@@ -1,0 +1,138 @@
+# Exchange and Microsoft Graph
+
+## Exchange is the source of truth
+
+```
+                Exchange
+                   │
+          ┌────────┴────────┐
+          ▼                 ▼
+       Outlook         PHB Platform
+```
+
+Both are clients of the same mailbox. Required behavior:
+
+```
+Email arrives in Exchange        → visible in Outlook AND in the platform
+Draft created in Outlook         → visible in the platform
+Draft edited in the platform     → updated draft visible in Outlook
+Employee clicks Send in platform → sent through Exchange, lands in Sent Items
+Message moved/deleted in Outlook → reflected in the platform
+```
+
+The platform must not create an independent email system, and must not maintain a
+second copy of mailbox state.
+
+## No sync engine
+
+With 1–3 users this is settled:
+
+- Reads go **live to Graph** on request.
+- Short-lived in-memory cache only (seconds), for list views.
+- **No message index table. No delta token store. No Graph change notifications /
+  webhooks / subscriptions.** Poll the current folder on an interval while the tab is
+  focused.
+- Writes go **straight through to Graph** synchronously, then re-read. No write
+  queue, no optimistic local store.
+
+If the platform's mailbox tables can't be dropped and rebuilt from Graph with no loss,
+a second mailbox has been built by accident.
+
+Webhooks become worth their reliability cost only when a background job must react to
+inbound mail with no human present. That is not before 2027.
+
+## Never persist
+
+Message bodies. Attachment content. Anything from `Bid Tracker.xlsx`. Anything from
+the SharePoint CO state files.
+
+## Authentication
+
+App-only (client credentials). One Entra app registration with Graph **application**
+permissions:
+
+- `Mail.ReadWrite`
+- `Mail.Send`
+
+Scoped by an Exchange **ApplicationAccessPolicy** to a mail-enabled security group
+containing only `changeorder@phb1899.com`. Without that policy, these permissions
+reach every mailbox in the company. The policy is part of the setup, not a follow-up.
+
+Credentials:
+
+- **Production:** Azure managed identity + federated identity credential. Nothing
+  expires.
+- **Local development:** client secret in `.env.local`. Never committed, never used in
+  Azure.
+
+## Graph rules
+
+**Always send `Prefer: IdType="ImmutableId"`.** On every request, without exception.
+By default a message ID changes when the message moves folders — and Power Automate
+moves messages constantly. Any ID captured without this header goes stale silently.
+
+**Reply and forward via Graph, not by hand.** Use `createReply`, `createReplyAll`,
+`createForward`. They return a real Exchange draft with quoting and threading intact.
+
+**Send the existing draft, never `sendMail`.**
+
+```
+POST /users/{mailbox}/messages/{id}/send
+```
+
+Sending via `sendMail` with a copied body loses the attachments Power Automate
+attached, the `[CO: Owner|Bulletin]` subject tag that downstream filing depends on,
+and conversation threading.
+
+**Attachments:** simple upload under 3 MB; `createUploadSession` above that.
+
+**HTML email bodies are attacker-controlled.** Vendors send them. Sanitize
+server-side, render in a sandboxed iframe with CSP, block remote images by default.
+
+**Delete is not permanent.** `DELETE` moves to Deleted Items. Never expose
+`permanentDelete`.
+
+**Throttling** concentrates on one mailbox through one app identity — roughly 10k
+requests per 10 minutes, ~4 concurrent is the practical ceiling. Not a constraint at
+this user count, but don't poll aggressively.
+
+**Concurrent editing.** Outlook and the platform editing one draft is last-write-wins.
+Take an advisory lock in the platform DB, show the user when a draft is locked, and
+accept that Outlook can still overwrite.
+
+## Service boundary
+
+```
+Route handler → mail service → Graph client → Microsoft Graph
+```
+
+No raw Graph calls in route handlers or components. The frontend must never see
+tenant IDs, Graph scopes, Exchange IDs, tokens, or URL construction — it asks for
+"the change-order inbox."
+
+## Development guards
+
+Both enforced inside the mail service, not at the route layer:
+
+- `PHB_ALLOW_SEND` must be `true` or any send throws.
+- When `NODE_ENV !== 'production'`, write operations are permitted only on messages
+  whose subject begins with `ZZTEST`. Reads unrestricted.
+
+## SharePoint
+
+Stays behind the scenes. Employees get no SharePoint UI. Do not duplicate SharePoint
+data into the platform database.
+
+When the backend eventually needs SharePoint reads (Phase 5+, CO context), it uses
+Graph with `Sites.Selected` granted on the `AISandbox` site only. Not needed before
+then — do not request the permission early.
+
+## Power Automate
+
+Untouched. The platform and the flows never talk to each other; both talk to Exchange
+and SharePoint. That independence is what makes the platform safe to build and
+redeploy while the pipeline runs.
+
+If a future phase needs the backend to trigger a flow, the mechanism is **writing the
+sentinel file** to SharePoint via Graph — zero flow edits, no premium license, no
+secret to rotate. Do not introduce Power Automate HTTP triggers.
