@@ -1,0 +1,180 @@
+// PHB Platform - Phase 1 schema.
+// Scope is fixed by docs/05-database-and-sources.md. There is deliberately no
+// message, folder, attachment, delta-token, subscription, prompt, or job table.
+//
+// Naming: Prisma fields are camelCase, database tables and columns are
+// snake_case via @@map / @map. The recovery procedures in docs/runbook.md are
+// raw SQL run by someone who has never seen this codebase - unquoted snake_case
+// is what they can type without getting the quoting exactly right.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+// Prisma 7 takes the connection URL from prisma.config.ts for the CLI, and
+// from a driver adapter at runtime - see lib/db/client.ts.
+datasource db {
+  provider = "postgresql"
+}
+
+enum EmployeeStatus {
+  active
+  disabled
+}
+
+enum ModuleStatus {
+  active
+  hidden
+}
+
+/// Shared by Position and Department. Hiding preserves existing assignments;
+/// it only removes the value from onboarding dropdowns.
+enum ListItemStatus {
+  active
+  hidden
+}
+
+model Employee {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Stamped on first sign-in and immutable thereafter. People get renamed;
+  /// the Entra object ID does not. Null only for a row seeded ahead of its
+  /// owner's first sign-in (the bootstrap admin).
+  entraOid String? @unique @map("entra_oid")
+
+  /// Always lowercased, always from the token. Never accepted from user input.
+  email     String @unique
+  firstName String @map("first_name")
+  lastName  String @map("last_name")
+
+  positionId String?   @map("position_id") @db.Uuid
+  position   Position? @relation(fields: [positionId], references: [id], onDelete: Restrict)
+
+  /// Free text captured when the employee picks "Other". Flags the row for
+  /// admin cleanup. Self-reported and unverified, like positionId itself.
+  positionOther String? @map("position_other")
+
+  departmentId String?     @map("department_id") @db.Uuid
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+
+  profileCompleted Boolean        @default(false) @map("profile_completed")
+  status           EmployeeStatus @default(active)
+  isPlatformAdmin  Boolean        @default(false) @map("is_platform_admin")
+
+  /// Any session issued before this instant is rejected. Bumped when an
+  /// employee is disabled, so revocation takes effect on the next request
+  /// rather than at next sign-out.
+  sessionsValidAfter DateTime? @map("sessions_valid_after") @db.Timestamptz(3)
+
+  firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  grants       ModuleGrant[] @relation("EmployeeGrants")
+  grantsIssued ModuleGrant[] @relation("GrantIssuedBy")
+
+  auditEventsActed    AuditEvent[] @relation("AuditActor")
+  auditEventsTargeted AuditEvent[] @relation("AuditTarget")
+
+  @@index([status])
+  @@index([departmentId])
+  @@index([positionId])
+  @@map("employees")
+}
+
+/// The module registry. This table - not a hardcoded list - drives the sidebar
+/// and the admin grant matrix. Adding a module is inserting a row.
+model Module {
+  /// Stable authorization key, e.g. 'change-orders'. Authorization never keys
+  /// on displayName.
+  key         String       @id
+  displayName String       @map("display_name")
+  description String?
+  icon        String?
+  sortOrder   Int          @map("sort_order")
+  status      ModuleStatus @default(active)
+
+  grants ModuleGrant[]
+
+  @@index([status, sortOrder])
+  @@map("modules")
+}
+
+model ModuleGrant {
+  id String @id @default(uuid()) @db.Uuid
+
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation("EmployeeGrants", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  moduleKey String @map("module_key")
+  module    Module @relation(fields: [moduleKey], references: [key], onDelete: Cascade)
+
+  /// Null means the grant was issued by the system (seeding), not by an admin.
+  /// SetNull rather than Cascade: losing the granting admin must not silently
+  /// revoke everyone they ever granted.
+  grantedById String?   @map("granted_by_id") @db.Uuid
+  grantedBy   Employee? @relation("GrantIssuedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  grantedAt DateTime @default(now()) @map("granted_at") @db.Timestamptz(3)
+
+  @@unique([employeeId, moduleKey])
+  @@index([moduleKey])
+  @@map("module_grants")
+}
+
+model Position {
+  id     String         @id @default(uuid()) @db.Uuid
+  name   String         @unique
+  status ListItemStatus @default(active)
+
+  employees Employee[]
+
+  @@map("positions")
+}
+
+model Department {
+  id     String         @id @default(uuid()) @db.Uuid
+  name   String         @unique
+  status ListItemStatus @default(active)
+
+  employees Employee[]
+
+  @@map("departments")
+}
+
+/// Append-only. Enforced in the application (no update or delete path is ever
+/// exposed) and again by a database trigger - see the migration that adds
+/// audit_events_append_only.
+model AuditEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Null means the platform itself acted, not a person.
+  actorEmployeeId String?   @map("actor_employee_id") @db.Uuid
+  actor           Employee? @relation("AuditActor", fields: [actorEmployeeId], references: [id], onDelete: SetNull)
+
+  /// Dotted action string, e.g. 'grant.added'. Deliberately not an enum:
+  /// later phases add strings without a migration.
+  action String
+
+  /// Null for events with no employee subject - notably login.denied, which
+  /// must not create an employee row. The rejected identity goes in metadata.
+  targetEmployeeId String?   @map("target_employee_id") @db.Uuid
+  target           Employee? @relation("AuditTarget", fields: [targetEmployeeId], references: [id], onDelete: SetNull)
+
+  /// Plain text with no foreign key on purpose: audit history must survive a
+  /// module row being removed.
+  moduleKey String? @map("module_key")
+
+  metadata Json?
+
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+
+  @@index([targetEmployeeId, occurredAt])
+  @@index([actorEmployeeId, occurredAt])
+  @@index([action, occurredAt])
+  @@index([occurredAt])
+  @@map("audit_events")
+}

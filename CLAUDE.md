@@ -157,4 +157,3 @@ seen it.
 | `docs/05-database-and-sources.md` | Schema ownership, source-of-truth table, migrations |
 | `docs/06-roadmap.md` | Phases, what is in scope before December, what is not |
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
-| `docs/08-open-questions.md` | Genuinely undecided items. Nothing else belongs here |
