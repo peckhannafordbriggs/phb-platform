@@ -74,6 +74,56 @@ that arrives in Phase 2. They are separate on purpose.
 
 ---
 
+## What expires, and when
+
+| Credential | Where | Expires | Breaks what |
+|---|---|---|---|
+| SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local development only |
+
+Nothing else in Phase 1 expires.
+
+**SSO app registration** — client ID `220921c1-f23e-4d01-b354-736884ba3d00`,
+tenant `48f37f84-1c36-4b3e-986c-b8b7196ad49d`. Neither is a secret; both appear
+in every authorization URL the app generates. They are recorded here so the next
+operator can find the right registration without guessing.
+
+### This secret must never reach Azure
+
+`CLAUDE.md` prohibition 7: no credential that expires may exist in production.
+Production authenticates with a **managed identity plus a federated identity
+credential**, which does not expire. The client secret exists solely because
+local development cannot use a managed identity.
+
+So when this expires on 13 August 2028, **production is unaffected** — only
+developer machines stop being able to sign in. If an expiring secret ever *does*
+break production, the real fault is that a secret was deployed at all; fix that,
+do not rotate it.
+
+### Symptom when it expires
+
+Sign-in fails at Microsoft with `AADSTS7000215: Invalid client secret provided`,
+before the platform's login gate runs. Nothing is written to `audit_events`,
+because no token ever reached the application.
+
+### Rotating it
+
+1. Azure portal → Microsoft Entra ID → App registrations → the SSO registration
+   (client ID above) → **Certificates & secrets** → **New client secret**.
+2. Copy the **Value**, not the Secret ID. The value is shown once.
+3. Put it in `.env.local` as `AUTH_MICROSOFT_ENTRA_ID_SECRET`.
+4. Restart the dev server — Next.js reads `.env.local` at boot.
+5. Delete the expired secret from the registration.
+
+**Never commit it.** `.env.local` is gitignored; keep it that way.
+
+### Before 13 August 2028
+
+Set a calendar reminder for roughly a month ahead. Ownership of the app
+registration must sit with an M365 group, not a person — prohibition 6 — so the
+reminder should go to that group, not to an individual who may have left.
+
+---
+
 ## The only admin is locked out
 
 **Symptom.** Nobody can reach `/admin`. The sidebar shows no Admin item for
