@@ -68,14 +68,19 @@ and creates no employee row.
 
 Retest properly if a second tenant ever becomes available.
 
-### 3. Out-of-allow-list domain is rejected — NOT YET RUN
+### 3. Out-of-allow-list domain is rejected — PASS
 
-Reproducible by temporarily setting `ALLOWED_EMAIL_DOMAINS` to a value excluding
-`phb1899.com` and signing in again, which drives the real gate with a real
-Microsoft token.
+**Observed, 14 August 2026.** `ALLOWED_EMAIL_DOMAINS` was temporarily set to
+`example.invalid`, the dev server restarted, and a real sign-in attempted as
+`msheth@phb1899.com`. Microsoft authenticated normally — it knows nothing about
+the platform's allow-list — and the gate then rejected the token. The plain
+"Not authorized for this application" page appeared, with no indication of which
+check failed.
 
-**Covered automatically** by `tests/gate.test.ts` — "rejects a domain outside the
-allow-list".
+`ALLOWED_EMAIL_DOMAINS` was restored to `phb1899.com` immediately afterwards.
+
+This is the strongest of the manual checks: it drives the real gate with a real
+Microsoft-issued token rather than a synthetic claim set.
 
 ### 4. A UPN containing `#EXT#` is rejected — NOT REPRODUCIBLE MANUALLY
 
@@ -87,30 +92,52 @@ available.
 `tests/onboarding.test.ts`, which asserts a rejected guest creates no employee
 row.
 
-### 5. A rejected sign-in creates no employee row and writes `login.denied` — NOT YET RUN
+### 5. A rejected sign-in creates no employee row and writes `login.denied` — PASS
 
-To be observed alongside criterion 3.
+**Observed, 14 August 2026**, from the criterion 3 attempts.
 
-**Covered automatically** by `tests/onboarding.test.ts`, which asserts both
-halves for a tenant mismatch and for a guest.
+- Three `login.denied` events, each with metadata
+  `{"reason": "domain_not_allowed", "email": "msheth@phb1899.com"}`
+- `target_employee_id` **NULL** on all three
+- Employee rows unchanged: 131 total, 1 real — nothing created
+- No `employee.provisioned` event
+- The existing row was not touched at all: `last_login_at` still read
+  `20:02:03` from criterion 1, so the gate rejects before any write
 
-### 6. A disabled employee cannot sign in — NOT YET RUN
+### 6. A disabled employee cannot sign in — PASS
 
-Reproducible by disabling the employee row directly in SQL — the admin
-guardrails correctly refuse self-disable — then attempting sign-in, then
-re-enabling.
+**Observed, 14 August 2026.** The employee row was set to `status = 'disabled'`
+directly in SQL — the admin guardrails correctly refuse self-disable through the
+UI — and a real sign-in attempted. Rejected with the same undifferentiated page.
 
-**Covered automatically** by `tests/onboarding.test.ts` — "rejects a disabled
-employee and creates nothing" — and by `tests/authz.test.ts`, which proves a
-disabled employee's next request returns 401 without signing out.
+- `login.denied` written with `reason: employee_disabled`
+- `target_employee_id` **set**, pointing at the employee row
+- `last_login_at` not bumped
+- The account was re-enabled immediately afterwards and confirmed `active`,
+  `is_platform_admin`, `profile_completed`, with `entra_oid` intact
+
+**Worth noting:** `employee_disabled` carries a `target_employee_id` while
+`domain_not_allowed` leaves it NULL. That is deliberate — the platform links an
+audit event to a row only when the identity is already known. A rejected
+stranger creates nothing to point at.
 
 ---
 
 ## Honest summary
 
-One of six manual authentication criteria has been observed end to end.
-Two are not reproducible on this tenant. Three remain to be run.
+| # | Criterion | Status |
+|---|---|---|
+| 1 | Company account signs in | **PASS** — observed |
+| 2 | Wrong `tid` rejected | Not reproducible — needs a second tenant |
+| 3 | Out-of-allow-list domain rejected | **PASS** — observed |
+| 4 | `#EXT#` UPN rejected | Not reproducible — needs a B2B guest account |
+| 5 | Rejected sign-in → no row, `login.denied` written | **PASS** — observed |
+| 6 | Disabled employee cannot sign in | **PASS** — observed |
 
-Every one of the six is covered by an automated test exercising the same code
-path. The untested link for criteria 2 and 4 is whether Entra actually issues
-such a token — Microsoft's behavior, not this codebase's.
+Four of six observed end to end against real Microsoft-issued tokens. Two are
+not reproducible on a single-tenant registration with no guest accounts.
+
+All six are covered by automated tests exercising the same code path. For 2 and
+4 the only untested link is whether Entra actually issues such a token — that is
+Microsoft's behavior, not this codebase's. Retest both if a second tenant or a
+guest account becomes available.
