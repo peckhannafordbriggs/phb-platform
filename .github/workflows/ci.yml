@@ -82,6 +82,110 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Builds the production image and proves it boots, without pushing anything.
+  #
+  # This is the check nobody can run without Docker installed, which is the point
+  # of having CI do it. A Dockerfile that builds but does not boot is worth
+  # nothing, so this does not stop at `docker build`.
+  image:
+    name: Container image builds and boots
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: phb_platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # push: false - nothing leaves the runner. load: true puts the image into
+      # the local daemon so the next steps can actually run it.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: phb-platform:ci
+          # Layer cache across runs, so a change that does not touch the
+          # lockfile skips the dependency install entirely.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: It does not run as root
+        run: |
+          uid="$(docker run --rm --entrypoint id phb-platform:ci -u)"
+          echo "container uid: $uid"
+          if [ "$uid" = "0" ]; then
+            echo "The image runs as root. The Dockerfile sets USER node."
+            exit 1
+          fi
+
+      # --network host so the container reaches the Postgres service container on
+      # localhost, the same address the runner sees it on.
+      #
+      # No migrations are applied first, deliberately: /api/health must answer
+      # without touching the database, and this proves it. If a future change
+      # gives the probe a query, this step starts failing - which is the warning
+      # worth having, because a probe that depends on Postgres turns a brief
+      # outage into a restart loop.
+      - name: It boots and serves
+        run: |
+          docker run -d --name phb-ci --network host \
+            -e DATABASE_URL='postgresql://postgres:postgres@localhost:5432/phb_platform' \
+            -e AUTH_SECRET='ci-placeholder-not-a-secret' \
+            -e AUTH_MICROSOFT_ENTRA_ID_ID='00000000-0000-0000-0000-000000000000' \
+            -e AUTH_MICROSOFT_ENTRA_ID_TENANT_ID='00000000-0000-0000-0000-000000000000' \
+            -e ALLOWED_EMAIL_DOMAINS='example.invalid' \
+            phb-platform:ci
+
+          for attempt in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/health || true)"
+            if [ "$code" = "200" ]; then
+              echo "healthy after $attempt attempt(s)"
+              break
+            fi
+            if [ "$attempt" = "30" ]; then
+              echo "The container never answered /api/health with 200. Last: $code"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "--- the probe reports up/down and nothing else ---"
+          body="$(curl -fsS http://localhost:3000/api/health)"
+          echo "$body"
+          test "$body" = '{"status":"ok"}'
+
+          echo "--- a rendered page, so the Next build is genuinely working ---"
+          curl -fsS -o /dev/null -w 'signin: %{http_code}\n' http://localhost:3000/signin
+
+          echo "--- an API route still rejects an unauthenticated caller ---"
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/me)"
+          echo "api/me: $code"
+          test "$code" = "401"
+
+      - name: Container logs
+        if: failure()
+        run: docker logs phb-ci || true
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f phb-ci || true
+
   # Validates the infrastructure definition without an Azure subscription.
   # `az bicep build` is a compile, not a deployment, so it needs no credentials
   # and runs on every push from today.
