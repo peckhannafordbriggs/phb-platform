@@ -18,8 +18,12 @@ const MODULES = [
   },
 ];
 
-// A first pass at the real list, from docs/05-database-and-sources.md, so early
-// users are not all choosing "Other". Admin-editable afterwards.
+// From docs/05-database-and-sources.md, so early users are not all choosing
+// "Other". Admin-editable afterwards, and displayed alphabetically wherever it
+// is shown - the order here is insertion order and does not reach a screen.
+//
+// Additive, like DEPARTMENTS below: this runs on every deploy, and removing
+// anything not named here would delete a position an admin had added.
 const POSITIONS = [
   "Foreman",
   "Superintendent",
@@ -30,6 +34,7 @@ const POSITIONS = [
   "Accounting",
   "Administrative",
   "Executive",
+  "Co-Op Intern",
 ];
 
 // The confirmed list, alphabetical. A fresh database gets exactly these.

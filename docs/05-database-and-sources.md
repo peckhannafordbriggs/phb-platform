@@ -106,9 +106,10 @@ Each of those arrives with the phase that needs it, or not at all.
 ## Seeds
 
 - `Module`: one row, `change-orders`.
-- `Position`: a first pass at the real list so early users aren't all choosing
-  "Other" — Foreman, Superintendent, Project Manager, Estimator, Controls Engineer,
-  Project Engineer, Accounting, Administrative, Executive. Admin-editable after.
+- `Position`: so early users aren't all choosing "Other" — Accounting,
+  Administrative, Co-Op Intern, Controls Engineer, Estimator, Executive, Foreman,
+  Project Engineer, Project Manager, Superintendent. Admin-editable after, and
+  employees can change their own.
 - `Department`: confirmed with the operator — Administrative, AI, Controls, Engineer,
   Estimator, Foreman, Piping, Project Manager, Service, Sheet Metal, VDC.
   Admin-editable after.
