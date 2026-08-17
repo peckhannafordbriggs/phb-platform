@@ -109,11 +109,19 @@ Each of those arrives with the phase that needs it, or not at all.
 - `Position`: a first pass at the real list so early users aren't all choosing
   "Other" — Foreman, Superintendent, Project Manager, Estimator, Controls Engineer,
   Project Engineer, Accounting, Administrative, Executive. Admin-editable after.
-- `Department`: to be confirmed with the operator; seed a minimal list and leave it
-  editable.
+- `Department`: confirmed with the operator — Administrative, AI, Controls, Engineer,
+  Estimator, Foreman, Piping, Project Manager, Service, Sheet Metal, VDC.
+  Admin-editable after.
 - Bootstrap admin from `BOOTSTRAP_ADMIN_EMAIL`.
 
 ## Migrations
 
 All schema changes go through Prisma Migrate. Version controlled, reproducible,
 clearly named, small. Never alter a production schema by hand.
+
+**Reference-data changes go through a migration too**, not a manual edit. There is no
+application path that deletes a `Position` or a `Department` — hiding must not break
+employees already assigned to a value, and both foreign keys are `ON DELETE RESTRICT`.
+So removing one is a migration, which is also the only way it reaches every
+environment identically. `20260817000000_replace_departments` is the worked example:
+reassign, audit, then delete.

@@ -32,16 +32,24 @@ const POSITIONS = [
   "Executive",
 ];
 
-// Placeholder. docs/05 says the real list is to be confirmed with the operator;
-// these exist so onboarding is usable and are editable in the admin screen.
+// The confirmed list, alphabetical. A fresh database gets exactly these.
+//
+// Admin-editable afterwards, which is why this loop only inserts: it runs on
+// every deploy, and removing anything not named here would delete a department
+// an admin had added. The one-off removal of the previous placeholder list is a
+// migration - 20260817000000_replace_departments - not this file's job.
 const DEPARTMENTS = [
-  "Field Operations",
-  "Project Management",
-  "Estimating",
+  "Administrative",
+  "AI",
+  "Controls",
+  "Engineer",
+  "Estimator",
+  "Foreman",
+  "Piping",
+  "Project Manager",
   "Service",
-  "Accounting",
-  "Administration",
-  "Executive",
+  "Sheet Metal",
+  "VDC",
 ];
 
 async function main(): Promise<void> {

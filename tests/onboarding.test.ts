@@ -38,7 +38,7 @@ function post(body: unknown): Request {
 async function seedLists() {
   const position = await testDb.position.create({ data: { name: "Estimator" } });
   const department = await testDb.department.create({
-    data: { name: "Estimating" },
+    data: { name: "Estimator" },
   });
   return { position, department };
 }

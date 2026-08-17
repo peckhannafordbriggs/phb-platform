@@ -19,7 +19,18 @@ export type AuditAction =
   | "position.created"
   | "position.updated"
   | "department.created"
-  | "department.updated";
+  | "department.updated"
+  /**
+   * Profile field changes. `employee.position_changed` is written by both the
+   * self-service route and the admin route - `actorEmployeeId` is what tells them
+   * apart. `employee.department_changed` is admin-only, and is also written by
+   * the 20260817000000_replace_departments migration with a null actor, which is
+   * the honest record for the platform acting rather than a person.
+   */
+  | "employee.position_changed"
+  | "employee.department_changed"
+  /** Written only by that migration. No application path deletes a department. */
+  | "department.deleted";
 
 export interface AuditEventInput {
   action: AuditAction;

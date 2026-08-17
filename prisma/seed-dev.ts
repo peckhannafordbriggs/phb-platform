@@ -67,10 +67,18 @@ async function main(): Promise<void> {
   const prisma = createDbClient();
 
   try {
+    // Ordered, so a re-run picks the same rows. An unordered findMany makes the
+    // whole seed non-deterministic however carefully the PRNG is seeded.
     const [positions, departments, modules] = await Promise.all([
-      prisma.position.findMany({ select: { id: true } }),
-      prisma.department.findMany({ select: { id: true } }),
-      prisma.module.findMany({ select: { key: true } }),
+      prisma.position.findMany({
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      }),
+      prisma.department.findMany({
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      }),
+      prisma.module.findMany({ select: { key: true }, orderBy: { key: "asc" } }),
     ]);
 
     if (positions.length === 0 || departments.length === 0) {
@@ -79,6 +87,8 @@ async function main(): Promise<void> {
 
     const rng = mulberry32(20260814);
     const createdIds: string[] = [];
+    const perDepartment = new Map<string, number>();
+    const generatedEmails = new Set<string>();
     let disabled = 0;
     let incomplete = 0;
     let freeText = 0;
@@ -99,29 +109,110 @@ async function main(): Promise<void> {
       if (isIncomplete) incomplete += 1;
       if (usesFreeText) freeText += 1;
 
+      generatedEmails.add(email);
+
+      // One draw per row, exactly as before, even though the value is used
+      // differently now.
+      //
+      // That matters more than it looks. The email address is built from PRNG
+      // draws, so adding or removing an rng() call shifts every later draw and
+      // renames every subsequent row. The old rows then no longer match by email,
+      // this script can no longer address them, and they survive as orphans -
+      // permanently, once audit_events references them. Keep the number of draws
+      // per row stable, or accept that the fake rows have to be rebuilt.
+      const department = isIncomplete ? null : pick(rng, departments);
+      if (department !== null) {
+        perDepartment.set(
+          department.name,
+          (perDepartment.get(department.name) ?? 0) + 1,
+        );
+      }
+
+      const profile = {
+        firstName,
+        lastName,
+        // A seeded row has no Entra object ID: nobody has signed in as it.
+        entraOid: null,
+        profileCompleted: !isIncomplete,
+        status: isDisabled ? ("disabled" as const) : ("active" as const),
+        positionId: usesFreeText ? null : pick(rng, positions).id,
+        positionOther: usesFreeText ? pick(rng, FREE_TEXT_POSITIONS) : null,
+        departmentId: department?.id ?? null,
+        lastLoginAt: isIncomplete
+          ? null
+          : new Date(Date.UTC(2026, 6, 1 + Math.floor(rng() * 40))),
+      };
+
       const employee = await prisma.employee.upsert({
         where: { email },
-        update: {},
-        create: {
-          email,
-          firstName,
-          lastName,
-          // A seeded row has no Entra object ID: nobody has signed in as it.
-          entraOid: null,
-          profileCompleted: !isIncomplete,
-          status: isDisabled ? "disabled" : "active",
-          positionId: usesFreeText ? null : pick(rng, positions).id,
-          positionOther: usesFreeText ? pick(rng, FREE_TEXT_POSITIONS) : null,
-          departmentId: isIncomplete ? null : pick(rng, departments).id,
-          lastLoginAt: isIncomplete
-            ? null
-            : new Date(Date.UTC(2026, 6, 1 + Math.floor(rng() * 40))),
-        },
+        // The same values on update as on create, so this is genuinely
+        // regenerable. It used to be `update: {}`, which meant a run after the
+        // department list changed left every existing fake row pointing at
+        // nothing. Grants are untouched - they are keyed separately below.
+        update: profile,
+        create: { email, ...profile },
         select: { id: true, status: true, profileCompleted: true },
       });
 
       if (employee.status === "active" && employee.profileCompleted) {
         createdIds.push(employee.id);
+      }
+    }
+
+    // Remove fake rows this script no longer generates.
+    //
+    // Without this, changing the generation logic silently leaves the previous
+    // rows behind - and because the department list changed under them, they sit
+    // in the admin screens as employees with no department, looking like a bug in
+    // the filter rather than seed drift.
+    //
+    // Only @seed.invalid addresses are ever considered. A real employee is never
+    // in scope, whatever else is in the database.
+    const stale = await prisma.employee.findMany({
+      where: {
+        email: { endsWith: `@${FAKE_DOMAIN}` },
+        NOT: { email: { in: [...generatedEmails] } },
+      },
+      select: { id: true, email: true },
+    });
+
+    let pruned = 0;
+    const keptForAudit: string[] = [];
+
+    if (stale.length > 0) {
+      const staleIds = stale.map((row) => row.id);
+
+      // audit_events is append-only, enforced by a database trigger. The foreign
+      // keys are ON DELETE SET NULL, which fires that trigger as an UPDATE, so an
+      // employee with audit history cannot be deleted at all - see
+      // docs/runbook.md. Check first rather than letting the delete blow up.
+      const references = await prisma.auditEvent.findMany({
+        where: {
+          OR: [
+            { targetEmployeeId: { in: staleIds } },
+            { actorEmployeeId: { in: staleIds } },
+          ],
+        },
+        select: { targetEmployeeId: true, actorEmployeeId: true },
+      });
+
+      const referenced = new Set(
+        references
+          .flatMap((event) => [event.targetEmployeeId, event.actorEmployeeId])
+          .filter((id): id is string => id !== null),
+      );
+
+      const deletable = stale.filter((row) => !referenced.has(row.id));
+      keptForAudit.push(
+        ...stale.filter((row) => referenced.has(row.id)).map((row) => row.email),
+      );
+
+      if (deletable.length > 0) {
+        // Grants cascade. Nothing else references an employee.
+        const result = await prisma.employee.deleteMany({
+          where: { id: { in: deletable.map((row) => row.id) } },
+        });
+        pruned = result.count;
       }
     }
 
@@ -147,6 +238,30 @@ async function main(): Promise<void> {
         `(${disabled} disabled, ${incomplete} incomplete, ${freeText} free-text position), ` +
         `${grants} grants.`,
     );
+    if (pruned > 0) {
+      console.log(`Pruned ${pruned} stale fake employee(s) from an earlier seed.`);
+    }
+    if (keptForAudit.length > 0) {
+      console.warn(
+        `${keptForAudit.length} stale fake employee(s) could NOT be removed: they are ` +
+          `referenced by audit_events, which is append-only. They will keep appearing ` +
+          `in the admin screens. Run \`npx prisma migrate reset\` for a clean database.`,
+      );
+    }
+
+    console.log("Department spread:");
+    for (const { name } of departments) {
+      console.log(`  ${name}: ${perDepartment.get(name) ?? 0}`);
+    }
+    const emptyDepartments = departments.filter(
+      (d) => (perDepartment.get(d.name) ?? 0) === 0,
+    );
+    if (emptyDepartments.length > 0) {
+      console.warn(
+        `No fake employee landed in: ${emptyDepartments.map((d) => d.name).join(", ")}. ` +
+          `Raise EMPLOYEE_COUNT or change the seed if a filter needs every department populated.`,
+      );
+    }
   } finally {
     await prisma.$disconnect();
   }
