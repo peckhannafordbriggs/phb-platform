@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  hasOnlyOnePositionChoice,
+  hasPositionChoice,
+  POSITION_NOT_BOTH,
+  POSITION_REQUIRED,
+} from "./profile";
 
 /**
  * Profile completion, not account creation - the person is already
@@ -8,6 +14,10 @@ import { z } from "zod";
  * keys, so a request body containing them cannot reach the update: they are
  * structurally impossible to accept rather than filtered out by a rule someone
  * could later forget to apply.
+ *
+ * The "Other" position rule is imported rather than restated. Onboarding and the
+ * two profile-edit routes have to agree about what a valid position is, and three
+ * copies of the rule is how they stop agreeing.
  */
 export const onboardingSchema = z
   .object({
@@ -21,24 +31,13 @@ export const onboardingSchema = z
 
     departmentId: z.uuid("Department is required."),
   })
-  .refine(
-    (v) =>
-      (v.positionId != null && v.positionId.length > 0) ||
-      (v.positionOther != null && v.positionOther.length > 0),
-    { message: "Position is required.", path: ["positionId"] },
-  )
-  .refine(
-    (v) =>
-      !(
-        v.positionId != null &&
-        v.positionId.length > 0 &&
-        v.positionOther != null &&
-        v.positionOther.length > 0
-      ),
-    {
-      message: "Choose a position from the list or describe it, not both.",
-      path: ["positionOther"],
-    },
-  );
+  .refine(hasPositionChoice, {
+    message: POSITION_REQUIRED,
+    path: ["positionId"],
+  })
+  .refine(hasOnlyOnePositionChoice, {
+    message: POSITION_NOT_BOTH,
+    path: ["positionOther"],
+  });
 
 export type OnboardingInput = z.infer<typeof onboardingSchema>;

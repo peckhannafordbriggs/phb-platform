@@ -113,7 +113,7 @@ describe("an unauthenticated request to an API route", () => {
 });
 
 describe("page routes still redirect", () => {
-  const pagePaths = ["/", "/admin", "/change-orders", "/onboarding"];
+  const pagePaths = ["/", "/admin", "/change-orders", "/onboarding", "/profile"];
 
   for (const path of pagePaths) {
     it(`${path} redirects to /signin`, async () => {

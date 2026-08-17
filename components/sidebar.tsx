@@ -70,14 +70,28 @@ export function Sidebar({
       <div className="mt-auto border-t border-[var(--border)] px-5 py-4">
         <p className="truncate text-sm font-medium">{employeeName}</p>
         <p className="truncate text-xs text-[var(--muted)]">{employeeEmail}</p>
-        <form action={signOutAction}>
-          <button
-            type="submit"
-            className="mt-3 text-xs text-[var(--muted)] underline underline-offset-2 hover:text-[var(--foreground)]"
+        <div className="mt-3 flex items-center gap-3">
+          <Link
+            href="/profile"
+            aria-current={pathname === "/profile" ? "page" : undefined}
+            className={
+              "text-xs underline underline-offset-2 hover:text-[var(--foreground)] " +
+              (pathname === "/profile"
+                ? "font-medium text-[var(--accent)]"
+                : "text-[var(--muted)]")
+            }
           >
-            Sign out
-          </button>
-        </form>
+            Profile
+          </Link>
+          <form action={signOutAction}>
+            <button
+              type="submit"
+              className="text-xs text-[var(--muted)] underline underline-offset-2 hover:text-[var(--foreground)]"
+            >
+              Sign out
+            </button>
+          </form>
+        </div>
       </div>
     </nav>
   );

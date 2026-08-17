@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/authz";
 import { prisma } from "@/lib/db";
 import { getEmployeeDetail } from "@/lib/admin/service";
 import { EmployeeControls } from "./employee-controls";
+import { ProfileControls } from "./profile-controls";
 
 export const dynamic = "force-dynamic";
 
@@ -19,11 +20,25 @@ export default async function AdminEmployeePage({
   const employee = await getEmployeeDetail(id);
   if (employee === null) notFound();
 
-  const modules = await prisma.module.findMany({
-    where: { status: "active" },
-    select: { key: true, displayName: true },
-    orderBy: { sortOrder: "asc" },
-  });
+  const [modules, positions, departments] = await Promise.all([
+    prisma.module.findMany({
+      where: { status: "active" },
+      select: { key: true, displayName: true },
+      orderBy: { sortOrder: "asc" },
+    }),
+    // Hidden values are omitted, so an admin cannot assign one either. Existing
+    // assignments to a hidden value are preserved and labelled below.
+    prisma.position.findMany({
+      where: { status: "active" },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.department.findMany({
+      where: { status: "active" },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+  ]);
 
   const grantedKeys = employee.grants.map((g) => g.moduleKey);
 
@@ -74,6 +89,15 @@ export default async function AdminEmployeePage({
           <Row label="Last sign-in">{formatDate(employee.lastLoginAt)}</Row>
         </dl>
       </section>
+
+      <ProfileControls
+        employeeId={employee.id}
+        positions={positions}
+        departments={departments}
+        currentPositionId={employee.position?.id ?? null}
+        currentPositionOther={employee.positionOther}
+        currentDepartmentId={employee.department?.id ?? null}
+      />
 
       <EmployeeControls
         employeeId={employee.id}

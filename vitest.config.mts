@@ -7,6 +7,11 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./", import.meta.url)),
     },
   },
+  // tsconfig.json sets jsx: "preserve" because Next does its own JSX transform.
+  // Vitest has to compile it instead, or a test cannot import a .tsx file at all -
+  // which is what the server-component smoke tests do. Test-only; the application
+  // build is untouched.
+  oxc: { jsx: { runtime: "automatic" } },
   test: {
     environment: "node",
     globals: true,

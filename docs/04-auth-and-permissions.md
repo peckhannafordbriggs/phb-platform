@@ -57,9 +57,33 @@ authenticated.
   a free-text field that flags the row for admin cleanup.
 - **Department:** required, dropdown from the `departments` table.
 
-Position and department are **self-reported and unverified**. Show them to admins as
-such. They are informational only — position never grants access. Admins can confirm
-or change them.
+Both are informational only. Neither ever grants access — access comes from module
+grants and the admin flag, nothing else.
+
+### After onboarding
+
+The two fields diverge once the profile exists.
+
+| Field | Employee can change | Admin can change | Where |
+|---|---|---|---|
+| Position | **Yes** | Yes | `/profile` · `PATCH /api/me/position` — or admin, `PATCH /api/admin/employees/[id]/position` |
+| Department | **No** | Yes | Admin only, `PATCH /api/admin/employees/[id]/department` |
+| Email, name, status, admin flag | No | Status and admin flag only | Their own admin routes |
+
+**Position stays self-reported and unverified.** Show it to admins as such — the free
+text "Other" flags the row for cleanup. Both paths share one implementation, so an
+admin's change and the employee's own change cannot disagree about what a valid
+position is. Last write wins; the audit event records which of them it was.
+
+**Department is admin-controlled.** It drives the admin employee filter, so an
+employee setting their own would turn that filter into a record of what people call
+themselves rather than of how the company is organised. There is deliberately **no
+`/api/me/department`** — the absence of the route is the enforcement, not a flag
+inside a shared one.
+
+Fields nobody may change through a profile route — email, name, status, the admin
+flag — are not declared on its schema. The schemas are strict objects, so sending one
+is a `422`, not a `200` that quietly ignored it.
 
 ## Authorization
 
@@ -108,7 +132,8 @@ Admin is privileged functionality, protected server-side. Hiding the nav item is
 protection.
 
 Admin-only operations: granting and revoking module access, enabling/disabling
-employees, managing the admin flag, managing positions and departments.
+employees, managing the admin flag, managing the positions and departments lists, and
+setting any employee's department or position.
 
 Admins do **not** create employees. There is no create-employee endpoint.
 
