@@ -25,9 +25,9 @@ is a placeholder page.
 npm install
 cp .env.example .env.local     # then fill it in - see below
 createdb phb_platform          # or: psql -U postgres -c "CREATE DATABASE phb_platform"
-createdb phb_platform_test
 npx prisma migrate dev
 npm run seed
+npm run db:test:setup          # creates and migrates the test database
 npm run dev
 ```
 
@@ -43,22 +43,30 @@ clean clone does not need to approve anything by hand.
 Every variable is listed in `.env.example` with no real values. Fill in
 `.env.local`, which is gitignored.
 
+**Where each value comes from — what to generate yourself, what to copy, and the
+three things to request from IT — is in
+[`docs/runbook.md`](docs/runbook.md#filling-in-envlocal-on-a-new-machine).**
+That includes what still works while you wait for a request to come back: the app
+boots and the whole test suite passes without any Microsoft credential.
+
 | Variable | What it is |
 |---|---|
 | `DATABASE_URL` | Postgres connection string |
 | `TEST_DATABASE_URL` | A **separate** database, used only by `npm test` |
-| `AUTH_SECRET` | Generate with `npx auth secret` |
+| `AUTH_SECRET` | Signs session cookies. Yours alone; it need not match anyone else's |
 | `AUTH_URL` | `http://localhost:3000` locally |
 | `AUTH_MICROSOFT_ENTRA_ID_ID` | Client ID of the **SSO** app registration |
 | `AUTH_MICROSOFT_ENTRA_ID_SECRET` | Client secret - **local development only**, never in Azure |
 | `AUTH_MICROSOFT_ENTRA_ID_TENANT_ID` | Tenant ID; the token's `tid` must match it |
 | `ALLOWED_EMAIL_DOMAINS` | Comma-separated allow-list of verified email domains |
 | `BOOTSTRAP_ADMIN_EMAIL` | Comma-separated. Each address is seeded as a platform admin. |
-| `PHB_ALLOW_SEND` | Reserved for Phase 3. Must stay `false`. |
+| `PHB_ALLOW_SEND` | The send gate. Must stay `false` outside production. |
+| `GRAPH_CLIENT_ID`, `GRAPH_TENANT_ID`, `GRAPH_CLIENT_SECRET` | Change Orders mailbox. Absent is a supported state - the module reports itself unconfigured |
+| `CO_MAILBOX` | The only mailbox the platform may touch |
 
-The SSO app registration is **separate** from the Graph mail app registration
-that arrives in Phase 2 - different permissions, different credential
-lifecycles, different consent stories.
+The SSO app registration is **separate** from the Graph mail app registration -
+different permissions, different credential lifecycles, different consent
+stories.
 
 `TEST_DATABASE_URL` must differ from `DATABASE_URL`. The suite truncates every
 table between test files and refuses to start if the two match.

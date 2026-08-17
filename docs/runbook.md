@@ -13,6 +13,89 @@ problem — they are unrelated.
 
 ---
 
+## Filling in `.env.local` on a new machine
+
+`cp .env.example .env.local` gives you the variable names. This is where each
+value comes from.
+
+**You can generate most of them yourself.** Only three things have to be
+requested, and two of those are already written down below.
+
+### Generate yourself
+
+| Variable | How |
+|---|---|
+| `DATABASE_URL` | Your own local Postgres. `createdb phb_platform`, then `postgresql://USER:PASSWORD@localhost:5432/phb_platform?schema=public` with your own local credentials. Nobody else needs to know this password. |
+| `TEST_DATABASE_URL` | Same server, **different database**. `npm run db:test:setup` creates it. The suite truncates every table and refuses to start if this matches `DATABASE_URL`. |
+| `AUTH_SECRET` | `npx auth secret`. Yours alone — it only signs session cookies on your machine, so it does not need to match anyone else's. Do not ask IT for this. |
+| `AUTH_URL` | `http://localhost:3000`. |
+| `BOOTSTRAP_ADMIN_EMAIL` | Your own work address is enough locally. It seeds an admin row in *your* database and has no effect anywhere else. |
+| `PHB_ALLOW_SEND` | `false`. Always. Never set it to `true` outside production — development runs against the live `changeorder@phb1899.com` mailbox and there is no test mailbox. |
+| `CO_MAILBOX` | `changeorder@phb1899.com`. |
+| `ALLOWED_EMAIL_DOMAINS` | `phb1899.com`. Confirm the full verified-domain list with IT only if a legitimate account is being rejected with `domain_not_allowed`. |
+
+### Copy from this runbook
+
+These are identifiers, not credentials. They appear in every authorization URL
+the app generates, so there is nothing to protect and no request to make:
+
+| Variable | Value |
+|---|---|
+| `AUTH_MICROSOFT_ENTRA_ID_ID` | `220921c1-f23e-4d01-b354-736884ba3d00` |
+| `AUTH_MICROSOFT_ENTRA_ID_TENANT_ID` | `48f37f84-1c36-4b3e-986c-b8b7196ad49d` |
+
+Both are also in *What expires, and when* below, which is where they are
+maintained.
+
+### Request from IT
+
+Only these. Everything else above you can do without talking to anyone.
+
+| Variable | Who owns it | What to ask for |
+|---|---|---|
+| `AUTH_MICROSOFT_ENTRA_ID_SECRET` | Owner of the **SSO** app registration (client ID above) | The current client secret **value**, sent over something that is not email. Needed only to sign in — see below. |
+| `GRAPH_CLIENT_ID`, `GRAPH_TENANT_ID` | Owner of the **Graph** app registration | Both IDs. Not secret. |
+| `GRAPH_CLIENT_SECRET` | Same | A client secret value for local development. Production never has one. |
+
+`GRAPH_MANAGED_IDENTITY_CLIENT_ID` is **Azure only**. Leave it empty locally.
+
+**Wording that gets a useful answer**, because "send me the client secret" gets
+the Secret ID about half the time:
+
+> For the app registration with client ID `<id>`: I need the **Value** of a
+> current client secret (not the Secret ID — the Value is only shown once, at
+> creation, so a new one may need to be generated). It is for local development
+> on the PHB Platform. Please send it over Teams rather than email.
+
+### What you can do before those requests come back
+
+The app boots and the test suite runs with **no Microsoft values at all beyond
+the two IDs above**. `lib/env.ts` requires exactly five variables at boot:
+`DATABASE_URL`, `AUTH_SECRET`, `AUTH_MICROSOFT_ENTRA_ID_ID`,
+`AUTH_MICROSOFT_ENTRA_ID_TENANT_ID`, `ALLOWED_EMAIL_DOMAINS`. A missing one
+fails on boot naming the variable.
+
+So, waiting on IT:
+
+| | Without the SSO secret | Without the Graph values |
+|---|---|---|
+| `npm run dev`, pages render | works | works |
+| `npm test` | works — the suite never authenticates against Microsoft | works |
+| Signing in | **fails** at Microsoft with `AADSTS7000215` | works |
+| Change Orders mailbox health | n/a | reports `configured: false` and names the missing variables — this is a normal state, not an error |
+
+The Graph values are the ones you can most safely be missing: the module reports
+itself unconfigured and nothing else degrades.
+
+### Never
+
+Do not copy `.env.local` from another developer, and do not paste one into chat
+or a ticket. It contains a database password and a client secret in plain text.
+The file is gitignored and must stay that way — `.gitignore` covers it with
+`.env.*`.
+
+---
+
 ## The mailbox is not connected
 
 **Symptom.** `GET /api/modules/change-orders/mailbox/health` returns `200` with
