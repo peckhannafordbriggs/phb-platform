@@ -145,6 +145,9 @@ Somewhere other than one laptop.
 - Production redirect URI added to the SSO app registration
 - Deploy from CI, not from a personal machine
 - Budget alert on the subscription
+- **Check the database collation at creation time** — see *Deployment: check this
+  when the Azure database is created* in `docs/runbook.md`. It is a dump and restore
+  to change later, and a five-second check now.
 - `docs/runbook.md` gets its Azure entries in this phase, not after
 
 **Requires:** an Azure subscription owned by a group rather than an individual.

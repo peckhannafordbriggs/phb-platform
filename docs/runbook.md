@@ -369,6 +369,63 @@ Then re-run `npx prisma migrate deploy`.
 
 ---
 
+## Deployment: check this when the Azure database is created
+
+**Verify the collation before anything is loaded into it.** Changing a database's
+collation afterwards is a dump and restore, not a setting.
+
+```sql
+SELECT datcollate, datctype FROM pg_database WHERE datname = current_database();
+```
+
+Expect a locale-aware collation — `en_US.utf8` is the Azure Database for PostgreSQL
+Flexible Server default and is correct. **`C` or `POSIX` is wrong for this
+application.**
+
+**Why it matters.** Every list of departments and positions — the onboarding
+dropdowns, the admin list editor, the admin employee filter — is ordered with
+`ORDER BY name ASC`, so the ordering is whatever the database's collation says. A
+locale-aware collation compares letters and ignores case at the first level. `C` and
+`POSIX` compare raw bytes, where every uppercase letter sorts before every lowercase
+one.
+
+The department list makes the difference visible:
+
+| Collation | Order |
+|---|---|
+| `en_US.utf8`, `English_United States.1252` | Administrative, **AI**, Controls, … |
+| `C`, `POSIX` | **AI**, Administrative, Controls, … |
+
+`AI` and `VDC` are the ones to look at — an all-caps name is where byte ordering
+stops matching what a person expects. It is cosmetic, not a data problem, but it is
+the kind of thing that gets reported as "the list is in a weird order" and takes an
+afternoon to trace back to the database.
+
+**Confirm it with the actual values rather than reading the collation name:**
+
+```sql
+SELECT name FROM (VALUES ('Administrative'), ('AI')) AS t(name) ORDER BY name;
+```
+
+`Administrative` must come first.
+
+**If it is wrong.** Before go-live, drop and recreate the database with an explicit
+collation — cheapest by far:
+
+```sql
+CREATE DATABASE phb_platform
+  LC_COLLATE = 'en_US.utf8'
+  LC_CTYPE   = 'en_US.utf8'
+  TEMPLATE   = template0;
+```
+
+After go-live it is a `pg_dump` / `pg_restore` into a correctly created database.
+Do not instead patch the application's `ORDER BY` clauses: Prisma cannot express a
+per-query `COLLATE`, so it would mean raw SQL in five places to work around one
+database setting.
+
+---
+
 ## The database is unreachable
 
 **Symptom.** Every page returns the generic error boundary. The log carries

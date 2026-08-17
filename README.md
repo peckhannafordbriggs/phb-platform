@@ -72,6 +72,7 @@ table between test files and refuses to start if the two match.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
 | `npm test` | Vitest against `TEST_DATABASE_URL` |
+| `npm run db:test:setup` | Creates and migrates the test database. Idempotent; run after a new migration. |
 | `npm run seed` | Modules, positions, departments, bootstrap admin. Idempotent, safe in production. |
 | `npm run seed:dev` | 130 fake employees for search and pagination testing. Refuses to run in production. |
 
@@ -109,13 +110,19 @@ Tests run against a **real PostgreSQL database**, not a mocked Prisma client.
 The only thing mocked is `auth()`, so a test can act as a given employee; every
 query, guard and route handler in the path is the real one.
 
-Before the first run:
+Before the first run, once:
 
 ```bash
-createdb phb_platform_test
-npx dotenv -e .env.local -- prisma migrate deploy   # or point DATABASE_URL at the test DB once
+npm run db:test:setup   # creates TEST_DATABASE_URL's database and migrates it
 npm test
 ```
+
+`db:test:setup` is idempotent - run it again after any new migration. It refuses to
+run if `TEST_DATABASE_URL` is missing, or if it points at the same database as
+`DATABASE_URL`, because the suite truncates every table between test files.
+
+It does not seed. Seeded rows would be truncated before the first assertion; each
+test builds the fixtures it needs.
 
 The authorization tests are the ones that matter. They assert that an ungranted
 request is rejected - not that a granted one succeeds.
