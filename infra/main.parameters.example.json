@@ -1,0 +1,94 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "_comment": [
+    "Copy to infra/main.parameters.json and fill in. That filename is gitignored.",
+    "",
+    "Every value here is a placeholder. Nothing in this file or in main.bicep",
+    "assumes anything about PH+B - the subscription and resource group are chosen",
+    "on the az command line, and the region and names are parameters.",
+    "",
+    "The three secure parameters - postgresAdminPassword, authSecret - are NOT in",
+    "this file and must never be committed. Pass them on the command line:",
+    "",
+    "  az deployment group create \\",
+    "    --subscription <subscription-id> \\",
+    "    --resource-group <resource-group> \\",
+    "    --template-file infra/main.bicep \\",
+    "    --parameters @infra/main.parameters.json \\",
+    "    --parameters postgresAdminPassword=\"$PGPASSWORD\" authSecret=\"$AUTH_SECRET\""
+  ],
+  "parameters": {
+    "location": {
+      "value": "<azure-region, e.g. eastus2>"
+    },
+    "namePrefix": {
+      "value": "<short-lowercase-prefix>"
+    },
+    "environmentName": {
+      "value": "prod"
+    },
+    "tags": {
+      "value": {
+        "application": "<application-name>",
+        "owner": "<m365-group, never an individual>",
+        "environment": "prod"
+      }
+    },
+
+    "postgresSkuName": {
+      "value": "Standard_B1ms"
+    },
+    "postgresSkuTier": {
+      "value": "Burstable"
+    },
+    "postgresStorageGb": {
+      "value": 32
+    },
+    "postgresAdminUsername": {
+      "value": "<database-admin-login, not a person>"
+    },
+    "databaseName": {
+      "value": "phb_platform"
+    },
+
+    "allowedEmailDomains": {
+      "value": "<comma-separated verified domains, confirm with IT>"
+    },
+    "bootstrapAdminEmails": {
+      "value": "<comma-separated admin addresses>"
+    },
+    "authUrl": {
+      "value": ""
+    },
+    "ssoClientId": {
+      "value": "<sso-app-registration-client-id>"
+    },
+    "ssoTenantId": {
+      "value": "<entra-tenant-id>"
+    },
+
+    "graphClientId": {
+      "value": ""
+    },
+    "graphTenantId": {
+      "value": ""
+    },
+    "coMailbox": {
+      "value": ""
+    },
+
+    "enableBudget": {
+      "value": false
+    },
+    "budgetAmount": {
+      "value": 50
+    },
+    "budgetContactEmails": {
+      "value": []
+    },
+    "budgetStartDate": {
+      "value": "<YYYY-MM-01, first of the current or a future month>"
+    }
+  }
+}

@@ -144,3 +144,7 @@ vite.config.ts.timestamp-*
 
 # Generated Prisma client
 lib/generated/
+
+# Filled-in Bicep parameters. Holds real subscription and tenant identifiers;
+# the example file is the committed one.
+infra/main.parameters.json

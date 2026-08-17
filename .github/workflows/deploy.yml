@@ -1,0 +1,152 @@
+name: Deploy
+
+# Push to main only. Pull requests never deploy.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  # Never two deployments at once: the migration step is not safe to run twice
+  # in parallel.
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  # Required for OIDC federated credentials. There is no service principal
+  # secret anywhere in this workflow - CLAUDE.md prohibition 7, nothing that
+  # expires.
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Build image, migrate, deploy
+    runs-on: ubuntu-latest
+
+    # INERT UNTIL AZURE EXISTS.
+    #
+    # These are repository *variables*, not secrets - a client ID, a tenant ID
+    # and a subscription ID are identifiers, not credentials, and the `secrets`
+    # context cannot be read in a job-level `if` anyway. Until all three are set
+    # this job is skipped, which shows as a grey check rather than a red one on
+    # every push between now and provisioning.
+    #
+    # To enable, set in Settings → Secrets and variables → Actions → Variables:
+    #   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
+    #   AZURE_RESOURCE_GROUP, AZURE_CONTAINER_APP, AZURE_REGISTRY
+    if: >-
+      vars.AZURE_CLIENT_ID != '' &&
+      vars.AZURE_TENANT_ID != '' &&
+      vars.AZURE_SUBSCRIPTION_ID != ''
+
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # The image is tagged with the commit SHA, never `latest`. A tag that moves
+      # makes "which code is running in production" unanswerable, and makes a
+      # rollback a rebuild instead of a redeploy.
+      - name: Build and push the image
+        run: |
+          az acr build \
+            --registry "${{ vars.AZURE_REGISTRY }}" \
+            --image "phb-platform:${{ github.sha }}" \
+            --file Dockerfile \
+            .
+
+      # ---------------------------------------------------------------------
+      # Migrations run HERE, before the new revision starts, and never inside
+      # the container.
+      #
+      # On container start every replica would run them at once. Prisma takes an
+      # advisory lock so they would not corrupt each other, but the losers block
+      # on it and fail their startup probe, which Container Apps reads as a bad
+      # revision.
+      #
+      # The runner's IP is opened on the database firewall for the duration and
+      # closed again in an `always()` step, so there is no standing rule for a
+      # network we do not control. GitHub-hosted runners have dynamic addresses,
+      # so a fixed rule is not an option and permanent public access is not
+      # acceptable.
+      # ---------------------------------------------------------------------
+      - name: Open the database firewall for this runner
+        id: firewall
+        run: |
+          RUNNER_IP="$(curl -fsSL https://api.ipify.org)"
+          RULE="gh-deploy-${{ github.run_id }}"
+          echo "rule=$RULE" >> "$GITHUB_OUTPUT"
+          az postgres flexible-server firewall-rule create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_POSTGRES_SERVER }}" \
+            --rule-name "$RULE" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP" \
+            --output none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations
+        env:
+          # The only real secret this workflow needs. Everything else the app
+          # reads comes from Key Vault at runtime.
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: npx prisma migrate deploy
+
+      - name: Close the database firewall
+        if: always() && steps.firewall.outputs.rule != ''
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_POSTGRES_SERVER }}" \
+            --rule-name "${{ steps.firewall.outputs.rule }}" \
+            --yes --output none
+
+      - name: Deploy the new image
+        run: |
+          az containerapp update \
+            --name "${{ vars.AZURE_CONTAINER_APP }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ vars.AZURE_REGISTRY }}.azurecr.io/phb-platform:${{ github.sha }}" \
+            --output none
+
+      # A deployment that reports success without the new revision answering is
+      # the failure mode worth catching. The probe is unauthenticated by design.
+      - name: Verify the deployment responds
+        run: |
+          URL="$(az containerapp show \
+            --name "${{ vars.AZURE_CONTAINER_APP }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --query properties.configuration.ingress.fqdn -o tsv)"
+
+          for attempt in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "https://$URL/api/health" || true)"
+            if [ "$code" = "200" ]; then
+              echo "healthy after $attempt attempt(s)"
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            sleep 10
+          done
+
+          echo "The new revision never returned 200 from /api/health."
+          echo "See 'A deploy fails' in docs/runbook.md."
+          exit 1
+
+      # NOTE: the production seed is NOT run here. It runs once, by hand, on the
+      # first deploy - see docs/runbook.md. It is idempotent, but running it on
+      # every deploy would mean a deploy could silently re-create an admin row
+      # somebody had deliberately removed.

@@ -74,7 +74,7 @@ table between test files and refuses to start if the two match.
 | `npm test` | Vitest against `TEST_DATABASE_URL` |
 | `npm run db:test:setup` | Creates and migrates the test database. Idempotent; run after a new migration. |
 | `npm run seed` | Modules, positions, departments, bootstrap admin. Idempotent, safe in production. |
-| `npm run seed:dev` | 130 fake employees for search and pagination testing. Refuses to run in production. |
+| `npm run seed:dev` | 130 fake employees for search and pagination testing. Refuses to run with `NODE_ENV=production`, or against any `DATABASE_URL` that is not localhost. |
 
 Run `npm run seed` before `npm run seed:dev`.
 

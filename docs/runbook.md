@@ -378,6 +378,148 @@ Then re-run `npx prisma migrate deploy`.
 
 ---
 
+## A deploy fails
+
+**Symptom.** The Deploy workflow is red, or it is green and the site still serves the
+old build.
+
+**First: which step?** The workflow is ordered so the step name is the diagnosis.
+
+| Step that failed | Cause | Fix |
+|---|---|---|
+| *Sign in to Azure* | The OIDC federated credential is missing, or its subject does not match this repository and branch. | Check the credential on the app registration: subject `repo:<owner>/<repo>:ref:refs/heads/main`. It is not a secret and not expiring — if it looks right, confirm `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` in repository *variables*. |
+| *Build and push the image* | `az acr build` failed. Usually the Dockerfile, occasionally registry quota on Basic. | Reproduce locally: `docker build -t phb-platform:test .` |
+| *Open the database firewall* | The identity lacks rights on the server, or `AZURE_POSTGRES_SERVER` is wrong. | The deploy identity needs Contributor on the resource group. |
+| *Apply migrations* | See *A migration fails on deploy* below. |  |
+| *Deploy the new image* | The revision was rejected. | `az containerapp revision list -n <app> -g <rg> -o table`, then `az containerapp logs show -n <app> -g <rg>`. |
+| *Verify the deployment responds* | The revision deployed but never returned 200 from `/api/health`. | The container started and died, or never started. See the next section. |
+
+**The deploy job is skipped entirely.** That is the intended state before the
+subscription exists — it is gated on three repository variables being set. A grey
+check, not a red one. Set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and
+`AZURE_SUBSCRIPTION_ID` to enable it.
+
+**Green but serving the old build.** Container Apps kept the previous revision because
+the new one never became healthy. `az containerapp revision list` shows both. The
+verify step should have caught this — if it did not, the probe answered 200 from the
+old revision while the new one was still failing.
+
+---
+
+## The container starts and immediately exits
+
+**Symptom.** Revisions cycle. `az containerapp logs show` shows the process starting
+and stopping with no request ever served.
+
+| Cause | What you will see | Fix |
+|---|---|---|
+| A required environment variable is missing | `Invalid environment configuration:` and the variable named. `lib/env.ts` parses at boot and fails loudly on purpose. | Set it on the container app, or add it to Key Vault and reference it. |
+| `AUTH_SECRET` missing or unreadable | The same message naming `AUTH_SECRET`. | The container app reads it from Key Vault through the managed identity — check the `Key Vault Secrets User` role assignment still exists. |
+| `GRAPH_CLIENT_SECRET` is set | `GRAPH_CLIENT_SECRET is set in production` | Working as intended. Remove it. Production authenticates with the managed identity; prohibition 7 forbids a credential that expires. |
+| The image is for the wrong architecture | `exec format error` | Build for `linux/amd64`. `az acr build` does this by default. |
+
+**It is not Prisma's query engine.** That is the usual guess and it does not apply
+here: Prisma 7 with the `@prisma/adapter-pg` driver adapter compiles queries with
+WebAssembly embedded in `@prisma/client/runtime`, so there is no native engine binary to
+mismatch a libc. Confirm with `ls node_modules/@prisma/client/runtime | grep
+query_compiler`. The platform-specific piece is the *schema* engine, used only by
+`prisma migrate deploy`, which runs on the CI runner and is not in the image.
+
+---
+
+## A migration fails on deploy
+
+**Symptom.** The *Apply migrations* step is red. The app is untouched — migrations run
+before the new revision, so a failure here leaves the old revision serving.
+
+**Diagnose first, and do not re-run the workflow.** A retry runs the same migration
+against the same database.
+
+```bash
+npx prisma migrate status     # with DATABASE_URL pointing at production
+```
+
+Then see *A migration fails* below for the causes and for resolving a half-applied
+migration. **Never `migrate reset` against production** — it drops every table.
+
+**If the firewall step opened a rule and the job died before closing it**, the rule is
+left behind. It is scoped to one runner IP, but remove it:
+
+```bash
+az postgres flexible-server firewall-rule list -g <rg> -n <server> -o table
+az postgres flexible-server firewall-rule delete -g <rg> -n <server> --rule-name gh-deploy-<run-id> --yes
+```
+
+The close step runs under `always()`, so this only happens if the runner itself is
+killed.
+
+---
+
+## The app is up but the database is unreachable
+
+**Symptom.** `/api/health` returns 200. Every real page returns the error boundary.
+Logs carry a Prisma error code.
+
+**That combination is by design.** The health probe deliberately does not touch the
+database: a probe that fails during a brief Postgres outage makes Container Apps
+restart a process that was working, turning a short blip into a restart loop that
+outlasts it. Liveness answers "should this process be killed", and the answer is no.
+
+| Error | Cause | Fix |
+|---|---|---|
+| `P1001: Can't reach database server` | The firewall rule allowing Azure services was removed, or the server is stopped. Burstable tier servers can be stopped to save money and stay stopped. | `az postgres flexible-server show -g <rg> -n <server> --query state`. Confirm the `AllowAllAzureServicesAndResourcesWithinAzureIps` rule exists. |
+| `P1000: Authentication failed` | The admin password was rotated on the server but not in Key Vault. | Update the `DATABASE-URL` secret, then restart the revision — the container reads Key Vault at start, not per request. |
+| `P2024: Timed out fetching a connection` | More replicas than the server's connection limit allows. Burstable tiers have low limits. | Lower `maxReplicas`, or move up a tier. |
+
+Nothing here needs a redeploy. Fix the database or the secret and restart the revision.
+
+---
+
+## Zero admins after seeding
+
+**Symptom.** Everyone can sign in. Nobody sees the Admin item, and `/api/admin/*`
+returns 403 for everyone. A brand-new production with no way in.
+
+**Cause.** `BOOTSTRAP_ADMIN_EMAIL` was empty or wrong when the production seed ran. It
+is the only way the first admin is created — there is deliberately no create-employee
+endpoint and no UI path to grant the first admin flag.
+
+**Confirm it:**
+
+```sql
+SELECT email, is_platform_admin, entra_oid IS NULL AS awaiting_first_signin
+FROM employees WHERE is_platform_admin = true;
+```
+
+**Fix.** Correct the variable on the container app, restart the revision so it is read,
+then run the seed once more:
+
+```bash
+# From a machine that can reach the production database.
+DATABASE_URL='<production-url>' BOOTSTRAP_ADMIN_EMAIL='a@…,b@…' npm run seed
+```
+
+It is idempotent. Missing rows are created; existing rows are promoted **only** because
+no active administrator remains, which is exactly this situation. In normal operation
+it never re-promotes anyone, so this cannot quietly undo a demotion made in the UI.
+
+**It only sets the admin flag.** A bootstrap admin whose account is *disabled* stays
+disabled and the platform stays locked out — use the direct SQL in *The only admin is
+locked out* above, which sets both.
+
+**Do not** run `npm run seed:dev` to "get some data in". It creates 130 fake employees,
+and it refuses twice over: once on `NODE_ENV=production`, and again if `DATABASE_URL`
+points anywhere other than localhost. The second guard is the one that matters here —
+the first only reports intent, and a production URL in your environment with
+`NODE_ENV` unset is the realistic accident. Neither check opens a connection before it
+fires.
+
+Those fake rows are not a mess you can clean up afterwards: `audit_events` is
+append-only and its foreign keys are `ON DELETE SET NULL`, so a fake employee cannot be
+deleted at all once it has any audit history.
+
+---
+
 ## Deployment: check this when the Azure database is created
 
 **Verify the collation before anything is loaded into it.** Changing a database's

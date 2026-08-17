@@ -126,6 +126,53 @@ describe("page routes still redirect", () => {
   }
 });
 
+describe("the container health probe", () => {
+  /**
+   * Container Apps sends no cookie. Anything other than a 2xx here reads as
+   * "this replica is dead" and it restarts a process that was working, so the
+   * probe has to be reachable through the middleware - which every other API
+   * route deliberately is not.
+   */
+  it("returns 200 unauthenticated, not a 401 or a redirect", async () => {
+    const response = await request("/api/health");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    await expect(response.json()).resolves.toEqual({ status: "ok" });
+  });
+
+  it("is not cached, so a dead process cannot keep answering", async () => {
+    const response = await request("/api/health");
+
+    expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("reports nothing about the system beyond up/down", async () => {
+    const body = await (await request("/api/health")).text();
+
+    // An unauthenticated endpoint is unauthenticated whoever is asking. No
+    // version, no environment, no database state, no configuration.
+    expect(body).toBe(JSON.stringify({ status: "ok" }));
+    for (const leak of ["version", "env", "database", "postgres", "commit", "uptime"]) {
+      expect(body.toLowerCase()).not.toContain(leak);
+    }
+  });
+
+  it("is the only unauthenticated route outside sign-in and auth", async () => {
+    // If a future change makes another API route public, this is where it shows.
+    for (const path of [
+      "/api/me",
+      "/api/admin/employees",
+      "/api/onboarding",
+      "/api/modules/change-orders/ping",
+      "/api/modules/change-orders/mailbox/health",
+    ]) {
+      const response = await request(path);
+      expect(response.status, `${path} must not be public`).toBe(401);
+    }
+  });
+});
+
 describe("the auth routes stay reachable", () => {
   it("does not intercept /api/auth/*, or sign-in could never start", async () => {
     const response = await request("/api/auth/providers");

@@ -24,7 +24,11 @@ export default middlewareAuth((req) => {
   const isPublic =
     pathname === "/signin" ||
     pathname === "/unauthorized" ||
-    pathname.startsWith("/api/auth");
+    pathname.startsWith("/api/auth") ||
+    // The container probe. Container Apps sends no cookie, so anything other
+    // than a 2xx here reads as "this replica is dead" and it restarts a process
+    // that was working. The endpoint itself reports nothing but up/down.
+    pathname === "/api/health";
 
   if (!signedIn && !isPublic) {
     // A redirect only helps a browser navigating to a page. An API caller gets

@@ -1,0 +1,100 @@
+name: CI
+
+# Every push and every pull request. This is the gate that has to stay green
+# between now and provisioning, which is why it shares no job with deployment.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  # A newer push to the same ref makes the older run pointless.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, lint, test, build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # Without this the first query races the server's startup.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Two DIFFERENT databases. tests/setup.ts and scripts/setup-test-db.ts both
+      # refuse to run if these match, because the suite truncates every table.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/phb_platform
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/phb_platform_test
+      # lib/env.ts parses the environment at import time, so `next build` needs
+      # these to exist. They are placeholders and are not secrets - the test
+      # suite overrides the auth values with its own fixed ones anyway.
+      AUTH_SECRET: ci-placeholder-not-a-secret
+      AUTH_MICROSOFT_ENTRA_ID_ID: 00000000-0000-0000-0000-000000000000
+      AUTH_MICROSOFT_ENTRA_ID_TENANT_ID: 00000000-0000-0000-0000-000000000000
+      ALLOWED_EMAIL_DOMAINS: example.invalid
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # `npm ci` rather than `npm install`: installs the lockfile exactly, and
+      # fails instead of silently resolving a different tree.
+      - name: Install dependencies
+        run: npm ci
+
+      # lib/generated is gitignored, so nothing typechecks until this runs.
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Create and migrate the test database
+        run: npm run db:test:setup
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  # Validates the infrastructure definition without an Azure subscription.
+  # `az bicep build` is a compile, not a deployment, so it needs no credentials
+  # and runs on every push from today.
+  infra:
+    name: Bicep compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bicep
+        run: az bicep install
+
+      # `az bicep build` runs the linter as part of compiling, so this is both
+      # checks. It resolves no Azure resources and needs no login.
+      - name: Compile and lint
+        run: az bicep build --file infra/main.bicep --stdout > /dev/null

@@ -1,4 +1,5 @@
 import { createDbClient } from "../scripts/db";
+import { assertLocalDatabase } from "../scripts/local-only";
 
 /**
  * Development seed - fake employees only.
@@ -58,11 +59,21 @@ function pick<T>(rng: () => number, items: readonly T[]): T {
 }
 
 async function main(): Promise<void> {
+  // Two independent guards, both before any connection is opened.
+  //
+  // NODE_ENV is the declared intent, and it is the weaker of the two: it is a
+  // variable a developer sets on their own machine, so it says nothing about
+  // which database DATABASE_URL actually names. `NODE_ENV=development` with a
+  // production URL in the environment is the realistic accident, and the first
+  // check alone would wave it through.
   if (process.env.NODE_ENV === "production") {
     throw new Error(
       "seed:dev creates fake employees and must never run against production.",
     );
   }
+
+  // So the second guard checks the destination rather than the intent.
+  assertLocalDatabase(process.env.DATABASE_URL, "seed:dev");
 
   const prisma = createDbClient();
 
