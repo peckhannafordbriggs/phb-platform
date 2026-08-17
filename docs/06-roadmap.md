@@ -137,23 +137,58 @@ end to end and confirm it lands in `changeorder@` Sent Items in Outlook.
 ---
 
 ## Phase 7 — Deploy to Production
-
+ 
 Somewhere other than one laptop.
-
+ 
 - Azure Container Apps, Azure Database for PostgreSQL Flexible Server, Key Vault
 - Managed identity with a federated identity credential — nothing that expires
 - Production redirect URI added to the SSO app registration
 - Deploy from CI, not from a personal machine
 - Budget alert on the subscription
-- **Check the database collation at creation time** — see *Deployment: check this
-  when the Azure database is created* in `docs/runbook.md`. It is a dump and restore
-  to change later, and a five-second check now.
 - `docs/runbook.md` gets its Azure entries in this phase, not after
-
-**Requires:** an Azure subscription owned by a group rather than an individual.
-
-**Goal:** other employees can actually use it.
-
+**Requires:** an Azure subscription owned by a group rather than an individual, plus
+Contributor access on the resource group. Without the second, nothing can be deployed
+into it — that permission is routinely forgotten when a subscription is created.
+ 
+### Before the production seed runs
+ 
+**Set `BOOTSTRAP_ADMIN_EMAIL` to all four addresses.** It is a comma-separated list:
+ 
+```
+msheth@phb1899.com,jschwarz@phb1899.com,jschriner@phb1899.com,bbolten@phb1899.com
+```
+ 
+If this is missing or wrong when the seed runs, production comes up with **zero
+admins** and there is no way to grant admin through the UI — the first admin can only
+come from this variable. Recovering means editing the production database by hand.
+ 
+Confirm after seeding that four employee rows exist with `is_platform_admin = true`
+and `entra_oid` null. Each becomes live when that person first signs in.
+ 
+### Check the database collation when it is created
+ 
+Every department and position list is `ORDER BY name ASC`, so ordering belongs to the
+database collation, not the application. `en_US.utf8` is correct and is the Flexible
+Server default; `C` or `POSIX` sorts `AI` before `Administrative` and puts the lists in
+the wrong order.
+ 
+Verify with actual values rather than reading the collation name — see the collation
+section in `docs/runbook.md`. Fixing this before go-live is a `CREATE DATABASE`
+parameter. Fixing it afterwards is a dump and restore.
+ 
+### Production environment
+ 
+- No client secret for Graph. Production refuses to boot with one set — that is
+  deliberate, and the federated identity credential replaces it.
+- `PHB_ALLOW_SEND` stays `false` until sending has been verified end to end.
+- The SSO client secret is development-only. An expiry there can never affect
+  production, and if it ever does, the fault is that a secret was deployed at all.
+### What "done" looks like
+ 
+All four admins can reach the production URL, sign in with their work account, complete
+a profile, and see the admin screen. Nothing runs on anyone's laptop. The Outlook path
+is untouched and still works.
+ 
 ---
 
 ## Phase 8 — Full Email Actions
