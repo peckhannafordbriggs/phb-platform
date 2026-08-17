@@ -115,8 +115,11 @@ is separate and stricter.
 
 ## Current phase
 
-**Phase 1 — Platform foundation.** See `PHASE-1.md` for scope and acceptance
-criteria. Phase 1 makes **no Microsoft Graph calls and no Claude API calls.**
+**Phase 4 — Microsoft 365 connection.** Connect the backend to Microsoft Graph and
+prove it can reach the Change Order mailbox. No email UI yet.
+
+Phases 1–3 are complete — platform foundation, employee authentication, and system
+permissions. `PHASE-1.md` covers the scope and acceptance criteria of all three.
 
 Roadmap and phase boundaries: `docs/06-roadmap.md`. Do not implement a later phase
 without being told to.

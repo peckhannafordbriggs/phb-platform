@@ -39,7 +39,8 @@ If the platform's mailbox tables can't be dropped and rebuilt from Graph with no
 a second mailbox has been built by accident.
 
 Webhooks become worth their reliability cost only when a background job must react to
-inbound mail with no human present. That is not before 2027.
+inbound mail with no human present. Polling versus change notifications gets decided
+when two-way sync and reliability are built, not before.
 
 ## Never persist
 
@@ -123,9 +124,9 @@ Both enforced inside the mail service, not at the route layer:
 Stays behind the scenes. Employees get no SharePoint UI. Do not duplicate SharePoint
 data into the platform database.
 
-When the backend eventually needs SharePoint reads (Phase 5+, CO context), it uses
-Graph with `Sites.Selected` granted on the `AISandbox` site only. Not needed before
-then — do not request the permission early.
+When the backend eventually needs SharePoint reads for CO context, it uses Graph with
+`Sites.Selected` granted on the `AISandbox` site only. Not needed until then — do not
+request the permission early.
 
 ## Power Automate
 
@@ -133,6 +134,6 @@ Untouched. The platform and the flows never talk to each other; both talk to Exc
 and SharePoint. That independence is what makes the platform safe to build and
 redeploy while the pipeline runs.
 
-If a future phase needs the backend to trigger a flow, the mechanism is **writing the
+If the backend ever needs to trigger a flow, the mechanism is **writing the
 sentinel file** to SharePoint via Graph — zero flow edits, no premium license, no
 secret to rotate. Do not introduce Power Automate HTTP triggers.

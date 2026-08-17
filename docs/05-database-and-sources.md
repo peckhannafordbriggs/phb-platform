@@ -22,12 +22,12 @@ mirror of Microsoft 365.
 | Module definitions | **Platform** |
 | Employee → module grants | **Platform** |
 | Audit events | **Platform** |
-| AI prompts | **SharePoint** today (`docs/09_Scheduled_Task_Prompts_VERBATIM.md`). Moves to the platform only at Phase 10 cutover, with the SharePoint copy re-labeled a mirror on the same day. Until then, SharePoint wins. |
+| AI prompts | **SharePoint** today (`docs/09_Scheduled_Task_Prompts_VERBATIM.md`). Moves to the platform only at cutover of the centralized AI logic, with the SharePoint copy re-labeled a mirror on the same day. Until then, SharePoint wins. |
 
 Never create a second authoritative copy. When one is unavoidable, name the winner
 explicitly and put a banner on the loser.
 
-## Phase 1 schema
+## Foundation schema
 
 Prisma models. Names are indicative; follow Prisma conventions.
 
@@ -87,14 +87,16 @@ AuditEvent
 
 `AuditEvent` is **append-only**. No updates, no deletes, ever.
 
-Phase 1 actions to record: `employee.provisioned`, `employee.profile_completed`,
-`employee.disabled`, `employee.enabled`, `employee.admin_granted`,
-`employee.admin_revoked`, `grant.added`, `grant.removed`, `login.denied`.
+Actions recorded by the foundation: `employee.provisioned`,
+`employee.profile_completed`, `employee.disabled`, `employee.enabled`,
+`employee.admin_granted`, `employee.admin_revoked`, `grant.added`, `grant.removed`,
+`login.denied`.
 
-Later phases add `mail.draft_edited`, `mail.sent`, `mail.deleted`, `mail.moved`, and
-job events. Do not build a general audit framework — add action strings as needed.
+Mail and scheduled-job work adds `mail.draft_edited`, `mail.sent`, `mail.deleted`,
+`mail.moved`, and job events. Do not build a general audit framework — add action
+strings as needed.
 
-## Not in the Phase 1 schema
+## Not in the foundation schema
 
 No message table. No folder table. No attachment table. No delta token table. No
 subscription table. No prompt table. No job table.

@@ -1,74 +1,322 @@
 # Roadmap
+Two things hold across every phase:
 
-## Constraint
-
-The current operator leaves **December 2026** and no successor has been confirmed.
-Everything below is shaped by that. The MVP must be a defensible stopping point, not
-a half-finished migration.
-
----
-
-## In scope before December
-
-### Phase 1 — Platform foundation
-Shell, Entra SSO with the full login gate, self-provisioning, onboarding, employees /
-grants / audit schema, authorization middleware, admin screen.
-
-No Graph. No Claude. Full spec: `PHASE-1.md`.
-
-*Why auth is in Phase 1:* SSO configuration is the riskiest unknown and roughly a
-day's work. Discovering redirect-URI or guest-filtering problems in week one is much
-cheaper than in week five. A shell without auth is also not demonstrable to anyone.
-
-### Phase 2 — Graph connection and read-only mailbox
-App-only Graph auth, mail service boundary, folder tree with nesting, message list,
-message read with sanitized HTML, attachments, search.
-
-Read-only ships first because the worst possible bug is showing nothing.
-
-Requires: the completed IT request (app registration, admin consent, verified
-ApplicationAccessPolicy scoping).
-
-### Phase 3 — Drafts
-Open, edit, autosave, send. `PHB_ALLOW_SEND` and `ZZTEST` guards in place.
-
-This is the actual daily human job and the highest-value part of the whole platform.
-
-### Phase 4 — Deploy and hand over
-Azure deployment from CI, Key Vault, managed identity + federated credential,
-`docs/runbook.md` complete, handover documentation.
-
-**Phases 1–4 are the MVP.** They are enough to stop and be useful.
+- **Exchange stays the source of truth for mail.** No duplicate mailbox in our database.
+- **The Outlook path keeps working.** The platform is an additional client, never the
+  only route to change-order work.
 
 ---
 
-## Not before 2027 — requires a named owner
+## Phase 1 — Platform Foundation — COMPLETE
 
-Do not begin any of these. Listing them is scope definition, not a plan.
+Basic application shell.
 
-- **Full email actions** — compose from scratch, reply / reply-all / forward, move,
-  delete, attachment add/remove.
-- **CO context panel** — linking a draft to its `co_key`, run report, and Q&A log.
-  The most attractive feature and the one with no Outlook fallback. Deliberately cut.
-- **Graph change notifications** — subscriptions, renewal, reconciliation.
-- **Message index / caching layer** — only if performance demands it.
-- **Centralizing the AI layer** — moving the scheduled tasks off the laptop, the
-  Claude API migration, prompt management.
-- **Centralized scheduling** — background jobs, heartbeats, alerting.
-- **Additional modules.**
+- Next.js frontend and API in one project
+- PostgreSQL with Prisma migrations
+- Environment/secret handling — `lib/env.ts`, Zod-validated at boot
+- Sidebar and navigation shell
+- Placeholder Home and Change Orders pages
+- Structured logging, error boundaries
 
-### On the AI layer specifically
+**Goal:** an empty but functioning company platform. ✔
 
-Leaving mid-migration on the AI layer is the worst possible handover state. The
-current pipeline works. Moving it requires: extracting a file-access interface from
-`run_workflow.py`, containerizing it, shadow-running against a copy for weeks,
-diffing outputs, then cutting over.
+---
 
-**Do not start this before December under any circumstances.**
+## Phase 2 — Employee Authentication — COMPLETE
 
-A separate, much smaller step is worth doing independently of the platform: move the
-two scheduled tasks from a personal laptop to an always-on host. Zero code change,
-removes the single point of failure. That is an operations task, not a platform phase.
+- Entra ID SSO via Auth.js. No platform passwords, ever
+- Four-check login gate: tenant `tid`, allowed email domain, `#EXT#` guest rejection,
+  employee not disabled
+- Self-provisioning on first sign-in with zero grants
+- Profile completion — name prefilled from token, email locked, position and department
+- Sessions, protected pages, protected API, logout
+- `sessions_valid_after` so revocation takes effect immediately
+
+**Goal:** employees sign in securely with their existing work account. ✔
+
+Verification record: `docs/phase-1-verification.md`. Four of six manual criteria
+observed against real Microsoft tokens; two documented as not reproducible without a
+second tenant or a guest account.
+
+---
+
+## Phase 3 — System Permissions — COMPLETE
+
+```
+Employee
+  Change Orders: YES
+  Future System A: NO
+```
+
+- `modules`, `module_grants` — the sidebar renders from grants, never a hardcoded list
+- Server-side guard on every `/api/modules/<key>/*` route: 404 on a missing grant, not
+  403
+- Admin screen for granting and revoking
+- Append-only audit log, enforced by a database trigger
+- 62 automated tests including the negative cases — URL-bypass attempts, revocation
+  mid-session, non-admin hitting admin routes
+
+**Goal:** access is genuinely controlled by the backend, not hidden in the UI. ✔
+
+---
+
+## Phase 4 — Microsoft 365 Connection
+
+Connect the backend to Microsoft. No email UI yet.
+
+- Second app registration, separate from SSO — different permission set, so they don't
+  share an identity
+- Microsoft Graph, **application** permissions: `Mail.ReadWrite` + `Mail.Send`
+- Exchange ApplicationAccessPolicy scoping the app to `changeorder@phb1899.com` alone
+- Credentials in `.env.local` for development; Key Vault and a federated identity
+  credential in production
+- One successful Graph call proving the backend can reach the mailbox
+
+The mailbox is a **licensed user mailbox**, shared with the current operator in
+Outlook. Settled — no investigation needed.
+
+**Requires:** `Test-ApplicationAccessPolicy` returning **Granted** for
+`changeorder@phb1899.com` and **Denied** for any other mailbox. Do not build against
+the credential before that output exists — without the policy, those permissions reach
+every mailbox in the company.
+
+**Goal:** the backend can securely talk to the real Change Order mailbox.
+
+---
+
+## Phase 5 — Read-Only Change Order Mailbox
+
+First genuinely useful screen. Read-only, because the worst bug in a read-only feature
+is showing nothing.
+
+Priority order within the phase — **Drafts and Sent first.** That's the daily job. If
+time runs short, ship those two and add the rest in place; no rework, since there's no
+local state to backfill.
+
+1. Drafts — list and open
+2. Sent Items — list and open, so a send can be confirmed
+3. Inbox
+4. Folder tree with nesting, including the Projects folders
+5. Message read: sender, recipients, subject, body, dates, attachments
+6. Pagination and loading older messages
+7. Search
+
+Body HTML is attacker-controlled — vendors send it. Sanitize server-side, sandboxed
+iframe, remote images blocked by default.
+
+`Prefer: IdType="ImmutableId"` on every request. Message IDs otherwise change when a
+Power Automate flow files something, and every cached ID goes stale silently.
+
+**Goal:** stop opening Outlook just to read the Change Order mailbox.
+
+---
+
+## Phase 6 — Drafts: Review, Edit, Send
+
+The actual daily human job and the highest-value part of the platform.
+
+- Open a draft the automation created
+- Edit recipients, subject, body; autosave via `PATCH`
+- Send with `POST /messages/{id}/send` on the existing draft
+
+Never `sendMail` with a copied body — that loses the attachments Power Automate
+attached, the `[CO: Owner|Bulletin]` subject tag downstream filing depends on, and
+conversation threading.
+
+Guards: `PHB_ALLOW_SEND` must be true or a send throws; outside production, writes are
+permitted only on subjects beginning with `ZZTEST`.
+
+**No bulk send. No send-all. No auto-send. Ever.** A human sending each draft is the
+entire safety model of the change-order system.
+
+Before anyone other than the author sends from the platform: send one `ZZTEST` draft
+end to end and confirm it lands in `changeorder@` Sent Items in Outlook.
+
+**Goal:** an employee can complete the review-and-send loop without Outlook.
+
+---
+
+## Phase 7 — Deploy to Production
+
+Somewhere other than one laptop.
+
+- Azure Container Apps, Azure Database for PostgreSQL Flexible Server, Key Vault
+- Managed identity with a federated identity credential — nothing that expires
+- Production redirect URI added to the SSO app registration
+- Deploy from CI, not from a personal machine
+- Budget alert on the subscription
+- `docs/runbook.md` gets its Azure entries in this phase, not after
+
+**Requires:** an Azure subscription owned by a group rather than an individual.
+
+**Goal:** other employees can actually use it.
+
+---
+
+## Phase 8 — Full Email Actions
+
+Turn the mailbox view into a real client. All against Exchange, never a local copy.
+
+- New email
+- Reply, reply all, forward — via `createReply`, `createReplyAll`, `createForward`, so
+  quoting and threading come from Exchange rather than string assembly
+- Add and remove attachments — simple upload under 3 MB, upload session above
+- Move between folders
+- Delete (to Deleted Items; never expose permanent delete)
+
+**Goal:** normal Change Order email work happens entirely inside the platform.
+
+---
+
+## Phase 9 — Two-Way Sync and Reliability
+
+Make it feel live.
+
+```
+Create draft in Outlook  → appears in platform
+Edit in platform         → updated in Outlook
+Send from platform       → appears in Outlook Sent Items
+Move in Outlook          → moves in platform
+```
+
+Investigate Graph change notifications versus polling here, and pick based on measured
+need rather than ambition. Webhooks bring subscription renewal, a validation handshake,
+and dropped-notification reconciliation — real work. At low user counts, polling the
+open folder is close to indistinguishable.
+
+Also handle: concurrent edits between Outlook and the platform (last write wins — take
+an advisory lock and show it), API failures, rate limits (throttling concentrates on
+one mailbox through one app identity), and retry behavior.
+
+**Goal:** Outlook and the platform behave like two interfaces to one mailbox.
+
+---
+
+## Phase 10 — Admin Panel Refinement
+
+The core shipped in Phase 3. What's left is scale and polish.
+
+- Search, filters, pagination at real volume
+- Bulk grant and revoke
+- Positions and departments management
+- Audit log views
+
+Note the onboarding model, which differs from a conventional admin panel: **there is no
+create-employee function.** Anyone with a company account can sign in and gets a row
+with zero grants. Admins grant access; they don't create accounts.
+
+```
+Sarah signs in          → row created, empty sidebar
+Admin toggles Change Orders ON
+Sarah's next request    → Change Orders appears
+```
+
+No Claude configuration. No SharePoint connection. No Power Automate setup on Sarah's
+computer.
+
+**Goal:** onboarding is centrally managed and takes one toggle.
+
+---
+
+## Phase 11 — Verify the Existing Automation Still Works
+
+Mostly a verification phase, not a build phase. The platform and the flows never talk
+to each other — both talk to Exchange and SharePoint. That independence is what makes
+this safe.
+
+```
+Existing automation → creates Outlook draft → Exchange
+                                                 ↓
+                                          Platform sees draft
+                                                 ↓
+                                          Employee reviews → sends
+```
+
+Confirm end to end that the 11 Power Automate flows, the SharePoint structure, inbound
+email processing, folder organization, and the two morning scheduled tasks all continue
+untouched while employees use the platform as their interface.
+
+**Goal:** the platform coexists with the existing automation, provably.
+
+---
+
+## Phase 12 — Centralize the AI Logic
+
+Reproduce the current AI behavior in the backend without changing the employee
+experience. **Do not shut down the existing setup during this phase.**
+
+Inventory what the Claude layer does today: project instructions, the two scheduled
+prompts, SharePoint access, decision logic, draft generation, language review,
+classification.
+
+Then translate:
+
+```
+Project instruction  → versioned prompt in the repo, loaded from the database
+Claude desktop app   → Claude API from a Python worker
+Local folder access  → Graph Files against the same SharePoint library
+```
+
+The hard part isn't the API. It's that `run_workflow.py` is ~196 KB of proven logic
+reading a locally-synced OneDrive folder with Windows paths. Extract a file-access
+interface first, keep everything else unmodified, containerize, then **shadow-run
+against a copy** and diff the outputs — sentinel JSON, `state/*.json`, run reports —
+against the real runs for weeks before cutover. Never run both against live: the lock
+file and duplicate detection make double-running dangerous.
+
+Prompts move to the repo as source of truth **only at cutover**, with the SharePoint
+copies re-labeled as mirrors the same day. Two authoritative copies is the failure
+this project exists to prevent.
+
+**Goal:** the AI logic runs centrally and produces identical output.
+
+---
+
+## Phase 13 — Centralize the Scheduled Jobs
+
+Move the two morning tasks off a personal laptop.
+
+```
+Scheduled time → backend job → gathers CO state and email context
+              → Claude API → determines action
+              → writes the sentinel file → Power Automate creates the draft
+              → draft appears in the Change Orders tab
+```
+
+Add: job history, success/failure status, retries, duplicate prevention, and **an alert
+when the morning run doesn't happen.** That last one fixes the documented failure mode
+where the pipeline goes quiet with no error anywhere.
+
+Single-fire semantics via a Postgres advisory lock, replacing the current lock file.
+
+Worth doing independently and early, well before this phase: move the two scheduled
+tasks to an always-on host with no code change at all. It removes the single largest
+point of failure in the current system and costs a day.
+
+**Goal:** the automation runs whether or not anyone's laptop is on.
+
+---
+
+## Phase 14 — Cutover and Production Hardening
+
+Prove the centralized version is correct, then retire the old path.
+
+```
+CO email arrives → Power Automate runs → SharePoint updated
+   → scheduled AI processing → Claude API generates the draft
+   → draft created in Exchange → employee reviews and sends
+   → Exchange sends → appears in Sent Items
+```
+
+Then: audit logs, error monitoring, security and permission review, backups,
+failed-job alerts, email action logging, AI execution logs, release process, recovery
+procedures.
+
+Retire the laptop-dependent workflow only after the centralized version has run
+correctly in parallel for a sustained period. Keep the old path documented as rollback
+for at least a month after cutover.
+
+**Goal:** Change Orders is a genuinely centrally hosted company system.
 
 ---
 
@@ -81,9 +329,9 @@ Build the platform beside it
     ↓
 Prove the employee workflow
     ↓
-(later, with an owner) integrate automation
+Integrate the automation
     ↓
-(later still) centralize AI
+Centralize the AI
 ```
 
-No big-bang rewrite. At every point, the Outlook path still works.
+No big-bang rewrite. At every point along the way, the Outlook path still works.
