@@ -6,9 +6,148 @@ not after.
 Assume the reader has never seen this codebase. The current operator leaves in
 December 2026.
 
-**Nothing in this file touches the existing change-order system.** Phase 1 makes
-no Microsoft Graph calls. Do not restart, re-authorize, or edit a Power Automate
-flow while diagnosing a platform problem — they are unrelated.
+**Nothing in this file touches the existing change-order system.** The platform
+reads the mailbox through Graph and never touches the flows. Do not restart,
+re-authorize, or edit a Power Automate flow while diagnosing a platform
+problem — they are unrelated.
+
+---
+
+## The mailbox is not connected
+
+**Symptom.** `GET /api/modules/change-orders/mailbox/health` returns `200` with
+
+```json
+{ "data": { "configured": false, "missing": ["GRAPH_CLIENT_ID", "GRAPH_TENANT_ID"], "folders": [] } }
+```
+
+**This is not a failure.** It is the deliberate answer when no Graph credential
+is configured. The platform boots, signs people in, and serves the admin screen
+in exactly this state — the Graph variables are *not* part of the boot-time
+environment check, so a missing credential degrades the Change Orders module and
+nothing else.
+
+**Fix.** Set the variables named in `missing`. They are, in full:
+
+| Variable | Where | Notes |
+|---|---|---|
+| `GRAPH_CLIENT_ID` | everywhere | The Graph app registration, **not** the SSO one |
+| `GRAPH_TENANT_ID` | everywhere | The PH+B tenant |
+| `GRAPH_CLIENT_SECRET` | local development **only** | Refused outright in production — see below |
+| `GRAPH_MANAGED_IDENTITY_CLIENT_ID` | Azure only, optional | Omit to use the system-assigned identity |
+| `CO_MAILBOX` | everywhere | `changeorder@phb1899.com` |
+
+Restart after changing them: Next.js reads `.env.local` at boot, and the token
+cache and Graph client are memoised per process.
+
+`missing` names variables, never values. A blank variable (`GRAPH_CLIENT_ID=""`)
+counts as absent rather than malformed, which is why `.env.example` can ship them
+empty.
+
+---
+
+## The mailbox health endpoint fails
+
+Every response below carries a non-technical message; the specific `code` and the
+server log are where the diagnosis is. All of them are `500` except `not_found` —
+`docs/07-conventions.md` fixes the status set, so integration failures are
+distinguished by `code`, not by status.
+
+| `code` | Log `outcome` | Cause | Fix |
+|---|---|---|---|
+| `mail_not_configured` | `not_configured` | No credential, or `GRAPH_CLIENT_SECRET` set in production. | See above. |
+| `mail_auth_failed` | `auth_failed` | Entra refused a token. Locally: expired or wrong `GRAPH_CLIENT_SECRET` (`AADSTS7000215`). In Azure: no managed identity assigned, or the federated identity credential is missing from the app registration. | Rotate the local secret; in Azure check the identity assignment. |
+| `mail_access_denied` | `mailbox_forbidden` | **Almost always the ApplicationAccessPolicy.** Graph returned 403. | See the next section. |
+| `mail_busy` | `throttled` | Graph throttled us and the single retry also failed. | Wait. Do not add retries — see below. |
+| `mail_unreachable` | `network` | The request never got an answer. Outbound network or DNS. | Check egress from the container app. |
+| `not_found` (404) | `not_found` | The folder or message is gone. Power Automate moves messages constantly, which is why every request sends `Prefer: IdType="ImmutableId"`. | Re-read the folder listing; the ID was captured before a move. |
+
+The log line is `"event":"mail.graph_call_failed"`, and its `reason` field carries
+`operation`, `status`, `code` and Microsoft's `requestId`. **Quote the
+`requestId` when opening a ticket with Microsoft.** The response body and the
+access token are never logged.
+
+---
+
+## `mail_access_denied` — the access policy
+
+**Symptom.** Authentication succeeds, then every mailbox read returns
+`mail_access_denied` / a Graph 403.
+
+**Cause.** The Graph app registration holds `Mail.ReadWrite` and `Mail.Send` as
+**application** permissions, which reach every mailbox in the company unless an
+Exchange **ApplicationAccessPolicy** restricts them to a mail-enabled security
+group containing only `changeorder@phb1899.com`. A 403 means the policy is
+denying the mailbox — or is denying *everything* because it was scoped wrongly.
+
+**Two things that look identical and are not.**
+
+- The policy applies and is correct → reads succeed.
+- The policy silently did not apply → reads succeed **against every mailbox in
+  the company**.
+
+The second is the dangerous one, and it does not announce itself. That is why
+Part B of Phase 4 includes reading a *different* mailbox with the same credential
+and confirming a 403. IT's `Test-ApplicationAccessPolicy` output is their
+verification; that read is ours.
+
+**Also note:** an access policy change can take **up to an hour** to propagate.
+A 403 immediately after IT reports the policy is in place may simply be early.
+Re-check before escalating.
+
+---
+
+## Graph throttling
+
+**Symptom.** `mail_busy`, and a log line `"event":"graph.throttled"` with
+`outcome: retrying_once`.
+
+**Expected behavior.** A throttled request (`429`, `503`, `504`) is retried
+**exactly once**, after the delay Graph asks for in `Retry-After`, capped at 30
+seconds. A second failure is surfaced to the caller.
+
+**Do not raise the retry count.** Throttling here concentrates on one mailbox
+through one app identity — roughly 10k requests per 10 minutes, about 4
+concurrent in practice. Retrying harder makes the throttle deeper and longer.
+If this becomes common, the cause is a polling interval that is too aggressive,
+not a retry count that is too low.
+
+---
+
+## Nothing sends, and that is correct
+
+**Symptom.** An attempt to send returns `mail_send_disabled`, with
+`"event":"mail.send_blocked"` in the log.
+
+**Cause.** `PHB_ALLOW_SEND` is not exactly the string `"true"`. `TRUE`, `True`,
+`1` and `yes` all leave the gate shut, deliberately.
+
+**This is the safety model, not a bug.** `CLAUDE.md` prohibition 1: nothing in
+this system sends automatically, in any phase. Every outbound message is an
+unsent draft that a human opens and sends. `sendMail` appears zero times across
+all 11 Power Automate flows and zero times in this codebase — a test asserts the
+second half of that.
+
+**Do not set `PHB_ALLOW_SEND=true` outside production.** Development runs against
+the live `changeorder@phb1899.com` mailbox and there is no test mailbox. A send
+cannot be undone; everything else can.
+
+---
+
+## A write was refused outside production — `mail_write_disabled`
+
+**Symptom.** A draft edit, move or delete fails with `mail_write_disabled` and
+`"event":"mail.write_blocked"`.
+
+**Cause.** Outside production, write operations are permitted only on messages
+whose subject **begins with** `ZZTEST`. Contains-anywhere is not enough — a
+vendor could otherwise name a real message so the platform would write to it.
+
+The subject is read from Exchange at the moment of the check, not taken from the
+caller, so passing `"ZZTEST"` in as an argument does not open the fence.
+
+**Fix.** To exercise a write path in development, create a message in the mailbox
+whose subject starts with `ZZTEST`. Do not disable the guard.
 
 ---
 
@@ -70,7 +209,7 @@ session cookie, and sign-in appears to succeed and then immediately loop back to
 `/signin`.
 
 **Do not** merge the SSO app registration with the Graph mail app registration
-that arrives in Phase 2. They are separate on purpose.
+(Phase 4). They are separate on purpose.
 
 ---
 
@@ -79,8 +218,23 @@ that arrives in Phase 2. They are separate on purpose.
 | Credential | Where | Expires | Breaks what |
 |---|---|---|---|
 | SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local development only |
+| Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | *recorded when the app registration exists* | Local development only |
 
-Nothing else in Phase 1 expires.
+Nothing in Azure expires. Both secrets above exist solely because a developer
+machine cannot use a managed identity.
+
+For the Graph credential this is enforced in code, not by convention:
+`createGraphCredential` in
+`lib/modules/change-orders/graph/credential.ts` **throws** if
+`GRAPH_CLIENT_SECRET` is set while `NODE_ENV=production`. Production authenticates
+with a managed identity plus a federated identity credential, so an expiring
+Graph secret can only ever affect a developer machine. If one ever appears to
+break production, the fault is that a secret was deployed at all — fix that, do
+not rotate it.
+
+**Graph app registration** — client ID, tenant ID and secret expiry date to be
+recorded here once IT creates it (Phase 4 Part B). It is a **second, separate**
+registration from the SSO one; do not merge them.
 
 **SSO app registration** — client ID `220921c1-f23e-4d01-b354-736884ba3d00`,
 tenant `48f37f84-1c36-4b3e-986c-b8b7196ad49d`. Neither is a secret; both appear

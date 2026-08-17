@@ -1,6 +1,6 @@
 import path from "node:path";
 import { config as loadEnv } from "dotenv";
-import { TEST_ALLOWED_DOMAIN, TEST_TENANT_ID } from "./constants";
+import { TEST_ALLOWED_DOMAIN, TEST_MAILBOX, TEST_TENANT_ID } from "./constants";
 
 /**
  * Runs before every test file.
@@ -37,7 +37,7 @@ process.env.DATABASE_URL = testUrl;
 
 // Vitest already sets NODE_ENV to "test", but the type is read-only, so assert
 // rather than assign - the value matters to lib/env.ts and to the ZZTEST guard
-// that arrives in Phase 3.
+// in lib/modules/change-orders/mail/guards.ts.
 if (process.env.NODE_ENV !== "test") {
   throw new Error(`Expected NODE_ENV=test, got ${String(process.env.NODE_ENV)}`);
 }
@@ -56,3 +56,25 @@ process.env.AUTH_MICROSOFT_ENTRA_ID_ID = "test-client-id";
 process.env.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID = TEST_TENANT_ID;
 process.env.ALLOWED_EMAIL_DOMAINS = TEST_ALLOWED_DOMAIN;
 process.env.BOOTSTRAP_ADMIN_EMAIL = `bootstrap@${TEST_ALLOWED_DOMAIN}`;
+
+/**
+ * Microsoft Graph configuration for the suite.
+ *
+ * CO_MAILBOX is a deliberately unroutable address, not changeorder@phb1899.com.
+ * Every mail test intercepts fetch, so nothing should reach the network at all -
+ * but if an interception is ever missed, the request must not be aimed at the
+ * live mailbox that PH+B runs its change-order process through.
+ *
+ * The credential variables are left UNSET on purpose. "No Graph credential
+ * configured" is the state the app has to boot and serve in, so it is the
+ * default the suite runs in; the tests that need a configured credential set
+ * fake values themselves and clean up after.
+ */
+process.env.CO_MAILBOX = TEST_MAILBOX;
+delete process.env.GRAPH_CLIENT_ID;
+delete process.env.GRAPH_CLIENT_SECRET;
+delete process.env.GRAPH_TENANT_ID;
+delete process.env.GRAPH_MANAGED_IDENTITY_CLIENT_ID;
+
+// The send gate must be off unless a test turns it on.
+process.env.PHB_ALLOW_SEND = "false";

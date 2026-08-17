@@ -44,7 +44,7 @@ Azure.
 
 Provide `.env.example` with every variable named and no real values.
 
-Phase 1 variables:
+Variables in use today:
 
 ```
 DATABASE_URL
@@ -55,8 +55,18 @@ AUTH_MICROSOFT_ENTRA_ID_SECRET        # local dev only
 AUTH_MICROSOFT_ENTRA_ID_TENANT_ID
 ALLOWED_EMAIL_DOMAINS                 # comma-separated
 BOOTSTRAP_ADMIN_EMAIL
-PHB_ALLOW_SEND=false                  # reserved for Phase 3, must stay false
+PHB_ALLOW_SEND=false                  # enforced in the mail service, must stay false
+
+GRAPH_CLIENT_ID                       # Graph app registration, separate from SSO
+GRAPH_CLIENT_SECRET                   # local dev only; refused in production
+GRAPH_TENANT_ID
+GRAPH_MANAGED_IDENTITY_CLIENT_ID      # Azure only, optional
+CO_MAILBOX                            # the only mailbox the platform may touch
 ```
+
+The `GRAPH_*` and `CO_MAILBOX` variables are **not** validated at boot. The platform
+must start and serve every other screen with no Graph credential configured, so they
+are checked lazily when the mail service is first used.
 
 ## Environments
 
@@ -100,4 +110,4 @@ Assume the reader has never seen this codebase.
 
 Never assume a scheduled job runs exactly once. Where duplication is dangerous —
 duplicate drafts, repeated flow triggers, double sends — design for it explicitly.
-Relevant from Phase 3 onward.
+Relevant once the platform can send mail and run scheduled jobs.
