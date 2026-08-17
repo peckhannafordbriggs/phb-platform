@@ -1,4 +1,5 @@
 import NextAuth from "next-auth";
+import { unauthenticated } from "@/lib/api/response";
 import { authConfig } from "./auth.config";
 
 /**
@@ -26,6 +27,12 @@ export default middlewareAuth((req) => {
     pathname.startsWith("/api/auth");
 
   if (!signedIn && !isPublic) {
+    // A redirect only helps a browser navigating to a page. An API caller gets
+    // the same 401 and the same error shape it would get from the route handler
+    // itself - otherwise fetch() follows the redirect and the caller has to
+    // parse a sign-in HTML page to discover it is not signed in.
+    if (pathname.startsWith("/api/")) return unauthenticated();
+
     const signInUrl = new URL("/signin", req.nextUrl.origin);
     return Response.redirect(signInUrl);
   }
