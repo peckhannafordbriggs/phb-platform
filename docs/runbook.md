@@ -289,15 +289,24 @@ no change may leave zero active admins. It is still reachable by direct database
 edits, by restoring an old database backup, or by the bootstrap admin never
 having signed in.
 
-**Fix — preferred.** Set `BOOTSTRAP_ADMIN_EMAIL` and re-run the seed. It is
-idempotent and will promote the matching employee row:
+**Fix — preferred.** Set `BOOTSTRAP_ADMIN_EMAIL` and re-run the seed:
 
 ```bash
 npm run seed
 ```
 
-That row keeps `entra_oid = NULL` until its owner signs in for the first time,
-at which point the object ID is stamped onto the existing row.
+It is comma-separated — list every address that should be an admin. Missing rows
+are created; existing rows are promoted **only because no active administrator
+remains**, which is exactly this situation. In normal operation the seed never
+re-promotes anyone, so a deploy cannot quietly undo a demotion made in the UI.
+
+A row it creates keeps `entra_oid = NULL` until its owner signs in for the first
+time, at which point the object ID is stamped onto the existing row.
+
+**It only sets the admin flag.** A bootstrap admin whose account is *disabled*
+stays disabled, and the platform is still locked out. Re-enabling an account is a
+decision for a person, not for a deploy — so if every bootstrap admin is also
+disabled, use the direct SQL below, which sets both.
 
 **Fix — direct, when the seed is not available.**
 

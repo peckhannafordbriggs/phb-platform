@@ -13,6 +13,7 @@ import { POST as statusRoute } from "@/app/api/admin/employees/[id]/status/route
 import { POST as adminFlagRoute } from "@/app/api/admin/employees/[id]/admin-flag/route";
 import { POST as bulkGrantsRoute } from "@/app/api/admin/grants/bulk/route";
 import { GET as auditRoute } from "@/app/api/admin/audit/route";
+import { seedBootstrapAdmins } from "@/lib/bootstrap-admins";
 import {
   createEmployee,
   disconnectDb,
@@ -313,6 +314,92 @@ describe("guardrails", () => {
     expect(response.status).toBe(403);
     const after = await testDb.employee.findUnique({ where: { id: other.id } });
     expect(after?.status).toBe("active");
+  });
+
+  it("holds with four seeded bootstrap admins, down to the last one", async () => {
+    // The real shape of the platform: BOOTSTRAP_ADMIN_EMAIL seeds several
+    // admins, so the guardrail has to survive them being removed one at a time
+    // rather than only ever seeing two.
+    const admin = await makeAdmin();
+    const seeded = await seedBootstrapAdmins(testDb, [
+      "msheth@phb1899.com",
+      "jschwarz@phb1899.com",
+      "jschriner@phb1899.com",
+      "bbolten@phb1899.com",
+    ]);
+    expect(seeded.created).toHaveLength(4);
+
+    const bootstrapRows = await testDb.employee.findMany({
+      where: { email: { in: seeded.created } },
+      select: { id: true, email: true },
+      orderBy: { email: "asc" },
+    });
+
+    // Five active admins now: the acting one plus the four seeded.
+    await expect(
+      testDb.employee.count({ where: { isPlatformAdmin: true, status: "active" } }),
+    ).resolves.toBe(5);
+
+    // Demote all four. Each is allowed, because the acting admin remains.
+    for (const row of bootstrapRows) {
+      await expect(
+        adminFlagRoute(
+          jsonRequest({ isPlatformAdmin: false }),
+          params({ id: row.id }),
+        ).then((r) => r.status),
+        `demoting ${row.email} should be allowed`,
+      ).resolves.toBe(200);
+    }
+
+    await expect(
+      testDb.employee.count({ where: { isPlatformAdmin: true, status: "active" } }),
+    ).resolves.toBe(1);
+
+    // The acting admin is now the last one, and cannot remove themselves.
+    await expect(
+      adminFlagRoute(
+        jsonRequest({ isPlatformAdmin: false }),
+        params({ id: admin.id }),
+      ).then((r) => r.status),
+    ).resolves.toBe(403);
+
+    // Nor disable themselves.
+    await expect(
+      statusRoute(
+        jsonRequest({ status: "disabled" }),
+        params({ id: admin.id }),
+      ).then((r) => r.status),
+    ).resolves.toBe(403);
+
+    await expect(
+      testDb.employee.count({ where: { isPlatformAdmin: true, status: "active" } }),
+    ).resolves.toBe(1);
+  });
+
+  it("refuses to demote the last admin even when the others are only disabled", async () => {
+    // Disabled admins still hold the flag but cannot administer anything, so
+    // they must not count towards "someone else can still do this".
+    const admin = await makeAdmin();
+    await seedBootstrapAdmins(testDb, [
+      "jschwarz@phb1899.com",
+      "jschriner@phb1899.com",
+    ]);
+
+    await testDb.employee.updateMany({
+      where: { email: { in: ["jschwarz@phb1899.com", "jschriner@phb1899.com"] } },
+      data: { status: "disabled" },
+    });
+
+    const response = await adminFlagRoute(
+      jsonRequest({ isPlatformAdmin: false }),
+      params({ id: admin.id }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(
+      (await testDb.employee.findUniqueOrThrow({ where: { id: admin.id } }))
+        .isPlatformAdmin,
+    ).toBe(true);
   });
 
   it("bumps sessionsValidAfter when disabling, so the target is rejected immediately", async () => {

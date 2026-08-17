@@ -113,7 +113,9 @@ Each of those arrives with the phase that needs it, or not at all.
 - `Department`: confirmed with the operator — Administrative, AI, Controls, Engineer,
   Estimator, Foreman, Piping, Project Manager, Service, Sheet Metal, VDC.
   Admin-editable after.
-- Bootstrap admin from `BOOTSTRAP_ADMIN_EMAIL`.
+- Bootstrap admins from `BOOTSTRAP_ADMIN_EMAIL`, a comma-separated list. Idempotent,
+  and never re-promotes someone demoted through the UI unless no active admin
+  remains — see the Bootstrap section of `docs/04-auth-and-permissions.md`.
 
 ## Migrations
 

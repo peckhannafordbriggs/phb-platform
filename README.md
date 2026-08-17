@@ -53,7 +53,7 @@ Every variable is listed in `.env.example` with no real values. Fill in
 | `AUTH_MICROSOFT_ENTRA_ID_SECRET` | Client secret - **local development only**, never in Azure |
 | `AUTH_MICROSOFT_ENTRA_ID_TENANT_ID` | Tenant ID; the token's `tid` must match it |
 | `ALLOWED_EMAIL_DOMAINS` | Comma-separated allow-list of verified email domains |
-| `BOOTSTRAP_ADMIN_EMAIL` | Seeded as the first platform admin |
+| `BOOTSTRAP_ADMIN_EMAIL` | Comma-separated. Each address is seeded as a platform admin. |
 | `PHB_ALLOW_SEND` | Reserved for Phase 3. Must stay `false`. |
 
 The SSO app registration is **separate** from the Graph mail app registration

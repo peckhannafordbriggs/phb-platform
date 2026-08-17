@@ -147,9 +147,31 @@ Without these, one wrong click needs database access to undo.
 
 ### Bootstrap
 
-The first admin is seeded at deploy time from `BOOTSTRAP_ADMIN_EMAIL`. On first
-sign-in, a matching email gets `is_platform_admin = true`. Every admin after that is
-made in the UI.
+`BOOTSTRAP_ADMIN_EMAIL` is a **comma-separated list**, the same shape as
+`ALLOWED_EMAIL_DOMAINS`. Every address on it is seeded as a platform admin at deploy
+time. Every admin after those is made in the UI.
+
+Each seeded row has `entra_oid` null, `is_platform_admin` true and
+`profile_completed` false. The row exists before its owner does anything; their first
+sign-in finds it by email, stamps the Entra object ID onto it, and does **not**
+create a second row. Someone on the list who signs in before the seed has run gets
+the flag at provisioning instead — both paths are covered.
+
+**Re-running the seed is idempotent, and deliberately not a reset.**
+
+| Situation | What the seed does |
+|---|---|
+| No row for the address | Creates it as an admin |
+| Row exists and is an admin | Nothing |
+| Row exists, demoted through the UI, other active admins remain | **Nothing** — the demotion was a decision, and a deploy must not undo it |
+| Row exists, demoted, and **no active admin remains anywhere** | Promotes it — this is the lockout the list exists for |
+
+That last row is the recovery path in `docs/runbook.md`. Only the admin flag is
+touched: a disabled account stays disabled, because re-enabling one is a decision for
+a person rather than for a deploy. If the only bootstrap admin is also disabled, use
+the direct SQL in the runbook.
+
+Nothing in the seed ever resets a name, an email, a status, or a completed profile.
 
 ## Deferred — do not build
 

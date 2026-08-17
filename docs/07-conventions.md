@@ -54,7 +54,7 @@ AUTH_MICROSOFT_ENTRA_ID_ID
 AUTH_MICROSOFT_ENTRA_ID_SECRET        # local dev only
 AUTH_MICROSOFT_ENTRA_ID_TENANT_ID
 ALLOWED_EMAIL_DOMAINS                 # comma-separated
-BOOTSTRAP_ADMIN_EMAIL
+BOOTSTRAP_ADMIN_EMAIL                 # comma-separated
 PHB_ALLOW_SEND=false                  # enforced in the mail service, must stay false
 
 GRAPH_CLIENT_ID                       # Graph app registration, separate from SSO

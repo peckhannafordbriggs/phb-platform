@@ -1,4 +1,8 @@
 import { createDbClient } from "../scripts/db";
+import {
+  parseBootstrapAdmins,
+  seedBootstrapAdmins,
+} from "../lib/bootstrap-admins";
 
 /**
  * Production seed. Idempotent - safe to re-run on every deploy.
@@ -92,28 +96,39 @@ async function main(): Promise<void> {
       });
     }
 
-    const bootstrapEmail = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+    const { emails, invalid } = parseBootstrapAdmins(
+      process.env.BOOTSTRAP_ADMIN_EMAIL,
+    );
 
-    if (bootstrapEmail === undefined || bootstrapEmail.length === 0) {
+    if (invalid.length > 0) {
+      throw new Error(
+        `BOOTSTRAP_ADMIN_EMAIL contains entries that are not email addresses: ` +
+          `${invalid.join(", ")}. It is a comma-separated list.`,
+      );
+    }
+
+    if (emails.length === 0) {
       console.warn(
         "BOOTSTRAP_ADMIN_EMAIL is not set - no admin was seeded. " +
           "Nobody will be able to reach the admin screen.",
       );
     } else {
-      // entraOid stays null: it is stamped on this person's first sign-in.
-      // profileCompleted stays false: they complete onboarding like anyone else.
-      await prisma.employee.upsert({
-        where: { email: bootstrapEmail },
-        update: { isPlatformAdmin: true },
-        create: {
-          email: bootstrapEmail,
-          firstName: "Platform",
-          lastName: "Administrator",
-          isPlatformAdmin: true,
-          profileCompleted: false,
-        },
-      });
-      console.log(`Bootstrap admin ready: ${bootstrapEmail}`);
+      const seeded = await seedBootstrapAdmins(prisma, emails);
+
+      // Reported per outcome rather than as a total, so re-running is visibly a
+      // no-op instead of looking like it rewrote four rows.
+      if (seeded.created.length > 0) {
+        console.log(`Bootstrap admins created: ${seeded.created.join(", ")}`);
+      }
+      if (seeded.promoted.length > 0) {
+        console.warn(
+          `No active administrator remained, so the bootstrap list was promoted: ` +
+            `${seeded.promoted.join(", ")}`,
+        );
+      }
+      if (seeded.unchanged.length > 0) {
+        console.log(`Bootstrap admins already present: ${seeded.unchanged.join(", ")}`);
+      }
     }
 
     console.log(

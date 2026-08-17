@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseBootstrapAdmins } from "./bootstrap-admins";
 
 /**
  * Environment is parsed once, at import time, so a misconfigured deployment
@@ -39,10 +40,25 @@ const schema = z.object({
     return domains;
   }),
 
+  // Comma-separated, like ALLOWED_EMAIL_DOMAINS above; an array everywhere in
+  // code. Absent means no bootstrap admin, which is valid - the platform still
+  // boots, nobody can reach /admin, and docs/runbook.md covers the recovery.
   BOOTSTRAP_ADMIN_EMAIL: z
-    .email()
-    .transform((e) => e.toLowerCase())
-    .optional(),
+    .string()
+    .optional()
+    .transform((raw, ctx) => {
+      const { emails, invalid } = parseBootstrapAdmins(raw);
+
+      if (invalid.length > 0) {
+        ctx.addIssue({
+          code: "custom",
+          message: `not an email address: ${invalid.join(", ")}`,
+        });
+        return z.NEVER;
+      }
+
+      return emails;
+    }),
 
   // The send gate. Read live rather than from here on the hot path - see
   // lib/modules/change-orders/mail/guards.ts for why. Declared here so a

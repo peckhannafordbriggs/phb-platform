@@ -89,9 +89,10 @@ async function provision(identity: GatedIdentity): Promise<SignInOutcome> {
     return { ok: true, employeeId: existing.id, entraOid: identity.entraOid };
   }
 
-  const isBootstrapAdmin =
-    env.BOOTSTRAP_ADMIN_EMAIL !== undefined &&
-    env.BOOTSTRAP_ADMIN_EMAIL === identity.email;
+  // Covers someone on the bootstrap list who signs in before the seed has run.
+  // The list is already lowercased; identity.email comes from the gate lowercased
+  // too, so this is a plain comparison and not a case-insensitive search.
+  const isBootstrapAdmin = env.BOOTSTRAP_ADMIN_EMAIL.includes(identity.email);
 
   const created = await prisma.$transaction(async (tx) => {
     const employee = await tx.employee.create({
