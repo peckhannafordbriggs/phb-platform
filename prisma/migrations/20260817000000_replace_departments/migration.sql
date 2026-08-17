@@ -33,37 +33,18 @@ VALUES
   (gen_random_uuid(), 'VDC')
 ON CONFLICT (name) DO NOTHING;
 
--- 2. Record the reassignment before making it, so the old value is still
---    readable. A null actor_employee_id is the honest record for a migration:
---    the platform acted, not a person.
-INSERT INTO audit_events (id, actor_employee_id, action, target_employee_id, metadata, occurred_at)
-SELECT
-  gen_random_uuid(),
-  NULL,
-  'employee.department_changed',
-  e.id,
-  jsonb_build_object(
-    'from', d.name,
-    'to', 'AI',
-    'reason', 'department list replaced by migration 20260817000000_replace_departments'
-  ),
-  now()
-FROM employees e
-LEFT JOIN departments d ON d.id = e.department_id
-WHERE e.email = 'msheth@phb1899.com';
-
-UPDATE employees
-SET department_id = (SELECT id FROM departments WHERE name = 'AI'),
-    updated_at = now()
-WHERE email = 'msheth@phb1899.com';
-
--- 3. Everyone else still pointing at a removed department loses the value.
+-- 2. Everyone still pointing at a removed department loses the value.
 --
 --    Nulling it rather than guessing a mapping is deliberate. 'Estimating' is not
 --    obviously 'Estimator', and 'Field Operations' could be Foreman, Piping or
 --    Sheet Metal. Inventing an answer would put unverified data in front of an
 --    admin as though someone had reported it. department_id is nullable and the
 --    employee stays profile-complete; an admin sets the real value.
+--
+--    Applied uniformly. No employee is named here: a migration that hardcodes an
+--    address bakes a person into the schema history and behaves differently for
+--    them than for everyone else. Per-person corrections belong in the admin
+--    screen, which now has them.
 --
 --    One audit row per affected employee, so a department that vanished from
 --    someone's profile is explainable rather than mysterious.
@@ -104,7 +85,7 @@ WHERE department_id IN (
   )
 );
 
--- 4. Record the removals, then remove them.
+-- 3. Record the removals, then remove them.
 INSERT INTO audit_events (id, actor_employee_id, action, target_employee_id, metadata, occurred_at)
 SELECT
   gen_random_uuid(),

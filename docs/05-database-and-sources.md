@@ -127,4 +127,26 @@ application path that deletes a `Position` or a `Department` — hiding must not
 employees already assigned to a value, and both foreign keys are `ON DELETE RESTRICT`.
 So removing one is a migration, which is also the only way it reaches every
 environment identically. `20260817000000_replace_departments` is the worked example:
-reassign, audit, then delete.
+clear the references, audit each one, then delete.
+
+### What a migration must not contain
+
+**No email address, and no other identifier for a specific person.** A migration is
+schema history: it runs in every environment, forever, and a hardcoded address bakes
+one individual into it and makes the migration behave differently for them than for
+everyone else.
+
+That rules out seeding employee rows from a migration. Employees are configuration —
+`BOOTSTRAP_ADMIN_EMAIL` decides who the admins are, and `prisma/seed.ts` reads it.
+The seed is idempotent and runs on fresh and existing databases alike, so there is
+nothing a migration would add except a second, contradictory source of truth.
+
+The division:
+
+| Change | Where |
+|---|---|
+| Schema | Migration |
+| Deleting reference data (a position, a department) | Migration — the app has no delete path |
+| Adding reference data | Seed (a migration may also add it; both are idempotent) |
+| Employee rows, admin flags | **Seed only**, from `BOOTSTRAP_ADMIN_EMAIL` |
+| Correcting one person's profile | The admin screen |
