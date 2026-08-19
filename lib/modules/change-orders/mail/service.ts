@@ -63,6 +63,13 @@ const MESSAGE_DETAIL_SELECT = [
   "body",
 ].join(",");
 
+/**
+ * `wellKnownName` is deliberately NOT selected. It exists on mailFolder in the
+ * Graph BETA endpoint only; asking v1.0 for it fails the whole request with
+ * `400 BadRequest: Could not find a property named 'wellKnownName'`. The
+ * published @microsoft/microsoft-graph-types package not declaring it is the
+ * tell. Identity comes from resolveWellKnownFolders() instead.
+ */
 const FOLDER_SELECT = [
   "id",
   "displayName",
@@ -70,8 +77,25 @@ const FOLDER_SELECT = [
   "childFolderCount",
   "unreadItemCount",
   "totalItemCount",
-  "wellKnownName",
 ].join(",");
+
+/**
+ * Well-known folder aliases, usable directly in a path:
+ * `/users/{mailbox}/mailFolders/drafts`. This is how v1.0 exposes the identity
+ * of a special folder, and it is the only reliable way to find one.
+ *
+ * Matching on displayName is not an alternative: it is localised to the
+ * mailbox's language, and a user can rename any folder in Outlook.
+ *
+ * Only the four the change-order workflow actually needs. Every alias added here
+ * costs one request per listFolders().
+ */
+const WELL_KNOWN_FOLDER_ALIASES = [
+  "inbox",
+  "drafts",
+  "sentitems",
+  "deleteditems",
+] as const;
 
 /**
  * `contentBytes` is NOT selected, and that is the point: GET /attachments
@@ -88,6 +112,22 @@ const FOLDER_PAGE_SIZE = 100;
 
 /** A mailbox with more top-level folder pages than this has bigger problems. */
 const MAX_FOLDER_PAGES = 10;
+
+/**
+ * How deep the folder tree is walked.
+ *
+ * One level is not enough, which the real mailbox proves: `Projects` is a child
+ * of Inbox, so the Projects tree the change-order process files into sits at
+ * depth two. Stopping at one level returned the Projects folder but none of its
+ * contents, which looked like an empty tree rather than a truncated walk.
+ *
+ * Bounded rather than unbounded: a folder loop would otherwise be an infinite
+ * request loop, and depth is cheaper to cap than to detect.
+ */
+const MAX_FOLDER_DEPTH = 5;
+
+/** Total folders returned, however deep. Truncation is always logged. */
+const MAX_FOLDERS = 300;
 
 interface GraphCollection<T> {
   value?: T[];
@@ -128,12 +168,11 @@ function toAddresses(
     .filter((entry): entry is MailAddress => entry !== null);
 }
 
+/**
+ * `wellKnownName` is filled in by the caller from resolveWellKnownFolders(),
+ * because v1.0 will not return it - see FOLDER_SELECT.
+ */
 function toFolderSummary(folder: MailFolder): MailFolderSummary {
-  // wellKnownName is returned by Graph v1.0 but is missing from the published
-  // types, so it is read explicitly rather than through the type.
-  const wellKnownName = (folder as { wellKnownName?: string | null })
-    .wellKnownName;
-
   return {
     id: folder.id ?? "",
     displayName: folder.displayName ?? "",
@@ -141,7 +180,7 @@ function toFolderSummary(folder: MailFolder): MailFolderSummary {
     totalItemCount: folder.totalItemCount ?? 0,
     unreadItemCount: folder.unreadItemCount ?? 0,
     childFolderCount: folder.childFolderCount ?? 0,
-    wellKnownName: wellKnownName ?? null,
+    wellKnownName: null,
   };
 }
 
@@ -216,20 +255,100 @@ export class ChangeOrderMailService {
    * this mailbox is small; this is a handful of requests, not a fan-out.
    */
   async listFolders(): Promise<MailFolderSummary[]> {
-    const top = await this.listFolderPage(this.path("/mailFolders"), "listFolders");
+    const all: MailFolderSummary[] = await this.listFolderPage(
+      this.path("/mailFolders"),
+      "listFolders",
+    );
 
-    const children = await Promise.all(
-      top
-        .filter((folder) => folder.childFolderCount > 0 && folder.id.length > 0)
-        .map((folder) =>
+    // Breadth-first, one round of requests per level. Each level's children are
+    // fetched in parallel; the levels themselves are sequential, because the next
+    // level's paths are not known until this one comes back.
+    let frontier = all;
+    for (let depth = 1; depth <= MAX_FOLDER_DEPTH; depth += 1) {
+      const parents = frontier.filter(
+        (folder) => folder.childFolderCount > 0 && folder.id.length > 0,
+      );
+      if (parents.length === 0) break;
+
+      const levels = await Promise.all(
+        parents.map((folder) =>
           this.listFolderPage(
             this.path(`/mailFolders/${encodeURIComponent(folder.id)}/childFolders`),
             "listFolders.children",
           ),
         ),
-    );
+      );
 
-    return [...top, ...children.flat()];
+      frontier = levels.flat();
+      if (frontier.length === 0) break;
+
+      all.push(...frontier);
+
+      // Never truncate silently: if a cap is what stopped the walk, say which.
+      if (all.length >= MAX_FOLDERS) {
+        logger.warn("mail.folder_tree_capped", {
+          outcome: "truncated",
+          count: all.length,
+          reason: `MAX_FOLDERS (${MAX_FOLDERS})`,
+        });
+        break;
+      }
+      if (depth === MAX_FOLDER_DEPTH && frontier.some((f) => f.childFolderCount > 0)) {
+        logger.warn("mail.folder_tree_capped", {
+          outcome: "truncated",
+          count: all.length,
+          reason: `MAX_FOLDER_DEPTH (${MAX_FOLDER_DEPTH})`,
+        });
+      }
+    }
+
+    const wellKnown = await this.resolveWellKnownFolders();
+
+    return all.map((folder) => ({
+      ...folder,
+      wellKnownName: wellKnown.get(folder.id) ?? null,
+    }));
+  }
+
+  /**
+   * Maps folder id -> well-known alias, for the aliases that resolve.
+   *
+   * One request per alias, because v1.0 has no way to ask for this in bulk and
+   * will not return `wellKnownName` on a listing. Four requests, in parallel,
+   * only on a full folder listing.
+   *
+   * An alias that does not resolve is skipped rather than failing the listing: a
+   * mailbox is not guaranteed to have every special folder, and a folder tree is
+   * still worth returning without the labels. It is logged, not swallowed.
+   */
+  private async resolveWellKnownFolders(): Promise<Map<string, string>> {
+    const resolved = new Map<string, string>();
+
+    const lookups = WELL_KNOWN_FOLDER_ALIASES.map(async (alias) => {
+      try {
+        const folder = await this.call(`resolveWellKnown.${alias}`, () =>
+          this.client
+            .api(this.path(`/mailFolders/${alias}`))
+            // Only the id. The listing already has everything else.
+            .select("id")
+            .get() as Promise<MailFolder>,
+        );
+        return { alias, id: folder.id ?? null };
+      } catch {
+        // this.call already logged it with the operation name and request id.
+        logger.warn("mail.well_known_folder_unresolved", {
+          outcome: "skipped",
+          reason: alias,
+        });
+        return { alias, id: null };
+      }
+    });
+
+    for (const { alias, id } of await Promise.all(lookups)) {
+      if (id !== null && id.length > 0) resolved.set(id, alias);
+    }
+
+    return resolved;
   }
 
   private async listFolderPage(
@@ -275,6 +394,14 @@ export class ChangeOrderMailService {
     return folders;
   }
 
+  /**
+   * One folder, by id or by well-known alias - `getFolder("drafts")` works,
+   * because an alias is a valid path segment in v1.0.
+   *
+   * `wellKnownName` comes back populated only when an alias was passed, since
+   * that is the only case where it is known without four extra requests. A
+   * caller that needs the labels for a whole tree uses listFolders().
+   */
   async getFolder(folderId: string): Promise<MailFolderSummary> {
     const folder = await this.call("getFolder", () =>
       this.client
@@ -283,7 +410,9 @@ export class ChangeOrderMailService {
         .get() as Promise<MailFolder>,
     );
 
-    return toFolderSummary(folder);
+    const alias = WELL_KNOWN_FOLDER_ALIASES.find((a) => a === folderId) ?? null;
+
+    return { ...toFolderSummary(folder), wellKnownName: alias };
   }
 
   /**

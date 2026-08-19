@@ -152,6 +152,34 @@ access token are never logged.
 
 ---
 
+## Folder listing fails with 400 BadRequest
+
+**Symptom.** Every folder read fails. The log shows
+`"outcome":"unexpected"` with `status=400 code=BadRequest`, and the Graph body
+reads *"Parsing OData Select and Expand failed: Could not find a property named
+'wellKnownName' on type 'microsoft.graph.mailFolder'."*
+
+**Cause.** `wellKnownName` exists on `mailFolder` in the Graph **beta** endpoint
+only. Asking v1.0 for it in `$select` fails the entire request — it is not
+ignored. This happened once, in Phase 4 Part B, the first time the real credential
+was used.
+
+**How the platform avoids it.** `FOLDER_SELECT` in
+`lib/modules/change-orders/mail/service.ts` does not include it, and
+`resolveWellKnownFolders()` identifies the special folders by requesting their
+aliases instead — `/mailFolders/inbox`, `/drafts`, `/sentitems`,
+`/deleteditems`. A test asserts no request ever contains `wellKnownName`.
+
+**If you add a folder property**, check it exists in **v1.0** first. The published
+`@microsoft/microsoft-graph-types` package is a reliable signal: if the property
+is missing from the type, it is usually beta-only, and casting around the type is
+how this bug got written in the first place.
+
+**Do not match special folders on `displayName`.** It is localised to the
+mailbox's language and any user can rename a folder in Outlook.
+
+---
+
 ## `mail_access_denied` — the access policy
 
 **Symptom.** Authentication succeeds, then every mailbox read returns
@@ -177,6 +205,36 @@ verification; that read is ours.
 **Also note:** an access policy change can take **up to an hour** to propagate.
 A 403 immediately after IT reports the policy is in place may simply be early.
 Re-check before escalating.
+
+### The fence was verified from our side on 19 August 2026
+
+IT's `Test-ApplicationAccessPolicy` reported Granted for
+`changeorder@phb1899.com` and Denied for another user's mailbox. That is their
+check. Ours, run with the real credential against a different real mailbox in the
+tenant, returned:
+
+```
+403  ErrorAccessDenied
+Access to OData is disabled: [RAOP] : Blocked by tenant configured AppOnly
+AccessPolicy settings.
+```
+
+Both halves matter, and a policy that silently did not apply looks identical to
+one that did until something tries. **Re-run this check whenever the app
+registration's permissions change, or the policy is edited, or the credential is
+replaced.** The mail service cannot perform it — the mailbox is not a parameter on
+any of its methods, by design — so it needs a throwaway script that builds a raw
+Graph client with the same credential and points it at another mailbox:
+
+```ts
+const raw = createGraphClient({ tokenProvider: graphTokenProvider() });
+await raw.api(`/users/${someone.else}/mailFolders`).select("id").top(1).get();
+// expect 403 ErrorAccessDenied
+```
+
+`$select=id` only, so that if the fence is ever broken the check reads as little
+of someone's mailbox as possible. **A 200 here is an incident**: stop using the
+credential and tell IT.
 
 ---
 
@@ -301,7 +359,15 @@ session cookie, and sign-in appears to succeed and then immediately loop back to
 | Credential | Where | Expires | Breaks what |
 |---|---|---|---|
 | SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local development only |
-| Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | *recorded when the app registration exists* | Local development only |
+| Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only |
+
+> **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
+> carries a note reading `Expiry Date of Entra : 8/13/2028`, but the same note
+> appears twice and the earlier one belongs to the SSO secret. A secret created in
+> August 2026 with a default 24-month lifetime would expire in August 2028 too, so
+> the date is plausible either way and that is exactly why it should not be taken
+> on trust. Open the Graph app registration → Certificates & secrets, read the
+> real date, and correct this row.
 
 Nothing in Azure expires. Both secrets above exist solely because a developer
 machine cannot use a managed identity.
@@ -315,9 +381,49 @@ Graph secret can only ever affect a developer machine. If one ever appears to
 break production, the fault is that a secret was deployed at all — fix that, do
 not rotate it.
 
-**Graph app registration** — client ID, tenant ID and secret expiry date to be
-recorded here once IT creates it (Phase 4 Part B). It is a **second, separate**
-registration from the SSO one; do not merge them.
+**Graph app registration** — client ID `d1795907-d017-4a5e-9da3-033c4bee4ec1`,
+tenant `48f37f84-1c36-4b3e-986c-b8b7196ad49d`. Neither is a secret. It is a
+**second, separate** registration from the SSO one; do not merge them.
+
+Application permissions: `Mail.ReadWrite` + `Mail.Send`, scoped to
+`changeorder@phb1899.com` alone by an Exchange ApplicationAccessPolicy.
+
+### The Graph secret cannot affect production
+
+Same reasoning as the SSO secret above, and worth repeating because it is the
+question someone will ask when this expires.
+
+Production authenticates to Graph with a **managed identity and a federated
+identity credential**. Nothing in that path expires, and there is no
+`GRAPH_CLIENT_SECRET` in Azure at all — `createGraphCredential` in
+`lib/modules/change-orders/graph/credential.ts` **throws on startup** if one is
+set with `NODE_ENV=production`, and `infra/main.bicep` does not define the
+variable. So when this secret expires, only developer machines are affected. The
+mailbox keeps working, the scheduled jobs keep working, and nobody outside
+development notices.
+
+If an expiring Graph secret ever *does* break production, the fault is that a
+secret was deployed at all. Fix that; do not rotate it.
+
+### Symptom when the Graph credential fails
+
+The mailbox health endpoint returns `500` with code `mail_auth_failed`, and the
+log carries `"event":"mail.graph_call_failed"` with `"outcome":"auth_failed"`.
+The user-facing message is *"The platform could not sign in to the change-order
+mailbox."*
+
+| What happened | What you will see |
+|---|---|
+| Secret expired or wrong | `mail_auth_failed`. Underneath, Entra returns `AADSTS7000215: Invalid client secret provided`. |
+| Client ID or tenant ID wrong | `mail_auth_failed`, with `AADSTS700016` (application not found) or `AADSTS90002` (tenant not found). |
+| Secret missing entirely | The module reports `configured: false` and names `GRAPH_CLIENT_SECRET`, rather than failing — outside production the credential factory requires one. |
+| Permissions not consented | `mail_access_denied` (403), not `mail_auth_failed`. A token was issued; Exchange refused it. See *`mail_access_denied` — the access policy*. |
+
+**Rotating it.** Azure portal → Microsoft Entra ID → App registrations → the
+Graph registration (client ID above) → Certificates & secrets → New client
+secret. Copy the **Value**, not the Secret ID — the Value is shown once. Put it in
+`.env.local` as `GRAPH_CLIENT_SECRET` and restart the dev server. Delete the
+expired secret afterwards. Never commit it; `.env.local` is gitignored.
 
 **SSO app registration** — client ID `220921c1-f23e-4d01-b354-736884ba3d00`,
 tenant `48f37f84-1c36-4b3e-986c-b8b7196ad49d`. Neither is a secret; both appear

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMailService } from "@/lib/modules/change-orders/mail/service";
-import { createGraphStub, jsonResponse } from "./graph-stub";
+import { createGraphStub, graphErrorResponse, jsonResponse } from "./graph-stub";
 import { TEST_MAILBOX } from "./constants";
 
 /**
@@ -14,7 +14,6 @@ const ENCODED_MAILBOX = encodeURIComponent(TEST_MAILBOX);
 const INBOX = {
   id: "folder-inbox",
   displayName: "Inbox",
-  wellKnownName: "inbox",
   totalItemCount: 40,
   unreadItemCount: 2,
   childFolderCount: 0,
@@ -24,7 +23,6 @@ const INBOX = {
 const PROJECTS = {
   id: "folder-projects",
   displayName: "Projects",
-  wellKnownName: null,
   totalItemCount: 0,
   unreadItemCount: 0,
   childFolderCount: 2,
@@ -83,16 +81,37 @@ describe("the mailbox cannot be supplied by a caller", () => {
   });
 });
 
+/**
+ * Graph v1.0 does not expose wellKnownName on mailFolder - selecting it fails the
+ * whole request with 400 - so the service resolves the well-known folders by
+ * their aliases instead. These handlers answer the alias lookups the way Graph
+ * does: `/mailFolders/inbox` returns that folder, and an alias the mailbox does
+ * not have is a 404.
+ */
+const ALIAS_IDS: Record<string, string> = {
+  inbox: "folder-inbox",
+  drafts: "folder-drafts",
+  sentitems: "folder-sent",
+  deleteditems: "folder-deleted",
+};
+
+function aliasInUrl(url: string): string | null {
+  const match = /\/mailFolders\/(inbox|drafts|sentitems|deleteditems)(?:\?|$)/.exec(url);
+  return match?.[1] ?? null;
+}
+
 describe("listFolders", () => {
   it("returns well-known folders plus the children of folders that have them", async () => {
-    const stub = createGraphStub((request) =>
-      request.url.includes("/childFolders")
+    const stub = createGraphStub((request) => {
+      const alias = aliasInUrl(request.url);
+      if (alias !== null) return jsonResponse({ id: ALIAS_IDS[alias] });
+
+      return request.url.includes("/childFolders")
         ? jsonResponse({
             value: [
               {
                 id: "folder-project-a",
                 displayName: "Project A",
-                wellKnownName: null,
                 totalItemCount: 5,
                 unreadItemCount: 1,
                 childFolderCount: 0,
@@ -100,8 +119,8 @@ describe("listFolders", () => {
               },
             ],
           })
-        : jsonResponse({ value: [INBOX, PROJECTS] }),
-    );
+        : jsonResponse({ value: [INBOX, PROJECTS] });
+    });
 
     const folders = await createMailService(stub.transport).listFolders();
 
@@ -110,17 +129,138 @@ describe("listFolders", () => {
       "Projects",
       "Project A",
     ]);
+    // Resolved from the alias lookup, not from a selected property.
     expect(folders[0]?.wellKnownName).toBe("inbox");
+    expect(folders[1]?.wellKnownName).toBeNull();
     expect(folders[2]?.parentFolderId).toBe("folder-projects");
 
-    // One request for the top level, one for the only folder with children -
-    // not one per folder.
-    expect(stub.requests).toHaveLength(2);
+    // One for the top level, one for the only folder with children - not one per
+    // folder - plus one per well-known alias.
+    const listings = stub.requests.filter((r) => aliasInUrl(r.url) === null);
+    expect(listings).toHaveLength(2);
+    expect(stub.requests).toHaveLength(2 + 4);
+  });
+
+  it("never asks v1.0 for wellKnownName, which would fail the whole request", async () => {
+    const stub = createGraphStub((request) => {
+      const alias = aliasInUrl(request.url);
+      return alias !== null
+        ? jsonResponse({ id: ALIAS_IDS[alias] })
+        : jsonResponse({ value: [INBOX] });
+    });
+
+    await createMailService(stub.transport).listFolders();
+    await createMailService(stub.transport).getFolder("folder-inbox");
+
+    // Graph answers `400 BadRequest: Could not find a property named
+    // 'wellKnownName' on type 'microsoft.graph.mailFolder'`. It is a beta-only
+    // property, and asking for it breaks every folder read.
+    for (const request of stub.requests) {
+      expect(decodeURIComponent(request.url)).not.toContain("wellKnownName");
+    }
+  });
+
+  it("still returns the tree when a well-known alias does not resolve", async () => {
+    const stub = createGraphStub((request) => {
+      const alias = aliasInUrl(request.url);
+      if (alias === "deleteditems") {
+        return graphErrorResponse(404, "ErrorItemNotFound", "no such folder");
+      }
+      if (alias !== null) return jsonResponse({ id: ALIAS_IDS[alias] });
+      return jsonResponse({ value: [INBOX] });
+    });
+
+    const folders = await createMailService(stub.transport).listFolders();
+
+    // A mailbox is not guaranteed to have every special folder, and a tree
+    // without one label is still worth returning.
+    expect(folders.map((f) => f.displayName)).toEqual(["Inbox"]);
+    expect(folders[0]?.wellKnownName).toBe("inbox");
+  });
+
+  it("walks the tree deeper than one level", async () => {
+    // The real mailbox is why this exists. `Projects` is a child of Inbox, so
+    // the project folders the change-order process files into sit at depth two
+    // and their contents at depth three. A one-level walk returned the Projects
+    // folder and nothing under it, which looked like an empty tree rather than a
+    // truncated one.
+    const tree: Record<string, unknown[]> = {
+      "folder-inbox": [
+        {
+          id: "folder-projects",
+          displayName: "Projects",
+          childFolderCount: 1,
+          parentFolderId: "folder-inbox",
+          totalItemCount: 0,
+          unreadItemCount: 0,
+        },
+      ],
+      "folder-projects": [
+        {
+          id: "folder-liberty",
+          displayName: "CCHMC Liberty Expansion",
+          childFolderCount: 1,
+          parentFolderId: "folder-projects",
+          totalItemCount: 0,
+          unreadItemCount: 0,
+        },
+      ],
+      "folder-liberty": [
+        {
+          id: "folder-bulletin",
+          displayName: "CCHMC Bulletin 12",
+          childFolderCount: 0,
+          parentFolderId: "folder-liberty",
+          totalItemCount: 13,
+          unreadItemCount: 0,
+        },
+      ],
+    };
+
+    const stub = createGraphStub((request) => {
+      const alias = aliasInUrl(request.url);
+      if (alias !== null) return jsonResponse({ id: ALIAS_IDS[alias] });
+
+      const child = /mailFolders\/([^/?]+)\/childFolders/.exec(request.url);
+      if (child !== null) {
+        return jsonResponse({ value: tree[decodeURIComponent(child[1] ?? "")] ?? [] });
+      }
+
+      return jsonResponse({ value: [{ ...INBOX, childFolderCount: 1 }] });
+    });
+
+    const folders = await createMailService(stub.transport).listFolders();
+
+    expect(folders.map((f) => f.displayName)).toEqual([
+      "Inbox",
+      "Projects",
+      "CCHMC Liberty Expansion",
+      "CCHMC Bulletin 12",
+    ]);
+    // Depth three, reached by three rounds of child lookups.
+    expect(folders[3]?.parentFolderId).toBe("folder-liberty");
+    expect(folders[3]?.totalItemCount).toBe(13);
+  });
+
+  it("labels a folder fetched by its alias", async () => {
+    const stub = createGraphStub(() =>
+      jsonResponse({ id: "folder-drafts", displayName: "Drafts" }),
+    );
+
+    const folder = await createMailService(stub.transport).getFolder("drafts");
+
+    expect(folder.wellKnownName).toBe("drafts");
+    expect(stub.requests).toHaveLength(1);
   });
 
   it("follows pagination rather than truncating at one page", async () => {
-    const stub = createGraphStub((request, index) =>
-      index === 0
+    let listingCount = 0;
+    const stub = createGraphStub((request) => {
+      const alias = aliasInUrl(request.url);
+      if (alias !== null) return jsonResponse({ id: ALIAS_IDS[alias] });
+
+      listingCount += 1;
+      return listingCount === 1
         ? jsonResponse({
             value: [INBOX],
             "@odata.nextLink":
@@ -128,13 +268,15 @@ describe("listFolders", () => {
           })
         : jsonResponse({
             value: [{ ...INBOX, id: "folder-drafts", displayName: "Drafts" }],
-          }),
-    );
+          });
+    });
 
     const folders = await createMailService(stub.transport).listFolders();
 
     expect(folders.map((f) => f.displayName)).toEqual(["Inbox", "Drafts"]);
     expect(stub.requests[1]?.url.toLowerCase()).toContain("skiptoken=page2");
+    // The second page's folder is the drafts folder, labelled from the alias.
+    expect(folders[1]?.wellKnownName).toBe("drafts");
   });
 });
 

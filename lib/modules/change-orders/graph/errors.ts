@@ -54,7 +54,26 @@ export function parseRetryAfter(header: string | null): number | null {
   return delta > 0 ? delta : 0;
 }
 
-function kindForStatus(statusCode: number): MailErrorKind {
+/**
+ * Graph error codes that mean "that item is not there", whatever status they
+ * arrive with.
+ *
+ * A malformed or stale ID is a 400, not a 404 - verified against the real
+ * mailbox. Reporting it as `unexpected` sends an operator looking for a bug in
+ * the platform, when the honest answer is the one a 404 gives: the thing you
+ * asked for is not there. Power Automate moves messages constantly, so a client
+ * holding an ID from a previous listing is ordinary, not exceptional.
+ */
+const NOT_FOUND_CODES = new Set([
+  "ErrorInvalidIdMalformed",
+  "ErrorItemNotFound",
+  "ErrorFolderNotFound",
+  "itemNotFound",
+]);
+
+function kindForStatus(statusCode: number, code: string | null): MailErrorKind {
+  if (code !== null && NOT_FOUND_CODES.has(code)) return "not_found";
+
   if (statusCode === 401) return "auth_failed";
   if (statusCode === 403) return "mailbox_forbidden";
   if (statusCode === 404) return "not_found";
@@ -89,7 +108,7 @@ export function mapGraphError(error: unknown, operation: string): MailError {
   if (passedThrough !== null) return passedThrough;
 
   if (error instanceof GraphError) {
-    const kind = kindForStatus(error.statusCode);
+    const kind = kindForStatus(error.statusCode, error.code);
     const retryAfter =
       kind === "throttled"
         ? parseRetryAfter(error.headers?.get("retry-after") ?? null)

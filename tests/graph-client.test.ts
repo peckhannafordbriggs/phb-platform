@@ -27,7 +27,6 @@ const FOLDER_PAGE = {
     {
       id: "folder-inbox",
       displayName: "Inbox",
-      wellKnownName: "inbox",
       totalItemCount: 12,
       unreadItemCount: 3,
       childFolderCount: 0,
@@ -206,7 +205,11 @@ describe("Graph error mapping", () => {
     { status: 401, code: "InvalidAuthenticationToken", kind: "auth_failed" },
     { status: 403, code: "ErrorAccessDenied", kind: "mailbox_forbidden" },
     { status: 404, code: "ErrorItemNotFound", kind: "not_found" },
-    { status: 400, code: "ErrorInvalidIdMalformed", kind: "unexpected" },
+    // A stale or malformed id arrives as 400, not 404 - confirmed against the
+    // real mailbox. It still means "that item is not there".
+    { status: 400, code: "ErrorInvalidIdMalformed", kind: "not_found" },
+    { status: 400, code: "ErrorFolderNotFound", kind: "not_found" },
+    { status: 400, code: "BadRequest", kind: "unexpected" },
     { status: 500, code: "InternalServerError", kind: "unexpected" },
   ];
 

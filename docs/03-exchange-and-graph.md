@@ -82,8 +82,30 @@ POST /users/{mailbox}/messages/{id}/send
 ```
 
 Sending via `sendMail` with a copied body loses the attachments Power Automate
-attached, the `[CO: Owner|Bulletin]` subject tag that downstream filing depends on,
-and conversation threading.
+attached, the bracketed subject tag that downstream filing depends on, and
+conversation threading.
+
+**The subject tag, as it actually appears in the mailbox.** Earlier drafts of these
+docs wrote it as `[CO: Owner|Bulletin]`. That was schematic, not literal — verified
+against `changeorder@phb1899.com` in Phase 4 Part B. The real format is a bracketed
+project and change-order identifier at the start of the subject:
+
+```
+[CCHMC RFI 229] New CO logged (Bid Tracker) — Due 08/25/2026
+[CCHMC Bulletin 12] Change Order Request — Additional Information Needed — …
+[ZZTEST PR-91] New CO logged (Bid Tracker) — Due 08/14/2026
+```
+
+Not every automation message carries one — the scope-request drafts start with the
+project name and no brackets:
+
+```
+CCHMC Liberty Expansion — Change Order Scope Request — Due 08-11-2026
+```
+
+So **nothing may filter on the literal string `[CO:`** — it appears nowhere in the
+mailbox — and nothing may assume a tag is present at all. Preserve the subject
+exactly and let a human read it.
 
 **Attachments:** simple upload under 3 MB; `createUploadSession` above that.
 
