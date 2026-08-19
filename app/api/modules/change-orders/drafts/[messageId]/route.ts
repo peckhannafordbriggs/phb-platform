@@ -22,13 +22,15 @@ const ROUTE = "/api/modules/change-orders/drafts/[messageId]";
  * could both open the same draft and only discover the collision after typing.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ messageId: string }> },
 ) {
   return withMailbox(ROUTE, async (service, viewer) => {
     const { messageId } = await params;
+    const allowRemoteImages =
+      new URL(request.url).searchParams.get("images") === "1";
 
-    const draft = await service.getDraftForEdit(messageId);
+    const draft = await service.getDraftForEdit(messageId, { allowRemoteImages });
     const lock = await acquireDraftLock(messageId, viewer.id);
 
     return ok({ draft, lock });
@@ -56,10 +58,16 @@ export async function PATCH(
     await assertDraftNotLockedByAnother(messageId, viewer.id);
 
     const { expectedChangeKey, ...changes } = input;
-    const draft = await service.updateDraft(messageId, {
-      ...changes,
-      expectedChangeKey,
-    });
+    // Only decides how the preview in the response is rendered. It reaches no
+    // write: the sanitized copy is never what gets saved.
+    const allowRemoteImages =
+      new URL(request.url).searchParams.get("images") === "1";
+
+    const draft = await service.updateDraft(
+      messageId,
+      { ...changes, expectedChangeKey },
+      { allowRemoteImages },
+    );
 
     // Refresh the lock on every save, so an active editor never loses it.
     const lock = await acquireDraftLock(messageId, viewer.id);

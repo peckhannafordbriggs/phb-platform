@@ -1,10 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  AttachmentSummary,
-  MessageBody,
-} from "@/lib/modules/change-orders/mail/types";
+import type { AttachmentSummary } from "@/lib/modules/change-orders/mail/types";
 import { ApiError } from "./mailbox-client";
 import { BodyEditor, BodySourceEditor } from "./body-editor";
 import {
@@ -59,7 +56,6 @@ interface EditorState {
 export function DraftEditor({
   messageId,
   attachments,
-  preview,
   remoteImagesAllowed,
   onShowImages,
   onSent,
@@ -67,7 +63,6 @@ export function DraftEditor({
 }: {
   messageId: string;
   attachments: AttachmentSummary[];
-  preview: MessageBody | null;
   remoteImagesAllowed: boolean;
   onShowImages: () => void;
   onSent: (summary: { subject: string | null; recipients: string[] }) => void;
@@ -107,7 +102,11 @@ export function DraftEditor({
 
     void (async () => {
       try {
-        const result = await openDraft(messageId, controller.signal);
+        const result = await openDraft(
+          messageId,
+          remoteImagesAllowed,
+          controller.signal,
+        );
         const initial: EditorState = {
           subject: result.draft.subject ?? "",
           to: addressesToText(result.draft.to),
@@ -138,7 +137,10 @@ export function DraftEditor({
       // expires on its own.
       void releaseDraft(messageId).catch(() => undefined);
     };
-  }, [messageId, onGone]);
+    // Re-opens when "show images" is switched on: the preview is sanitized on
+    // the server, so images can only appear by re-reading it. The control
+    // flushes any pending save first - see showImages below.
+  }, [messageId, remoteImagesAllowed, onGone]);
 
   // -------------------------------------------------------------- autosave
 
@@ -226,7 +228,7 @@ export function DraftEditor({
 
       setSave({ status: "saving" });
       try {
-        const result = await saveDraft(messageId, patch);
+        const result = await saveDraft(messageId, patch, remoteImagesAllowed);
 
         setLoaded(result);
         setChangeKey(result.draft.changeKey);
@@ -260,7 +262,7 @@ export function DraftEditor({
         return false;
       }
     },
-    [saved, buildPatch, messageId, onGone],
+    [saved, buildPatch, messageId, remoteImagesAllowed, onGone],
   );
 
   const scheduleSave = useCallback(() => {
@@ -305,13 +307,13 @@ export function DraftEditor({
     if (loaded === null) return;
 
     const interval = setInterval(() => {
-      void openDraft(messageId)
+      void openDraft(messageId, remoteImagesAllowed)
         .then((result) => setLock(result.lock))
         .catch(() => undefined);
     }, LOCK_REFRESH_MS);
 
     return () => clearInterval(interval);
-  }, [loaded, messageId]);
+  }, [loaded, messageId, remoteImagesAllowed]);
 
   // ----------------------------------------------------------------- send
 
@@ -323,6 +325,27 @@ export function DraftEditor({
       return true;
     }
   }, [state, saved, draft, buildPatch]);
+
+  /**
+   * Turning on remote images re-opens the draft, because the preview is
+   * sanitized on the server. Re-opening rebases the editor onto what Exchange
+   * holds, so anything still sitting in the autosave debounce has to be written
+   * first or it would vanish when the pane came back.
+   */
+  const showImages = useCallback(async () => {
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+
+    const current = latest.current;
+    if (dirty && current !== null) {
+      const saved = await persist(current);
+      if (!saved) return;
+    }
+
+    onShowImages();
+  }, [dirty, persist, onShowImages]);
 
   const beginSend = useCallback(async () => {
     setSendError(null);
@@ -483,14 +506,15 @@ export function DraftEditor({
         />
       ) : (
         <BodyEditor
-          preview={preview}
+          preview={draft.preview}
+          previewStale={dirty || save.status === "saving"}
           segments={draft.segments}
           edits={state.bodyEdits}
           note={state.note}
           disabled={lockedByOther}
           onEditSegment={editSegment}
           onNoteChange={(text) => edit({ note: text })}
-          onShowImages={onShowImages}
+          onShowImages={showImages}
           remoteImagesAllowed={remoteImagesAllowed}
         />
       )}

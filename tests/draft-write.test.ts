@@ -383,6 +383,84 @@ describe("text-only body editing", () => {
     expect(draft.segments.map((s) => s.text).join(" ")).not.toContain("margin");
   });
 
+  it("returns a sanitized preview of the same body it returns raw", async () => {
+    const stub = createGraphStub(() => jsonResponse(HTML_DRAFT));
+    const draft = await createMailService(stub.transport).getDraftForEdit("AAMkDraft");
+
+    // One read, so the editable text and the rendered preview cannot be
+    // different versions of the message.
+    expect(draft.preview?.format).toBe("html");
+    expect(draft.preview?.content).toContain("07/30/2026");
+    // Sanitized, not raw: the <style> element is gone.
+    expect(draft.preview?.content).not.toContain("<style");
+    // But the formatting the recipient will see survives, which is the whole
+    // reason the preview is worth looking at before sending.
+    expect(draft.preview?.content).toContain("background-color:rgb(242,242,242)");
+    expect(draft.preview?.content).toContain("font-size:11pt");
+  });
+
+  it("previews the edit, not the version the editor opened", async () => {
+    // The bug this covers: the preview was fetched when the message was opened
+    // and never re-read, so a saved edit showed in the field and not in the
+    // pane beside it. The reasonable reading of that is "nothing saved".
+    //
+    // The stub has to hold the write for this to mean anything - a responder
+    // that returns the same body forever would pass whether or not the service
+    // re-read it.
+    let stored = HTML_DRAFT;
+    const stub = createGraphStub((request) => {
+      if (request.method === "PATCH") {
+        const patch = JSON.parse(request.body ?? "{}") as {
+          body?: { content: string };
+        };
+        if (patch.body !== undefined) {
+          stored = {
+            ...stored,
+            body: { contentType: "html", content: patch.body.content },
+          };
+        }
+        return jsonResponse(stored);
+      }
+      return jsonResponse(stored);
+    });
+
+    const service = createMailService(stub.transport);
+    const draft = await service.getDraftForEdit("AAMkDraft");
+    const dueDate = draft.segments.find((s) => s.text === "07/30/2026")!;
+
+    const after = await service.updateDraft("AAMkDraft", {
+      bodyEdits: [{ id: dueDate.id, text: "08/15/2026" }],
+    });
+
+    expect(after.preview?.content).toContain("08/15/2026");
+    expect(after.preview?.content).not.toContain("07/30/2026");
+    // And the preview is still the sanitized rendering, not the raw body.
+    expect(after.preview?.content).not.toContain("<style");
+    expect(after.body).toContain("<style");
+  });
+
+  it("keeps remote images out of the preview unless asked", async () => {
+    const withImage = {
+      ...HTML_DRAFT,
+      body: {
+        contentType: "html",
+        content: '<body><img src="https://tracker.invalid/open.gif"><p>x</p></body>',
+      },
+    };
+
+    const stub = createGraphStub(() => jsonResponse(withImage));
+    const service = createMailService(stub.transport);
+
+    const blocked = await service.getDraftForEdit("AAMkDraft");
+    expect(blocked.preview?.content).not.toContain("tracker.invalid");
+    expect(blocked.preview?.remoteImagesBlocked).toBe(1);
+
+    const shown = await service.getDraftForEdit("AAMkDraft", {
+      allowRemoteImages: true,
+    });
+    expect(shown.preview?.content).toContain("tracker.invalid");
+  });
+
   it("changes only the edited words, keeping every style attribute", async () => {
     const stub = createGraphStub(() => jsonResponse(HTML_DRAFT));
     const service = createMailService(stub.transport);

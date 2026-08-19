@@ -485,7 +485,6 @@ export function MailboxWorkspace() {
           <DraftEditor
             messageId={message.message.id}
             attachments={message.attachments}
-            preview={message.message.body}
             remoteImagesAllowed={message.remoteImagesAllowed}
             onShowImages={() => void openMessage(message.message.id, true)}
             onSent={(summary) => {

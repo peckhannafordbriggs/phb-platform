@@ -25,6 +25,7 @@ import { MessageBodyFrame } from "./message-body";
  */
 export function BodyEditor({
   preview,
+  previewStale,
   segments,
   edits,
   note,
@@ -35,6 +36,8 @@ export function BodyEditor({
   remoteImagesAllowed,
 }: {
   preview: MessageBody | null;
+  /** Edits are typed but not yet written back, so the preview is behind. */
+  previewStale: boolean;
   segments: BodySegment[];
   edits: Record<string, string>;
   note: string;
@@ -50,7 +53,20 @@ export function BodyEditor({
     <div className="flex min-h-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col border-r border-[var(--border)]">
         <PaneLabel>
-          Preview — how the recipient sees it
+          <span className="flex items-center gap-2">
+            Preview — how the recipient sees it
+            {/*
+              The preview renders what Exchange stores, which for about a second
+              after a keystroke is not yet what the fields show. Saying so beats
+              a pane that silently disagrees with the text beside it - the
+              reasonable reading of that is "my edit did not save".
+            */}
+            {previewStale && (
+              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[0.625rem] font-medium normal-case tracking-normal text-amber-900">
+                updating…
+              </span>
+            )}
+          </span>
         </PaneLabel>
         <MessageBodyFrame
           body={preview}

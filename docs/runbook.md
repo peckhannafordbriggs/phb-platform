@@ -400,6 +400,34 @@ One thing Exchange *does* rewrite: a literal U+00A0 comes back as `&nbsp;`, so
 the encoder emits `&nbsp;` itself. Without that, every edit touching a
 non-breaking space differed from what was sent by five bytes.
 
+The preview beside the fields renders the body **Exchange currently holds**,
+not a copy fetched when the message was opened. It arrives with the draft and
+again with every save, so it cannot disagree with the fields. It used to: the
+preview came from the read API and was never re-read, so a saved edit appeared
+in the field and not in the pane beside it, which reads as "nothing saved".
+While a keystroke is still inside the autosave window the pane is marked
+*updating…* rather than left to silently disagree.
+
+**The preview keeps the message's formatting.** The sanitizer allows inline
+`style` attributes, one declaration at a time, against a fixed list of visual
+properties - colours, fonts, borders, padding, alignment. It still discards
+`<style>` ELEMENTS along with their contents, and still drops `class` and `id`.
+
+The reason that allowance is narrow rather than absent: nothing on the list can
+name a URL (`background-image`, the `background` shorthand, `cursor`, `content`,
+`list-style-image` and `filter` are all unlisted) and nothing on it can position
+an element (`position`, `top`, `left`, `z-index`, `transform`). So CSS cannot
+make a network request - it cannot become the read receipt that blocking remote
+images exists to prevent - and cannot lay message content over anything. Values
+are pattern-matched as well: only `rgb()`/`rgba()` admit a parenthesis at all,
+so `url(` and `expression(` cannot be spelled by any accepted value.
+
+If a draft ever renders unstyled, the cause is usually a declaration whose value
+does not match its pattern, and the fix belongs in the pattern rather than in
+the property list. Two were found that way against a real draft: Outlook writes
+`aptos_embeddedfont` in its default font stack and the pattern rejected the
+underscore, and `direction` / `box-sizing` appear on every body it generates but
+were missing. Both are covered in `tests/mail-sanitize.test.ts` now.
 Fields are labelled by **priority, not nesting depth**. Outlook writes a pasted
 table cell as `<td><p>value</p></td>`, so taking the innermost element called
 all eight cells of an automation table "paragraph" - accurate and useless when

@@ -23,9 +23,11 @@ export function contentSecurityPolicy(allowRemoteImages: boolean): string {
   return [
     "default-src 'none'",
     `img-src ${imgSrc}`,
-    // For the stylesheet below. The sanitizer strips every style attribute and
-    // every <style> element from the message itself, so the only inline CSS in
-    // this document is ours.
+    // For the stylesheet below, and for the style attributes the sanitizer
+    // allows through. <style> ELEMENTS are still discarded with their contents,
+    // so no message CSS can carry a selector: what survives is a short list of
+    // visual declarations, each scoped to the one element carrying it. None of
+    // them can name a URL, so this directive does not reopen the network.
     "style-src 'unsafe-inline'",
     "script-src 'none'",
     "object-src 'none'",

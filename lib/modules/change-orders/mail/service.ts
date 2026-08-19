@@ -696,8 +696,15 @@ export class ChangeOrderMailService {
    * Returns the RAW body. See DraftForEdit for why: saving the sanitized copy
    * back would overwrite the original with a lossy version every time anyone
    * touched a draft. The value only ever reaches a textarea.
+   *
+   * It also returns a sanitized `preview` of that same body. Both come from one
+   * read, so the editable text and the rendered preview are always the same
+   * version of the message.
    */
-  async getDraftForEdit(messageId: string): Promise<DraftForEdit> {
+  async getDraftForEdit(
+    messageId: string,
+    options: GetMessageOptions = {},
+  ): Promise<DraftForEdit> {
     const message = await this.call("getDraftForEdit", () =>
       this.client
         .api(this.path(`/messages/${encodeURIComponent(messageId)}`))
@@ -725,6 +732,7 @@ export class ChangeOrderMailService {
       // Only HTML has markup worth protecting. A plain-text body is already
       // readable and is edited whole.
       segments: bodyFormat === "html" ? extractBodySegments(body) : [],
+      preview: this.toBody(message, options.allowRemoteImages ?? false),
       hasAttachments: message.hasAttachments ?? false,
       changeKey: message.changeKey ?? null,
       lastModifiedDateTime: message.lastModifiedDateTime ?? null,
@@ -751,6 +759,7 @@ export class ChangeOrderMailService {
   async updateDraft(
     messageId: string,
     changes: DraftChanges,
+    options: GetMessageOptions = {},
   ): Promise<DraftForEdit> {
     const current = await this.getDraftForEdit(messageId);
 
@@ -799,7 +808,7 @@ export class ChangeOrderMailService {
 
     // Re-read rather than trusting the PATCH response, so the caller gets the
     // changeKey Exchange actually settled on for the next save.
-    return this.getDraftForEdit(messageId);
+    return this.getDraftForEdit(messageId, options);
   }
 
   /**

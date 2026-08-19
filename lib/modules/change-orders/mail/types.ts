@@ -121,6 +121,16 @@ export interface DraftForEdit {
    * of its 12-28 style attributes.
    */
   segments: BodySegment[];
+  /**
+   * The same body, sanitized, for the preview beside the editor.
+   *
+   * Derived here rather than in the browser so there is still exactly one
+   * function that turns a vendor body into something renderable. It is computed
+   * from the `body` above, so a save that changes the body changes this in the
+   * same response - the preview cannot drift from what Exchange holds, which it
+   * did when the editor previewed a copy fetched when the message was opened.
+   */
+  preview: MessageBody | null;
   hasAttachments: boolean;
   /**
    * Exchange's version marker. Sent back with a save so the service can notice
