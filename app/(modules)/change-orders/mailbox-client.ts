@@ -166,6 +166,22 @@ export function buildFolderTree(folders: FolderNode[]): FolderTreeNode[] {
   return build(null, 0);
 }
 
+/**
+ * The folders the tree opens on first paint: the roots that have children.
+ *
+ * Not cosmetic. In this mailbox `Projects` is a child of Inbox, so a fully
+ * collapsed tree shows 8 of 19 folders and no sign that a project hierarchy
+ * exists - which reads as a truncated tree rather than a closed one.
+ *
+ * Roots only, deliberately. Opening every level would put all 19 on screen and
+ * bury Drafts, which is the folder the default selection just chose.
+ */
+export function initiallyExpandedFolderIds(folders: FolderNode[]): string[] {
+  return buildFolderTree(folders)
+    .filter((node) => node.children.length > 0)
+    .map((node) => node.id);
+}
+
 /** The ancestor ids of a folder, so the tree can open to reveal it. */
 export function ancestorsOf(
   folders: FolderNode[],

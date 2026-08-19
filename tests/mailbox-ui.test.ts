@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ancestorsOf,
   buildFolderTree,
+  initiallyExpandedFolderIds,
   sortFolders,
   type FolderNode,
 } from "@/app/(modules)/change-orders/mailbox-client";
@@ -137,6 +138,65 @@ describe("revealing the selected folder", () => {
 
   it("returns nothing for a folder it does not know", () => {
     expect(ancestorsOf(REAL_MAILBOX, "nope")).toEqual([]);
+  });
+});
+
+describe("what the tree shows on first paint", () => {
+  /**
+   * The regression this exists for: the tree used to paint fully collapsed. The
+   * only thing that auto-expanded was the path to the selected folder, and the
+   * default selection is Drafts - a root with no ancestors - so nothing expanded
+   * at all. That showed 8 of 19 folders with no sign that a project hierarchy
+   * existed, which reads as a truncated tree rather than a closed one.
+   */
+  function visibleRows(expanded: Set<string>): string[] {
+    const rows: string[] = [];
+    const walk = (nodes: ReturnType<typeof buildFolderTree>): void => {
+      for (const node of nodes) {
+        rows.push(node.displayName);
+        if (expanded.has(node.id)) walk(node.children);
+      }
+    };
+    walk(buildFolderTree(REAL_MAILBOX));
+    return rows;
+  }
+
+  it("opens the roots that have children, so Projects is visible", () => {
+    const expanded = new Set(initiallyExpandedFolderIds(REAL_MAILBOX));
+    const rows = visibleRows(expanded);
+
+    // Projects is a child of Inbox. If Inbox is closed, it does not exist as far
+    // as the reader is concerned.
+    expect(rows).toContain("Projects");
+    expect(rows).toContain("Processed CO's");
+    expect(expanded.has("inbox")).toBe(true);
+  });
+
+  it("leaves deeper levels closed, so Drafts is not buried", () => {
+    const rows = visibleRows(new Set(initiallyExpandedFolderIds(REAL_MAILBOX)));
+
+    // Projects' own children stay collapsed - opening everything would put all
+    // 19 folders on screen and push the default selection out of view.
+    expect(rows).not.toContain("CCHMC Liberty Expansion");
+    expect(rows).not.toContain("CCHMC Bulletin 12");
+
+    // The folder the default selection just chose is still near the top.
+    expect(rows.indexOf("Drafts")).toBeLessThan(5);
+  });
+
+  it("would have shown only the roots before the fix", () => {
+    // Documents the old behaviour so the difference is legible.
+    expect(visibleRows(new Set())).toHaveLength(6);
+    expect(visibleRows(new Set())).not.toContain("Projects");
+  });
+
+  it("expands nothing when no root has children", () => {
+    const flat = REAL_MAILBOX.filter((f) => f.parentFolderId === "root").map((f) => ({
+      ...f,
+      childFolderCount: 0,
+    }));
+
+    expect(initiallyExpandedFolderIds(flat)).toEqual([]);
   });
 });
 

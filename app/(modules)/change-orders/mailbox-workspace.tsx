@@ -9,6 +9,7 @@ import {
   ancestorsOf,
   buildFolderTree,
   fetchFolders,
+  initiallyExpandedFolderIds,
   fetchMessage,
   fetchMessages,
   isMissing,
@@ -102,8 +103,34 @@ export function MailboxWorkspace() {
     return () => controller.abort();
   }, [loadFolders]);
 
-  // Open the tree far enough to reveal the selected folder - Drafts is a root,
-  // but a project folder is three levels down.
+  /**
+   * Open the roots that have children, once, when the tree first arrives.
+   *
+   * Without this the tree paints fully collapsed, and in this mailbox that hides
+   * everything interesting: `Projects` is a child of Inbox, not a top-level
+   * folder, so a collapsed Inbox means 8 visible rows out of 19 and no sign that
+   * a project hierarchy exists at all. It reads as a truncated tree rather than
+   * a closed one.
+   *
+   * Roots only. Opening every level would put all 19 folders on screen and bury
+   * Drafts, which is the folder the default selection just chose.
+   *
+   * Guarded by a ref so it happens on first load and never again - re-running it
+   * would reopen a folder the user deliberately collapsed.
+   */
+  const didInitialExpand = useRef(false);
+
+  useEffect(() => {
+    if (folders === null || didInitialExpand.current) return;
+    didInitialExpand.current = true;
+
+    const roots = initiallyExpandedFolderIds(folders);
+    if (roots.length > 0) setExpanded((current) => new Set([...current, ...roots]));
+  }, [folders]);
+
+  // Open the tree far enough to reveal the selected folder. Drafts is a root,
+  // but a project folder is three levels down - selecting one from a search
+  // result or a deep link has to reveal where it lives.
   useEffect(() => {
     if (folders === null || selectedFolder === null) return;
     const path = ancestorsOf(folders, selectedFolder.id);
