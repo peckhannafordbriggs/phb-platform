@@ -34,10 +34,25 @@ export const draftPatchSchema = z
       })
       .optional(),
     /**
+     * Text-run edits. The normal path: each entry replaces one run of text in
+     * the body currently in Exchange, and every byte outside those runs is
+     * preserved exactly - which is what keeps the automation's table styling.
+     */
+    bodyEdits: z
+      .array(z.strictObject({ id: z.string().max(32), text: z.string().max(100_000) }))
+      .max(2_000)
+      .optional(),
+    /** A paragraph appended before </body>. Existing content is not rewritten. */
+    appendNote: z.string().max(10_000).optional(),
+    /**
      * The version the editor last saw. Sent so the service can refuse a save
      * that would silently overwrite an edit made in Outlook.
      */
     expectedChangeKey: z.string().max(500).nullish(),
+  })
+  .refine((v) => !(v.body !== undefined && v.bodyEdits !== undefined), {
+    message:
+      "Send either a whole body or text edits, not both - they mean different things.",
   })
   .refine(
     (v) =>
@@ -45,7 +60,9 @@ export const draftPatchSchema = z
       v.to !== undefined ||
       v.cc !== undefined ||
       v.bcc !== undefined ||
-      v.body !== undefined,
+      v.body !== undefined ||
+      v.bodyEdits !== undefined ||
+      v.appendNote !== undefined,
     { message: "Provide at least one field to change." },
   );
 

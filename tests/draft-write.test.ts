@@ -348,3 +348,121 @@ describe("errors that will actually happen", () => {
     expect(error?.userMessage).not.toContain("403");
   });
 });
+
+describe("text-only body editing", () => {
+  const HTML_DRAFT = {
+    ...ZZTEST_DRAFT,
+    body: {
+      contentType: "html",
+      content:
+        '<html><head><style>p{margin:0}</style></head><body dir="ltr">' +
+        '<table border="1" style="border-collapse:collapse">' +
+        '<tr style="background-color:rgb(242,242,242)"><th><div style="font-size:11pt">Due Date</div></th></tr>' +
+        '<tr><td><div style="font-size:11pt">07/30/2026</div></td></tr>' +
+        "</table></body></html>",
+    },
+  };
+
+  async function patchBodyFor(
+    changes: Parameters<ReturnType<typeof createMailService>["updateDraft"]>[1],
+  ): Promise<{ content: string } | undefined> {
+    const stub = createGraphStub(() => jsonResponse(HTML_DRAFT));
+    await createMailService(stub.transport).updateDraft("AAMkDraft", changes);
+
+    const patch = stub.requests.find((r) => r.method === "PATCH");
+    if (patch === undefined) return undefined;
+    return (JSON.parse(patch.body ?? "{}") as { body?: { content: string } }).body;
+  }
+
+  it("offers the message text but not the markup", async () => {
+    const stub = createGraphStub(() => jsonResponse(HTML_DRAFT));
+    const draft = await createMailService(stub.transport).getDraftForEdit("AAMkDraft");
+
+    expect(draft.segments.map((s) => s.text)).toEqual(["Due Date", "07/30/2026"]);
+    // The <style> block's CSS must never be presented as message text.
+    expect(draft.segments.map((s) => s.text).join(" ")).not.toContain("margin");
+  });
+
+  it("changes only the edited words, keeping every style attribute", async () => {
+    const stub = createGraphStub(() => jsonResponse(HTML_DRAFT));
+    const service = createMailService(stub.transport);
+    const draft = await service.getDraftForEdit("AAMkDraft");
+    const dueDate = draft.segments.find((s) => s.text === "07/30/2026")!;
+
+    const written = await patchBodyFor({
+      bodyEdits: [{ id: dueDate.id, text: "08/15/2026" }],
+    });
+
+    expect(written?.content).toContain("08/15/2026");
+    expect(written?.content).not.toContain("07/30/2026");
+    // Everything sanitizing would have destroyed is still here.
+    expect(written?.content).toContain('style="background-color:rgb(242,242,242)"');
+    expect(written?.content).toContain("border-collapse:collapse");
+    expect(written?.content).toContain("<style>p{margin:0}</style>");
+    expect(written?.content).toContain('dir="ltr"');
+  });
+
+  it("does not write when the edits change nothing", async () => {
+    const stub = createGraphStub(() => jsonResponse(HTML_DRAFT));
+    const service = createMailService(stub.transport);
+    const draft = await service.getDraftForEdit("AAMkDraft");
+
+    // Re-submitting the current text is not a change, and must not cost a write
+    // to the live mailbox.
+    await service.updateDraft("AAMkDraft", {
+      bodyEdits: draft.segments.map((s) => ({ id: s.id, text: s.text })),
+    });
+
+    expect(stub.requests.some((r) => r.method === "PATCH")).toBe(false);
+  });
+
+  it("appends a note without rewriting what is above it", async () => {
+    const written = await patchBodyFor({ appendNote: "Please confirm by Friday." });
+
+    expect(written?.content).toContain("<p>Please confirm by Friday.</p></body>");
+    expect(written?.content).toContain("border-collapse:collapse");
+    expect(written?.content).toContain("07/30/2026");
+  });
+
+  it("encodes typed text so it cannot become markup", async () => {
+    const stub = createGraphStub(() => jsonResponse(HTML_DRAFT));
+    const service = createMailService(stub.transport);
+    const draft = await service.getDraftForEdit("AAMkDraft");
+
+    const written = await patchBodyFor({
+      bodyEdits: [{ id: draft.segments[0]!.id, text: "<script>alert(1)</script>" }],
+    });
+
+    expect(written?.content).not.toContain("<script>alert(1)</script>");
+    expect(written?.content).toContain("&lt;script&gt;");
+  });
+
+  it("applies text edits to the body in Exchange, not one supplied by a caller", async () => {
+    const stub = createGraphStub(() => jsonResponse(HTML_DRAFT));
+    const service = createMailService(stub.transport);
+    const draft = await service.getDraftForEdit("AAMkDraft");
+
+    // A caller cannot smuggle a whole replacement body through the edit path:
+    // the splice always starts from what Exchange currently holds.
+    const written = await patchBodyFor({
+      bodyEdits: [{ id: draft.segments[0]!.id, text: "Changed" }],
+    });
+
+    expect(written?.content).toContain("<style>p{margin:0}</style>");
+    expect(written?.content).toContain("Changed");
+  });
+
+  it("a plain-text draft offers no segments and is edited whole", async () => {
+    const stub = createGraphStub(() =>
+      jsonResponse({
+        ...ZZTEST_DRAFT,
+        body: { contentType: "text", content: "plain body" },
+      }),
+    );
+
+    const draft = await createMailService(stub.transport).getDraftForEdit("AAMkDraft");
+
+    expect(draft.bodyFormat).toBe("text");
+    expect(draft.segments).toEqual([]);
+  });
+});

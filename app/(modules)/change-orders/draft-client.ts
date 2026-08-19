@@ -83,6 +83,8 @@ export interface DraftPatch {
   cc?: MailAddress[];
   bcc?: MailAddress[];
   body?: { content: string; format: "html" | "text" };
+  bodyEdits?: { id: string; text: string }[];
+  appendNote?: string;
   expectedChangeKey: string | null;
 }
 

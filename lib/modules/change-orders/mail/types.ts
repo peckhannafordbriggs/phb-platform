@@ -1,3 +1,5 @@
+import type { BodyEdit, BodySegment } from "./body-text";
+
 /**
  * The vocabulary the rest of the platform uses for mail.
  *
@@ -109,6 +111,16 @@ export interface DraftForEdit {
   bcc: MailAddress[];
   body: string;
   bodyFormat: "html" | "text";
+  /**
+   * The editable text runs in the body, for the text-only editor.
+   *
+   * Empty for a plain-text body, which is already readable and is edited
+   * whole. For HTML, editing these and splicing by source offset is what lets
+   * a reviewer fix a date without the message losing its table styling -
+   * measured against the real mailbox, sanitizing an automation body keeps 0
+   * of its 12-28 style attributes.
+   */
+  segments: BodySegment[];
   hasAttachments: boolean;
   /**
    * Exchange's version marker. Sent back with a save so the service can notice
@@ -125,6 +137,13 @@ export interface DraftChanges {
   cc?: MailAddress[];
   bcc?: MailAddress[];
   body?: { content: string; format: "html" | "text" };
+  /**
+   * Edits to individual text runs, applied to the body currently in Exchange.
+   * Every byte outside an edited run is preserved exactly.
+   */
+  bodyEdits?: BodyEdit[];
+  /** A paragraph appended before </body>. Nothing existing is rewritten. */
+  appendNote?: string;
   /** The changeKey the editor last saw. Omit to save unconditionally. */
   expectedChangeKey?: string | null;
 }

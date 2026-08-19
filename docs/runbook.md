@@ -357,6 +357,60 @@ cannot be undone; everything else can.
 
 ---
 
+## How draft editing preserves the message
+
+Worth understanding before changing anything in the editor, because the
+obvious simplification is the one that breaks it.
+
+A "New CO logged" draft is 1.3-4KB of Outlook HTML: one table, 12-28 `style`
+attributes, a `<style>` block. **Sanitizing it discards 59-83% of that**,
+including the grey header row and the Calibri 11pt on every cell. Sanitizing is
+right for *rendering* - it is what makes vendor HTML safe to display - but a
+draft saved back in sanitized form would reach the vendor visibly degraded.
+
+So the editor never re-emits the body. It parses the raw HTML, records the
+exact source offsets of each run of text, and splices edits into the original
+string. Everything outside an edited run survives **by construction** rather
+than by careful round-tripping.
+
+| The screen | What it writes |
+|---|---|
+| Message text fields | Only the edited runs, spliced by offset. Markup untouched. |
+| Add a paragraph | An insertion before `</body>`. Nothing existing is rewritten. |
+| Edit HTML source | **Replaces the whole body.** The escape hatch, for structural changes. |
+| Subject / recipients only | The body is not sent at all, so it cannot change. |
+
+Two consequences to keep in mind:
+
+- **The text fields cannot change structure.** No new table rows, no
+  formatting. That is the trade that keeps the automation's output intact; the
+  source view is the way round it.
+- **Autosave sends only changed fields.** Editing the subject does not rewrite
+  the body. If that ever regresses, a draft could be rewritten by someone who
+  only fixed a typo in the subject line.
+
+Exchange itself was the open question - a store that normalised HTML on write
+would defeat all of the above. It does not. Verified against a ZZTEST draft
+containing a real pasted table: PATCHing a body back verbatim returns the same
+3,513 bytes, and splicing one table cell stored exactly the bytes intended -
+table, 2 rows, 8 cells, 29 `style` attributes, 11 classes, the `<style>` block,
+CRLFs and `&nbsp;` all identical either side of the write.
+
+One thing Exchange *does* rewrite: a literal U+00A0 comes back as `&nbsp;`, so
+the encoder emits `&nbsp;` itself. Without that, every edit touching a
+non-breaking space differed from what was sent by five bytes.
+
+Fields are labelled by **priority, not nesting depth**. Outlook writes a pasted
+table cell as `<td><p>value</p></td>`, so taking the innermost element called
+all eight cells of an automation table "paragraph" - accurate and useless when
+the labels exist so a reviewer knows which value they are changing.
+The guarantee is tested two ways: `tests/body-text.test.ts` covers it with
+synthetic fixtures shaped like the real thing, and a one-off gate ran the same
+properties against nine real bodies before any of it shipped. Real message
+bodies are deliberately **not** committed as fixtures - CLAUDE.md forbids
+persisting message content, and a test fixture is persistence.
+
+---
 ## Editing a draft goes wrong
 
 | What the user sees | Code | Cause | What to do |

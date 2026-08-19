@@ -15,6 +15,11 @@ import {
   assertSendGateOpen,
   assertWriteAllowed,
 } from "./guards";
+import {
+  applyBodyEdits,
+  appendParagraph,
+  extractBodySegments,
+} from "./body-text";
 import { sanitizeEmailHtml } from "./sanitize";
 import type {
   AttachmentSummary,
@@ -246,6 +251,35 @@ function toAddresses(
  * `wellKnownName` is filled in by the caller from resolveWellKnownFolders(),
  * because v1.0 will not return it - see FOLDER_SELECT.
  */
+/**
+ * Works out what the body should become, if anything.
+ *
+ * Order matters: text edits and a note are applied to the CURRENT body from
+ * Exchange, not to anything the caller supplied, so a caller cannot smuggle in
+ * a whole replacement body through the text-edit path.
+ */
+function resolveBodyChange(
+  current: DraftForEdit,
+  changes: DraftChanges,
+): { content: string; format: "html" | "text" } | null {
+  const hasEdits = changes.bodyEdits !== undefined && changes.bodyEdits.length > 0;
+  const hasNote = changes.appendNote !== undefined && changes.appendNote.trim().length > 0;
+
+  if (hasEdits || hasNote) {
+    let content = current.body;
+    if (hasEdits) {
+      content = applyBodyEdits(content, current.segments, changes.bodyEdits ?? []);
+    }
+    if (hasNote) {
+      content = appendParagraph(content, changes.appendNote ?? "");
+    }
+
+    // Unchanged after all that is not a write.
+    return content === current.body ? null : { content, format: current.bodyFormat };
+  }
+
+  return changes.body ?? null;
+}
 /** The Graph shape for a recipient list, for writes. */
 function toGraphRecipients(addresses: MailAddress[]): Recipient[] {
   return addresses.map((a) => ({
@@ -677,14 +711,20 @@ export class ChangeOrderMailService {
       });
     }
 
+    const body = message.body?.content ?? "";
+    const bodyFormat = message.body?.contentType === "html" ? "html" : "text";
+
     return {
       id: message.id ?? messageId,
       subject: message.subject ?? null,
       to: toAddresses(message.toRecipients),
       cc: toAddresses(message.ccRecipients),
       bcc: toAddresses(message.bccRecipients),
-      body: message.body?.content ?? "",
-      bodyFormat: message.body?.contentType === "html" ? "html" : "text",
+      body,
+      bodyFormat,
+      // Only HTML has markup worth protecting. A plain-text body is already
+      // readable and is edited whole.
+      segments: bodyFormat === "html" ? extractBodySegments(body) : [],
       hasAttachments: message.hasAttachments ?? false,
       changeKey: message.changeKey ?? null,
       lastModifiedDateTime: message.lastModifiedDateTime ?? null,
@@ -734,10 +774,17 @@ export class ChangeOrderMailService {
     if (changes.to !== undefined) payload.toRecipients = toGraphRecipients(changes.to);
     if (changes.cc !== undefined) payload.ccRecipients = toGraphRecipients(changes.cc);
     if (changes.bcc !== undefined) payload.bccRecipients = toGraphRecipients(changes.bcc);
-    if (changes.body !== undefined) {
+    // Three ways the body can change, most-preserving first.
+    //
+    // Text edits and an appended note are splices into the body currently in
+    // Exchange: every byte outside an edited run survives untouched, which is
+    // what keeps the automation's table styling intact. Replacing the whole
+    // body is the source escape hatch, and says so.
+    const editedBody = resolveBodyChange(current, changes);
+    if (editedBody !== null) {
       payload.body = {
-        contentType: changes.body.format === "html" ? "HTML" : "Text",
-        content: changes.body.content,
+        contentType: editedBody.format === "html" ? "HTML" : "Text",
+        content: editedBody.content,
       };
     }
 
