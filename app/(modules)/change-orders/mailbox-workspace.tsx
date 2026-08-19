@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MessageSummary } from "@/lib/modules/change-orders/mail/types";
 import { FolderTree } from "./folder-tree";
 import { MessageBodyFrame } from "./message-body";
+import { DraftEditor, SentConfirmation } from "./draft-editor";
 import {
   ApiError,
   ancestorsOf,
@@ -61,6 +62,10 @@ export function MailboxWorkspace() {
   const [messageError, setMessageError] = useState<ApiError | null>(null);
   const [messageLoading, setMessageLoading] = useState(false);
   const [vanished, setVanished] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [sent, setSent] = useState<{ subject: string | null; recipients: string[] } | null>(
+    null,
+  );
 
   const [searchInput, setSearchInput] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
@@ -274,6 +279,8 @@ export function MailboxWorkspace() {
   const openMessage = useCallback(
     async (id: string, allowRemoteImages = false) => {
       setSelectedId(id);
+      setEditing(false);
+      setSent(null);
       setMessageLoading(true);
       setMessageError(null);
       setVanished(false);
@@ -308,6 +315,8 @@ export function MailboxWorkspace() {
     setMessage(null);
     setMessageError(null);
     setVanished(false);
+    setEditing(false);
+    setSent(null);
     setSearchInput("");
     setActiveQuery("");
   }, []);
@@ -435,9 +444,21 @@ export function MailboxWorkspace() {
         </div>
       </div>
 
-      {/* Reading pane */}
-      <div className="flex min-w-0 flex-1 flex-col bg-white">
-        {vanished ? (
+      {/* Reading pane. Relative, so the send confirmation can cover it. */}
+      <div className="relative flex min-w-0 flex-1 flex-col bg-white">
+        {sent !== null ? (
+          <SentConfirmation
+            summary={sent}
+            onDismiss={() => {
+              setSent(null);
+              setSelectedId(null);
+              setMessage(null);
+              if (selectedFolder !== null) {
+                void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+              }
+            }}
+          />
+        ) : vanished ? (
           <PaneMessage
             title="That message is no longer here"
             detail="It was moved or sent while this list was open. The list has been refreshed."
@@ -455,10 +476,40 @@ export function MailboxWorkspace() {
             title="No message selected"
             detail="Choose a message from the list to read it."
           />
+        ) : editing && message.message.isDraft ? (
+          /**
+           * A draft opens in the editor; anything already sent is read-only.
+           * The service refuses to edit a non-draft regardless, so this is the
+           * convenience, not the control.
+           */
+          <DraftEditor
+            messageId={message.message.id}
+            attachments={message.attachments}
+            onSent={(summary) => {
+              setSent(summary);
+              setEditing(false);
+              // The draft no longer exists. Refresh so the list agrees.
+              if (selectedFolder !== null) {
+                void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+              }
+            }}
+            onGone={() => {
+              setEditing(false);
+              setMessage(null);
+              setSelectedId(null);
+              setVanished(true);
+              if (selectedFolder !== null) {
+                void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+              }
+            }}
+          />
         ) : (
           <MessageView
             result={message}
             onShowImages={() => void openMessage(message.message.id, true)}
+            onEdit={
+              message.message.isDraft ? () => setEditing(true) : undefined
+            }
           />
         )}
       </div>
@@ -548,18 +599,31 @@ function describeRecipients(message: MessageSummary): string {
 function MessageView({
   result,
   onShowImages,
+  onEdit,
 }: {
   result: MessageResult;
   onShowImages: () => void;
+  onEdit?: () => void;
 }) {
   const { message, attachments, remoteImagesAllowed } = result;
 
   return (
     <>
       <div className="shrink-0 border-b border-[var(--border)] px-6 py-4">
-        <h2 className="text-base font-semibold" title={message.subject ?? undefined}>
-          {message.subject ?? "(no subject)"}
-        </h2>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-base font-semibold" title={message.subject ?? undefined}>
+            {message.subject ?? "(no subject)"}
+          </h2>
+          {onEdit !== undefined && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="shrink-0 rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)]"
+            >
+              Review and edit
+            </button>
+          )}
+        </div>
 
         <dl className="mt-3 space-y-1 text-sm">
           <AddressRow label="From" addresses={message.from === null ? [] : [message.from]} />

@@ -71,17 +71,29 @@ export function assertWriteAllowed(
  * draft.
  */
 export function assertSendAllowed(subject: string | null, operation: string): void {
-  if (!sendAllowed()) {
-    logger.warn("mail.send_blocked", {
-      outcome: "blocked",
-      reason: "PHB_ALLOW_SEND is not true",
-      route: operation,
-    });
-    throw new MailError("send_not_allowed", {
-      detail: `Refused ${operation}: PHB_ALLOW_SEND is not "true".`,
-    });
-  }
+  assertSendGateOpen(operation);
 
   // A send is also a write, so the ZZTEST fence applies outside production.
   assertWriteAllowed(subject, operation);
+}
+
+/**
+ * The environment half of the send gate, on its own.
+ *
+ * Separate so a send can be refused before a single Graph request is made. The
+ * ZZTEST half needs the subject, and reading the subject means a network call -
+ * so checking them together would mean a closed gate still talked to Exchange
+ * about a message it was never going to send.
+ */
+export function assertSendGateOpen(operation: string): void {
+  if (sendAllowed()) return;
+
+  logger.warn("mail.send_blocked", {
+    outcome: "blocked",
+    reason: "PHB_ALLOW_SEND is not true",
+    route: operation,
+  });
+  throw new MailError("send_not_allowed", {
+    detail: `Refused ${operation}: PHB_ALLOW_SEND is not "true".`,
+  });
 }

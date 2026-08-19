@@ -79,6 +79,8 @@ model Employee {
   auditEventsActed    AuditEvent[] @relation("AuditActor")
   auditEventsTargeted AuditEvent[] @relation("AuditTarget")
 
+  draftLocks DraftLock[]
+
   @@index([status])
   @@index([departmentId])
   @@index([positionId])
@@ -143,6 +145,36 @@ model Department {
   employees Employee[]
 
   @@map("departments")
+}
+
+/// An advisory lock on one draft, so two people in the platform do not edit the
+/// same message at once.
+///
+/// Advisory in the strict sense: it coordinates the platform with itself and
+/// nothing more. Outlook holds no lock and can still overwrite anything here -
+/// docs/03, last write wins. The UI says so rather than pretending otherwise.
+///
+/// This is the ONLY table Phase 6 adds, and it deliberately stores nothing about
+/// the message: an id, a holder, and an expiry. No subject, no recipients, no
+/// body. Dropping it loses nothing but a few seconds of coordination.
+model DraftLock {
+  /// The message's IMMUTABLE Graph id. Not a local key - the whole point is that
+  /// it survives Power Automate moving the message between folders.
+  messageId String @id @map("message_id")
+
+  heldById String   @map("held_by_id") @db.Uuid
+  heldBy   Employee @relation(fields: [heldById], references: [id], onDelete: Cascade)
+
+  acquiredAt DateTime @default(now()) @map("acquired_at") @db.Timestamptz(3)
+
+  /// Short, and refreshed by the editor while it is open. A closed tab must not
+  /// strand a draft, so expiry is the release mechanism rather than an explicit
+  /// unlock the browser might never send.
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@index([heldById])
+  @@map("draft_locks")
 }
 
 /// Append-only. Enforced in the application (no update or delete path is ever

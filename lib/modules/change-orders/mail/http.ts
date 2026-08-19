@@ -12,14 +12,20 @@ import { isMailError, type MailError, type MailErrorKind } from "./errors";
  */
 
 /**
- * docs/07-conventions.md fixes the status codes: 401, 403, 404, 422, 500. So
- * every integration failure is a 500 with a distinct machine-readable `code`,
- * rather than a status outside that set.
+ * docs/07-conventions.md fixes the status codes for the platform's own failures:
+ * 401, 403, 404, 422, 500. Integration failures are 500 with a distinct
+ * machine-readable `code` rather than a status outside that set.
  *
- * Note what is NOT here: nothing maps to 403. A Graph 403 means the platform's
+ * Two Phase 6 kinds use 409, which is outside that list on purpose. A conflict
+ * and a held lock are neither a fault nor a permission problem - they are "the
+ * world moved, ask again", and the browser has to tell them apart from a 500 to
+ * offer a reload rather than a retry.
+ *
+ * Note what a Graph 403 does NOT map to: a 403 response. It means the platform's
  * own access policy is wrong, not that this employee lacks access - reporting it
  * as 403 would send an operator looking at module grants for a problem that is
- * in Exchange.
+ * in Exchange. `not_draft` is the one true 403: understood, and refused on the
+ * state of the message.
  */
 const RESPONSE_FOR: Record<MailErrorKind, { status: number; code: string }> = {
   not_configured: { status: 500, code: "mail_not_configured" },
@@ -30,13 +36,18 @@ const RESPONSE_FOR: Record<MailErrorKind, { status: number; code: string }> = {
   network: { status: 500, code: "mail_unreachable" },
   send_not_allowed: { status: 500, code: "mail_send_disabled" },
   write_not_allowed: { status: 500, code: "mail_write_disabled" },
+  // 403 rather than 500: the request was understood and refused on the state of
+  // the message, which is the caller's problem to resolve rather than a fault.
+  not_draft: { status: 403, code: "mail_not_draft" },
+  conflict: { status: 409, code: "mail_conflict" },
+  locked: { status: 409, code: "mail_locked" },
   unexpected: { status: 500, code: "mail_error" },
 };
 
 export function mailErrorResponse(error: MailError): NextResponse {
   const { status, code } = RESPONSE_FOR[error.kind];
 
-  if (status === 404) return notFound(error.userMessage);
+  if (error.kind === "not_found") return notFound(error.userMessage);
 
   // Only the user-facing half of the error crosses the wire. `detail` was
   // already logged by the service.

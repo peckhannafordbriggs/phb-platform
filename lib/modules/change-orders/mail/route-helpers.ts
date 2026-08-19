@@ -1,6 +1,6 @@
 import type { NextResponse } from "next/server";
 import { denialResponse, requireModuleAccess, type Viewer } from "@/lib/authz";
-import { ok } from "@/lib/api/response";
+import { ok, validationFailed } from "@/lib/api/response";
 import { CHANGE_ORDERS_MODULE_KEY } from "@/lib/modules/change-orders/constants";
 import { mailErrorResponse, mailRouteError } from "./http";
 import { MailError } from "./errors";
@@ -15,15 +15,38 @@ import type { ChangeOrderMailService } from "./service";
  * means "is the mailbox configured" is answered once, in one place, rather than
  * by each handler remembering to check.
  */
-export async function withMailbox(
+export type ParsedInput<T> =
+  | { ok: true; data: T }
+  | { ok: false; message?: string };
+
+/**
+ * The order of the three steps is deliberate.
+ *
+ *   1. Authorization. An unauthenticated caller learns nothing else, including
+ *      what a valid body would look like.
+ *   2. Validation. A malformed request is malformed whether or not the mailbox
+ *      happens to be connected, so it is answered honestly - and it means the
+ *      write routes' strictness is provable without a live credential.
+ *   3. Connectivity. Only then is "the mailbox is not connected" the answer.
+ */
+export async function withMailbox<T = undefined>(
   route: string,
   handler: (
     service: ChangeOrderMailService,
     viewer: Viewer,
+    input: T,
   ) => Promise<NextResponse>,
+  parse?: () => Promise<ParsedInput<T>>,
 ): Promise<NextResponse> {
   const access = await requireModuleAccess(CHANGE_ORDERS_MODULE_KEY);
   if (!access.ok) return denialResponse(access.denial);
+
+  let input = undefined as T;
+  if (parse !== undefined) {
+    const parsed = await parse();
+    if (!parsed.ok) return validationFailed(parsed.message);
+    input = parsed.data;
+  }
 
   // Not an error, and not a crash. IT creates the app registration on its own
   // schedule; until then every mail route says so in the same shape, and the UI
@@ -38,7 +61,7 @@ export async function withMailbox(
   }
 
   try {
-    return await handler(mailService(), access.viewer);
+    return await handler(mailService(), access.viewer, input);
   } catch (error) {
     return mailRouteError(route, error);
   }

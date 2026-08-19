@@ -306,6 +306,37 @@ the polling still running — that is the likelier cause than the interval itsel
 
 ---
 
+## Who sent a message, and when
+
+**`audit_events` is the only record.** Under app-only auth Exchange records the
+*application* as the sender, not the person — the Sent Items copy in
+`changeorder@phb1899.com` says nothing about which employee clicked send. This
+row is it.
+
+```sql
+SELECT a.occurred_at,
+       e.email                AS sent_by,
+       a.metadata->>'subject' AS subject,
+       a.metadata->'to'       AS recipients
+FROM audit_events a
+LEFT JOIN employees e ON e.id = a.actor_employee_id
+WHERE a.action = 'mail.sent'
+ORDER BY a.occurred_at DESC
+LIMIT 50;
+```
+
+`mail.draft_edited` records who changed a draft and which fields, never the
+content.
+
+**A send with no audit row is possible, and is logged.** The row is written after
+Exchange confirms the send, because recording a send that never happened is worse
+than the alternative — a false entry is a false alibi. If the insert itself then
+fails, the same facts go to the application log as
+`"event":"mail.sent_audit_failed"` with `outcome: sent_without_audit_row`. Search
+the logs for that before concluding a message was never sent from the platform.
+
+---
+
 ## Nothing sends, and that is correct
 
 **Symptom.** An attempt to send returns `mail_send_disabled`, with
@@ -323,6 +354,47 @@ second half of that.
 **Do not set `PHB_ALLOW_SEND=true` outside production.** Development runs against
 the live `changeorder@phb1899.com` mailbox and there is no test mailbox. A send
 cannot be undone; everything else can.
+
+---
+
+## Editing a draft goes wrong
+
+| What the user sees | Code | Cause | What to do |
+|---|---|---|---|
+| **"This draft changed in Outlook while you were editing"** | `mail_conflict` | Somebody edited the same draft in Outlook, or an autosave landed late. The platform refused rather than overwriting. | Reload the draft. Nothing was lost in Exchange — the Outlook version is intact. |
+| **"Someone else in the platform is editing this draft"** | `mail_locked` | Another employee has it open. Locks lapse after 90 seconds, so a closed tab frees it. | Wait, or check who: `SELECT held_by_id, expires_at FROM draft_locks;` |
+| **"This message has already been sent"** | `mail_not_draft` | The draft was sent — possibly from Outlook — while it was open here. | Nothing. Sent messages are immutable in Exchange; this is the correct refusal. |
+| **"Not saved"** in the editor | varies | Any save failure. **The send button is disabled while this shows.** | Fix the underlying error. Do not work around it: an unsaved edit means the content on screen is not the content that would send. |
+
+### Deleting a draft in Outlook does not make it vanish from the platform
+
+Worth knowing, because the opposite is the natural assumption. Deleting a draft
+in Outlook **moves it to Deleted Items**, and the platform addresses messages by
+their *immutable* id — which is the whole point of
+`Prefer: IdType="ImmutableId"` and survives a move between folders. So the draft
+stays readable and editable through the platform, from the bin. Verified against
+the live mailbox.
+
+What actually produces each outcome:
+
+| In Outlook | The platform then reports |
+|---|---|
+| Delete (to Deleted Items) | Nothing changes. Still a draft, still editable. |
+| Delete permanently (Shift+Delete, or emptying the bin) | `not_found` — pane clears, list refreshes |
+| Send the draft | `mail_not_draft` — a sent message is immutable in Exchange |
+| Edit and save the draft | `mail_conflict` on the next save from the platform |
+
+**A stranded lock cannot block a send for long.** `draft_locks` holds only a
+message id, a holder and an expiry, and every read treats an expired row as
+absent. To clear one by hand:
+
+```sql
+DELETE FROM draft_locks WHERE message_id = '<immutable id>';
+```
+
+That table is disposable. Dropping it entirely loses nothing but a few seconds of
+coordination between two people in the platform — **it is not a permission
+system**, and Outlook holds no lock at all.
 
 ---
 

@@ -89,6 +89,46 @@ export interface ListMessagesOptions {
   cursor?: string;
 }
 
+/**
+ * A draft as the editor needs it.
+ *
+ * `body` here is the RAW stored body, not the sanitized one getMessage returns.
+ * That is deliberate and narrow: saving the sanitized version back would write
+ * the lossy copy over the original every time somebody touched a draft, quietly
+ * destroying the formatting Power Automate produced.
+ *
+ * It is only ever put in a textarea, which does not parse markup, and only ever
+ * for a message where isDraft is true. The reading pane still renders through
+ * the sanitizer and the sandboxed iframe.
+ */
+export interface DraftForEdit {
+  id: string;
+  subject: string | null;
+  to: MailAddress[];
+  cc: MailAddress[];
+  bcc: MailAddress[];
+  body: string;
+  bodyFormat: "html" | "text";
+  hasAttachments: boolean;
+  /**
+   * Exchange's version marker. Sent back with a save so the service can notice
+   * that Outlook changed the draft underneath the editor.
+   */
+  changeKey: string | null;
+  lastModifiedDateTime: string | null;
+}
+
+/** Only the fields Phase 6 permits editing. Attachments are never touched. */
+export interface DraftChanges {
+  subject?: string;
+  to?: MailAddress[];
+  cc?: MailAddress[];
+  bcc?: MailAddress[];
+  body?: { content: string; format: "html" | "text" };
+  /** The changeKey the editor last saw. Omit to save unconditionally. */
+  expectedChangeKey?: string | null;
+}
+
 export interface GetMessageOptions {
   /**
    * The "show images" affordance. Off unless a person asks for this message,

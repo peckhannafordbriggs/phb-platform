@@ -181,14 +181,48 @@ describe("Phase 4 implements no write or send operation", () => {
       ChangeOrderMailService.prototype,
     ).filter((name) => name !== "constructor");
 
-    // CLAUDE.md prohibition 1 and the Phase 4 scope: no send, no sendMail, no
-    // draft creation, no move, no delete. If one of these appears, it appears
-    // deliberately, in the phase that asked for it.
-    const forbidden = methods.filter((name) =>
-      /^(send|sendMail|create|update|patch|move|delete|reply|forward)/i.test(name),
+    /**
+     * The write surface is exactly what Phase 6 authorised, and nothing else.
+     *
+     * This assertion used to be "no write method exists at all", which was right
+     * for Phases 4 and 5 and correctly failed the moment Phase 6 added editing
+     * and sending. It is deliberately kept as an allowlist rather than deleted:
+     * the value was never in the empty list, it is in having to come here and
+     * name a new way of changing the mailbox before one can ship.
+     *
+     * Still absent, and out of scope: creating a message, replying, forwarding,
+     * moving, deleting, and anything resembling sendMail.
+     */
+    const WRITE_METHODS_AUTHORISED_BY_PHASE_6 = ["updateDraft", "sendDraft"];
+
+    const writes = methods
+      .filter((name) =>
+        /^(send|create|update|patch|put|move|delete|remove|reply|forward|copy|flag)/i.test(
+          name,
+        ),
+      )
+      .sort();
+
+    expect(writes).toEqual([...WRITE_METHODS_AUTHORISED_BY_PHASE_6].sort());
+  });
+
+  it("still has no method that could send more than one message", async () => {
+    const { ChangeOrderMailService } = await import(
+      "@/lib/modules/change-orders/mail/service"
     );
 
-    expect(forbidden).toEqual([]);
+    const methods = Object.getOwnPropertyNames(ChangeOrderMailService.prototype);
+
+    // CLAUDE.md prohibition 1: no auto-send, bulk-send, send-all or scheduled
+    // send, ever. One human, one draft, one deliberate action.
+    for (const name of methods) {
+      expect(name.toLowerCase(), `${name} looks like a bulk or automatic send`).not.toMatch(
+        /(sendall|sendmany|sendbulk|bulksend|sendeach|schedulesend|sendlater|autosend)/,
+      );
+    }
+
+    // sendDraft takes one id, not a list.
+    expect(ChangeOrderMailService.prototype.sendDraft.length).toBeLessThanOrEqual(2);
   });
 
   it("contains no sendMail call anywhere in the change-orders module", async () => {

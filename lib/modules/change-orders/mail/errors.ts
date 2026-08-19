@@ -28,6 +28,19 @@ export type MailErrorKind =
   | "send_not_allowed"
   /** Non-production write attempted against a message that is not a ZZTEST. */
   | "write_not_allowed"
+  /**
+   * The message is not a draft. Editing or sending a message that has already
+   * been sent is refused in the service, not in the UI.
+   */
+  | "not_draft"
+  /**
+   * The draft changed in Exchange since it was read. Outlook edits the same
+   * mailbox and always wins; this is how the platform notices rather than
+   * silently overwriting.
+   */
+  | "conflict"
+  /** Another employee holds the advisory edit lock on this draft. */
+  | "locked"
   | "unexpected";
 
 /**
@@ -48,6 +61,11 @@ const USER_MESSAGES: Record<MailErrorKind, string> = {
   network: "The mailbox could not be reached. Try again in a moment.",
   send_not_allowed: "Sending is disabled in this environment.",
   write_not_allowed: "This message cannot be modified in this environment.",
+  not_draft:
+    "This message has already been sent, so it can no longer be edited or sent.",
+  conflict:
+    "This draft changed in Outlook while you were editing. Reload it to see the current version before saving again.",
+  locked: "Someone else in the platform is editing this draft.",
   unexpected: "Something went wrong reaching the mailbox. Try again.",
 };
 

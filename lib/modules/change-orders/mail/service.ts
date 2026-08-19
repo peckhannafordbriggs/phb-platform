@@ -10,10 +10,16 @@ import { readGraphEnv, readMailboxAddress } from "@/lib/env";
 import { createGraphClient, graphClient, type GraphTransport } from "../graph/client";
 import { mapGraphError } from "../graph/errors";
 import { MailError } from "./errors";
-import { assertSendAllowed, assertWriteAllowed } from "./guards";
+import {
+  assertSendAllowed,
+  assertSendGateOpen,
+  assertWriteAllowed,
+} from "./guards";
 import { sanitizeEmailHtml } from "./sanitize";
 import type {
   AttachmentSummary,
+  DraftChanges,
+  DraftForEdit,
   GetMessageOptions,
   ListMessagesOptions,
   MailAddress,
@@ -97,6 +103,25 @@ const WELL_KNOWN_FOLDER_ALIASES = [
   "sentitems",
   "deleteditems",
 ] as const;
+
+/**
+ * What the draft editor reads. `body` here is the raw stored body - the editor
+ * writes it back, so it must not be the sanitized copy. `changeKey` is
+ * Exchange's version marker, used to notice that Outlook edited the draft
+ * underneath the editor.
+ */
+const DRAFT_EDIT_SELECT = [
+  "id",
+  "subject",
+  "toRecipients",
+  "ccRecipients",
+  "bccRecipients",
+  "body",
+  "isDraft",
+  "hasAttachments",
+  "changeKey",
+  "lastModifiedDateTime",
+].join(",");
 
 /**
  * `contentBytes` is NOT selected, and that is the point: GET /attachments
@@ -221,6 +246,13 @@ function toAddresses(
  * `wellKnownName` is filled in by the caller from resolveWellKnownFolders(),
  * because v1.0 will not return it - see FOLDER_SELECT.
  */
+/** The Graph shape for a recipient list, for writes. */
+function toGraphRecipients(addresses: MailAddress[]): Recipient[] {
+  return addresses.map((a) => ({
+    emailAddress: { address: a.address, ...(a.name === null ? {} : { name: a.name }) },
+  }));
+}
+
 function toFolderSummary(folder: MailFolder): MailFolderSummary {
   return {
     id: folder.id ?? "",
@@ -618,6 +650,166 @@ export class ChangeOrderMailService {
     );
 
     return (page.value ?? []).map(toAttachmentSummary);
+  }
+
+  /**
+   * A draft, in the shape the editor needs.
+   *
+   * Refuses anything that is not a draft, in the service rather than the UI - a
+   * sent message is immutable in Exchange and asking to edit one is a bug, not a
+   * user error.
+   *
+   * Returns the RAW body. See DraftForEdit for why: saving the sanitized copy
+   * back would overwrite the original with a lossy version every time anyone
+   * touched a draft. The value only ever reaches a textarea.
+   */
+  async getDraftForEdit(messageId: string): Promise<DraftForEdit> {
+    const message = await this.call("getDraftForEdit", () =>
+      this.client
+        .api(this.path(`/messages/${encodeURIComponent(messageId)}`))
+        .select(DRAFT_EDIT_SELECT)
+        .get() as Promise<Message>,
+    );
+
+    if (message.isDraft !== true) {
+      throw new MailError("not_draft", {
+        detail: `getDraftForEdit refused: message ${messageId} is not a draft.`,
+      });
+    }
+
+    return {
+      id: message.id ?? messageId,
+      subject: message.subject ?? null,
+      to: toAddresses(message.toRecipients),
+      cc: toAddresses(message.ccRecipients),
+      bcc: toAddresses(message.bccRecipients),
+      body: message.body?.content ?? "",
+      bodyFormat: message.body?.contentType === "html" ? "html" : "text",
+      hasAttachments: message.hasAttachments ?? false,
+      changeKey: message.changeKey ?? null,
+      lastModifiedDateTime: message.lastModifiedDateTime ?? null,
+    };
+  }
+
+  /**
+   * Saves an edit to a draft.
+   *
+   * The order of the checks is the safety model, and it is deliberate:
+   *
+   *   1. Read the current state from Exchange. Not from the caller - a caller
+   *      that could supply the subject could supply "ZZTEST" and write anywhere.
+   *   2. Refuse anything that is not a draft.
+   *   3. Apply the ZZTEST fence, using that subject.
+   *   4. Refuse if the draft changed since the editor last read it.
+   *   5. Only then PATCH, and only the fields actually supplied.
+   *
+   * Attachments are never named in the payload, so Exchange leaves them alone.
+   * The subject is written back byte for byte when supplied and omitted
+   * entirely when not - nothing here parses, normalizes or regenerates the
+   * `[CCHMC RFI 229]` tag that downstream filing depends on.
+   */
+  async updateDraft(
+    messageId: string,
+    changes: DraftChanges,
+  ): Promise<DraftForEdit> {
+    const current = await this.getDraftForEdit(messageId);
+
+    assertWriteAllowed(current.subject, "updateDraft");
+
+    if (
+      changes.expectedChangeKey !== undefined &&
+      changes.expectedChangeKey !== null &&
+      current.changeKey !== null &&
+      changes.expectedChangeKey !== current.changeKey
+    ) {
+      throw new MailError("conflict", {
+        detail:
+          `updateDraft refused: draft ${messageId} changed in Exchange. ` +
+          `Editor held a stale version.`,
+      });
+    }
+
+    const payload: Record<string, unknown> = {};
+    if (changes.subject !== undefined) payload.subject = changes.subject;
+    if (changes.to !== undefined) payload.toRecipients = toGraphRecipients(changes.to);
+    if (changes.cc !== undefined) payload.ccRecipients = toGraphRecipients(changes.cc);
+    if (changes.bcc !== undefined) payload.bccRecipients = toGraphRecipients(changes.bcc);
+    if (changes.body !== undefined) {
+      payload.body = {
+        contentType: changes.body.format === "html" ? "HTML" : "Text",
+        content: changes.body.content,
+      };
+    }
+
+    // Nothing to do is not an error, and must not cost a write.
+    if (Object.keys(payload).length === 0) return current;
+
+    await this.call("updateDraft", () =>
+      this.client
+        .api(this.path(`/messages/${encodeURIComponent(messageId)}`))
+        .patch(payload) as Promise<Message>,
+    );
+
+    // Re-read rather than trusting the PATCH response, so the caller gets the
+    // changeKey Exchange actually settled on for the next save.
+    return this.getDraftForEdit(messageId);
+  }
+
+  /**
+   * Sends an existing draft.
+   *
+   * `POST /messages/{id}/send`, never `sendMail`. docs/03: sending a copied body
+   * loses the attachments Power Automate attached, the subject tag downstream
+   * filing depends on, and conversation threading.
+   *
+   * The send gate is checked before any network call, so a closed gate never
+   * causes Exchange to be asked about a message that was never going to be sent.
+   */
+  async sendDraft(
+    messageId: string,
+    options: { expectedChangeKey?: string | null } = {},
+  ): Promise<{ subject: string | null; to: MailAddress[]; cc: MailAddress[]; bcc: MailAddress[] }> {
+    // Environment gate first: no Graph request at all when sending is off.
+    assertSendGateOpen("sendDraft");
+
+    const current = await this.getDraftForEdit(messageId);
+    assertWriteAllowed(current.subject, "sendDraft");
+
+    // The draft on the server must be the one the human read and approved. A
+    // changed version means an autosave landed late or Outlook edited it, and
+    // sending it would send content nobody reviewed.
+    if (
+      options.expectedChangeKey !== undefined &&
+      options.expectedChangeKey !== null &&
+      current.changeKey !== null &&
+      options.expectedChangeKey !== current.changeKey
+    ) {
+      throw new MailError("conflict", {
+        detail:
+          `sendDraft refused: draft ${messageId} changed since it was reviewed. ` +
+          `Sending would send content the sender did not see.`,
+      });
+    }
+
+    await this.call("sendDraft", () =>
+      this.client
+        .api(this.path(`/messages/${encodeURIComponent(messageId)}/send`))
+        // An empty body. Nothing about the message comes from the caller - that
+        // is what makes this structurally incapable of becoming sendMail with a
+        // copied body, which would drop the attachments Power Automate attached,
+        // the subject tag downstream filing depends on, and the threading.
+        .post({}) as Promise<unknown>,
+    );
+
+    // Returned so the caller can write the audit row describing what went. The
+    // draft no longer exists, so this is the last moment these facts are
+    // readable at all.
+    return {
+      subject: current.subject,
+      to: current.to,
+      cc: current.cc,
+      bcc: current.bcc,
+    };
   }
 
   /**

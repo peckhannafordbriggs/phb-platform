@@ -30,7 +30,17 @@ export type AuditAction =
   | "employee.position_changed"
   | "employee.department_changed"
   /** Written only by that migration. No application path deletes a department. */
-  | "department.deleted";
+  | "department.deleted"
+  /**
+   * Mail. `mail.sent` is the important one and is not logging: under app-only
+   * auth Exchange records the application as the sender, not the person, so this
+   * row is the ONLY record of who sent a message to a vendor. Its metadata
+   * carries the recipients and subject deliberately - docs/07 forbids recipient
+   * lists in application *logs*, which is a different thing from an audit trail
+   * whose purpose is attribution.
+   */
+  | "mail.draft_edited"
+  | "mail.sent";
 
 export interface AuditEventInput {
   action: AuditAction;
