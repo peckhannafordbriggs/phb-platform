@@ -152,6 +152,47 @@ access token are never logged.
 
 ---
 
+## The Change Orders tab shows a problem
+
+The mailbox screen has four states that are not failures, and they are the ones
+most likely to be reported as bugs.
+
+| What the user sees | What it means | What to do |
+|---|---|---|
+| **"Nothing to review"** in Drafts | The Drafts folder is empty. It is empty most of the day — the automation produces drafts in bursts. | Nothing. This is the normal resting state and the default view. |
+| **"The mailbox is not connected yet"** | No Graph credential is configured. Every pane shows this together, not one pane failing. | *The mailbox is not connected*, above. |
+| **"That message is no longer here"** | The message was moved or sent between the list being drawn and the row being clicked. Power Automate moves messages constantly. | Nothing. The list refreshes itself. It is a normal event, not an error. |
+| **"Search results, ordered by relevance rather than date"** | Graph's `$search` rejects `$orderby`, so search results genuinely are not newest-first. | Nothing. Clear the search box to get the ordered list back. |
+
+**Real failures** show "That did not load" with a Try again button, and the
+underlying code is in the log as `"event":"mail.graph_call_failed"`. The
+`outcome` field names which — `auth_failed`, `mailbox_forbidden`, `throttled`,
+`network`. Each has its own section above.
+
+---
+
+## The folder tree looks wrong or incomplete
+
+**Symptom.** A folder that exists in Outlook is missing from the tree, or
+`Projects` appears with nothing under it.
+
+**First, the shape is not what it looks like.** `Projects` is a **child of
+Inbox**, not a top-level folder. Project folders are at depth 2 and their
+contents at depth 3. The live mailbox has **19 folders**, and the tree walks to
+depth 5.
+
+| Cause | What you will see | Fix |
+|---|---|---|
+| The tree was truncated | `"event":"mail.folder_tree_capped"` in the log, with `reason` naming `MAX_FOLDER_DEPTH` or `MAX_FOLDERS` | Raise the constant in `lib/modules/change-orders/mail/service.ts`. It is logged rather than silent precisely so this is answerable. |
+| A folder is nested deeper than 5 levels | Same log line, `reason: MAX_FOLDER_DEPTH` | As above. Consider whether the mailbox structure is what you want first. |
+| A well-known folder has no label | `"event":"mail.well_known_folder_unresolved"` | The mailbox is missing that special folder, or Graph refused the alias. The tree still renders; only the label is absent. |
+
+**Do not add `wellKnownName` to a `$select` to "fix" a missing label.** It is a
+beta-only property and asking v1.0 for it fails every folder read — see the next
+section.
+
+---
+
 ## Folder listing fails with 400 BadRequest
 
 **Symptom.** Every folder read fails. The log shows
@@ -252,6 +293,16 @@ through one app identity — roughly 10k requests per 10 minutes, about 4
 concurrent in practice. Retrying harder makes the throttle deeper and longer.
 If this becomes common, the cause is a polling interval that is too aggressive,
 not a retry count that is too low.
+
+**What the Change Orders screen contributes.** It polls the selected folder once
+a minute, and **only while the tab is visible** — switching away stops the timer,
+and returning fires one catch-up read. A search is never polled. So an idle open
+tab costs one request per minute, and a backgrounded one costs nothing.
+
+If throttling does become a problem, raise `POLL_INTERVAL_MS` in
+`app/(modules)/change-orders/mailbox-workspace.tsx` before touching anything in
+the retry path. Check first whether a browser tab was left open somewhere with
+the polling still running — that is the likelier cause than the interval itself.
 
 ---
 

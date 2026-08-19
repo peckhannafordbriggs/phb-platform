@@ -55,7 +55,7 @@ describe("the mailbox cannot be supplied by a caller", () => {
     const service = createMailService(stub.transport);
 
     await service.getFolder(LIVE_MAILBOX);
-    await service.listMessages(LIVE_MAILBOX, { skipToken: LIVE_MAILBOX });
+    await service.listMessages(LIVE_MAILBOX, { cursor: LIVE_MAILBOX });
     await service.getMessage(LIVE_MAILBOX);
     await service.listAttachments(LIVE_MAILBOX);
 
@@ -318,7 +318,31 @@ describe("listMessages", () => {
     expect(url).not.toContain("body");
   });
 
-  it("hands back a skip token, not a Graph URL", async () => {
+  /**
+   * The nextLink below is the real one, copied from the live mailbox: a
+   * 13-message folder requested with $top=5. Mail collections continue with
+   * `$skip`, NOT `$skiptoken`.
+   *
+   * The previous fixture invented a `$skiptoken` link, so the tests agreed with
+   * a service that could only ever return one page. That is the whole reason
+   * PHASE-5 says to verify paging against the live mailbox.
+   */
+  const REAL_NEXT_LINK =
+    "https://graph.microsoft.com/v1.0/users/changeorder@example.invalid/mailFolders('AAMkAD%3D%3D')/messages" +
+    "?%24select=id%2csubject&%24orderby=receivedDateTime+desc&%24top=5&%24skip=5";
+
+  it("reads Graph's $skip continuation, which is how mail actually pages", async () => {
+    const stub = createGraphStub(() =>
+      jsonResponse({ value: [MESSAGE], "@odata.nextLink": REAL_NEXT_LINK }),
+    );
+
+    const page = await createMailService(stub.transport).listMessages("folder-inbox");
+
+    expect(page.nextCursor).toBe("s:5");
+    expect(page.nextCursor).not.toContain("http");
+  });
+
+  it("still reads a $skiptoken continuation, for collections that use one", async () => {
     const stub = createGraphStub(() =>
       jsonResponse({
         value: [MESSAGE],
@@ -329,8 +353,34 @@ describe("listMessages", () => {
 
     const page = await createMailService(stub.transport).listMessages("folder-inbox");
 
-    expect(page.nextSkipToken).toBe("NEXTPAGE");
-    expect(page.nextSkipToken).not.toContain("http");
+    expect(page.nextCursor).toBe("t:NEXTPAGE");
+  });
+
+  it("carries an offset cursor back as $skip", async () => {
+    const stub = createGraphStub(() => jsonResponse({ value: [] }));
+
+    await createMailService(stub.transport).listMessages("folder-inbox", {
+      cursor: "s:5",
+    });
+
+    expect(decodeURIComponent(stub.requests[0]?.url ?? "")).toContain("$skip=5");
+  });
+
+  it("ignores a cursor a caller made up, rather than trusting it", async () => {
+    const stub = createGraphStub(() => jsonResponse({ value: [] }));
+    const service = createMailService(stub.transport);
+
+    // The cursor arrives from a URL query parameter, so it is input.
+    for (const bad of ["s:-1", "s:abc", "nonsense", "s:", "t:"]) {
+      await service.listMessages("folder-inbox", { cursor: bad });
+    }
+
+    for (const request of stub.requests) {
+      const url = decodeURIComponent(request.url);
+      expect(url).not.toContain("$skip=-1");
+      expect(url).not.toContain("$skip=abc");
+      expect(url).not.toContain("$skiptoken=");
+    }
   });
 
   it("clamps an unbounded page size", async () => {
@@ -343,18 +393,34 @@ describe("listMessages", () => {
     expect(decodeURIComponent(stub.requests[0]?.url ?? "")).toContain("$top=100");
   });
 
-  it("orders newest first on the first page only", async () => {
+  it("repeats $orderby on an offset page, or the offset addresses the wrong rows", async () => {
     const stub = createGraphStub(() => jsonResponse({ value: [] }));
     const service = createMailService(stub.transport);
 
     await service.listMessages("folder-inbox");
-    await service.listMessages("folder-inbox", { skipToken: "PAGE2" });
+    await service.listMessages("folder-inbox", { cursor: "s:5" });
 
-    expect(decodeURIComponent(stub.requests[0]?.url ?? "")).toContain(
-      "$orderby=receivedDateTime desc",
-    );
-    // The token already encodes the order; Graph rejects the combination.
-    expect(decodeURIComponent(stub.requests[1]?.url ?? "")).not.toContain("$orderby");
+    // Graph's own nextLink repeats it. $skip=5 into an unordered result set is
+    // a different five messages than $skip=5 into a sorted one, so page two
+    // would overlap page one and silently drop messages.
+    for (const request of stub.requests) {
+      expect(decodeURIComponent(request.url)).toContain(
+        "$orderby=receivedDateTime desc",
+      );
+    }
+  });
+
+  it("drops $orderby only for a $skiptoken cursor, which Graph rejects it with", async () => {
+    const stub = createGraphStub(() => jsonResponse({ value: [] }));
+
+    await createMailService(stub.transport).listMessages("folder-inbox", {
+      cursor: "t:OPAQUE",
+    });
+
+    const url = decodeURIComponent(stub.requests[0]?.url ?? "");
+    expect(url).not.toContain("$orderby");
+    // The SDK spells it $skipToken; Graph accepts either casing.
+    expect(url.toLowerCase()).toContain("$skiptoken=opaque");
   });
 });
 

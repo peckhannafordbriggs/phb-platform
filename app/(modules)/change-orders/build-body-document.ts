@@ -1,0 +1,102 @@
+import type { MessageBody } from "@/lib/modules/change-orders/mail/types";
+
+/**
+ * Builds the document a message body is rendered into.
+ *
+ * Kept out of the component so it is a pure function of the body and one flag,
+ * and can be tested against hostile input without a DOM. It is the second layer
+ * of the defence described in docs/03 - the sanitizer is the first, and neither
+ * is an alternative to the other.
+ */
+
+/**
+ * An allowlist of nothing, plus the few things a mail body legitimately needs.
+ *
+ * `img-src` is the only directive that changes with "show images". `data:` stays
+ * permitted either way, because an inline logo is not a network request, and
+ * `cid:` references an attachment the platform cannot resolve yet - it renders
+ * as a marked placeholder rather than reaching the network.
+ */
+export function contentSecurityPolicy(allowRemoteImages: boolean): string {
+  const imgSrc = allowRemoteImages ? "https: data: cid:" : "data: cid:";
+
+  return [
+    "default-src 'none'",
+    `img-src ${imgSrc}`,
+    // For the stylesheet below. The sanitizer strips every style attribute and
+    // every <style> element from the message itself, so the only inline CSS in
+    // this document is ours.
+    "style-src 'unsafe-inline'",
+    "script-src 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "form-action 'none'",
+    "base-uri 'none'",
+  ].join("; ");
+}
+
+const BODY_STYLES = `
+  :root { color-scheme: light; }
+  body {
+    margin: 0;
+    padding: 20px 24px;
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #1a1a1a;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+  a { color: #1d4ed8; }
+  img { max-width: 100%; height: auto; }
+  /* A blocked or unresolvable image would otherwise collapse to a broken-image
+     glyph with no explanation of why it is missing. */
+  img[data-remote-blocked], img[src^="cid:"] {
+    display: inline-block;
+    min-width: 120px;
+    min-height: 28px;
+    border: 1px dashed #d4d4d8;
+    border-radius: 3px;
+    background: #fafafa;
+  }
+  table { border-collapse: collapse; max-width: 100%; }
+  td, th { padding: 4px 8px; vertical-align: top; }
+  blockquote {
+    margin: 12px 0;
+    padding-left: 12px;
+    border-left: 3px solid #e4e4e7;
+    color: #52525b;
+  }
+  pre { white-space: pre-wrap; word-break: break-word; }
+`;
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export function buildBodyDocument(
+  body: MessageBody,
+  allowRemoteImages: boolean,
+): string {
+  // A plain-text body is escaped and wrapped, never interpreted as markup. A
+  // text/plain message containing "<script>" is text, and must stay text.
+  const content =
+    body.format === "html"
+      ? body.content
+      : `<pre>${escapeHtml(body.content)}</pre>`;
+
+  return [
+    "<!doctype html>",
+    '<html lang="en"><head>',
+    '<meta charset="utf-8">',
+    `<meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(allowRemoteImages)}">`,
+    // Nothing in a mail body should be able to send a referrer anywhere.
+    '<meta name="referrer" content="no-referrer">',
+    `<style>${BODY_STYLES}</style>`,
+    "</head><body>",
+    content,
+    "</body></html>",
+  ].join("");
+}

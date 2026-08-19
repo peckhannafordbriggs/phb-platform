@@ -1,4 +1,4 @@
-import type { Client } from "@microsoft/microsoft-graph-client";
+import type { Client, GraphRequest } from "@microsoft/microsoft-graph-client";
 import type {
   Attachment,
   MailFolder,
@@ -14,6 +14,7 @@ import { assertSendAllowed, assertWriteAllowed } from "./guards";
 import { sanitizeEmailHtml } from "./sanitize";
 import type {
   AttachmentSummary,
+  GetMessageOptions,
   ListMessagesOptions,
   MailAddress,
   MailFolderSummary,
@@ -135,20 +136,68 @@ interface GraphCollection<T> {
 }
 
 /**
- * Graph paginates with an opaque nextLink URL. Callers get the token out of it
- * and nothing else, so no Graph URL crosses the boundary.
+ * An unbounded page size against one mailbox through one app identity is how
+ * throttling starts, so a caller's `top` is clamped rather than trusted.
  */
-function skipTokenFrom(nextLink: string | undefined): string | null {
+function clampPageSize(requested: number | undefined): number {
+  return Math.min(
+    Math.max(requested ?? DEFAULT_MESSAGE_PAGE_SIZE, 1),
+    MAX_MESSAGE_PAGE_SIZE,
+  );
+}
+
+/**
+ * Turns Graph's @odata.nextLink into an opaque cursor.
+ *
+ * Graph does not use one continuation mechanism. Mail collections page with
+ * `$skip` - verified against the real mailbox, where a 13-message folder
+ * requested with `$top=5` returns
+ * `...&$top=5&$skip=5` - while other collections use `$skiptoken`. Reading only
+ * for `$skiptoken` therefore looked like "there is no next page" on every mail
+ * folder, and silently truncated every listing at one page.
+ *
+ * The cursor encodes which mechanism produced it so the caller keeps holding one
+ * opaque string and no Graph URL crosses the boundary.
+ */
+function cursorFrom(nextLink: string | undefined): string | null {
   if (nextLink === undefined) return null;
 
   try {
     const params = new URL(nextLink).searchParams;
-    return params.get("$skiptoken") ?? params.get("$skipToken");
+
+    const token = params.get("$skiptoken") ?? params.get("$skipToken");
+    if (token !== null && token.length > 0) return `t:${token}`;
+
+    const skip = params.get("$skip");
+    if (skip !== null && /^\d+$/.test(skip)) return `s:${skip}`;
+
+    return null;
   } catch {
     // A nextLink we cannot parse means we stop paginating rather than guess.
     logger.warn("mail.unparseable_next_link", { outcome: "pagination_stopped" });
     return null;
   }
+}
+
+/**
+ * Applies a cursor that came back from cursorFrom.
+ *
+ * The value reaches here from a URL query parameter, so it is validated rather
+ * than trusted: an unrecognised prefix or a non-numeric offset is ignored, which
+ * returns the first page instead of letting a caller inject `$skip=-1`.
+ */
+function applyCursor(request: GraphRequest, cursor: string): GraphRequest {
+  if (cursor.startsWith("t:")) {
+    const token = cursor.slice(2);
+    return token.length > 0 ? request.skipToken(token) : request;
+  }
+
+  if (cursor.startsWith("s:")) {
+    const skip = Number.parseInt(cursor.slice(2), 10);
+    return Number.isSafeInteger(skip) && skip > 0 ? request.skip(skip) : request;
+  }
+
+  return request;
 }
 
 function toAddress(recipient: Recipient | null | undefined): MailAddress | null {
@@ -356,13 +405,13 @@ export class ChangeOrderMailService {
     operation: string,
   ): Promise<MailFolderSummary[]> {
     const folders: MailFolderSummary[] = [];
-    let skipToken: string | null = null;
+    let cursor: string | null = null;
     let pages = 0;
 
     do {
       // Captured before the closure so its type is not widened back to
       // `string | null` inside it.
-      const token = skipToken;
+      const token = cursor;
 
       const page: GraphCollection<MailFolder> = await this.call(
         operation,
@@ -371,17 +420,17 @@ export class ChangeOrderMailService {
             .api(path)
             .select(FOLDER_SELECT)
             .top(FOLDER_PAGE_SIZE);
-          if (token !== null) request = request.skipToken(token);
+          if (token !== null) request = applyCursor(request, token);
           return request.get() as Promise<GraphCollection<MailFolder>>;
         },
       );
 
       folders.push(...(page.value ?? []).map(toFolderSummary));
-      skipToken = skipTokenFrom(page["@odata.nextLink"]);
+      cursor = cursorFrom(page["@odata.nextLink"]);
       pages += 1;
 
       // Never truncate silently: if the cap is what stopped us, say so.
-      if (skipToken !== null && pages >= MAX_FOLDER_PAGES) {
+      if (cursor !== null && pages >= MAX_FOLDER_PAGES) {
         logger.warn("mail.folder_pages_capped", {
           outcome: "truncated",
           count: folders.length,
@@ -389,7 +438,7 @@ export class ChangeOrderMailService {
         });
         break;
       }
-    } while (skipToken !== null);
+    } while (cursor !== null);
 
     return folders;
   }
@@ -418,7 +467,7 @@ export class ChangeOrderMailService {
   /**
    * Metadata for one page of a folder, newest first.
    *
-   * `skipToken` is the token from a previous page, not a Graph URL. `top` is
+   * `cursor` is the opaque continuation from a previous page, not a Graph URL. `top` is
    * clamped: an unbounded page size against one mailbox through one app identity
    * is how throttling starts.
    */
@@ -426,10 +475,7 @@ export class ChangeOrderMailService {
     folderId: string,
     options: ListMessagesOptions = {},
   ): Promise<MessagePage> {
-    const top = Math.min(
-      Math.max(options.top ?? DEFAULT_MESSAGE_PAGE_SIZE, 1),
-      MAX_MESSAGE_PAGE_SIZE,
-    );
+    const top = clampPageSize(options.top);
 
     const page = await this.call("listMessages", () => {
       let request = this.client
@@ -439,11 +485,18 @@ export class ChangeOrderMailService {
         .select(MESSAGE_SUMMARY_SELECT)
         .top(top);
 
-      if (options.skipToken !== undefined && options.skipToken.length > 0) {
-        request = request.skipToken(options.skipToken);
-      } else {
-        // Graph rejects $orderby combined with a skip token on this collection,
-        // and the token already encodes the order of the first page.
+      const cursor = options.cursor ?? "";
+      if (cursor.length > 0) request = applyCursor(request, cursor);
+
+      // $orderby has to be repeated on an offset page, and Graph's own nextLink
+      // repeats it: `...&$orderby=receivedDateTime desc&$top=5&$skip=5`. An
+      // offset into a differently ordered result set addresses different rows,
+      // so dropping it here would make page two overlap page one and skip
+      // messages entirely.
+      //
+      // A $skiptoken cursor is the opposite case - the token already encodes the
+      // ordering, and Graph rejects the combination.
+      if (!cursor.startsWith("t:")) {
         request = request.query({ $orderby: "receivedDateTime desc" });
       }
 
@@ -452,7 +505,49 @@ export class ChangeOrderMailService {
 
     return {
       messages: (page.value ?? []).map(toMessageSummary),
-      nextSkipToken: skipTokenFrom(page["@odata.nextLink"]),
+      nextCursor: cursorFrom(page["@odata.nextLink"]),
+    };
+  }
+
+  /**
+   * Searches one folder.
+   *
+   * `$search` is not `$filter`. Graph rejects it combined with `$orderby`, and
+   * results come back by relevance rather than by date - so this returns no
+   * ordering guarantee and the UI must not imply one.
+   *
+   * The term is quoted and its quotes escaped. Without that, a subject
+   * containing a double quote ends the search expression early and Graph
+   * answers 400 on an ordinary-looking query.
+   */
+  async searchMessages(
+    folderId: string,
+    query: string,
+    options: ListMessagesOptions = {},
+  ): Promise<MessagePage> {
+    const term = query.trim();
+    if (term.length === 0) return { messages: [], nextCursor: null };
+
+    const top = clampPageSize(options.top);
+    const escaped = term.replace(/"/g, '\\"');
+
+    const page = await this.call("searchMessages", () => {
+      let request = this.client
+        .api(this.path(`/mailFolders/${encodeURIComponent(folderId)}/messages`))
+        .select(MESSAGE_SUMMARY_SELECT)
+        .search(`"${escaped}"`)
+        .top(top);
+
+      if (options.cursor !== undefined && options.cursor.length > 0) {
+        request = applyCursor(request, options.cursor);
+      }
+
+      return request.get() as Promise<GraphCollection<Message>>;
+    });
+
+    return {
+      messages: (page.value ?? []).map(toMessageSummary),
+      nextCursor: cursorFrom(page["@odata.nextLink"]),
     };
   }
 
@@ -462,8 +557,16 @@ export class ChangeOrderMailService {
    * The HTML body is sanitized here rather than at the render site. A caller
    * cannot obtain the raw vendor markup through this service, because there is
    * no caller that has a legitimate use for it - see ./sanitize.ts.
+   *
+   * `allowRemoteImages` is the "show images" affordance, and it is off unless
+   * asked for. Loading a remote image tells the sender the mail was opened, by
+   * whom and when, so it is a decision a person makes per message rather than a
+   * default.
    */
-  async getMessage(messageId: string): Promise<MessageDetail> {
+  async getMessage(
+    messageId: string,
+    options: GetMessageOptions = {},
+  ): Promise<MessageDetail> {
     const message = await this.call("getMessage", () =>
       this.client
         .api(this.path(`/messages/${encodeURIComponent(messageId)}`))
@@ -478,16 +581,19 @@ export class ChangeOrderMailService {
       replyTo: toAddresses(message.replyTo),
       sentDateTime: message.sentDateTime ?? null,
       parentFolderId: message.parentFolderId ?? null,
-      body: this.toBody(message),
+      body: this.toBody(message, options.allowRemoteImages ?? false),
     };
   }
 
-  private toBody(message: Message): MessageDetail["body"] {
+  private toBody(
+    message: Message,
+    allowRemoteImages: boolean,
+  ): MessageDetail["body"] {
     const content = message.body?.content;
     if (content === undefined || content === null) return null;
 
     if (message.body?.contentType === "html") {
-      const sanitized = sanitizeEmailHtml(content);
+      const sanitized = sanitizeEmailHtml(content, { allowRemoteImages });
       return {
         content: sanitized.html,
         format: "html",

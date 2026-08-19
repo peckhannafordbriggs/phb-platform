@@ -71,17 +71,31 @@ export interface AttachmentSummary {
 }
 
 /**
- * `nextSkipToken` is Graph's opaque continuation token, extracted from the
- * @odata.nextLink so callers never handle a Graph URL. Null means the last page.
+ * `nextCursor` is an opaque continuation, derived from the @odata.nextLink so
+ * callers never handle a Graph URL. Null means the last page.
+ *
+ * Opaque is not a formality. Graph continues a mail collection with `$skip` and
+ * other collections with `$skiptoken`, so the cursor encodes which - a caller
+ * that assumed either would be wrong half the time.
  */
 export interface MessagePage {
   messages: MessageSummary[];
-  nextSkipToken: string | null;
+  nextCursor: string | null;
 }
 
 export interface ListMessagesOptions {
   top?: number;
-  skipToken?: string;
+  /** The `nextCursor` from a previous page. Never a Graph URL. */
+  cursor?: string;
+}
+
+export interface GetMessageOptions {
+  /**
+   * The "show images" affordance. Off unless a person asks for this message,
+   * because loading a remote image tells the sender it was opened, by whom and
+   * when.
+   */
+  allowRemoteImages?: boolean;
 }
 
 /** What the health endpoint reports. */
