@@ -559,6 +559,58 @@ session cookie, and sign-in appears to succeed and then immediately loop back to
 
 ---
 
+## Sign-in lands on `{"message":"Not found"}`
+
+**Symptom.** Sign-in appears to work — Microsoft accepts the login — and the
+browser lands on a blank page reading `{"message":"Not found"}`. The URL is
+`localhost:3000/api/auth/callback/microsoft-entra-id?code=...`
+
+**Cause.** Something else already owns port 3000, so Next.js quietly started on
+3001. Entra redirected to the URI registered on the app registration, which is
+port **3000**, and hit whatever is actually listening there.
+
+On a machine with Grafana installed, that is Grafana. `{"message":"Not found"}`
+is Grafana's 404 format — Next.js returns an HTML error page, not JSON. **The
+JSON body is the diagnosis:** a second application answered.
+
+**Confirm it.**
+
+```powershell
+Get-NetTCPConnection -LocalPort 3000 -State Listen |
+  ForEach-Object { Get-Process -Id $_.OwningProcess } | Select-Object Id, ProcessName
+```
+
+**Fix.** The platform must own 3000. Changing the Entra redirect URI needs Azure
+portal access; a port number is a local config file. So the other application
+moves.
+
+For Grafana, in an **elevated** shell — the config is under Program Files:
+
+```powershell
+Set-Content 'C:\Program Files\GrafanaLabs\grafana\conf\custom.ini' `
+  -Value @('[server]', 'http_port = 3001') -Encoding ASCII
+Restart-Service grafana
+```
+
+Three details that each cost time on 21 August:
+
+- Edit **`custom.ini`, never `defaults.ini`.** Grafana layers the former over the
+  latter, and an upgrade overwrites the latter — so a port set there silently
+  reverts. Create `custom.ini` if it does not exist.
+- **Give it 15–30 seconds** before checking the port. The service reports
+  `Running` well before Grafana binds, and if Grafana was installed through NSSM
+  the service is the *wrapper*, which reports `Running` even when the app it
+  wraps has crashed.
+- If the service path points at `nssm.exe`, it tells you nothing about where
+  Grafana lives. Find the config by searching for `defaults.ini` instead.
+
+**Why the dev server is pinned.** `package.json` runs `next dev -p 3000`. With an
+explicit port, Next fails immediately with `EADDRINUSE` naming the port. Without
+it, Next moves to 3001 and you discover the problem twenty minutes later as a
+broken auth callback. **Do not remove the `-p`.**
+
+---
+
 ## What expires, and when
 
 | Credential | Where | Expires | Breaks what |
@@ -1072,6 +1124,35 @@ Then commit the `package.json` change. Do not disable the check globally.
 
 ---
 
+## Rebuilding a development database needs BOTH seeds
+
+**Symptom.** After a reset the platform works and you can sign in, but the
+employee list is nearly empty — the sample users are gone. It reads as data loss.
+
+**Cause.** There are two seed scripts, and `migrate reset` runs neither.
+
+| Script | What it creates |
+|---|---|
+| `npm run seed` | modules, positions, departments, bootstrap admins |
+| `npm run seed:dev` | the sample employees used to exercise the admin screen |
+
+Running only the first leaves a correct platform with almost nobody in it.
+
+**Fix — the full sequence after any `migrate reset` on a development machine:**
+
+```bash
+npx prisma migrate reset
+npm run seed
+npm run seed:dev
+npx tsx scripts/bas-import.ts --apply    # if the bas_* tables are in use
+```
+
+`seed:dev` refuses to run against production twice over — once on `NODE_ENV`,
+and again if `DATABASE_URL` does not point at localhost. See *Zero admins after
+seeding* for why that second guard is the one that matters.
+
+---
+
 # BAS — Building Automation module
 
 ## The BAS schema lives in two places, and `schema.prisma` is not all of it
@@ -1079,9 +1160,23 @@ Then commit the `package.json` change. Do not disable the check globally.
 **Read this before changing anything about the `bas_*` tables.** It is the one
 thing about this module that is not discoverable from the code.
 
-Prisma models tables, columns and indexes. It does not model **CHECK
-constraints**, **generated columns**, or **views**. So three things are defined
-in the migration SQL rather than in `prisma/schema.prisma`:
+**The rule, stated so it predicts rather than lists:** Prisma models **columns
+and indexes**. It ignores **constraints** and **triggers** entirely.
+
+That cuts both ways, and the two halves behave very differently.
+
+*Safe to hand-append, because Prisma cannot see them at all:* CHECK constraints,
+triggers, views. They survive every future migration untouched.
+
+*NOT safe to leave unmodelled, because Prisma does diff them:* indexes. An index
+that exists in the database but not in `schema.prisma` gets a **drop proposal**
+on the next `migrate dev`. This is why the original partial indexes
+(`WHERE equipment_id IS NOT NULL`) are declared as plain indexes instead — on
+metadata tables of a few hundred rows the partial-ness saves nothing, and it
+avoids the trap. It is the same trap as the generated column below.
+
+So three things are defined in the migration SQL rather than in
+`prisma/schema.prisma`:
 
 | What | Where | Does Prisma notice it? |
 |---|---|---|
@@ -1310,6 +1405,43 @@ rolls back with `INCONCLUSIVE` if that count is short. That check exists because
 threw inside its comparison loop and skipped all ten tables. **Always count what
 you actually checked, and refuse to pass on zero.**
 
+## Back up before any destructive BAS operation
+
+`--truncate-target` on the import script, any manual `DELETE` against
+`bas_readings`, and any `migrate reset` on a database holding real BAS data all
+need a verified backup first. Beyond the JACE's ~42-hour roll horizon those rows
+exist nowhere else.
+
+**Take it:**
+
+```powershell
+$db = ((Select-String -Path .env.local -Pattern '^DATABASE_URL="?([^"]+)"?').Matches[0].Groups[1].Value.Trim()) -replace '\?.*$',''
+pg_dump $db -Fc -f "C:\dev\phb_platform_$(Get-Date -Format yyyy-MM-dd_HHmm).dump"
+```
+
+`-Fc` is the custom format: compressed, and `pg_restore` can read its table of
+contents without needing a database to restore into.
+
+The `?schema=public` suffix must be stripped. `libpq` rejects it as an unknown
+URI parameter and the error names the connection string rather than the suffix,
+which sends you looking in the wrong place.
+
+**Verify it before relying on it** — a dump that has never been read back is a
+file, not a backup:
+
+```powershell
+pg_restore --list "C:\dev\phb_platform_....dump" | Select-String 'TABLE DATA public bas_readings'
+```
+
+No output means the readings are not in there, whatever the exit code said.
+
+**Restoring into a scratch database and comparing row counts is stronger still**,
+and is what `C:\dev\bas-collector\Test-BasRestore.ps1` does for the standalone
+database. The same approach applies here. A backup that has never been restored
+is a hypothesis.
+
+---
+
 ## BAS irreplaceability — read before any destructive operation
 
 **The JACE overwrites its own history roughly every 42 hours.** Once a row is in
@@ -1331,3 +1463,404 @@ Consequences, all non-optional:
   than the Prisma client precisely because the Prisma client can write
 - `--truncate-target` on the import script, and any manual `DELETE`, needs a
   verified backup first
+
+---
+
+## The test database is a separate database, and migrations do not reach it
+
+**Symptom.** `npm test` passes, and then the first test that touches a new table
+fails with either a raw `relation "bas_readings" does not exist` or — for a BAS
+route — a `500 bas_unavailable` where a `200` was expected. Nothing else in the
+suite complains.
+
+**Cause.** `prisma migrate deploy` applies migrations to whatever `DATABASE_URL`
+points at, which is the *development* database. The suite runs against
+`TEST_DATABASE_URL`, a different database, and the only thing that migrates it is
+`npm run db:test:setup`.
+
+This bit B2. B1 added twelve `bas_*` tables and 416/416 tests still passed,
+because no B1 test read one of them — the test database was twelve tables behind
+and the suite had no way to notice. The first BAS test to expect a `200` got a
+`500` instead.
+
+**Fix.**
+
+```
+npm run db:test:setup
+```
+
+Idempotent, and it prints the migrations it applies. Run it **after every
+migration**, not just after a new clone. `No pending migrations to apply.` means
+you were already up to date.
+
+**Check what the test database actually has** before believing a schema-shaped
+test failure:
+
+```powershell
+$u = ((Select-String -Path .env.local -Pattern '^TEST_DATABASE_URL="?([^"]+)"?').Matches[0].Groups[1].Value.Trim()) -replace '\?.*$',''
+psql $u -c '\dt bas_*'
+```
+
+`Did not find any relation named "bas_*"` is the whole answer. The `?schema=`
+suffix has to be stripped for the same reason as in the backup section above.
+
+---
+
+## `bas_unavailable` — the BAS tables are not in this database
+
+**Symptom.** Every BAS route answers `500` with
+`{"error":{"code":"bas_unavailable","message":"Building automation data is not
+available right now. Contact IT."}}`. The rest of the platform, Change Orders
+included, works normally.
+
+**Cause.** One of two, and the response deliberately does not say which — the
+distinction matters to an operator and not to a browser. The log line
+`bas.unavailable` names it in `outcome`:
+
+| `outcome` | Meaning |
+|---|---|
+| `schema_missing` | `public.bas_readings` does not exist. The `add_bas_tables` migration has not been applied to this database |
+| `unreachable` | The query itself failed. The database is down, or the connection string is wrong — not specific to BAS |
+
+**Fix.** For `schema_missing`, apply the migration:
+
+```
+npx prisma migrate deploy
+```
+
+For `unreachable`, see *The database is unreachable* above — BAS is just where
+you noticed.
+
+**Why the check exists at all.** Without it Prisma raises
+`relation "bas_points" does not exist` once per screen panel, which reads as a
+code defect rather than an unapplied migration. `withBas` asks
+`to_regclass('public.bas_readings')` once per request — a catalog lookup, not a
+table scan — and turns it into one honest answer. It is deliberately **not
+cached**: a database that gained the migration a minute ago must not keep
+reporting it missing until the process restarts.
+
+---
+
+## An unauthenticated HTTP probe cannot tell you whether a route exists
+
+**Symptom.** You add a module page and a module API route, curl them while signed
+out, get a `302 /signin` and a `401`, and conclude they are wired up. They may
+not exist at all.
+
+**Cause.** `middleware.ts` runs before routing and answers every unauthenticated
+request itself — a redirect for a page path, a `401` for anything under `/api/`.
+It never consults the route table. Measured on the running dev server:
+
+| Request | Response |
+|---|---|
+| `/bas` | `302 → /signin` |
+| `/definitely-not-a-page` | `302 → /signin` |
+| `/api/modules/bas/ping` | `401` |
+| `/api/modules/bas/definitely-not-a-route` | `401` |
+
+**Fix — what does prove it.** In order of cost:
+
+- `npm run typecheck`. Next regenerates `.next/types/routes.d.ts` and
+  `.next/types/validator.ts` from the files on disk, and `tsc` checks each page
+  and route handler against the generated contract for its path. A page that does
+  not exist is not in `AppRoutes`; one with the wrong signature fails to compile.
+- `grep '"/bas"' .next/types/routes.d.ts` — the generated route table, straight
+  from the filesystem. Stale until a dev server or a build has run since your
+  edit.
+- A test that imports the page or handler and calls it. `tests/bas-module.test.ts`
+  does this, and it is the only one of the three that also proves the guard runs.
+
+---
+
+## Asserting that a page 404s needs the digest, not just the throw
+
+**Symptom.** A test asserting `await expect(Page()).rejects.toThrow()` passes,
+and the page is still broken — a missing import, a bad Prisma query, or a typo in
+the module key all throw too.
+
+**Cause.** `notFound()` from `next/navigation` signals the 404 by throwing. As of
+Next 15.5 it is a plain `Error` whose `message` and `digest` are both the string
+`NEXT_HTTP_ERROR_FALLBACK;404`. There is no exported type guard to check against,
+so "it threw" is all a naive assertion tests.
+
+**Fix.** Assert on the digest, which is the only part that carries the status:
+
+```ts
+const NOT_FOUND_DIGEST = "NEXT_HTTP_ERROR_FALLBACK;404";
+// ...
+expect((error as { digest?: unknown }).digest).toBe(NOT_FOUND_DIGEST);
+```
+
+`tests/bas-module.test.ts` wraps this in `expectPageNotFound`, whose default
+value is a *message* rather than a throw — so a page that returns normally fails
+the assertion instead of silently satisfying it. The digest string is a Next
+internal and could change on a major upgrade; when it does, this assertion fails
+loudly, which is the correct outcome.
+
+---
+
+## A new module is registered and still nobody can see it
+
+**Symptom.** The row is in `modules`, the page and routes exist, the tests pass —
+and the sidebar shows nothing. Signing out and back in does not help.
+
+**Cause.** Three separate things have to be true, and adding the module only
+does the first:
+
+1. **The row exists.** `prisma/seed.ts` inserts it. The seed does not run by
+   itself — `npm run seed` locally, and on deploy.
+2. **The employee holds a grant.** The seed issues **no grants** and there is no
+   endpoint that creates one implicitly. An admin grants it at `/admin`. This is
+   deliberate: first sign-in creates an employee with zero modules.
+3. **The row is `active`.** A module an admin hid stays hidden, and re-seeding
+   does not un-hide it — `status` is absent from the upsert's `update` block on
+   purpose. A grant on a hidden module still gets a `404`.
+
+**Fix.** Check them in that order:
+
+```sql
+SELECT key, display_name, sort_order, status FROM modules ORDER BY sort_order;
+SELECT m.key FROM module_grants g JOIN modules m ON m.key = g.module_key
+  JOIN employees e ON e.id = g.employee_id WHERE e.email = 'you@phb1899.com';
+```
+
+**Also worth knowing:** `modules.icon` is stored and served but nothing renders
+it — `components/sidebar.tsx` draws labels only. `icon: "gauge"` on the `bas` row
+is metadata for a later screen, not a missing image.
+
+---
+
+## Why an ungranted employee gets 404 and not 403
+
+Not a failure — the behaviour someone will eventually try to "fix". Both the BAS
+page and every BAS route answer a missing grant with `404 Not found.`, and the
+body names nothing: no module key, no table, no mention of the word building.
+
+The platform does not confirm that a module exists to someone who cannot use it.
+`403` would confirm it. This is decided once, in `lib/authz/http.ts`, and both
+`withBas` and `withMailbox` inherit it; the page reaches the same outcome through
+`notFound()`.
+
+The order inside `withBas` carries the same intent: **authorization, then
+validation, then availability.** A caller without the grant must not learn what a
+valid request body looks like, so the Zod parser does not run until the grant
+check has passed — asserted in `tests/bas-module.test.ts`, which fails if the
+parser is called at all.
+
+---
+
+## `prisma.basPoint` is undefined, and the schema looks fine
+
+**Symptom.** `prisma.basPoint`, `tx.basOrg`, any BAS model — `undefined` at
+runtime, `TypeError: Cannot read properties of undefined (reading 'create')`.
+`schema.prisma` declares all twelve models. The database has all twelve tables.
+`npx prisma validate` is happy.
+
+**Cause.** The generated client under `lib/generated/prisma` is stale. It is
+written by `prisma generate`, and:
+
+- `prisma migrate dev` runs `generate` for you
+- `prisma migrate deploy` does **not**
+- editing `schema.prisma` and hand-writing the migration SQL does **not**
+- `lib/generated/` is in `.gitignore`, so a fresh clone, a new machine or a CI
+  runner has no client at all until something generates one
+
+B1 landed this way. `lib/generated/prisma/models/` held seven files — the Phase-1
+models — and none of the twelve `Bas*` ones, for the whole of B1 and B2. Nothing
+complained because no code referenced a BAS model yet. The first line of B3 would
+have.
+
+**Fix.**
+
+```bash
+npx prisma generate
+```
+
+**Check it, rather than assuming:**
+
+```bash
+ls lib/generated/prisma/models/
+```
+
+Nineteen files today: seven platform models and twelve `Bas*`. If `BasPoint.ts`
+is missing, nothing that touches BAS data can work.
+
+**Worth knowing:** `npm run typecheck` catches this the moment any code
+references a BAS model, because the types are generated from the same schema. It
+cannot catch it before then. There is deliberately no `postinstall` hook doing
+this — adding one is a reasonable change, and would remove the whole failure
+mode.
+
+---
+
+## The data dictionary is 211 rows and 2 of them are annotated
+
+**Symptom.** `bas_v_data_dictionary` returns the whole schema, and almost none of
+it has a `column_description`. An LLM handed this gets column names and types —
+which it could have guessed — and no statement of what any of them mean.
+
+**Cause.** The port from the standalone database to Prisma dropped the comments.
+Counted:
+
+| | standalone `bas` schema | platform `bas_*` |
+|---|---|---|
+| `COMMENT ON COLUMN` | 22 | **2** |
+| `COMMENT ON TABLE` | 12 | **0** |
+| `COMMENT ON VIEW` | 6 | 6 |
+
+The prose did not disappear — it moved into `schema.prisma` as `///` doc
+comments, which is where it now lives and where it reads well. But **Prisma does
+not emit `///` comments as SQL `COMMENT ON`**, and a `///` comment is invisible
+from inside a query. `bas_v_data_dictionary` reads `col_description()` and
+`obj_description()` from the catalog, so it can only see what the migration
+wrote.
+
+The two that survived are the two that were hand-written into the migration:
+`bas_points.roll_horizon_s` and `bas_v_reading.ts_local`.
+
+**Why it matters.** B5's entire premise, from `docs/08-bas-and-niagara.md`, is
+that *an analyst — or a language model writing SQL — can `SELECT` from a table to
+discover what values exist and what they mean.* With two annotated columns out of
+211 that is not true yet.
+
+**Fix.** A new forward migration containing `COMMENT ON TABLE` / `COMMENT ON
+COLUMN` statements, sourced from the `///` comments already in `schema.prisma`
+and from `C:\dev\bas-db\migrations\001_core_schema.sql`. Comments are pure
+metadata — the statements cannot fail on data and cannot lock anything
+meaningfully — so this is one of the safest migrations there is. It is **not
+done**, and B5 should not be started before it is.
+
+`tests/bas-schema.test.ts` asserts the two surviving comments and the six view
+descriptions, and deliberately does **not** assert verify.py's floor of twenty:
+asserting a number the schema does not meet would be asserting a fix that has not
+happened. Raise the floor in that test when the comments land.
+
+---
+
+## The point-role vocabulary is imported data, not schema
+
+**Symptom.** On a database that has had every migration applied,
+`SELECT count(*) FROM bas_point_roles` returns **0**. Every point is
+unclassified, `bas_v_setpoint_pair` and `bas_v_command_status_pair` return
+nothing at all, and every cross-equipment question silently has no answer.
+
+**Cause.** The 91 point roles and 25 equipment types are not created by a
+migration and not created by `prisma/seed.ts`. They exist in the development
+database only because `scripts/bas-import.ts` copied them out of the standalone
+`bas` database. The test database has none, and so would a fresh Azure database.
+
+**Why this is easy to miss.** Nothing errors. `point_role` is nullable by design
+— an unclassified point is a visible backlog item, not an error — so an empty
+vocabulary looks exactly like a building nobody has classified yet.
+
+**Check:**
+
+```sql
+SELECT count(*) FROM bas_point_roles;      -- 91 in development
+SELECT count(*) FROM bas_equipment_types;  -- 25 in development
+```
+
+**Fix, today:** re-run `scripts/bas-import.ts` against the target database.
+
+**Fix, before deployment:** the vocabulary is reference data with no customer
+content in it, so it belongs in a migration or in the seed, the same way
+positions and departments do. Until then, the division of labour in `docs/05` is
+not being followed for these two tables and a fresh production database will come
+up with no vocabulary at all. This is a **B6 blocker**, not a B3 one — the
+screens work, they just have nothing to group by.
+
+`tests/bas-schema.test.ts` therefore does not port verify.py's
+`point roles seeded (>= 50)` check. On the test database it would fail forever,
+and making it pass by seeding from the test suite would hide the gap rather than
+record it. The BAS tests build their own `zztest_` vocabulary instead, which is
+also why they do not depend on the import ever having run.
+
+---
+
+## The BAS tests, and how to check that they can still fail
+
+`tests/bas-schema.test.ts` and `tests/bas-views.test.ts` cover the half of the
+schema Prisma cannot see: thirteen CHECK constraints, the `roll_horizon_s`
+trigger, and the six views. They are ported from
+`C:\dev\bas-db\scripts\verify.py`.
+
+**Every test runs inside a transaction that is always rolled back.**
+`tests/bas-fixture.ts` does this deliberately rather than for tidiness:
+`bas_readings` rows cannot be re-fetched from anywhere, so the BAS suite is
+written so that it cannot leave a row behind even when it throws halfway
+through. `resetDb()` is not involved and never truncates a `bas_*` table.
+
+**Confirm no residue after a run:**
+
+```powershell
+$u = ((Select-String -Path .env.local -Pattern '^TEST_DATABASE_URL="?([^"]+)"?').Matches[0].Groups[1].Value.Trim()) -replace '\?.*$',''
+psql $u -c 'SELECT (SELECT count(*) FROM bas_orgs), (SELECT count(*) FROM bas_readings)'
+```
+
+Both zero. Anything else means a test committed.
+
+**To check the tests can actually fail** — worth doing after editing them, and
+the reason two real defects were found while writing them — break the schema on a
+throwaway clone rather than on the test database:
+
+```bash
+ADMIN="postgresql://postgres:PASSWORD@localhost:5432/postgres"
+MUT="postgresql://postgres:PASSWORD@localhost:5432/phb_mutant"
+
+psql "$ADMIN" -c 'CREATE DATABASE phb_mutant TEMPLATE phb_platform_test'
+psql "$MUT"   -c 'ALTER TABLE bas_readings DROP CONSTRAINT bas_readings_at_most_one_value'
+TEST_DATABASE_URL="$MUT" npx vitest run tests/bas-schema.test.ts
+psql "$ADMIN" -c 'DROP DATABASE phb_mutant'
+```
+
+`TEMPLATE` needs no open connections to the source database, and the clone is
+instant. Measured results — each mutation must fail the tests named and no
+others:
+
+| Mutation | Tests that must fail |
+|---|---|
+| Drop `bas_readings_at_most_one_value` | 2 — the two-value and three-value refusals |
+| Drop the `bas_points_roll_horizon_maintain` trigger | 9 — every horizon test plus the three `roll_risk` classifications |
+| Drop `bas_readings_pkey` | 3 — both idempotency tests and the duplicate refusal |
+| Dictionary predicate to `nspname = 'public'` alone | 3 — platform tables, stray objects, platform columns |
+| Dictionary predicate left at `nspname = 'bas'` | 6 — everything about the dictionary |
+| `bas_v_reading` timezone hardcoded to `'EST'` | 1 — the summer/EDT assertion, and only that one |
+
+**Two defects this found**, both of which had passing tests before the mutation:
+
+1. `expectRejection` committed its fixture when the body unexpectedly *succeeded*
+   — so dropping one constraint turned 4 expected failures into 15, and left
+   `bas_*` rows in the test database. A helper that expects a failure has to roll
+   back on success too.
+2. The annotated-column floor of twenty, ported from verify.py, was asserting a
+   state the schema has never been in. See the entry above.
+
+---
+
+## The suite refuses to start when the test database is behind
+
+The guard the earlier entry asks for now exists: `tests/global-setup.ts`, wired
+in as vitest's `globalSetup`, so it runs **once** before any test file rather
+than once per file.
+
+It compares the directory names under `prisma/migrations` against
+`_prisma_migrations` in the test database and stops the run if any migration is
+missing, unfinished, or rolled back. On success it prints what it checked:
+
+```
+[test-db] 6/6 migrations applied; latest 20260821150733_add_bas_tables
+```
+
+**That count is the point.** A guard that verifies nothing and reports success is
+the failure this repo has hit three times — see the `RESTORE VERIFIED` note under
+*Importing the standalone BAS database*. If the count ever reads `0/0`, the guard
+is broken, not the database.
+
+On failure it exits non-zero before collecting a single test, and names the
+missing migrations. Verified against all three failure modes: a database with no
+`_prisma_migrations` table at all, one behind by a single migration, and one with
+a migration recorded as started but never finished.
+
+**What it deliberately does not check:** checksum drift. Prisma detects an edited
+migration and reports it far better than this could — see *Editing a migration
+that has already been applied*.

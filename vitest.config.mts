@@ -16,6 +16,10 @@ export default defineConfig({
     environment: "node",
     globals: true,
     setupFiles: ["./tests/setup.ts"],
+    // Runs once for the whole suite, before any file. It refuses to let the run
+    // start against a test database that is behind prisma/migrations - the exact
+    // state in which B1 reported 416/416 green with none of its tables present.
+    globalSetup: ["./tests/global-setup.ts"],
     // Each test file truncates shared tables, so files must not overlap in time.
     fileParallelism: false,
     hookTimeout: 30_000,

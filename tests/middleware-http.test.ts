@@ -68,6 +68,7 @@ describe("an unauthenticated request to an API route", () => {
   const apiPaths = [
     "/api/modules/change-orders/mailbox/health",
     "/api/modules/change-orders/ping",
+    "/api/modules/bas/ping",
     "/api/me",
     "/api/admin/employees",
     "/api/onboarding",
@@ -113,7 +114,14 @@ describe("an unauthenticated request to an API route", () => {
 });
 
 describe("page routes still redirect", () => {
-  const pagePaths = ["/", "/admin", "/change-orders", "/onboarding", "/profile"];
+  const pagePaths = [
+    "/",
+    "/admin",
+    "/change-orders",
+    "/bas",
+    "/onboarding",
+    "/profile",
+  ];
 
   for (const path of pagePaths) {
     it(`${path} redirects to /signin`, async () => {
@@ -166,6 +174,7 @@ describe("the container health probe", () => {
       "/api/onboarding",
       "/api/modules/change-orders/ping",
       "/api/modules/change-orders/mailbox/health",
+      "/api/modules/bas/ping",
     ]) {
       const response = await request(path);
       expect(response.status, `${path} must not be public`).toBe(401);

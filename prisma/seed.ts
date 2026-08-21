@@ -20,6 +20,14 @@ const MODULES = [
     icon: "mail",
     sortOrder: 100,
   },
+  {
+    key: "bas",
+    displayName: "Building Automation",
+    description:
+      "Trended data from the building automation system: collection health, point history, and questions in English.",
+    icon: "gauge",
+    sortOrder: 200,
+  },
 ];
 
 // From docs/05-database-and-sources.md, so early users are not all choosing

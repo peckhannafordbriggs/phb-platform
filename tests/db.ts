@@ -50,6 +50,22 @@ export async function seedChangeOrdersModule(): Promise<void> {
   });
 }
 
+/**
+ * The Building Automation module. Separate from the change-orders helper so a
+ * BAS test cannot accidentally pass because a change-orders grant was present.
+ */
+export async function seedBasModule(): Promise<void> {
+  await testDb.module.upsert({
+    where: { key: "bas" },
+    update: {},
+    create: {
+      key: "bas",
+      displayName: "Building Automation",
+      sortOrder: 200,
+    },
+  });
+}
+
 export interface EmployeeFixture {
   email?: string;
   entraOid?: string | null;
