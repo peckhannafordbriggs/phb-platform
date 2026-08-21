@@ -24,14 +24,14 @@ fully working path forever. Never build anything the platform is the sole route 
 |---|---|
 | Frontend + backend | Next.js 15 (App Router), TypeScript, React, Tailwind |
 | Database | PostgreSQL |
-| ORM / migrations | Prisma |
+| ORM / migrations | Prisma 7 (`prisma-client` generator, `@prisma/adapter-pg`) |
 | Auth | Auth.js (NextAuth v5), Microsoft Entra ID provider |
 | Microsoft integration | Microsoft Graph via `@microsoft/microsoft-graph-client` |
-| Graph credential | Azure managed identity + federated identity credential (prod) |
-| Hosting | Azure Container Apps, Azure Database for PostgreSQL Flexible Server, Key Vault |
+| Graph credential | Client secret locally; managed identity + federated credential in prod |
+| Hosting | Azure Container Apps, Azure Database for PostgreSQL, Key Vault |
 | Node | 20 LTS or newer |
 | Package manager | npm |
-| Tests | Vitest |
+| Tests | Vitest against a real Postgres test database |
 
 One repo. One app. No microservices, no message queue, no Redis, no Docker Compose
 sprawl. If a task seems to need one of those, stop and ask.
@@ -42,87 +42,115 @@ sprawl. If a task seems to need one of those, stop and ask.
 
 Each of these has a reason. Do not build abstractions to keep the alternative open.
 
-**Mail identity: app-only.** The platform holds one Entra app identity with Graph
-`Mail.ReadWrite` + `Mail.Send` (Application), scoped to `changeorder@phb1899.com`
-only via an Exchange ApplicationAccessPolicy. *Why:* onboarding must not require a
-per-employee mailbox grant, and the scheduled job needs a token when nobody is
-signed in. **Do not implement delegated / on-behalf-of auth.**
+**Mail identity: app-only.** One Entra app registration with Graph `Mail.ReadWrite` +
+`Mail.Send` (Application), scoped to `changeorder@phb1899.com` by an Exchange
+ApplicationAccessPolicy — verified `Granted` for that mailbox and `Denied` for others.
+*Why:* onboarding must not require a per-employee mailbox grant, and the scheduled job
+needs a token when nobody is signed in. **Do not implement delegated auth.**
 
-**Employee identity: Entra ID SSO.** The platform never stores a password and never
-creates accounts. Everyone at PH+B already exists in Entra.
+**Employee identity: Entra ID SSO.** Separate app registration from the Graph one. The
+platform never stores a password and never creates accounts.
 
-**Employees self-provision.** Anyone with a company account can sign in. First
-sign-in creates an employee row with **zero module grants** and sends them to a
-profile-completion step. Admins **grant access**; they do not create accounts.
+**Employees self-provision.** Anyone with a company account can sign in. First sign-in
+creates an employee row with **zero module grants** and sends them to profile
+completion. Admins **grant access**; they do not create accounts. There is no
+create-employee endpoint.
 
-**Exchange is the source of truth for all mail.** The platform reads live from
-Graph. No message index, no local mailbox copy, no sync engine. See
-`docs/03-exchange-and-graph.md`.
+**Exchange is the source of truth for all mail.** Reads go live to Graph. No message
+index, no delta tokens, no webhooks, no sync engine. See `docs/03-exchange-and-graph.md`.
 
 **No mail caching beyond short-lived in-memory.** Never persist message bodies or
-attachments to the database.
+attachments.
 
-**The mailbox is a licensed user mailbox**, shared with the current operator in
-Outlook. Not a shared mailbox. Stop asking.
+**The mailbox is a licensed user mailbox**, shared with the current operator in Outlook.
+
+**Bootstrap admins come from `BOOTSTRAP_ADMIN_EMAIL`** (comma-separated), applied by the
+seed, never by a migration. Migrations contain no email addresses. See
+`docs/05-database-and-sources.md` for what belongs in a migration versus a seed.
 
 ---
 
 ## Hard prohibitions
 
-Violating any of these can break a production pipeline that PH+B runs on daily.
+Violating any of these can break a production pipeline PH+B runs on daily.
 
-1. **Never auto-send email.** Every outbound message in this system is created as an
-   unsent draft and sent by a human. `sendMail` appears zero times across all 11
-   existing Power Automate flows — deliberately. Never add auto-send, bulk-send,
-   send-all, or a scheduled send. This is the entire safety model of the
-   change-order system.
+1. **Never auto-send email.** Every outbound message is created as an unsent draft and
+   sent by a human who has read it. `sendMail` appears zero times across all 11 Power
+   Automate flows — deliberately. Never add auto-send, bulk-send, send-all, multi-select
+   send, or scheduled send. One human, one draft, one deliberate action. This is the
+   entire safety model of the change-order system.
 2. **Never modify, disable, re-authorize, or export any Power Automate flow.**
-3. **Never write these filenames anywhere:** `scrub_result.json`,
-   `vendor_drafts.json`, `transfer_ready.json`, `classification_result.json`.
-   They are live flow triggers.
+3. **Never write these filenames anywhere:** `scrub_result.json`, `vendor_drafts.json`,
+   `transfer_ready.json`, `classification_result.json`. They are live flow triggers.
 4. **Never write `Bid Tracker.xlsx`** with a script or library. Read-only, and only
    through the Graph workbook API.
-5. **Never "fix" the SharePoint path spelling.** It is `CO Managment Process` —
-   one A. Every flow depends on the literal string.
-6. **Never bind anything to an individual person's account** — repo, subscription,
-   app registration, resource, or credential. Owners are M365 groups.
+5. **Never "fix" the SharePoint path spelling.** It is `CO Managment Process` — one A.
+   Every flow depends on the literal string.
+6. **Never bind anything to an individual person's account** — repo, subscription, app
+   registration, resource, or credential. Owners are M365 groups.
 7. **Never introduce a credential that expires** in production. No client secrets or
-   certificates in Azure. Local development may use a client secret in `.env.local`.
-8. **Never commit secrets.** Not in code, not in tests, not in docs, not in fixtures.
+   certificates in Azure; production refuses to boot with `GRAPH_CLIENT_SECRET` set.
+   Local development may use a client secret in `.env.local`.
+8. **Never commit secrets**, and never commit real message content as a test fixture —
+   a committed fixture is persistence.
 
-Full context on what already exists: `docs/02-existing-co-system.md`. Read it before
-any task that touches Microsoft 365.
+Full context: `docs/02-existing-co-system.md`. Read it before any task touching
+Microsoft 365.
 
 ---
 
 ## Development safety
 
 Development runs against the **live** `changeorder@phb1899.com` mailbox. There is no
-test mailbox. Two guards, both enforced in the mail service itself, not in route
-handlers:
+test mailbox. Two guards, both enforced inside the mail service, not in route handlers:
 
-- **`PHB_ALLOW_SEND`** — must be `true` for any send to execute. Absent or `false`
-  throws. Never set to `true` outside production.
-- **`ZZTEST` convention** — when `NODE_ENV !== 'production'`, write operations
-  (draft create/update, move, delete) are permitted only on messages whose subject
-  begins with `ZZTEST`. Reads are unrestricted.
+- **`PHB_ALLOW_SEND`** — must be `true` for any send. Absent or `false` throws, before
+  any network call. **Stays `false` except during a deliberate, supervised send test.**
+- **`ZZTEST` convention** — when `NODE_ENV !== 'production'`, write operations are
+  permitted only on messages whose subject begins with `ZZTEST`. The subject is read
+  from Exchange, never taken from the caller.
+
+Do not weaken, bypass, or add an override to either. Test sends go to the operator's own
+address only, never to a vendor.
 
 Everything else is recoverable: deletes go to Deleted Items, moves reverse, a broken
-draft can be deleted. A send cannot be undone. That asymmetry is why the send gate
+draft can be regenerated. A send cannot be undone. That asymmetry is why the send gate
 is separate and stricter.
 
 ---
 
-## Current phase
+## Verify against the live mailbox, not fixtures
 
-**Phase 4 — Microsoft 365 connection.** Connect the backend to Microsoft Graph and
-prove it can reach the Change Order mailbox. No email UI yet.
+This has earned its place at the top level. Every phase that touched Graph found defects
+that mocked transports agreed with:
 
-Phases 1–3 are complete — platform foundation, employee authentication, and system
-permissions. `PHASE-1.md` covers the scope and acceptance criteria of all three.
+- `wellKnownName` doesn't exist in Graph v1.0 — it fails the whole request, not just the
+  field
+- `Projects` is a child of Inbox, so project folders sit at depth 2 and their contents at
+  depth 3. A tree that stops short looks empty rather than truncated
+- Graph pages mail with `$skip`, not `$skiptoken` — and dropping `$orderby` on an offset
+  page corrupts paging silently
+- The subject tags are `[CCHMC RFI 229]` / `[CCHMC Bulletin 12]`, and some messages carry
+  none. `[CO:` appears nowhere in the mailbox
+- Exchange rewrites a literal U+00A0 as `&nbsp;` on write
+- Outlook writes a pasted table cell as `<td><p>value</p></td>`
 
-Roadmap and phase boundaries: `docs/06-roadmap.md`. Do not implement a later phase
-without being told to.
+Fixtures are right for hostile-HTML tests and error mapping. Anything about Graph's
+actual behaviour needs the real mailbox.
+
+---
+
+## Current state
+
+**Phases 1–6 complete.** Platform shell, Entra SSO with the full login gate,
+self-provisioning and onboarding, employees / grants / audit, authorization middleware,
+admin screen, Graph connection, read-only mailbox with folder tree and search, and draft
+review / edit / send verified end to end.
+
+**Phase 7 Part A complete** — Dockerfile, CI, Bicep. Part B waits on the Azure
+subscription.
+
+Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
 
@@ -131,16 +159,17 @@ without being told to.
 **Before implementing:** read the existing code, follow existing conventions, check
 whether the functionality partly exists already.
 
-**After implementing:** run tests, run typecheck and lint, verify the build, state
-what changed and what you verified.
+**After implementing:** run tests, typecheck, lint, verify the build, and state what you
+changed and what you verified. Distinguish what you observed from what you inferred.
 
-**Use judgment without asking** on reversible, conventional, low-risk, internal
-choices.
+**Commit straight to main.** No branches unless asked.
+
+**Use judgment without asking** on reversible, conventional, low-risk, internal choices.
 
 **Stop and ask** before anything that could touch the existing change-order system,
-significantly alters the architecture, requires broader Microsoft permissions,
-requires production data migration, adds long-term infrastructure, or conflicts with
-this file.
+sends more than one message per human action, weakens either send guard, adds a table
+holding mailbox data, requires broader Microsoft permissions, adds long-term
+infrastructure, or conflicts with this file.
 
 **Every phase ships operational docs.** For each new failure mode: the symptom, the
 cause, the fix. Written during the phase, in `docs/runbook.md`. The current operator
@@ -157,6 +186,8 @@ seen it.
 | `docs/02-existing-co-system.md` | **What already exists and must not break** |
 | `docs/03-exchange-and-graph.md` | Exchange as source of truth, Graph rules and gotchas |
 | `docs/04-auth-and-permissions.md` | Login rules, authorization contract, admin security |
-| `docs/05-database-and-sources.md` | Schema ownership, source-of-truth table, migrations |
-| `docs/06-roadmap.md` | Phases, what is in scope before December, what is not |
+| `docs/05-database-and-sources.md` | Schema ownership, migration vs seed, source of truth |
+| `docs/06-roadmap.md` | Phases 1–14 |
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
+| `docs/runbook.md` | Failure modes, recovery, what expires and when |
+| `docs/phase-1-verification.md` | Manual verification record |
