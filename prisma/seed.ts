@@ -3,6 +3,7 @@ import {
   parseBootstrapAdmins,
   seedBootstrapAdmins,
 } from "../lib/bootstrap-admins";
+import { seedBasVocabularies } from "./bas-vocabularies";
 
 /**
  * Production seed. Idempotent - safe to re-run on every deploy.
@@ -104,6 +105,23 @@ async function main(): Promise<void> {
       });
     }
 
+    // The BAS semantic vocabularies. Reference data like POSITIONS and
+    // DEPARTMENTS, and until now the one piece of it that no migration and no
+    // seed created - it reached the development database only via
+    // scripts/bas-import.ts, so a fresh database came up with an empty
+    // vocabulary and nothing said so. See prisma/bas-vocabularies.ts.
+    const vocab = await seedBasVocabularies(prisma);
+
+    // Not fatal: a role a point already references cannot be deleted, so an
+    // undeclared row is something to look at rather than something to fix here.
+    if (vocab.undeclared.length > 0) {
+      console.warn(
+        `bas_point_roles contains ${vocab.undeclared.length} role(s) this repo ` +
+          `does not declare: ${vocab.undeclared.join(", ")}. ` +
+          `Add them to prisma/bas-vocabularies.ts or remove them by hand.`,
+      );
+    }
+
     const { emails, invalid } = parseBootstrapAdmins(
       process.env.BOOTSTRAP_ADMIN_EMAIL,
     );
@@ -141,6 +159,13 @@ async function main(): Promise<void> {
 
     console.log(
       `Seeded ${MODULES.length} module(s), ${POSITIONS.length} positions, ${DEPARTMENTS.length} departments.`,
+    );
+    // Counted rather than assumed. A vocabulary that silently seeded nothing is
+    // the failure this line exists to make visible.
+    console.log(
+      `Seeded ${vocab.pointRoles} BAS point roles ` +
+        `(${vocab.setpointLinks} setpoint links, ${vocab.statusLinks} status links) ` +
+        `and ${vocab.equipmentTypes} equipment types.`,
     );
   } finally {
     await prisma.$disconnect();

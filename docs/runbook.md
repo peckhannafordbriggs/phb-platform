@@ -1685,97 +1685,258 @@ ls lib/generated/prisma/models/
 Nineteen files today: seven platform models and twelve `Bas*`. If `BasPoint.ts`
 is missing, nothing that touches BAS data can work.
 
-**Worth knowing:** `npm run typecheck` catches this the moment any code
-references a BAS model, because the types are generated from the same schema. It
-cannot catch it before then. There is deliberately no `postinstall` hook doing
-this — adding one is a reasonable change, and would remove the whole failure
-mode.
+**This is now prevented rather than documented.** `package.json` declares
+`"postinstall": "prisma generate"`, so `npm ci` and `npm install` cannot leave a
+stale client behind. You should only see the symptom above on a `node_modules`
+installed before that hook existed — reinstall, or run `npx prisma generate`.
+
+**The hook changes the Dockerfile, and would have broken it.** Stage 1 copied
+only `package.json` and `package-lock.json` before `npm ci`, so the postinstall
+had no schema to read. Reproduced exactly, by simulating that stage:
+
+```
+> prisma generate
+Error: Could not find Prisma Schema that is required for this command.
+npm error code 1
+```
+
+So stage 1 now copies `prisma/` and `prisma.config.ts` before `npm ci`. Those two
+are all `prisma generate` reads; it needs no database, because
+`prisma.config.ts` resolves `DATABASE_URL` to `""` when unset and `generate`
+never connects.
+
+**The cost, so nobody rediscovers it:** that layer used to be cached on the
+lockfile alone, and a schema edit now invalidates `npm ci` as well. That is the
+price of the hook failing loudly. **Do not** reach for `|| true` or
+`--ignore-scripts` instead — a generate that silently does nothing is the exact
+failure the hook exists to prevent, and it would put you back here without the
+error message.
+
+**Also worth knowing:** npm 11 gates *dependency* install scripts behind
+`allowScripts` in `package.json`, but the root package's own `postinstall` runs
+regardless. It is not affected by that list. Verified by running `npm ci`.
+
+`npm run typecheck` catches a stale client the moment any code references a BAS
+model, because the types come from the same schema. It cannot catch it before
+then, which is why the hook matters.
 
 ---
 
-## The data dictionary is 211 rows and 2 of them are annotated
+## Prisma `///` comments are not SQL comments, and the AI can only see SQL ones
 
-**Symptom.** `bas_v_data_dictionary` returns the whole schema, and almost none of
-it has a `column_description`. An LLM handed this gets column names and types —
-which it could have guessed — and no statement of what any of them mean.
+**Read this before adding a table or column to the BAS schema.**
 
-**Cause.** The port from the standalone database to Prisma dropped the comments.
-Counted:
+**The rule.** Prisma models columns and indexes. It does **not** emit `///` doc
+comments as SQL `COMMENT ON`. A `///` comment reads beautifully in
+`schema.prisma` and is completely invisible from inside a query.
 
-| | standalone `bas` schema | platform `bas_*` |
-|---|---|---|
-| `COMMENT ON COLUMN` | 22 | **2** |
-| `COMMENT ON TABLE` | 12 | **0** |
-| `COMMENT ON VIEW` | 6 | 6 |
-
-The prose did not disappear — it moved into `schema.prisma` as `///` doc
-comments, which is where it now lives and where it reads well. But **Prisma does
-not emit `///` comments as SQL `COMMENT ON`**, and a `///` comment is invisible
-from inside a query. `bas_v_data_dictionary` reads `col_description()` and
-`obj_description()` from the catalog, so it can only see what the migration
+That matters here more than in most projects, because
+`bas_v_data_dictionary` — the view whose entire purpose is to be selected and
+pasted into an LLM prompt — reads `col_description()` and `obj_description()`
+straight out of the PostgreSQL catalog. It can only ever see what a migration
 wrote.
 
-The two that survived are the two that were hand-written into the migration:
-`bas_points.roll_horizon_s` and `bas_v_reading.ts_local`.
+**What went wrong once.** The port from the standalone database dropped the
+comments, and nothing noticed for two phases:
 
-**Why it matters.** B5's entire premise, from `docs/08-bas-and-niagara.md`, is
-that *an analyst — or a language model writing SQL — can `SELECT` from a table to
-discover what values exist and what they mean.* With two annotated columns out of
-211 that is not true yet.
+| | standalone `bas` | platform, before | platform, now |
+|---|---|---|---|
+| `COMMENT ON TABLE` | 12 | 0 | **12** |
+| `COMMENT ON COLUMN` | 22 | 2 | **22** |
+| `COMMENT ON VIEW` | 6 | 6 | 6 |
 
-**Fix.** A new forward migration containing `COMMENT ON TABLE` / `COMMENT ON
-COLUMN` statements, sourced from the `///` comments already in `schema.prisma`
-and from `C:\dev\bas-db\migrations\001_core_schema.sql`. Comments are pure
-metadata — the statements cannot fail on data and cannot lock anything
-meaningfully — so this is one of the safest migrations there is. It is **not
-done**, and B5 should not be started before it is.
+The dictionary was 211 rows carrying two annotations: column names and types,
+which a model could have guessed, and no statement of what any of it means.
+Restored by the `add_bas_comments` migration. Now 18 of 18 objects have a
+description and 22 columns are annotated, which is the floor verify.py asserted.
 
-`tests/bas-schema.test.ts` asserts the two surviving comments and the six view
-descriptions, and deliberately does **not** assert verify.py's floor of twenty:
-asserting a number the schema does not meet would be asserting a fix that has not
-happened. Raise the floor in that test when the comments land.
+**So when you add a `bas_*` table or column:** write the prose in
+`schema.prisma` as usual *and* add a `COMMENT ON` to the migration. The `///`
+comment is for whoever reads the schema; the SQL comment is for whatever queries
+the database. `tests/bas-schema.test.ts` fails if any object has no description,
+so a new table cannot land without one — but it cannot force a *column* comment,
+so that part is on you.
+
+**Check it:**
+
+```sql
+SELECT count(*) FILTER (WHERE column_description IS NOT NULL) AS annotated,
+       count(DISTINCT object_name) FILTER (WHERE object_description IS NOT NULL) AS described,
+       count(*) AS rows
+  FROM bas_v_data_dictionary;
+```
+
+`22 | 18 | 211` today. An `annotated` count near zero is this failure returning.
+
+**Safe to hand-write.** Prisma does not diff comments, so `COMMENT ON` in a
+migration produces no drift and no future `migrate dev` proposal — the same
+reason the triggers, CHECK constraints and views in `add_bas_tables` are
+invisible to it. `COMMENT ON` replaces rather than appends, touches no data, and
+takes no lock worth the name.
+
+**Two things `add_bas_comments` deliberately does not restate:**
+`bas_points.roll_horizon_s` and `bas_v_reading.ts_local`. `add_bas_tables`
+already carries both, and its `roll_horizon_s` wording is *better* than the
+original because it names the trigger that maintains the column — which the
+standalone schema had no reason to mention. Re-stating the original would be a
+downgrade, and there is a test asserting it has not happened.
 
 ---
 
-## The point-role vocabulary is imported data, not schema
+## A migration fails with `syntax error at or near "||"`
 
-**Symptom.** On a database that has had every migration applied,
-`SELECT count(*) FROM bas_point_roles` returns **0**. Every point is
-unclassified, `bas_v_setpoint_pair` and `bas_v_command_status_pair` return
-nothing at all, and every cross-equipment question silently has no answer.
+**Symptom.** `prisma migrate deploy` stops on a `COMMENT ON` statement and points
+at the second line:
 
-**Cause.** The 91 point roles and 25 equipment types are not created by a
-migration and not created by `prisma/seed.ts`. They exist in the development
-database only because `scripts/bas-import.ts` copied them out of the standalone
-`bas` database. The test database has none, and so would a fresh Azure database.
+```
+COMMENT ON TABLE bas_orgs IS
+  'Portfolio owner - the customer or business unit that owns a set of ' ||
+```
 
-**Why this is easy to miss.** Nothing errors. `point_role` is nullable by design
-— an unclassified point is a visible backlog item, not an error — so an empty
-vocabulary looks exactly like a building nobody has classified yet.
+```
+DbError { severity: "ERROR", code: SqlState(E42601),
+          message: "syntax error at or near \"||\"" }
+```
+
+**Cause.** `COMMENT ON ... IS` takes a string **constant**, not an expression.
+`'a' || 'b'` is a perfectly good expression and is rejected outright here. The
+same text works fine in a `SELECT`, which is what makes it surprising.
+
+**Fix.** Adjacent string literals, separated by whitespace that contains a
+newline. SQL joins those into one constant, and `COMMENT ON` accepts it:
+
+```sql
+COMMENT ON TABLE bas_orgs IS
+  'Portfolio owner - the customer or business unit that owns a set of '
+  'buildings. One row today; the table exists so that multi-customer data '
+  'never has to be retrofitted.';
+```
+
+No operator. Just two quoted parts on separate lines. Every long comment in
+`add_bas_tables` and `add_bas_comments` is written this way, and so was the
+original `001_core_schema.sql`.
+
+### Then clear the failed migration before retrying
+
+A `migrate deploy` that fails partway leaves the migration recorded in
+`_prisma_migrations` with `finished_at` NULL. Every later `deploy` refuses to
+proceed until that is resolved, and it is the same state
+`tests/global-setup.ts` reports as *started but not finished*:
+
+```sql
+SELECT migration_name, finished_at, applied_steps_count
+  FROM _prisma_migrations ORDER BY started_at;
+```
+
+`applied_steps_count = 0` means nothing from the file was applied — check that
+before deciding, because the answer changes what you do next.
+
+**Nothing applied** — mark it rolled back, fix the SQL, deploy again:
+
+```bash
+npx prisma migrate resolve --rolled-back 20260821151125_add_bas_comments
+npx prisma migrate deploy
+```
+
+**Partly applied** — a migration with no transaction wrapper can get halfway.
+Undo the applied part by hand first, or the retry fails on an object that already
+exists. Prisma wraps each migration in a transaction, so for these files
+`applied_steps_count = 0` is the normal case.
+
+This is safe for a comments-only migration: `COMMENT ON` touches no data, so a
+failed attempt destroys nothing. It would not be safe to assume for a migration
+that writes rows.
+---
+
+## The vocabularies are empty, and nothing errors
+
+**Symptom.** `SELECT count(*) FROM bas_point_roles` returns **0**. Every point
+reads as unclassified, `bas_v_setpoint_pair` and `bas_v_command_status_pair`
+return nothing at all, and every cross-equipment question silently has no answer.
+
+**Why this is the nastiest shape of failure in this module.** Nothing errors.
+`point_role` is nullable by design — an unclassified point is a visible backlog
+item, not an error — so an empty vocabulary looks exactly like a building nobody
+has labelled yet, and both pairing views returning zero rows looks like a
+building with no setpoints.
+
+**Cause.** The seed has not been run. The 91 point roles and 25 equipment types
+are reference data and live in `prisma/bas-vocabularies.ts`, installed by
+`prisma/seed.ts` alongside positions and departments. They used to be created by
+nothing at all: they reached the development database only because
+`scripts/bas-import.ts` copied them out of the standalone `bas` database, so a
+fresh database came up empty and said nothing about it.
+
+**Fix.**
+
+```bash
+npm run seed
+```
+
+It prints what it wrote, and the count is the point:
+
+```
+Seeded 91 BAS point roles (12 setpoint links, 8 status links) and 25 equipment types.
+```
 
 **Check:**
 
 ```sql
-SELECT count(*) FROM bas_point_roles;      -- 91 in development
-SELECT count(*) FROM bas_equipment_types;  -- 25 in development
+SELECT count(*) FROM bas_point_roles;      -- 91
+SELECT count(*) FROM bas_equipment_types;  -- 25
+SELECT count(*) FROM bas_point_roles WHERE setpoint_for IS NOT NULL;  -- 12
+SELECT count(*) FROM bas_point_roles WHERE status_of IS NOT NULL;     -- 8
 ```
 
-**Fix, today:** re-run `scripts/bas-import.ts` against the target database.
+**The test database is empty on purpose**, and that is not this failure.
+`npm run db:test:setup` applies migrations and deliberately does not seed,
+because `tests/setup.ts` truncates between files. The BAS tests build their own
+`zztest_` vocabulary, so they depend on neither a seed nor an import having run.
+`tests/bas-vocabularies.test.ts` runs the real seeder inside a rolled-back
+transaction, which is how the 91 / 25 / 12 / 8 counts are asserted without
+leaving 116 rows behind.
 
-**Fix, before deployment:** the vocabulary is reference data with no customer
-content in it, so it belongs in a migration or in the seed, the same way
-positions and departments do. Until then, the division of labour in `docs/05` is
-not being followed for these two tables and a fresh production database will come
-up with no vocabulary at all. This is a **B6 blocker**, not a B3 one — the
-screens work, they just have nothing to group by.
+### Adding a role
 
-`tests/bas-schema.test.ts` therefore does not port verify.py's
-`point roles seeded (>= 50)` check. On the test database it would fail forever,
-and making it pass by seeding from the test suite would hide the gap rather than
-record it. The BAS tests build their own `zztest_` vocabulary instead, which is
-also why they do not depend on the import ever having run.
+Add it to `prisma/bas-vocabularies.ts` and re-run the seed. Never as an ad-hoc
+string at ingest time — a role that is not in that file is invisible to every
+generic rule and every cross-equipment comparison.
 
----
+**The seeder writes in two passes, and the order is not optional.**
+`setpoint_for` and `status_of` are self-referencing foreign keys on
+`bas_point_roles`, so a single ordered pass would depend on every role appearing
+after the role it points at — one reordering away from a foreign-key violation.
+Every row is written first with no links, then the links are applied once all 91
+exist. `002_vocabularies.sql` does the same thing for the same reason.
+
+**It never deletes.** A role a point already references cannot be removed — the
+foreign key is `RESTRICT` — and silently dropping vocabulary out from under
+existing data would be worse than saying so. A role in the database that the repo
+does not declare is reported and left alone:
+
+```
+bas_point_roles contains 1 role(s) this repo does not declare: ...
+```
+
+Add it to the file, or remove it by hand once nothing references it.
+
+**Links are declarative including their absence.** Pass two writes
+`setpoint_for` and `status_of` for *every* role, null included, so deleting a
+link from the file deletes it from the database rather than leaving a stale one.
+
+### How the port was verified, and why counts were not enough
+
+The 116 rows were parsed out of
+`C:\dev\bas-db\migrations\002_vocabularies.sql` and then compared field by field
+against the same rows in the development database, which the import had populated
+from that same source. Both had 91 and 25, and the counts agreed at every stage.
+
+The field-by-field comparison found a corrupted value anyway: one description had
+been broken across a line at a hyphen and rejoined with a space, turning
+`reviewed-but-not-mappable` into `reviewed-but-not- mappable`. Every count-based
+check passed with that in place.
+
+**Counts do not verify a data port. Compare the rows.**
 
 ## The BAS tests, and how to check that they can still fail
 
@@ -1825,15 +1986,33 @@ others:
 | Dictionary predicate to `nspname = 'public'` alone | 3 — platform tables, stray objects, platform columns |
 | Dictionary predicate left at `nspname = 'bas'` | 6 — everything about the dictionary |
 | `bas_v_reading` timezone hardcoded to `'EST'` | 1 — the summer/EDT assertion, and only that one |
+| `COMMENT ON TABLE bas_* IS NULL` for all twelve | 1 — every-object-has-a-description |
+| Drop the 20 restored column comments | 1 — column-level annotation |
+| Overwrite `roll_horizon_s` with the pre-trigger wording | 1 — column-level annotation |
+| Set one description to `'   '` | 1 — column-level annotation, via the empty-prose check |
 
-**Two defects this found**, both of which had passing tests before the mutation:
+The vocabulary tests are mutated in the declaration rather than the database,
+because the seeder is what writes it. Restore the file afterwards and confirm by
+checksum:
+
+| Mutation to `prisma/bas-vocabularies.ts` | Tests that must fail |
+|---|---|
+| Point a `setpointFor` at a role that does not exist | 9 — the declaration check fires first and names the cause |
+| Delete one role | 3 — both count assertions and idempotency |
+| Remove `isSetpoint` from a role that has a `setpointFor` | 1 — flags-agree-with-links |
+
+**Three defects this found**, all of which had passing tests before the mutation:
 
 1. `expectRejection` committed its fixture when the body unexpectedly *succeeded*
    — so dropping one constraint turned 4 expected failures into 15, and left
    `bas_*` rows in the test database. A helper that expects a failure has to roll
    back on success too.
 2. The annotated-column floor of twenty, ported from verify.py, was asserting a
-   state the schema has never been in. See the entry above.
+   state the schema had never been in. Held at 2 until `add_bas_comments` made
+   twenty true, then raised.
+3. A word broken across a line during the vocabulary port. Not found by mutation
+   but by the same instinct — see *How the port was verified* above. No count
+   check would ever have caught it.
 
 ---
 

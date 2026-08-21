@@ -337,18 +337,36 @@ cannot see — the CHECK constraints, the `roll_horizon_s` trigger, and the six
 views. `tests/global-setup.ts` now refuses to let the suite start against a test
 database that is behind the migrations.
 
-**Two gaps that were only visible once something looked**, both in the runbook,
-neither fixed:
+**Three gaps that were only visible once something looked**, all now closed.
+Each has a runbook entry, because each will be someone else's confusing afternoon
+if it comes back:
 
-- `bas_v_data_dictionary` has 211 rows and **2** annotated columns. The port to
-  Prisma dropped 20 of 22 `COMMENT ON COLUMN` and all 12 `COMMENT ON TABLE`; the
-  prose moved into `schema.prisma` `///` comments, which Prisma does not emit as
-  SQL comments and which are invisible from inside a query. **B5 depends on
-  this** and should not start before a comments migration lands.
-- `bas_point_roles` and `bas_equipment_types` are populated only by
-  `scripts/bas-import.ts`. No migration and no seed creates them, so a fresh
-  production database comes up with an empty vocabulary and every
-  cross-equipment question silently has no answer. **A B6 blocker.**
+- **The vocabularies were created by nothing.** 91 point roles and 25 equipment
+  types reached the development database only because `scripts/bas-import.ts`
+  copied them out of the standalone database. A fresh database came up with an
+  empty vocabulary, every point read as unclassified, both pairing views returned
+  zero rows, and nothing errored. They are reference data and now live in
+  `prisma/bas-vocabularies.ts`, installed by the seed alongside positions and
+  departments, in two passes because `setpoint_for` and `status_of` are
+  self-referencing. Proven on a fresh database: 91 / 25 / 12 links / 8 links,
+  every link resolving, byte-identical to what the import produced, and a second
+  run changing nothing.
+- **`bas_v_data_dictionary` had 211 rows and 2 annotated columns.** The port
+  dropped 20 of 22 `COMMENT ON COLUMN` and all 12 `COMMENT ON TABLE`, because
+  the prose moved into `schema.prisma` `///` comments and Prisma does not emit
+  those as SQL comments — they are invisible from inside a query. Restored by the
+  `add_bas_comments` migration: 22 annotated columns and 18 of 18 objects
+  described. B5's premise now holds.
+- **`prisma generate` was forced by nothing.** `lib/generated/prisma` sat twelve
+  models stale through B1 and B2. `package.json` now declares
+  `postinstall: prisma generate`, and Dockerfile stage 1 copies `prisma/` and
+  `prisma.config.ts` before `npm ci` so that hook has a schema to read — without
+  which the image build fails, verified by reproducing it.
+
+**What is still open**, and it is not a defect: `bas_points.point_role` is NULL
+for all seven points in the development database. The vocabulary exists to
+classify against, and nothing has been classified — deliberately, per *The state
+of the data* below. Classification tooling is in *Deliberately not built*.
 
 ### B2 — module registration and the guard — COMPLETE
 

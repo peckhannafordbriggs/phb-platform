@@ -31,7 +31,7 @@
 ARG NODE_VERSION=24-bookworm-slim
 
 # ---------------------------------------------------------------------------
-# Stage 1 - dependencies. Cached on the lockfile alone.
+# Stage 1 - dependencies.
 # ---------------------------------------------------------------------------
 FROM node:${NODE_VERSION} AS deps
 
@@ -40,6 +40,25 @@ WORKDIR /app
 # npm 11 refuses install scripts unless approved, and package.json pins the
 # approvals under "allowScripts". Copying both files means that stays true here.
 COPY package.json package-lock.json ./
+
+# The schema and the Prisma config, needed here ONLY so that npm's postinstall
+# can run. package.json declares `postinstall: prisma generate`, which exists
+# because lib/generated/prisma is gitignored: without the hook a fresh clone, a
+# new machine or a CI runner has no Prisma client at all, and B1 sat for two
+# phases with a client twelve models out of date because nothing forced a
+# regenerate. See docs/runbook.md.
+#
+# `prisma generate` reads prisma/schema.prisma and prisma.config.ts and nothing
+# else. It needs no database: prisma.config.ts resolves DATABASE_URL to "" when
+# it is unset, and generate never connects.
+#
+# THE COST, stated so nobody has to rediscover it: this layer used to be cached
+# on the lockfile alone, and now a schema edit invalidates `npm ci` too. That is
+# the price of the hook failing loudly rather than being skipped. Do NOT reach
+# for `|| true` or an ignore-scripts flag instead - a generate that silently does
+# nothing is exactly the failure the hook is here to prevent.
+COPY prisma ./prisma
+COPY prisma.config.ts ./
 
 # `npm ci` deletes node_modules and installs exactly the lockfile. Never
 # `npm install` in an image: it can resolve a different tree than CI tested.

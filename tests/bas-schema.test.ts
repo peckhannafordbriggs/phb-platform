@@ -19,12 +19,12 @@ import {
  * the whole story (docs/runbook.md, *The BAS schema lives in two places*), and
  * nothing else in the repo would notice if the hand-written half were dropped.
  *
- * Deliberately NOT ported: verify.py's counts of the point-role and
- * equipment-type vocabularies. Those rows are imported by
- * `scripts/bas-import.ts` from the standalone database - no migration and no
- * seed in this repo creates them - so on a test database they do not exist and
- * the check would be vacuous. See the runbook entry *The point-role vocabulary
- * is imported data, not schema*.
+ * The vocabularies are covered separately, in `tests/bas-vocabularies.test.ts`.
+ * They are not present in the test database at all: `npm run db:test:setup`
+ * applies migrations and deliberately does not seed, because tests/setup.ts
+ * truncates between files. So the fixtures here build their own `zztest_`
+ * vocabulary, which also means these tests never depend on a seed or an import
+ * having run.
  */
 
 afterAll(async () => {
@@ -150,43 +150,81 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
     expect(rows[0]?.n ?? 0).toBeGreaterThan(150);
   });
 
-  it("carries a description for every view", async () => {
-    const rows = await testDb.$queryRaw<Array<{ object_name: string }>>`
+  it("carries a description for EVERY object, table and view alike", async () => {
+    const undescribed = await testDb.$queryRaw<Array<{ object_name: string }>>`
       SELECT DISTINCT object_name FROM bas_v_data_dictionary
-       WHERE object_type = 'view' AND object_description IS NOT NULL
-       ORDER BY 1`;
+       WHERE object_description IS NULL ORDER BY 1`;
 
-    // These survived the port from the standalone database, and they are where
-    // the pairing and roll_risk semantics are explained.
-    expect(rows.map((r) => r.object_name)).toEqual(BAS_VIEWS);
+    // All eighteen. The twelve table comments arrived with the
+    // add_bas_comments migration; the six view comments survived the original
+    // port. An object with no description is one the model has to guess about
+    // from its name.
+    expect(undescribed.map((r) => r.object_name)).toEqual([]);
+
+    const described = await testDb.$queryRaw<Array<{ object_name: string }>>`
+      SELECT DISTINCT object_name FROM bas_v_data_dictionary
+       WHERE object_description IS NOT NULL ORDER BY 1`;
+    expect(described.map((r) => r.object_name)).toEqual(
+      [...BAS_TABLES, ...BAS_VIEWS].sort(),
+    );
   });
 
-  it("keeps the two column comments whose meaning cannot be guessed", async () => {
+  it("is annotated at the column level, which is the only reason it is worth pasting", async () => {
     const rows = await testDb.$queryRaw<
       Array<{ object_name: string; column_name: string; column_description: string }>
     >`SELECT object_name, column_name, column_description FROM bas_v_data_dictionary
        WHERE column_description IS NOT NULL
        ORDER BY object_name, column_name`;
 
+    // verify.py used 20 as its floor against the standalone schema. This floor
+    // was deliberately held at 2 for as long as that was the truth: the port to
+    // Prisma dropped 20 of 22 COMMENT ON COLUMN and all 12 COMMENT ON TABLE,
+    // because /// doc comments in schema.prisma are not emitted as SQL comments
+    // and are invisible from inside a query. add_bas_comments restored them, so
+    // the floor is now the one verify.py asserted.
+    expect(rows.length).toBeGreaterThanOrEqual(20);
+
     const annotated = rows.map((r) => `${r.object_name}.${r.column_name}`);
 
-    // verify.py asserted 20+ annotated columns against the standalone schema,
-    // which had 22 COMMENT ON COLUMN statements and 12 COMMENT ON TABLE. The
-    // Prisma-generated migration carries 2 and 0: the prose moved into
-    // schema.prisma's /// doc comments, which Prisma does NOT emit as SQL
-    // COMMENTs and which are therefore invisible from inside a query. That is a
-    // real gap for B5 and it is recorded in docs/runbook.md under *The data
-    // dictionary is 211 rows and 2 of them are annotated*. Asserting 20 here
-    // would be asserting a fix that has not happened.
-    //
-    // These two are asserted because they are the two whose meaning is actively
-    // dangerous to get wrong, and because losing them would be a regression on
-    // top of the gap rather than the gap itself.
+    // The two that were never lost, and are the two most dangerous to get wrong.
     expect(annotated).toContain("bas_points.roll_horizon_s");
     expect(annotated).toContain("bas_v_reading.ts_local");
 
+    // add_bas_comments must not have overwritten the roll_horizon_s wording with
+    // the standalone version, which predates the trigger and does not name it.
     const horizon = rows.find((r) => r.column_name === "roll_horizon_s");
     expect(horizon?.column_description).toContain("never write it by hand");
+    expect(horizon?.column_description).toContain("bas_points_roll_horizon");
+
+    // A spread of the restored ones, chosen because each documents something a
+    // reader cannot infer from the column name.
+    for (const column of [
+      "bas_points.niagara_history_name",
+      "bas_points.capacity",
+      "bas_points.full_policy",
+      "bas_points.unit",
+      "bas_readings.ts",
+      "bas_readings.status",
+      "bas_sites.timezone",
+      "bas_point_roles.setpoint_for",
+      "bas_point_roles.status_of",
+      "bas_data_gaps.cause",
+    ]) {
+      expect(annotated, `${column} must be documented`).toContain(column);
+    }
+
+    // Spot-check the prose itself, not just its presence: an empty string is a
+    // non-null description and would satisfy every assertion above.
+    const history = rows.find(
+      (r) => r.column_name === "niagara_history_name" && r.object_name === "bas_points",
+    );
+    expect(history?.column_description).toContain("$-hex escapes");
+    for (const row of rows) {
+      expect(
+        row.column_description.trim().length,
+        `${row.object_name}.${row.column_name} has an empty description`,
+      ).toBeGreaterThan(20);
+    }
   });
 
   it("reports only tables and views", async () => {
