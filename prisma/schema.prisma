@@ -210,3 +210,449 @@ model AuditEvent {
   @@index([occurredAt])
   @@map("audit_events")
 }
+
+// =============================================================================
+// BAS - Building Automation module (B1)
+//
+// Translated from C:\dev\bas-db\migrations\001_core_schema.sql and 002-005,
+// which passed 34/34 verification checks as raw SQL. Prisma now owns this
+// schema (decision D2); migrate.py and those five files retire.
+//
+// Tables are bas_*-prefixed inside the SAME public schema rather than a
+// separate `bas` Postgres schema (decision D3) - the repo uses one schema with
+// no Prisma multi-schema, and docs/05 says match the existing pattern.
+//
+// THREE THINGS ARE NOT IN THIS FILE. Read this before assuming schema.prisma is
+// the whole truth - see docs/runbook.md, "the BAS schema lives in two places":
+//
+//   1. bas_points.roll_horizon_s is kept equal to capacity *
+//      collection_interval_s by the bas_points_roll_horizon trigger. Here it is
+//      an ordinary nullable Int, which is exactly what the database has - and
+//      that is the point. A GENERATED ALWAYS column was tried first and had to
+//      be abandoned: Prisma reads the generated expression as a DEFAULT and
+//      emits `ALTER COLUMN roll_horizon_s DROP DEFAULT` on every subsequent
+//      migrate dev, which PostgreSQL then refuses. Read it, never write it.
+//   2. Thirteen CHECK constraints. Prisma does not model CHECK at all, so it
+//      neither generates them nor notices them missing. They are appended to
+//      the migration by hand and are load-bearing - reading_at_most_one_value
+//      is what stops a reading carrying two typed values.
+//   3. Six views (v_point, v_reading, v_setpoint_pair, v_command_status_pair,
+//      v_collection_health, v_data_dictionary). Queried through $queryRaw with
+//      hand-written types in lib/modules/bas/; the `views` preview feature was
+//      deliberately not enabled.
+//
+// Timestamps here are plain @db.Timestamptz() with no precision argument,
+// unlike the platform's own models which use (3). Niagara returns sub-second
+// precision and the correctness anchor - comparing bas_readings against the
+// same history in Workbench - depends on exact timestamps.
+// =============================================================================
+
+/// Controlled vocabulary of equipment kinds. Lets "compare all AHUs" work
+/// without string-matching on names.
+///
+/// A table rather than a Prisma/Postgres enum, deliberately: an analyst or an
+/// LLM writing SQL can SELECT from it to discover what values exist and what
+/// they mean. An enum is invisible from inside a query.
+model BasEquipmentType {
+  equipType   String @id @map("equip_type")
+  displayName String @map("display_name")
+  description String
+
+  /// Coarse grouping: air_side, water_side, plant, terminal, metering, other.
+  category String
+
+  equipment BasEquipment[]
+
+  @@map("bas_equipment_types")
+}
+
+/// What KIND of measurement a point is. The highest-leverage table in the BAS
+/// schema: without it every analytical question degenerates into string-matching
+/// against whatever naming convention a given integrator happened to use.
+model BasPointRole {
+  pointRole   String @id @map("point_role")
+  displayName String @map("display_name")
+  description String
+
+  /// Physical quantity: temperature, humidity, pressure, flow, position, power,
+  /// energy, speed, status, mode, time. Null for non-physical roles.
+  measurement String?
+  typicalUnit String? @map("typical_unit")
+
+  isSetpoint Boolean @default(false) @map("is_setpoint")
+  isCommand  Boolean @default(false) @map("is_command")
+  isStatus   Boolean @default(false) @map("is_status")
+
+  /// On 'supply_air_temp_sp' this is 'supply_air_temp'. That is how "which units
+  /// never reached setpoint" is answerable across every building without
+  /// hardcoding point pairs.
+  setpointFor     String?        @map("setpoint_for")
+  setpointForRole BasPointRole?  @relation("BasRoleSetpointFor", fields: [setpointFor], references: [pointRole], onDelete: Restrict)
+  setpointForBy   BasPointRole[] @relation("BasRoleSetpointFor")
+
+  /// On 'supply_fan_status' this is 'supply_fan_cmd'. A command that is on while
+  /// its status is off is a fault - real, common, and expensive.
+  statusOf     String?        @map("status_of")
+  statusOfRole BasPointRole?  @relation("BasRoleStatusOf", fields: [statusOf], references: [pointRole], onDelete: Restrict)
+  statusOfBy   BasPointRole[] @relation("BasRoleStatusOf")
+
+  points BasPoint[]
+
+  @@map("bas_point_roles")
+}
+
+/// Portfolio owner - the customer or business unit that owns a set of
+/// buildings. One row today; the table exists so multi-customer data never has
+/// to be retrofitted.
+model BasOrg {
+  orgId     BigInt    @id @default(autoincrement()) @map("org_id")
+  name      String    @unique
+  notes     String?
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  sites BasSite[]
+
+  @@map("bas_orgs")
+}
+
+/// A building.
+model BasSite {
+  siteId BigInt @id @default(autoincrement()) @map("site_id")
+
+  orgId BigInt @map("org_id")
+  org   BasOrg @relation(fields: [orgId], references: [orgId], onDelete: Restrict)
+
+  name    String
+  address String?
+
+  /// IANA timezone name, e.g. America/New_York. DISPLAY ONLY - every stored
+  /// timestamp is UTC. This is what converts UTC back to "what time was it in
+  /// the building", the only frame occupancy schedules make sense in. Must be a
+  /// value from pg_timezone_names.
+  timezone String
+
+  areaSqft Int? @map("area_sqft")
+
+  /// Open-ended site metadata (building type, year built, floors).
+  /// Deliberately loose - the layer most likely to need fields we have not
+  /// thought of yet.
+  attributes Json @default("{}")
+
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  stations  BasStation[]
+  equipment BasEquipment[]
+
+  @@unique([orgId, name])
+  @@map("bas_sites")
+}
+
+/// A running Niagara station - a JACE, or a Supervisor. One row per controller.
+model BasStation {
+  stationId BigInt @id @default(autoincrement()) @map("station_id")
+
+  siteId BigInt  @map("site_id")
+  site   BasSite @relation(fields: [siteId], references: [siteId], onDelete: Restrict)
+
+  /// The station name EXACTLY as Niagara spells it, including capitalisation.
+  /// This appears literally in every oBIX URL. Get the case wrong and every
+  /// request 404s.
+  niagaraStationName String  @map("niagara_station_name")
+  baseUrl            String? @map("base_url")
+  hostId             String? @map("host_id")
+  model              String?
+  niagaraVersion     String? @map("niagara_version")
+
+  /// The Supervisor this station reports to, if any. NULL for a standalone
+  /// JACE. This single nullable self-reference is how a Supervisor stays
+  /// optional forever - introducing one later needs no schema change at all.
+  parentStationId BigInt?      @map("parent_station_id")
+  parentStation   BasStation?  @relation("BasStationParent", fields: [parentStationId], references: [stationId], onDelete: Restrict)
+  childStations   BasStation[] @relation("BasStationParent")
+
+  isActive    Boolean   @default(true) @map("is_active")
+  notes       String?
+  firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
+  lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz()
+
+  points     BasPoint[]
+  ingestRuns BasIngestRun[]
+
+  @@unique([siteId, niagaraStationName])
+  @@index([siteId])
+  @@map("bas_stations")
+}
+
+/// A physical piece of equipment: AHU-3, VAV-204, Chiller-1. Expect this to be
+/// wrong at first and cheap to correct - nothing depends on its values, only on
+/// its identity.
+///
+/// Table is bas_equipment, singular: "equipments" is not a word.
+model BasEquipment {
+  equipmentId BigInt @id @default(autoincrement()) @map("equipment_id")
+
+  siteId BigInt  @map("site_id")
+  site   BasSite @relation(fields: [siteId], references: [siteId], onDelete: Restrict)
+
+  name String
+
+  equipType     String?           @map("equip_type")
+  equipmentType BasEquipmentType? @relation(fields: [equipType], references: [equipType], onDelete: Restrict)
+
+  /// Equipment served by this one, e.g. a VAV box under the AHU that feeds it.
+  /// Enables "show me everything downstream of AHU-3".
+  parentEquipmentId BigInt?        @map("parent_equipment_id")
+  parentEquipment   BasEquipment?  @relation("BasEquipmentParent", fields: [parentEquipmentId], references: [equipmentId], onDelete: Restrict)
+  childEquipment    BasEquipment[] @relation("BasEquipmentParent")
+
+  attributes Json     @default("{}")
+  notes      String?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  points BasPoint[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+  @@index([equipType])
+  @@index([parentEquipmentId])
+  @@map("bas_equipment")
+}
+
+/// One trended value in the building - the crux table.
+///
+/// The natural key is (stationId, niagaraHistoryName); everything else
+/// references the surrogate pointId. A point renamed in Niagara therefore
+/// appears as a NEW point rather than silently rewriting the meaning of
+/// existing history. That is deliberate, and the old row should be marked
+/// inactive after a human looks at it.
+model BasPoint {
+  pointId BigInt @id @default(autoincrement()) @map("point_id")
+
+  stationId BigInt     @map("station_id")
+  station   BasStation @relation(fields: [stationId], references: [stationId], onDelete: Restrict)
+
+  equipmentId BigInt?       @map("equipment_id")
+  equipment   BasEquipment? @relation(fields: [equipmentId], references: [equipmentId], onDelete: Restrict)
+
+  /// The history name EXACTLY as Niagara returns it, INCLUDING $-hex escapes
+  /// ($20 = space, $2d = dash). This string goes into the oBIX URL verbatim.
+  /// Never store the pretty decoded form - decoding and re-encoding is not
+  /// reliably round-trippable and produces 404s that look exactly like missing
+  /// points.
+  niagaraHistoryName String  @map("niagara_history_name")
+  niagaraHistoryOrd  String? @map("niagara_history_ord")
+
+  displayName String? @map("display_name")
+
+  /// A point with no role is invisible to every cross-equipment comparison and
+  /// every generic fault rule, so unclassified points are an explicit, visible
+  /// backlog rather than an error.
+  pointRole String?       @map("point_role")
+  role      BasPointRole? @relation(fields: [pointRole], references: [pointRole], onDelete: Restrict)
+
+  /// Engineering unit as reported by oBIX with the "obix:units/" prefix
+  /// stripped. Captured at ingest because recovering it later ranges from
+  /// painful to impossible - and comparing 55 degF against 12.8 degC silently
+  /// produces a confident wrong answer.
+  ///
+  /// Niagara can return obix:units/null, which naively becomes the STRING
+  /// "null" - worse than NULL, because every `unit IS NOT NULL` check then
+  /// passes and unit_mismatch never fires. The collector's _clean_unit()
+  /// handles it; nothing here may reintroduce it.
+  unit String?
+
+  /// CHECK (data_type IN ('real','int','bool','str','enum','abstime','unknown'))
+  /// lives in the migration SQL - Prisma cannot express CHECK.
+  dataType       String  @default("unknown") @map("data_type")
+  sourceTimezone String? @map("source_timezone")
+
+  /// From the history extension in Workbench, or BQL. NOT available over oBIX.
+  collectionIntervalS Int? @map("collection_interval_s")
+
+  /// Maximum records the station retains before the full policy applies.
+  /// Niagara defaults to 500. Workbench/BQL only.
+  capacity Int?
+
+  /// 'roll' = oldest records overwritten (Niagara default, and silent).
+  /// 'stop' = logging halts when full. CHECK is in the migration SQL.
+  fullPolicy String? @map("full_policy")
+
+  /// Maintained by the bas_points_roll_horizon trigger as capacity *
+  /// collection_interval_s. Read-only in practice: a direct write is silently
+  /// recomputed, so setting it does nothing but mislead the caller.
+  ///
+  /// How far back this history reaches before the station destroys data. The
+  /// collector must poll far more often than this - polling slower loses data
+  /// permanently, with no error and no gap marker anywhere.
+  rollHorizonS Int? @map("roll_horizon_s")
+
+  tags  Json    @default("{}")
+  notes String?
+
+  isActive    Boolean   @default(true) @map("is_active")
+  firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
+  lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz()
+
+  readings   BasReading[]
+  checkpoint BasSyncCheckpoint?
+  gaps       BasDataGap[]
+  linksFrom  BasPointLink[]     @relation("BasLinkFrom")
+  linksTo    BasPointLink[]     @relation("BasLinkTo")
+
+  @@unique([stationId, niagaraHistoryName])
+  @@index([stationId])
+  @@index([equipmentId])
+  @@index([pointRole])
+  @@index([isActive])
+  @@map("bas_points")
+}
+
+/// One trend record. Append-only in practice: never UPDATE, never DELETE.
+///
+/// Carries no names, units, or equipment on purpose - denormalising those
+/// multiplies storage ~5x and turns a rename into a billion-row rewrite. Join
+/// to BasPoint instead.
+///
+/// This is the table decision D10 covers: the JACE is a ~42-hour rolling
+/// buffer, so beyond the roll horizon these rows are the ONLY copy of the data
+/// in existence. A bad DELETE cannot be restored from source.
+model BasReading {
+  pointId BigInt   @map("point_id")
+  point   BasPoint @relation(fields: [pointId], references: [pointId], onDelete: Cascade)
+
+  /// The instant the value was recorded, UTC. Convert to the site's timezone
+  /// for display or for any question about occupancy or "last Tuesday".
+  ///
+  /// No precision argument, unlike the platform's (3) - see the header comment.
+  ts DateTime @db.Timestamptz()
+
+  valueNum  Float?   @map("value_num")
+  valueBool Boolean? @map("value_bool")
+  valueStr  String?  @map("value_str")
+
+  /// Niagara status flags as reported, e.g. "{down}" or "{overridden}". A value
+  /// present with an override flag is not the same as a value the building
+  /// actually produced.
+  status String?
+
+  /// The PK IS the idempotency guarantee and the dedup mechanism - re-running a
+  /// collection cannot double-insert.
+  @@id([pointId, ts])
+  /// Serves "everything, over this window"; the PK already serves "this point,
+  /// over this window". BRIN is kilobytes rather than gigabytes because
+  /// readings are appended in roughly timestamp order, so physical page order
+  /// tracks time order.
+  @@index([ts], type: Brin)
+  @@map("bas_readings")
+}
+
+/// Explicit relationships between specific points, for cases the role
+/// vocabulary cannot infer - an AHU with two supply temperature sensors, a
+/// setpoint shared across zones, a meter that submeters another.
+model BasPointLink {
+  fromPointId BigInt   @map("from_point_id")
+  fromPoint   BasPoint @relation("BasLinkFrom", fields: [fromPointId], references: [pointId], onDelete: Cascade)
+
+  toPointId BigInt   @map("to_point_id")
+  toPoint   BasPoint @relation("BasLinkTo", fields: [toPointId], references: [pointId], onDelete: Cascade)
+
+  /// CHECK link_type IN ('setpoint_for','status_of','feedback_for','serves',
+  /// 'measures_same') - in the migration SQL.
+  linkType String @map("link_type")
+
+  /// 'manual' = a human asserted it. 'inferred' = derived by a script from
+  /// naming or structure. Analysis that matters should be able to tell the
+  /// difference. CHECK is in the migration SQL.
+  confidence String @default("manual")
+
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@id([fromPointId, toPointId, linkType])
+  @@index([toPointId])
+  @@map("bas_point_links")
+}
+
+/// Per-point high-water mark. The reason the collector self-heals: after a
+/// network drop, a station reboot, or a database outage, the next run resumes
+/// from here with no human involvement and no duplicates.
+model BasSyncCheckpoint {
+  pointId BigInt   @id @map("point_id")
+  point   BasPoint @relation(fields: [pointId], references: [pointId], onDelete: Cascade)
+
+  /// Timestamp of the newest record successfully COMMITTED for this point.
+  /// Advanced only after a successful write, never before. Deliberately not
+  /// derived from MAX(ts) on the readings table, because that cannot express
+  /// "we tried and failed", cannot support backfill running independently of
+  /// forward collection, and cannot distinguish an idle point from a broken one.
+  lastRecordTs DateTime? @map("last_record_ts") @db.Timestamptz()
+  lastRunAt    DateTime? @map("last_run_at") @db.Timestamptz()
+
+  /// CHECK last_status IN ('never_run','ok','error','skipped') - migration SQL.
+  lastStatus          String  @default("never_run") @map("last_status")
+  consecutiveFailures Int     @default(0) @map("consecutive_failures")
+  lastError           String? @map("last_error")
+
+  @@map("bas_sync_checkpoints")
+}
+
+/// One row per collector execution. The audit trail - worth having from the
+/// very first run, because the alternative is discovering a gap months later
+/// with no way to explain it.
+model BasIngestRun {
+  runId BigInt @id @default(autoincrement()) @map("run_id")
+
+  stationId BigInt?     @map("station_id")
+  station   BasStation? @relation(fields: [stationId], references: [stationId], onDelete: Restrict)
+
+  startedAt  DateTime  @default(now()) @map("started_at") @db.Timestamptz()
+  finishedAt DateTime? @map("finished_at") @db.Timestamptz()
+
+  /// CHECK status IN ('running','ok','partial','failed') - migration SQL.
+  status String @default("running")
+
+  windowStart DateTime? @map("window_start") @db.Timestamptz()
+  windowEnd   DateTime? @map("window_end") @db.Timestamptz()
+
+  pointsAttempted Int @default(0) @map("points_attempted")
+  pointsSucceeded Int @default(0) @map("points_succeeded")
+  recordsWritten  Int @default(0) @map("records_written")
+
+  errors Json @default("[]")
+
+  collectorVersion String? @map("collector_version")
+  collectorHost    String? @map("collector_host")
+
+  @@index([startedAt(sort: Desc)])
+  @@map("bas_ingest_runs")
+}
+
+/// Periods we know we are missing, and why. Recording gaps explicitly is far
+/// better than silently having holes: it lets analysis distinguish "the
+/// equipment was off" from "we were not looking". An AI answering questions
+/// about this data needs that distinction to avoid confidently reporting a
+/// shutdown that never happened.
+model BasDataGap {
+  gapId BigInt @id @default(autoincrement()) @map("gap_id")
+
+  pointId BigInt   @map("point_id")
+  point   BasPoint @relation(fields: [pointId], references: [pointId], onDelete: Cascade)
+
+  gapStart   DateTime @map("gap_start") @db.Timestamptz()
+  gapEnd     DateTime @map("gap_end") @db.Timestamptz()
+  detectedAt DateTime @default(now()) @map("detected_at") @db.Timestamptz()
+
+  /// CHECK cause IN ('roll_overwrite','collector_down','station_unreachable',
+  /// 'point_added_later','station_clock_change','unknown') - migration SQL.
+  ///
+  /// 'roll_overwrite' is the unrecoverable one - the station destroyed the data
+  /// before we collected it. Every occurrence means the poll cadence is wrong
+  /// for that point.
+  cause String
+
+  notes String?
+
+  @@index([pointId, gapStart])
+  @@map("bas_data_gaps")
+}

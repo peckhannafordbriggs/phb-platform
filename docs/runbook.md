@@ -1069,3 +1069,265 @@ npm approve-scripts <package-name>
 ```
 
 Then commit the `package.json` change. Do not disable the check globally.
+
+---
+
+# BAS — Building Automation module
+
+## The BAS schema lives in two places, and `schema.prisma` is not all of it
+
+**Read this before changing anything about the `bas_*` tables.** It is the one
+thing about this module that is not discoverable from the code.
+
+Prisma models tables, columns and indexes. It does not model **CHECK
+constraints**, **generated columns**, or **views**. So three things are defined
+in the migration SQL rather than in `prisma/schema.prisma`:
+
+| What | Where | Does Prisma notice it? |
+|---|---|---|
+| `bas_points_roll_horizon` trigger, keeping `roll_horizon_s` correct | migration SQL | No |
+| 13 CHECK constraints | migration SQL | No. Invisible to it in both directions |
+| 6 views, `bas_v_*` | migration SQL | No |
+
+The BRIN index on `bas_readings(ts)` **is** in `schema.prisma`, as
+`@@index([ts], type: Brin)`. Prisma expresses PostgreSQL index types natively.
+Only the `pages_per_range` storage parameter cannot be expressed, and it was
+deliberately left at the default — it is a tuning choice, not a correctness one.
+
+The source of these definitions is `prisma/bas/hand-additions.sql` if that file
+still exists, and the `add_bas_tables` migration if it has been deleted as
+intended. The migration is authoritative.
+
+**Why the CHECK constraints matter.** `bas_readings_at_most_one_value` is what
+makes "a reading cannot carry two typed values" true rather than merely
+intended. Zero populated value columns is *valid* — it is a record the station
+returned as null, a sensor fault or a real gap — and that is different from no
+row at all, which means we never collected it. If these constraints are ever
+dropped, nothing will complain and bad rows will accumulate silently.
+
+## `migrate dev` emits `ALTER COLUMN roll_horizon_s DROP DEFAULT`, and it fails
+
+**This one cost an afternoon on 21 August. Do not re-derive it.**
+
+**Symptom.** `npx prisma migrate dev` generates a migration whose entire content
+is:
+
+```sql
+ALTER TABLE "bas_points" ALTER COLUMN "roll_horizon_s" DROP DEFAULT;
+```
+
+Applying it fails with `column "roll_horizon_s" of relation "bas_points" is a
+generated column`. You can neither apply it nor stop Prisma generating it.
+
+**Cause.** Somebody has made `roll_horizon_s` a `GENERATED ALWAYS AS (...)
+STORED` column again. Prisma reads that expression as a column DEFAULT, has no
+syntax for it in `schema.prisma`, and therefore believes the database has a
+default the schema does not — so every `migrate dev` proposes removing it,
+forever.
+
+Declaring the field in `schema.prisma` does **not** fix this. Declaring it
+prevents a `DROP COLUMN`, which is a different problem. The generated-column
+conflict is unavoidable while the column is generated.
+
+**Fix.** Use the trigger, which is what the `add_bas_tables` migration installs:
+
+```sql
+CREATE OR REPLACE FUNCTION bas_points_roll_horizon() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.roll_horizon_s := NEW.capacity * NEW.collection_interval_s;
+  RETURN NEW;
+END; $$;
+
+CREATE TRIGGER bas_points_roll_horizon_maintain
+  BEFORE INSERT OR UPDATE OF capacity, collection_interval_s, roll_horizon_s
+  ON bas_points FOR EACH ROW EXECUTE FUNCTION bas_points_roll_horizon();
+```
+
+`roll_horizon_s` stays an ordinary nullable `INTEGER`, which is exactly what
+`schema.prisma` declares, so the diff is empty. Prisma does not model triggers —
+the same reason it ignores the `audit_events_append_only` triggers, which have
+survived every migration since August 2026 without producing a diff.
+
+**The one behavioural difference.** A generated column *rejects* a direct write;
+the trigger *overwrites* it. The stored value is right either way, but a caller
+that sets `roll_horizon_s` gets no error. Nothing writes it — the collector only
+reads it — so this is a lost warning, not a lost guarantee.
+
+**Delete the corrective migration** if one was generated and committed. It can
+never be applied.
+
+**After any change here,** confirm:
+
+```sql
+SELECT count(*) FROM bas_points
+ WHERE capacity IS NOT NULL AND collection_interval_s IS NOT NULL
+   AND roll_horizon_s IS DISTINCT FROM capacity * collection_interval_s;
+```
+
+Zero is the only acceptable answer. `roll_horizon_s` is what every data-loss
+warning in this module is computed from — a point whose horizon reads NULL is
+reported as `roll_horizon_unknown`, which is deliberately **not** treated as
+safe and must never be rendered green.
+
+## After `prisma migrate reset`, nobody can reach `/admin`
+
+**Symptom.** Following a reset, the sidebar is empty for everyone and `/admin`
+is unreachable. `SELECT count(*) FROM modules` returns **0**.
+
+**Cause.** `npx prisma migrate reset` does **not** run the seed in this repo,
+despite `prisma.config.ts` declaring `seed: "tsx prisma/seed.ts"`. The database
+comes back schema-correct and content-empty. With no module rows there is
+nothing to grant, and with no bootstrap admin there is nobody to grant it.
+
+**Fix.**
+
+```bash
+npm run seed
+```
+
+**The detail that makes this confusing:** `1 position, 11 departments` appear
+anyway, because reference data is inserted by migrations rather than by the
+seed. So the database looks partially populated, which reads like a seed that
+ran and half-worked rather than one that never ran at all. **Check the `modules`
+count, not the department count.**
+
+## Editing a migration that has already been applied
+
+**Symptom.** Prisma reports that an applied migration's checksum no longer
+matches the file on disk.
+
+**Cause.** Someone edited a migration after it was applied. Prisma checksums
+applied migrations precisely to catch this — the file and the database now
+disagree about what was run.
+
+**Fix, locally:** `npx prisma migrate reset`, then `npm run seed` (see above),
+then re-run `scripts/bas-import.ts`. Safe on a development machine because BAS
+data re-imports from the standalone `bas` database and everything else comes
+from the seed.
+
+**Not safe once the platform is deployed.** After Azure exists, a change of this
+kind is a **new forward migration**, never an edit. Resetting a deployed
+database destroys `bas_readings`, and beyond the JACE's ~42-hour roll horizon
+those rows cannot be re-fetched from anywhere.
+
+This happened once, on 21 August, fixing the `roll_horizon_s` generated column
+inside `20260821150733_add_bas_tables` after it was already live in the dev
+database. It was the right moment for it to happen — before deployment, against
+synthetic data.
+
+## The views are named `bas_v_*`, and that is load-bearing
+
+**Not cosmetic.** `bas_v_data_dictionary` — the view whose entire purpose is to
+be pasted into an LLM prompt so the model writes SQL against documented columns
+instead of guessing — selects objects matching `relname LIKE 'bas\_%'` in the
+`public` schema. A view named `v_point` would be excluded from the dictionary,
+so the AI would not know it exists.
+
+The predicate was `nspname = 'bas'` in the standalone database, where these
+tables had a schema of their own. Both obvious ways of updating it are wrong and
+neither raises an error:
+
+- leaving it as `'bas'` → returns zero rows, and the AI starts guessing column names
+- changing it to `nspname = 'public'` alone → returns `employees`, `audit_events`,
+  `module_grants` and `draft_locks` as well, putting the platform's own tables
+  into an LLM prompt
+
+If someone reports that the AI is inventing column names, check this view first.
+
+## `prisma generate` fails with a 403 from `binaries.prisma.sh`
+
+**Symptom.**
+
+```
+Error: Failed to fetch sha256 checksum at
+https://binaries.prisma.sh/.../schema-engine.gz.sha256 - 403 Forbidden
+```
+
+**Cause.** The environment cannot reach `binaries.prisma.sh` — a restricted
+network, an egress allowlist, or an air-gapped CI runner. Prisma 7's *query*
+engine is WebAssembly inside `@prisma/client` and needs nothing downloaded, but
+the *schema* engine is a separate binary and the CLI checks for it.
+
+**Fix, when you only need to generate the client:**
+
+```bash
+touch /tmp/fake && chmod +x /tmp/fake
+PRISMA_SCHEMA_ENGINE_BINARY=/tmp/fake npx prisma generate
+```
+
+`generate` only checks that the path exists; it never invokes the engine.
+
+**What this does NOT fix.** `prisma migrate dev` and `prisma validate` both
+genuinely invoke the engine. Pointing them at a stub makes them exit 0 having
+checked *nothing*, which is worse than the 403 — you get a passing result that
+means nothing. If you need to validate a schema without the engine, run
+`generate`: it has to parse the schema to emit a client, so an invalid schema
+fails.
+
+`PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1` does not help. It skips the checksum
+fetch; the engine download then 403s on the next line.
+
+**To apply migrations without the engine,** run the migration `.sql` files
+directly — they are plain SQL. This does not record them in
+`_prisma_migrations`, so it is for test databases only. A real database needs
+`prisma migrate deploy` from a machine that can reach the binary host.
+
+## Importing the standalone BAS database — `scripts/bas-import.ts`
+
+Moves the `bas` schema of the standalone database (`C:\dev\bas-db`) into the
+platform's `bas_*` tables. Needed once now, and again when the platform moves to
+Azure — which is the reason it is a script.
+
+```bash
+# read-only inspection, always safe
+BAS_SOURCE_DATABASE_URL="postgresql://.../bas" npx tsx scripts/bas-import.ts
+# then
+npx tsx scripts/bas-import.ts --apply
+```
+
+**Point ids are preserved deliberately.** `bas_sync_checkpoints` and
+`bas_readings` both key on `point_id`. If the ids changed, every checkpoint
+would refer to the wrong point and the collector would either re-fetch
+everything or silently skip data. The script inserts ids explicitly and then
+advances each sequence past the highest value.
+
+**It refuses to import onto a populated target.** A dry run against a populated
+target still exits 0 and reports the blocker — a read-only inspection must not
+fail. `--apply` against a populated target exits 1. `--truncate-target` replaces
+the rows, and should be preceded by a backup: beyond the JACE's ~42-hour roll
+horizon, `bas_readings` **is the only copy of that data in existence** and
+cannot be re-fetched from the station.
+
+**"`bas_points.point_id` has no sequence."** The column has probably been
+changed to `GENERATED ALWAYS AS IDENTITY`. The inserts then need `OVERRIDING
+SYSTEM VALUE`. The script fails loudly rather than renumbering rows.
+
+**Everything is one transaction, and verification happens before the commit.**
+It compares row counts table by table, counts how many tables it compared, and
+rolls back with `INCONCLUSIVE` if that count is short. That check exists because
+`Test-BasRestore.ps1` once printed `RESTORE VERIFIED` after a bad format string
+threw inside its comparison loop and skipped all ten tables. **Always count what
+you actually checked, and refuse to pass on zero.**
+
+## BAS irreplaceability — read before any destructive operation
+
+**The JACE overwrites its own history roughly every 42 hours.** Once a row is in
+`bas_readings`, that row is **the only copy of it in existence.** There is no
+re-import, no vendor archive, and no station-side backup. A bad `DELETE` cannot
+be undone from the source.
+
+This is the one place the platform's own rule — *if the platform is not the
+authoritative owner of some information, do not store it* (`docs/05`) — is
+deliberately overridden, and it is overridden for **history only**. Current
+values, point configuration and station metadata stay owned by the JACE and are
+re-derived, never treated as truth.
+
+Consequences, all non-optional:
+
+- Backups of the platform database are a correctness requirement, not hygiene
+- Anything that reads BAS data for analysis connects as a role with no write
+  permission — see the AI SQL tool, which uses its own read-only pool rather
+  than the Prisma client precisely because the Prisma client can write
+- `--truncate-target` on the import script, and any manual `DELETE`, needs a
+  verified backup first
