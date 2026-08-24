@@ -7,11 +7,15 @@ import type {
   CollectionHealth,
   DataGapRow,
   IngestRunRow,
+  PointExplorer,
   PointHealthRow,
+  PointOption,
   RollRisk,
   RunGap,
   RunRecordPoint,
   SiteOption,
+  TrendGap,
+  TrendPoint,
 } from "./types";
 
 /**
@@ -639,5 +643,373 @@ function toDataGapRow(row: GapRow): DataGapRow {
     hoursLost: row.hours_lost,
     cause: row.cause,
     notes: row.notes,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// B4 - Point Explorer
+// ---------------------------------------------------------------------------
+
+/** Grafana's point picker is single-select, and so is this. See `getPointExplorer`. */
+export function parsePointId(value: string | null | undefined): bigint | null {
+  if (value === undefined || value === null) return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (!/^[0-9]+$/.test(trimmed)) {
+    throw new BasError("point_not_found", "That point is not available.");
+  }
+  return BigInt(trimmed);
+}
+
+/**
+ * How far apart two readings have to be before the trend line breaks.
+ *
+ * A multiple of the point's own collection interval, so it scales with how
+ * often the point is actually logged rather than assuming five minutes. Three
+ * intervals is wide enough that one late poll does not fragment the line and
+ * narrow enough that a real outage is unmistakable.
+ *
+ * The floor exists for points whose interval is not known - capacity has not
+ * been filled in from Workbench - where the alternative is either never breaking
+ * or breaking constantly.
+ */
+const BREAK_INTERVAL_MULTIPLE = 3;
+const MIN_BREAK_SECONDS = 900;
+
+function breakThresholdMs(collectionIntervalS: number | null): number {
+  const fromInterval =
+    collectionIntervalS === null ? 0 : collectionIntervalS * BREAK_INTERVAL_MULTIPLE;
+  return Math.max(fromInterval, MIN_BREAK_SECONDS) * 1000;
+}
+
+/**
+ * The most samples the payload will carry.
+ *
+ * 90 days at one record per five minutes is about 26,000 rows, which is more
+ * than a chart 800 pixels wide can express and more than is pleasant to ship.
+ * Past this the MOST RECENT slice is returned and `trendTruncated` says so.
+ *
+ * Truncation rather than downsampling, deliberately. Averaging buckets together
+ * would smooth over exactly the thing this chart exists to show: a hole where
+ * the station overwrote data before anyone collected it. A shorter window that
+ * is complete beats a long one that has been quietly averaged.
+ */
+const MAX_TREND_POINTS = 12_000;
+
+interface PointOptionRow {
+  point_id: bigint;
+  point_name: string;
+  point_role: string | null;
+  unit: string | null;
+  site_name: string;
+  collection_interval_s: number | null;
+}
+
+interface PointStatsRow {
+  readings: number;
+  null_records: number;
+  distinct_values: number;
+  average: number | null;
+  minimum: number | null;
+  maximum: number | null;
+}
+
+interface LatestRow {
+  value_num: number | null;
+  ts: Date | null;
+}
+
+interface TrendRow {
+  ts: Date;
+  value_num: number | null;
+}
+
+export interface PointExplorerOptions {
+  windowDays?: number;
+  siteId?: bigint | null;
+  /** Absent means "the first point the picker would offer". */
+  pointId?: bigint | null;
+}
+
+/**
+ * Everything the Point Explorer screen shows, for ONE point.
+ *
+ * One point at a time, which is the same choice Grafana's dashboard makes
+ * (`$point` is `multi: false`) and it is load-bearing rather than incidental.
+ * `points_RoomT` is in fahrenheit and `Temp1`..`Temp3` carry no unit at all, so
+ * plotting two of them on one axis would put 55 degF and 12.8 degC on the same
+ * line with nothing on screen saying they are different quantities. A
+ * single-point chart cannot express that mistake. If this ever grows a compare
+ * mode, it needs one axis per unit and an explicit refusal for unitless points -
+ * see docs/runbook.md, *Two points on one axis*.
+ *
+ * Same transaction discipline as `getCollectionHealth`: one `now()` for the
+ * window, the stats and the trend, so the tiles cannot disagree with the chart
+ * they sit above.
+ */
+export async function getPointExplorer(
+  viewer: Viewer,
+  options: PointExplorerOptions = {},
+): Promise<PointExplorer> {
+  const windowDays = clampWindowDays(options.windowDays);
+  const requestedSiteId = options.siteId ?? null;
+  const requestedPointId = options.pointId ?? null;
+  const scope = await basSiteScope(viewer);
+  const entitled = scope.entitled;
+
+  const result = await prisma.$transaction(async (tx) => {
+    const observedAt = firstRow(
+      await tx.$queryRaw<Array<{ now: Date }>>`SELECT now() AS now`,
+      "now()",
+    ).now;
+
+    const siteRows = await tx.$queryRaw<SiteRow[]>`
+      SELECT s.site_id, s.name, o.name AS org_name
+      FROM bas_sites s
+      JOIN bas_orgs o USING (org_id)
+      WHERE ${siteFilter(entitled, Prisma.sql`s.site_id`)}
+      ORDER BY o.name, s.name
+    `;
+
+    const selectedSite =
+      requestedSiteId === null
+        ? null
+        : (siteRows.find((row) => row.site_id === requestedSiteId) ?? null);
+
+    if (requestedSiteId !== null && selectedSite === null) {
+      throw new BasError("site_not_found", "That building is not available.");
+    }
+
+    const siteIds = effectiveSiteIds(entitled, requestedSiteId);
+    const healthSites = siteFilter(siteIds, Prisma.sql`site_id`);
+
+    // Grafana's $point variable query, plus the two columns the screen needs
+    // that a dropdown does not: the unit, and the interval the break threshold
+    // is derived from.
+    //
+    // ORDER BY carries point_id as a tie-break. Two points in one building can
+    // share a display name - display_name is not unique, only
+    // (station_id, niagara_history_name) is - and without it the picker would
+    // reorder between refreshes.
+    const pointRows = await tx.$queryRaw<PointOptionRow[]>`
+      SELECT point_id, point_name, point_role, unit, site_name,
+             collection_interval_s
+      FROM bas_v_point
+      WHERE is_active AND ${healthSites}
+      ORDER BY site_name, point_name, point_id
+    `;
+
+    const selectedPoint =
+      requestedPointId === null
+        ? (pointRows[0] ?? null)
+        : (pointRows.find((row) => row.point_id === requestedPointId) ?? null);
+
+    // A point outside the picker's list is refused rather than silently swapped
+    // for the first one. Silently swapping would show one point's data under
+    // another point's name in the URL, which is the worst of both.
+    if (requestedPointId !== null && selectedPoint === null) {
+      throw new BasError("point_not_found", "That point is not available.");
+    }
+
+    if (selectedPoint === null) {
+      return {
+        observedAt,
+        siteRows,
+        selectedSite,
+        pointRows,
+        selectedPoint: null,
+        stats: null,
+        latest: null,
+        trend: [] as TrendRow[],
+        trendTruncated: false,
+        dataGaps: [] as GapRow[],
+      };
+    }
+
+    const pointId = selectedPoint.point_id;
+    const since = Prisma.sql`now() - make_interval(days => ${windowDays}::int)`;
+
+    // Grafana runs panels 2, 3, 4 and 5 as four queries over the same rows.
+    // One pass, the same five numbers.
+    const stats = firstRow(
+      await tx.$queryRaw<PointStatsRow[]>`
+        SELECT
+          count(*)::int AS readings,
+          count(*) FILTER (
+            WHERE value_num IS NULL AND value_bool IS NULL AND value_str IS NULL
+          )::int AS null_records,
+          count(DISTINCT value_num)::int AS distinct_values,
+          round(avg(value_num)::numeric, 2)::float8 AS average,
+          round(min(value_num)::numeric, 2)::float8 AS minimum,
+          round(max(value_num)::numeric, 2)::float8 AS maximum
+        FROM bas_readings
+        WHERE point_id = ${pointId} AND ts >= ${since}
+      `,
+      "point stats",
+    );
+
+    // Grafana's panel 1. Deliberately NOT windowed and deliberately NOT null:
+    // "latest" answers "what is it reading now", and a window with no data in it
+    // does not make the last known value untrue.
+    const latest =
+      (
+        await tx.$queryRaw<LatestRow[]>`
+          SELECT value_num, ts
+          FROM bas_readings
+          WHERE point_id = ${pointId} AND value_num IS NOT NULL
+          ORDER BY ts DESC
+          LIMIT 1
+        `
+      )[0] ?? null;
+
+    // One extra row so truncation can be detected without a second count.
+    const trendRows = await tx.$queryRaw<TrendRow[]>`
+      SELECT ts, value_num
+      FROM bas_readings
+      WHERE point_id = ${pointId} AND ts >= ${since}
+      ORDER BY ts DESC
+      LIMIT ${MAX_TREND_POINTS + 1}
+    `;
+
+    const trendTruncated = trendRows.length > MAX_TREND_POINTS;
+    // Newest-first above so that truncation keeps the RECENT end; flipped here
+    // because a chart reads left to right.
+    const trend = trendRows.slice(0, MAX_TREND_POINTS).reverse();
+
+    const dataGaps = await tx.$queryRaw<GapRow[]>`
+      SELECT
+        g.gap_id,
+        h.point_name,
+        h.site_name,
+        g.gap_start,
+        g.gap_end,
+        round((EXTRACT(EPOCH FROM (g.gap_end - g.gap_start)) / 3600.0)::numeric, 1)::float8
+          AS hours_lost,
+        g.cause,
+        g.notes
+      FROM bas_data_gaps g
+      JOIN bas_v_collection_health h USING (point_id)
+      WHERE g.point_id = ${pointId}
+      ORDER BY g.gap_start DESC, g.gap_id DESC
+      LIMIT ${DATA_GAPS_LIMIT}
+    `;
+
+    return {
+      observedAt,
+      siteRows,
+      selectedSite,
+      pointRows,
+      selectedPoint,
+      stats,
+      latest,
+      trend,
+      trendTruncated,
+      dataGaps,
+    };
+  });
+
+  const { trend, gaps } = buildTrend(
+    result.trend,
+    result.selectedPoint?.collection_interval_s ?? null,
+  );
+
+  const explorer: PointExplorer = {
+    windowDays,
+    observedAt: result.observedAt.toISOString(),
+    sites: result.siteRows.map(toSiteOption),
+    selectedSiteId:
+      result.selectedSite === null ? null : result.selectedSite.site_id.toString(),
+    selectedSiteName: result.selectedSite === null ? null : result.selectedSite.name,
+    points: result.pointRows.map(toPointOption),
+    selectedPoint:
+      result.selectedPoint === null ? null : toPointOption(result.selectedPoint),
+    collectionIntervalS: result.selectedPoint?.collection_interval_s ?? null,
+    stats: {
+      readings: result.stats?.readings ?? 0,
+      nullRecords: result.stats?.null_records ?? 0,
+      distinctValues: result.stats?.distinct_values ?? 0,
+      latest: result.latest?.value_num ?? null,
+      latestAt: iso(result.latest?.ts ?? null),
+      average: result.stats?.average ?? null,
+      minimum: result.stats?.minimum ?? null,
+      maximum: result.stats?.maximum ?? null,
+    },
+    trend,
+    trendGaps: gaps,
+    trendTruncated: result.trendTruncated,
+    dataGaps: result.dataGaps.map(toDataGapRow),
+  };
+
+  logger.info("bas.point_explorer", {
+    employeeId: scope.employeeId,
+    moduleKey: "bas",
+    count: explorer.stats.readings,
+    reason:
+      `window=${windowDays}d site=${explorer.selectedSiteId ?? "all"} ` +
+      `point=${explorer.selectedPoint?.pointId ?? "none"} ` +
+      `gaps=${gaps.length}`,
+  });
+
+  return explorer;
+}
+
+/**
+ * Turns ordered readings into a series the chart can draw, inserting an explicit
+ * break wherever there is no data rather than letting the line cross the hole.
+ *
+ * A straight segment across a gap asserts values that were never recorded, and
+ * in this database that is not hypothetical: the station destroyed 22.7 hours of
+ * every point on 21-22 August 2026 and a line drawn across it reads as a steady
+ * temperature. See docs/runbook.md, *The trend chart must break across gaps*.
+ *
+ * Exported so a test can drive it with a synthetic series and so the rule is
+ * checkable without a database.
+ */
+export function buildTrend(
+  rows: Array<{ ts: Date; value_num: number | null }>,
+  collectionIntervalS: number | null,
+): { trend: TrendPoint[]; gaps: TrendGap[] } {
+  const threshold = breakThresholdMs(collectionIntervalS);
+  const trend: TrendPoint[] = [];
+  const gaps: TrendGap[] = [];
+
+  let previousMs: number | null = null;
+
+  for (const row of rows) {
+    const tsMs = row.ts.getTime();
+
+    if (previousMs !== null && tsMs - previousMs > threshold) {
+      // One synthetic null between the two real samples. Recharts breaks a line
+      // at a null y-value, so this is what stops the segment being drawn - and
+      // it sits at the midpoint so neither real reading is displaced.
+      trend.push({
+        tsMs: previousMs + Math.floor((tsMs - previousMs) / 2),
+        value: null,
+        isBreak: true,
+      });
+      gaps.push({
+        fromMs: previousMs,
+        toMs: tsMs,
+        hours: (tsMs - previousMs) / 3_600_000,
+      });
+    }
+
+    // A row whose value columns are all null is a RECORD with no value. It is
+    // pushed with value null - the line cannot cross it either - but isBreak is
+    // false, because something was collected here and the tiles count it.
+    trend.push({ tsMs, value: row.value_num, isBreak: false });
+    previousMs = tsMs;
+  }
+
+  return { trend, gaps };
+}
+
+function toPointOption(row: PointOptionRow): PointOption {
+  return {
+    pointId: row.point_id.toString(),
+    pointName: row.point_name,
+    pointRole: row.point_role,
+    unit: row.unit,
+    siteName: row.site_name,
   };
 }

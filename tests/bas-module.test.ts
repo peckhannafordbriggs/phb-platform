@@ -63,6 +63,9 @@ async function expectPageNotFound(run: () => Promise<unknown>): Promise<void> {
 const importBasPage = () =>
   import("@/app/(modules)/bas/page").then((m) => m.default);
 
+const importBasPointsPage = () =>
+  import("@/app/(modules)/bas/points/page").then((m) => m.default);
+
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -205,6 +208,86 @@ describe("the BAS page is guarded the same way as the route", () => {
     const BasPage = await importBasPage();
 
     await expect(BasPage()).resolves.toBeDefined();
+  });
+});
+
+describe("every tab is guarded on its own route", () => {
+  /**
+   * A tab bar is navigation, not authorization. Both routes repeat the grant
+   * check, because reaching a URL directly is the case that matters and the tab
+   * bar is not involved in it.
+   *
+   * This is also why the module's chrome is rendered from inside each guarded
+   * page rather than from a Next.js layout. A layout renders AROUND a page that
+   * calls notFound(), so an ungranted employee would get the "Building
+   * Automation" heading and the tab bar wrapped around a 404 body - confirming
+   * the module exists to exactly the person who may not know that.
+   */
+  const TABS: Array<[string, () => Promise<() => Promise<unknown>>]> = [
+    ["/bas", importBasPage],
+    ["/bas/points", importBasPointsPage],
+  ];
+
+  for (const [route, importPage] of TABS) {
+    it(`${route} 404s for an employee without the grant`, async () => {
+      await createEmployee({ entraOid: `oid-tab-nogrant-${route}` });
+      signedInAs(`oid-tab-nogrant-${route}`);
+
+      const Page = await importPage();
+
+      await expectPageNotFound(() => Page());
+    });
+
+    it(`${route} 404s for an unauthenticated visitor`, async () => {
+      authMock.mockResolvedValue(null as never);
+
+      const Page = await importPage();
+
+      await expectPageNotFound(() => Page());
+    });
+
+    it(`${route} renders for an employee holding the grant`, async () => {
+      const employee = await createEmployee({ entraOid: `oid-tab-ok-${route}` });
+      await grantModule(employee.id, BAS_MODULE_KEY);
+      signedInAs(`oid-tab-ok-${route}`);
+
+      const Page = await importPage();
+
+      await expect(Page()).resolves.toBeDefined();
+    });
+
+    it(`${route} 404s when the module row is hidden, even with a grant`, async () => {
+      const employee = await createEmployee({ entraOid: `oid-tab-hidden-${route}` });
+      await grantModule(employee.id, BAS_MODULE_KEY);
+      await testDb.module.update({
+        where: { key: BAS_MODULE_KEY },
+        data: { status: "hidden" },
+      });
+      signedInAs(`oid-tab-hidden-${route}`);
+
+      const Page = await importPage();
+
+      await expectPageNotFound(() => Page());
+    });
+  }
+
+  it("keeps exactly one sidebar entry however many tabs there are", async () => {
+    // Tabs are navigation WITHIN a module. components/sidebar.tsx renders from
+    // the modules table and must not gain a row per tab.
+    const employee = await createEmployee({ entraOid: "oid-tab-sidebar" });
+    await grantModule(employee.id, BAS_MODULE_KEY);
+
+    const me = await buildMe({
+      id: employee.id,
+      email: employee.email,
+      firstName: employee.firstName,
+      lastName: employee.lastName,
+      profileCompleted: true,
+      isPlatformAdmin: false,
+    });
+
+    expect(me.modules).toHaveLength(1);
+    expect(me.modules[0]?.key).toBe("bas");
   });
 });
 

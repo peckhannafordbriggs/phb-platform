@@ -417,7 +417,14 @@ backlog item, not an error.
 
 ### Point Explorer
 
-Point picker, trend chart, summary tiles, known gaps.
+Point picker, trend chart, summary tiles, known gaps - one point at a time,
+because `points_RoomT` is in fahrenheit and `Temp1`..`Temp3` carry no unit at
+all, and two of those on one axis is how 55 degF and 12.8 degC end up on one
+line.
+
+**The trend line breaks across gaps rather than drawing through them.** A
+straight segment across a hole asserts readings that were never taken, and on
+21-22 August 2026 the station destroyed 22.7 hours of every point here.
 
 **Use distinct-value count, not standard deviation, to judge whether a sensor is
 alive.** A standard-deviation threshold is unit-dependent and untunable across
@@ -621,13 +628,49 @@ banner and the *recorded data gaps* table exist precisely to carry that memory.
 See the runbook, *Collection Health says everything is fine and you know it is
 not*.
 
-### B4 — Point Explorer
+### B4 — Point Explorer — COMPLETE
 
 The charting library is already here: B3 added **Recharts 3** for the
 records-per-run panel, because that panel needs a real time axis.
 
 **Done when** you can answer *"what did this point do yesterday"* without SQL,
 and it matches Grafana.
+
+Verified 24 August 2026. Every panel of both dashboards matched via
+`npm run bas:oracle`, across all four points and both the 1-day and 7-day
+windows. 710/710 tests (639 before B4), typecheck, lint and build clean.
+
+**The module became tabbed.** `/bas` is Collection Health, `/bas/points` is Point
+Explorer, and both are real routes - bookmarkable, refreshable, middle-clickable.
+The sidebar keeps exactly one *Building Automation* entry. `tabs.ts` is the whole
+extension point; B5 is one line there plus a page.
+
+*Each tab guards itself*, and the chrome is deliberately NOT a Next.js layout: a
+layout renders around a page that calls `notFound()`, so an ungranted employee
+would get the module heading and tab bar wrapped around a 404. See the runbook,
+*The Building Automation tabs are routes, not state*.
+
+*The filters live in the URL* - `site`, `days`, `point` - which is what makes
+them survive a tab switch, a refresh and a bookmark. A filter that silently
+resets is worse than none: a filtered zero and a real zero look identical.
+
+**Four things this screen has to get right**, each with its own runbook section:
+
+1. **Distinct values, not standard deviation** for judging whether a sensor is
+   alive. Sigma is unit-dependent, untunable across buildings, and points the
+   wrong way - a stuck sensor and a stable room both have low sigma. Live: Temp1
+   gives 254 distinct across 286 readings in 24 h.
+2. **The trend breaks across gaps.** Worth being precise about which gap: the
+   *collector* was silent 64.3 h, but the hole in the *readings* is 22.7 h,
+   because the backfill recovered everything the station still held. Three
+   mechanisms - an inserted null with `connectNulls={false}`, a shaded band, and
+   a written list - because a break alone reads as a rendering artifact.
+3. **A null reading is not a missing reading.** The readings/nulls tile carries
+   two numbers because "0 nulls, 286 rows" and "0 nulls, 0 rows" both report zero
+   and mean opposite things.
+4. **Units.** One point at a time, matching Grafana's `multi: false`, so two
+   units can never share an axis. The axis says "no unit recorded" rather than
+   going bare, because bare reads as *none needed* and the truth is *unknown*.
 
 ### B5 — Ask
 

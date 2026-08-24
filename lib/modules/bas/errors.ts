@@ -18,7 +18,17 @@ export type BasErrorCode =
    * site, so only the first case is reachable; the second becomes reachable the
    * day `bas_site_grant` exists, and it must not need a second look then.
    */
-  "site_not_found";
+  | "site_not_found"
+  /**
+   * A point was asked for that is not in the picker's list for this employee and
+   * this building filter - it does not exist, is inactive, or belongs to a site
+   * they cannot see.
+   *
+   * Refused rather than quietly replaced with the first available point. A
+   * silent swap would render one point's readings under another point's name in
+   * the URL, which is worse than an error: it is wrong and it looks fine.
+   */
+  | "point_not_found";
 
 export class BasError extends Error {
   constructor(

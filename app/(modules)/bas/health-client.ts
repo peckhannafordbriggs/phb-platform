@@ -1,5 +1,6 @@
 import type {
   CollectionHealth,
+  PointExplorer,
   RollRisk,
   RunGap,
 } from "@/lib/modules/bas/types";
@@ -364,4 +365,136 @@ export function describeRunGap(gap: RunGap | null): string | null {
   }
 
   return `The longest collector silence in this window was ${duration}, inside the ${horizon} roll horizon.`;
+}
+
+// ------------------------------------------------------- B4: Point Explorer
+
+export async function fetchPointExplorer(
+  options: { days?: number; siteId?: string | null; pointId?: string | null } = {},
+  signal?: AbortSignal,
+): Promise<PointExplorer> {
+  const params = new URLSearchParams();
+  if (options.days !== undefined) params.set("days", String(options.days));
+  if (options.siteId != null) params.set("site", options.siteId);
+  if (options.pointId != null) params.set("point", options.pointId);
+  const suffix = params.toString();
+
+  let response: Response;
+  try {
+    response = await fetch(
+      `${BASE}/point-explorer${suffix.length > 0 ? `?${suffix}` : ""}`,
+      { signal, cache: "no-store" },
+    );
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: PointExplorer; error?: { code?: string; message?: string } }
+    | null;
+
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+
+  if (payload?.data === undefined) {
+    throw new ApiError("unexpected", "The server returned nothing.");
+  }
+
+  return payload.data;
+}
+
+/**
+ * Is this sensor alive? Distinct-value count, NOT standard deviation.
+ *
+ * This was got wrong twice before it was got right, so the reasoning is here
+ * rather than in a commit message. A threshold on sigma is unit-dependent -
+ * "sigma below 0.5" means something different in degrees F, degrees C, percent
+ * open and pascals - and it is untunable across buildings. It missed a sensor
+ * frozen at 64.5 with sigma 0.08, because a stuck sensor has a LOW standard
+ * deviation and so does a genuinely stable room.
+ *
+ * Distinct-value count is unit-independent. A live sensor sampling the physical
+ * world produces many values whatever it measures; a dead one repeats a handful.
+ * Live figures from this database: Temp1 gives 256 distinct across 286 readings
+ * in 24 hours. A stuck sensor would give one or two.
+ *
+ * The thresholds are Grafana's, from panel 5 of the Point Explorer dashboard:
+ * red below 4, amber 4 to 19, green from 20.
+ */
+export const DISTINCT_VALUES_AMBER = 4;
+export const DISTINCT_VALUES_GREEN = 20;
+
+export function distinctValuesTone(
+  distinct: number,
+  readings: number,
+): Tone {
+  // No readings at all is not a stuck sensor, it is no evidence. Rendering it
+  // red would be as wrong as rendering it green.
+  if (readings === 0) return "neutral";
+  if (distinct >= DISTINCT_VALUES_GREEN) return "ok";
+  if (distinct >= DISTINCT_VALUES_AMBER) return "warn";
+  return "bad";
+}
+
+/** What the distinct-values tile says underneath the number. */
+export function describeDistinctValues(
+  distinct: number,
+  readings: number,
+): string {
+  if (readings === 0) {
+    return "No readings in this window, so there is nothing to judge.";
+  }
+  if (distinct >= DISTINCT_VALUES_GREEN) {
+    return `${formatCount(distinct)} distinct values across ${formatCount(readings)} readings. A sensor sampling the physical world looks like this.`;
+  }
+  if (distinct >= DISTINCT_VALUES_AMBER) {
+    return `Only ${formatCount(distinct)} distinct values across ${formatCount(readings)} readings. Worth a look - a sensor that has stopped responding repeats itself.`;
+  }
+  return `${formatCount(distinct)} distinct value${distinct === 1 ? "" : "s"} across ${formatCount(readings)} readings. This reads as a stuck sensor rather than a stable room.`;
+}
+
+/**
+ * What the readings/nulls tile says.
+ *
+ * The tile exists to keep two things apart that both look like "no data":
+ * a row with no populated value column is a RECORD the station returned empty -
+ * a sensor fault - and no row at all means we never collected. docs/08, *A null
+ * reading is not a missing reading*. Analysis that merges them reports equipment
+ * shutdowns that never happened.
+ */
+export function describeNullRecords(
+  readings: number,
+  nullRecords: number,
+): string {
+  if (readings === 0) {
+    return "No rows at all in this window. That is not the same as null readings - it means nothing was collected.";
+  }
+  if (nullRecords === 0) {
+    return "Every row carries a value. A null record would mean the station logged an entry with nothing in it.";
+  }
+  return `${formatCount(nullRecords)} of ${formatCount(readings)} rows carry no value at all - the station logged an entry and had nothing to put in it. That is a sensor fault, not a missing row.`;
+}
+
+/**
+ * The unit for an axis label, and the honest answer when there is not one.
+ *
+ * `points_RoomT` is fahrenheit; `Temp1` to `Temp3` carry no unit at all. The
+ * chart plots one point at a time, so two units can never share an axis here -
+ * but the label still has to say which of the two situations it is in, because
+ * an unlabelled axis reads as "no unit needed" rather than "unit unknown".
+ */
+export function axisLabel(unit: string | null): string {
+  return unit ?? "value (no unit recorded)";
+}
+
+/** A reading, at the precision the database rounds to. */
+export function formatValue(value: number | null, unit: string | null): string {
+  if (value === null) return "—";
+  const rendered = value.toFixed(2);
+  return unit === null ? rendered : `${rendered} ${unit}`;
 }

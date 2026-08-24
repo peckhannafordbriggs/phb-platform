@@ -2989,3 +2989,260 @@ Grafana uses, and it is the one that will hit a missing grant.
 `README.md` in `bas-grafana` also carries five hand-written fallback queries for
 rebuilding a panel by hand. Those were retargeted and executed too — documentation
 someone will paste is code.
+
+---
+
+## The Building Automation tabs are routes, not state
+
+`/bas` is Collection Health. `/bas/points` is Point Explorer. Each is a real
+route, so each bookmarks, survives a refresh, and opens in a new tab from a
+middle-click. Adding B5's *Ask* is one entry in
+`app/(modules)/bas/tabs.ts` plus `app/(modules)/bas/ask/page.tsx`.
+
+**Every tab guards itself.** A tab bar is navigation, not authorization.
+`/bas/points` calls `requireModuleAccess` in its own `page.tsx`, and the API
+route it fetches repeats the check independently. Reaching a URL directly is the
+case that matters and the tab bar is not involved in it.
+
+### Why the chrome is not a Next.js layout
+
+**Do not move `BasShell` into `app/(modules)/bas/layout.tsx`.** It looks like the
+obvious refactor and it opens a hole.
+
+A layout renders *around* a page that calls `notFound()`. So an employee without
+the grant would get the "Building Automation" heading and the tab bar wrapped
+around a 404 body — which confirms the module exists to exactly the person who
+must not learn that. `docs/04-auth-and-permissions.md` is why the guard answers
+404 rather than 403 in the first place; a layout would undo that at the
+presentation layer.
+
+Rendering the chrome from inside each guarded page means the guard throws before
+any of it exists. `tests/bas-module.test.ts`, *every tab is guarded on its own
+route*, asserts the digest for both tabs, unauthenticated and ungranted, and with
+the module row hidden.
+
+**The sidebar keeps exactly one entry.** `components/sidebar.tsx` renders from
+the `modules` table and knows nothing about tabs. One module, one row, one
+sidebar item — however many tabs it grows.
+
+---
+
+## The filters live in the URL, and that is what makes them trustworthy
+
+`site`, `days` and `point` are query parameters, not React state. Three things
+follow, and none of them are free any other way:
+
+- **They survive a tab switch.** `tabHref` carries the whole query string, so
+  selecting a building on Collection Health and moving to Point Explorer keeps
+  it. A filter that silently resets is worse than no filter at all: a filtered
+  zero and a real zero look identical, and the reader has no way to tell which
+  one they are looking at.
+- **They are bookmarkable.** `/bas/points?site=5&days=1&point=41` is a URL that
+  goes in a ticket.
+- **They survive a refresh**, because there is nothing to survive — the URL is
+  the state.
+
+Two conventions worth knowing before editing `filters.ts`:
+
+| Rule | Why |
+|---|---|
+| `null` deletes the parameter | `/bas` beats `/bas?site=&days=&point=` |
+| The default window is dropped | A URL should carry choices, not restate defaults |
+| `__all__` never leaves the browser | It is a `<select>` sentinel. Absent already means all buildings to the server |
+
+Filter changes use `router.replace`, so changing a filter twenty times does not
+put twenty entries in the back button. Tab links are ordinary `<Link>`s, so
+moving between tabs *is* in the history.
+
+**The filtering itself still happens in SQL.** These helpers only read and
+rewrite the query string; `siteFilter` in `lib/modules/bas/service.ts` is what
+excludes rows. Nothing is fetched and then hidden.
+
+---
+
+## The trend chart must break across gaps, not draw through them
+
+**The single thing most likely to be got wrong on this screen, and the one that
+turns missing data into a confident lie.**
+
+A line drawn straight across a hole asserts readings that were never taken. This
+is not hypothetical here. On 21–22 August 2026 the station overwrote **22.7
+hours** of every point on the site before the collector came back, and a straight
+segment across that hole renders as a steady temperature — the most confident
+possible drawing of data that no longer exists anywhere.
+
+**Note the two different numbers.** The *collector* was silent for **64.3 hours**
+(21 Aug 16:05 → 24 Aug 08:20). The hole in the *readings* is **22.7 hours**
+(21 Aug 16:05 → 22 Aug 14:45), because when the collector came back it backfilled
+everything the station still held — the station keeps 41.7 hours, so it recovered
+the rest. 64.3 − 41.7 = 22.6, which is what `bas_data_gaps` records. The chart
+shows the 22.7-hour hole because that is the hole in the data being plotted.
+
+### How the break is made
+
+Three mechanisms, because one is not enough to be noticed:
+
+1. **`buildTrend` in the service inserts an explicit null sample** between any
+   two readings further apart than the threshold, and Recharts is told
+   `connectNulls={false}`. This is what actually stops the line. `connectNulls`
+   already defaults to false — it is written out anyway, because a future edit
+   that flipped it would silently draw through 22.7 hours of destroyed data.
+2. **A shaded band** over every gap. A break on its own reads as a rendering
+   artifact; a labelled band does not.
+3. **A list under the chart**, naming each gap's start, end and duration in
+   words.
+
+### The threshold
+
+`max(3 × collection_interval_s, 15 minutes)`. A multiple of the point's own
+interval so it scales with how often the point is actually logged, and a floor
+for points whose interval has not been filled in from Workbench — where the
+alternative is either never breaking or breaking constantly.
+
+At the lab station's 300 s interval that is 15 minutes. Measured cadence there is
+a 300 s median against a 357 s mean, so ordinary late polls do not fragment the
+line.
+
+### Verifying it, which means against the real gap
+
+Do not assume Recharts' default. Run it:
+
+```bash
+npm run bas:oracle -- --point 41 --days 7
+```
+
+and check `trendGaps` is non-empty for a 7-day window on any point at Spring
+Grove Lab. Every active point there shows exactly one gap of 22.7 hours. A
+1-day window shows none, which is also correct — the hole is outside it.
+
+`tests/bas-point-explorer.test.ts` drives `buildTrend` directly with synthetic
+series, and then writes a reading 30 hours old into the fixture and asserts the
+gap appears end to end through the database.
+
+---
+
+## Distinct values, not standard deviation
+
+**Got wrong twice before it was got right. The reasoning is here so it is not got
+wrong a third time.**
+
+To judge whether a sensor is alive, count how many **distinct values** it
+produced. Do not threshold its standard deviation.
+
+A sigma threshold is **unit-dependent** — "below 0.5" means something different
+in °F, °C, percent open and pascals — and it is **untunable across buildings**.
+Worse, it points the wrong way: a stuck sensor has a *low* standard deviation and
+so does a genuinely stable room, so the test cannot separate them. It missed a
+sensor frozen at 64.5 with σ = 0.08.
+
+Distinct-value count does not care about units. A sensor sampling the physical
+world produces many values; a dead one repeats a handful.
+
+Live figures from this database, over 24 hours:
+
+| Point | Readings | Distinct | Verdict |
+|---|---|---|---|
+| `Temp1` | 286 | 254 | healthy |
+| `Temp2` | 286 | 252 | healthy |
+| `Temp3` | 286 | 253 | healthy |
+| `points_RoomT` | 286 | 28 | healthy — coarser resolution, still alive |
+
+Thresholds are Grafana's, from panel 5: **red below 4, amber 4–19, green from
+20**. `points_RoomT` at 28 sits above green with room to spare, which is the
+point — a coarse sensor is not a stuck one.
+
+**Zero readings is `neutral`, not red.** No evidence is not bad evidence, and
+colouring it red would be as wrong as colouring it green.
+
+---
+
+## A null reading is not a missing reading, and the tile is how they stay apart
+
+`bas_readings` allows a row with **zero** populated value columns. That is a
+record the station returned empty — a sensor fault — and it is different from
+**no row at all**, which means we never collected. Analysis that merges the two
+reports equipment shutdowns that never happened.
+
+The *Readings / null records* tile shows both numbers for exactly this reason,
+and the wording changes to say which situation it is in:
+
+| State | What the tile says |
+|---|---|
+| 0 readings | "No rows at all in this window… it means nothing was collected" |
+| 286 readings, 0 nulls | "Every row carries a value" |
+| 286 readings, 3 nulls | "…the station logged an entry and had nothing to put in it. That is a sensor fault, not a missing row" |
+
+Both of the first two report **0 nulls** and they mean opposite things. That is
+the whole reason the tile carries two numbers rather than one.
+
+In the trend series the two are also kept apart: a null-valued row is a sample
+with `value: null` and `isBreak: false`; a synthetic break is `isBreak: true`.
+The line cannot cross either, but only one of them has a record behind it — and
+the oracle counts only the real ones, so a point with a gap does not report a
+false difference against Grafana.
+
+**There are currently zero null-valued rows in the database.** The tile is
+therefore untested by live data, and is covered by a fixture test that writes
+one.
+
+---
+
+## Units, and the axis that must not lie
+
+`points_RoomT` is in fahrenheit. `Temp1`, `Temp2` and `Temp3` carry **no unit at
+all** — `bas_points.unit` is NULL.
+
+The Point Explorer plots **one point at a time**, matching Grafana's dashboard
+where `$point` is `multi: false`. That is a correctness decision, not a scoping
+one: two of these on one axis would put a temperature in °F and a bare number on
+the same line with nothing on screen saying they are different quantities, which
+is how 55 °F and 12.8 °C end up looking like the same reading.
+
+A single-point chart cannot express that mistake, so it does not need to guard
+against it.
+
+**The axis still says which situation it is in.** `axisLabel(null)` renders
+"value (no unit recorded)" rather than leaving the axis bare, because a bare axis
+reads as *no unit needed* and the truth is *unit unknown*. Those are different
+claims.
+
+### If a compare mode is ever added
+
+It needs, and this is not optional:
+
+- one Y axis per distinct unit, never a shared one;
+- an explicit refusal — not a silent overlay — when a point has no unit, because
+  an unknown unit cannot be shown to match any other;
+- the unit on every series in the legend and the tooltip.
+
+---
+
+## Comparing the Point Explorer against Grafana
+
+```bash
+npm run bas:oracle                          # both dashboards, 7 days
+npm run bas:oracle -- --point 41 --days 1   # one point, one window
+```
+
+`npm run bas:oracle` now covers **both** dashboards. It resolves which point the
+screen would be showing — with no `--point`, whichever the picker offers first,
+in the picker's own order — before either side runs, so the two are never asked
+about different points.
+
+Verified on 24 August 2026: every panel of both dashboards matched, across all
+four points and both the 1-day and 7-day windows.
+
+**Two comparison rules exist to stop false alarms, and both are narrower than
+they look.**
+
+*Trend sample count counts real rows only.* The screen's series carries synthetic
+nulls that break the line across holes. There is no row behind them, so counting
+them would report a difference on every point that has ever had a gap.
+
+*Numbers are compared as numbers.* PostgreSQL renders `round(x::numeric, 2)` as
+`-40.00`; JavaScript renders the float8 parsed from the same expression as `-40`.
+Grafana is not even internally consistent — its Latest panel casts float8 straight
+to text and gets `-40`, while its Range panels go through numeric and get
+`-40.00`. Both sides round to two decimal places in SQL, so the comparison
+normalises to six: well beyond what either side claims, and still catching any
+real difference.

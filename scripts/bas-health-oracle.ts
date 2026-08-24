@@ -11,10 +11,14 @@ import { Client } from "pg";
  * `C:\dev\bas-grafana\dashboards\bas-collection-health.json` - against the same
  * database the screen reads, and prints both answers side by side.
  *
- *   npm run bas:oracle                    # the screen vs Grafana's SQL, 7 days
+ *   npm run bas:oracle                    # both screens vs Grafana's SQL, 7 days
  *   npm run bas:oracle -- --days 30       # a different window
  *   npm run bas:oracle -- --site 5        # one building
+ *   npm run bas:oracle -- --point 41      # one point on the Point Explorer
  *   npm run bas:oracle -- --source        # platform db vs standalone db
+ *
+ * Covers BOTH dashboards: `bas-collection-health.json` (B3) and
+ * `bas-point-explorer.json` (B4).
  *
  * The default run answers B3's acceptance criterion: it calls
  * `getCollectionHealth` - the real service the route calls - and compares what
@@ -49,6 +53,8 @@ interface Ctx {
   windowDays: number;
   /** Grafana's `$site` variable, as a SQL fragment. `TRUE` for "All". */
   site: (column: string) => string;
+  /** Grafana's `$point` variable - a single id, resolved before any query runs. */
+  point: string;
 }
 
 interface Panel {
@@ -192,6 +198,117 @@ const PANELS: Panel[] = [
   },
 ];
 
+
+/**
+ * `bas-point-explorer.json`, panel for panel.
+ *
+ * `$point` is single-valued (`multi: false`), so it interpolates as one id
+ * rather than as a list - unlike `$site`. That asymmetry is Grafana's and it is
+ * reproduced here rather than smoothed over.
+ */
+const POINT_PANELS: Panel[] = [
+  {
+    id: "V",
+    title: "Points offered by the picker",
+    /** Grafana's `$point` template query, scoped by `$site` exactly as it is. */
+    sql: (c) =>
+      `SELECT string_agg(point_name, ', ' ORDER BY site_name, point_name, point_id)::text AS v
+         FROM ${c.view.replace("bas_v_collection_health", "bas_v_point")}
+        WHERE is_active AND ${c.site("site_id")}`,
+  },
+  {
+    id: "PE1",
+    title: "Latest (unwindowed, as Grafana has it)",
+    sql: (c) =>
+      `SELECT value_num::text AS v FROM ${c.table("reading")}
+        WHERE point_id = ${c.point} AND value_num IS NOT NULL
+        ORDER BY ts DESC LIMIT 1`,
+  },
+  {
+    id: "PE2",
+    title: "Average (selected range)",
+    sql: (c) =>
+      `SELECT round(avg(value_num)::numeric, 2)::text AS v
+         FROM ${c.table("reading")}
+        WHERE point_id = ${c.point}
+          AND ts >= now() - make_interval(days => ${c.windowDays})`,
+  },
+  {
+    id: "PE3",
+    title: "  ...Min",
+    sql: (c) =>
+      `SELECT round(min(value_num)::numeric, 2)::text AS v
+         FROM ${c.table("reading")}
+        WHERE point_id = ${c.point}
+          AND ts >= now() - make_interval(days => ${c.windowDays})`,
+  },
+  {
+    id: "PE3.1",
+    title: "  ...Max",
+    sql: (c) =>
+      `SELECT round(max(value_num)::numeric, 2)::text AS v
+         FROM ${c.table("reading")}
+        WHERE point_id = ${c.point}
+          AND ts >= now() - make_interval(days => ${c.windowDays})`,
+  },
+  {
+    id: "PE4",
+    title: "Readings",
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.table("reading")}
+        WHERE point_id = ${c.point}
+          AND ts >= now() - make_interval(days => ${c.windowDays})`,
+  },
+  {
+    id: "PE4.1",
+    title: "  ...null records",
+    /**
+     * A row with no populated value column. NOT a missing row - see docs/08,
+     * *A null reading is not a missing reading*. The screen keeps the two apart
+     * in its own tile and this panel is what proves the count matches.
+     */
+    sql: (c) =>
+      `SELECT count(*) FILTER (
+              WHERE value_num IS NULL AND value_bool IS NULL AND value_str IS NULL
+            )::text AS v
+         FROM ${c.table("reading")}
+        WHERE point_id = ${c.point}
+          AND ts >= now() - make_interval(days => ${c.windowDays})`,
+  },
+  {
+    id: "PE5",
+    title: "Distinct values (the stuck-sensor signal)",
+    sql: (c) =>
+      `SELECT count(DISTINCT value_num)::text AS v
+         FROM ${c.table("reading")}
+        WHERE point_id = ${c.point}
+          AND ts >= now() - make_interval(days => ${c.windowDays})`,
+  },
+  {
+    id: "PE6",
+    title: "Trend samples in range",
+    /**
+     * Compared against the screen's REAL samples only.
+     *
+     * The screen's series additionally carries synthetic nulls that break the
+     * line across holes in collection - see `buildTrend`. Those are a rendering
+     * decision and there is no row behind them, so counting them here would
+     * report a difference on every point that has ever had a gap.
+     */
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.table("reading")}
+        WHERE point_id = ${c.point}
+          AND ts >= now() - make_interval(days => ${c.windowDays})`,
+  },
+  {
+    id: "PE7",
+    title: "Known data gaps for this point",
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.table("data_gap")}
+        WHERE point_id = ${c.point}`,
+  },
+];
+
 /** The per-point table, whole, so the columns are compared and not just a count. */
 const PER_POINT = (c: Ctx) => `
   SELECT point_name || ' | ' || COALESCE(point_role, '-') || ' | '
@@ -219,9 +336,15 @@ interface Options {
   windowDays: number;
   /** Digits only, already validated. `null` is Grafana's "All". */
   siteId: string | null;
+  /** Digits only. `null` means whichever point the picker offers first. */
+  pointId: string | null;
 }
 
-function contextFor(side: "platform" | "source", options: Options): Ctx {
+function contextFor(
+  side: "platform" | "source",
+  options: Options,
+  pointId: string,
+): Ctx {
   const site = (column: string) =>
     options.siteId === null ? "TRUE" : `${column} = ${options.siteId}`;
 
@@ -231,18 +354,54 @@ function contextFor(side: "platform" | "source", options: Options): Ctx {
         table: (name) => PLATFORM_TABLES[name] ?? `bas_${name}`,
         windowDays: options.windowDays,
         site,
+        point: pointId,
       }
     : {
         view: "bas.v_collection_health",
         table: (name) => `bas.${name}`,
         windowDays: options.windowDays,
         site,
+        point: pointId,
       };
+}
+
+/**
+ * Which point the Point Explorer would be showing.
+ *
+ * Resolved once, before any comparison, so both sides ask about the same point.
+ * With no `--point` that is whichever the picker offers first, in the picker's
+ * own order - site_name, point_name, point_id - which is the point the screen
+ * defaults to. Asking Grafana about one point and the screen about another
+ * produces a difference that is entirely the tool's own fault.
+ */
+async function resolvePointId(
+  connectionString: string,
+  options: Options,
+): Promise<string | null> {
+  if (options.pointId !== null) return options.pointId;
+
+  const client = new Client({ connectionString });
+  await client.connect();
+  try {
+    const site =
+      options.siteId === null ? "TRUE" : `site_id = ${options.siteId}`;
+    const { rows } = await client.query<{ point_id: string }>(
+      `SELECT point_id::text FROM bas_v_point
+        WHERE is_active AND ${site}
+        ORDER BY site_name, point_name, point_id
+        LIMIT 1`,
+    );
+    return rows[0]?.point_id ?? null;
+  } finally {
+    await client.end();
+  }
 }
 
 async function run(
   connectionString: string,
   ctx: Ctx,
+  panels: Panel[] = PANELS,
+  perPoint: ((c: Ctx) => string) | null = null,
 ): Promise<Map<string, string>> {
   const client = new Client({ connectionString });
   await client.connect();
@@ -252,13 +411,15 @@ async function run(
 
   const answers = new Map<string, string>();
   try {
-    for (const panel of PANELS) {
+    for (const panel of panels) {
       const { rows } = await client.query<{ v: string | null }>(panel.sql(ctx));
       answers.set(`${panel.id} ${panel.title}`, rows[0]?.v ?? "(null)");
     }
 
-    const { rows } = await client.query<{ v: string }>(PER_POINT(ctx));
-    rows.forEach((row, i) => answers.set(`P${i + 1}`, row.v));
+    if (perPoint !== null) {
+      const { rows } = await client.query<{ v: string }>(perPoint(ctx));
+      rows.forEach((row, i) => answers.set(`P${i + 1}`, row.v));
+    }
   } finally {
     await client.query("ROLLBACK");
     await client.end();
@@ -294,6 +455,34 @@ function toMillisecondResolution(value: string): string {
   );
 }
 
+/**
+ * Two renderings of the same number are the same number.
+ *
+ * PostgreSQL prints `round(x::numeric, 2)` as `-40.00`; JavaScript prints the
+ * float8 it parsed from the same expression as `-40`. Grafana is not even
+ * internally consistent about it - the Latest panel casts float8 straight to
+ * text and gets `-40`, while the Range panels go through numeric and get
+ * `-40.00`.
+ *
+ * Both sides round to two decimal places in SQL, so comparing at more precision
+ * than either side produces is how a verification tool generates false alarms.
+ * Six places is well beyond what is claimed and still catches any real
+ * difference. A value that is not entirely a number is left alone - the
+ * per-point rows are pipe-joined strings and must compare literally.
+ */
+function sameNumber(a: string, b: string): boolean {
+  if (a.trim().length === 0 || b.trim().length === 0) return false;
+  const x = Number(a);
+  const y = Number(b);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  return x.toFixed(6) === y.toFixed(6);
+}
+
+function matches(a: string, b: string): boolean {
+  if (toMillisecondResolution(a) === toMillisecondResolution(b)) return true;
+  return sameNumber(a, b);
+}
+
 function report(
   left: Map<string, string>,
   leftLabel: string,
@@ -308,7 +497,7 @@ function report(
   for (const key of keys) {
     const a = left.get(key) ?? "(absent)";
     const b = right.get(key) ?? "(absent)";
-    const same = toMillisecondResolution(a) === toMillisecondResolution(b);
+    const same = matches(a, b);
     if (!same) mismatches += 1;
     console.log(
       `${same ? "  OK " : "DIFF "} ${key.padEnd(width)}  ${a}${same ? "" : `   !=   ${b}`}`,
@@ -407,6 +596,59 @@ async function screenAnswers(options: Options): Promise<Map<string, string>> {
   return answers;
 }
 
+
+/** What the Point Explorer screen answers, in the panels' shape. */
+async function pointScreenAnswers(
+  options: Options,
+): Promise<Map<string, string>> {
+  const { getPointExplorer } = await import("../lib/modules/bas/service");
+
+  const explorer = await getPointExplorer(
+    {
+      id: "bas-health-oracle",
+      email: "oracle@localhost",
+      firstName: "Oracle",
+      lastName: "Script",
+      profileCompleted: true,
+      isPlatformAdmin: false,
+    },
+    {
+      windowDays: options.windowDays,
+      siteId: options.siteId === null ? null : BigInt(options.siteId),
+      pointId: options.pointId === null ? null : BigInt(options.pointId),
+    },
+  );
+
+  const answers = new Map<string, string>();
+  const titleOf = (id: string) => {
+    const panel = POINT_PANELS.find((p) => p.id === id);
+    if (panel === undefined) throw new Error(`No point panel ${id}`);
+    return `${panel.id} ${panel.title}`;
+  };
+  const set = (id: string, value: string) => answers.set(titleOf(id), value);
+  const num = (v: number | null) => (v === null ? "(null)" : String(v));
+
+  set(
+    "V",
+    explorer.points.length === 0
+      ? "(null)"
+      : explorer.points.map((p) => p.pointName).join(", "),
+  );
+  set("PE1", num(explorer.stats.latest));
+  set("PE2", num(explorer.stats.average));
+  set("PE3", num(explorer.stats.minimum));
+  set("PE3.1", num(explorer.stats.maximum));
+  set("PE4", String(explorer.stats.readings));
+  set("PE4.1", String(explorer.stats.nullRecords));
+  set("PE5", String(explorer.stats.distinctValues));
+  // Real samples only. The synthetic nulls that break the line across a hole
+  // have no row behind them - see the panel's own comment.
+  set("PE6", String(explorer.trend.filter((p) => !p.isBreak).length));
+  set("PE7", String(explorer.dataGaps.length));
+
+  return answers;
+}
+
 function readOptions(): Options {
   const argv = process.argv;
   const flag = (name: string): string | null => {
@@ -416,6 +658,7 @@ function readOptions(): Options {
 
   const days = flag("days");
   const site = flag("site");
+  const point = flag("point");
 
   // Both are interpolated into SQL below, so they are checked rather than
   // trusted. The application parameterises instead; this is a script and the
@@ -427,8 +670,15 @@ function readOptions(): Options {
   if (days !== null && !/^[0-9]+$/.test(days)) {
     throw new Error(`--days must be a number, got ${JSON.stringify(days)}`);
   }
+  if (point !== null && !/^[0-9]+$/.test(point)) {
+    throw new Error(`--point must be a number, got ${JSON.stringify(point)}`);
+  }
 
-  return { windowDays: days === null ? 7 : Number(days), siteId: site };
+  return {
+    windowDays: days === null ? 7 : Number(days),
+    siteId: site,
+    pointId: point,
+  };
 }
 
 async function main(): Promise<void> {
@@ -438,7 +688,11 @@ async function main(): Promise<void> {
   }
 
   const options = readOptions();
-  console.log(`window=${options.windowDays}d site=${options.siteId ?? "all"}`);
+  const pointId = await resolvePointId(platformUrl, options);
+  console.log(
+    `window=${options.windowDays}d site=${options.siteId ?? "all"} ` +
+      `point=${pointId ?? "none"}`,
+  );
 
   if (process.argv.includes("--source")) {
     const sourceUrl =
@@ -446,9 +700,9 @@ async function main(): Promise<void> {
       "postgresql://bas_readonly:bas_readonly_local@localhost:5432/bas";
 
     const mismatches = report(
-      await run(platformUrl, contextFor("platform", options)),
+      await run(platformUrl, contextFor("platform", options, pointId ?? "0")),
       "platform public.bas_*",
-      await run(sourceUrl, contextFor("source", options)),
+      await run(sourceUrl, contextFor("source", options, pointId ?? "0")),
       "standalone bas.* (Grafana's datasource)",
     );
 
@@ -464,16 +718,35 @@ async function main(): Promise<void> {
 
   // The screen first, then the panels - the smaller the window between the two
   // reads, the less chance a collector run lands in the middle of the
-  // comparison and reports itself as a defect.
-  const screen = await screenAnswers(options);
-  const panels = await run(platformUrl, contextFor("platform", options));
+  // comparison and reports itself as a defect. The collector writes to this
+  // database every fifteen minutes now, so that window is not theoretical.
+  const ctx = contextFor("platform", options, pointId ?? "0");
 
-  const mismatches = report(
-    screen,
+  const healthScreen = await screenAnswers(options);
+  const healthPanels = await run(platformUrl, ctx, PANELS, PER_POINT);
+
+  let mismatches = report(
+    healthScreen,
     "the Collection Health screen",
-    panels,
-    "Grafana's panel SQL, same database",
+    healthPanels,
+    "bas-collection-health.json, same database",
   );
+
+  if (pointId === null) {
+    console.log(
+      "\nNo active point to compare - skipping the Point Explorer panels.\n",
+    );
+  } else {
+    const pointScreen = await pointScreenAnswers(options);
+    const pointPanels = await run(platformUrl, ctx, POINT_PANELS);
+
+    mismatches += report(
+      pointScreen,
+      "the Point Explorer screen",
+      pointPanels,
+      "bas-point-explorer.json, same database",
+    );
+  }
 
   if (mismatches > 0) process.exitCode = 1;
   console.log(

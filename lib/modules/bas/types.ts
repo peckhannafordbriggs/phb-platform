@@ -176,3 +176,109 @@ export interface CollectionHealth {
   longestRunGap: RunGap | null;
   dataGaps: DataGapRow[];
 }
+
+// ---------------------------------------------------------------- B4
+
+/** One entry in the point picker. */
+export interface PointOption {
+  pointId: string;
+  /** `display_name` falling back to the Niagara history name, as the view does. */
+  pointName: string;
+  pointRole: string | null;
+  unit: string | null;
+  siteName: string;
+}
+
+/**
+ * One sample on the trend chart.
+ *
+ * `value` is `null` for two different reasons and the chart treats them the
+ * same way on purpose - it cannot draw a line through either:
+ *
+ *  1. A row exists with no populated value column. The station logged an entry
+ *     and had nothing to put in it: a sensor fault. It is a RECORD.
+ *  2. A synthetic break inserted where consecutive rows are further apart than
+ *     the point's collection interval allows. There is NO record.
+ *
+ * `isBreak` says which. The distinction is the whole of docs/08's *A null
+ * reading is not a missing reading*, and it is carried in the payload rather
+ * than re-derived in the browser so that the tiles and the chart cannot drift
+ * apart about it.
+ */
+export interface TrendPoint {
+  tsMs: number;
+  value: number | null;
+  /** `true` only for a synthetic break. A real null-valued row is `false`. */
+  isBreak: boolean;
+}
+
+/**
+ * A stretch of time with no readings at all, derived from the readings
+ * themselves rather than from `bas_data_gaps`.
+ *
+ * Both are shown, and they answer different questions. This one is "the chart
+ * has nothing to draw here". `DataGapRow` is "somebody recorded that we know we
+ * missed this, and why". A gap can appear here without being recorded, which is
+ * exactly the case worth seeing.
+ */
+export interface TrendGap {
+  fromMs: number;
+  toMs: number;
+  hours: number;
+}
+
+export interface PointStats {
+  /** Rows in the window, including any with no populated value column. */
+  readings: number;
+  /** Of those rows, how many carried no value. NOT the same as a missing row. */
+  nullRecords: number;
+  /**
+   * Distinct non-null numeric values in the window.
+   *
+   * The stuck-sensor signal, and deliberately NOT standard deviation. A
+   * threshold on sigma is unit-dependent and untunable across buildings - it
+   * missed a sensor frozen at 64.5 with sigma 0.08. A live sensor sampling the
+   * physical world produces many distinct values; a dead one produces a handful,
+   * and that holds whatever the units are. docs/08, *Point Explorer*.
+   */
+  distinctValues: number;
+  /** Most recent non-null value in the window, and when. */
+  latest: number | null;
+  latestAt: string | null;
+  average: number | null;
+  minimum: number | null;
+  maximum: number | null;
+}
+
+export interface PointExplorer {
+  windowDays: number;
+  observedAt: string;
+
+  sites: SiteOption[];
+  selectedSiteId: string | null;
+  selectedSiteName: string | null;
+
+  /** Every point the picker offers, scoped by the building filter. */
+  points: PointOption[];
+  /** `null` when there is no point to show - an empty database, or none active. */
+  selectedPoint: PointOption | null;
+
+  /**
+   * The point's configured seconds between records, from `bas_points`.
+   * `null` when capacity has not been filled in from Workbench. Used to decide
+   * what counts as a break in the trend.
+   */
+  collectionIntervalS: number | null;
+
+  stats: PointStats;
+  trend: TrendPoint[];
+  trendGaps: TrendGap[];
+  /**
+   * `true` when the window held more samples than the payload will carry, so
+   * `trend` is the most recent slice rather than the whole window. Said out
+   * loud on screen: a silently truncated chart is a chart that lies about when
+   * the data starts.
+   */
+  trendTruncated: boolean;
+  dataGaps: DataGapRow[];
+}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Bar,
   BarChart,
@@ -19,7 +20,6 @@ import type {
 } from "@/lib/modules/bas/types";
 import {
   ApiError,
-  DEFAULT_WINDOW_DAYS,
   RISK_EXPLANATION,
   RISK_LABEL,
   WINDOW_PRESETS,
@@ -43,6 +43,7 @@ import {
   windowLabel,
   type Tone,
 } from "./health-client";
+import { ALL_SITES, DAYS_PARAM, SITE_PARAM, readFilters, withFilter } from "./filters";
 
 /**
  * Collection Health - is data arriving, and is any of it about to be lost.
@@ -67,16 +68,7 @@ import {
  */
 const POLL_INTERVAL_MS = 60_000;
 
-/**
- * The dropdown's "All" value.
- *
- * A `<select>` option value has to be a string, and the empty string is a poor
- * choice - it is indistinguishable from an unset control in a form and from a
- * site id of "" in a URL. It never leaves the browser: `fetchCollectionHealth`
- * omits the parameter entirely for all-buildings, because the server's default
- * IS all buildings.
- */
-const ALL_SITES = "__all__";
+
 
 const TONE_TILE: Record<Tone, string> = {
   ok: "border-emerald-300 bg-emerald-50",
@@ -125,11 +117,19 @@ export function CollectionHealth() {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // The two controls. Held here and sent to the server on every fetch - the
-  // filtering happens in SQL, so changing either is a refetch, never a
-  // client-side hide. See lib/modules/bas/service.ts, `siteFilter`.
-  const [windowDays, setWindowDays] = useState<number>(DEFAULT_WINDOW_DAYS);
-  const [siteId, setSiteId] = useState<string | null>(null);
+  // The two controls live in the URL, not in React state, so they survive a tab
+  // switch, a refresh and a bookmark. See filters.ts. The filtering itself still
+  // happens in SQL - see lib/modules/bas/service.ts, `siteFilter`.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { siteId, windowDays } = readFilters(searchParams);
+
+  const setParam = (key: string, value: string | null) => {
+    router.replace(`${pathname}${withFilter(searchParams, key, value)}`, {
+      scroll: false,
+    });
+  };
 
   const load = useCallback(
     async (
@@ -148,18 +148,6 @@ export function CollectionHealth() {
         if (caught instanceof DOMException && caught.name === "AbortError") {
           return;
         }
-        // A selected building that has stopped being visible - removed, or a
-        // site grant revoked while the tab was open - would otherwise leave the
-        // screen stuck on an error it cannot clear from its own controls.
-        if (
-          caught instanceof ApiError &&
-          caught.code === "not_found" &&
-          selection.siteId !== null
-        ) {
-          setSiteId(null);
-          return;
-        }
-
         setError(
           caught instanceof ApiError
             ? caught
@@ -175,6 +163,24 @@ export function CollectionHealth() {
   useEffect(() => {
     void load({ days: windowDays, siteId });
   }, [load, windowDays, siteId]);
+
+  /**
+   * A selected building that has stopped being visible - removed, or a site
+   * grant revoked while the tab was open - would otherwise leave the screen
+   * stuck on an error it cannot clear from its own controls. Dropping the
+   * parameter puts it back on "All", and the effect above refetches.
+   *
+   * Kept out of `load` deliberately: doing it there would make the fetch
+   * callback depend on the router and the current query string, so every filter
+   * change would rebuild it and fire a second request.
+   */
+  useEffect(() => {
+    if (error?.code === "not_found" && siteId !== null) {
+      router.replace(`${pathname}${withFilter(searchParams, SITE_PARAM, null)}`, {
+        scroll: false,
+      });
+    }
+  }, [error, siteId, router, pathname, searchParams]);
 
   // Same shape as the mailbox workspace: poll only while the tab is visible,
   // catch up on return, and never leave a timer behind.
@@ -259,11 +265,7 @@ export function CollectionHealth() {
             <span className="text-[var(--muted)]">Building</span>
             <select
               value={health.selectedSiteId ?? ALL_SITES}
-              onChange={(event) =>
-                setSiteId(
-                  event.target.value === ALL_SITES ? null : event.target.value,
-                )
-              }
+              onChange={(event) => setParam(SITE_PARAM, event.target.value)}
               disabled={health.sites.length === 0}
               className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
             >
@@ -288,7 +290,7 @@ export function CollectionHealth() {
                   key={preset.days}
                   type="button"
                   aria-pressed={health.windowDays === preset.days}
-                  onClick={() => setWindowDays(preset.days)}
+                  onClick={() => setParam(DAYS_PARAM, String(preset.days))}
                   className={
                     "border-l border-[var(--border)] px-2.5 py-1 text-sm first:border-l-0 " +
                     (health.windowDays === preset.days
