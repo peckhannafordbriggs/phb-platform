@@ -531,9 +531,26 @@ model BasReading {
   valueBool Boolean? @map("value_bool")
   valueStr  String?  @map("value_str")
 
-  /// Niagara status flags as reported, e.g. "{down}" or "{overridden}". A value
-  /// present with an override flag is not the same as a value the building
-  /// actually produced.
+  /// ALWAYS NULL over the current extraction path, and NULL means "NOT
+  /// SUPPLIED" - never "no fault".
+  ///
+  /// Measured rather than assumed: 0 of 5,759 readings across all four points
+  /// carry a value. The oBIX ~historyQuery response includes a #RecordDef
+  /// prototype declaring exactly what each record contains, and for these
+  /// histories it declares two fields and no more - an abstime `timestamp` and
+  /// a real `value`. Niagara does not send status with history records over
+  /// this path. The collector is not dropping it; there is nothing to fix in
+  /// the code.
+  ///
+  /// The consequence is the design, not a gap to work around: fault detection
+  /// on this data is VALUE-BASED only. We cannot ask what the station believes
+  /// about a reading. That is portable - a rule saying a room temperature of
+  /// -40 is not a temperature works on Johnson Controls and Siemens too, and
+  /// PH+B's portfolio will not be all Niagara.
+  ///
+  /// The column stays. A Supervisor or a different extraction path may populate
+  /// it later, and an always-null column is cheaper than a migration. See
+  /// docs/08-bas-and-niagara.md, *Status is never supplied*.
   status String?
 
   /// The PK IS the idempotency guarantee and the dedup mechanism - re-running a

@@ -389,6 +389,78 @@ happened.
 `roll_overwrite`: the station destroyed the data before we read it. Every
 occurrence means the poll cadence is wrong for that point.
 
+### `bas_readings.status` is never supplied, and NULL does not mean "no fault"
+
+**Measured on 24 August 2026: 0 of 5,759 readings across all four points carry a
+status. It is not a bug, and it will not change on this extraction path.**
+
+The oBIX `~historyQuery` response carries a `#RecordDef` prototype declaring
+exactly what each record contains. For these histories it declares two fields and
+no more:
+
+```xml
+<abstime name="timestamp" tz="Etc/UTC"/>
+<real name="value" unit="obix:units/fahrenheit"/>
+```
+
+Niagara does not send status with history records over this path. **The collector
+is not dropping it.** There is nothing to fix in the code.
+
+**NULL here means "not supplied". It never means "no fault".** Those are opposite
+readings of the same empty column, and the wrong one is the comfortable one: a
+reader who sees NULL and concludes *the station reported no problems* has
+inverted the meaning of the data. The truth is that the station was never asked
+and never told us. The column comment in the database says this in as many words,
+because `bas_v_data_dictionary` feeds column comments to a language model that
+will write SQL against it.
+
+**The column stays.** A Supervisor or a different extraction path may populate it
+later, and an always-null column is cheaper than a migration.
+
+#### The consequence is the design, not a gap to work around
+
+Fault detection on this data is **value-based only**. We cannot ask what the
+station believes about a reading — only what the reading was.
+
+That is a better position than it sounds. A rule that says *a room temperature of
+-40 is not a temperature* works on Johnson Controls and Siemens too. PH+B is a
+mechanical contractor and its portfolio will not be all Niagara, so a fault
+library built on values ports to the next building and one built on vendor status
+flags does not. The first real fault this system found — see the runbook,
+*points_RoomT went to -40* — was caught from the value alone, with no help from
+the station.
+
+#### Two routes that could supply status later — both UNVERIFIED
+
+Neither is a plan. Neither has been tried. They are written down so that nobody
+re-derives them, and marked so that nobody treats them as scheduled work.
+
+**oBIX points carry a status facet even though history records do not.** Reading
+each point's current value *and* status alongside the history would be a small
+collector addition. It would give *"the station says this point is in fault right
+now"* — never *"the station thought this at 3am last Tuesday"*. Present-tense
+only, and therefore not useful for analysing history.
+
+**Alarm extensions are how Niagara buildings actually signal this**, and alarms
+are separately queryable. This is the route that matches how the building is
+really engineered. It is Niagara engineering work with its own extraction path,
+not a configuration toggle.
+
+#### One thing that is genuinely unknown
+
+**Whether the history itself can be configured to include status is UNKNOWN.**
+Do not assert either way — not in a commit message, not in a ticket, and not to a
+customer.
+
+What would settle it, in Workbench:
+
+- what record type the history extension logs, and whether a record type carrying
+  status is available and selectable for these points;
+- whether the `ObixNetwork` exposes anything about record fields, or whether the
+  `#RecordDef` prototype is fixed by the history's own configuration.
+
+Until somebody looks, the honest answer is that we do not know.
+
 ---
 
 ## What the module does

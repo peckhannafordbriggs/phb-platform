@@ -3246,3 +3246,185 @@ to text and gets `-40`, while its Range panels go through numeric and get
 `-40.00`. Both sides round to two decimal places in SQL, so the comparison
 normalises to six: well beyond what either side claims, and still catching any
 real difference.
+
+---
+
+## `bas_readings.status` is empty, and that is not a collector fault
+
+**Corrected 24 August 2026. The previous description of this column was wrong in
+the worst available direction, so read this before acting on a NULL status.**
+
+**Symptom that brings you here.** Every reading has `status IS NULL`. It looks
+like the collector is dropping a field.
+
+**It is not.** Measured, not inferred: **0 of 5,759 readings across all four
+points** carry a status, and none ever will over this extraction path. The oBIX
+`~historyQuery` response includes a `#RecordDef` prototype that declares exactly
+what each record contains, and for these histories it declares two fields and no
+more:
+
+```xml
+<abstime name="timestamp" tz="Etc/UTC"/>
+<real name="value" unit="obix:units/fahrenheit"/>
+```
+
+Niagara does not send status with history records this way. **There is nothing to
+fix in the code.** Do not go looking in `collector/obix.py`.
+
+### What the column comment used to say, and why it mattered
+
+Until this correction, `bas_readings.status` was documented as:
+
+> Niagara status flags as reported, e.g. `{down}` or `{overridden}`. A value
+> present with an override flag is not the same as a value the building actually
+> produced.
+
+That described a capability we have never had. Worse, it **inverted the meaning
+of the data**. Someone reading a NULL against that comment concludes *the station
+reported no problems*. The truth is *the station was never asked and never told
+us*. Those are opposite readings of the same empty column, and the wrong one is
+the reassuring one.
+
+**NULL means "not supplied". It never means "no fault".**
+
+This was not only a developer-facing note. `bas_v_data_dictionary` selects column
+comments and exists to be pasted into an LLM prompt — so the comment was an
+instruction to a model that writes SQL against this column. Both
+`bas_readings.status` and `bas_v_reading.status` now carry the corrected text;
+the view's column had no description at all, which invited a reader to fall back
+on the base table's.
+
+### The column stays
+
+A Supervisor or a different extraction path may populate it later, and an
+always-null column is cheaper than a migration. Do not drop it.
+
+### The consequence: fault detection here is value-based only
+
+We cannot ask what the station believes about a reading. That is the design
+rather than a gap to work around — a rule saying *a room temperature of -40 is
+not a temperature* works on Johnson Controls and Siemens too, and PH+B's
+portfolio will not be all Niagara. A fault library built on values ports to the
+next building; one built on vendor status flags does not.
+
+### If somebody asks for status later — two routes, both UNVERIFIED
+
+Neither has been tried. Neither is scheduled. They are recorded so nobody
+re-derives them, and flagged so nobody quotes them as a plan.
+
+| Route | What it would give | What it is |
+|---|---|---|
+| oBIX **points** carry a status facet even though history records do not. Reading current value + status alongside the history | *"the station says this point is in fault **right now**"* — never what it thought at 3am last Tuesday | A small collector addition. Present-tense only, so no use for analysing history |
+| **Alarm extensions**, which is how Niagara buildings actually signal this. Alarms are separately queryable | The real signal, as engineered | Niagara engineering work with its own extraction path. **Not a configuration toggle** |
+
+### And one thing that is genuinely unknown
+
+**Whether the history itself can be configured to include status is UNKNOWN.**
+Do not assert it either way.
+
+What would settle it, in Workbench:
+
+- what record type the history extension logs for these points, and whether a
+  record type carrying status is available and selectable;
+- whether the `ObixNetwork` exposes anything about record fields, or whether the
+  `#RecordDef` prototype is fixed by the history's own configuration.
+
+Until somebody looks, "we do not know" is the correct answer to give.
+
+### Why the fix is a new migration and not an edit
+
+The wrong text was in `20260821151125_add_bas_comments`, which is applied.
+Editing an applied migration breaks its checksum, and the documented recovery is
+`prisma migrate reset` — see *Editing a migration that has already been applied*.
+
+**That advice is now out of date for this database and this entry supersedes it
+for anything touching `bas_*`.** It was written in August against synthetic data,
+before the cutover. The collector now writes `bas_readings` directly, the
+standalone `bas` database is no longer being written to, and the station holds
+41.7 hours. A reset would destroy readings that exist nowhere else.
+
+The correction is `20260824180000_correct_bas_readings_status_comment`, which
+contains two `COMMENT ON` statements and nothing else — no structural change and
+no data change.
+
+**So the old text is still on disk, in `20260821151125`, and must stay there.**
+If you grep for `status flags as reported` that migration is what you will find
+first. It is history, not documentation: migrations record what was run, and the
+later one supersedes it. The authority on what a column means is
+`\d+ bas_readings` against the live database, or `bas_v_data_dictionary` — both
+of which now say the right thing.
+
+---
+
+## points_RoomT went to -40 and stayed there
+
+**24 August 2026. The first genuine building observation this system has
+produced, and a worked example of what value-based fault detection looks like.**
+
+**What happened.** `points_RoomT` — the one real sensor at Spring Grove Lab, and
+the only classified point (`zone_temp`, fahrenheit) — stepped from **76.1** to
+exactly **−40** between `13:00` and `13:05` UTC, and has held there since. As of
+this writing, 55 consecutive readings, every one of them −40, one distinct value.
+
+```
+ utc          edt     value_num
+ 08-24 12:55  08:55   76
+ 08-24 13:00  09:00   76.0999984741211
+ 08-24 13:05  09:05   -40          <- step
+ 08-24 13:10  09:10   -40
+```
+
+**Why −40 is not a temperature.** −40 is the one point where Celsius and
+Fahrenheit are equal, which makes it a conventional out-of-range sentinel, and it
+is a common **open-circuit signature** for a resistive temperature sensor: the
+input reads full-scale-low when the wire is broken or the sensor has failed
+open. A room does not go from 76 °F to −40 °F in five minutes and then hold
+perfectly flat. **This reads as a wiring or sensor failure, not as weather.**
+
+Stated as what it is: a plausible reading of a signature, not a diagnosis. The
+building is not ours and nobody has been to look at the wire.
+
+**Confirmed independently.** The same vertical step appears in Workbench's own
+chart at 13:00 UTC. That is worth more than a second opinion — it also
+**cross-checks our timestamps end to end**, since 13:05 UTC is 09:05 EDT and both
+render the step at the same instant. After the four-hour Prisma timestamp defect
+in August (*Timestamps written through Prisma were four hours out*), an
+independent confirmation that our clock agrees with the station's is not a
+formality.
+
+### Why this is the worked example
+
+**It was caught from the value alone.** `status` was NULL for every one of those
+readings, as it is for all of them — the station told us nothing. No alarm
+reached us, because we do not read alarms. The only evidence was the number.
+
+That is exactly the argument in *`bas_readings.status` is empty*: a rule that
+says −40 is not a room temperature needs no vendor cooperation, and it will work
+unchanged on the next building whatever controller is in it.
+
+**What the screens show.** On Point Explorer with `points_RoomT` selected:
+
+- *Latest* reads **−40**, and *Range* reads **−40 to 78.4** at both 24 hours and
+  7 days. That is the tell. A range spanning 118 degrees inside a day is not a
+  room.
+- *Distinct values* is **green at both windows** — 27 distinct across 288
+  readings at 24 hours, 33 across 1,442 at 7 days. Measured, because the first
+  draft of this entry guessed that the 24-hour figure would already have fallen
+  and it had not.
+
+**That green tile is worth understanding rather than treating as a miss.**
+Distinct-value count answers *"is this sensor still moving"*, and it is a
+**lagging** indicator by construction: the failure began at 09:05 EDT, so a
+24-hour window still holds roughly seventeen hours of live data from before it.
+The count only falls once the flat run dominates the window — around a day after
+onset for the 24-hour view, a week for the 7-day one.
+
+So the stuck-sensor tile is not what catches a fault like this, and it was never
+meant to be. **The value is.** −40 is wrong the instant it appears; a flat line
+takes a window's worth of time to become statistically obvious. Both signals are
+worth having and they answer different questions on different timescales.
+
+**What has NOT been done.** No fault rule has been written, nothing alerts on
+this, and no `point_role`-driven range check exists yet — that is B5 territory.
+This entry exists so the observation is not lost, and so the first rule written
+has a real case to be tested against.
