@@ -19,12 +19,16 @@ import type {
 } from "@/lib/modules/bas/types";
 import {
   ApiError,
+  DEFAULT_WINDOW_DAYS,
   RISK_EXPLANATION,
   RISK_LABEL,
+  WINDOW_PRESETS,
   activePointsTone,
   atRiskTone,
   basRiskTone,
+  describeEmptyRuns,
   describeRunGap,
+  describeScope,
   fetchCollectionHealth,
   formatChartTick,
   formatCount,
@@ -36,6 +40,7 @@ import {
   stalenessTone,
   totalReadingsTone,
   unclassifiedTone,
+  windowLabel,
   type Tone,
 } from "./health-client";
 
@@ -61,6 +66,17 @@ import {
  * mailbox: a background tab polls nobody's database.
  */
 const POLL_INTERVAL_MS = 60_000;
+
+/**
+ * The dropdown's "All" value.
+ *
+ * A `<select>` option value has to be a string, and the empty string is a poor
+ * choice - it is indistinguishable from an unset control in a form and from a
+ * site id of "" in a URL. It never leaves the browser: `fetchCollectionHealth`
+ * omits the parameter entirely for all-buildings, because the server's default
+ * IS all buildings.
+ */
+const ALL_SITES = "__all__";
 
 const TONE_TILE: Record<Tone, string> = {
   ok: "border-emerald-300 bg-emerald-50",
@@ -109,32 +125,67 @@ export function CollectionHealth() {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async (options: { quiet?: boolean } = {}) => {
-    if (options.quiet !== true) setLoading(true);
-    try {
-      const data = await fetchCollectionHealth();
-      setHealth(data);
-      setError(null);
-    } catch (caught) {
-      if (caught instanceof DOMException && caught.name === "AbortError") return;
-      setError(
-        caught instanceof ApiError
-          ? caught
-          : new ApiError("unexpected", "Something went wrong."),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // The two controls. Held here and sent to the server on every fetch - the
+  // filtering happens in SQL, so changing either is a refetch, never a
+  // client-side hide. See lib/modules/bas/service.ts, `siteFilter`.
+  const [windowDays, setWindowDays] = useState<number>(DEFAULT_WINDOW_DAYS);
+  const [siteId, setSiteId] = useState<string | null>(null);
+
+  const load = useCallback(
+    async (
+      selection: { days: number; siteId: string | null },
+      options: { quiet?: boolean } = {},
+    ) => {
+      if (options.quiet !== true) setLoading(true);
+      try {
+        const data = await fetchCollectionHealth({
+          days: selection.days,
+          siteId: selection.siteId,
+        });
+        setHealth(data);
+        setError(null);
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === "AbortError") {
+          return;
+        }
+        // A selected building that has stopped being visible - removed, or a
+        // site grant revoked while the tab was open - would otherwise leave the
+        // screen stuck on an error it cannot clear from its own controls.
+        if (
+          caught instanceof ApiError &&
+          caught.code === "not_found" &&
+          selection.siteId !== null
+        ) {
+          setSiteId(null);
+          return;
+        }
+
+        setError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError("unexpected", "Something went wrong."),
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void load({ days: windowDays, siteId });
+  }, [load, windowDays, siteId]);
 
   // Same shape as the mailbox workspace: poll only while the tab is visible,
   // catch up on return, and never leave a timer behind.
-  const loadRef = useRef(load);
-  loadRef.current = load;
+  //
+  // The ref carries the CURRENT selection, not the one that was current when the
+  // timer was installed. Without it the poll would quietly revert the screen to
+  // seven days and all buildings a minute after someone changed either control.
+  const pollRef = useRef<() => void>(() => {});
+  pollRef.current = () => {
+    void load({ days: windowDays, siteId }, { quiet: true });
+  };
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -148,15 +199,12 @@ export function CollectionHealth() {
 
     const start = () => {
       if (timer !== null || document.visibilityState !== "visible") return;
-      timer = setInterval(
-        () => void loadRef.current({ quiet: true }),
-        POLL_INTERVAL_MS,
-      );
+      timer = setInterval(() => pollRef.current(), POLL_INTERVAL_MS);
     };
 
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
-        void loadRef.current({ quiet: true });
+        pollRef.current();
         start();
       } else {
         stop();
@@ -189,7 +237,7 @@ export function CollectionHealth() {
         <p className="mt-1 text-sm text-red-900">{error.message}</p>
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={() => void load({ days: windowDays, siteId })}
           className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm hover:bg-red-100"
         >
           Try again
@@ -205,18 +253,74 @@ export function CollectionHealth() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-xs text-[var(--muted)]">
-          As of {formatTimestamp(health.observedAt)} · refreshes every minute
-          while this tab is open · run history covers the last{" "}
-          {health.windowDays} days
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-[var(--muted)]">Building</span>
+            <select
+              value={health.selectedSiteId ?? ALL_SITES}
+              onChange={(event) =>
+                setSiteId(
+                  event.target.value === ALL_SITES ? null : event.target.value,
+                )
+              }
+              disabled={health.sites.length === 0}
+              className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
+            >
+              <option value={ALL_SITES}>All</option>
+              {health.sites.map((site) => (
+                <option key={site.siteId} value={site.siteId}>
+                  {site.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div
+            className="flex items-center gap-2 text-sm"
+            role="group"
+            aria-label="Run history range"
+          >
+            <span className="text-[var(--muted)]">Range</span>
+            <div className="flex overflow-hidden rounded border border-[var(--border)]">
+              {WINDOW_PRESETS.map((preset) => (
+                <button
+                  key={preset.days}
+                  type="button"
+                  aria-pressed={health.windowDays === preset.days}
+                  onClick={() => setWindowDays(preset.days)}
+                  className={
+                    "border-l border-[var(--border)] px-2.5 py-1 text-sm first:border-l-0 " +
+                    (health.windowDays === preset.days
+                      ? "bg-[var(--accent)] text-white"
+                      : "bg-white hover:bg-[var(--surface)]")
+                  }
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         {error !== null && (
           <p className="text-xs text-red-700" role="alert">
             The last refresh failed. Showing the previous reading.
           </p>
         )}
       </div>
+
+      {/*
+        The selection restated in words, next to the data rather than only in the
+        controls that set it. Two controls change what every panel means, and a
+        reader who has lost track of which building is selected cannot tell a
+        real zero from a filtered one.
+      */}
+      <p className="-mt-3 text-xs text-[var(--muted)]">
+        {describeScope(health.selectedSiteName, health.windowDays)} · as of{" "}
+        {formatTimestamp(health.observedAt)} · refreshes every minute while this
+        tab is open
+      </p>
 
       {/* ------------------------------------------------------- five tiles */}
 
@@ -314,18 +418,18 @@ export function CollectionHealth() {
 
       {/* --------------------------------------------------- per-point table */}
 
-      <PointTable points={health.points} />
+      <PointTable points={health.points} siteName={health.selectedSiteName} />
 
       {/* ------------------------------------------- runs: chart and history */}
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <RunChart health={health} />
-        <RunTable runs={health.runs} />
+        <RunTable health={health} />
       </div>
 
       {/* ------------------------------------------------------ recorded gaps */}
 
-      <DataGapTable gaps={health.dataGaps} />
+      <DataGapTable gaps={health.dataGaps} siteName={health.selectedSiteName} />
     </div>
   );
 }
@@ -421,7 +525,13 @@ function Th({
   );
 }
 
-function PointTable({ points }: { points: PointHealthRow[] }) {
+function PointTable({
+  points,
+  siteName,
+}: {
+  points: PointHealthRow[];
+  siteName: string | null;
+}) {
   return (
     <Panel
       title="Per-point collection status"
@@ -429,8 +539,9 @@ function PointTable({ points }: { points: PointHealthRow[] }) {
     >
       {points.length === 0 ? (
         <Empty>
-          No active points. Nothing has been discovered on the station yet, or
-          every point has been marked inactive.
+          {siteName === null
+            ? "No active points. Nothing has been discovered on the station yet, or every point has been marked inactive."
+            : `No active points at ${siteName}. Another building may still have some — switch the filter to All.`}
         </Empty>
       ) : (
         <div className="overflow-x-auto">
@@ -508,7 +619,11 @@ function RunChart({ health }: { health: CollectionHealthData }) {
     >
       {health.runRecords.length === 0 ? (
         <Empty>
-          No collector runs in the last {health.windowDays} days.
+          {describeEmptyRuns(
+            health.newestRunAt,
+            health.windowDays,
+            health.selectedSiteName,
+          )}
         </Empty>
       ) : (
         <div className="h-64 p-3">
@@ -569,16 +684,24 @@ function RunChart({ health }: { health: CollectionHealthData }) {
   );
 }
 
-function RunTable({ runs }: { runs: IngestRunRow[] }) {
+function RunTable({ health }: { health: CollectionHealthData }) {
+  const runs = health.runs;
+
   return (
     <Panel
       title="Recent collector runs"
-      description="The 30 most recent, newest first."
+      description={`Inside the last ${windowLabel(health.windowDays)}, newest first, up to 30.`}
     >
       {runs.length === 0 ? (
+        // Never "no runs" on its own. An empty list because the collector has
+        // never run and an empty list because it last ran outside a 24-hour
+        // window look identical and mean opposite things.
         <Empty>
-          The collector has never recorded a run in this database. Either it has
-          not been pointed here yet, or it has never started.
+          {describeEmptyRuns(
+            health.newestRunAt,
+            health.windowDays,
+            health.selectedSiteName,
+          )}
         </Empty>
       ) : (
         <div className="max-h-64 overflow-auto">
@@ -634,7 +757,13 @@ function RunTable({ runs }: { runs: IngestRunRow[] }) {
   );
 }
 
-function DataGapTable({ gaps }: { gaps: DataGapRow[] }) {
+function DataGapTable({
+  gaps,
+  siteName,
+}: {
+  gaps: DataGapRow[];
+  siteName: string | null;
+}) {
   const overwritten = gaps.filter((gap) => gap.cause === "roll_overwrite");
 
   return (
@@ -643,7 +772,11 @@ function DataGapTable({ gaps }: { gaps: DataGapRow[] }) {
       description="A gap means we were not watching. Before concluding equipment was off, check whether we were even reading."
     >
       {gaps.length === 0 ? (
-        <Empty>No gaps recorded.</Empty>
+        <Empty>
+          {siteName === null
+            ? "No gaps recorded."
+            : `No gaps recorded at ${siteName}.`}
+        </Empty>
       ) : (
         <>
           {overwritten.length > 0 && (

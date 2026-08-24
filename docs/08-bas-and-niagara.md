@@ -257,8 +257,17 @@ occurrence means the poll cadence is wrong for that point.
 ### Collection Health
 
 Is data arriving, and is any of it about to be lost. Five tiles, a per-point
-table, and the recent collector runs, reading `bas_ingest_runs` and
-`bas_v_collection_health`.
+table, the recent collector runs and the recorded data gaps, reading
+`bas_ingest_runs`, `bas_data_gaps` and `bas_v_collection_health`.
+
+**Two controls, and they scope different things.** *Building* — All or one site
+— scopes every panel without exception. *Range* — 24 hours, 7 days, 30 days —
+scopes only the run list, the run chart and the collector-silence calculation;
+the tiles, the per-point table and the recorded gaps are statements about the
+present and windowing them would mean nothing. Both are applied in SQL, never by
+hiding rows in the browser. Whatever is selected is restated in words above the
+data, because a reader who has lost track of the filter cannot tell a real zero
+from a filtered one.
 
 **Two tiles have semantics worth stating.** *Points at risk* counts `data_lost`
 — the station overwrote records before we collected them, permanently — and
@@ -433,6 +442,23 @@ destroyed.
 real time axis: a bar chart spaced evenly by run number draws 21 August and 24
 August adjacent and erases a 64-hour outage entirely. That is the one thing this
 screen may not do. It costs ~114 kB on `/bas` and nothing on any other route.
+
+**The two controls were added after B3 shipped**, on 24 August 2026. The building
+filter is built against a two-building test fixture rather than the one real
+site, because with a single building `All` and `the only building` return the
+same rows and a filter that was ignored entirely would pass every assertion. The
+service separates ENTITLEMENT (which sites an employee may see - `basSiteScope`,
+the one place per-site grants will land) from SELECTION (which one they asked
+for), and intersects them; a building outside the entitlement answers 404, the
+same as a missing module grant. Verified with `npm run bas:oracle -- --site N
+--days N`, which reproduces Grafana's `$site` variable and time range.
+
+That work also found the per-point table reshuffling itself on every refresh:
+`seconds_since_last_record` is whole seconds, the collector writes every point in
+one poll, so they tie exactly and PostgreSQL returned tied rows in a different
+order each time. Fixed with a deterministic tie-break. See the runbook, *The
+per-point table reshuffles itself every refresh* - the general rule being that
+any `ORDER BY` on a truncated duration needs one.
 
 **`withBas` now caches the affirmative availability answer**, and only the
 affirmative one. B2 left `to_regclass` uncached because it was one ping route;

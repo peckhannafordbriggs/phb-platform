@@ -27,11 +27,14 @@ export class ApiError extends Error {
 const BASE = "/api/modules/bas";
 
 export async function fetchCollectionHealth(
-  options: { days?: number } = {},
+  options: { days?: number; siteId?: string | null } = {},
   signal?: AbortSignal,
 ): Promise<CollectionHealth> {
   const params = new URLSearchParams();
   if (options.days !== undefined) params.set("days", String(options.days));
+  // Absent, not "all": the server's default IS all, and sending a sentinel it
+  // has to recognise is one more string to keep in step across two files.
+  if (options.siteId != null) params.set("site", options.siteId);
   const suffix = params.toString();
 
   let response: Response;
@@ -62,6 +65,71 @@ export async function fetchCollectionHealth(
   }
 
   return payload.data;
+}
+
+// --------------------------------------------------------------- controls
+
+/**
+ * The window presets.
+ *
+ * Three, matching the ranges anyone actually asks for: has it run since
+ * yesterday, has it run this week, what has the month looked like. The service
+ * accepts 1 to 90, so a wider range is one entry away, but a picker with eleven
+ * options is a picker nobody reads.
+ *
+ * Grafana's dashboard opens on `now-7d`, so 7 is the default here too.
+ */
+export const WINDOW_PRESETS = [
+  { days: 1, label: "24 hours" },
+  { days: 7, label: "7 days" },
+  { days: 30, label: "30 days" },
+] as const;
+
+export const DEFAULT_WINDOW_DAYS = 7;
+
+/** "24 hours" for one day, because "1 days" is not a thing a person writes. */
+export function windowLabel(days: number): string {
+  const preset = WINDOW_PRESETS.find((option) => option.days === days);
+  if (preset !== undefined) return preset.label;
+  return days === 1 ? "24 hours" : `${days} days`;
+}
+
+/**
+ * The sentence under the heading that says what is on screen.
+ *
+ * It is not decoration. Two controls change what every panel means, and a
+ * reader who has forgotten which building is selected has no way to tell a real
+ * zero from a filtered one. So the selection is restated in words next to the
+ * data, not only in the controls that set it.
+ */
+export function describeScope(
+  siteName: string | null,
+  windowDays: number,
+): string {
+  const building = siteName ?? "All buildings";
+  return `${building} · run history covers the last ${windowLabel(windowDays)}`;
+}
+
+/**
+ * What the run list should say when it is empty.
+ *
+ * Three genuinely different states, and collapsing them is the failure this
+ * whole screen is built to avoid: "the collector has never run" and "the
+ * collector last ran four days ago and you are looking at 24 hours" both render
+ * as an empty table, and only one of them is fine.
+ */
+export function describeEmptyRuns(
+  newestRunAt: string | null,
+  windowDays: number,
+  siteName: string | null,
+): string {
+  const where = siteName === null ? "this database" : siteName;
+
+  if (newestRunAt === null) {
+    return `The collector has never recorded a run against ${where}. Either it has not been pointed here yet, or it has never started.`;
+  }
+
+  return `No collector runs in the last ${windowLabel(windowDays)}. The most recent one was ${formatTimestamp(newestRunAt)} — outside this window, so widen the range to see it.`;
 }
 
 // ---------------------------------------------------------------- colour

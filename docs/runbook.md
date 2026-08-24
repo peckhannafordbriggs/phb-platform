@@ -2425,3 +2425,122 @@ That is a real state on a fresh database and each panel says so in words rather
 than rendering as broken — *No active points*, *The collector has never recorded
 a run in this database*, *No gaps recorded*. Run
 `scripts/bas-import.ts --apply`, or point the collector at this database (B6).
+
+---
+
+## The Collection Health controls, and what each one does not do
+
+Two controls, added after B3 shipped. Both send their value to the server and
+refetch; **neither hides rows in the browser.** Filtering happens in the SQL
+`WHERE` clause — `siteFilter` in `lib/modules/bas/service.ts` — so a building
+that is filtered out is not in the response at all. At ten buildings, a filter
+that shipped the rows it claimed to exclude would be a lie rather than a filter.
+
+**Building.** `All`, or one site. It scopes **every** panel: the five tiles, the
+per-point table, the run chart, the run list, the collector-silence banner and
+the recorded gaps. A tile that silently ignored it would be worse than no
+filter, so `tests/bas-collection-health.test.ts` has a case per panel, and each
+one asserts that something was *excluded* rather than that something was
+returned. That is why the test fixture builds a second building: with one site,
+`All` and `the only building` return identical rows and a filter that was
+ignored entirely would pass every assertion.
+
+**Range.** 24 hours, 7 days, 30 days. It scopes the run list, the run chart and
+the collector-silence calculation, and **nothing else**. The tiles, the
+per-point table and the recorded gaps are statements about the present —
+`roll_risk` is computed from `now() - last_record_ts` — and windowing them would
+mean nothing.
+
+### Three things about the controls that look like bugs and are not
+
+**A run with no building appears under every building.** `bas_ingest_runs`
+allows a NULL `station_id`, which is what a run that failed *before* it
+identified a station looks like. Grafana keeps those under every value of its
+`$site` variable (`WHERE st.site_id IN ($site) OR st.site_id IS NULL`) and so do
+we. Attributing such a run to a building is not possible, and it is exactly the
+run worth seeing — hiding it behind a filter would hide the failures.
+
+**The run list obeys the range; Grafana's does not.** Grafana's *Recent
+collector runs* panel carries no `$__timeFilter`, so with a 24-hour range
+selected it still lists runs from last week. That is a wart, not a decision: the
+list and the chart sit side by side and would disagree about which runs exist.
+The platform windows both. `scripts/bas-health-oracle.ts` applies the window to
+its copy of panel 8 for the same reason, and says so in a comment — otherwise it
+would report a difference on every run that is real and expected, which is how a
+verification tool teaches people to ignore it.
+
+**An empty run list is never just empty.** `describeEmptyRuns` distinguishes
+*the collector has never run against this database* from *it last ran on 21
+August, outside this window — widen the range to see it*. Both render as an
+empty table and only one of them is fine. If you ever see a bare "no runs",
+something has regressed.
+
+---
+
+## The per-point table reshuffles itself every refresh
+
+**Fixed on 24 August 2026. Recorded because the cause is not guessable from the
+symptom.**
+
+**Symptom.** The rows of *Per-point collection status* change order on their own
+roughly once a minute, under the reader's cursor. Every row is correct; only the
+order moves.
+
+**Cause.** `seconds_since_last_record` in `bas_v_collection_health` is whole
+seconds, and the collector writes every point in a single poll — the four lab
+points are 9 milliseconds apart, so all four tie **exactly**. `ORDER BY
+seconds_since_last_record DESC NULLS FIRST` therefore leaves them unordered
+relative to each other, and PostgreSQL is free to return tied rows differently
+on each execution. It does.
+
+**Fix.** A deterministic tie-break, in the service's per-point query:
+
+```sql
+ORDER BY seconds_since_last_record DESC NULLS FIRST, point_name, point_id
+```
+
+`point_id` is there so that two points sharing a display name still order
+stably. Grafana's query has the same instability and it does not matter there,
+because a dashboard nobody is reading does not reshuffle under anyone.
+
+**How it was found**, which is the part worth keeping: `npm run bas:oracle` ran
+the screen and Grafana's SQL against the same rows in the same second and got
+two different orders. Nothing else would have noticed — the numbers were right,
+the rows were right, and a single run of either query looks perfectly correct.
+`scripts/bas-health-oracle.ts` carries the same tie-break for the same reason.
+
+**The general rule.** Any `ORDER BY` on this screen that can tie needs a
+tie-break. Truncated durations tie constantly, because that is what truncation
+does.
+
+---
+
+## The dev platform database gets staler every day, and that is correct
+
+**Symptom.** On a development machine, *Since newest reading* climbs past 30
+minutes, then past 60, and eventually every point moves to `at_risk` and then to
+`data_lost`. Nothing is broken.
+
+**Cause.** The collector writes to the **standalone** `bas` database at
+`C:\dev\bas-db`. The platform's `bas_*` tables are a copy taken by
+`scripts/bas-import.ts` and they are frozen at the moment of that import.
+Nothing writes to them until the next import, or until B6 points the collector
+at this database directly.
+
+So the screen is reporting the literal truth: no reading has arrived in the
+platform's database since the import. **Do not "fix" this by relaxing a
+threshold.** The thresholds are Grafana's and they are right.
+
+**To confirm that is all it is:**
+
+```bash
+npm run bas:oracle -- --source
+```
+
+Every difference should be the standalone database being *ahead* — more
+readings, more runs, fewer minutes of staleness. If the platform is ahead of the
+standalone database on anything, that is a real problem and the import is not
+what you think it is.
+
+**To make it current again**, back up first and re-import — see *Importing the
+standalone BAS database*.

@@ -2,6 +2,7 @@ import { Prisma } from "@/lib/generated/prisma/client";
 import type { Viewer } from "@/lib/authz";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { BasError } from "./errors";
 import type {
   CollectionHealth,
   DataGapRow,
@@ -10,6 +11,7 @@ import type {
   RollRisk,
   RunGap,
   RunRecordPoint,
+  SiteOption,
 } from "./types";
 
 /**
@@ -44,16 +46,38 @@ import type {
  */
 
 /**
- * Which sites this employee may see.
+ * ENTITLEMENT: which sites this employee may see at all.
  *
  * `null` means every site, which is the answer for everyone today. When per-site
  * scoping arrives this reads `bas_site_grant` and returns a list, `siteFilter`
  * turns it into a WHERE clause, and nothing else moves.
+ *
+ * Kept rigidly separate from SELECTION below. They look alike - both end up as a
+ * list of site ids - and collapsing them is how a filter becomes an
+ * authorization hole: a screen that asked for one building and got it would
+ * work identically whether the employee was entitled to it or not.
  */
 async function basSiteScope(
   viewer: Viewer,
-): Promise<{ employeeId: string; siteIds: bigint[] | null }> {
-  return { employeeId: viewer.id, siteIds: null };
+): Promise<{ employeeId: string; entitled: bigint[] | null }> {
+  return { employeeId: viewer.id, entitled: null };
+}
+
+/**
+ * SELECTION: what the employee asked to look at, narrowed by what they may see.
+ *
+ * The intersection is the whole job. `requested` arrives from a query string and
+ * is never trusted on its own; the caller has already checked it against the
+ * site list, which is itself built from the entitlement, so this is the second
+ * of two independent narrowings rather than the only one.
+ */
+function effectiveSiteIds(
+  entitled: bigint[] | null,
+  requested: bigint | null,
+): bigint[] | null {
+  if (requested === null) return entitled;
+  if (entitled === null) return [requested];
+  return entitled.includes(requested) ? [requested] : [];
 }
 
 /**
@@ -63,11 +87,34 @@ async function basSiteScope(
  * turns the surrounding `WHERE ... AND` into a syntax error, and an employee
  * entitled to no sites has to produce `FALSE` rather than the empty string that
  * would quietly show them everything.
+ *
+ * Every panel on the screen composes one of these into its own query. Filtering
+ * in SQL rather than by fetching everything and hiding rows is not a
+ * performance preference: at ten buildings the hidden rows would still be in the
+ * response, and a filter that ships the data it claims to exclude is a lie.
  */
 function siteFilter(siteIds: bigint[] | null, column: Prisma.Sql): Prisma.Sql {
   if (siteIds === null) return Prisma.sql`TRUE`;
   if (siteIds.length === 0) return Prisma.sql`FALSE`;
   return Prisma.sql`${column} IN (${Prisma.join(siteIds)})`;
+}
+
+/**
+ * A site id from a query string.
+ *
+ * `bigint` and not `number`: `bas_sites.site_id` is a PostgreSQL `bigint`, and
+ * parsing it through a JS number would round silently past 2^53. It never has to
+ * be valid - an unparseable one is simply not a site, and is refused the same
+ * way a nonexistent one is.
+ */
+export function parseSiteId(value: string | null | undefined): bigint | null {
+  if (value === undefined || value === null) return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.toLowerCase() === "all") return null;
+  if (!/^[0-9]+$/.test(trimmed)) {
+    throw new BasError("site_not_found", "That building is not available.");
+  }
+  return BigInt(trimmed);
 }
 
 /** Window bounds. The Grafana dashboard opens on `now-7d`. */
@@ -196,6 +243,14 @@ interface GapRow {
 export interface CollectionHealthOptions {
   /** Days of run history. Clamped here as well as parsed at the route. */
   windowDays?: number;
+  /** One building, or `null`/absent for all of the ones this employee may see. */
+  siteId?: bigint | null;
+}
+
+interface SiteRow {
+  site_id: bigint;
+  name: string;
+  org_name: string;
 }
 
 /**
@@ -218,19 +273,49 @@ export async function getCollectionHealth(
   options: CollectionHealthOptions = {},
 ): Promise<CollectionHealth> {
   const windowDays = clampWindowDays(options.windowDays);
+  const requestedSiteId = options.siteId ?? null;
   const scope = await basSiteScope(viewer);
-  const { siteIds } = scope;
-
-  // bas_v_collection_health exposes site_id directly; bas_readings and
-  // bas_ingest_runs reach it through bas_stations, exactly as Grafana does.
-  const healthSites = siteFilter(siteIds, Prisma.sql`site_id`);
-  const stationSites = siteFilter(siteIds, Prisma.sql`st.site_id`);
+  const entitled = scope.entitled;
 
   const result = await prisma.$transaction(async (tx) => {
     const observedAt = firstRow(
       await tx.$queryRaw<Array<{ now: Date }>>`SELECT now() AS now`,
       "now()",
     ).now;
+
+    // --- the building filter, before anything reads a row ------------------
+
+    // Scoped to the ENTITLEMENT and never to the selection: this list is the
+    // dropdown's options, and a dropdown that lost its other options the moment
+    // you picked one could not be used to pick again.
+    const siteRows = await tx.$queryRaw<SiteRow[]>`
+      SELECT s.site_id, s.name, o.name AS org_name
+      FROM bas_sites s
+      JOIN bas_orgs o USING (org_id)
+      WHERE ${siteFilter(entitled, Prisma.sql`s.site_id`)}
+      ORDER BY o.name, s.name
+    `;
+
+    // The first of the two narrowings. A site the employee cannot list is not a
+    // site as far as this request is concerned, whether it is missing or merely
+    // not theirs - see lib/modules/bas/errors.ts for why those answer alike.
+    const selected =
+      requestedSiteId === null
+        ? null
+        : (siteRows.find((row) => row.site_id === requestedSiteId) ?? null);
+
+    if (requestedSiteId !== null && selected === null) {
+      throw new BasError("site_not_found", "That building is not available.");
+    }
+
+    // The second. Belt and braces: even with the check above, every query below
+    // is built from the intersection rather than from the request.
+    const siteIds = effectiveSiteIds(entitled, requestedSiteId);
+
+    // bas_v_collection_health exposes site_id directly; bas_readings and
+    // bas_ingest_runs reach it through bas_stations, exactly as Grafana does.
+    const healthSites = siteFilter(siteIds, Prisma.sql`site_id`);
+    const stationSites = siteFilter(siteIds, Prisma.sql`st.site_id`);
 
     // --- the five tiles -----------------------------------------------------
 
@@ -294,7 +379,16 @@ export async function getCollectionHealth(
       WHERE is_active AND ${healthSites}
       -- Grafana's ordering, and it is the right one: NULLS FIRST puts a point
       -- that has never been collected above one that is merely stale.
-      ORDER BY seconds_since_last_record DESC NULLS FIRST
+      --
+      -- The tie-break is NOT Grafana's, and it is a fix rather than a
+      -- divergence. seconds_since_last_record is whole seconds, and a collector
+      -- that writes every point in the same poll gives them all the same value -
+      -- four points collected 9 ms apart tie exactly. PostgreSQL returns tied
+      -- rows in whatever order it likes, and it does not pick the same one
+      -- twice, so the table reshuffled itself on every one-minute refresh.
+      -- Caught by scripts/bas-health-oracle.ts, which compared two runs of the
+      -- same query and got two orders.
+      ORDER BY seconds_since_last_record DESC NULLS FIRST, point_name, point_id
     `;
 
     // --- collector runs -----------------------------------------------------
@@ -318,10 +412,26 @@ export async function getCollectionHealth(
         )::int AS error_count
       FROM bas_ingest_runs ir
       LEFT JOIN bas_stations st USING (station_id)
-      WHERE (${stationSites} OR st.site_id IS NULL)
+      WHERE ir.started_at >= now() - make_interval(days => ${windowDays}::int)
+        AND (${stationSites} OR st.site_id IS NULL)
       ORDER BY ir.started_at DESC
       LIMIT ${RECENT_RUNS_LIMIT}
     `;
+
+    // Deliberately NOT windowed and NOT limited. It exists for the case where
+    // `runs` above came back empty: a short window over a collector that stopped
+    // days ago produces an empty list, and an empty list reads as "nothing to
+    // report" when it means the opposite. This lets the empty state say when it
+    // last ran instead of saying nothing.
+    const newestRun = firstRow(
+      await tx.$queryRaw<Array<{ newest_run_at: Date | null }>>`
+        SELECT max(ir.started_at) AS newest_run_at
+        FROM bas_ingest_runs ir
+        LEFT JOIN bas_stations st USING (station_id)
+        WHERE (${stationSites} OR st.site_id IS NULL)
+      `,
+      "newest run",
+    ).newest_run_at;
 
     const runRecords = await tx.$queryRaw<RunRecordRow[]>`
       SELECT ir.started_at, ir.records_written
@@ -381,10 +491,13 @@ export async function getCollectionHealth(
 
     return {
       observedAt,
+      siteRows,
+      selected,
       totals,
       readingTotals,
       points,
       runs,
+      newestRun,
       runRecords,
       runGap,
       dataGaps,
@@ -429,6 +542,10 @@ export async function getCollectionHealth(
 
   const health: CollectionHealth = {
     windowDays,
+    sites: result.siteRows.map(toSiteOption),
+    selectedSiteId:
+      result.selected === null ? null : result.selected.site_id.toString(),
+    selectedSiteName: result.selected === null ? null : result.selected.name,
     observedAt: result.observedAt.toISOString(),
     totals: {
       activePoints: result.totals.active_points,
@@ -440,6 +557,7 @@ export async function getCollectionHealth(
     },
     points: result.points.map(toPointHealthRow),
     runs: result.runs.map(toIngestRunRow),
+    newestRunAt: iso(result.newestRun),
     runRecords: result.runRecords.map(toRunRecordPoint),
     longestRunGap,
     dataGaps: result.dataGaps.map(toDataGapRow),
@@ -450,6 +568,9 @@ export async function getCollectionHealth(
     moduleKey: "bas",
     count: health.totals.activePoints,
     outcome: health.totals.pointsAtRisk > 0 ? "at_risk" : "ok",
+    // Which window and which building this answer was for. Without it a support
+    // question about a wrong number cannot be reproduced from the log.
+    reason: `window=${windowDays}d site=${health.selectedSiteId ?? "all"}`,
   });
 
   return health;
@@ -463,6 +584,14 @@ export function clampWindowDays(requested: number | undefined): number {
   if (whole < MIN_WINDOW_DAYS) return MIN_WINDOW_DAYS;
   if (whole > MAX_WINDOW_DAYS) return MAX_WINDOW_DAYS;
   return whole;
+}
+
+function toSiteOption(row: SiteRow): SiteOption {
+  return {
+    siteId: row.site_id.toString(),
+    name: row.name,
+    orgName: row.org_name,
+  };
 }
 
 function toPointHealthRow(row: PointRow): PointHealthRow {

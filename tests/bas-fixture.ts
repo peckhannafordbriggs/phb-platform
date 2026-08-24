@@ -264,8 +264,34 @@ export interface HealthFixture extends BasFixture {
   /** now(), captured once so every offset below is relative to one instant. */
   now: Date;
   runIds: bigint[];
+  /**
+   * A SECOND building, and it is the whole reason the building filter can be
+   * tested at all.
+   *
+   * With one site every filter passes: "all buildings" and "the only building"
+   * return the same rows, so a filter that was silently ignored would look
+   * correct on every panel. Site B exists so that each panel has to prove it
+   * excluded something.
+   */
+  siteBId: bigint;
+  stationBId: bigint;
+  /** Role, capacity and interval set. Collected 2 minutes ago -> ok. */
+  bOk: bigint;
+  /** No role and no capacity -> unclassified AND roll_horizon_unknown. */
+  bUnknown: bigint;
+  /**
+   * A run with a NULL station_id, which therefore belongs to no building.
+   *
+   * Grafana's panel keeps these under every value of its `$site` variable
+   * (`WHERE st.site_id IN ($site) OR st.site_id IS NULL`) and so do we. A run
+   * that failed before it identified a station is exactly the run worth seeing,
+   * and attributing it to a building is not possible.
+   */
+  unattributedRunId: bigint;
   cleanup: () => Promise<void>;
 }
+
+export const SITE_B_NAME = "ZZTEST_SITE_B";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -354,7 +380,7 @@ export async function createHealthFixture(): Promise<HealthFixture> {
   //   1 day  -> one run, so there is no interval to measure at all
   //   7 days -> two runs, 6.25 h apart, comfortably inside the horizon
   //  30 days -> all four, and the 164 h hole
-  const runIds = [
+  const runIds: bigint[] = [
     await run(200 * HOUR, 12),
     await run(190 * HOUR, 12),
     await run(26 * HOUR, 2_000),
@@ -371,15 +397,115 @@ export async function createHealthFixture(): Promise<HealthFixture> {
     },
   });
 
+  // --- the second building ------------------------------------------------
+
+  const siteB = await testDb.basSite.create({
+    data: { orgId: base.orgId, name: SITE_B_NAME, timezone: "America/Chicago" },
+  });
+  const stationB = await testDb.basStation.create({
+    data: { siteId: siteB.siteId, niagaraStationName: "ZZTestStationB" },
+  });
+
+  const pointB = async (
+    historyName: string,
+    role: string | null,
+    capacity: number | null,
+    intervalS: number | null,
+  ) =>
+    (
+      await testDb.basPoint.create({
+        data: {
+          stationId: stationB.stationId,
+          niagaraHistoryName: historyName,
+          displayName: historyName,
+          pointRole: role,
+          unit: role === null ? null : "fahrenheit",
+          dataType: "real",
+          capacity,
+          collectionIntervalS: intervalS,
+          fullPolicy: "roll",
+        },
+      })
+    ).pointId;
+
+  const bOk = await pointB("B_SupplyAirTemp", ROLES.sat, 500, 900);
+  const bUnknown = await pointB("B_Unknown", null, null, null);
+
+  await checkpoint(bOk, ago(2 * MINUTE));
+  await checkpoint(bUnknown, ago(2 * MINUTE));
+
+  await testDb.basReading.createMany({
+    data: [0, 15].map((minutes) => ({
+      pointId: bOk,
+      ts: ago(minutes * MINUTE + 2 * MINUTE),
+      valueNum: 60 + minutes / 10,
+    })),
+  });
+
+  const runB = async (startedAgoMs: number, recordsWritten: number) =>
+    (
+      await testDb.basIngestRun.create({
+        data: {
+          stationId: stationB.stationId,
+          startedAt: ago(startedAgoMs),
+          finishedAt: ago(startedAgoMs - 20_000),
+          status: "ok",
+          pointsAttempted: 2,
+          pointsSucceeded: 2,
+          recordsWritten,
+          collectorHost: "ZZTEST-HOST-B",
+        },
+      })
+    ).runId;
+
+  // Both inside every preset window, so site B's run list is never empty and a
+  // window assertion about site A cannot pass by accident.
+  runIds.push(await runB(3 * HOUR, 8), await runB(2 * HOUR, 8));
+
+  // 210 h back, ahead of every attributed run. Placed at the far end on purpose:
+  // it belongs to no building, so it appears under every filter, and putting it
+  // at the edge keeps it from silently becoming the newest run in a short window
+  // and rewriting the arithmetic of every other assertion in the file.
+  const unattributed = await testDb.basIngestRun.create({
+    data: {
+      stationId: null,
+      startedAt: ago(210 * HOUR),
+      finishedAt: ago(210 * HOUR - 5_000),
+      status: "failed",
+      pointsAttempted: 0,
+      pointsSucceeded: 0,
+      recordsWritten: 0,
+      errors: [{ stage: "discovery", error: "ZZTEST station unreachable" }],
+      collectorHost: "ZZTEST-HOST-B",
+    },
+  });
+  runIds.push(unattributed.runId);
+
+  await testDb.basDataGap.create({
+    data: {
+      pointId: bOk,
+      gapStart: ago(5 * HOUR),
+      gapEnd: ago(4 * HOUR),
+      cause: "collector_down",
+      notes: "ZZTEST fixture gap, second building.",
+    },
+  });
+
   const cleanup = async () => {
-    await testDb.basIngestRun.deleteMany({
-      where: { stationId: base.stationId },
-    });
+    // By run_id, not by station: the unattributed run has no station to key on,
+    // and leaving it behind would corrupt the next file's run counts.
+    await testDb.basIngestRun.deleteMany({ where: { runId: { in: runIds } } });
     // Readings, checkpoints, gaps and links all cascade from bas_points.
-    await testDb.basPoint.deleteMany({ where: { stationId: base.stationId } });
-    await testDb.basStation.deleteMany({ where: { siteId: base.siteId } });
+    await testDb.basPoint.deleteMany({
+      where: { stationId: { in: [base.stationId, stationB.stationId] } },
+    });
+    await testDb.basStation.deleteMany({
+      where: { siteId: { in: [base.siteId, siteB.siteId] } },
+    });
     await testDb.basEquipment.deleteMany({ where: { siteId: base.siteId } });
-    await testDb.basSite.deleteMany({ where: { siteId: base.siteId } });
+    await testDb.basSite.deleteMany({
+      where: { siteId: { in: [base.siteId, siteB.siteId] } },
+    });
     await testDb.basOrg.deleteMany({ where: { orgId: base.orgId } });
     await testDb.basEquipmentType.deleteMany({
       where: { equipType: ROLES.equipType },
@@ -394,5 +520,15 @@ export async function createHealthFixture(): Promise<HealthFixture> {
     });
   };
 
-  return { ...base, now, runIds, cleanup };
+  return {
+    ...base,
+    now,
+    runIds,
+    siteBId: siteB.siteId,
+    stationBId: stationB.stationId,
+    bOk,
+    bUnknown,
+    unattributedRunId: unattributed.runId,
+    cleanup,
+  };
 }

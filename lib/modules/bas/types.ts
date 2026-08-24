@@ -126,14 +126,52 @@ export interface DataGapRow {
   notes: string | null;
 }
 
+/** One entry in the building filter. */
+export interface SiteOption {
+  siteId: string;
+  name: string;
+  orgName: string;
+}
+
 export interface CollectionHealth {
-  /** Days of history the run chart and the run-gap calculation cover. */
+  /**
+   * Days of history the run list, the run chart and the run-gap calculation
+   * cover. The tiles, the per-point table and the recorded gaps are statements
+   * about the present and are not windowed - see `getCollectionHealth`.
+   */
   windowDays: number;
+
+  /**
+   * Every site this employee may look at, whatever they are currently looking
+   * at. It is the building filter's option list, so it must never be narrowed
+   * by the current selection - a dropdown that dropped its other options once
+   * you picked one could not be used to pick again.
+   */
+  sites: SiteOption[];
+
+  /** `null` is "All buildings", which is the default. */
+  selectedSiteId: string | null;
+
+  /** Resolved here so the screen never has to look it up in `sites`. */
+  selectedSiteName: string | null;
   /** The server's `now()`, shared by every figure in this payload. */
   observedAt: string;
   totals: CollectionHealthTotals;
   points: PointHealthRow[];
   runs: IngestRunRow[];
+
+  /**
+   * When the newest collector run started, ignoring the window entirely.
+   *
+   * The whole point of it is the case where `runs` is empty. A short window over
+   * a collector that stopped three days ago produces an empty run list, and an
+   * empty list reads as "nothing to report" when it means the opposite. This is
+   * what lets the empty state say *when* it last ran instead.
+   *
+   * `null` means it has genuinely never run against this database.
+   */
+  newestRunAt: string | null;
+
   runRecords: RunRecordPoint[];
   longestRunGap: RunGap | null;
   dataGaps: DataGapRow[];

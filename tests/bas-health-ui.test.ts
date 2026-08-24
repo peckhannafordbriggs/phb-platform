@@ -5,10 +5,14 @@ import {
   type RunGap,
 } from "@/lib/modules/bas/types";
 import {
+  DEFAULT_WINDOW_DAYS,
   RISK_LABEL,
+  WINDOW_PRESETS,
   atRiskTone,
   basRiskTone,
+  describeEmptyRuns,
   describeRunGap,
+  describeScope,
   formatCount,
   formatDurationAgainstHorizon,
   formatHours,
@@ -18,6 +22,7 @@ import {
   runGapTone,
   stalenessTone,
   unclassifiedTone,
+  windowLabel,
 } from "@/app/(modules)/bas/health-client";
 
 /**
@@ -238,5 +243,68 @@ describe("formatting", () => {
   it("renders a null or unparseable timestamp as an em dash", () => {
     expect(formatTimestamp(null)).toBe("—");
     expect(formatTimestamp("not a date")).toBe("—");
+  });
+});
+
+describe("the two controls say what they are showing", () => {
+  it("offers 24 hours, 7 days and 30 days, defaulting to Grafana's 7", () => {
+    expect(WINDOW_PRESETS.map((preset) => preset.days)).toEqual([1, 7, 30]);
+    expect(DEFAULT_WINDOW_DAYS).toBe(7);
+    expect(
+      WINDOW_PRESETS.some((preset) => preset.days === DEFAULT_WINDOW_DAYS),
+    ).toBe(true);
+  });
+
+  it("never writes '1 days'", () => {
+    expect(windowLabel(1)).toBe("24 hours");
+    expect(windowLabel(7)).toBe("7 days");
+    expect(windowLabel(30)).toBe("30 days");
+    // Reachable by hand-editing the URL; the service accepts 1 to 90.
+    expect(windowLabel(45)).toBe("45 days");
+  });
+
+  it("restates both selections in words", () => {
+    // Not decoration. Two controls change what every panel means, and a reader
+    // who has lost track of which building is selected cannot tell a real zero
+    // from a filtered one.
+    expect(describeScope("Spring Grove Lab", 7)).toBe(
+      "Spring Grove Lab · run history covers the last 7 days",
+    );
+    expect(describeScope(null, 1)).toBe(
+      "All buildings · run history covers the last 24 hours",
+    );
+  });
+});
+
+describe("an empty run list explains which kind of empty it is", () => {
+  it("says so when the collector has never run", () => {
+    const sentence = describeEmptyRuns(null, 7, null);
+
+    expect(sentence).toContain("never recorded a run");
+    expect(sentence).toContain("this database");
+  });
+
+  it("names the building when one is selected", () => {
+    expect(describeEmptyRuns(null, 7, "Spring Grove Lab")).toContain(
+      "Spring Grove Lab",
+    );
+  });
+
+  it("points at the run just outside the window rather than falling silent", () => {
+    // The failure this exists to prevent: "the collector has never run" and
+    // "it last ran four days ago and you are looking at 24 hours" both render
+    // as an empty table, and only one of them is fine.
+    const sentence = describeEmptyRuns("2026-08-21T20:05:45.000Z", 1, null);
+
+    expect(sentence).toContain("last 24 hours");
+    expect(sentence).toContain("outside this window");
+    expect(sentence).toContain("widen the range");
+    expect(sentence).not.toContain("never");
+  });
+
+  it("distinguishes the two, which is the whole point", () => {
+    expect(describeEmptyRuns(null, 1, null)).not.toBe(
+      describeEmptyRuns("2026-08-21T20:05:45.000Z", 1, null),
+    );
   });
 });

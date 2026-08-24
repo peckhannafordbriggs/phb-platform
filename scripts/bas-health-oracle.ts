@@ -8,17 +8,19 @@ import { Client } from "pg";
  * `docs/08-bas-and-niagara.md` makes Grafana the oracle for B3 and B4: it reads
  * the same data and its queries have already been run against it. This runs the
  * dashboard's own SQL - copied out of
- * `C:\dev\bas-grafana\dashboards\bas-collection-health.json`, unmodified except
- * for the schema prefix - against the same database the screen reads, and prints
- * both answers side by side.
+ * `C:\dev\bas-grafana\dashboards\bas-collection-health.json` - against the same
+ * database the screen reads, and prints both answers side by side.
  *
- *   npx tsx scripts/bas-health-oracle.ts            # the SCREEN vs Grafana's SQL
- *   npx tsx scripts/bas-health-oracle.ts --source   # platform db vs standalone db
+ *   npm run bas:oracle                    # the screen vs Grafana's SQL, 7 days
+ *   npm run bas:oracle -- --days 30       # a different window
+ *   npm run bas:oracle -- --site 5        # one building
+ *   npm run bas:oracle -- --source        # platform db vs standalone db
  *
- * The default run is the one that answers B3's acceptance criterion: it calls
+ * The default run answers B3's acceptance criterion: it calls
  * `getCollectionHealth` - the real service the route calls - and compares what
  * it returns against Grafana's SQL executed on the same database, in the same
- * moment. Any difference is the screen being wrong.
+ * moment, for the same window and the same building. Any difference is the
+ * screen being wrong. Exit code 1 on any disagreement.
  *
  * Read-only on every connection it opens. It is a verification tool, not part of
  * the application, and nothing in the app imports it.
@@ -33,134 +35,229 @@ import { Client } from "pg";
 loadEnv({ path: path.resolve(process.cwd(), ".env.local"), quiet: true });
 loadEnv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
 
-/** Grafana's `$site` is "All" here - one building - so the filter is a no-op. */
-const PANELS = [
+/**
+ * How a query names things on one side of the comparison.
+ *
+ * The standalone database calls these `bas.reading` and
+ * `bas.v_collection_health`; the platform calls them `public.bas_readings` and
+ * `public.bas_v_collection_health`. That rename is the ONLY edit made to any
+ * Grafana query below, apart from panel 8, which says why in its own comment.
+ */
+interface Ctx {
+  view: string;
+  table: (name: string) => string;
+  windowDays: number;
+  /** Grafana's `$site` variable, as a SQL fragment. `TRUE` for "All". */
+  site: (column: string) => string;
+}
+
+interface Panel {
+  id: string;
+  title: string;
+  sql: (c: Ctx) => string;
+}
+
+const PANELS: Panel[] = [
   {
-    id: 1,
+    id: "1",
     title: "Active points",
-    sql: (v: string) => `SELECT count(*)::text AS v FROM ${v} WHERE is_active`,
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.view}
+        WHERE is_active AND ${c.site("site_id")}`,
   },
   {
-    id: 2,
+    id: "2",
     title: "Total readings",
-    sql: (_v: string, t: (n: string) => string) =>
-      `SELECT count(*)::text AS v FROM ${t("reading")} r
-         JOIN ${t("point")} p USING (point_id)
-         JOIN ${t("station")} st USING (station_id)`,
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.table("reading")} r
+         JOIN ${c.table("point")} p USING (point_id)
+         JOIN ${c.table("station")} st USING (station_id)
+        WHERE ${c.site("st.site_id")}`,
   },
   {
-    id: 3,
+    id: "3",
     title: "Unclassified points",
-    sql: (v: string) =>
-      `SELECT count(*)::text AS v FROM ${v} WHERE is_active AND point_role IS NULL`,
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.view}
+        WHERE is_active AND point_role IS NULL AND ${c.site("site_id")}`,
   },
   {
-    id: 4,
+    id: "4",
     title: "Points at risk of data loss",
-    sql: (v: string) =>
-      `SELECT count(*)::text AS v FROM ${v}
-        WHERE is_active
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.view}
+        WHERE is_active AND ${c.site("site_id")}
           AND roll_risk IN ('data_lost','at_risk','roll_horizon_unknown','never_collected')`,
   },
   {
-    id: 5,
+    id: "5",
     title: "Minutes since newest reading",
-    sql: (_v: string, t: (n: string) => string) =>
+    sql: (c) =>
       `SELECT round(EXTRACT(EPOCH FROM (now() - max(r.ts))) / 60)::text AS v
-         FROM ${t("reading")} r
-         JOIN ${t("point")} p USING (point_id)
-         JOIN ${t("station")} st USING (station_id)`,
+         FROM ${c.table("reading")} r
+         JOIN ${c.table("point")} p USING (point_id)
+         JOIN ${c.table("station")} st USING (station_id)
+        WHERE ${c.site("st.site_id")}`,
   },
   {
-    id: 6,
+    id: "6",
     title: "Per-point rows",
-    sql: (v: string) => `SELECT count(*)::text AS v FROM ${v} WHERE is_active`,
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.view}
+        WHERE is_active AND ${c.site("site_id")}`,
   },
   {
-    id: 7,
-    title: "Records written per run, last 7 days (bars)",
-    sql: (_v: string, t: (n: string) => string) =>
-      `SELECT count(*)::text AS v FROM ${t("ingest_run")} ir
-         LEFT JOIN ${t("station")} st USING (station_id)
-        WHERE ir.started_at >= now() - interval '7 days'`,
+    id: "7",
+    title: "Records written per run, in window (bars)",
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.table("ingest_run")} ir
+         LEFT JOIN ${c.table("station")} st USING (station_id)
+        WHERE ir.started_at >= now() - make_interval(days => ${c.windowDays})
+          AND (${c.site("st.site_id")} OR st.site_id IS NULL)`,
   },
   {
-    id: 7.1,
+    id: "7.1",
     title: "  ...their total records written",
-    sql: (_v: string, t: (n: string) => string) =>
+    sql: (c) =>
       `SELECT COALESCE(sum(ir.records_written), 0)::text AS v
-         FROM ${t("ingest_run")} ir
-         LEFT JOIN ${t("station")} st USING (station_id)
-        WHERE ir.started_at >= now() - interval '7 days'`,
+         FROM ${c.table("ingest_run")} ir
+         LEFT JOIN ${c.table("station")} st USING (station_id)
+        WHERE ir.started_at >= now() - make_interval(days => ${c.windowDays})
+          AND (${c.site("st.site_id")} OR st.site_id IS NULL)`,
   },
   {
-    id: 8,
-    title: "Recent collector runs (LIMIT 30)",
-    sql: (_v: string, t: (n: string) => string) =>
+    id: "8",
+    title: "Recent collector runs (window, LIMIT 30)",
+    /**
+     * The one panel this file does not reproduce literally, and the divergence
+     * is deliberate.
+     *
+     * Grafana's panel 8 carries no `$__timeFilter`, so with a 24-hour range
+     * selected on the dashboard it still lists runs from last week. That is a
+     * wart rather than a decision: the run list and the run chart sit side by
+     * side and would disagree about which runs exist. The platform windows both,
+     * so the window is applied here too - this compares the screen against what
+     * the query MEANS, not against a known bug in it.
+     *
+     * Removing the window clause would make this panel report a difference on
+     * every run, real and expected, which is exactly the kind of noise that
+     * teaches people to ignore a verification tool.
+     */
+    sql: (c) =>
       `SELECT count(*)::text AS v FROM (
-         SELECT ir.run_id FROM ${t("ingest_run")} ir
-           LEFT JOIN ${t("station")} st USING (station_id)
+         SELECT ir.run_id FROM ${c.table("ingest_run")} ir
+           LEFT JOIN ${c.table("station")} st USING (station_id)
+          WHERE ir.started_at >= now() - make_interval(days => ${c.windowDays})
+            AND (${c.site("st.site_id")} OR st.site_id IS NULL)
           ORDER BY ir.started_at DESC LIMIT 30) x`,
   },
   {
-    id: 8.1,
-    title: "  ...newest run started",
-    sql: (_v: string, t: (n: string) => string) =>
-      `SELECT max(ir.started_at)::text AS v FROM ${t("ingest_run")} ir`,
+    id: "8.1",
+    title: "  ...newest run started, ignoring the window",
+    sql: (c) =>
+      `SELECT max(ir.started_at)::text AS v
+         FROM ${c.table("ingest_run")} ir
+         LEFT JOIN ${c.table("station")} st USING (station_id)
+        WHERE (${c.site("st.site_id")} OR st.site_id IS NULL)`,
   },
   {
-    id: 9,
+    id: "9",
     title: "Recorded data gaps",
-    sql: (v: string, t: (n: string) => string) =>
-      `SELECT count(*)::text AS v FROM ${t("data_gap")} g
-         JOIN ${t("point")} p USING (point_id)
-         JOIN ${v} h USING (point_id)`,
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.table("data_gap")} g
+         JOIN ${c.table("point")} p USING (point_id)
+         JOIN ${c.view} h USING (point_id)
+        WHERE ${c.site("h.site_id")}`,
   },
   {
-    id: 9.1,
+    id: "9.1",
     title: "  ...of which roll_overwrite",
-    sql: (_v: string, t: (n: string) => string) =>
-      `SELECT count(*)::text AS v FROM ${t("data_gap")} g
-        WHERE g.cause = 'roll_overwrite'`,
+    sql: (c) =>
+      `SELECT count(*)::text AS v FROM ${c.table("data_gap")} g
+         JOIN ${c.view} h USING (point_id)
+        WHERE g.cause = 'roll_overwrite' AND ${c.site("h.site_id")}`,
+  },
+  {
+    id: "S",
+    title: "Buildings offered by the filter",
+    /**
+     * Grafana's `$site` template variable query. Deliberately NOT scoped by the
+     * current selection on either side: it is the dropdown's option list, and a
+     * dropdown that narrowed to its own selection could not be used to pick
+     * again.
+     */
+    sql: (c) =>
+      `SELECT string_agg(name, ', ' ORDER BY name)::text AS v
+         FROM ${c.table("site")}`,
   },
 ];
 
 /** The per-point table, whole, so the columns are compared and not just a count. */
-const PER_POINT = (v: string) => `
+const PER_POINT = (c: Ctx) => `
   SELECT point_name || ' | ' || COALESCE(point_role, '-') || ' | '
        || COALESCE(unit, '-') || ' | ' || roll_risk || ' | '
        || COALESCE(last_record_ts AT TIME ZONE 'UTC' || '', '-') || ' | '
        || COALESCE(round(seconds_since_last_record / 60.0)::text, '-') || ' | '
        || COALESCE(round((roll_horizon_s / 3600.0)::numeric, 2)::text, '-') AS v
-    FROM ${v}
-   WHERE is_active
-   ORDER BY seconds_since_last_record DESC NULLS FIRST`;
+    FROM ${c.view}
+   WHERE is_active AND ${c.site("site_id")}
+   -- Same tie-break as the service. Without it both sides sort tied rows
+   -- arbitrarily and this comparison reports a difference that is only ever
+   -- PostgreSQL returning equal rows in a different order.
+   ORDER BY seconds_since_last_record DESC NULLS FIRST, point_name, point_id`;
 
-interface Target {
-  label: string;
-  url: string;
-  /** `bas_v_collection_health` here, `bas.v_collection_health` there. */
-  view: string;
-  table: (name: string) => string;
+const PLATFORM_TABLES: Record<string, string> = {
+  reading: "bas_readings",
+  point: "bas_points",
+  station: "bas_stations",
+  site: "bas_sites",
+  ingest_run: "bas_ingest_runs",
+  data_gap: "bas_data_gaps",
+};
+
+interface Options {
+  windowDays: number;
+  /** Digits only, already validated. `null` is Grafana's "All". */
+  siteId: string | null;
 }
 
-async function run(target: Target): Promise<Map<string, string>> {
-  const client = new Client({ connectionString: target.url });
+function contextFor(side: "platform" | "source", options: Options): Ctx {
+  const site = (column: string) =>
+    options.siteId === null ? "TRUE" : `${column} = ${options.siteId}`;
+
+  return side === "platform"
+    ? {
+        view: "bas_v_collection_health",
+        table: (name) => PLATFORM_TABLES[name] ?? `bas_${name}`,
+        windowDays: options.windowDays,
+        site,
+      }
+    : {
+        view: "bas.v_collection_health",
+        table: (name) => `bas.${name}`,
+        windowDays: options.windowDays,
+        site,
+      };
+}
+
+async function run(
+  connectionString: string,
+  ctx: Ctx,
+): Promise<Map<string, string>> {
+  const client = new Client({ connectionString });
   await client.connect();
-  // Same pin the application uses, so the two sides render timestamps alike.
+  // The same pin the application uses, so the two sides render timestamps alike.
   await client.query("SET TIME ZONE 'UTC'");
   await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
 
   const answers = new Map<string, string>();
   try {
     for (const panel of PANELS) {
-      const { rows } = await client.query<{ v: string | null }>(
-        panel.sql(target.view, target.table),
-      );
+      const { rows } = await client.query<{ v: string | null }>(panel.sql(ctx));
       answers.set(`${panel.id} ${panel.title}`, rows[0]?.v ?? "(null)");
     }
 
-    const { rows } = await client.query<{ v: string }>(PER_POINT(target.view));
+    const { rows } = await client.query<{ v: string }>(PER_POINT(ctx));
     rows.forEach((row, i) => answers.set(`P${i + 1}`, row.v));
   } finally {
     await client.query("ROLLBACK");
@@ -215,54 +312,70 @@ function report(
 }
 
 /** What the screen itself answers, reduced to the same shape as the panels. */
-async function screenAnswers(): Promise<Map<string, string>> {
+async function screenAnswers(options: Options): Promise<Map<string, string>> {
   // Imported lazily: loading the service pulls in the Prisma client, which
   // insists on DATABASE_URL, and dotenv has to have run first.
   const { getCollectionHealth } = await import("../lib/modules/bas/service");
 
-  const health = await getCollectionHealth({
-    id: "bas-health-oracle",
-    email: "oracle@localhost",
-    firstName: "Oracle",
-    lastName: "Script",
-    profileCompleted: true,
-    isPlatformAdmin: false,
-  });
+  const health = await getCollectionHealth(
+    {
+      id: "bas-health-oracle",
+      email: "oracle@localhost",
+      firstName: "Oracle",
+      lastName: "Script",
+      profileCompleted: true,
+      isPlatformAdmin: false,
+    },
+    {
+      windowDays: options.windowDays,
+      siteId: options.siteId === null ? null : BigInt(options.siteId),
+    },
+  );
 
   const answers = new Map<string, string>();
-  answers.set("1 Active points", String(health.totals.activePoints));
-  answers.set("2 Total readings", String(health.totals.totalReadings));
-  answers.set("3 Unclassified points", String(health.totals.unclassifiedPoints));
-  answers.set("4 Points at risk of data loss", String(health.totals.pointsAtRisk));
-  answers.set(
-    "5 Minutes since newest reading",
+  const titleOf = (id: string) => {
+    const panel = PANELS.find((p) => p.id === id);
+    if (panel === undefined) throw new Error(`No panel ${id}`);
+    return `${panel.id} ${panel.title}`;
+  };
+  const set = (id: string, value: string) => answers.set(titleOf(id), value);
+
+  set("1", String(health.totals.activePoints));
+  set("2", String(health.totals.totalReadings));
+  set("3", String(health.totals.unclassifiedPoints));
+  set("4", String(health.totals.pointsAtRisk));
+  set(
+    "5",
     health.totals.minutesSinceNewestReading === null
       ? "(null)"
       : String(Math.round(health.totals.minutesSinceNewestReading)),
   );
-  answers.set("6 Per-point rows", String(health.points.length));
-  answers.set(
-    "7 Records written per run, last 7 days (bars)",
-    String(health.runRecords.length),
-  );
-  answers.set(
-    "7.1   ...their total records written",
+  set("6", String(health.points.length));
+  set("7", String(health.runRecords.length));
+  set(
+    "7.1",
     String(health.runRecords.reduce((sum, r) => sum + r.recordsWritten, 0)),
   );
-  answers.set("8 Recent collector runs (LIMIT 30)", String(health.runs.length));
-  answers.set(
-    "8.1   ...newest run started",
-    health.runs[0] === undefined
+  set("8", String(health.runs.length));
+  set(
+    "8.1",
+    health.newestRunAt === null
       ? "(null)"
-      : new Date(health.runs[0].startedAt)
-          .toISOString()
-          .replace("T", " ")
-          .replace("Z", "+00"),
+      : health.newestRunAt.replace("T", " ").replace("Z", "+00"),
   );
-  answers.set("9 Recorded data gaps", String(health.dataGaps.length));
-  answers.set(
-    "9.1   ...of which roll_overwrite",
+  set("9", String(health.dataGaps.length));
+  set(
+    "9.1",
     String(health.dataGaps.filter((g) => g.cause === "roll_overwrite").length),
+  );
+  set(
+    "S",
+    health.sites.length === 0
+      ? "(null)"
+      : health.sites
+          .map((site) => site.name)
+          .sort((a, b) => a.localeCompare(b))
+          .join(", "),
   );
 
   health.points.forEach((point, i) => {
@@ -287,46 +400,48 @@ async function screenAnswers(): Promise<Map<string, string>> {
   return answers;
 }
 
+function readOptions(): Options {
+  const argv = process.argv;
+  const flag = (name: string): string | null => {
+    const i = argv.indexOf(`--${name}`);
+    return i === -1 ? null : (argv[i + 1] ?? null);
+  };
+
+  const days = flag("days");
+  const site = flag("site");
+
+  // Both are interpolated into SQL below, so they are checked rather than
+  // trusted. The application parameterises instead; this is a script and the
+  // value comes from the operator's own command line, but "it is only me" is how
+  // that argument always starts.
+  if (site !== null && !/^[0-9]+$/.test(site)) {
+    throw new Error(`--site must be a number, got ${JSON.stringify(site)}`);
+  }
+  if (days !== null && !/^[0-9]+$/.test(days)) {
+    throw new Error(`--days must be a number, got ${JSON.stringify(days)}`);
+  }
+
+  return { windowDays: days === null ? 7 : Number(days), siteId: site };
+}
+
 async function main(): Promise<void> {
   const platformUrl = process.env.DATABASE_URL;
   if (platformUrl === undefined || platformUrl.trim().length === 0) {
     throw new Error("DATABASE_URL is not set.");
   }
 
-  // The standalone database calls these bas.reading, bas.point and so on; the
-  // platform calls them public.bas_readings, public.bas_points. That rename is
-  // the ONLY edit made to any Grafana query in this file.
-  const PLATFORM_TABLES: Record<string, string> = {
-    reading: "bas_readings",
-    point: "bas_points",
-    station: "bas_stations",
-    ingest_run: "bas_ingest_runs",
-    data_gap: "bas_data_gaps",
-  };
-
-  const platform: Target = {
-    label: "platform public.bas_*",
-    url: platformUrl,
-    view: "bas_v_collection_health",
-    table: (name) => PLATFORM_TABLES[name] ?? `bas_${name}`,
-  };
+  const options = readOptions();
+  console.log(`window=${options.windowDays}d site=${options.siteId ?? "all"}`);
 
   if (process.argv.includes("--source")) {
     const sourceUrl =
       process.env.BAS_SOURCE_DATABASE_URL ??
       "postgresql://bas_readonly:bas_readonly_local@localhost:5432/bas";
 
-    const source: Target = {
-      label: "standalone bas.* (what Grafana reads)",
-      url: sourceUrl,
-      view: "bas.v_collection_health",
-      table: (name) => `bas.${name}`,
-    };
-
     const mismatches = report(
-      await run(platform),
+      await run(platformUrl, contextFor("platform", options)),
       "platform public.bas_*",
-      await run(source),
+      await run(sourceUrl, contextFor("source", options)),
       "standalone bas.* (Grafana's datasource)",
     );
 
@@ -340,11 +455,11 @@ async function main(): Promise<void> {
     return;
   }
 
-  // The screen first, then the panels - the smaller window between the two
+  // The screen first, then the panels - the smaller the window between the two
   // reads, the less chance a collector run lands in the middle of the
   // comparison and reports itself as a defect.
-  const screen = await screenAnswers();
-  const panels = await run(platform);
+  const screen = await screenAnswers(options);
+  const panels = await run(platformUrl, contextFor("platform", options));
 
   const mismatches = report(
     screen,
