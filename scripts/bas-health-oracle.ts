@@ -279,11 +279,18 @@ async function run(
  * every lossy type as raw text. Here nothing is written, the screen renders to
  * the minute, and the alternative would be shipping strings the browser cannot
  * parse. The comparison is done at the resolution the screen actually claims.
+ *
+ * It PADS as well as truncates. PostgreSQL prints `14:05:00.02` and JavaScript's
+ * toISOString prints `14:05:00.020` for the same instant, so a rule that only
+ * truncated reported a difference between two spellings of one number. Both
+ * sides are normalised to exactly three digits, and a timestamp with no
+ * fractional part at all becomes `.000` rather than being left alone.
  */
 function toMillisecondResolution(value: string): string {
   return value.replace(
-    /(\d{2}:\d{2}:\d{2}\.\d{3})\d+/g,
-    (_match, kept: string) => kept,
+    /(\d{2}:\d{2}:\d{2})(?:\.(\d+))?/g,
+    (_match, hms: string, fraction: string | undefined) =>
+      `${hms}.${(fraction ?? "").padEnd(3, "0").slice(0, 3)}`,
   );
 }
 

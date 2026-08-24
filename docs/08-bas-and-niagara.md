@@ -502,13 +502,37 @@ this one feature; it must never stop the platform booting.
 **Done when** the platform answers a question correctly, and a write attempted
 through the SQL tool fails **at the database level** with the validator bypassed.
 
-### B6 — point the collector at this database
+### B6 — point the collector at this database — BLOCKED
 
-One connection string locally. In production: a firewall rule for the site's
-egress IP, TLS enforced, and a `bas_collector` role with write access to
-`bas_*` and nothing else.
+*It is not one connection string.* Attempted 24 August 2026 and stopped before
+any change was made.
 
-**Done when** seven consecutive days of collection land with no gaps.
+The collector's SQL is schema-qualified and singular throughout - `bas.reading`,
+`bas.point`, `bas.station`, `bas.v_collection_health` - about thirty statements
+in `collector/db.py` plus a few in `cli.py`. The platform has
+`public.bas_readings`, `public.bas_points`, `public.bas_stations`. Pointing
+`DATABASE_URL` at the platform makes `collector check` report *"connected, but
+the bas schema is missing"*, and `collector sync` abort on its first write.
+
+Views in a `bas` schema do not rescue it: the collector uses `INSERT … ON
+CONFLICT` everywhere and PostgreSQL does not support `ON CONFLICT` on a view.
+`search_path` does not either, because the names are already qualified. The only
+route is renaming the references inside the collector - a real change to the one
+component validated against real hardware, needing its own decision and its own
+before-and-after run against the station.
+
+**Repointing anyway is the harmful move.** The 15-minute sync task is currently
+the only thing collecting anything, so a collector that cannot write means no
+collection at all, against a 41.7-hour roll horizon. Two days of that is a
+permanent hole.
+
+Changing that one line also repoints the nightly 02:15 backup, whose
+verification step then fails on every run - it looks for the standalone schema's
+table names. The dump is fine; the check is not. Both are in `docs/runbook.md`
+under *B6 is blocked* and *Repointing the collector also repoints the nightly
+backup*, with a tested patch for the backup script.
+
+**Still done when** seven consecutive days of collection land with no gaps.
 
 ---
 

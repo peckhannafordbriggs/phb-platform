@@ -2344,9 +2344,12 @@ exactly one 15-minute cycle. Anything structural differing — active points,
 unclassified, points at risk, gap counts, roll horizons — is a real
 disagreement.
 
-*Microseconds.* The screen carries a `timestamptz` to the browser as a
+*Fractional seconds.* The screen carries a `timestamptz` to the browser as a
 JavaScript `Date`, which holds milliseconds, so `12:35:45.386223` arrives as
-`12:35:45.386`. The screen renders to the minute and never writes, so this is
+`12:35:45.386`. The two sides also *spell* the same instant differently:
+PostgreSQL prints `14:05:00.02` where `toISOString` prints `14:05:00.020`. The
+comparison pads to exactly three digits as well as truncating to them — a rule
+that only truncated reported a difference between two spellings of one number. The screen renders to the minute and never writes, so this is
 display truncation and nothing more. **It is not the same as the import bug** —
 see *The first BAS import corrupted every timestamp*, where the truncated value
 was written back and the microseconds were destroyed. The oracle script compares
@@ -2544,3 +2547,240 @@ what you think it is.
 
 **To make it current again**, back up first and re-import — see *Importing the
 standalone BAS database*.
+
+---
+
+## B6 is blocked: the collector cannot write to the platform database
+
+**Attempted 24 August 2026 and stopped before any change was made. Read this
+before trying again — the obvious approach does not work and the failure mode is
+expensive.**
+
+**What B6 was expected to be.** One line: change `DATABASE_URL` in
+`C:\dev\bas-collector\.env` from the standalone `bas` database to the platform
+database, and the collector starts writing where the screen reads.
+
+**Why it does not work.** The collector's SQL is **schema-qualified and
+singular** throughout: `bas.reading`, `bas.point`, `bas.station`, `bas.org`,
+`bas.site`, `bas.sync_checkpoint`, `bas.data_gap`, `bas.ingest_run`,
+`bas.v_collection_health`. Roughly thirty statements across
+`collector/db.py`, plus `collector/cli.py`. The platform has none of those. It
+has `public.bas_readings`, `public.bas_points`, `public.bas_stations` and so on —
+different schema, different names, plural.
+
+Measured, not inferred:
+
+```
+$ DATABASE_URL=postgresql://.../phb_platform python -m collector check
+  database       localhost:5432/phb_platform
+Database
+  FAIL  connected, but the bas schema is missing.
+        Run the migrations in the bas-db project first.
+Station
+  OK    atlashost - Niagara AX 4.15.4.24
+```
+
+It connects fine and reaches the station fine. `schema_present()` in
+`collector/db.py` is `SELECT to_regclass('bas.reading') IS NOT NULL`, which is
+NULL against the platform database.
+
+**`collector sync` has no such guard** — `cmd_sync` goes straight into `sync()`
+without calling `schema_present()`. Its first write would be
+`INSERT INTO bas.org …`, which fails inside `with self.transaction()`:
+
+```
+ERROR:  relation "bas.org" does not exist
+ROLLBACK
+```
+
+So it fails safe — nothing is written and nothing is corrupted — but it fails
+with a raw psycopg error rather than the clear message `check` gives.
+
+**Why repointing anyway would be actively harmful.** The scheduled task *BAS
+Collector Sync* runs every 15 minutes and is currently the only thing collecting
+anything. Point it at a database it cannot write to and collection stops
+completely — while the station keeps overwriting its own history every **41.7
+hours**. Nothing alarms. Within two days there is a permanent hole, which is the
+exact outcome this entire module exists to prevent. **Do not repoint `.env`
+until the collector speaks the platform's schema.**
+
+### The three ways forward, and why two of them do not work
+
+| Approach | Verdict |
+|---|---|
+| Views in a `bas` schema mapping onto `public.bas_*` | **No.** Single-table views are auto-updatable, but `collector/db.py` uses `INSERT … ON CONFLICT` everywhere and PostgreSQL does not support `ON CONFLICT` on a view |
+| `search_path` | **No.** The names are schema-qualified (`bas.reading`), so the search path is never consulted |
+| Rename the table references in the collector | **The only option.** Roughly thirty statements in `collector/db.py` plus a handful in `cli.py` |
+
+The third is a real change to the one component validated against real hardware,
+which `docs/08-bas-and-niagara.md` deliberately keeps outside this repo. It needs
+its own decision, and its own before-and-after run against the live station. It
+is **not** a configuration change and must not be scheduled as one.
+
+**Until then**, keep the collector on the standalone database and refresh the
+platform copy with `scripts/bas-import.ts --apply --truncate-target`, which is
+what *The dev platform database gets staler every day* describes.
+
+---
+
+## Repointing the collector also repoints the nightly backup — and breaks it
+
+**Checked by running it, 24 August 2026. Both halves of this are true and the
+second one is the dangerous one.**
+
+`Backup-BasDatabase.ps1` reads `DATABASE_URL` from the **same**
+`C:\dev\bas-collector\.env` the collector uses:
+
+```powershell
+$match = Select-String -Path $envFile -Pattern '^DATABASE_URL=(.+)$' | Select-Object -First 1
+```
+
+So changing that one line also moves the nightly 02:15 *BAS Database Backup*
+task onto whatever database it names. There is no second setting.
+
+**The dump itself is correct and complete.** Run against the platform database it
+contains all twelve `bas_*` tables **and** the platform's own:
+
+```
+TABLE DATA public bas_readings          TABLE DATA public employees
+TABLE DATA public bas_points            TABLE DATA public audit_events
+TABLE DATA public bas_ingest_runs       TABLE DATA public module_grants
+TABLE DATA public bas_data_gaps         TABLE DATA public modules
+… all 12 …                              TABLE DATA public positions
+                                        TABLE DATA public departments
+                                        TABLE DATA public draft_locks
+                                        TABLE DATA public _prisma_migrations
+```
+
+**But the script's own verification fails, every time.** It looks for the
+standalone schema's names:
+
+```powershell
+foreach ($t in @('reading', 'point', 'site', 'sync_checkpoint')) {
+    if ($toc -notmatch "TABLE DATA bas $t") { … exit 1 }
+}
+```
+
+Against the platform database the table of contents says
+`TABLE DATA public bas_readings`, which does not match `TABLE DATA bas reading`.
+Observed:
+
+```
+[10:18:15] Backing up to …\bas_2026-08-24_1018.dump
+[10:18:16] Wrote 0.15 MB
+[10:18:16] FAILED VERIFICATION: table 'reading' is missing from the dump.
+EXITCODE=1
+```
+
+**Two consequences, and the second is worse than the first.** The exit happens
+*after* the dump is written and *before* the rotation step — so old backups are
+never rotated out, and the scheduled task reports failure every single night
+while a perfectly good dump sits on disk. An operator who learns that the
+nightly "backup failed" line means nothing has no backup at all.
+
+### The fix
+
+Not yet applied — `C:\dev\bas-collector` is outside this repository. Apply it
+**before** repointing `.env`, whenever B6 happens. Replace the `foreach` block in
+the *Verify* section of `Backup-BasDatabase.ps1` with:
+
+```powershell
+# The same data lives under two different names, and which one a dump uses
+# depends entirely on which database .env points at:
+#
+#   standalone bas database   TABLE DATA bas reading
+#   platform database         TABLE DATA public bas_readings
+#
+# The trailing \s matters: without it 'bas point' also matches 'bas point_link',
+# so a dump missing bas.point could pass.
+function Test-TocHasTables($toc, [string[]]$tables) {
+    foreach ($t in $tables) {
+        $pattern = [regex]::Escape("TABLE DATA $t") + '\s'
+        if ($toc -notmatch $pattern) { return $false }
+    }
+    return $true
+}
+
+$standaloneTables = @('bas reading', 'bas point', 'bas site', 'bas sync_checkpoint')
+$platformTables   = @('public bas_readings', 'public bas_points',
+                      'public bas_sites', 'public bas_sync_checkpoints')
+
+if (Test-TocHasTables $toc $standaloneTables) {
+    $layout = 'standalone bas schema'
+} elseif (Test-TocHasTables $toc $platformTables) {
+    $layout = 'platform public.bas_* tables'
+} else {
+    Write-Log "FAILED VERIFICATION: the dump has neither the standalone bas schema nor the platform bas_* tables. Core tables are missing."
+    exit 1
+}
+Write-Log "Verified: archive readable, core tables present ($layout)"
+```
+
+Measured on a copy of the script, against real dumps:
+
+| Case | Result |
+|---|---|
+| Platform database | `Verified … (platform public.bas_* tables)`, exit 0 |
+| Standalone `bas` database | `Verified … (standalone bas schema)`, exit 0 — no regression |
+| A dump of `public.positions` only | Refused, neither layout matched |
+| A TOC with `bas point_link` but no `bas point` | Refused. **The old check passed this** |
+
+That last row is a latent bug in the original, fixed in passing: `TABLE DATA bas
+point` matches `TABLE DATA bas point_link`, so a dump missing `bas.point` would
+have verified clean.
+
+### One more thing to decide before repointing
+
+The backup destination is **OneDrive**. Today it holds building sensor readings.
+Pointed at the platform database it would also hold `employees` — real names and
+work email addresses — plus `audit_events` and `module_grants`. That is company
+data going to company OneDrive, so it is not a leak, but it is a change in what
+the file *is*, and whoever owns that folder should know before it happens rather
+than after.
+
+---
+
+## Refreshing the platform copy from the standalone database
+
+Routine, and the answer to *The dev platform database gets staler every day*.
+Roughly 12 readings per point per 15-minute cycle accumulate in the standalone
+database and nowhere else until this is run.
+
+```bash
+# 1. Back up BOTH. --truncate-target is destructive and bas_readings beyond the
+#    ~42-hour roll horizon is the only copy in existence.
+pg_dump "postgresql://…/phb_platform" -Fc --no-owner --no-privileges -f "C:\dev\phb_platform_$(date +%F_%H%M).dump"
+pg_dump "postgresql://…/bas"          -Fc --no-owner --no-privileges -f "C:\dev\bas_standalone_$(date +%F_%H%M).dump"
+
+# 2. Prove the dumps are readable. A dump never read back is a file, not a backup.
+pg_restore --list <platform dump>   | grep "TABLE DATA public bas_readings"
+pg_restore --list <standalone dump> | grep "TABLE DATA bas reading"
+
+# 3. Dry run first. Always safe, exits 0 even when it reports a blocker.
+npx tsx scripts/bas-import.ts
+
+# 4. Apply, then verify by content.
+npx tsx scripts/bas-import.ts --apply --truncate-target
+npm run bas:verify
+```
+
+Both steps 4 and 5 must end in the word VERIFIED:
+
+```
+12/12 tables and 103/103 columns compared by content, 5798 rows written,
+roll_horizon_s recomputed. IMPORT VERIFIED.
+12/12 tables compared by content. Every table matches. CONTENT VERIFIED.
+```
+
+**The count in step 3 tells you what you are about to gain.** On 24 August the
+dry run reported `bas_readings 5591 source / 5519 target` and `bas_ingest_runs
+70 / 64` — three hours of drift. If source and target already agree, there is
+nothing to do and the truncate is pure risk.
+
+**`bas_verify` reports `bas_points: roll_horizon_s` as "present in the target and
+NOT compared", and that is correct.** It is maintained by a trigger on the target
+and has no counterpart in the source. See *`migrate dev` emits ALTER COLUMN
+roll_horizon_s DROP DEFAULT*.
+
+Afterwards, `npm run bas:oracle -- --source` should show the two databases
+agreeing except for whatever the collector wrote during the run itself.
