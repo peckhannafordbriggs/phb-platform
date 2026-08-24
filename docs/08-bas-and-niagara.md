@@ -171,6 +171,145 @@ nothing in the current design should be read as a step toward it.
 
 ---
 
+## Azure: the container app may sleep, the database may not
+
+**Read this before configuring cost management, auto-shutdown, or any
+start/stop automation on this subscription.** Agreed with IT on 24 August 2026.
+
+| Resource | May it be stopped or scaled to zero? |
+|---|---|
+| Container app (the website) | **Yes, freely.** Scale to zero overnight and at weekends |
+| Azure Database for PostgreSQL Flexible Server | **No. Never stop it** |
+
+The two look like the same kind of resource and they are not. What follows is
+why, written for someone who has never heard of Niagara.
+
+### What the idle database is actually doing
+
+The database looks idle out of hours because nobody is using the website out of
+hours. That is a fact about the website, not about the database.
+
+A building automation controller — the box that runs the heating, cooling and
+ventilation in a PH+B project — records a reading from every sensor every few
+minutes. It keeps roughly **500 readings per sensor and then overwrites the
+oldest, forever.** At our measured five-minute interval that is **41.7 hours** of
+memory. There is no alarm when it wraps, no log entry, no gap marker. The
+controller simply forgets, silently, and it does this whether or not PH+B is
+open, whether or not anyone is signed in, and whether or not the website is
+running.
+
+A small on-premises program (the collector) reads that controller every 15
+minutes and writes the readings into this database. **That is the only copy that
+will ever exist.** Past 41.7 hours the original is gone from the controller and
+cannot be re-fetched from anywhere — not from the vendor, not from a backup of
+the controller, not by asking again.
+
+So at 3am on a Sunday the database is not idle. It is receiving the only copy of
+data that is being destroyed at source on a 41.7-hour timer.
+
+### Why stopping it destroys data rather than merely postponing work
+
+If the database is unreachable, the collector's write fails. That part is
+handled: the checkpoint that records how far collection has got **only advances
+on committed data**, so a failed run does not skip anything. The collector
+retries, and on the next successful run it asks the controller for everything
+since its last checkpoint and catches up.
+
+Catching up only works while the controller still remembers. The arithmetic is
+the whole rule:
+
+| Outage | Duration | Result |
+|---|---|---|
+| Overnight, 20:00 → 07:00 | 11 h | **Survivable.** Collector fails, retries, catches up in the morning. Nothing lost |
+| Friday evening → Monday morning | **~61 h** | **Data destroyed.** ~19 hours per sensor overwritten before anything read it |
+| Long weekend, Friday → Tuesday | ~85 h | Worse in proportion |
+
+An overnight stop is free. A weekend stop is permanent loss. There is no warning
+between the two, and the resource looks identically idle in both cases.
+
+**Stopping the database also stops the backup.** The nightly verified `pg_dump`
+runs on-premises against this server. A stopped server means no dump, so the
+window in which data is being destroyed is also the window in which nothing is
+being preserved.
+
+### It has already happened
+
+Not hypothetical. **21–24 August 2026**, before deployment, on the development
+machine — the laptop holding the database was closed over a weekend:
+
+- the collector was silent for **64.3 hours** (21 Aug 16:05 → 24 Aug 08:20)
+- against a **41.7-hour** roll horizon
+- **four points each lost 22.6 hours** of history, permanently
+
+Those four losses are `roll_overwrite` rows in `bas_data_gaps` and are on the
+Collection Health screen now. A closed laptop and a stopped Flexible Server are
+the same event as far as the controller is concerned.
+
+**22.6 is 64.3 minus 41.7.** The loss is exactly the outage minus the roll
+horizon, which is the same subtraction as the table above — so that table is the
+mechanism rather than an estimate of it. Any outage longer than 41.7 hours loses
+the difference, and no outage shorter than that loses anything.
+
+### Why this is an attractive-looking mistake
+
+Every signal points the wrong way:
+
+- **Burstable-tier Flexible Server can be stopped, and stays stopped.** That is a
+  real, documented, deliberate Azure feature, and for most workloads it is good
+  advice. `docs/runbook.md` mentions the capability approvingly in a different
+  context — diagnosing a server that turns out to be stopped.
+- Cost tooling will suggest it. Azure Advisor, cost-management recommendations,
+  Dev/Test guidance and most start/stop automation samples all treat a
+  low-utilisation database as an obvious saving.
+- The metrics agree with them. Connection counts and CPU on this server are
+  genuinely near zero out of hours. The cost of stopping it is invisible on every
+  screen an Azure administrator will be looking at.
+- Nothing fails loudly. There is no error, no alert, and no missing row —
+  `bas_readings` is simply thinner than it should have been, in a range nobody
+  will query for months.
+
+Even where a stopped server is eventually restarted automatically, that window is
+far longer than 41.7 hours, so it is not a safety net.
+
+### The distinction it rests on
+
+**The website and the database have different availability requirements, and it
+is very easy to configure them as though they do not.**
+
+Nobody needs the site at 3am on a Sunday. Scale the container app to zero then
+and the only consequence is a cold start for whoever signs in first.
+
+For every table except `bas_*`, downtime costs **availability** — the data is
+still there when the server comes back. For `bas_readings`, downtime costs
+**data**, because the clock that destroys the original is inside a building
+controller PH+B does not own and cannot pause.
+
+> The website can be unavailable. The database can only be unavailable for as
+> long as the controller can remember, which is 41.7 hours, and nobody is
+> measuring how much of that has been used up.
+
+### What to do instead, if the bill needs trimming
+
+All of these are safe and none of them touch availability:
+
+- Scale the container app to zero out of hours. It is the more expensive
+  resource of the two.
+- Keep the database on the burstable tier — **just never stop it.** The tier is
+  the saving; the stop button is not.
+- Reduce vCores or storage on the server. Small dataset, low write rate.
+- Buy reserved capacity for a server that is, by design, never switched off.
+- Shorten backup retention if it is over-provisioned, having first checked
+  `docs/runbook.md`, *BAS irreplaceability*.
+
+**If a genuine maintenance stop is unavoidable**, it is safe only while the total
+outage stays well inside 41.7 hours, and only if someone confirms afterwards that
+no new `roll_overwrite` rows appeared in `bas_data_gaps`. The Collection Health
+screen answers that in one look. If the outage cannot be kept inside the roll
+horizon, the collector must be stopped deliberately and the loss accepted
+knowingly rather than discovered later.
+
+---
+
 ## The data model
 
 Twelve tables, `bas_`-prefixed in `public`, defined in `prisma/schema.prisma`
@@ -550,6 +689,7 @@ backup*, with a tested patch for the backup script.
 | **Store history; override `docs/05`** | Niagara is a two-day buffer, not a system of record | **No — foundational** |
 | **Grafana as verification tool only** | The platform exists to be the one place these things live | Yes |
 | **Poll every ~15 minutes, not nightly** | Counterintuitive: frequent polling is *gentler*. Same daily volume, smaller peak memory in the station's heap, far more margin before overwrite | Yes |
+| **The Azure PostgreSQL server is never stopped; the container app may scale to zero** | The website and the database have different availability requirements. Downtime costs availability for every other table and *data* for `bas_readings`, because the clock that destroys the original runs inside a controller PH+B does not own | **No — a weekend of it is unrecoverable** |
 
 ---
 
