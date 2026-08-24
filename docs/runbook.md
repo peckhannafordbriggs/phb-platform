@@ -2784,3 +2784,208 @@ roll_horizon_s DROP DEFAULT*.
 
 Afterwards, `npm run bas:oracle -- --source` should show the two databases
 agreeing except for whatever the collector wrote during the run itself.
+
+---
+
+## The BAS read-only role on the platform database
+
+**Created 24 August 2026, when Grafana and the MCP server were moved off the
+standalone `bas` database.** `bas_readonly_platform`, created by
+`C:\dev\bas-mcp\setup_readonly_role_platform.sql`.
+
+It is a **different role** from the standalone database's `bas_readonly`, and
+that is not tidiness. PostgreSQL roles are cluster-wide, so there is exactly one
+password per role name. `bas_readonly`'s password is `bas_readonly_local`,
+committed in `setup_readonly_role.sql` on purpose, and that file says never to
+reuse it. Granting that role on `phb_platform` would hand a committed password
+read access to real building data. Both roles now exist; `bas_readonly` has no
+privileges on `phb_platform` and must not be given any.
+
+**Every grant is per-table, on names matching `bas\_%`.** The standalone database
+had a schema of its own, so `GRANT SELECT ON ALL TABLES IN SCHEMA bas` was
+precise. `phb_platform` keeps the twelve `bas_*` tables and six `bas_v_*` views in
+`public` alongside `employees`, `audit_events`, `module_grants`, `modules`,
+`positions`, `departments`, `draft_locks` and `_prisma_migrations`. A role that
+can read the employee directory is not a read-only BAS role. This is the same
+shape used for `bas_collector`.
+
+The pattern is `'bas\_%'` with the underscore escaped. Unescaped, `_` is a
+single-character wildcard and `'bas_%'` would also match a table called
+`basement_survey`.
+
+### Proving it, which is the only part that counts
+
+The grant that lets the right thing through proves nothing on its own. Run all
+three:
+
+```powershell
+$ro = "postgresql://bas_readonly_platform:<password>@localhost:5432/phb_platform"
+psql "$ro" -c "SELECT count(*) FROM bas_points"       # must succeed
+psql "$ro" -c "SELECT count(*) FROM employees"        # must be DENIED
+psql "$ro" -c "SELECT count(*) FROM audit_events"     # must be DENIED
+```
+
+Measured on creation: 18 objects readable (12 tables + 6 views), 8 platform
+tables refused with `permission denied for table ...`.
+
+### Two independent layers stop writes, and only one of them holds
+
+```powershell
+# Layer 1: the role default. A client can turn this off.
+psql "$ro" -c "INSERT INTO bas_orgs (name) VALUES ('x')"
+#   ERROR: cannot execute INSERT in a read-only transaction
+
+# Layer 2: the grant. Nothing the client sends can change this.
+$env:PGOPTIONS="-c default_transaction_read_only=off"
+psql "$ro" -c "INSERT INTO bas_orgs (name) VALUES ('x')"
+#   ERROR: permission denied for table bas_orgs
+```
+
+**Test layer 2 the way the second block does.** `default_transaction_read_only`
+is a role *default*, not a lock — `SET default_transaction_read_only = off` is
+permitted. A write test that leaves it on only ever proves the layer that the
+client controls. Both were measured; `CREATE TABLE` fails with `permission denied
+for schema public` and nothing was written in any case.
+
+### `ALTER DEFAULT PRIVILEGES` is deliberately absent, and this is the cost
+
+The standalone script uses it so that objects created by future migrations are
+covered automatically. **That mechanism cannot be used here.** Default privileges
+apply per schema and per creating role, and there is no way to filter them by
+table name. `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES`
+would silently grant this role `SELECT` on the next table Prisma creates,
+whatever it happens to hold.
+
+So a new `bas_*` table or view is invisible to Grafana and the MCP server until
+the script is re-run. That failure is loud — a permissions error in a panel — and
+the fix is one command. The alternative fails silently and without limit.
+
+**After any migration that adds a `bas_*` object:**
+
+```powershell
+cd C:\dev\bas-mcp
+psql "$dsn" -v pw=<the existing password> -f setup_readonly_role_platform.sql
+```
+
+Re-running is safe and is also how the password is rotated.
+
+---
+
+## `psql` does not substitute `:variables` inside a dollar-quoted block
+
+**Cost twenty minutes on 24 August. The error names the wrong thing.**
+
+**Symptom.** A setup script that takes a password as `-v pw=...` fails with:
+
+```
+psql:setup_readonly_role_platform.sql:70: ERROR:  syntax error at or near ":"
+LINE 4: ...TE ROLE bas_readonly_platform WITH LOGIN PASSWORD %L', :pw);
+```
+
+**Cause.** The `CREATE ROLE` was inside `DO $$ ... $$`. psql performs variable
+interpolation on its input *before* sending it to the server, but it deliberately
+skips the interior of dollar-quoted strings — otherwise every PL/pgSQL body
+containing a colon would be mangled. So `:pw` is sent to the server literally,
+and the server has no idea what it means.
+
+The error points at the colon, which reads like a quoting mistake in the SQL
+rather than a psql feature working as designed.
+
+**Fix.** Build the statement as text outside the block and run it with `\gexec`:
+
+```sql
+SELECT format('CREATE ROLE bas_readonly_platform WITH LOGIN PASSWORD %L', :'pw')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'bas_readonly_platform')
+UNION ALL
+SELECT format('ALTER ROLE bas_readonly_platform WITH LOGIN PASSWORD %L', :'pw')
+ WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'bas_readonly_platform');
+\gexec
+```
+
+`:'pw'` — with the inner quotes — asks psql to quote the value as a SQL literal,
+which is also what escapes a password containing a quote. The `UNION ALL` makes
+the script re-runnable and turns it into the password-rotation path as well.
+
+---
+
+## Retargeting a reader: the checks that pass without checking
+
+**The pattern that keeps recurring in this project, seen twice more on 24 August
+while moving Grafana and the MCP server onto the platform database.**
+
+When SQL is retargeted from `bas.reading` to `bas_readings`, the *tests* usually
+contain the old names too — and a test against a table that no longer exists does
+not necessarily fail. It can pass for the wrong reason.
+
+`C:\dev\bas-mcp\test_tools.py` had three distinct behaviours in one file:
+
+| Check | Against the stale name |
+|---|---|
+| `run_sql("DELETE FROM bas.reading")` is refused | **Passes vacuously.** The validator rejects it on the string before the database ever sees it, so it would pass against any nonsense table |
+| `"bas.reading" in describe_schema()` | Fails — loudly and correctly |
+| The role-level write test, `DELETE FROM bas.reading WHERE false` | Fails, but **for the wrong reason**: it expects `InsufficientPrivilege` and gets `UndefinedTable`, so the message sends you to the permissions system when the problem is the table name |
+
+Only the first is dangerous, and it is the one that looks fine. **Retarget the
+test file in the same pass as the code, and read the assertions rather than the
+pass count.**
+
+The same class of thing in `server.py`: `describe_schema` built its headings as
+`f"## bas.{current}"`, where `current` comes from `bas_v_data_dictionary`. On the
+platform that column already carries the prefix, so the output read
+`## bas.bas_v_reading` — a relation that does not exist, handed to a language
+model as documentation. Nothing errors; the model just writes SQL against a name
+it was told about.
+
+---
+
+## A Grafana panel disagrees with the chart beside it
+
+**Fixed 24 August 2026 in `bas-collection-health.json`, panel 8.**
+
+**Symptom.** Set the dashboard range to 24 hours. *Records written per collector
+run* shows 12 bars. *Recent collector runs*, directly beside it, lists 30 runs
+going back a week.
+
+**Cause.** Panel 8's query had no `$__timeFilter`, so the dashboard's time range
+did not reach it. Only its `LIMIT 30` bounded the output.
+
+**Fix**, one clause:
+
+```sql
+WHERE $__timeFilter(ir.started_at) AND (st.site_id IN ($site) OR st.site_id IS NULL)
+```
+
+Measured before and after:
+
+| Range | Panel 7 (chart) | Panel 8, before | Panel 8, after |
+|---|---|---|---|
+| 24 hours | 12 | 30 | **12** |
+| 7 days | 74 | 30 | 30 *(its own LIMIT)* |
+
+The platform's own Collection Health screen already windowed both, so this brings
+Grafana into line with it rather than the other way round. `npm run bas:oracle`
+compares the two and has a comment explaining why it applies the window to its
+copy of panel 8.
+
+---
+
+## Editing a dashboard JSON is not the same as the query running
+
+**Both dashboards were rewritten and then every query was executed.** Do the
+second part. 19 queries across two files, and a rewrite that produces valid JSON
+and invalid SQL looks identical in a diff.
+
+The Grafana macros have to be expanded first, the way Grafana expands them:
+
+| Macro | Expands to |
+|---|---|
+| `$__timeFilter(col)` | `col BETWEEN <from> AND <to>` |
+| `$site` | a **comma-separated list of ids**, because the variable is `multi` with `includeAll` — never the literal string `All` |
+| `$point` | a single `point_id` |
+
+Run them **as `bas_readonly_platform`**, not as a superuser. That is the account
+Grafana uses, and it is the one that will hit a missing grant.
+
+`README.md` in `bas-grafana` also carries five hand-written fallback queries for
+rebuilding a panel by hand. Those were retargeted and executed too — documentation
+someone will paste is code.
