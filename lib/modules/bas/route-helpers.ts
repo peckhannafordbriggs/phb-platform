@@ -40,14 +40,36 @@ type BasAvailability =
     };
 
 /**
- * Deliberately not cached.
+ * The affirmative answer is cached for the life of the process. The negative
+ * answers are not, and that asymmetry is the whole design.
  *
- * `to_regclass` is a catalog lookup, not a table scan, so the cost is one cheap
- * round trip. Caching the answer would mean a database that gained the migration
- * five minutes ago still reported it missing until the process restarted, and
- * would make this branch untestable without dropping a table.
+ * B2 left this uncached because it was one `to_regclass` on one ping route.
+ * Collection Health polls, so the same catalog lookup now runs on every refresh
+ * to detect a condition that changes when a migration is applied and at no other
+ * time.
+ *
+ * Caching only `available: true` keeps the property that made it uncached in the
+ * first place. A database that gains the add_bas_tables migration is picked up on
+ * the very next request, because "missing" was never remembered. Going the other
+ * way needs someone to DROP the table out from under a running process, which is
+ * not a state worth paying a round trip per panel to notice.
+ *
+ * `unreachable` is deliberately in the same not-cached bucket: a five-second
+ * Postgres blip must not leave the module dark until the container restarts.
+ *
+ * Process-local on purpose. There is no shared cache to invalidate and no
+ * revalidation window to reason about - a new revision starts with an empty one.
  */
+let schemaConfirmed = false;
+
+/** Test-only. Nothing in the application calls this. */
+export function resetBasAvailabilityCache(): void {
+  schemaConfirmed = false;
+}
+
 export async function basDataAvailability(): Promise<BasAvailability> {
+  if (schemaConfirmed) return { available: true };
+
   try {
     // bas_readings stands in for the whole schema: it is the last table the
     // migration creates and the one every screen ultimately joins to.
@@ -65,6 +87,7 @@ export async function basDataAvailability(): Promise<BasAvailability> {
       };
     }
 
+    schemaConfirmed = true;
     return { available: true };
   } catch (error) {
     return {

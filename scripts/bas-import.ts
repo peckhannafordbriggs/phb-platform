@@ -36,19 +36,89 @@
  *   - Refuses to run if any target bas_ table already has rows, unless
  *     --truncate-target is given. Re-running by accident must not double-insert
  *     or partially overwrite.
- *   - Counts what it verified and refuses to report success on a short count.
- *     A verification that skips its checks and still prints PASS is worse than
- *     no verification - that exact bug shipped in Test-BasRestore.ps1 and is
- *     recorded in the runbook.
+ *   - Verifies by CONTENT, not by row count, and inside the transaction. The
+ *     first run of this script reported "12/12 tables reconciled, 3,481 rows"
+ *     and had truncated every microsecond and turned a jsonb array into an
+ *     object. Counts matched exactly. See scripts/bas-checksum.ts.
+ *   - Counts what it verified - tables AND columns - and refuses to report
+ *     success on a short count. A verification that skips its checks and still
+ *     prints PASS is worse than no verification: that exact bug shipped in
+ *     Test-BasRestore.ps1 and is recorded in the runbook.
+ *   - Reads the source in one REPEATABLE READ snapshot, so the count, the copy
+ *     and the verification all see the same rows even though the standalone
+ *     collector keeps writing.
  *   - Never prints a connection string. Host and database name only.
  */
 
 import path from "node:path";
 import { config as loadEnv } from "dotenv";
-import { Client } from "pg";
+import { Client, types } from "pg";
+import { MOVES } from "./bas-tables";
+import {
+  columnTypes,
+  compareTable,
+  rowHashes,
+  rowValues,
+} from "./bas-checksum";
 
 loadEnv({ path: path.resolve(process.cwd(), ".env.local"), quiet: true });
 loadEnv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
+
+/**
+ * READ EVERY LOSSY TYPE AS RAW TEXT. This is not a preference, it is the fix for
+ * a corruption this script shipped.
+ *
+ * node-postgres parses some types into JavaScript values that cannot represent
+ * what PostgreSQL sent, and the script then wrote that JavaScript value back:
+ *
+ *   timestamptz  ->  JS Date, which has MILLISECOND resolution.
+ *                    2026-08-20 12:31:32.995363 came back as .995 and was
+ *                    written as .995000. Every timestamp in the first import
+ *                    lost its microseconds: 107 of 107 values ended in .xxx000.
+ *
+ *   jsonb array  ->  JS Array, which node-postgres then serialises as a
+ *                    POSTGRES ARRAY LITERAL rather than JSON. jsonb `[]` was
+ *                    written back as jsonb `{}` - an array became an object.
+ *                    Harmless only because every array was empty.
+ *
+ * Row counts saw none of it. Handing the raw text straight back to PostgreSQL
+ * means the server does the parsing, exactly as it would for a dump and restore.
+ * NULL is unaffected: a type parser is never called for NULL.
+ */
+const RAW = (value: string): string => value;
+types.setTypeParser(types.builtins.TIMESTAMPTZ, RAW);
+types.setTypeParser(types.builtins.TIMESTAMP, RAW);
+types.setTypeParser(types.builtins.DATE, RAW);
+types.setTypeParser(types.builtins.JSONB, RAW);
+types.setTypeParser(types.builtins.JSON, RAW);
+// float8 round-tripped exactly through a JS number - both are IEEE 754 doubles,
+// and the bytes were verified identical. Read as text anyway: relying on that
+// is relying on node-postgres using a shortest-round-trip formatter forever.
+types.setTypeParser(types.builtins.FLOAT8, RAW);
+types.setTypeParser(types.builtins.FLOAT4, RAW);
+
+/**
+ * Source types this script knows it can copy without losing information.
+ *
+ * Checked against the live schema before anything is written. A column whose
+ * type is not here stops the import - the alternative is discovering the next
+ * timestamptz-shaped bug after the standalone database is gone.
+ */
+const LOSSLESS_TYPES = new Set([
+  "smallint",
+  "integer",
+  "bigint",
+  "boolean",
+  "text",
+  "double precision",
+  "real",
+  "jsonb",
+  "json",
+  "timestamp with time zone",
+  "timestamp without time zone",
+  "date",
+  "uuid",
+]);
 
 const APPLY = process.argv.includes("--apply");
 const TRUNCATE_TARGET = process.argv.includes("--truncate-target");
@@ -63,139 +133,6 @@ const TRUNCATE_TARGET = process.argv.includes("--truncate-target");
  */
 const READING_BATCH = 1000;
 
-/**
- * The move, in dependency order. Parents before children, so every foreign key
- * has something to point at.
- *
- * `columns` are the SOURCE column names. Target columns are identical - the
- * translation renamed tables, never columns - which is what makes this a
- * straight copy rather than a mapping exercise.
- *
- * `deferred` columns are self-references. They are written as NULL on the first
- * pass and filled in by an UPDATE afterwards, because a row can reference
- * another row of the same table that has not been inserted yet. The alternative
- * would be deferrable constraints, which Prisma does not emit.
- */
-interface TableMove {
-  source: string;
-  target: string;
-  columns: string[];
-  deferred?: string[];
-  /** Primary key column whose sequence must be advanced after an explicit-id insert. */
-  sequenceColumn?: string;
-  /** Key used to match rows for the deferred UPDATE. */
-  keyColumn?: string;
-}
-
-const MOVES: TableMove[] = [
-  {
-    source: "equipment_type",
-    target: "bas_equipment_types",
-    columns: ["equip_type", "display_name", "description", "category"],
-  },
-  {
-    source: "point_role",
-    target: "bas_point_roles",
-    columns: [
-      "point_role", "display_name", "description", "measurement", "typical_unit",
-      "is_setpoint", "is_command", "is_status", "setpoint_for", "status_of",
-    ],
-    deferred: ["setpoint_for", "status_of"],
-    keyColumn: "point_role",
-  },
-  {
-    source: "org",
-    target: "bas_orgs",
-    columns: ["org_id", "name", "notes", "created_at"],
-    sequenceColumn: "org_id",
-  },
-  {
-    source: "site",
-    target: "bas_sites",
-    columns: [
-      "site_id", "org_id", "name", "address", "timezone", "area_sqft",
-      "attributes", "notes", "created_at",
-    ],
-    sequenceColumn: "site_id",
-  },
-  {
-    source: "station",
-    target: "bas_stations",
-    columns: [
-      "station_id", "site_id", "niagara_station_name", "base_url", "host_id",
-      "model", "niagara_version", "parent_station_id", "is_active", "notes",
-      "first_seen_at", "last_seen_at",
-    ],
-    deferred: ["parent_station_id"],
-    keyColumn: "station_id",
-    sequenceColumn: "station_id",
-  },
-  {
-    source: "equipment",
-    target: "bas_equipment",
-    columns: [
-      "equipment_id", "site_id", "name", "equip_type", "parent_equipment_id",
-      "attributes", "notes", "created_at",
-    ],
-    deferred: ["parent_equipment_id"],
-    keyColumn: "equipment_id",
-    sequenceColumn: "equipment_id",
-  },
-  {
-    // roll_horizon_s is deliberately absent: it is GENERATED ALWAYS AS STORED in
-    // the target, and Postgres rejects any attempt to write it. The value is
-    // recomputed from capacity and collection_interval_s, which are copied, so
-    // nothing is lost. Adding it to this list is the most likely way to break
-    // this script.
-    source: "point",
-    target: "bas_points",
-    columns: [
-      "point_id", "station_id", "equipment_id", "niagara_history_name",
-      "niagara_history_ord", "display_name", "point_role", "unit", "data_type",
-      "source_timezone", "collection_interval_s", "capacity", "full_policy",
-      "tags", "notes", "is_active", "first_seen_at", "last_seen_at",
-    ],
-    sequenceColumn: "point_id",
-  },
-  {
-    source: "reading",
-    target: "bas_readings",
-    columns: ["point_id", "ts", "value_num", "value_bool", "value_str", "status"],
-  },
-  {
-    source: "point_link",
-    target: "bas_point_links",
-    columns: [
-      "from_point_id", "to_point_id", "link_type", "confidence", "notes", "created_at",
-    ],
-  },
-  {
-    source: "sync_checkpoint",
-    target: "bas_sync_checkpoints",
-    columns: [
-      "point_id", "last_record_ts", "last_run_at", "last_status",
-      "consecutive_failures", "last_error",
-    ],
-  },
-  {
-    source: "ingest_run",
-    target: "bas_ingest_runs",
-    columns: [
-      "run_id", "station_id", "started_at", "finished_at", "status",
-      "window_start", "window_end", "points_attempted", "points_succeeded",
-      "records_written", "errors", "collector_version", "collector_host",
-    ],
-    sequenceColumn: "run_id",
-  },
-  {
-    source: "data_gap",
-    target: "bas_data_gaps",
-    columns: [
-      "gap_id", "point_id", "gap_start", "gap_end", "detected_at", "cause", "notes",
-    ],
-    sequenceColumn: "gap_id",
-  },
-];
 
 /** Host and database only. A connection string carries a password. */
 function describe(connectionString: string): string {
@@ -246,7 +183,65 @@ async function main(): Promise<void> {
   // Belt and braces: the source is only ever read, and the connection says so.
   await source.query("SET default_transaction_read_only = on");
 
+  // Raw timestamptz text carries its own offset, so the instant survives whatever
+  // the target's timezone is. Forcing UTC makes the strings readable and keeps a
+  // failed comparison legible.
+  await source.query("SET TimeZone = 'UTC'");
+
+  /**
+   * ONE SNAPSHOT OF THE SOURCE, for the whole run.
+   *
+   * The standalone collector writes to the source every 15 minutes. Without this
+   * the script counts the source, copies it, and then verifies against it as
+   * three separate reads of a moving target - so a row written between the copy
+   * and the verify reads as a failed import, and a row written between the count
+   * and the copy reads as a count mismatch. Either way the operator is sent
+   * looking for corruption that is not there.
+   *
+   * REPEATABLE READ holds one snapshot for every statement on this connection.
+   * It costs the source a held snapshot for the duration, which is the right
+   * trade for a comparison that means something.
+   */
+  await source.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+
   try {
+    // ---- refuse types this script cannot copy losslessly ------------------
+    // Before anything is read, let alone written. A column type with no proven
+    // round-trip is how the first import lost every microsecond.
+    const unknownTypes: string[] = [];
+    let typesChecked = 0;
+    for (const move of MOVES) {
+      const columns = await columnTypes(source, "bas", move.source);
+      for (const name of move.columns) {
+        const column = columns.find((c) => c.name === name);
+        if (column === undefined) {
+          throw new Error(`bas.${move.source} has no column ${name}.`);
+        }
+        typesChecked += 1;
+        if (!LOSSLESS_TYPES.has(column.type)) {
+          unknownTypes.push(`bas.${move.source}.${name} is ${column.type}`);
+        }
+      }
+    }
+
+    const expectedColumns = MOVES.reduce((n, m) => n + m.columns.length, 0);
+    if (typesChecked !== expectedColumns) {
+      throw new Error(
+        `INCONCLUSIVE: checked ${typesChecked} of ${expectedColumns} column types.`,
+      );
+    }
+    if (unknownTypes.length > 0) {
+      throw new Error(
+        "These source columns have types this script has not been proven to copy " +
+          `losslessly:\n  ${unknownTypes.join("\n  ")}\n\n` +
+          "Add the type to LOSSLESS_TYPES only after deciding how it is read - " +
+          "see the type-parser block at the top of this file - and add a matching " +
+          "rule to EXACT_TEXT in scripts/bas-checksum.ts so the verification can " +
+          "actually compare it.",
+      );
+    }
+    console.log(`${typesChecked} source columns, all of known lossless types.\n`);
+
     // ---- inspect both sides before touching anything ----------------------
     const sourceCounts = new Map<string, number>();
     const targetCounts = new Map<string, number>();
@@ -382,16 +377,71 @@ async function main(): Promise<void> {
     }
 
     // ---- verify inside the transaction, before committing -----------------
-    console.log("\nVerifying...");
+    //
+    // BY CONTENT, not by row count. The first run of this script reported
+    // "12/12 tables reconciled, 3,481 rows" and had silently truncated every
+    // microsecond and turned a jsonb array into a jsonb object. Counts were
+    // exact. See docs/runbook.md.
+    //
+    // Both sides are hashed with the same type-aware exact-text expressions -
+    // float8 as IEEE 754 bytes, timestamps at microsecond precision normalised
+    // to UTC, NULL kept distinct from the empty string. The source is read
+    // inside the REPEATABLE READ snapshot opened above; the target is read on
+    // the connection holding the uncommitted writes, so it sees them.
+    console.log("\nVerifying by content...");
     let compared = 0;
+    let columnsCompared = 0;
     const mismatches: string[] = [];
 
     for (const move of MOVES) {
-      const expected = sourceCounts.get(move.source) ?? 0;
-      const actual = await countRows(target, move.target);
+      const comparison = await compareTable({
+        source,
+        sourceSchema: "bas",
+        sourceTable: move.source,
+        target,
+        targetSchema: "public",
+        targetTable: move.target,
+        keyColumns: move.verifyKey,
+        columns: move.columns,
+      });
+
       compared += 1;
-      if (expected !== actual) {
-        mismatches.push(`${move.target}: expected ${expected}, found ${actual}`);
+      columnsCompared += comparison.source.columnsCompared.length;
+
+      if (!comparison.match) {
+        mismatches.push(
+          `${move.target}: source ${comparison.source.rows} rows / ` +
+            `${comparison.source.checksum}, target ${comparison.target.rows} rows / ` +
+            `${comparison.target.checksum}` +
+            (comparison.schemaDifferences.length > 0
+              ? `\n      schema: ${comparison.schemaDifferences.join("; ")}`
+              : ""),
+        );
+
+        // Name the rows and the columns, not just the hashes. An operator who
+        // has to diff two databases by hand to find out what went wrong will
+        // not do it.
+        const from = await rowHashes(source, "bas", move.source, move.verifyKey, move.columns);
+        const to = await rowHashes(target, "public", move.target, move.verifyKey, move.columns);
+        const differing = [...from.keys()].filter((k) => to.has(k) && to.get(k) !== from.get(k));
+
+        for (const key of differing.slice(0, 3)) {
+          const a = await rowValues(source, "bas", move.source, move.verifyKey, key, move.columns);
+          const b = await rowValues(target, "public", move.target, move.verifyKey, key, move.columns);
+          const columns = move.columns.filter((c) => a[c] !== b[c]);
+          mismatches.push(
+            `      ${move.verifyKey.join("/")}=${key}: ` +
+              columns
+                .map(
+                  (c) =>
+                    `${c} ${JSON.stringify(a[c] ?? null)} != ${JSON.stringify(b[c] ?? null)}`,
+                )
+                .join(", "),
+          );
+        }
+        if (differing.length > 3) {
+          mismatches.push(`      ... and ${differing.length - 3} more differing row(s)`);
+        }
       }
     }
 
@@ -406,14 +456,31 @@ async function main(): Promise<void> {
       );
     }
 
-    if (mismatches.length > 0) {
+    // The same rule one level down, which is what makes the checksums mean
+    // something. md5 over zero columns is a stable value that matches on both
+    // sides forever, so a comparison that quietly narrowed its column list would
+    // pass. Compared against the expected total rather than against zero: a
+    // comparison that dropped ONE column would also pass a >0 check.
+    if (columnsCompared !== expectedColumns) {
       await target.query("ROLLBACK");
-      throw new Error(`Row counts do not match. Rolled back.\n  ${mismatches.join("\n  ")}`);
+      throw new Error(
+        `INCONCLUSIVE: compared ${columnsCompared} of ${expectedColumns} columns ` +
+          "across the twelve tables. Rolled back. A checksum over fewer columns " +
+          "than it should have covered must not pass.",
+      );
     }
 
-    // A generated column that silently stopped computing would be invisible in
-    // a row count, and roll_horizon_s is what the entire data-loss warning
-    // depends on. Confirm it recomputed for every point that has the inputs.
+    if (mismatches.length > 0) {
+      await target.query("ROLLBACK");
+      throw new Error(
+        `Content does not match. Rolled back. Nothing was written.\n  ${mismatches.join("\n  ")}`,
+      );
+    }
+
+    // roll_horizon_s is not copied, so no checksum covers it - it is computed on
+    // the target by the bas_points_roll_horizon trigger. A trigger that stopped
+    // firing would be invisible above, and roll_horizon_s is what every
+    // data-loss warning in this module is computed from.
     const horizon = await target.query<{ wrong: string }>(
       `SELECT count(*)::text AS wrong FROM bas_points
         WHERE capacity IS NOT NULL AND collection_interval_s IS NOT NULL
@@ -424,14 +491,15 @@ async function main(): Promise<void> {
       await target.query("ROLLBACK");
       throw new Error(
         `roll_horizon_s check ${wrongHorizons === undefined ? "returned nothing" : `failed on ${wrongHorizons} point(s)`}. Rolled back. ` +
-          "The GENERATED ALWAYS definition from prisma/bas/hand-additions.sql is " +
-          "probably missing from the applied migration.",
+          "The bas_points_roll_horizon trigger from the add_bas_tables migration " +
+          "is probably missing.",
       );
     }
 
     await target.query("COMMIT");
     console.log(
-      `\n${compared}/${MOVES.length} tables reconciled, ${rowsWritten} rows written, ` +
+      `\n${compared}/${MOVES.length} tables and ${columnsCompared}/${expectedColumns} ` +
+        `columns compared by content, ${rowsWritten} rows written, ` +
         "roll_horizon_s recomputed. IMPORT VERIFIED.",
     );
   } catch (error) {

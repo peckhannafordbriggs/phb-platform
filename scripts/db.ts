@@ -1,7 +1,7 @@
 import path from "node:path";
 import { config as loadEnv } from "dotenv";
-import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../lib/generated/prisma/client";
+import { createPgAdapter } from "../lib/db/adapter";
 
 /**
  * A Prisma client for scripts (seeding, test setup).
@@ -23,5 +23,5 @@ export function createDbClient(connectionString?: string): PrismaClient {
     );
   }
 
-  return new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
+  return new PrismaClient({ adapter: createPgAdapter(url) });
 }

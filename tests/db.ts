@@ -1,5 +1,5 @@
-import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/lib/generated/prisma/client";
+import { createPgAdapter } from "@/lib/db/adapter";
 
 /**
  * A direct client for arranging test fixtures and asserting on rows.
@@ -9,10 +9,11 @@ import { PrismaClient } from "@/lib/generated/prisma/client";
  * authorization suite has to prove the real query rejects the real row.
  */
 export const testDb = new PrismaClient({
-  adapter: new PrismaPg({
-    // tests/setup.ts has already redirected this to TEST_DATABASE_URL.
-    connectionString: process.env.DATABASE_URL ?? "",
-  }),
+  // The same adapter the application uses, including the UTC session pin - a
+  // fixture written on a differently configured connection would not be the row
+  // the code under test would have written.
+  // tests/setup.ts has already redirected this to TEST_DATABASE_URL.
+  adapter: createPgAdapter(process.env.DATABASE_URL ?? ""),
 });
 
 // Order matters only for readability - CASCADE handles the foreign keys.

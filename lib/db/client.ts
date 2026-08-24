@@ -1,5 +1,5 @@
-import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@/lib/generated/prisma/client";
+import { createPgAdapter } from "./adapter";
 
 /**
  * Deliberately does not import lib/env.ts.
@@ -23,7 +23,7 @@ function connectionString(): string {
 
 function createClient(): PrismaClient {
   return new PrismaClient({
-    adapter: new PrismaPg({ connectionString: connectionString() }),
+    adapter: createPgAdapter(connectionString()),
     log: ["warn", "error"],
   });
 }

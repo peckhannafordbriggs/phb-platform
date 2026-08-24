@@ -16,7 +16,9 @@
     "test:watch": "vitest",
     "seed": "tsx prisma/seed.ts",
     "seed:dev": "tsx prisma/seed-dev.ts",
-    "db:test:setup": "tsx scripts/setup-test-db.ts"
+    "db:test:setup": "tsx scripts/setup-test-db.ts",
+    "bas:verify": "tsx scripts/bas-verify-import.ts",
+    "bas:oracle": "tsx scripts/bas-health-oracle.ts"
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",
@@ -28,6 +30,7 @@
     "pg": "^8.23.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "recharts": "^3.10.1",
     "sanitize-html": "^2.17.7",
     "zod": "4.4.3"
   },

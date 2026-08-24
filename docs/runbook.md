@@ -1399,11 +1399,205 @@ changed to `GENERATED ALWAYS AS IDENTITY`. The inserts then need `OVERRIDING
 SYSTEM VALUE`. The script fails loudly rather than renumbering rows.
 
 **Everything is one transaction, and verification happens before the commit.**
-It compares row counts table by table, counts how many tables it compared, and
-rolls back with `INCONCLUSIVE` if that count is short. That check exists because
+It compares the two databases **by content** - see *Verifying a BAS import by
+content* below - counts the tables AND the columns it compared, and rolls back
+with `INCONCLUSIVE` if either count is short. That check exists because
 `Test-BasRestore.ps1` once printed `RESTORE VERIFIED` after a bad format string
 threw inside its comparison loop and skipped all ten tables. **Always count what
 you actually checked, and refuse to pass on zero.**
+
+It used to compare row counts, and that is how it shipped a corruption - see
+*The first BAS import corrupted every timestamp* below.
+
+
+---
+
+## The first BAS import corrupted every timestamp, and said IMPORT VERIFIED
+
+**This is the reference case for why row counts are not verification.** The
+import of 21 August 2026 reported `12/12 tables reconciled, 3,481 rows` and was
+believed. Compared by content afterwards, two columns-worth of data were wrong.
+
+**What was actually wrong.**
+
+| | Symptom | Scope |
+|---|---|---|
+| Timestamps | Microseconds truncated to milliseconds | **107 of 107** timestamptz values in the target ended `.xxx000`. **0 of 137** on the source did |
+| jsonb arrays | An array became an object | `bas_ingest_runs.errors` was jsonb `[]` in all 60 source rows and jsonb `{}` in all 45 target rows |
+
+Concretely: `2026-08-20 12:31:32.995363` was stored as `2026-08-20
+12:31:32.995000`.
+
+**Cause, and it is one line of library behaviour in each case.** node-postgres
+parses some PostgreSQL types into JavaScript values that cannot hold what the
+server sent, and the import wrote that JavaScript value straight back:
+
+- `timestamptz` becomes a JS `Date`, which has **millisecond** resolution. The
+  microseconds are gone before the script ever sees the value.
+- `jsonb` becomes a plain JS value. For an array, node-postgres then serialises
+  it as a **PostgreSQL array literal** rather than as JSON, so `[]` is written as
+  `{}`. This one was harmless only because every array was empty; a real error
+  payload would have been mangled or rejected.
+
+Verified in isolation, with nothing else involved:
+
+```
+timestamptz -> Date "2026-08-20T12:31:32.995Z"   written back as 995000
+jsonb []    -> JS Array []                       written back as jsonb object
+float8      -> number 55.123456789012344         exact
+```
+
+**What was NOT wrong**, checked rather than assumed:
+
+- `bas_readings.value_num` — the IEEE 754 bytes are identical across all 3,303
+  shared rows. Floats survived, because a JS number *is* a double.
+- `bas_readings.ts` — no shared reading differs. The collector writes
+  millisecond precision there, so there were no microseconds to lose. **The
+  irreplaceable table was intact.** The damage was confined to metadata written
+  by `now()`.
+- `niagara_history_name`, `unit`, `display_name` — identical. With a caveat worth
+  stating: no value in this dataset contains a `$`-hex escape (the points are
+  `Temp1`, `points_RoomT`, `AuditHistory`), so the escape-mangling risk was never
+  exercised by this data. The comparison would catch it; this import did not test
+  it.
+- NULL versus empty string — no empty strings on either side, NULLs preserved.
+- No timezone or offset shift. The comparison is UTC-normalised, and only the
+  sub-millisecond digits differed.
+
+**The fix, in scripts/bas-import.ts.** Every lossy type is now read as raw text
+via `types.setTypeParser`, and handed straight back to PostgreSQL to parse -
+exactly what a dump and restore does. `timestamptz`, `timestamp`, `date`, `json`,
+`jsonb`, `float8` and `float4`. A type parser is never called for NULL, so NULL
+is unaffected.
+
+There is also a whitelist, `LOSSLESS_TYPES`, checked against the live source
+schema before anything is written. A column whose type is not on it stops the
+import. That is the part that matters for next time: the next
+timestamptz-shaped bug should be a refusal, not a discovery.
+
+**Re-importing is how the existing data gets fixed.** The standalone database is
+still the source of truth for these rows, so this is recoverable - until that box
+goes away.
+
+```bash
+# Back up first. bas_readings beyond the ~42-hour roll horizon is the only copy.
+npx tsx scripts/bas-import.ts --apply --truncate-target
+npm run bas:verify
+```
+
+---
+
+## Verifying a BAS import by content — `npm run bas:verify`
+
+```bash
+npm run bas:verify              # or: npx tsx scripts/bas-verify-import.ts
+npm run bas:verify -- --examples 20
+```
+
+Read-only on both sides, writes nothing, and needs `BAS_SOURCE_DATABASE_URL` and
+`DATABASE_URL`. `scripts/bas-import.ts` runs the same comparison inside its
+transaction before committing; this is that comparison run after the fact,
+against an import that already happened. **Run it while the standalone database
+still exists.**
+
+Expected output ends:
+
+```
+12/12 tables compared by content. Every table matches. CONTENT VERIFIED.
+```
+
+### Reading a failure
+
+Every difference is classified, because they do not all mean the same thing:
+
+| Category | What it means |
+|---|---|
+| **present on both sides but DIFFERENT** | Corruption. The import did not copy the row faithfully. This is the one that matters |
+| **only in source** | Almost always the standalone collector, which keeps running after the import. Not a fault |
+| **only in target** | Should be impossible. Rows the source does not have |
+
+`bas_sync_checkpoints` is the exception worth knowing about: the collector
+**updates** those rows in place, so a shared key legitimately differs once the
+source has moved on. Four of seven differed by several hours for exactly that
+reason. Judge corruption on the immutable columns - `created_at`,
+`first_seen_at` - which cannot have changed since the import.
+
+### How the comparison works, and why each choice is deliberate
+
+`scripts/bas-checksum.ts`. Per table: every value is turned into text by an
+expression chosen for its type, the values for one row become a JSON array, that
+is hashed, and the row hashes are hashed in explicit key order.
+
+| Type | Expression | Why not `::text` |
+|---|---|---|
+| `double precision` | `encode(float8send(x),'hex')` | `::text` goes through a formatter. At `extra_float_digits = -15` two **different** doubles both render as `6e+01` and compare equal. Measured |
+| `timestamptz` | `to_char(x AT TIME ZONE 'UTC','...US')` | `::text` depends on the session `TimeZone`. This catches a lost microsecond and a shifted offset with the same string |
+| `date` | `to_char(x,'YYYY-MM-DD')` | `::text` depends on `DateStyle` |
+| `bytea` | `encode(x,'hex')` | `::text` depends on `bytea_output` |
+| `jsonb` | `::text` | jsonb output is canonical: keys sorted, whitespace normalised |
+| `json` | `::text` | Deliberately different from jsonb - `json` keeps its input text, so two equal documents can differ. Reported rather than smoothed over |
+
+Three rules hold the whole thing up:
+
+1. **Coerce nothing.** Above.
+2. **A type with no rule is an error.** Never a skip, never a `::text` fallback.
+   A fallback is how a comparison quietly stops comparing.
+3. **Count what was compared.** Tables *and* columns. `md5` over zero columns is
+   a stable value that matches on both sides forever, so a comparison that
+   narrowed its column list would pass. The import compares the column total
+   against the expected 103, not against zero - a comparison that dropped **one**
+   column would satisfy a `> 0` check.
+
+NULL is kept distinct from the empty string by building the row payload as a JSON
+array: `[null]` and `[""]` are different strings. Ordering uses `COLLATE "C"` on
+text keys, so the checksum does not change with the database locale - both
+databases are `English_United States.1252` today and Azure will not be.
+
+### The source is read in one snapshot
+
+Both scripts open `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` on the
+source. The standalone collector writes every 15 minutes, and without a snapshot
+the count, the copy and the verification are three reads of a moving target: a
+row written between the copy and the verify reads as a failed import. The cost is
+a held snapshot on the source for the duration of the run.
+
+### Scale limit, stated rather than discovered
+
+The checksum is `md5(string_agg(...))`, which holds 32 bytes per row in one
+PostgreSQL value against a 1GB cap - so it runs out somewhere near 33 million
+rows. `bas_readings` is thousands today. A real building at 1,000 points and
+15-minute intervals reaches that in about a year. The engine catches the
+allocation failure and says so, including what to do: split the comparison by key
+range, and **do not fall back to comparing counts.**
+
+### Checking that the comparison can still fail
+
+The point of all of this is that it fails when it should. On a throwaway clone of
+the target, corrupt one value and re-run - each of these was measured, and each
+names the table, the row, the column and both values:
+
+| Mutation | Reported as |
+|---|---|
+| One character in a history name | `bas_points` — `"points_RoomT" != "points_Roomt"` |
+| One ULP in `value_num` | `bas_readings` — `"4050275b20000000" != "4050275b20000001"` |
+| One microsecond on a timestamp | `bas_ingest_runs` — `.500134 != .500135` |
+| A one-hour offset shift | `bas_ingest_runs` — `12:32 != 13:32` |
+| NULL to the empty string | `bas_points` — `unit: source NULL != target ""` |
+
+Exit code 1 in every case. `tests/bas-checksum.test.ts` covers the same ground in
+`npm test`, against a table built for the purpose, and those tests were
+themselves checked by breaking the engine three ways: float8 as `::text` fails
+the `extra_float_digits` test, timestamptz as `::text` fails the TimeZone and
+DateStyle tests, and coalescing NULL to `''` fails both NULL tests.
+
+The two INCONCLUSIVE guards were checked the same way, by patching the import:
+
+- narrowing every column list by one → `INCONCLUSIVE: compared 91 of 103 columns`
+- breaking out of the table loop early → `INCONCLUSIVE: compared 3 of 12 tables`
+
+Both roll back and exit 1.
+
+---
 
 ## Back up before any destructive BAS operation
 
@@ -2043,3 +2237,191 @@ a migration recorded as started but never finished.
 **What it deliberately does not check:** checksum drift. Prisma detects an edited
 migration and reports it far better than this could — see *Editing a migration
 that has already been applied*.
+
+---
+
+## Timestamps written through Prisma were four hours out
+
+**Found on 24 August 2026, building B3. It had been true since Phase 1 and
+nothing had caught it.** Read this before writing any query that compares a
+timestamp against `now()`.
+
+**Symptom.** A reading written five minutes ago reported as **235 minutes in the
+future**. `SELECT now()` read back through Prisma was four hours behind the
+process clock. Nothing threw, nothing logged, and every existing test passed.
+
+**Cause.** Prisma's driver-adapter layer moves a `timestamptz` across the
+boundary as a naive wall-clock string with the offset **discarded**. The
+PostgreSQL session's `TimeZone` then supplies one. Measured against
+`phb_platform_test`, whose session timezone was `America/New_York`:
+
+```
+JS  new Date()                     2026-08-24T12:59:30.599Z
+  written through Prisma, stored   2026-08-24 12:59:30.599-04   (+4 h)
+SELECT now(), as text              2026-08-24 08:59:30.809-04
+  the same now(), parsed by Prisma 2026-08-24T08:59:30.809Z     (-4 h)
+```
+
+**Why nobody noticed.** Writes gain the offset and reads lose it, so the two
+cancel exactly. A value written through Prisma and read back through Prisma is
+unchanged, which is what almost every test does. Everything that crosses the
+boundary once is wrong:
+
+- any SQL comparing a Prisma-written timestamp against `now()`, `age()` or
+  another server-side clock — which is every number on Collection Health;
+- any timestamp Prisma hands to a browser;
+- and the error moves with DST, so it is five hours for half the year.
+
+It is also invisible on a UTC machine, so it would have reproduced in Ohio and
+not in CI.
+
+**Fix.** `lib/db/adapter.ts` — one place, used by the application, the test
+suite and the scripts:
+
+```ts
+new PrismaPg({ connectionString, options: "-c timezone=UTC" })
+```
+
+With the session pinned to UTC the discarded offset is `+00` and both directions
+become exact. **Do not remove it, and do not construct a `PrismaPg` anywhere
+without going through `createPgAdapter`.** A second connection configured by
+hand reintroduces this silently.
+
+This changes only how a connection *interprets and renders* timestamps. Nothing
+is stored differently — `timestamptz` is an absolute instant on disk in every
+session — so no migration and no backfill is involved.
+
+**What was already stored wrong, and what was not.**
+
+| | Affected? |
+|---|---|
+| Columns with `@default(now())` — `created_at`, `audit_events.created_at` | **No.** PostgreSQL computed them |
+| `bas_*` rows | **No.** The collector and `scripts/bas-import.ts` use raw `pg`, not Prisma |
+| Columns Prisma wrote from a JavaScript `Date` — `employees.last_login_at`, `sessions_valid_after`, `draft_locks.expires_at` | **Yes**, by the offset in force when they were written |
+
+Nothing has been rewritten. The affected columns are development-database
+metadata and each is either re-derived on the next sign-in or expired already.
+**Decide before go-live** whether any production row needs correcting; the
+correction is `column - interval '4 hours'` scoped by when it was written, and
+getting the DST boundary wrong makes it worse rather than better.
+
+**The regression test** is in `tests/bas-collection-health.test.ts`, *a timestamp
+written through Prisma survives a comparison in SQL*. It has to cross the
+boundary in both directions to have teeth: a JS `Date` written by Prisma, and
+the subtraction done by PostgreSQL. A test that writes and reads back through
+Prisma alone passes either way, which is exactly how this survived four phases.
+
+---
+
+## Collection Health disagrees with Grafana
+
+**Grafana is the oracle, not the other way round.** It reads the same data and
+its queries were run against it before the dashboard shipped. If a number
+disagrees, the screen is wrong.
+
+```bash
+npx tsx scripts/bas-health-oracle.ts            # the screen vs Grafana's own SQL
+npx tsx scripts/bas-health-oracle.ts --source   # platform db vs standalone db
+```
+
+The default run calls `getCollectionHealth` — the real service the route calls —
+and runs the dashboard's panel SQL against the same database in the same moment,
+then prints both answers side by side. Read-only on every connection. Exit code
+1 on any disagreement.
+
+The only edit made to a Grafana query is the schema rename: the standalone
+database calls these `bas.reading` and `bas.v_collection_health`, the platform
+calls them `public.bas_readings` and `public.bas_v_collection_health`.
+
+**Two differences are expected and are not defects.**
+
+*Drift, on `--source` only.* Grafana's datasource is the **standalone** `bas`
+database, whose collector keeps running after an import. One collector cycle of
+difference — twelve more readings, one more run, fifteen fewer minutes of
+staleness — is the standalone database being ahead, not the platform being
+wrong. Measured on 24 August: nine panels differed and every one of them was
+exactly one 15-minute cycle. Anything structural differing — active points,
+unclassified, points at risk, gap counts, roll horizons — is a real
+disagreement.
+
+*Microseconds.* The screen carries a `timestamptz` to the browser as a
+JavaScript `Date`, which holds milliseconds, so `12:35:45.386223` arrives as
+`12:35:45.386`. The screen renders to the minute and never writes, so this is
+display truncation and nothing more. **It is not the same as the import bug** —
+see *The first BAS import corrupted every timestamp*, where the truncated value
+was written back and the microseconds were destroyed. The oracle script compares
+timestamps at millisecond resolution and says why, in a comment, so that nobody
+later "fixes" it into a comparison that stops comparing.
+
+---
+
+## Collection Health says everything is fine and you know it is not
+
+**The screen is deliberately built so that a healthy present cannot hide a
+damaged past.** If it looks calm, check these four things before believing it —
+each answers a different question and they routinely disagree.
+
+| What it answers | Where |
+|---|---|
+| Is the collector running **right now** | *Since newest reading* tile, and the *Recent collector runs* list |
+| Is data being lost **right now** | *Points at risk of data loss* tile |
+| Did the collector **stop for longer than the station remembers** | *Longest collector silence* banner |
+| Has data **already been destroyed** | *Recorded data gaps* table, `roll_overwrite` rows |
+
+The development database on 24 August 2026 is the worked example, and it is
+worth understanding because it is the case a naive screen gets wrong:
+
+- Every tile reads healthy. Four active points, all `roll_risk = 'ok'`, **zero**
+  at risk. That is correct — the collector ran half an hour ago and Grafana says
+  zero too.
+- The *longest collector silence* banner is **red**: `64.3 h (2.7 days)` between
+  21 Aug 16:05 and 24 Aug 08:20 — the laptop was closed over the weekend —
+  against a **41.7 h** roll horizon.
+- The *recorded data gaps* table has **four** `roll_overwrite` rows of 22.6 h
+  each. That data existed on the station and the station destroyed it before we
+  read it.
+
+So roughly ninety point-hours are gone permanently, and **the five tiles are
+still right to be green.** `roll_risk` is computed from
+`now() - last_record_ts`, which is a question about the present. Once collection
+resumes, every point returns to `ok` and the tiles have no memory of the outage.
+
+That is why the banner and the gaps table exist. **A Collection Health screen
+built only from the tiles would have shown four green points and nothing else
+on the morning after ninety hours of data were destroyed.**
+
+The run chart carries the same signal a third way: it is plotted on a real time
+axis rather than by run number, so the outage is a hole with a 2,000-record
+backfill spike on the far side of it. A bar chart spaced evenly by run would
+have drawn 21 August and 24 August adjacent and shown nothing at all.
+
+---
+
+## The Building Automation screen is blank, or every panel errors at once
+
+**First, `/api/modules/bas/ping`.** It reads no BAS rows and answers 200 only if
+the grant and the schema are both fine — see *B2* in `docs/08-bas-and-niagara.md`.
+
+| Ping says | Meaning | Fix |
+|---|---|---|
+| 401 | Not signed in | Sign in |
+| 404 | No `bas` grant, or the module row is hidden | Grant it in `/admin`. **404 is deliberate** — the platform does not confirm a module exists to someone who cannot use it |
+| 403 | Profile incomplete | Finish onboarding |
+| 500 `bas_unavailable` | The `bas_*` tables are missing, or Postgres is unreachable | `npx prisma migrate deploy`. The log line says which of the two; the browser is not told |
+
+**`bas_unavailable` after the migration has been applied.** `withBas` caches the
+affirmative answer for the life of the process, and only the affirmative one —
+so a database that *gains* the tables is picked up on the very next request with
+no restart. If you see it persist, the tables really are absent on the connection
+the app is using; check `DATABASE_URL` rather than restarting.
+
+**Ping is 200 but the screen is empty.** Then it is not authorization. The screen
+fetches `/api/modules/bas/collection-health` once per minute while the tab is
+visible; open it directly. A `422` means the `days` parameter is outside 1–90.
+Anything else is in the server log under `bas.route_failed`.
+
+**Every panel is empty but nothing errors.** The tables are present and empty.
+That is a real state on a fresh database and each panel says so in words rather
+than rendering as broken — *No active points*, *The collector has never recorded
+a run in this database*, *No gaps recorded*. Run
+`scripts/bas-import.ts --apply`, or point the collector at this database (B6).

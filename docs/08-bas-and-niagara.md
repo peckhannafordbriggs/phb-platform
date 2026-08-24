@@ -320,7 +320,7 @@ Each phase ships runbook entries as it goes — symptom, cause, fix — per
 `docs/07-conventions.md`. Nothing starts before the previous phase is
 demonstrably done.
 
-### B1 — schema — COMPLETE
+### B1 — schema — COMPLETE, with a corrupted import still on disk
 
 Twelve models, one migration, the data import. Commit `56f2811`.
 
@@ -363,6 +363,18 @@ if it comes back:
   `prisma.config.ts` before `npm ci` so that hook has a schema to read — without
   which the image build fails, verified by reproducing it.
 
+**The import itself was wrong, and the data in the development database still
+is.** It verified by row count, reported `12/12 tables reconciled, 3,481 rows`,
+and had truncated every microsecond timestamp to milliseconds (107 of 107 values)
+and turned `bas_ingest_runs.errors` from a jsonb array into a jsonb object.
+Counts matched exactly on both sides. `bas_readings` - the irreplaceable table -
+was intact, because the collector writes milliseconds there anyway.
+
+`scripts/bas-import.ts` now reads every lossy type as raw text and verifies by
+content, and `npm run bas:verify` runs the same comparison after the fact. A
+re-import fixes the existing rows and has not been run. Full account in the
+runbook under *The first BAS import corrupted every timestamp*.
+
 **What is still open**, and it is not a defect: `bas_points.point_role` is NULL
 for all seven points in the development database. The vocabulary exists to
 classify against, and nothing has been classified — deliberately, per *The state
@@ -391,7 +403,7 @@ page both answer `404` for an ungranted employee, and `withBas` refuses to run
 the Zod parser before the grant check. Four runbook entries added — the test
 database being twelve tables behind was the one that cost time.
 
-### B3 — Collection Health
+### B3 — Collection Health — COMPLETE
 
 Service layer in `lib/modules/bas/service.ts`, **employee-parameterised from day
 one** so per-site scoping later is a one-place change.
@@ -404,9 +416,50 @@ queries are already validated. Point a new screen at the same window and the
 numbers either agree or the screen is wrong. Grafana is a development tool, not
 a deliverable — the module is the deliverable.
 
+Verified 24 August 2026. All nine panels, plus every column of the per-point
+table, compared against the dashboard's own SQL by
+`scripts/bas-health-oracle.ts` — every number matched. 611/611 tests (554
+before B3), typecheck, lint and build clean.
+
+**What was built.** One route, `/api/modules/bas/collection-health`, answering
+the whole screen in one payload; `getCollectionHealth` reads all of it inside
+one transaction so that `now()` is the same instant for the tiles, the per-point
+"minutes ago" and the view's `roll_risk`. Five tiles, the per-point table,
+records-per-run, recent runs, and — added deliberately — the recorded data gaps,
+which is the ninth Grafana panel and the only one that shows data already
+destroyed.
+
+**Recharts, added here rather than in B4.** The records-per-run panel needs a
+real time axis: a bar chart spaced evenly by run number draws 21 August and 24
+August adjacent and erases a 64-hour outage entirely. That is the one thing this
+screen may not do. It costs ~114 kB on `/bas` and nothing on any other route.
+
+**`withBas` now caches the affirmative availability answer**, and only the
+affirmative one. B2 left `to_regclass` uncached because it was one ping route;
+this screen polls. A database that *gains* the migration is still picked up on
+the next request, because "missing" is never remembered, and a transient Postgres
+failure is not remembered either.
+
+**Two things this phase found that were not about B3.**
+
+*Every timestamp Prisma wrote was four hours out.* Prisma's driver adapter
+discards the offset on a `timestamptz` in both directions, so a Prisma round trip
+cancels out and every comparison against `now()` is wrong by the session's UTC
+offset. It had been true since Phase 1. Fixed by pinning the session to UTC in
+`lib/db/adapter.ts`, which every client now goes through. Full account in
+`docs/runbook.md`, *Timestamps written through Prisma were four hours out*.
+
+*The tiles can be green while ninety point-hours are gone.* `roll_risk` asks a
+question about the present, so once collection resumes every point returns to
+`ok` and the tiles have no memory of an outage. The *longest collector silence*
+banner and the *recorded data gaps* table exist precisely to carry that memory.
+See the runbook, *Collection Health says everything is fine and you know it is
+not*.
+
 ### B4 — Point Explorer
 
-Adds a charting library. Recharts unless there is a reason otherwise.
+The charting library is already here: B3 added **Recharts 3** for the
+records-per-run panel, because that panel needs a real time axis.
 
 **Done when** you can answer *"what did this point do yesterday"* without SQL,
 and it matches Grafana.

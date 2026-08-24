@@ -12,7 +12,11 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { buildMe } from "@/lib/me";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
-import { withBas } from "@/lib/modules/bas/route-helpers";
+import {
+  basDataAvailability,
+  resetBasAvailabilityCache,
+  withBas,
+} from "@/lib/modules/bas/route-helpers";
 import { ok } from "@/lib/api/response";
 import { GET as basPing } from "@/app/api/modules/bas/ping/route";
 import {
@@ -63,6 +67,10 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
+  // withBas remembers a confirmed schema for the life of the process. Tests run
+  // in one process, so without this a test that arranges "the tables are not
+  // there" would be answered from a cache filled by an earlier test.
+  resetBasAvailabilityCache();
   await resetDb();
   await seedChangeOrdersModule();
   await seedBasModule();
@@ -455,6 +463,53 @@ describe("withBas runs authorization, then validation, then availability", () =>
     await expect(response.json()).resolves.toEqual({
       data: { reached: true },
     });
+  });
+});
+
+describe("the availability check caches the answer it is allowed to cache", () => {
+  /**
+   * B3 turned one `to_regclass` on one ping route into one per screen refresh.
+   * Caching it is safe in exactly one direction, and these are the tests that
+   * hold that asymmetry in place.
+   */
+  it("asks the database only once after the schema is confirmed", async () => {
+    const spy = vi.spyOn(prisma, "$queryRaw");
+
+    await expect(basDataAvailability()).resolves.toEqual({ available: true });
+    await basDataAvailability();
+    await basDataAvailability();
+
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not remember a missing schema", async () => {
+    const spy = vi
+      .spyOn(prisma, "$queryRaw")
+      .mockResolvedValue([{ present: false }]);
+
+    const first = await basDataAvailability();
+    const second = await basDataAvailability();
+
+    // A database that gains the add_bas_tables migration must be picked up on
+    // the very next request, not at the next container restart.
+    expect(first.available).toBe(false);
+    expect(second.available).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    spy.mockResolvedValue([{ present: true }]);
+    await expect(basDataAvailability()).resolves.toEqual({ available: true });
+  });
+
+  it("does not remember an unreachable database", async () => {
+    const spy = vi
+      .spyOn(prisma, "$queryRaw")
+      .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:5432"));
+
+    await basDataAvailability();
+    await basDataAvailability();
+
+    // A five-second Postgres blip must not leave the module dark until restart.
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });
 
