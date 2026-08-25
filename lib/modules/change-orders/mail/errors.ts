@@ -41,6 +41,21 @@ export type MailErrorKind =
   | "conflict"
   /** Another employee holds the advisory edit lock on this draft. */
   | "locked"
+  /**
+   * The attachment is over the platform's limit. Refused before the upload
+   * starts, not after Exchange rejects the message at send time.
+   */
+  | "attachment_too_large"
+  /**
+   * The attachment is executable content, empty, or otherwise something the
+   * platform will not put in a message to a vendor.
+   */
+  | "attachment_rejected"
+  /**
+   * A move or delete was asked for on something that cannot take it - notably
+   * removing an attachment from a message that has already been sent.
+   */
+  | "not_permitted"
   | "unexpected";
 
 /**
@@ -66,6 +81,12 @@ const USER_MESSAGES: Record<MailErrorKind, string> = {
   conflict:
     "This draft changed in Outlook while you were editing. Reload it to see the current version before saving again.",
   locked: "Someone else in the platform is editing this draft.",
+  attachment_too_large:
+    "That file is too large to attach. The limit is 25 MB per file.",
+  attachment_rejected:
+    "That kind of file cannot be attached. Program and script files are not allowed.",
+  not_permitted:
+    "That is not something that can be done to this message.",
   unexpected: "Something went wrong reaching the mailbox. Try again.",
 };
 

@@ -158,6 +158,73 @@ export interface DraftChanges {
   expectedChangeKey?: string | null;
 }
 
+/**
+ * Which Graph operation produces the derived draft.
+ *
+ * A closed set, and it maps one-to-one onto `createReply`, `createReplyAll` and
+ * `createForward`. There is deliberately no "build a reply myself" member:
+ * docs/03 - concatenating the original body into a new message loses the
+ * quoting, the In-Reply-To and References headers, and the conversation
+ * threading that Intake 6 matches replies by.
+ */
+export type DerivedDraftMode = "reply" | "replyAll" | "forward";
+
+/**
+ * A draft created from scratch.
+ *
+ * Every field is optional except in one respect: outside production the subject
+ * has to satisfy the ZZTEST fence, and for a message that does not exist yet the
+ * caller is the only possible source of it. See createDraft().
+ */
+export interface NewDraftInput {
+  subject?: string;
+  to?: MailAddress[];
+  cc?: MailAddress[];
+  bcc?: MailAddress[];
+  body?: { content: string; format: "html" | "text" };
+}
+
+/**
+ * What a move did.
+ *
+ * `idChanged` exists because it should never be true. Exchange gives a moved
+ * message a new ID unless immutable IDs are in use - they are, on every request,
+ * via the middleware - so this is the assertion that the header is still doing
+ * its job, reported rather than assumed.
+ */
+export interface MoveResult {
+  id: string;
+  previousId: string;
+  idChanged: boolean;
+  destinationFolderId: string;
+  subject: string | null;
+}
+
+/** What a delete moved to Deleted Items. Returned so the caller can audit it. */
+export interface DeleteResult {
+  subject: string | null;
+}
+
+/** An attachment on its way into a draft. Never persisted anywhere. */
+export interface AttachmentUpload {
+  name: string;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * An attachment on its way out to a browser.
+ *
+ * `bytes` is held in memory for the length of one response and then dropped.
+ * docs/03: attachment content is never persisted - not to disk, not to the
+ * database, not to a cache.
+ */
+export interface AttachmentDownload {
+  name: string;
+  contentType: string;
+  bytes: Uint8Array;
+}
+
 export interface GetMessageOptions {
   /**
    * The "show images" affordance. Off unless a person asks for this message,

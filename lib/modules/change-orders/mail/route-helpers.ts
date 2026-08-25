@@ -41,26 +41,35 @@ export async function withMailbox<T = undefined>(
   const access = await requireModuleAccess(CHANGE_ORDERS_MODULE_KEY);
   if (!access.ok) return denialResponse(access.denial);
 
-  let input = undefined as T;
-  if (parse !== undefined) {
-    const parsed = await parse();
-    if (!parsed.ok) return validationFailed(parsed.message);
-    input = parsed.data;
-  }
-
-  // Not an error, and not a crash. IT creates the app registration on its own
-  // schedule; until then every mail route says so in the same shape, and the UI
-  // renders one "not configured" state instead of a failure per pane.
-  const status = mailboxConnectionStatus();
-  if (!status.configured) {
-    return mailErrorResponse(
-      new MailError("not_configured", {
-        detail: `Missing Graph configuration: ${status.missing.join(", ")}`,
-      }),
-    );
-  }
-
+  /**
+   * Parsing is inside the try, not before it.
+   *
+   * Phase 8 gave one route a parse step that does real work - reading a
+   * multipart body and measuring it - and a parse step that can throw was
+   * previously the one path out of this wrapper that produced a bare 500 with an
+   * HTML body. Every response from a mail route goes through the same mapping,
+   * including the ones from before the handler runs.
+   */
   try {
+    let input = undefined as T;
+    if (parse !== undefined) {
+      const parsed = await parse();
+      if (!parsed.ok) return validationFailed(parsed.message);
+      input = parsed.data;
+    }
+
+    // Not an error, and not a crash. IT creates the app registration on its own
+    // schedule; until then every mail route says so in the same shape, and the UI
+    // renders one "not configured" state instead of a failure per pane.
+    const status = mailboxConnectionStatus();
+    if (!status.configured) {
+      return mailErrorResponse(
+        new MailError("not_configured", {
+          detail: `Missing Graph configuration: ${status.missing.join(", ")}`,
+        }),
+      );
+    }
+
     return await handler(mailService(), access.viewer, input);
   } catch (error) {
     return mailRouteError(route, error);

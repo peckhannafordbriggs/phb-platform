@@ -1,6 +1,9 @@
 import type {
+  AttachmentSummary,
+  DerivedDraftMode,
   DraftForEdit,
   MailAddress,
+  MoveResult,
 } from "@/lib/modules/change-orders/mail/types";
 import { ApiError } from "./mailbox-client";
 
@@ -154,4 +157,109 @@ export function textToAddresses(text: string): {
   }
 
   return { addresses, invalid };
+}
+
+// ---------------------------------------------------------------- Phase 8
+
+const MESSAGES = "/api/modules/change-orders/messages";
+
+/**
+ * Reply, reply-all or forward.
+ *
+ * Returns the created draft in the same shape `openDraft` returns, because it IS
+ * the same thing: the caller hands it to the Phase 6 editor. Nothing about the
+ * content is sent - Exchange writes the quoting, the threading and the recipient
+ * list, and the person types into the editor afterwards.
+ */
+export function createDerivedDraft(
+  messageId: string,
+  mode: DerivedDraftMode,
+): Promise<DraftResult> {
+  return request(`${MESSAGES}/${encodeURIComponent(messageId)}/respond`, {
+    method: "POST",
+    ...json({ mode }),
+  });
+}
+
+/** A draft from scratch. Opens in the same editor; there is no compose window. */
+export function createDraft(
+  input: { subject?: string } = {},
+): Promise<DraftResult> {
+  return request("/api/modules/change-orders/drafts", {
+    method: "POST",
+    ...json(input),
+  });
+}
+
+/**
+ * Files a message into a folder.
+ *
+ * `destinationFolderId` is the opaque id from the folder tree the workspace
+ * already has. The browser never names a folder by path or display name.
+ */
+export function moveMessage(
+  messageId: string,
+  destinationFolderId: string,
+): Promise<MoveResult> {
+  return request(`${MESSAGES}/${encodeURIComponent(messageId)}/move`, {
+    method: "POST",
+    ...json({ destinationFolderId }),
+  });
+}
+
+/** To Deleted Items, recoverably. There is no permanent delete to call. */
+export function deleteMessage(
+  messageId: string,
+): Promise<{ deleted: true; subject: string | null }> {
+  return request(`${MESSAGES}/${encodeURIComponent(messageId)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * The URL a download link points at.
+ *
+ * A plain link rather than a fetch-and-blob: the browser's own download
+ * handling gets the filename from Content-Disposition, shows progress, and never
+ * holds the whole file in the page's memory. The route is same-origin, so the
+ * session cookie goes with it.
+ */
+export function attachmentDownloadUrl(
+  messageId: string,
+  attachmentId: string,
+): string {
+  return `${MESSAGES}/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+/**
+ * Adds one attachment to a draft.
+ *
+ * One file per call, deliberately - the route takes one, so a person picking
+ * three files makes three requests and sees three outcomes rather than one
+ * ambiguous partial failure.
+ *
+ * No Content-Type header: the browser sets the multipart boundary itself, and
+ * setting it by hand produces a body the server cannot parse.
+ */
+export function addAttachment(
+  messageId: string,
+  file: File,
+): Promise<{ attachments: AttachmentSummary[] }> {
+  const form = new FormData();
+  form.set("file", file);
+
+  return request(
+    `${BASE}/${encodeURIComponent(messageId)}/attachments`,
+    { method: "POST", body: form },
+  );
+}
+
+export function removeAttachment(
+  messageId: string,
+  attachmentId: string,
+): Promise<{ attachments: AttachmentSummary[] }> {
+  return request(
+    `${BASE}/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    { method: "DELETE" },
+  );
 }

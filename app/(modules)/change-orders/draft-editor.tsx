@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AttachmentSummary } from "@/lib/modules/change-orders/mail/types";
 import { ApiError } from "./mailbox-client";
 import { BodyEditor, BodySourceEditor } from "./body-editor";
+import { DraftAttachments } from "./attachments";
 import {
   addressesToText,
   openDraft,
@@ -58,6 +59,8 @@ export function DraftEditor({
   attachments,
   remoteImagesAllowed,
   onShowImages,
+  onAttachmentsChanged,
+  onClose,
   onSent,
   onGone,
 }: {
@@ -65,6 +68,20 @@ export function DraftEditor({
   attachments: AttachmentSummary[];
   remoteImagesAllowed: boolean;
   onShowImages: () => void;
+  /**
+   * An attachment was added or removed. The workspace re-reads the message so
+   * the reading pane and the editor agree, rather than the editor keeping its
+   * own copy of the list.
+   */
+  onAttachmentsChanged: () => void;
+  /**
+   * Leaves the editor for the read view of the same message.
+   *
+   * Needed once Phase 8 could open the editor directly - a reply or a forward
+   * lands here without passing through the read view, so without this there was
+   * no way to reach Move or Delete for a draft somebody decided not to send.
+   */
+  onClose: () => void;
   onSent: (summary: { subject: string | null; recipients: string[] }) => void;
   onGone: () => void;
 }) {
@@ -426,6 +443,18 @@ export function DraftEditor({
             Draft
           </span>
           <SaveIndicator state={save} dirty={dirty} />
+          {/*
+            Not a cancel: everything typed here has already been autosaved to
+            Exchange, and closing the editor does not undo any of it. It goes to
+            the read view of the same draft, which is where Move and Delete are.
+          */}
+          <button
+            type="button"
+            onClick={onClose}
+            className="ml-auto rounded border border-[var(--border)] px-2.5 py-1 text-xs hover:bg-[var(--surface)]"
+          >
+            Close editor
+          </button>
         </div>
 
         {lockedByOther && (
@@ -473,15 +502,6 @@ export function DraftEditor({
             The subject is saved exactly as written, including any{" "}
             <code className="rounded bg-[var(--surface)] px-1">[CO tag]</code>.
           </p>
-          {attachments.length > 0 && (
-            <p className="text-xs text-[var(--muted)]">
-              ·{" "}
-              {attachments.length === 1
-                ? "1 attachment kept"
-                : `${attachments.length} attachments kept`}
-              : {attachments.map((a) => a.name ?? "(unnamed)").join(", ")}
-            </p>
-          )}
           <button
             type="button"
             onClick={() =>
@@ -495,6 +515,22 @@ export function DraftEditor({
           >
             {sourceMode ? "Back to text view" : "Edit HTML source"}
           </button>
+        </div>
+
+        {/*
+          Attachments live in the editor rather than on a screen of their own.
+          A draft the automation created already carries attachments downstream
+          flows expect, so the person changing them is the person reading the
+          message - and every add and remove re-reads the list from Exchange, so
+          "the others survived" is shown rather than assumed.
+        */}
+        <div className="border-t border-[var(--border)] pt-2">
+          <DraftAttachments
+            messageId={messageId}
+            attachments={attachments}
+            disabled={lockedByOther}
+            onChanged={onAttachmentsChanged}
+          />
         </div>
       </div>
 

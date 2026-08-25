@@ -40,7 +40,28 @@ export type AuditAction =
    * whose purpose is attribution.
    */
   | "mail.draft_edited"
-  | "mail.sent";
+  | "mail.sent"
+  /**
+   * Phase 8. `mail.moved` and `mail.deleted` are the two the phase requires,
+   * and for the same reason as `mail.sent`: under app-only auth Exchange records
+   * the application as having done it, so this row is the only record of which
+   * person did.
+   *
+   * A delete is recoverable - it goes to Deleted Items - so this row is what
+   * tells an operator where a message went, not a record of destruction.
+   */
+  | "mail.moved"
+  | "mail.deleted"
+  /**
+   * A draft the platform created: composed from scratch, or derived from a
+   * message by reply, reply-all or forward. The metadata says which, and what it
+   * came from, because a reply draft nobody remembers making is otherwise
+   * indistinguishable from one the automation produced.
+   */
+  | "mail.draft_created"
+  /** Attachment metadata only - the name and size, never the content. */
+  | "mail.attachment_added"
+  | "mail.attachment_removed";
 
 export interface AuditEventInput {
   action: AuditAction;

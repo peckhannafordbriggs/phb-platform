@@ -1,10 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MessageSummary } from "@/lib/modules/change-orders/mail/types";
+import type {
+  DerivedDraftMode,
+  MessageSummary,
+} from "@/lib/modules/change-orders/mail/types";
 import { FolderTree } from "./folder-tree";
 import { MessageBodyFrame } from "./message-body";
 import { DraftEditor, SentConfirmation } from "./draft-editor";
+import { AttachmentList } from "./attachments";
+import {
+  ComposePrompt,
+  DeleteConfirmation,
+  FolderPicker,
+  MessageActions,
+} from "./message-actions";
+import {
+  createDerivedDraft,
+  createDraft,
+  deleteMessage,
+  moveMessage,
+} from "./draft-client";
 import {
   ApiError,
   ancestorsOf,
@@ -26,14 +42,21 @@ import {
 } from "./states";
 
 /**
- * The read-only Change Orders mailbox.
+ * The Change Orders mailbox.
  *
- * Read-only in the strict sense: every request this component can make is a GET,
- * and the service it reaches exposes no write method at all.
+ * Phases 4 and 5 made this read-only, and Phase 6 added editing and sending one
+ * draft. Phase 8 finished the client: reply, reply-all, forward, move, delete,
+ * attachments and compose. What did NOT change is the shape of it - every one of
+ * those either produces an unsent draft that opens in the same editor, or is
+ * reversible in Exchange.
  *
  * Nothing here is persisted. The mailbox is read live from Exchange on demand,
  * which is why a stale list and a message that has moved are ordinary events
  * rather than errors - Power Automate moves messages constantly.
+ *
+ * One rule this component holds to that is easy to lose: no action operates on
+ * more than the one message somebody is looking at. There is no multi-select,
+ * no "apply to all", and above all no send that is not the editor's own.
  */
 
 /** Gentle on purpose. Throttling concentrates on one mailbox, one app identity. */
@@ -69,6 +92,32 @@ export function MailboxWorkspace() {
 
   const [searchInput, setSearchInput] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
+
+  /**
+   * Phase 8 actions.
+   *
+   * One `actionBusy` flag rather than one per action, because only one can be in
+   * flight: every control that starts one is disabled while it is set. That is
+   * what makes a double-click on Delete impossible to turn into two requests.
+   */
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [composing, setComposing] = useState(false);
+
+  /**
+   * What just happened to a message that is no longer on screen.
+   *
+   * A move and a delete both end with the reading pane empty, and an empty pane
+   * with no explanation reads as "something went wrong". These say what became
+   * of it and, in the move case, that the message is findable again.
+   */
+  const [moved, setMoved] = useState<{
+    subject: string | null;
+    idChanged: boolean;
+  } | null>(null);
+  const [deletedSubject, setDeletedSubject] = useState<string | null>(null);
 
   const tree = useMemo(
     () => (folders === null ? [] : buildFolderTree(folders)),
@@ -281,6 +330,9 @@ export function MailboxWorkspace() {
       setSelectedId(id);
       setEditing(false);
       setSent(null);
+      setMoved(null);
+      setDeletedSubject(null);
+      setActionError(null);
       setMessageLoading(true);
       setMessageError(null);
       setVanished(false);
@@ -309,6 +361,170 @@ export function MailboxWorkspace() {
     [selectedFolder, activeQuery, loadMessages],
   );
 
+  /**
+   * Re-reads the message already open, without disturbing what the pane is
+   * showing.
+   *
+   * `openMessage` is the wrong tool for this: it drops out of the editor and
+   * clears the sent confirmation, because that is what opening a DIFFERENT
+   * message should do. After an attachment changes, the same message is still
+   * open and the person is still editing it.
+   */
+  const refreshOpenMessage = useCallback(async () => {
+    const id = selectedId;
+    if (id === null) return;
+
+    try {
+      setMessage(await fetchMessage(id, {
+        allowRemoteImages: message?.remoteImagesAllowed ?? false,
+      }));
+    } catch (error) {
+      if (isMissing(error)) {
+        setMessage(null);
+        setSelectedId(null);
+        setEditing(false);
+        setVanished(true);
+      }
+      // Any other failure leaves the pane as it was. The attachment operation
+      // itself already reported its own outcome; replacing a message somebody is
+      // editing with an error pane over a failed re-read would lose their work.
+    }
+  }, [selectedId, message]);
+
+  // ------------------------------------------------------------- actions
+
+  /**
+   * Runs one action, and one only.
+   *
+   * Every Phase 8 action goes through here so that the busy flag, the error
+   * handling and the "it vanished" case are written once. A message that is gone
+   * is not an error - Power Automate moves things and somebody else may have
+   * filed it already.
+   */
+  const runAction = useCallback(
+    async <T,>(
+      action: () => Promise<T>,
+      onDone: (result: T) => void,
+    ): Promise<void> => {
+      if (actionBusy) return;
+
+      setActionBusy(true);
+      setActionError(null);
+      try {
+        onDone(await action());
+      } catch (error) {
+        if (isMissing(error)) {
+          setMessage(null);
+          setSelectedId(null);
+          setEditing(false);
+          setVanished(true);
+          setPicking(false);
+          setDeleting(false);
+          if (selectedFolder !== null) {
+            void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+          }
+        } else if (error instanceof ApiError) {
+          setActionError(error.message);
+        }
+      } finally {
+        setActionBusy(false);
+      }
+    },
+    [actionBusy, selectedFolder, activeQuery, loadMessages],
+  );
+
+  /**
+   * Opens a draft the platform just created, in the Phase 6 editor.
+   *
+   * The draft is fetched as a message first, because the editor needs the
+   * attachment list and the reading pane needs the header - and it is the same
+   * request the editor would make anyway. There is deliberately no separate
+   * "new draft" pane: reply, forward and compose all land here.
+   */
+  const openCreatedDraft = useCallback(
+    async (draftId: string) => {
+      await openMessage(draftId);
+      setEditing(true);
+
+      // A reply lands in Drafts, not in the folder being looked at, so the list
+      // is refreshed - otherwise the new draft is invisible until the next poll.
+      if (selectedFolder !== null) {
+        void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+      }
+    },
+    [openMessage, selectedFolder, activeQuery, loadMessages],
+  );
+
+  const respond = useCallback(
+    (mode: DerivedDraftMode) => {
+      const id = selectedId;
+      if (id === null) return;
+
+      void runAction(
+        () => createDerivedDraft(id, mode),
+        (result) => void openCreatedDraft(result.draft.id),
+      );
+    },
+    [selectedId, runAction, openCreatedDraft],
+  );
+
+  const compose = useCallback(
+    (subject: string) => {
+      void runAction(
+        () => createDraft({ subject }),
+        (result) => {
+          setComposing(false);
+          void openCreatedDraft(result.draft.id);
+        },
+      );
+    },
+    [runAction, openCreatedDraft],
+  );
+
+  const move = useCallback(
+    (destinationFolderId: string) => {
+      const id = selectedId;
+      if (id === null) return;
+
+      void runAction(
+        () => moveMessage(id, destinationFolderId),
+        (result) => {
+          setPicking(false);
+          setEditing(false);
+          setMessage(null);
+          // The id survives the move - immutable ids are requested on every
+          // request - but the list is now wrong, and the message is no longer in
+          // the folder being shown. Clearing the pane is the honest state.
+          setSelectedId(null);
+          setMoved({ subject: result.subject, idChanged: result.idChanged });
+          if (selectedFolder !== null) {
+            void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+          }
+        },
+      );
+    },
+    [selectedId, runAction, selectedFolder, activeQuery, loadMessages],
+  );
+
+  const remove = useCallback(() => {
+    const id = selectedId;
+    if (id === null) return;
+
+    void runAction(
+      () => deleteMessage(id),
+      (result) => {
+        setDeleting(false);
+        setEditing(false);
+        setMessage(null);
+        setSelectedId(null);
+        setDeletedSubject(result.subject);
+        if (selectedFolder !== null) {
+          void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+        }
+      },
+    );
+  }, [selectedId, runAction, selectedFolder, activeQuery, loadMessages]);
+
   const selectFolder = useCallback((folder: FolderTreeNode) => {
     setSelectedFolder(folder);
     setSelectedId(null);
@@ -317,6 +533,9 @@ export function MailboxWorkspace() {
     setVanished(false);
     setEditing(false);
     setSent(null);
+    setMoved(null);
+    setDeletedSubject(null);
+    setActionError(null);
     setSearchInput("");
     setActiveQuery("");
   }, []);
@@ -369,6 +588,23 @@ export function MailboxWorkspace() {
       <div className="flex w-80 shrink-0 flex-col border-r border-[var(--border)] bg-white">
         <PaneHeader>
           <span className="truncate">{selectedFolder?.displayName ?? "Messages"}</span>
+          {/*
+            Composing is the least-used entry point in this module - most
+            change-order mail originates from the automation - so it sits here
+            rather than anywhere more prominent. It creates a draft; it does not
+            open anything that can send.
+          */}
+          <button
+            type="button"
+            disabled={actionBusy}
+            onClick={() => {
+              setActionError(null);
+              setComposing(true);
+            }}
+            className="ml-auto shrink-0 rounded border border-[var(--border)] bg-white px-2 py-0.5 text-[0.7rem] font-medium normal-case tracking-normal hover:bg-[var(--surface)] disabled:opacity-50"
+          >
+            New message
+          </button>
         </PaneHeader>
 
         <form
@@ -458,6 +694,43 @@ export function MailboxWorkspace() {
               }
             }}
           />
+        ) : moved !== null ? (
+          <PaneMessage
+            title="Moved"
+            detail={
+              `“${moved.subject ?? "(no subject)"}” is now in the folder you chose. ` +
+              `It is in that folder in Outlook too.` +
+              // Should never appear. If it does, immutable ids have stopped
+              // taking effect and every id the browser holds is a move away
+              // from being stale - so it says so rather than hiding it.
+              (moved.idChanged
+                ? " Its identifier changed during the move, which is unexpected — tell IT."
+                : "")
+            }
+            action={
+              <button
+                type="button"
+                onClick={() => setMoved(null)}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)]"
+              >
+                Back to the list
+              </button>
+            }
+          />
+        ) : deletedSubject !== null ? (
+          <PaneMessage
+            title="Moved to Deleted Items"
+            detail={`“${deletedSubject}” is in Deleted Items in changeorder@phb1899.com. Drag it back in Outlook if that was a mistake.`}
+            action={
+              <button
+                type="button"
+                onClick={() => setDeletedSubject(null)}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)]"
+              >
+                Back to the list
+              </button>
+            }
+          />
         ) : vanished ? (
           <PaneMessage
             title="That message is no longer here"
@@ -487,6 +760,8 @@ export function MailboxWorkspace() {
             attachments={message.attachments}
             remoteImagesAllowed={message.remoteImagesAllowed}
             onShowImages={() => void openMessage(message.message.id, true)}
+            onAttachmentsChanged={() => void refreshOpenMessage()}
+            onClose={() => setEditing(false)}
             onSent={(summary) => {
               setSent(summary);
               setEditing(false);
@@ -512,6 +787,61 @@ export function MailboxWorkspace() {
             onEdit={
               message.message.isDraft ? () => setEditing(true) : undefined
             }
+            actionBusy={actionBusy}
+            actionError={actionError}
+            onRespond={respond}
+            onMove={() => {
+              setActionError(null);
+              setPicking(true);
+            }}
+            onDelete={() => {
+              setActionError(null);
+              setDeleting(true);
+            }}
+          />
+        )}
+
+        {/*
+          The dialogs sit inside the reading pane, which is `relative`, so each
+          covers the message it is about rather than the whole application. Only
+          one can be open: each is opened from a control the others disable.
+        */}
+        {picking && folders !== null && (
+          <FolderPicker
+            folders={folders}
+            currentFolderId={message?.message.parentFolderId ?? null}
+            busy={actionBusy}
+            error={actionError}
+            onCancel={() => {
+              setPicking(false);
+              setActionError(null);
+            }}
+            onConfirm={(folder) => move(folder.id)}
+          />
+        )}
+
+        {deleting && (
+          <DeleteConfirmation
+            subject={message?.message.subject ?? null}
+            busy={actionBusy}
+            error={actionError}
+            onCancel={() => {
+              setDeleting(false);
+              setActionError(null);
+            }}
+            onConfirm={remove}
+          />
+        )}
+
+        {composing && (
+          <ComposePrompt
+            busy={actionBusy}
+            error={actionError}
+            onCancel={() => {
+              setComposing(false);
+              setActionError(null);
+            }}
+            onCreate={compose}
           />
         )}
       </div>
@@ -602,10 +932,20 @@ function MessageView({
   result,
   onShowImages,
   onEdit,
+  actionBusy,
+  actionError,
+  onRespond,
+  onMove,
+  onDelete,
 }: {
   result: MessageResult;
   onShowImages: () => void;
   onEdit?: () => void;
+  actionBusy: boolean;
+  actionError: string | null;
+  onRespond: (mode: DerivedDraftMode) => void;
+  onMove: () => void;
+  onDelete: () => void;
 }) {
   const { message, attachments, remoteImagesAllowed } = result;
 
@@ -627,6 +967,23 @@ function MessageView({
           )}
         </div>
 
+        <div className="mt-3">
+          <MessageActions
+            busy={actionBusy}
+            // Replying to a draft is not a meaningful thing to do, and Graph
+            // refuses it. Move and delete still apply.
+            canRespond={!message.isDraft}
+            onRespond={onRespond}
+            onMove={onMove}
+            onDelete={onDelete}
+          />
+          {actionError !== null && (
+            <p role="alert" className="mt-2 text-xs text-red-700">
+              {actionError}
+            </p>
+          )}
+        </div>
+
         <dl className="mt-3 space-y-1 text-sm">
           <AddressRow label="From" addresses={message.from === null ? [] : [message.from]} />
           <AddressRow label="To" addresses={message.to} />
@@ -639,29 +996,13 @@ function MessageView({
           </div>
         </dl>
 
-        {attachments.length > 0 && (
-          <div className="mt-3 border-t border-[var(--border)] pt-3">
-            <p className="text-xs font-medium text-[var(--muted)]">
-              {attachments.length === 1 ? "1 attachment" : `${attachments.length} attachments`}
-            </p>
-            <ul className="mt-1.5 flex flex-wrap gap-2">
-              {attachments.map((a) => (
-                <li
-                  key={a.id}
-                  className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
-                  title={a.contentType ?? undefined}
-                >
-                  {a.name ?? "(unnamed)"}
-                  <span className="ml-1.5 text-[var(--muted)]">{formatSize(a.sizeBytes)}</span>
-                </li>
-              ))}
-            </ul>
-            {/* Phase 5 reads names and sizes only. Downloading content is Phase 6. */}
-            <p className="mt-1.5 text-xs italic text-[var(--muted)]">
-              Open the message in Outlook to download an attachment.
-            </p>
-          </div>
-        )}
+        {/*
+          Downloadable as of Phase 8. The bytes stream through the backend from
+          Graph and are never written anywhere - the alternative would have been
+          handing the browser a Graph URL, which needs the app-only token
+          attached, and a token in a browser can read the whole mailbox.
+        */}
+        <AttachmentList messageId={message.id} attachments={attachments} />
       </div>
 
       <MessageBodyFrame
@@ -717,11 +1058,4 @@ function formatDateTime(value: string | null): string {
     hour: "numeric",
     minute: "2-digit",
   });
-}
-
-function formatSize(bytes: number | null): string {
-  if (bytes === null) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

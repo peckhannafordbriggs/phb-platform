@@ -47,7 +47,14 @@ export function BodyEditor({
   onShowImages: () => void;
   remoteImagesAllowed: boolean;
 }) {
-  const [showNote, setShowNote] = useState(false);
+  /**
+   * Open already when there is no text to edit.
+   *
+   * A draft composed from scratch has no segments, so the only way to write
+   * anything in the text view is this field - and leaving it collapsed behind a
+   * link makes an empty draft look like one that cannot be edited at all.
+   */
+  const [showNote, setShowNote] = useState(segments.length === 0);
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -80,9 +87,23 @@ export function BodyEditor({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {segments.length === 0 ? (
+            /**
+             * Two different situations reach here, and the copy has to serve
+             * both. A draft composed from scratch has a genuinely empty body -
+             * this is the case "add a paragraph at the end" was built for, and
+             * pointing a person at the HTML source view to write their first
+             * sentence would be absurd. A body made only of markup - an image,
+             * a table of nothing but formatting - is the other, and the source
+             * view is the right answer there.
+             *
+             * So it names the ordinary path first and keeps the escape hatch as
+             * an aside.
+             */
             <p className="text-sm text-[var(--muted)]">
-              This message has no editable text. Use the HTML source view to change
-              it.
+              There is no text in this message yet. Use{" "}
+              <span className="font-medium">Add a paragraph at the end</span>{" "}
+              below to write it, or the HTML source view for anything
+              structural.
             </p>
           ) : (
             <ul className="space-y-3">

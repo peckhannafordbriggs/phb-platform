@@ -1,3 +1,4 @@
+import { ResponseType } from "@microsoft/microsoft-graph-client";
 import type { Client, GraphRequest } from "@microsoft/microsoft-graph-client";
 import type {
   Attachment,
@@ -21,8 +22,22 @@ import {
   extractBodySegments,
 } from "./body-text";
 import { sanitizeEmailHtml } from "./sanitize";
+import {
+  MAX_ATTACHMENT_BYTES,
+  SIMPLE_UPLOAD_MAX_BYTES,
+  UPLOAD_CHUNK_BYTES,
+  assertUploadAllowed,
+  safeAttachmentName,
+  safeDownloadContentType,
+} from "./attachments";
 import type {
+  AttachmentDownload,
   AttachmentSummary,
+  AttachmentUpload,
+  DeleteResult,
+  DerivedDraftMode,
+  MoveResult,
+  NewDraftInput,
   DraftChanges,
   DraftForEdit,
   GetMessageOptions,
@@ -136,6 +151,20 @@ const DRAFT_EDIT_SELECT = [
 const ATTACHMENT_SELECT = ["id", "name", "contentType", "size", "isInline"].join(
   ",",
 );
+
+/**
+ * The three Graph actions that produce a derived draft, keyed by the mode the
+ * platform speaks.
+ *
+ * A lookup rather than string interpolation at the call site: it means a mode is
+ * a member of a closed union, and no caller-supplied string can ever become a
+ * path segment naming some other Graph action.
+ */
+const DERIVED_DRAFT_ACTIONS: Record<DerivedDraftMode, string> = {
+  reply: "createReply",
+  replyAll: "createReplyAll",
+  forward: "createForward",
+};
 
 const DEFAULT_MESSAGE_PAGE_SIZE = 25;
 const MAX_MESSAGE_PAGE_SIZE = 100;
@@ -313,6 +342,16 @@ function toMessageSummary(message: Message): MessageSummary {
   };
 }
 
+/**
+ * Bytes as base64, for a simple attachment upload.
+ *
+ * Node's Buffer rather than a hand-rolled loop; this runs only in the Node
+ * runtime, which every mail route declares.
+ */
+function toBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64");
+}
+
 function toAttachmentSummary(attachment: Attachment): AttachmentSummary {
   const odataType = (attachment as { "@odata.type"?: string })["@odata.type"];
 
@@ -329,10 +368,26 @@ function toAttachmentSummary(attachment: Attachment): AttachmentSummary {
 export class ChangeOrderMailService {
   private readonly client: Client;
   private readonly mailbox: string;
+  private readonly uploadFetch: typeof fetch;
 
-  constructor(deps: { client: Client; mailbox: string }) {
+  constructor(deps: {
+    client: Client;
+    mailbox: string;
+    /**
+     * Used for the PUT of each upload-session chunk, and nothing else.
+     *
+     * An upload session hands back a pre-authenticated `uploadUrl`, which is why
+     * it cannot go through the Graph client: the client would attach a bearer
+     * token, and Microsoft documents that the Authorization header must be
+     * omitted on those PUTs. It is a constructor dependency rather than a bare
+     * `fetch` call so a test can still intercept it, and so this file remains
+     * the only place in the codebase that talks to Graph.
+     */
+    uploadFetch?: typeof fetch;
+  }) {
     this.client = deps.client;
     this.mailbox = deps.mailbox;
+    this.uploadFetch = deps.uploadFetch ?? globalThis.fetch;
   }
 
   /**
@@ -868,15 +923,503 @@ export class ChangeOrderMailService {
     };
   }
 
+  // ------------------------------------------------------------------------
+  // Phase 8: reply, reply-all, forward
+  // ------------------------------------------------------------------------
+
   /**
-   * The write gate, ready for the phase that adds writes.
+   * Creates a reply draft, in Exchange, from Exchange's own operation.
+   *
+   * Why this is not string assembly, restated because it is the load-bearing
+   * reason: `createReply` returns a real draft with the quoted original, the
+   * `In-Reply-To` and `References` headers, and the same conversationId as the
+   * message being replied to. Intake 6 matches replies by conversation ID, so a
+   * reply assembled by concatenating bodies breaks the automation's filing -
+   * silently, and nobody notices until a message does not get filed.
+   *
+   * The fence is applied to the SOURCE message's subject, read from Exchange.
+   * That is the right thing to gate on: the question being asked is "may this
+   * message be replied to", and the answer must not come from the caller.
+   *
+   * The draft this returns is opened in the Phase 6 editor. There is no separate
+   * reply surface, no reply-specific autosave and no reply-specific send.
+   */
+  async createReplyDraft(messageId: string): Promise<DraftForEdit> {
+    return this.createDerivedDraft(messageId, "reply");
+  }
+
+  /** Reply-all. Exchange decides the recipient list, from the original headers. */
+  async createReplyAllDraft(messageId: string): Promise<DraftForEdit> {
+    return this.createDerivedDraft(messageId, "replyAll");
+  }
+
+  /**
+   * Forward.
+   *
+   * The original attachments come along, because `createForward` copies them -
+   * that is Exchange's behaviour, not ours, and it is asserted against the live
+   * mailbox rather than assumed. Nothing here enumerates or re-uploads them.
+   */
+  async createForwardDraft(messageId: string): Promise<DraftForEdit> {
+    return this.createDerivedDraft(messageId, "forward");
+  }
+
+  /**
+   * The one implementation behind the three above.
+   *
+   * `mode` is a closed union mapped to a fixed path here, so no caller-supplied
+   * string ever reaches the URL - a mode that does not exist is a type error
+   * rather than a request to an arbitrary Graph action.
+   */
+  private async createDerivedDraft(
+    messageId: string,
+    mode: DerivedDraftMode,
+  ): Promise<DraftForEdit> {
+    const action = DERIVED_DRAFT_ACTIONS[mode];
+
+    // Read the source subject from Exchange and fence on it. A caller that could
+    // supply the subject could supply "ZZTEST" and reply to anything.
+    await this.assertWritable(messageId, `createDerivedDraft.${mode}`);
+
+    const created = await this.call(`createDerivedDraft.${mode}`, () =>
+      this.client
+        .api(this.path(`/messages/${encodeURIComponent(messageId)}/${action}`))
+        // An empty body deliberately. Passing `comment` or `message` here would
+        // let a caller put content into a draft it never opened; the reviewer
+        // types into the editor instead, through updateDraft, which is fenced.
+        .post({}) as Promise<Message>,
+    );
+
+    const draftId = created.id ?? null;
+    if (draftId === null || draftId.length === 0) {
+      throw new MailError("unexpected", {
+        detail: `${action} returned no message id for source ${messageId}.`,
+      });
+    }
+
+    // Re-read rather than trusting the create response: the editor needs the
+    // full DRAFT_EDIT_SELECT shape, the segments computed from the stored body,
+    // and the changeKey Exchange actually settled on.
+    return this.getDraftForEdit(draftId);
+  }
+
+  // ------------------------------------------------------------------------
+  // Phase 8: compose from scratch
+  // ------------------------------------------------------------------------
+
+  /**
+   * Creates an empty draft, which then opens in the Phase 6 editor.
+   *
+   * The ZZTEST fence is applied to the subject the caller supplied, and this is
+   * the one place in the service where that is the case. It is not a hole in the
+   * rule, it is the rule reaching its limit: the message does not exist yet, so
+   * Exchange has no subject to read. What the rule protects against - a caller
+   * naming a subject in order to write to a message it is not allowed to touch -
+   * cannot happen here, because the only message this can affect is the empty one
+   * it is about to create.
+   *
+   * It is then verified the other way round: after the create, the subject is
+   * read back FROM EXCHANGE and the fence applied again. From that point on every
+   * operation on the draft - edit, attach, send - is fenced on Exchange's copy
+   * like everything else.
+   *
+   * The body is written as explicitly-empty HTML rather than omitted, so the
+   * editor gets a deterministic bodyFormat instead of whatever Graph defaults to.
+   * An empty body has no text segments to splice, which is the case the editor's
+   * "add a paragraph" affordance exists for.
+   */
+  async createDraft(input: NewDraftInput = {}): Promise<DraftForEdit> {
+    const subject = input.subject ?? "";
+    assertWriteAllowed(subject, "createDraft");
+
+    const payload: Record<string, unknown> = {
+      subject,
+      body: {
+        contentType: input.body?.format === "text" ? "Text" : "HTML",
+        content: input.body?.content ?? "",
+      },
+    };
+    if (input.to !== undefined) payload.toRecipients = toGraphRecipients(input.to);
+    if (input.cc !== undefined) payload.ccRecipients = toGraphRecipients(input.cc);
+    if (input.bcc !== undefined) payload.bccRecipients = toGraphRecipients(input.bcc);
+
+    const created = await this.call("createDraft", () =>
+      this.client.api(this.path("/messages")).post(payload) as Promise<Message>,
+    );
+
+    const draftId = created.id ?? null;
+    if (draftId === null || draftId.length === 0) {
+      throw new MailError("unexpected", {
+        detail: "createDraft returned no message id.",
+      });
+    }
+
+    const draft = await this.getDraftForEdit(draftId);
+
+    // The fence, now on Exchange's own copy. Belt and braces rather than
+    // theatre: if Exchange ever normalised the subject into something outside
+    // the fence, every later operation on this draft would be refused, and it is
+    // better to find that out here than at the moment somebody tries to send.
+    assertWriteAllowed(draft.subject, "createDraft.verify");
+
+    return draft;
+  }
+
+  // ------------------------------------------------------------------------
+  // Phase 8: move and delete
+  // ------------------------------------------------------------------------
+
+  /**
+   * Moves a message to another folder.
+   *
+   * The ID question, verified rather than trusted: Exchange assigns a moved
+   * message a NEW id unless immutable IDs are in use. They are - the middleware
+   * sets `Prefer: IdType="ImmutableId"` on every request without exception - so
+   * the id should survive the move. This returns both ids and whether they
+   * differed, so a regression in that header shows up as data rather than as a
+   * message that mysteriously cannot be found afterwards.
+   *
+   * `destinationId` is the only thing taken from the caller, and it is an opaque
+   * folder id. A folder that was renamed or deleted in Outlook comes back from
+   * Graph as a not-found, which is an ordinary event here, not a fault.
+   */
+  async moveMessage(
+    messageId: string,
+    destinationFolderId: string,
+  ): Promise<MoveResult> {
+    const subject = await this.subjectOf(messageId);
+    assertWriteAllowed(subject, "moveMessage");
+
+    if (destinationFolderId.trim().length === 0) {
+      throw new MailError("not_found", {
+        detail: "moveMessage refused: no destination folder id.",
+      });
+    }
+
+    const moved = await this.call("moveMessage", () =>
+      this.client
+        .api(this.path(`/messages/${encodeURIComponent(messageId)}/move`))
+        .post({ destinationId: destinationFolderId }) as Promise<Message>,
+    );
+
+    const id = moved.id ?? messageId;
+    const idChanged = id !== messageId;
+
+    if (idChanged) {
+      // Not thrown: the move itself succeeded and the caller is handed the new
+      // id, so the operation is fine. It is logged loudly because it means the
+      // immutable-id header stopped taking effect, and every id the platform
+      // holds is then one move away from being stale.
+      logger.warn("mail.move_changed_id", {
+        outcome: "id_changed",
+        reason: "immutable ids appear not to be in effect",
+        route: "moveMessage",
+      });
+    }
+
+    return {
+      id,
+      previousId: messageId,
+      idChanged,
+      destinationFolderId,
+      subject,
+    };
+  }
+
+  /**
+   * Deletes a message. To Deleted Items, recoverably.
+   *
+   * `DELETE /messages/{id}` is a soft delete in Exchange - the message lands in
+   * Deleted Items and can be dragged back out in Outlook. That is the whole
+   * reason this operation is allowed to exist at this level of confirmation.
+   *
+   * There is deliberately no counterpart for `permanentDelete`. Not behind a
+   * flag, not behind a confirmation, not in an admin screen: CLAUDE.md and
+   * docs/03 both forbid it, it destroys the audit trail, and there is no
+   * legitimate need for it in a change-order mailbox.
+   */
+  async deleteMessage(messageId: string): Promise<DeleteResult> {
+    const subject = await this.subjectOf(messageId);
+    assertWriteAllowed(subject, "deleteMessage");
+
+    await this.call("deleteMessage", () =>
+      this.client
+        .api(this.path(`/messages/${encodeURIComponent(messageId)}`))
+        .delete() as Promise<unknown>,
+    );
+
+    // Returned so the caller can write an audit row describing what went; after
+    // this the message is only findable in Deleted Items.
+    return { subject };
+  }
+
+  // ------------------------------------------------------------------------
+  // Phase 8: attachments
+  // ------------------------------------------------------------------------
+
+  /**
+   * One attachment's bytes, for streaming straight back to the browser.
+   *
+   * Nothing is written to disk and nothing is cached. The bytes exist for the
+   * length of one response and are then dropped - docs/03, "never persist
+   * attachment content", which includes not persisting it briefly.
+   *
+   * Metadata first, then content, for three reasons: the size is checked before
+   * anything large is pulled into memory, the name and content type come from
+   * Exchange rather than from the caller, and an attachment that is not there is
+   * a cheap not-found rather than a failed download.
+   */
+  async downloadAttachment(
+    messageId: string,
+    attachmentId: string,
+  ): Promise<AttachmentDownload> {
+    const meta = await this.call("downloadAttachment.meta", () =>
+      this.client
+        .api(
+          this.path(
+            `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+          ),
+        )
+        .select(ATTACHMENT_SELECT)
+        .get() as Promise<Attachment>,
+    );
+
+    const summary = toAttachmentSummary(meta);
+
+    if ((summary.sizeBytes ?? 0) > MAX_ATTACHMENT_BYTES) {
+      throw new MailError("attachment_too_large", {
+        detail:
+          `Refused download of ${summary.sizeBytes} bytes from message ` +
+          `${messageId}: over the ${MAX_ATTACHMENT_BYTES}-byte limit.`,
+      });
+    }
+
+    /**
+     * `/$value` rather than reading `contentBytes` off the resource.
+     *
+     * Two reasons. `contentBytes` is base64, so it costs a third more memory and
+     * a decode for every download. And selecting it means the metadata read and
+     * the content read are the same request, which would pull whole attachments
+     * into memory just to answer "how big is it".
+     *
+     * An itemAttachment - a message forwarded as an attachment - answers with the
+     * MIME of that message, which is a valid .eml file. Both cases work.
+     */
+    const buffer = (await this.call("downloadAttachment.content", () =>
+      this.client
+        .api(
+          this.path(
+            `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/$value`,
+          ),
+        )
+        .responseType(ResponseType.ARRAYBUFFER)
+        .get() as Promise<ArrayBuffer>,
+    )) as ArrayBuffer;
+
+    const name = safeAttachmentName(summary.name);
+
+    return {
+      // An item attachment is a message, not a file, and Exchange gives it no
+      // extension of its own. Saving it as .eml is what makes it openable.
+      name: summary.isItemAttachment && !name.toLowerCase().endsWith(".eml")
+        ? `${name}.eml`
+        : name,
+      contentType: summary.isItemAttachment
+        ? "message/rfc822"
+        : safeDownloadContentType(summary.contentType),
+      bytes: new Uint8Array(buffer),
+    };
+  }
+
+  /**
+   * Adds one attachment to a draft.
+   *
+   * Only to a draft: `getDraftForEdit` refuses anything that is not one, and a
+   * sent message is immutable in Exchange regardless. The fence runs on the
+   * subject that read returned.
+   *
+   * The existing attachments are never named in the request. That is what keeps
+   * them: a draft the automation created already carries attachments downstream
+   * flows expect, and this adds a sibling rather than replacing a set.
+   *
+   * Under 3 MB is a simple POST; at or above it Graph requires an upload session.
+   * docs/03 fixes that boundary, and `assertUploadAllowed` fixes the ceiling.
+   */
+  async addDraftAttachment(
+    messageId: string,
+    upload: AttachmentUpload,
+  ): Promise<AttachmentSummary[]> {
+    const draft = await this.getDraftForEdit(messageId);
+    assertWriteAllowed(draft.subject, "addDraftAttachment");
+
+    const { name, contentType } = assertUploadAllowed({
+      name: upload.name,
+      contentType: upload.contentType,
+      sizeBytes: upload.bytes.byteLength,
+    });
+
+    if (upload.bytes.byteLength < SIMPLE_UPLOAD_MAX_BYTES) {
+      await this.call("addDraftAttachment.simple", () =>
+        this.client
+          .api(this.path(`/messages/${encodeURIComponent(messageId)}/attachments`))
+          .post({
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            name,
+            contentType,
+            contentBytes: toBase64(upload.bytes),
+          }) as Promise<Attachment>,
+      );
+    } else {
+      await this.uploadLargeAttachment(messageId, { ...upload, name, contentType });
+    }
+
+    // Re-read rather than reporting what we sent. This is the assertion that the
+    // pre-existing attachments survived, and the caller shows the list it
+    // returns - so "the other one is gone" is visible immediately rather than at
+    // send time.
+    return this.listAttachments(messageId);
+  }
+
+  /**
+   * An attachment at or above 3 MB, through an upload session.
+   *
+   * The session hands back a pre-authenticated `uploadUrl`, and each chunk is
+   * PUT to it WITHOUT an Authorization header - Microsoft documents that
+   * explicitly, and sending one can fail the upload. That is why these PUTs do
+   * not go through the Graph client, and why `uploadFetch` is a constructor
+   * dependency rather than a bare global call.
+   *
+   * Chunks are sequential, not parallel. Graph requires the ranges to arrive in
+   * order, and parallel PUTs against one mailbox through one app identity is how
+   * throttling starts.
+   */
+  private async uploadLargeAttachment(
+    messageId: string,
+    upload: AttachmentUpload,
+  ): Promise<void> {
+    const total = upload.bytes.byteLength;
+
+    const session = await this.call("addDraftAttachment.createUploadSession", () =>
+      this.client
+        .api(
+          this.path(
+            `/messages/${encodeURIComponent(messageId)}/attachments/createUploadSession`,
+          ),
+        )
+        .post({
+          AttachmentItem: {
+            attachmentType: "file",
+            name: upload.name,
+            size: total,
+            contentType: upload.contentType,
+          },
+        }) as Promise<{ uploadUrl?: string }>,
+    );
+
+    const uploadUrl = session.uploadUrl ?? "";
+    if (uploadUrl.length === 0) {
+      throw new MailError("unexpected", {
+        detail: "createUploadSession returned no uploadUrl.",
+      });
+    }
+
+    for (let offset = 0; offset < total; offset += UPLOAD_CHUNK_BYTES) {
+      const end = Math.min(offset + UPLOAD_CHUNK_BYTES, total) - 1;
+      const chunk = upload.bytes.subarray(offset, end + 1);
+
+      let response: Response;
+      try {
+        response = await this.uploadFetch(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Length": String(chunk.byteLength),
+            "Content-Range": `bytes ${offset}-${end}/${total}`,
+          },
+          // A copy, so the request body cannot be a view over a buffer something
+          // else still holds.
+          body: new Uint8Array(chunk).buffer as ArrayBuffer,
+        });
+      } catch (error) {
+        throw new MailError("network", {
+          detail: `Attachment upload chunk ${offset}-${end}/${total} never got an answer.`,
+          cause: error,
+        });
+      }
+
+      if (response.status === 429 || response.status === 503) {
+        // Deliberately not retried here. The Graph client retries a throttled
+        // request once; an upload session cannot be resumed by replaying a chunk
+        // blindly, and a half-uploaded attachment that looks complete is worse
+        // than one the person is asked to add again.
+        throw new MailError("throttled", {
+          detail: `Attachment upload throttled at ${offset}-${end}/${total}.`,
+        });
+      }
+
+      if (!response.ok) {
+        throw new MailError("unexpected", {
+          detail:
+            `Attachment upload chunk ${offset}-${end}/${total} answered ` +
+            `${response.status}.`,
+        });
+      }
+    }
+  }
+
+  /**
+   * Removes one attachment from a draft.
+   *
+   * Draft only, and that is a refusal rather than a UI convenience: a sent or
+   * received message is immutable in Exchange, and removing an attachment from
+   * the record of what was actually sent would be falsifying it.
+   *
+   * Removing one attachment the automation attached is a legitimate human
+   * decision. Disturbing the others is not, so this names exactly one id and the
+   * refreshed list it returns is the proof.
+   */
+  async removeDraftAttachment(
+    messageId: string,
+    attachmentId: string,
+  ): Promise<AttachmentSummary[]> {
+    let draft: DraftForEdit;
+    try {
+      draft = await this.getDraftForEdit(messageId);
+    } catch (error) {
+      if (error instanceof MailError && error.kind === "not_draft") {
+        throw new MailError("not_permitted", {
+          detail:
+            `removeDraftAttachment refused: message ${messageId} has already ` +
+            `been sent or received, so its attachments are part of the record.`,
+        });
+      }
+      throw error;
+    }
+
+    assertWriteAllowed(draft.subject, "removeDraftAttachment");
+
+    await this.call("removeDraftAttachment", () =>
+      this.client
+        .api(
+          this.path(
+            `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+          ),
+        )
+        .delete() as Promise<unknown>,
+    );
+
+    return this.listAttachments(messageId);
+  }
+
+  /**
+   * The write gate, on its own, for an operation that has no other reason to
+   * read the message first.
    *
    * It reads the subject from Exchange rather than taking it from the caller, so
    * the ZZTEST fence is decided by what is actually in the mailbox. A caller that
    * could pass its own subject could pass "ZZTEST" and write anywhere.
    *
-   * Phase 4 implements no write operation. This exists so that when one is added
-   * it is added to something already correct.
+   * Phase 8's move and delete use it directly; the draft operations get the same
+   * check for free, because they have already read the draft.
    */
   async assertWritable(messageId: string, operation: string): Promise<void> {
     assertWriteAllowed(await this.subjectOf(messageId), operation);
@@ -925,6 +1468,10 @@ export function createMailService(
   return new ChangeOrderMailService({
     client: transport === undefined ? graphClient() : createGraphClient(transport),
     mailbox,
+    // An upload-session PUT does not go through the Graph client - see the
+    // constructor - so a test that intercepts the transport has to intercept
+    // this too, or the one request that leaves the process is the real one.
+    uploadFetch: transport?.fetchImpl,
   });
 }
 

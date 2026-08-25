@@ -150,6 +150,21 @@ review / edit / send verified end to end.
 **Phase 7 Part A complete** — Dockerfile, CI, Bicep. Part B waits on the Azure
 subscription.
 
+**Phase 8 implemented, live verification outstanding.** Reply / reply-all /
+forward via Graph's own `createReply*` operations, compose from scratch, move,
+delete to Deleted Items, and attachment download / add / remove. Every one of
+them produces or edits a draft that opens in the **Phase 6 editor** — there is
+one editing surface and adding a second is a mistake. `permanentDelete` is
+exposed nowhere and a test enforces that.
+
+One guard changed, deliberately: the ZZTEST fence now skips Exchange's own
+`RE:` / `FW:` prefixes, because `createReply` names its draft `RE: <original>`
+and every derived draft would otherwise be uneditable outside production. A reply
+to a real change order is still refused. See `docs/runbook.md`.
+
+Still to do: the manual checks against the live mailbox listed in
+`docs/PHASE-8.md`. `scripts/co-verify-phase8.ts` runs them; it never sends.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

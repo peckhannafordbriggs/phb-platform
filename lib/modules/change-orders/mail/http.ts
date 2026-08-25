@@ -41,6 +41,14 @@ const RESPONSE_FOR: Record<MailErrorKind, { status: number; code: string }> = {
   not_draft: { status: 403, code: "mail_not_draft" },
   conflict: { status: 409, code: "mail_conflict" },
   locked: { status: 409, code: "mail_locked" },
+  // 422 rather than 500: the request was well-formed and the value in it was
+  // not acceptable, which is what 422 is for. The browser shows the reason
+  // beside the file picker rather than a failure pane.
+  attachment_too_large: { status: 422, code: "mail_attachment_too_large" },
+  attachment_rejected: { status: 422, code: "mail_attachment_rejected" },
+  // 403, for the same reason not_draft is: understood, and refused on the state
+  // of the message rather than on who is asking.
+  not_permitted: { status: 403, code: "mail_not_permitted" },
   unexpected: { status: 500, code: "mail_error" },
 };
 

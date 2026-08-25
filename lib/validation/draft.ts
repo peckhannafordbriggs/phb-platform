@@ -82,3 +82,54 @@ export type DraftPatchInput = z.infer<typeof draftPatchSchema>;
 export const draftSendSchema = z.strictObject({
   expectedChangeKey: z.string().max(500).nullable(),
 });
+
+/**
+ * Creating a draft from scratch.
+ *
+ * Every field is optional, because an empty draft is a legitimate thing to
+ * create - it opens in the editor and is filled in there. What is NOT here is
+ * the point, as with the patch schema above: no attachments, no folder, no
+ * flags, and above all nothing that sends. Creating and sending are two
+ * requests, always, and a human sees the draft in between.
+ */
+export const newDraftSchema = z.strictObject({
+  subject: z.string().max(500).optional(),
+  to: recipients.optional(),
+  cc: recipients.optional(),
+  bcc: recipients.optional(),
+  body: z
+    .strictObject({
+      content: z.string().max(5_000_000),
+      format: z.enum(["html", "text"]),
+    })
+    .optional(),
+});
+
+export type NewDraftInputParsed = z.infer<typeof newDraftSchema>;
+
+/**
+ * Reply, reply-all or forward.
+ *
+ * The mode is the ONLY field. No comment, no body, no recipients: the draft
+ * Exchange produces is what opens in the editor, and everything a person wants
+ * to say goes in through the same fenced edit path as any other draft. A
+ * `comment` field here would be a second way to put content in a message, and
+ * the whole safety model rests on there being one.
+ */
+export const derivedDraftSchema = z.strictObject({
+  mode: z.enum(["reply", "replyAll", "forward"]),
+});
+
+export type DerivedDraftInput = z.infer<typeof derivedDraftSchema>;
+
+/**
+ * Moving a message.
+ *
+ * An opaque Exchange folder id and nothing else. Bounded in length so a
+ * pathological value is rejected at the boundary rather than inside a URL.
+ */
+export const moveMessageSchema = z.strictObject({
+  destinationFolderId: z.string().trim().min(1).max(512),
+});
+
+export type MoveMessageInput = z.infer<typeof moveMessageSchema>;

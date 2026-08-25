@@ -482,18 +482,301 @@ system**, and Outlook holds no lock at all.
 
 ## A write was refused outside production — `mail_write_disabled`
 
-**Symptom.** A draft edit, move or delete fails with `mail_write_disabled` and
-`"event":"mail.write_blocked"`.
+**Symptom.** A draft edit, reply, forward, compose, move, delete or attachment
+change fails with `mail_write_disabled` and `"event":"mail.write_blocked"`.
 
 **Cause.** Outside production, write operations are permitted only on messages
 whose subject **begins with** `ZZTEST`. Contains-anywhere is not enough — a
 vendor could otherwise name a real message so the platform would write to it.
 
 The subject is read from Exchange at the moment of the check, not taken from the
-caller, so passing `"ZZTEST"` in as an argument does not open the fence.
+caller, so passing `"ZZTEST"` in as an argument does not open the fence. There is
+**one** exception, and it is structural rather than a loophole: creating a draft
+from scratch has no message in Exchange to read a subject from, so the fence is
+applied to the subject the caller asked for — and then applied a second time to
+what Exchange actually stored, before the draft is handed back. A caller who lies
+about the subject affects only the empty draft it is about to create.
+
+**Exchange's reply and forward prefixes are skipped.** `RE:`, `FW:` and `FWD:`
+are stripped, repeatedly, before the `ZZTEST` test:
+
+| Subject | Inside the fence? |
+|---|---|
+| `ZZTEST anything` | yes |
+| `RE: ZZTEST anything` | yes |
+| `FW: RE: ZZTEST anything` | yes |
+| `[CCHMC RFI 229] New CO logged` | no |
+| `RE: [CCHMC RFI 229] New CO logged` | **no** |
+| `Notes RE: ZZTEST` | no — the prefix has to be at the front |
+
+**Why that was necessary, and not a weakening.** `createReply` names the draft it
+produces `RE: <original>`. Without stripping the prefix, replying to a ZZTEST
+message in development produced a draft called `RE: ZZTEST …` that the platform
+would then refuse to edit or send — so the whole reply path was unverifiable
+outside production, which is the only place verifying it is possible at all.
+The case that protects the live pipeline is unchanged: a reply to a real change
+order is still refused.
+
+en-US prefixes only. `AW:`, `WG:` and other locales are deliberately absent —
+this mailbox is en-US and will never produce them.
 
 **Fix.** To exercise a write path in development, create a message in the mailbox
 whose subject starts with `ZZTEST`. Do not disable the guard.
+
+---
+
+# Change Orders — full email actions (Phase 8)
+
+## Reply and forward must come from Exchange, never from string assembly
+
+**Read this before touching anything in the respond path.** It is the entry in
+this file most likely to be "simplified" into a silent production failure.
+
+The platform creates a reply by asking Exchange for one:
+
+```
+POST /users/{mailbox}/messages/{id}/createReply
+POST /users/{mailbox}/messages/{id}/createReplyAll
+POST /users/{mailbox}/messages/{id}/createForward
+```
+
+The body of that POST is `{}`. Nothing about the message comes from the caller.
+
+**What Exchange gives back that hand-building would lose:** the quoted original,
+the `In-Reply-To` and `References` headers, the recipient list derived from the
+original headers, and — the load-bearing one — the **same `conversationId` as the
+message being replied to**.
+
+**Intake 6 matches replies by conversation ID.** A reply that breaks the thread
+breaks the automation's filing, and it breaks it *silently* — no error, no
+bounce. Nobody notices until somebody asks why a message was never filed. That
+is the failure this design exists to prevent, and it is why the route schema
+rejects a `comment`, a `body`, or recipients: `createReply` would happily accept a
+`comment` and put it in the draft, which would be a second way to get content
+into an outbound message. There is exactly one — the editor, with a human looking
+at it.
+
+**Attachments come along on a forward.** `createForward` copies them; the
+platform does not enumerate or re-upload anything. Verified against the live
+mailbox rather than assumed — see the verification record below.
+
+---
+
+## A reply draft opens in the same editor as everything else
+
+There is one editing surface. Reply, reply-all, forward and compose all end the
+same way: a draft id, opened in the Phase 6 editor, with the same splice-based
+body editing, the same autosave, the same advisory lock, the same send
+confirmation and the same audit row.
+
+**If you are about to add a second one, don't.** A separate compose window would
+mean a second place for the splice logic, the changeKey conflict check and the
+send confirmation to drift — and the send confirmation is the last thing standing
+between a draft and a vendor.
+
+**A composed draft starts genuinely empty**, which is the one case the editor's
+*Add a paragraph at the end* field exists for: an empty body has no text runs to
+splice into, so the segment fields have nothing to show. The field is open by
+default when there are no segments, precisely so an empty draft does not look
+like one that cannot be edited. The draft is created with an explicitly empty
+**HTML** body rather than no body at all, so `bodyFormat` is deterministic
+instead of whatever Graph defaults to.
+
+---
+
+## Moving a message
+
+```
+POST /users/{mailbox}/messages/{id}/move   { "destinationId": "<folder id>" }
+```
+
+**The message keeps its id.** Exchange assigns a moved message a *new* id
+normally, but `Prefer: IdType="ImmutableId"` is set on every request by
+middleware, and immutable ids survive a move. This is not taken on trust: the
+service compares the id before and after, returns `idChanged`, and logs
+`"event":"mail.move_changed_id"` at warn level if it ever differs.
+
+**If you see that log line, treat it as serious.** It means the immutable-id
+header has stopped taking effect, and every id the browser is holding is one move
+away from being stale. The symptom users would report is messages that cannot be
+reopened. Start at `ImmutableIdMiddleware` in
+`lib/modules/change-orders/graph/client.ts`.
+
+| What the user sees | Code | Cause | What to do |
+|---|---|---|---|
+| **"That item is no longer in the mailbox"** after picking a folder | `not_found` | The destination folder was renamed or deleted in Outlook since the tree was read. Graph answers `ErrorFolderNotFound`. | Reload the page to re-read the tree, then move again. |
+| Same, on the message rather than the folder | `not_found` | The message id is stale — Power Automate filed it already, or somebody moved it in Outlook. A stale id is a **400** from Graph, not a 404, and is mapped to `not_found` deliberately. | Nothing. The list refreshes. |
+| **"Its identifier changed during the move"** in the moved banner | n/a | `idChanged` was true. Should be impossible. | The paragraph above. |
+
+The folder picker opens every folder that has children, unlike the sidebar. That
+is deliberate: `Projects` is a child of Inbox, so a collapsed tree in a *picker*
+hides every destination anybody actually wants.
+
+---
+
+## Deleting a message — it is not permanent, and it never will be
+
+```
+DELETE /users/{mailbox}/messages/{id}
+```
+
+**This is Exchange's soft delete.** The message lands in **Deleted Items** in
+`changeorder@phb1899.com` and stays there until Exchange's retention removes it.
+Anyone with the mailbox open in Outlook can drag it back. The confirmation dialog
+says so in those words, deliberately: a person who believes a delete is permanent
+avoids an operation that is safe, or goes looking for one that is not.
+
+**`permanentDelete` is not exposed, and must never be.** Not behind a
+confirmation, not in an admin screen, not behind an environment variable.
+`CLAUDE.md` and `docs/03-exchange-and-graph.md` both forbid it, it destroys the
+audit trail, and there is no legitimate need for it in a change-order mailbox.
+Three tests enforce this: no service method whose name contains `permanent`,
+`purge` or `harddelete`; the string `permanentDelete` appears in no source file
+under `lib/modules/change-orders`, `app/api/modules/change-orders` or
+`app/(modules)/change-orders` outside a comment; and the service write allowlist
+must be edited by hand before any new write can ship.
+
+**Deleting a message somebody already deleted** answers `not_found`. Ordinary,
+not an error.
+
+---
+
+## Attachments
+
+### Downloading
+
+The bytes stream **through the backend** from Graph:
+
+```
+GET /messages/{messageId}/attachments/{attachmentId}          # metadata first
+GET /messages/{messageId}/attachments/{attachmentId}/$value   # then the bytes
+```
+
+**Why not hand the browser a Graph URL.** It would need the app-only token
+attached, and that token can read the entire mailbox. Nothing that reaches a
+browser may be able to do that.
+
+**Nothing is written to disk or to the database, ever** — not even briefly. The
+bytes live in memory for the length of one response. `docs/03`: never persist
+attachment content.
+
+Metadata is read first so the size is known before anything large is pulled into
+memory, and so `contentBytes` is never selected on a message read. An attachment
+over 25 MB is refused with `mail_attachment_too_large` before any content is
+fetched.
+
+**Three independent reasons the browser will not execute a downloaded
+attachment**, because a vendor chooses its declared type and one of these being
+enough is not something to rely on:
+
+1. A renderable content type — `text/html`, `image/svg+xml`, `text/xml`,
+   `application/xhtml+xml` — is served as `application/octet-stream` instead.
+2. `Content-Disposition: attachment`, never `inline`.
+3. `X-Content-Type-Options: nosniff`.
+
+**The filename never reaches a header in the form a vendor wrote it.**
+`safeAttachmentName` discards everything before the last `/` **or** `\` (both,
+because the platform runs on Linux in Azure and Windows locally), strips control
+characters — CR and LF above all, where a newline would be header injection
+rather than an odd filename — neutralises Windows device names like `CON.pdf`,
+and never returns an empty string. The header carries both spellings per RFC
+6266: an ASCII-reduced `filename=` and the real UTF-8 name in `filename*`.
+
+A message forwarded as an attachment (an *item* attachment) is a message rather
+than a file, so it is served as `message/rfc822` and named `.eml` — otherwise it
+downloads with no extension and will not open.
+
+### Adding
+
+Under 3 MB is a single POST. At or above 3 MB Graph requires
+`createUploadSession`, and the chunks are PUT to the pre-authenticated
+`uploadUrl` **without** an Authorization header — Microsoft documents that, and
+sending one can fail the upload. That is the one place in this codebase where a
+request to Microsoft does not go through the Graph client; it uses the service's
+injected `uploadFetch` so it stays inside the service boundary and stays
+testable.
+
+Chunks are sequential, 3.2 MB each, in order. Not parallel — Graph requires the
+ranges in order, and parallel PUTs against one mailbox through one app identity
+is how throttling starts.
+
+**A throttled chunk fails the whole upload rather than retrying.** An upload
+session cannot be resumed by replaying a chunk blindly, and a half-uploaded
+attachment that looks complete is worse than asking the person to add the file
+again. The user sees *"The mailbox is busy. Try again in a moment."*
+
+### What is refused, and why
+
+| Refusal | Code | Rule |
+|---|---|---|
+| Program or script content | `mail_attachment_rejected` | Blocked by **extension** and by **content type**, independently. Extension because the content type is whatever the browser guessed and an attacker picks it; content type because the name can be anything. **Every** extension in the name is tested, not only the last — `invoice.pdf.exe` ends in `.exe`, and `invoice.exe.pdf` is the trick that relies on Windows hiding known extensions. |
+| Over 25 MB | `mail_attachment_too_large` | Exchange Online's own per-message ceiling is 25 MB for most tenants, and a message over it is rejected **at send time** — after the human clicked send, which is the worst possible moment to find out. |
+| An empty file | `mail_attachment_rejected` | Nothing useful, and an ambiguous request. |
+| Removing an attachment from a sent or received message | `mail_not_permitted` | A sent message is the record of what actually went. Editing that record would be falsifying it. Exchange refuses it anyway; this is the honest error rather than a Graph failure. |
+
+A refused attachment is answered as **422**, not 500: the request was well-formed
+and the value in it was not acceptable. The browser shows the reason next to the
+file picker rather than a failure pane.
+
+### The assertion that matters most
+
+**A draft the automation created already carries attachments that downstream
+flows expect.** Adding or removing one must not disturb the others.
+
+Two things make that true rather than hoped-for. The add request never names the
+existing attachments — it adds a sibling rather than replacing a set, so Exchange
+has nothing to interpret as "the whole collection". And every add and remove
+returns the **refreshed list read back from Exchange**, which is what the browser
+displays. So "the other attachments survived" is something the person sees, not
+something they assume.
+
+---
+
+## Who moved, deleted or attached — the audit trail
+
+Same reasoning as `mail.sent`: under app-only auth Exchange records the
+*application* as having done it, so these rows are the only record of which
+person did.
+
+```sql
+SELECT a.occurred_at,
+       a.action,
+       e.email                 AS by,
+       a.metadata->>'subject'  AS subject,
+       a.metadata
+FROM audit_events a
+LEFT JOIN employees e ON e.id = a.actor_employee_id
+WHERE a.action IN ('mail.moved', 'mail.deleted', 'mail.draft_created',
+                   'mail.attachment_added', 'mail.attachment_removed')
+ORDER BY a.occurred_at DESC
+LIMIT 50;
+```
+
+| Action | Metadata worth reading |
+|---|---|
+| `mail.moved` | `destinationFolderId`, `subject`, and `idChanged` — see the move section |
+| `mail.deleted` | `subject`, and `destination: "deleteditems"` so the row says where to go looking |
+| `mail.draft_created` | `mode` — `reply`, `replyAll`, `forward` or `compose` — and `sourceMessageId`, which is null for a composed one. A reply draft nobody remembers making is otherwise indistinguishable from one the automation produced. |
+| `mail.attachment_added` | `name` and `sizeBytes`. **Never content** — an audit row is not a place to start persisting attachment bytes. |
+| `mail.attachment_removed` | `attachmentId` and how many remain |
+
+---
+
+## The service write allowlist — read this before adding a write
+
+`tests/mail-guards.test.ts` asserts that the set of write-shaped methods on the
+mail service is **exactly** a list written out by hand in that test. Adding a new
+way to change the mailbox fails the suite until somebody comes to that list and
+names it.
+
+That is the point, and it is not a formality: the list is where the reviewer
+finds out that a new write exists at all. It currently holds eleven entries,
+including `createDerivedDraft` — the private method the three `createReply*`
+methods share. Private is a compile-time notion in TypeScript, so a private write
+method is still a write method at runtime, and naming it is the honest outcome.
+
+The same file also asserts that `sendMail` and `permanentDelete` appear nowhere in
+the module, its API routes or its UI — comments that forbid them excepted.
 
 ---
 

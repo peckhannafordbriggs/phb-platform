@@ -29,8 +29,47 @@ function inProduction(): boolean {
 
 export const ZZTEST_PREFIX = "ZZTEST";
 
+/**
+ * The reply and forward prefixes Exchange writes for us.
+ *
+ * Not cosmetic. `createReply` and `createForward` name the draft they produce
+ * "RE: <original>" / "FW: <original>", so a reply to a ZZTEST message is called
+ * "RE: ZZTEST ..." - which does not begin with ZZTEST, and would put every
+ * derived draft outside the fence the moment Phase 8 could create one. That
+ * would mean a reply could be created and then neither edited nor sent, which
+ * makes the whole path unverifiable outside production.
+ *
+ * Stripped rather than matched loosely: the prefix has to be at the front, and
+ * what follows it still has to be a ZZTEST subject. `RE: [CCHMC RFI 229] ...`
+ * is still refused, which is the case that matters.
+ *
+ * en-US only, deliberately. The mailbox is en-US, and accepting every locale's
+ * prefix - AW:, WG:, RE :, Re[2]: - would widen the fence for a mailbox that
+ * will never produce them.
+ */
+const REPLY_PREFIX = /^\s*(?:re|fw|fwd)\s*:\s*/i;
+
+/**
+ * Whether a subject is inside the non-production write fence.
+ *
+ * Exchange's own reply and forward prefixes are skipped, repeatedly, because a
+ * forwarded reply is "FW: RE: ZZTEST ...". Everything else about the subject is
+ * taken literally - nothing here normalizes, parses or rewrites the
+ * `[CCHMC RFI 229]` tag that downstream filing depends on.
+ */
 export function isZzTestSubject(subject: string | null): boolean {
-  return subject !== null && subject.trimStart().startsWith(ZZTEST_PREFIX);
+  if (subject === null) return false;
+
+  let remaining = subject;
+  // Bounded rather than a greedy repeated group: a pathological subject of
+  // thousands of "RE:" runs must not become a regex the parser walks forever.
+  for (let i = 0; i < 10; i += 1) {
+    const stripped = remaining.replace(REPLY_PREFIX, "");
+    if (stripped === remaining) break;
+    remaining = stripped;
+  }
+
+  return remaining.trimStart().startsWith(ZZTEST_PREFIX);
 }
 
 /**

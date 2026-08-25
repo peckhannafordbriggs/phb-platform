@@ -105,9 +105,73 @@ describe("the ZZTEST fence", () => {
 
     // "begins with", not "contains" - otherwise a vendor could name a real
     // message so that the platform would write to it.
-    expect(() => assertWriteAllowed("Re: ZZTEST follow-up", "updateDraft")).toThrowError(
-      expect.objectContaining({ kind: "write_not_allowed" }) as unknown as Error,
-    );
+    for (const subject of [
+      "Change order notes ZZTEST",
+      "[CCHMC RFI 229] ZZTEST",
+      "Please see ZZTEST attached",
+      "XZZTEST",
+    ]) {
+      expect(
+        () => assertWriteAllowed(subject, "updateDraft"),
+        `${subject} must not be inside the fence`,
+      ).toThrowError(
+        expect.objectContaining({ kind: "write_not_allowed" }) as unknown as Error,
+      );
+    }
+  });
+
+  /**
+   * Exchange's own reply and forward prefixes are skipped before the fence is
+   * tested. This case used to be a blocked one, and changing it was a deliberate
+   * decision rather than a drift.
+   *
+   * The reason: `createReply` names its draft "RE: <original>", so a reply to a
+   * ZZTEST message is called "RE: ZZTEST ...". Without this, Phase 8 could create
+   * a derived draft and then neither edit nor send it, which would make the whole
+   * reply path unverifiable outside production - the one place where verifying it
+   * matters, since production has no fence at all.
+   *
+   * What it does NOT do is widen the fence to real mail: a reply to an actual
+   * change order is still refused, which is the case that protects the pipeline.
+   */
+  it("skips the reply and forward prefixes Exchange writes", () => {
+    silenceLogs();
+
+    for (const subject of [
+      "RE: ZZTEST follow-up",
+      "Re: ZZTEST follow-up",
+      "re:ZZTEST follow-up",
+      "FW: ZZTEST follow-up",
+      "FWD: ZZTEST follow-up",
+      "FW: RE: ZZTEST follow-up",
+      "RE: RE: RE: ZZTEST thread",
+    ]) {
+      expect(
+        () => assertWriteAllowed(subject, "updateDraft"),
+        `${subject} is a derived ZZTEST draft and must be inside the fence`,
+      ).not.toThrow();
+    }
+  });
+
+  it("still refuses a reply to a real change order", () => {
+    silenceLogs();
+
+    // The case that protects the live pipeline. A reply prefix in front of a
+    // real subject is still a real message.
+    for (const subject of [
+      "RE: [CCHMC RFI 229] New CO logged (Bid Tracker)",
+      "FW: [CCHMC Bulletin 12] Change Order Request",
+      "RE: CCHMC Liberty Expansion - Change Order Scope Request",
+      // Not a prefix at all - the text has to be at the front to be skipped.
+      "Notes RE: ZZTEST",
+    ]) {
+      expect(
+        () => assertWriteAllowed(subject, "updateDraft"),
+        `${subject} must not be inside the fence`,
+      ).toThrowError(
+        expect.objectContaining({ kind: "write_not_allowed" }) as unknown as Error,
+      );
+    }
   });
 
   it("permits a write to a ZZTEST message", () => {
@@ -123,6 +187,9 @@ describe("the ZZTEST fence", () => {
 
   it("recognises the prefix predicate consistently", () => {
     expect(isZzTestSubject("ZZTEST x")).toBe(true);
+    expect(isZzTestSubject("RE: ZZTEST x")).toBe(true);
+    expect(isZzTestSubject("FW: FW: ZZTEST x")).toBe(true);
+    expect(isZzTestSubject("RE: [CCHMC RFI 229] New CO logged")).toBe(false);
     expect(isZzTestSubject("zztest x")).toBe(false);
     expect(isZzTestSubject(null)).toBe(false);
     expect(isZzTestSubject("")).toBe(false);
@@ -171,8 +238,8 @@ describe("the service reads the subject from Exchange, not from the caller", () 
   });
 });
 
-describe("Phase 4 implements no write or send operation", () => {
-  it("exposes only reads and guards on the service", async () => {
+describe("the write surface is exactly what has been authorised", () => {
+  it("exposes only reads, guards, and the named writes", async () => {
     const { ChangeOrderMailService } = await import(
       "@/lib/modules/change-orders/mail/service"
     );
@@ -182,28 +249,96 @@ describe("Phase 4 implements no write or send operation", () => {
     ).filter((name) => name !== "constructor");
 
     /**
-     * The write surface is exactly what Phase 6 authorised, and nothing else.
+     * The write surface is exactly what has been authorised, and nothing else.
      *
      * This assertion used to be "no write method exists at all", which was right
      * for Phases 4 and 5 and correctly failed the moment Phase 6 added editing
      * and sending. It is deliberately kept as an allowlist rather than deleted:
      * the value was never in the empty list, it is in having to come here and
-     * name a new way of changing the mailbox before one can ship.
+     * NAME a new way of changing the mailbox before one can ship.
      *
-     * Still absent, and out of scope: creating a message, replying, forwarding,
-     * moving, deleting, and anything resembling sendMail.
+     * Every entry below is one such decision. What each one may do:
+     *
+     *   updateDraft            - PATCHes named fields on a draft. Never attachments.
+     *   sendDraft              - POSTs {id}/send on an existing draft. Never sendMail.
+     *   createDraft            - a new empty draft. Cannot send it.
+     *   createReplyDraft       - Graph createReply. Threading comes from Exchange.
+     *   createReplyAllDraft    - Graph createReplyAll.
+     *   createForwardDraft     - Graph createForward. Carries the originals.
+     *   moveMessage            - {id}/move to one folder id. Reversible.
+     *   deleteMessage          - DELETE {id}, i.e. to Deleted Items. Recoverable.
+     *   addDraftAttachment     - one file, onto a draft only.
+     *   removeDraftAttachment  - one attachment, off a draft only.
+     *
+     * Still absent, and not an oversight: anything resembling sendMail, anything
+     * that sends more than one message, permanentDelete, copy, flag, category,
+     * rule, and any bulk form of the above.
      */
-    const WRITE_METHODS_AUTHORISED_BY_PHASE_6 = ["updateDraft", "sendDraft"];
+    const AUTHORISED_WRITE_METHODS = [
+      "updateDraft",
+      "sendDraft",
+      "createDraft",
+      "createReplyDraft",
+      "createReplyAllDraft",
+      "createForwardDraft",
+      "moveMessage",
+      "deleteMessage",
+      "addDraftAttachment",
+      "removeDraftAttachment",
+      /**
+       * The private implementation the three createReply* methods share.
+       *
+       * It is listed because this assertion reads the prototype, and TypeScript's
+       * `private` is a compile-time notion - so a private write method is still a
+       * write method at runtime. Naming it is the honest outcome: it is one more
+       * way the mailbox changes, and the point of this list is that every one of
+       * them is written down.
+       */
+      "createDerivedDraft",
+    ];
 
     const writes = methods
       .filter((name) =>
-        /^(send|create|update|patch|put|move|delete|remove|reply|forward|copy|flag)/i.test(
+        /^(send|create|update|patch|put|move|delete|remove|reply|forward|copy|flag|add)/i.test(
           name,
         ),
       )
       .sort();
 
-    expect(writes).toEqual([...WRITE_METHODS_AUTHORISED_BY_PHASE_6].sort());
+    expect(writes).toEqual([...AUTHORISED_WRITE_METHODS].sort());
+  });
+
+  it("has no method that permanently deletes anything", async () => {
+    const { ChangeOrderMailService } = await import(
+      "@/lib/modules/change-orders/mail/service"
+    );
+
+    // CLAUDE.md and docs/03: never expose permanentDelete. Not behind a
+    // confirmation, not in an admin screen, nowhere. `deleteMessage` is
+    // Exchange's soft delete and the message lands in Deleted Items.
+    for (const name of Object.getOwnPropertyNames(
+      ChangeOrderMailService.prototype,
+    )) {
+      expect(name.toLowerCase()).not.toContain("permanent");
+      expect(name.toLowerCase()).not.toContain("purge");
+      expect(name.toLowerCase()).not.toContain("harddelete");
+    }
+  });
+
+  it("contains no permanentDelete anywhere in the module or its routes", async () => {
+    const files = await changeOrderSourceFiles();
+    const { readFile } = await import("node:fs/promises");
+
+    expect(files.length).toBeGreaterThan(20);
+
+    for (const file of files) {
+      const source = await readFile(file, "utf8");
+
+      expect(
+        codeOnly(source),
+        `${file} must not reference permanentDelete`,
+      ).not.toContain("permanentDelete");
+    }
   });
 
   it("still has no method that could send more than one message", async () => {
@@ -226,26 +361,61 @@ describe("Phase 4 implements no write or send operation", () => {
   });
 
   it("contains no sendMail call anywhere in the change-orders module", async () => {
-    const { readFile, readdir } = await import("node:fs/promises");
-    const path = await import("node:path");
+    const files = await changeOrderSourceFiles();
+    const { readFile } = await import("node:fs/promises");
 
-    const root = path.resolve(process.cwd(), "lib/modules/change-orders");
-    const entries = await readdir(root, { recursive: true, withFileTypes: true });
-    const files = entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-      .map((entry) => path.join(entry.parentPath ?? root, entry.name));
-
-    expect(files.length).toBeGreaterThan(0);
+    expect(files.length).toBeGreaterThan(20);
 
     for (const file of files) {
       const source = await readFile(file, "utf8");
-      // Mentioning it in a comment that forbids it is the only legitimate use.
-      const codeLines = source
-        .split("\n")
-        .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line));
-      expect(codeLines.join("\n"), `${file} must not call sendMail`).not.toContain(
+      expect(codeOnly(source), `${file} must not call sendMail`).not.toContain(
         "sendMail",
       );
     }
   });
 });
+
+/**
+ * Every TypeScript source file in the change-orders module, its API routes and
+ * its UI.
+ *
+ * Phase 8 widened this from the service directory alone. `sendMail` or
+ * `permanentDelete` reached from a route handler would be exactly as fatal as
+ * one reached from the service, and the routes are where a future phase is most
+ * likely to reach for a shortcut.
+ */
+async function changeOrderSourceFiles(): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const path = await import("node:path");
+
+  const roots = [
+    path.resolve(process.cwd(), "lib/modules/change-orders"),
+    path.resolve(process.cwd(), "app/api/modules/change-orders"),
+    path.resolve(process.cwd(), "app/(modules)/change-orders"),
+  ];
+
+  const found: string[] = [];
+  for (const root of roots) {
+    const entries = await readdir(root, { recursive: true, withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) continue;
+      found.push(path.join(entry.parentPath ?? root, entry.name));
+    }
+  }
+  return found;
+}
+
+/**
+ * The source with comment lines removed.
+ *
+ * Naming a forbidden operation in a comment that forbids it is the only
+ * legitimate use of the string, and this whole codebase does exactly that - so a
+ * scan that did not strip comments would fail on the documentation of the rule.
+ */
+function codeOnly(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line))
+    .join("\n");
+}
