@@ -72,6 +72,16 @@ Credentials:
 By default a message ID changes when the message moves folders — and Power Automate
 moves messages constantly. Any ID captured without this header goes stale silently.
 
+**`$search` ignores that header.** Verified against the live mailbox in Phase 8: the
+same message in the same folder comes back with an immutable ID (`AAkALg…`) from
+`listMessages` and a standard, folder-scoped ID (`AAMkAD…`) from `searchMessages`,
+with the header present on both requests. A standard ID **does** change on a move.
+
+So an ID obtained through the search box is second-class, and a `move` performed with
+one succeeds but leaves the caller's ID dead. `move` returns the new ID for exactly
+this reason. A GET cannot be used to translate one: Graph echoes back whichever ID
+form addressed the resource, so only a collection request yields an immutable ID.
+
 **Reply and forward via Graph, not by hand.** Use `createReply`, `createReplyAll`,
 `createForward`. They return a real Exchange draft with quoting and threading intact.
 
@@ -112,8 +122,18 @@ exactly and let a human read it.
 **HTML email bodies are attacker-controlled.** Vendors send them. Sanitize
 server-side, render in a sandboxed iframe with CSP, block remote images by default.
 
-**Delete is not permanent.** `DELETE` moves to Deleted Items. Never expose
-`permanentDelete`.
+**Delete is not permanent — but `DELETE` does not do what this doc used to claim.**
+Verified against the live mailbox in Phase 8, on both a draft and a received message:
+`DELETE /messages/{id}` moves the message to **Recoverable Items \ Deletions** — the
+dumpster — and the user-visible Deleted Items folder never sees it. Recovering from
+there needs Outlook's *Recover Deleted Items from Server* dialog and is bounded by the
+deleted-item retention window.
+
+So a platform "delete" is implemented as an explicit **move to `deleteditems`**, which
+is what actually lands a message in Deleted Items where anyone can drag it back. That is
+strictly more recoverable than `DELETE`, and it is what the confirmation dialog promises.
+
+Never expose `permanentDelete`.
 
 **Throttling** concentrates on one mailbox through one app identity — roughly 10k
 requests per 10 minutes, ~4 concurrent is the practical ceiling. Not a constraint at

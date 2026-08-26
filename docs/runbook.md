@@ -617,14 +617,36 @@ hides every destination anybody actually wants.
 ## Deleting a message — it is not permanent, and it never will be
 
 ```
-DELETE /users/{mailbox}/messages/{id}
+POST /users/{mailbox}/messages/{id}/move   { "destinationId": "deleteditems" }
 ```
 
-**This is Exchange's soft delete.** The message lands in **Deleted Items** in
-`changeorder@phb1899.com` and stays there until Exchange's retention removes it.
-Anyone with the mailbox open in Outlook can drag it back. The confirmation dialog
-says so in those words, deliberately: a person who believes a delete is permanent
-avoids an operation that is safe, or goes looking for one that is not.
+**A move, not `DELETE`, and that is a correction the live mailbox forced.**
+
+`docs/03` and `PHASE-8.md` both said `DELETE /messages/{id}` moves a message to
+Deleted Items. It does not. Verified twice in Phase 8, on a draft and on a
+received message: after `DELETE`, the message's `parentFolderId` resolves to a
+folder named **`Deletions`** — Recoverable Items \ Deletions, the dumpster, 209
+items in this mailbox — while the user-visible **Deleted Items** folder held 4 and
+never saw it.
+
+Nothing is destroyed either way, and the message stays addressable by the same
+immutable id. But recovery from Recoverable Items needs Outlook's **Recover
+Deleted Items from Server** dialog and is bounded by the deleted-item retention
+window, where recovery from Deleted Items is opening a folder and dragging.
+
+So the platform issues an explicit move instead. The message lands in **Deleted
+Items** in `changeorder@phb1899.com` and stays there until Exchange's retention
+removes it. Anyone with the mailbox open in Outlook can drag it back. The
+confirmation dialog says so in those words, deliberately: a person who believes a
+delete is permanent avoids an operation that is safe, or goes looking for one that
+is not.
+
+**If you are tempted to "simplify" this back to `DELETE`** — that is the change
+this entry exists to prevent. It is one request either way; the difference is
+entirely in where the message ends up.
+
+`destinationId` accepts a well-known folder name, so this costs no extra request to
+resolve the folder, and a test asserts no `/mailFolders/` lookup happens.
 
 **`permanentDelete` is not exposed, and must never be.** Not behind a
 confirmation, not in an admin screen, not behind an environment variable.
@@ -638,6 +660,61 @@ must be edited by hand before any new write can ship.
 
 **Deleting a message somebody already deleted** answers `not_found`. Ordinary,
 not an error.
+
+---
+
+## An id from the search box is not an immutable id
+
+**This is the subtlest thing in the module.** Read it before trusting any message
+id, and before "fixing" the `mail.move_changed_id` warning.
+
+`$search` **ignores** `Prefer: IdType="ImmutableId"`. The header is on the request
+— a test asserts that at the transport for every request without exception — and
+Graph returns standard ids from a search anyway.
+
+Same message, same folder, header present on both:
+
+```
+listMessages    AAkALgAAAAAAHYQDEapmEc2byACqAC-EWg0A…TPFR8QAA   immutable
+searchMessages  AAMkADE0NjQyNmExLTYzMTEtNGYwYS04Mj…M8YDjAAA=   standard
+```
+
+The way to confirm the header still works at all is to strip it and compare:
+`listMessages` without it returns the `AAMkAD…` form, with it the `AAkALg…` form.
+So immutable ids are in effect everywhere except `$search`.
+
+**Why it matters.** A standard id is folder-scoped and changes when the message
+moves — which is the entire reason the header exists, and Power Automate moves
+messages constantly. So an id from the search box dies on the next move, by
+anyone.
+
+**A GET cannot translate one.** Asking for a message by its standard id returns
+that same standard id; Graph echoes back whichever form addressed the resource.
+Only a collection request yields an immutable id.
+
+**What this does NOT currently break.** `moveMessage` returns the id the message
+has now, the route audits both, and the reading pane clears after a move — so the
+user sees the right outcome. A stale id on a read is already reported as
+`not_found`, which refreshes the list. Nothing is visibly wrong today.
+
+**If `"event":"mail.move_changed_id"` appears in the log**, the first thing to
+check is whether the id came from a search, NOT whether the middleware broke. An
+earlier version of that log line asserted the header had stopped working and cost
+an afternoon of looking in the wrong place.
+
+### The two candidate fixes, and why neither has been applied
+
+Choosing between these is a **product decision**, not a technical one, which is
+why the code is unchanged and this entry exists instead.
+
+| Fix | What it costs |
+|---|---|
+| Replace `$search` with `$filter=contains(subject,'…')` | One request, immutable ids, and `$orderby` works again — which also fixes the "results are by relevance, not date" wart. But search narrows from full-text to **subject only**: no body, no sender, no attachment names. |
+| Resolve each search hit to its immutable id | Keeps full-text search. But there is no cheap way to do it — a GET echoes the form back, so each hit needs locating in a folder listing, which is fragile (what do you match on?) and costs a request per result. |
+
+Given this mailbox, subject-only search is arguably closer to how people actually
+look for a change order — they know the project tag. But that is the operator's
+call to make.
 
 ---
 
@@ -664,6 +741,20 @@ Metadata is read first so the size is known before anything large is pulled into
 memory, and so `contentBytes` is never selected on a message read. An attachment
 over 25 MB is refused with `mail_attachment_too_large` before any content is
 fetched.
+
+**An attachment's `size` is not its content length.** It carries per-attachment
+storage overhead, and the overhead is not preserved when Exchange copies the
+attachment:
+
+| | Reported `size` | Actual content |
+|---|---|---|
+| A PDF on a received message | 337,527 | 337,145 |
+| The same PDF on a forward of it | 337,532 | 337,145 |
+
+So never compare sizes to answer "is this the same file" or "did the download
+complete" — compare content, or a hash of it. `size` is only ever displayed. The
+Phase 8 verification script asserted size equality at first and reported a
+meaningless 5-byte failure on a forward whose bytes were identical.
 
 **Three independent reasons the browser will not execute a downloaded
 attachment**, because a vendor chooses its declared type and one of these being

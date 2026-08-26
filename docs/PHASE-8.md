@@ -99,6 +99,11 @@ DELETE /messages/{id}
 
 This moves the message to Deleted Items. It is recoverable.
 
+> **Corrected during verification.** It does not. Against the live mailbox `DELETE`
+> puts the message in Recoverable Items \ Deletions, not in Deleted Items. The
+> platform issues `move` to `deleteditems` instead, which does what this paragraph
+> intended. See `docs/phase-8-verification.md`.
+
 **Never expose `permanentDelete`.** Not behind a confirmation, not in an admin screen,
 nowhere. There is no legitimate need for it here and it destroys the audit trail.
 

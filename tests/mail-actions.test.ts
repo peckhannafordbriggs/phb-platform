@@ -72,11 +72,6 @@ afterEach(() => {
   process.env.PHB_ALLOW_SEND = "false";
 });
 
-/** What Exchange answers a successful DELETE with: 204, and no body. */
-function noContentResponse(): Response {
-  return new Response(null, { status: 204 });
-}
-
 /** The POST that is not the subject read. */
 function postTo(requests: RecordedRequest[]): RecordedRequest | undefined {
   return requests.find((r) => r.method === "POST");
@@ -399,21 +394,57 @@ describe("moving a message", () => {
 });
 
 describe("deleting a message", () => {
-  it("issues DELETE, which is Exchange's soft delete", async () => {
+  /**
+   * A delete is a MOVE to Deleted Items, not `DELETE /messages/{id}`.
+   *
+   * This test asserted the DELETE verb until the live mailbox showed what that
+   * verb actually does: the message lands in Recoverable Items \ Deletions, and
+   * the user-visible Deleted Items folder never sees it. Verified on both a
+   * draft and a received message. The UI promises "it moves to Deleted Items,
+   * drag it back in Outlook", so the implementation was changed to match the
+   * promise rather than the promise softened to match the implementation.
+   */
+  it("moves the message to Deleted Items rather than issuing DELETE", async () => {
     const stub = createGraphStub((request) =>
-      request.method === "DELETE"
-        ? noContentResponse()
+      request.method === "POST"
+        ? jsonResponse({ ...ZZTEST_SOURCE, parentFolderId: "deleteditems" })
         : jsonResponse(ZZTEST_SOURCE),
     );
 
     const result = await createMailService(stub.transport).deleteMessage("AAMkSource");
 
-    const del = stub.requests.find((r) => r.method === "DELETE");
-    expect(del?.url).toContain("/messages/AAMkSource");
+    const post = postTo(stub.requests);
+    expect(post?.url).toContain("/messages/AAMkSource/move");
+    expect(JSON.parse(post?.body ?? "{}")).toEqual({
+      destinationId: "deleteditems",
+    });
+
+    // The verb that would put it in the dumpster is not used at all.
+    expect(stub.requests.some((r) => r.method === "DELETE")).toBe(false);
+
     // Never the permanent form. It destroys the audit trail and there is no
     // legitimate need for it here.
-    expect(del?.url.toLowerCase()).not.toContain("permanentdelete");
+    for (const request of stub.requests) {
+      expect(request.url.toLowerCase()).not.toContain("permanentdelete");
+    }
+
     expect(result.subject).toBe(ZZTEST_SOURCE.subject);
+    expect(result.id).toBe("AAMkSource");
+  });
+
+  it("names a well-known folder, so nothing has to resolve it first", async () => {
+    const stub = createGraphStub((request) =>
+      request.method === "POST" ? jsonResponse(ZZTEST_SOURCE) : jsonResponse(ZZTEST_SOURCE),
+    );
+
+    await createMailService(stub.transport).deleteMessage("AAMkSource");
+
+    // Two requests: read the subject for the fence, then move. A delete must not
+    // cost a folder lookup - `destinationId` takes the alias.
+    expect(stub.requests).toHaveLength(2);
+    expect(
+      stub.requests.some((r) => r.url.includes("/mailFolders/")),
+    ).toBe(false);
   });
 
   it("refuses to delete a message that is not a ZZTEST", async () => {
@@ -424,14 +455,14 @@ describe("deleting a message", () => {
       createMailService(stub.transport).deleteMessage("AAMkSource"),
     ).rejects.toMatchObject({ kind: "write_not_allowed" });
 
-    expect(stub.requests.some((r) => r.method === "DELETE")).toBe(false);
+    expect(stub.requests.some((r) => r.method === "POST")).toBe(false);
   });
 
   it("reports a message somebody already deleted as not_found", async () => {
     silenceLogs();
 
     const stub = createGraphStub((request) =>
-      request.method === "DELETE"
+      request.method === "POST"
         ? graphErrorResponse(404, "ErrorItemNotFound", "already gone")
         : jsonResponse(ZZTEST_SOURCE),
     );
@@ -466,7 +497,7 @@ describe("none of the new writes can send", () => {
     vi.stubEnv("PHB_ALLOW_SEND", "true");
 
     const stub = createGraphStub((request) =>
-      request.method === "POST" || request.method === "DELETE"
+      request.method === "POST"
         ? jsonResponse(DERIVED_DRAFT)
         : jsonResponse(request.url.includes("AAMkReply") ? DERIVED_DRAFT : ZZTEST_SOURCE),
     );

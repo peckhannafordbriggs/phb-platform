@@ -76,6 +76,10 @@ export async function DELETE(
       moduleKey: "change-orders",
       metadata: {
         messageId,
+        // The id after the move. It should equal messageId - immutable ids are
+        // requested on every request - and an operator recovering the message
+        // needs the id it has now.
+        newMessageId: deleted.id,
         subject: deleted.subject,
         destination: "deleteditems",
       },

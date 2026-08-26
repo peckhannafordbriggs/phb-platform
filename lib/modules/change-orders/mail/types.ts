@@ -200,9 +200,16 @@ export interface MoveResult {
   subject: string | null;
 }
 
-/** What a delete moved to Deleted Items. Returned so the caller can audit it. */
+/**
+ * What a delete moved to Deleted Items.
+ *
+ * `id` is included because a delete is implemented as a move - see
+ * deleteMessage() - and a caller that wants to offer an undo needs the id the
+ * message has now. With immutable ids in effect it is the id it always had.
+ */
 export interface DeleteResult {
   subject: string | null;
+  id: string;
 }
 
 /** An attachment on its way into a draft. Never persisted anywhere. */

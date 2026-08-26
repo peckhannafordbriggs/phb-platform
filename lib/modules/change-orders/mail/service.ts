@@ -166,6 +166,15 @@ const DERIVED_DRAFT_ACTIONS: Record<DerivedDraftMode, string> = {
   forward: "createForward",
 };
 
+/**
+ * Where a delete puts a message.
+ *
+ * A well-known folder name rather than an id, which `destinationId` accepts -
+ * so no request is needed to resolve it, and it cannot go stale. See
+ * deleteMessage() for why a delete is a move at all.
+ */
+const DELETED_ITEMS_FOLDER = "deleteditems";
+
 const DEFAULT_MESSAGE_PAGE_SIZE = 25;
 const MAX_MESSAGE_PAGE_SIZE = 100;
 const FOLDER_PAGE_SIZE = 100;
@@ -1106,13 +1115,26 @@ export class ChangeOrderMailService {
     const idChanged = id !== messageId;
 
     if (idChanged) {
-      // Not thrown: the move itself succeeded and the caller is handed the new
-      // id, so the operation is fine. It is logged loudly because it means the
-      // immutable-id header stopped taking effect, and every id the platform
-      // holds is then one move away from being stale.
+      /**
+       * Not thrown: the move succeeded and the caller is handed the id the
+       * message has now, so the operation is fine.
+       *
+       * The likely cause is NOT that immutable ids stopped working. Verified
+       * against the live mailbox: `$search` does not honour
+       * `Prefer: IdType="ImmutableId"` even though the header is on the request,
+       * so any id that came from the search box is a standard, folder-scoped id -
+       * and a standard id is exactly the kind that changes on a move. An id from
+       * a folder LISTING is immutable and survives.
+       *
+       * The earlier version of this log line asserted the header had stopped
+       * taking effect, which is the wrong first place to look and cost an
+       * afternoon. Both possibilities are named now, likeliest first.
+       */
       logger.warn("mail.move_changed_id", {
         outcome: "id_changed",
-        reason: "immutable ids appear not to be in effect",
+        reason:
+          "the id supplied was probably not an immutable id (ids from $search " +
+          "are not); failing that, the ImmutableId header has stopped working",
         route: "moveMessage",
       });
     }
@@ -1127,30 +1149,50 @@ export class ChangeOrderMailService {
   }
 
   /**
-   * Deletes a message. To Deleted Items, recoverably.
+   * Deletes a message, by MOVING it to Deleted Items.
    *
-   * `DELETE /messages/{id}` is a soft delete in Exchange - the message lands in
-   * Deleted Items and can be dragged back out in Outlook. That is the whole
-   * reason this operation is allowed to exist at this level of confirmation.
+   * A move, not `DELETE`, and this is a correction the live mailbox forced.
+   *
+   * docs/03 and PHASE-8 both said `DELETE /messages/{id}` "moves the message to
+   * Deleted Items". Against `changeorder@phb1899.com` it does not: the message
+   * lands in **Recoverable Items \ Deletions** - the dumpster - and the
+   * user-visible Deleted Items folder never sees it. Verified twice, on a draft
+   * and on a received message, by reading `parentFolderId` afterwards and
+   * resolving that folder: "Deletions", 209 items, while Deleted Items held 4.
+   *
+   * Why that difference matters enough to change the implementation rather than
+   * the wording. An item in Deleted Items is recovered by opening the folder and
+   * dragging it back - something the operator can do without being told how. An
+   * item in Recoverable Items needs Outlook's "Recover Deleted Items from
+   * Server" dialog, which nobody finds under pressure, and which is subject to
+   * the deleted-item retention window. The confirmation dialog promises the
+   * former. Making the code match the promise is the honest fix; softening the
+   * promise to match the code would have made a recoverable action feel
+   * unrecoverable, and this mailbox runs a daily process.
+   *
+   * `destinationId` takes a well-known folder name as well as an id, so this
+   * needs no extra request to resolve the folder first.
    *
    * There is deliberately no counterpart for `permanentDelete`. Not behind a
    * flag, not behind a confirmation, not in an admin screen: CLAUDE.md and
    * docs/03 both forbid it, it destroys the audit trail, and there is no
-   * legitimate need for it in a change-order mailbox.
+   * legitimate need for it in a change-order mailbox. Note that this change
+   * moves the platform FURTHER from permanent deletion, not closer.
    */
   async deleteMessage(messageId: string): Promise<DeleteResult> {
     const subject = await this.subjectOf(messageId);
     assertWriteAllowed(subject, "deleteMessage");
 
-    await this.call("deleteMessage", () =>
+    const moved = await this.call("deleteMessage", () =>
       this.client
-        .api(this.path(`/messages/${encodeURIComponent(messageId)}`))
-        .delete() as Promise<unknown>,
+        .api(this.path(`/messages/${encodeURIComponent(messageId)}/move`))
+        .post({ destinationId: DELETED_ITEMS_FOLDER }) as Promise<Message>,
     );
 
-    // Returned so the caller can write an audit row describing what went; after
-    // this the message is only findable in Deleted Items.
-    return { subject };
+    // Returned so the caller can write an audit row describing what went. The id
+    // is returned too: it should be unchanged, and a caller that wants to offer
+    // an undo needs the id the message has now.
+    return { subject, id: moved.id ?? messageId };
   }
 
   // ------------------------------------------------------------------------

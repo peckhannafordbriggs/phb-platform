@@ -134,6 +134,15 @@ that mocked transports agreed with:
   none. `[CO:` appears nowhere in the mailbox
 - Exchange rewrites a literal U+00A0 as `&nbsp;` on write
 - Outlook writes a pasted table cell as `<td><p>value</p></td>`
+- `DELETE /messages/{id}` does **not** move a message to Deleted Items. It goes to
+  Recoverable Items \ Deletions, which needs Outlook's *Recover Deleted Items from
+  Server* dialog. A platform delete is a `move` to `deleteditems` instead
+- `$search` ignores `Prefer: IdType="ImmutableId"` even with the header on the wire, so
+  ids from the search box are standard folder-scoped ids and go stale on a move.
+  `listMessages` returns immutable ids. A GET cannot translate between them — Graph
+  echoes back whichever form addressed the resource
+- An attachment's `size` is not its content length. A 337,145-byte PDF reports 337,527,
+  and 337,532 after a forward copies it. Compare content, never the reported size
 
 Fixtures are right for hostile-HTML tests and error mapping. Anything about Graph's
 actual behaviour needs the real mailbox.
@@ -162,8 +171,13 @@ One guard changed, deliberately: the ZZTEST fence now skips Exchange's own
 and every derived draft would otherwise be uneditable outside production. A reply
 to a real change order is still refused. See `docs/runbook.md`.
 
-Still to do: the manual checks against the live mailbox listed in
-`docs/PHASE-8.md`. `scripts/co-verify-phase8.ts` runs them; it never sends.
+Live verification is done — `docs/phase-8-verification.md` records what Exchange
+actually did, including three claims the docs had wrong. `scripts/co-verify-phase8.ts`
+re-runs it and never sends.
+
+One decision is still open: ids from `$search` are not immutable (see the list above),
+so the search box hands out weaker ids than the folder listing does. Nothing is
+currently broken by it, and the fix is a product choice — see the runbook.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

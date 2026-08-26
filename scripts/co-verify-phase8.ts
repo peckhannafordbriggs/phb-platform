@@ -262,13 +262,45 @@ async function respond(messageId: string): Promise<void> {
         "the forward carries the same number of attachments as the original",
         `${forwarded.length} vs ${sourceAttachments.length}`,
       );
+
+      /**
+       * Compared by CONTENT, not by the reported size.
+       *
+       * This check used to require `size` to match too, and failed against the
+       * live mailbox: Exchange reported the forwarded copy as 5 bytes larger
+       * than the original while the bytes were identical. `size` includes
+       * per-attachment overhead and is not preserved across a copy - see the
+       * download check below. A hash is the only thing that answers "is this the
+       * same file", and it is the question worth asking.
+       */
       for (const original of sourceAttachments) {
+        const match = forwarded.find((f) => f.name === original.name);
+        if (match === undefined) {
+          check(false, `the forward carries "${original.name}"`, "no attachment of that name");
+          continue;
+        }
+
+        const [before, after] = await Promise.all([
+          service.downloadAttachment(messageId, original.id),
+          service.downloadAttachment(draft.id, match.id),
+        ]);
+
+        const beforeDigest = sha256(before.bytes);
+        const afterDigest = sha256(after.bytes);
+
         check(
-          forwarded.some(
-            (f) => f.name === original.name && f.sizeBytes === original.sizeBytes,
-          ),
-          `the forward carries "${original.name}"`,
+          beforeDigest === afterDigest,
+          `the forward carries "${original.name}" byte for byte`,
+          `${after.bytes.byteLength} bytes, sha256 ${afterDigest.slice(0, 16)}…`,
         );
+
+        if (match.sizeBytes !== original.sizeBytes) {
+          note(
+            `Graph reports size ${original.sizeBytes} on the original and ` +
+              `${match.sizeBytes} on the copy. Expected: that field is not the ` +
+              `content length. Content is identical.`,
+          );
+        }
       }
     }
   }
@@ -411,9 +443,13 @@ async function remove(messageId: string): Promise<void> {
   const result = await service.deleteMessage(messageId);
   say(`  reported subject: ${result.subject}`);
 
-  heading("It went to Deleted Items, not away");
+  heading("It went to Deleted Items, not to the dumpster");
   const deletedItems = await service.getFolder("deleteditems");
   say(`  Deleted Items id: ${deletedItems.id}`);
+  note(
+    "This is the check that caught the original implementation: DELETE " +
+      "/messages/{id} put the message in Recoverable Items \\ Deletions, not here.",
+  );
 
   /**
    * The claim being checked is that DELETE is a SOFT delete. If this ever fails,
@@ -474,10 +510,25 @@ async function attachments(draftId: string, fileToAdd?: string): Promise<void> {
 
     note(`downloaded as: ${file.name}  ${file.contentType}`);
     note(`bytes: ${file.bytes.byteLength}  sha256: ${digest}`);
+    /**
+     * `size` is NOT the content length, and this check used to assert that it
+     * was. Measured against the live mailbox: a 337,145-byte PDF is reported by
+     * Graph as `size: 337527` on the message it arrived on, and `size: 337532`
+     * on a forward of that same message - while the content bytes are identical
+     * both times. So `size` carries per-attachment storage overhead (382 bytes
+     * here, 387 after the copy) and is not stable across a copy.
+     *
+     * The honest assertion is therefore a bound, not an equality: the content
+     * must be non-empty and must not exceed what Exchange reported. Anything
+     * about the CONTENT is proved by the SHA-256, which is what the caller
+     * compares against the original file.
+     */
+    const reported = attachment.sizeBytes ?? 0;
     check(
-      attachment.sizeBytes === null || file.bytes.byteLength === attachment.sizeBytes,
-      "the downloaded length matches the size Exchange reported",
-      `${file.bytes.byteLength} vs ${attachment.sizeBytes}`,
+      file.bytes.byteLength > 0 && file.bytes.byteLength <= reported,
+      "the content is non-empty and within the size Exchange reported",
+      `${file.bytes.byteLength} content bytes, ${reported} reported ` +
+        `(${reported - file.bytes.byteLength} bytes of overhead)`,
     );
     note("Compare that sha256 against the original file with:");
     note(`  certutil -hashfile "<original>" SHA256`);
