@@ -142,7 +142,8 @@ that mocked transports agreed with:
   GET cannot translate between the forms; Graph echoes back whichever one addressed the
   resource
 - `$filter` and `$orderby` together on messages are refused with `400 InefficientFilter`,
-  so a subject search cannot be date-ordered. A plain listing can
+  so Graph will not order a search. The service collects the whole result set and sorts
+  it — page-by-page sorting looks ordered and is not
 - An attachment's `size` is not its content length. A 337,145-byte PDF reports 337,527,
   and 337,532 after a forward copies it. Compare content, never the reported size
 

@@ -175,6 +175,24 @@ const DERIVED_DRAFT_ACTIONS: Record<DerivedDraftMode, string> = {
  */
 const DELETED_ITEMS_FOLDER = "deleteditems";
 
+/**
+ * Search collects whole pages, because it has to sort the complete result set -
+ * see searchMessages(). Bigger pages mean fewer requests for the same answer.
+ */
+const SEARCH_PAGE_SIZE = 100;
+
+/**
+ * The most matches a search will collect before saying it truncated.
+ *
+ * Generous relative to this mailbox, where the largest folder holds 13 messages,
+ * so in practice a search is one request. It exists for the folder that has
+ * grown to thousands by 2030, and it is reported rather than silent.
+ */
+const MAX_SEARCH_MATCHES = 500;
+
+/** A second bound, on requests rather than results. Belt and braces. */
+const MAX_SEARCH_PAGES = 5;
+
 const DEFAULT_MESSAGE_PAGE_SIZE = 25;
 const MAX_MESSAGE_PAGE_SIZE = 100;
 const FOLDER_PAGE_SIZE = 100;
@@ -381,6 +399,30 @@ function toMessageSummary(message: Message): MessageSummary {
  */
 function toBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64");
+}
+
+/**
+ * Newest first, the way every folder listing is ordered.
+ *
+ * A message with no usable `receivedDateTime` sorts last rather than first: an
+ * unknown date must not be presented as the most recent thing in the mailbox.
+ * An unparseable string is treated as absent for the same reason.
+ */
+function byNewestFirst(a: MessageSummary, b: MessageSummary): number {
+  const at = timeOf(a.receivedDateTime);
+  const bt = timeOf(b.receivedDateTime);
+
+  if (at === null && bt === null) return 0;
+  if (at === null) return 1;
+  if (bt === null) return -1;
+
+  return bt - at;
+}
+
+function timeOf(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function toAttachmentSummary(attachment: Attachment): AttachmentSummary {
@@ -658,84 +700,127 @@ export class ChangeOrderMailService {
     return {
       messages: (page.value ?? []).map(toMessageSummary),
       nextCursor: cursorFrom(page["@odata.nextLink"]),
+      // A listing is paged, not capped: there is always a cursor when more
+      // exists, so nothing is being withheld.
+      truncated: false,
     };
   }
 
   /**
-   * Searches one folder, by subject.
+   * Searches one folder by subject, newest first.
    *
-   * `$filter=contains(subject,'...')`, deliberately, and NOT `$search`. This
-   * started as `$search` and was changed after Phase 8's live verification, for
-   * one reason that outweighs the rest:
+   * Two Graph limitations shape this whole method, both measured against the live
+   * mailbox rather than assumed:
    *
-   *   **`$search` ignores `Prefer: IdType="ImmutableId"`.** The header is on the
-   *   request - a test asserts that for every request without exception - and
-   *   Graph returns standard, folder-scoped ids from a search anyway. Verified
-   *   against the live mailbox: the same message in the same folder came back as
-   *   `AAkALg...` from a listing and `AAMkAD...` from a search. A standard id
-   *   changes when the message moves, and Power Automate moves messages
-   *   constantly - so every id the search box produced was one move away from
-   *   being dead, and a platform `move` performed with one left the caller
-   *   holding a 404.
+   *   1. `$search` ignores `Prefer: IdType="ImmutableId"` - the header is on the
+   *      request and Graph returns standard, folder-scoped ids anyway. Those die
+   *      on the next move, and Power Automate moves messages constantly. So this
+   *      filters instead of searching.
+   *   2. `$filter` and `$orderby` cannot be combined on messages: Exchange
+   *      answers `400 InefficientFilter`, for `contains` and `startswith` alike.
+   *      So Graph will not order the result and the order it does return is
+   *      neither date nor relevance - a real folder came back 08-19, 08-19,
+   *      08-18, 08-25, 08-06.
    *
-   * `$filter` is an ordinary collection request, so it honours the header and
-   * hands out immutable ids like every other read.
+   * Which means the ordering has to happen here. It is done over the WHOLE result
+   * set rather than per page, and that is the point: sorting each page
+   * independently would produce a list that looks ordered and is not, because
+   * page two can hold messages newer than the last row of page one. A subtly
+   * wrong order is worse than an admittedly absent one.
    *
-   * **Results are still not in date order, and `$orderby` cannot fix that.**
-   * Exchange answers `400 InefficientFilter` to `$filter` combined with
-   * `$orderby` on a message collection - verified for both `contains` and
-   * `startswith`, with and without the ordering. So this sends no `$orderby` at
-   * all, and the order Exchange returns is not date order: a real folder came
-   * back 08-19, 08-19, 08-18, 08-25, 08-06. The UI must keep saying so.
+   * So this collects every match up to a cap, sorts, and returns the lot in one
+   * response - `nextCursor` is always null for a search. In this mailbox that is
+   * a single request: the largest folder holds 13 messages. It only becomes
+   * several for folders that grow large, and it is bounded either way.
    *
-   * That was expected to be a side benefit of the switch and it is not one. The
-   * ordering is no worse than `$search` was, and the immutable ids are the whole
-   * reason for the change.
+   * Results are deduplicated by id while they accumulate. Paging with `$skip`
+   * into a result set that has no guaranteed order can return the same row twice
+   * if Exchange's order shifts between requests, and a duplicated row in a list
+   * somebody is about to act on is not acceptable.
    *
-   * Matching is case-insensitive - `zztest` finds `ZZTEST` - which is what
-   * anybody typing in a search box expects.
+   * `truncated` is returned rather than logged and forgotten: docs/07 and the
+   * rest of this file treat silent truncation as a defect, and a search that
+   * quietly stopped at 500 would look like a complete answer.
    *
-   * The cost, stated plainly: this searches the SUBJECT ONLY. Not the body, not
-   * the sender, not attachment names. That is a real narrowing, and it was
-   * accepted because subjects in this mailbox carry the bracketed project tag
-   * people actually search for - `[CCHMC RFI 229]` - and a stale id is a
+   * The cost, stated plainly: this matches the SUBJECT ONLY - not the body, not
+   * the sender, not attachment names. Accepted because subjects here carry the
+   * bracketed project tag people actually search for, and because a stale id is a
    * correctness bug where a narrower search is a smaller feature.
    *
-   * Offset paging works and Graph's nextLink repeats the filter, but paging into
-   * an unordered result set can overlap or skip rows in principle. `$search` had
-   * exactly the same property, so this is not a regression - and it is why the
-   * caller is told the results are unordered rather than left to assume.
+   * Matching is case-insensitive: `zztest` finds `ZZTEST`.
    */
-  async searchMessages(
-    folderId: string,
-    query: string,
-    options: ListMessagesOptions = {},
-  ): Promise<MessagePage> {
+  async searchMessages(folderId: string, query: string): Promise<MessagePage> {
     const term = query.trim();
-    if (term.length === 0) return { messages: [], nextCursor: null };
+    if (term.length === 0) {
+      return { messages: [], nextCursor: null, truncated: false };
+    }
 
-    const top = clampPageSize(options.top);
+    const filter = `contains(subject,'${escapeODataLiteral(term)}')`;
+    const path = this.path(
+      `/mailFolders/${encodeURIComponent(folderId)}/messages`,
+    );
 
-    const page = await this.call("searchMessages", () => {
-      let request = this.client
-        .api(this.path(`/mailFolders/${encodeURIComponent(folderId)}/messages`))
-        .select(MESSAGE_SUMMARY_SELECT)
-        .filter(`contains(subject,'${escapeODataLiteral(term)}')`)
-        .top(top);
+    const byId = new Map<string, MessageSummary>();
+    let skip = 0;
+    let pages = 0;
+    let truncated = false;
 
-      const cursor = options.cursor ?? "";
-      if (cursor.length > 0) request = applyCursor(request, cursor);
+    for (;;) {
+      // Captured before the closure so its type is not widened inside it.
+      const offset = skip;
 
-      // No $orderby, deliberately. Exchange refuses $filter + $orderby on
-      // messages with 400 InefficientFilter - see the note above. Adding one
-      // here fails every search, so this is the line to check first if search
-      // starts returning "Something went wrong reaching the mailbox".
-      return request.get() as Promise<GraphCollection<Message>>;
-    });
+      const page: GraphCollection<Message> = await this.call(
+        "searchMessages",
+        () => {
+          let request = this.client
+            .api(path)
+            .select(MESSAGE_SUMMARY_SELECT)
+            .filter(filter)
+            .top(SEARCH_PAGE_SIZE);
+
+          if (offset > 0) request = request.skip(offset);
+
+          // No $orderby, deliberately. Exchange refuses $filter + $orderby with
+          // 400 InefficientFilter, so adding one here does not degrade search -
+          // it breaks every search outright. This is the line to check first if
+          // search starts failing with "Something went wrong reaching the
+          // mailbox" and the log shows code=InefficientFilter.
+          return request.get() as Promise<GraphCollection<Message>>;
+        },
+      );
+
+      const batch = page.value ?? [];
+      for (const message of batch) {
+        const summary = toMessageSummary(message);
+        if (summary.id.length > 0) byId.set(summary.id, summary);
+      }
+
+      pages += 1;
+      skip += batch.length;
+
+      // Exchange had nothing more to give.
+      if (batch.length === 0 || page["@odata.nextLink"] === undefined) break;
+
+      if (byId.size >= MAX_SEARCH_MATCHES || pages >= MAX_SEARCH_PAGES) {
+        truncated = true;
+        logger.warn("mail.search_capped", {
+          outcome: "truncated",
+          count: byId.size,
+          route: "searchMessages",
+          reason:
+            byId.size >= MAX_SEARCH_MATCHES
+              ? `MAX_SEARCH_MATCHES (${MAX_SEARCH_MATCHES})`
+              : `MAX_SEARCH_PAGES (${MAX_SEARCH_PAGES})`,
+        });
+        break;
+      }
+    }
 
     return {
-      messages: (page.value ?? []).map(toMessageSummary),
-      nextCursor: cursorFrom(page["@odata.nextLink"]),
+      messages: [...byId.values()].sort(byNewestFirst),
+      // Always null: every match this is willing to return is in `messages`.
+      nextCursor: null,
+      truncated,
     };
   }
 

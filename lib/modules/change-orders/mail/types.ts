@@ -83,6 +83,20 @@ export interface AttachmentSummary {
 export interface MessagePage {
   messages: MessageSummary[];
   nextCursor: string | null;
+  /**
+   * The result set was capped and there are matches this response does not
+   * contain.
+   *
+   * Only a search can set this, and only because a search has to collect its
+   * whole result set before it can order it - Graph refuses to order a filtered
+   * message collection, so the sort happens here. A folder listing is paged
+   * rather than capped, so it is always false there: a cursor means "there is
+   * more", which is a different statement from "some was dropped".
+   *
+   * Returned rather than only logged because a search that quietly stopped at
+   * its cap looks exactly like a complete answer.
+   */
+  truncated: boolean;
 }
 
 export interface ListMessagesOptions {

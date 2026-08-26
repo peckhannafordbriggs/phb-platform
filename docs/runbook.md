@@ -162,7 +162,8 @@ most likely to be reported as bugs.
 | **"Nothing to review"** in Drafts | The Drafts folder is empty. It is empty most of the day — the automation produces drafts in bursts. | Nothing. This is the normal resting state and the default view. |
 | **"The mailbox is not connected yet"** | No Graph credential is configured. Every pane shows this together, not one pane failing. | *The mailbox is not connected*, above. |
 | **"That message is no longer here"** | The message was moved or sent between the list being drawn and the row being clicked. Power Automate moves messages constantly. | Nothing. The list refreshes itself. It is a normal event, not an error. |
-| **"Search results, ordered by relevance rather than date"** | Graph's `$search` rejects `$orderby`, so search results genuinely are not newest-first. | Nothing. Clear the search box to get the ordered list back. |
+| **"N subject matches, newest first. Search does not look inside messages."** | Search matches the subject only, by design — `$search` returns ids that go stale on a move, so it is not used. Results are sorted by the service, because Graph will not sort a filtered collection. | Nothing. To find text inside a message, use Outlook. See *Folder search* below. |
+| **"Showing the first N subject matches — there are more"** | The search hit its 500-match cap. | Narrow the term. The cap and why it is reported are under *Folder search* below. |
 
 **Real failures** show "That did not load" with a Try again button, and the
 underlying code is in the log as `"event":"mail.graph_call_failed"`. The
@@ -663,7 +664,7 @@ not an error.
 
 ---
 
-## Folder search is subject-only, and that is deliberate
+## Folder search: subject-only, sorted here, and capped
 
 **Read this before "restoring" full-text search or adding an `$orderby`.** Both
 look like obvious improvements. One of them breaks every search outright.
@@ -729,16 +730,50 @@ without the ordering:
 | `$filter=startswith(subject,'x')` + `$orderby` | **400 InefficientFilter** |
 | `$search="x"` | 200, standard ids |
 
-So search results are **not in date order** and cannot be made so at the API. The
-order Exchange returns is neither date nor relevance — a real folder came back
-08-19, 08-19, 08-18, 08-25, 08-06. A plain folder listing, with no `$filter`, does
-order by `receivedDateTime desc`; only the search path is unordered. The UI says
-which one it is showing.
-
 `tests/mail-search.test.ts` asserts no `$orderby` is ever sent, with this reason
 attached. If search starts failing with *"Something went wrong reaching the
 mailbox"* and the log shows `code=InefficientFilter`, an ordering has been added
-back.
+back. It does not degrade search, it breaks every search.
+
+### So the service does the sorting, over the whole result set
+
+Graph will not order a filtered collection, and the order it returns is neither
+date nor relevance — a real folder came back 08-19, 08-19, 08-18, 08-25, 08-06. So
+`searchMessages` collects every match up to a cap, sorts newest-first, and returns
+the lot in one response.
+
+**A search therefore has no cursor**, and the UI shows no "Load older messages"
+button for search results. That is not an omission.
+
+**Why not sort each page as it arrives**, which would have been free: Exchange's
+underlying order is arbitrary, so page two can hold messages newer than the last
+row of page one. The list would look ordered and not be — and somebody scanning
+for the newest thing would find it below a "Load older" button. A subtly wrong
+order is worse than an openly absent one.
+
+| Bound | Value | What happens at it |
+|---|---|---|
+| Matches collected | 500 | `truncated: true` in the response, `"event":"mail.search_capped"` in the log |
+| Requests per search | 5 | same |
+| Page size | 100 | — |
+
+In this mailbox a search is **one request** — the largest folder holds 13
+messages. The loop exists for the project folder that has grown to thousands by
+2030.
+
+**Truncation is reported, not just logged.** The API returns `truncated` and the
+list pane says *"Showing the first N subject matches, newest first — there are
+more."* A search that quietly stopped at 500 would look exactly like a complete
+answer, which is the failure mode this file cares about most.
+
+**Results are deduplicated by id** as they accumulate. `$skip` into a collection
+with no guaranteed order can return the same row on two pages if Exchange's order
+shifts between the requests, and a duplicated row in a list somebody is about to
+move or delete is not acceptable.
+
+**A message with no usable `receivedDateTime` sorts last**, never first — an
+unknown date must not be presented as the newest thing in the mailbox. An
+unparseable date string is treated as absent.
 
 ### The apostrophe
 
@@ -748,12 +783,12 @@ it — not with a backslash. Get it wrong and searching for `P&G Reese's` sends
 completely ordinary. This mailbox has a folder called `P&G Reese's`, so it is not
 hypothetical. Control characters are stripped rather than escaped.
 
-### Paging
+### Paging, internally
 
-`$skip`, and Graph's `nextLink` repeats the filter. Paging into an unordered
-result set can in principle overlap or skip rows — but `$search` had exactly the
-same property, so this is not a regression, and it is why the API reports the
-results as unordered rather than letting the client assume.
+`$skip`, with Graph's `nextLink` repeating the filter. This is now an
+implementation detail of collecting the result set rather than something the
+caller sees — the caller gets one sorted response. The overlap hazard that paging
+an unordered collection carries is handled by the dedupe above.
 
 ---
 

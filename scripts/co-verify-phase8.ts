@@ -143,7 +143,7 @@ async function survey(): Promise<void> {
    */
   const wellKnown = ["inbox", "drafts", "sentitems"];
   for (const alias of wellKnown) {
-    const page = await service.searchMessages(alias, "ZZTEST", { top: 25 });
+    const page = await service.searchMessages(alias, "ZZTEST");
     const relevant = page.messages.filter((m) => isZzTestSubject(m.subject));
 
     say(`  ${alias}: ${relevant.length} ZZTEST message(s)`);

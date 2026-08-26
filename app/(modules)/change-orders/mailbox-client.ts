@@ -25,7 +25,12 @@ export interface FolderNode {
 export interface MessagePageResult {
   messages: MessageSummary[];
   nextCursor: string | null;
-  ordered: boolean;
+  /**
+   * There are matches this response does not contain. Only a search can set it -
+   * a search collects and sorts its whole result set, so it is capped rather than
+   * paged.
+   */
+  truncated: boolean;
   query: string;
 }
 

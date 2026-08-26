@@ -88,11 +88,12 @@ implementation was wrong and was changed.
 
 ---
 
-## Four things the docs had wrong
+## Five things worth recording
 
 Every Graph phase so far has found defects a mocked transport agreed with. This
 phase found four, and three of them were in the specification rather than the
-code. The fourth was a wrong prediction of mine while fixing the second.
+code. The fourth was a wrong prediction of mine while fixing the second, and the
+fifth is the design decision that wrong prediction forced.
 
 ### 1. `DELETE /messages/{id}` does not put a message in Deleted Items
 
@@ -163,10 +164,14 @@ is normally accepted alongside `$filter`. It is not, on messages:
 | `$filter=startswith(subject,'x')` | 200, immutable ids |
 | the same plus `$orderby` | **400 InefficientFilter** |
 
-So search results are still unordered — Exchange returned 08-19, 08-19, 08-18,
-08-25, 08-06 for a real folder — and the "not in date order" caveat in the UI
-stays. Immutable ids were always the real reason for the change; the ordering was
-a bonus that turned out not to exist.
+Exchange returned 08-19, 08-19, 08-18, 08-25, 08-06 for a real folder. Immutable
+ids were always the real reason for the change; the ordering was a bonus that
+turned out not to exist **at the API**.
+
+**Resolved afterwards, in the service.** Since Graph will not sort a filtered
+collection, the service now collects the whole result set and sorts it itself -
+see finding 5. So search results are newest-first after all, and the "not in date
+order" caveat is gone from the UI.
 
 Also confirmed while changing it: matching is case-insensitive (`zztest` finds
 `ZZTEST`), the apostrophe escaping is accepted by Graph (`Reese''s`), and `$skip`
@@ -190,6 +195,41 @@ meant nothing. Both checks now compare **content hashes**, and the size check is
 bound rather than an equality.
 
 Nothing in the application depended on this; `size` is only ever displayed.
+
+### 5. Graph will not sort a search, so the service does
+
+Not a defect - a design decision forced by finding 4, recorded here because the
+alternative is the tempting one.
+
+`$orderby` is refused alongside `$filter`, so the ordering had to move into the
+process. There were two ways to do it and they are not equivalent:
+
+| | Cost | Correctness |
+|---|---|---|
+| Sort each page as it arrives | Free | **Wrong.** Exchange's underlying order is arbitrary, so page two can hold messages newer than the last row of page one. The list looks ordered and is not. |
+| Collect every match up to a cap, sort the set | One request in this mailbox today; more only as folders grow | Correct end to end |
+
+The second was chosen. A subtly wrong order is worse than an openly absent one -
+somebody scanning a list for the newest thing would find it below a "Load older
+messages" button.
+
+What that means concretely:
+
+- A search returns **all** its matches in one response. `nextCursor` is always
+  null and there is no "Load older" button for search results.
+- Bounded at **500 matches / 5 requests**, and `truncated` is returned when a cap
+  stopped it. Silent truncation looks exactly like a complete answer.
+- In this mailbox it is **one request**: the largest folder holds 13 messages.
+- Results are **deduplicated by id** while accumulating. `$skip` into a collection
+  with no guaranteed order can return the same row on two pages if Exchange's
+  order shifts between requests, and a duplicated row in a list somebody is about
+  to move or delete is not acceptable.
+- A message with no usable `receivedDateTime` sorts **last**, never first. An
+  unknown date must not be presented as the newest thing in the mailbox.
+
+Verified live. The `contains(subject,'e')` case that previously came back
+08-19, 08-19, 08-18, 08-25, 08-06 now returns 14 matches in strict newest-first
+order, all with immutable ids, in a single request, untruncated.
 
 ---
 

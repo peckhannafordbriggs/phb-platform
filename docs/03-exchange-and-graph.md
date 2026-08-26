@@ -87,11 +87,21 @@ this mailbox carry the bracketed project tag people actually search for, and a s
 is a correctness bug where a narrower search is a smaller feature.
 
 **`$filter` and `$orderby` cannot be combined on messages.** Exchange answers
-`400 InefficientFilter`, for `contains` and `startswith` alike. So a subject search sends
-no ordering and Exchange returns neither date nor relevance order — a real folder came
-back 08-19, 08-19, 08-18, 08-25, 08-06. A plain folder listing (no `$filter`) *does*
-order by `receivedDateTime desc`. The UI says which one it is showing. Adding an
-`$orderby` to the search path does not degrade it, it breaks every search outright.
+`400 InefficientFilter`, for `contains` and `startswith` alike, so Graph will not order a
+filtered collection — and the order it does return is neither date nor relevance: a real
+folder came back 08-19, 08-19, 08-18, 08-25, 08-06. Adding an `$orderby` to the search
+path does not degrade it, it breaks every search outright.
+
+**So the service sorts search results itself, over the whole result set.** It collects
+every match up to a cap, sorts newest-first, and returns the lot in one response — so a
+search has no cursor. Sorting page-by-page was rejected: page two can hold messages
+newer than the last row of page one, which produces a list that looks ordered and is
+not. Results are deduplicated by id while they accumulate, because `$skip` into a
+collection with no guaranteed order can return the same row twice.
+
+Both listings are therefore newest-first, and a search additionally reports whether it
+was `truncated` at the cap — silent truncation would look exactly like a complete
+answer.
 
 **Reply and forward via Graph, not by hand.** Use `createReply`, `createReplyAll`,
 `createForward`. They return a real Exchange draft with quoting and threading intact.

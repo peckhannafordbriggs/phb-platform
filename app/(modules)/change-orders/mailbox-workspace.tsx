@@ -66,7 +66,8 @@ const PAGE_SIZE = 25;
 interface ListState {
   messages: MessageSummary[];
   nextCursor: string | null;
-  ordered: boolean;
+  /** A search hit its cap. Never true for a folder listing, which pages. */
+  truncated: boolean;
 }
 
 export function MailboxWorkspace() {
@@ -221,7 +222,7 @@ export function MailboxWorkspace() {
         setList({
           messages: page.messages,
           nextCursor: page.nextCursor,
-          ordered: page.ordered,
+          truncated: page.truncated,
         });
         setListError(null);
       } catch (error) {
@@ -648,11 +649,29 @@ export function MailboxWorkspace() {
             />
           ) : (
             <>
-              {!list.ordered && (
+              {/*
+                Both listings are newest-first, so there is nothing to warn
+                about on ordering any more - the service sorts a search's whole
+                result set because Graph will not order a filtered collection.
+                What is still worth saying is what a search matched on, and
+                whether it returned everything.
+              */}
+              {activeQuery.length > 0 && (
                 <p className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-1.5 text-xs text-[var(--muted)]">
-                  Matched on subject, and not in date order. Search does not look
-                  inside messages — clear the box for the full folder, newest
-                  first.
+                  {list.truncated ? (
+                    <>
+                      Showing the first {list.messages.length} subject matches,
+                      newest first — there are more. Narrow the search to see the
+                      rest.
+                    </>
+                  ) : (
+                    <>
+                      {list.messages.length === 1
+                        ? "1 subject match"
+                        : `${list.messages.length} subject matches`}
+                      , newest first. Search does not look inside messages.
+                    </>
+                  )}
                 </p>
               )}
               <ul className="divide-y divide-[var(--border)]">

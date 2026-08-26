@@ -33,26 +33,32 @@ export async function GET(
         cursor: readCursor(search),
       };
 
+      /**
+       * A search takes no paging options, and that is not an oversight.
+       *
+       * Graph refuses to order a filtered message collection, so the service
+       * collects the whole result set and sorts it before returning - which
+       * means there is nothing left to page through, and a `cursor` or `top` it
+       * accepted but ignored would be a trap for the next caller.
+       */
       const page =
         query.length > 0
-          ? await service.searchMessages(folderId, query, options)
+          ? await service.searchMessages(folderId, query)
           : await service.listMessages(folderId, options);
 
       return ok({
         messages: page.messages,
         nextCursor: page.nextCursor,
         /**
-         * Search results are not in date order, and this survived the switch
-         * from `$search` to `$filter`.
+         * Both listings are newest-first now, so there is no longer an `ordered`
+         * flag for the client to interpret. A folder listing gets its order from
+         * Graph; a search gets it from the service, which sorts the whole result
+         * set because Graph refuses to order a filtered collection.
          *
-         * Exchange answers 400 InefficientFilter to `$filter` combined with
-         * `$orderby` on messages, so a subject search sends no ordering and gets
-         * back whatever order Exchange chooses - measured as neither date nor
-         * relevance. A plain folder listing DOES order by receivedDateTime desc.
-         * The client says which it is looking at rather than implying an order
-         * that is not there.
+         * `truncated` replaced it, and answers a different question: not "is
+         * this ordered" but "is this all of it".
          */
-        ordered: query.length === 0,
+        truncated: page.truncated,
         query,
       });
     },
