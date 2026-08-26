@@ -268,6 +268,28 @@ function applyCursor(request: GraphRequest, cursor: string): GraphRequest {
   return request;
 }
 
+/**
+ * Control characters, built from escapes so none sits literally in this file.
+ * They cannot appear in a subject anybody typed, and a CR or LF in a query
+ * string is worth removing on principle.
+ */
+const CONTROL_CHARACTERS = new RegExp("[\\u0000-\\u001f\\u007f]", "g");
+
+/**
+ * Escapes a value for an OData single-quoted string literal.
+ *
+ * A literal quote is doubled - that is OData's own escape, not a backslash. Get
+ * this wrong and a subject containing an apostrophe ends the expression early:
+ * searching for `P&G Reese's` would send `contains(subject,'P&G Reese's')`, and
+ * Graph answers 400 on a query that looks completely ordinary. This mailbox has
+ * a folder called `P&G Reese's`, so that is not hypothetical.
+ *
+ * Percent-encoding is the SDK's job and is not duplicated here.
+ */
+function escapeODataLiteral(value: string): string {
+  return value.replace(CONTROL_CHARACTERS, "").replace(/'/g, "''");
+}
+
 function toAddress(recipient: Recipient | null | undefined): MailAddress | null {
   const address = recipient?.emailAddress?.address;
   if (address === undefined || address === null || address.length === 0) {
@@ -640,15 +662,49 @@ export class ChangeOrderMailService {
   }
 
   /**
-   * Searches one folder.
+   * Searches one folder, by subject.
    *
-   * `$search` is not `$filter`. Graph rejects it combined with `$orderby`, and
-   * results come back by relevance rather than by date - so this returns no
-   * ordering guarantee and the UI must not imply one.
+   * `$filter=contains(subject,'...')`, deliberately, and NOT `$search`. This
+   * started as `$search` and was changed after Phase 8's live verification, for
+   * one reason that outweighs the rest:
    *
-   * The term is quoted and its quotes escaped. Without that, a subject
-   * containing a double quote ends the search expression early and Graph
-   * answers 400 on an ordinary-looking query.
+   *   **`$search` ignores `Prefer: IdType="ImmutableId"`.** The header is on the
+   *   request - a test asserts that for every request without exception - and
+   *   Graph returns standard, folder-scoped ids from a search anyway. Verified
+   *   against the live mailbox: the same message in the same folder came back as
+   *   `AAkALg...` from a listing and `AAMkAD...` from a search. A standard id
+   *   changes when the message moves, and Power Automate moves messages
+   *   constantly - so every id the search box produced was one move away from
+   *   being dead, and a platform `move` performed with one left the caller
+   *   holding a 404.
+   *
+   * `$filter` is an ordinary collection request, so it honours the header and
+   * hands out immutable ids like every other read.
+   *
+   * **Results are still not in date order, and `$orderby` cannot fix that.**
+   * Exchange answers `400 InefficientFilter` to `$filter` combined with
+   * `$orderby` on a message collection - verified for both `contains` and
+   * `startswith`, with and without the ordering. So this sends no `$orderby` at
+   * all, and the order Exchange returns is not date order: a real folder came
+   * back 08-19, 08-19, 08-18, 08-25, 08-06. The UI must keep saying so.
+   *
+   * That was expected to be a side benefit of the switch and it is not one. The
+   * ordering is no worse than `$search` was, and the immutable ids are the whole
+   * reason for the change.
+   *
+   * Matching is case-insensitive - `zztest` finds `ZZTEST` - which is what
+   * anybody typing in a search box expects.
+   *
+   * The cost, stated plainly: this searches the SUBJECT ONLY. Not the body, not
+   * the sender, not attachment names. That is a real narrowing, and it was
+   * accepted because subjects in this mailbox carry the bracketed project tag
+   * people actually search for - `[CCHMC RFI 229]` - and a stale id is a
+   * correctness bug where a narrower search is a smaller feature.
+   *
+   * Offset paging works and Graph's nextLink repeats the filter, but paging into
+   * an unordered result set can overlap or skip rows in principle. `$search` had
+   * exactly the same property, so this is not a regression - and it is why the
+   * caller is told the results are unordered rather than left to assume.
    */
   async searchMessages(
     folderId: string,
@@ -659,19 +715,21 @@ export class ChangeOrderMailService {
     if (term.length === 0) return { messages: [], nextCursor: null };
 
     const top = clampPageSize(options.top);
-    const escaped = term.replace(/"/g, '\\"');
 
     const page = await this.call("searchMessages", () => {
       let request = this.client
         .api(this.path(`/mailFolders/${encodeURIComponent(folderId)}/messages`))
         .select(MESSAGE_SUMMARY_SELECT)
-        .search(`"${escaped}"`)
+        .filter(`contains(subject,'${escapeODataLiteral(term)}')`)
         .top(top);
 
-      if (options.cursor !== undefined && options.cursor.length > 0) {
-        request = applyCursor(request, options.cursor);
-      }
+      const cursor = options.cursor ?? "";
+      if (cursor.length > 0) request = applyCursor(request, cursor);
 
+      // No $orderby, deliberately. Exchange refuses $filter + $orderby on
+      // messages with 400 InefficientFilter - see the note above. Adding one
+      // here fails every search, so this is the line to check first if search
+      // starts returning "Something went wrong reaching the mailbox".
       return request.get() as Promise<GraphCollection<Message>>;
     });
 

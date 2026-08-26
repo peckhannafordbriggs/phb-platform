@@ -11,6 +11,7 @@ Fixtures, both created by the operator in Outlook:
 |---|---|---|
 | 1 | `ZZTEST phase 8 reply source` — from `msheth@phb1899.com`, Cc `msheth@phb1899.com`, one PDF attached (`Cost Intelligence System (1).pdf`) | Inbox |
 | 2 | `ZZTEST phase 8 attachment draft` — one PDF attached (`JACE Discovery Checklist Rev 2.pdf`) | Drafts |
+| 3 | `ZZTEST phase 8 reply source ` — same, but Cc `jschriner@phb1899.com`, a different address from the sender. Sent second, to close reply-all | Inbox |
 
 ---
 
@@ -28,12 +29,23 @@ body.
 | Derived subject inside the ZZTEST fence | **Pass.** `RE: ZZTEST phase 8 reply source` and `FW: …`. This is the prefix-skipping change earning its place — without it every one of these drafts would have been uneditable. |
 | Forward carries the original attachments | **Pass, by content.** See the `size` finding below. |
 
-**Reply-all recipients: not conclusively verified, and the fixture is why.** The
-source was From `msheth@phb1899.com`, To `changeorder@`, Cc `msheth@phb1899.com`.
-Exchange correctly deduplicated, so reply-all produced To `msheth@phb1899.com`,
-Cc empty — *identical to plain reply*. The result is right, but it does not
-distinguish reply from reply-all. Proving that needs a source whose Cc is a
-different person from the sender. **Outstanding.**
+**Reply-all recipients: pass, on the second fixture.**
+
+Fixture 1 could not prove it. Its Cc was the sender's own address, so Exchange
+correctly deduplicated and reply-all produced recipients *identical to plain
+reply* — a right answer that distinguishes nothing.
+
+Fixture 3 has a Cc that is somebody else, and the two operations separate
+cleanly:
+
+| Source | From `msheth@`, To `changeorder@`, Cc `jschriner@` |
+|---|---|
+| `createReply` | To `msheth@`, Cc empty |
+| `createReplyAll` | To `msheth@`, **Cc `jschriner@`** |
+
+So reply-all adds the Cc recipient and — the part worth checking — excludes
+`changeorder@phb1899.com` itself. A reply-all that included the mailbox would
+have it replying to itself on every thread.
 
 ### Compose from scratch — pass
 
@@ -76,10 +88,11 @@ implementation was wrong and was changed.
 
 ---
 
-## Three things the docs had wrong
+## Four things the docs had wrong
 
 Every Graph phase so far has found defects a mocked transport agreed with. This
-phase found three, and two of them were in the specification rather than the code.
+phase found four, and three of them were in the specification rather than the
+code. The fourth was a wrong prediction of mine while fixing the second.
 
 ### 1. `DELETE /messages/{id}` does not put a message in Deleted Items
 
@@ -128,11 +141,36 @@ be, and `moveMessage` returned the right new immutable id.
 standard id returns that same standard id: Graph echoes back whichever form
 addressed the resource. Only a collection request yields an immutable id.
 
-**Not currently breaking anything**, because the reading pane clears after a move
-and treats a stale id as "no longer here". But it violates the invariant in
-`docs/03` and it is a latent hazard. See `docs/runbook.md` for the two candidate
-fixes; choosing between them is a product decision, because the cheap one
-(`$filter contains(subject,…)`) narrows search from full-text to subject-only.
+**Fixed by not using `$search`.** Folder search now sends
+`$filter=contains(subject,'…')`, which is an ordinary collection request and
+honours the header. Re-verified against the live mailbox: every search result now
+comes back with an `AAkALg…` immutable id.
+
+The cost is that search is **subject-only** — not the body, not the sender, not
+attachment names. That was accepted deliberately: subjects here carry the
+bracketed project tag people actually search for, and a stale id is a correctness
+bug where a narrower search is a smaller feature. Outlook remains a fully working
+path for finding text inside a message.
+
+**One expected benefit did not materialise, and this was a wrong prediction on my
+part.** The switch was expected to bring date ordering with it, since `$orderby`
+is normally accepted alongside `$filter`. It is not, on messages:
+
+| Request | Result |
+|---|---|
+| `$filter=contains(subject,'x')` | 200, immutable ids |
+| the same plus `$orderby=receivedDateTime desc` | **400 InefficientFilter** |
+| `$filter=startswith(subject,'x')` | 200, immutable ids |
+| the same plus `$orderby` | **400 InefficientFilter** |
+
+So search results are still unordered — Exchange returned 08-19, 08-19, 08-18,
+08-25, 08-06 for a real folder — and the "not in date order" caveat in the UI
+stays. Immutable ids were always the real reason for the change; the ordering was
+a bonus that turned out not to exist.
+
+Also confirmed while changing it: matching is case-insensitive (`zztest` finds
+`ZZTEST`), the apostrophe escaping is accepted by Graph (`Reese''s`), and `$skip`
+paging works with the filter repeated in Graph's own `nextLink`.
 
 ### 3. An attachment's `size` is not its content length
 
@@ -157,12 +195,10 @@ Nothing in the application depended on this; `size` is only ever displayed.
 
 ## Still outstanding
 
-- **Reply-all recipients.** Needs a source message whose Cc is somebody other
-  than the sender. The fixture's Cc was the sender, so Exchange deduplicated and
-  reply-all was indistinguishable from reply.
-- **The `$search` id decision.** Finding 2. Nothing is broken today; the fix is a
-  product choice.
 - **A browser pass over the UI.** Everything above went through the service, which
   is where every rule is enforced — but the folder picker, the delete dialog, the
   compose prompt and the attachment panel have not been clicked through by a
-  person.
+  person. Worth doing before anyone relies on this daily.
+
+Nothing else. Reply-all closed on fixture 3, and the `$search` id problem is fixed
+rather than deferred.

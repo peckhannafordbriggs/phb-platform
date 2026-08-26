@@ -138,9 +138,11 @@ that mocked transports agreed with:
   Recoverable Items \ Deletions, which needs Outlook's *Recover Deleted Items from
   Server* dialog. A platform delete is a `move` to `deleteditems` instead
 - `$search` ignores `Prefer: IdType="ImmutableId"` even with the header on the wire, so
-  ids from the search box are standard folder-scoped ids and go stale on a move.
-  `listMessages` returns immutable ids. A GET cannot translate between them — Graph
-  echoes back whichever form addressed the resource
+  it is not used at all — search is `$filter=contains(subject,…)`, which honours it. A
+  GET cannot translate between the forms; Graph echoes back whichever one addressed the
+  resource
+- `$filter` and `$orderby` together on messages are refused with `400 InefficientFilter`,
+  so a subject search cannot be date-ordered. A plain listing can
 - An attachment's `size` is not its content length. A 337,145-byte PDF reports 337,527,
   and 337,532 after a forward copies it. Compare content, never the reported size
 
@@ -171,13 +173,12 @@ One guard changed, deliberately: the ZZTEST fence now skips Exchange's own
 and every derived draft would otherwise be uneditable outside production. A reply
 to a real change order is still refused. See `docs/runbook.md`.
 
-Live verification is done — `docs/phase-8-verification.md` records what Exchange
-actually did, including three claims the docs had wrong. `scripts/co-verify-phase8.ts`
-re-runs it and never sends.
+**Phase 8 complete.** Live verification is done and `docs/phase-8-verification.md`
+records what Exchange actually did, including four claims the docs had wrong.
+`scripts/co-verify-phase8.ts` re-runs it and never sends.
 
-One decision is still open: ids from `$search` are not immutable (see the list above),
-so the search box hands out weaker ids than the folder listing does. Nothing is
-currently broken by it, and the fix is a product choice — see the runbook.
+Folder search is subject-only as a result: `$search` returns ids that go stale on a
+move, so it is not used. See the list above.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

@@ -618,8 +618,8 @@ export function MailboxWorkspace() {
             type="search"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search this folder"
-            aria-label="Search this folder"
+            placeholder="Search subjects in this folder"
+            aria-label="Search subjects in this folder"
             className="w-full rounded border border-[var(--border)] px-2 py-1.5 text-sm"
           />
         </form>
@@ -650,7 +650,9 @@ export function MailboxWorkspace() {
             <>
               {!list.ordered && (
                 <p className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-1.5 text-xs text-[var(--muted)]">
-                  Search results, ordered by relevance rather than date.
+                  Matched on subject, and not in date order. Search does not look
+                  inside messages — clear the box for the full folder, newest
+                  first.
                 </p>
               )}
               <ul className="divide-y divide-[var(--border)]">

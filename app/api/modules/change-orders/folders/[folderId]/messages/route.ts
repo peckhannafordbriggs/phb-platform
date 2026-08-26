@@ -41,8 +41,17 @@ export async function GET(
       return ok({
         messages: page.messages,
         nextCursor: page.nextCursor,
-        // $search returns by relevance and rejects $orderby, so the client must
-        // not claim these are newest-first.
+        /**
+         * Search results are not in date order, and this survived the switch
+         * from `$search` to `$filter`.
+         *
+         * Exchange answers 400 InefficientFilter to `$filter` combined with
+         * `$orderby` on messages, so a subject search sends no ordering and gets
+         * back whatever order Exchange chooses - measured as neither date nor
+         * relevance. A plain folder listing DOES order by receivedDateTime desc.
+         * The client says which it is looking at rather than implying an order
+         * that is not there.
+         */
         ordered: query.length === 0,
         query,
       });

@@ -663,58 +663,97 @@ not an error.
 
 ---
 
-## An id from the search box is not an immutable id
+## Folder search is subject-only, and that is deliberate
 
-**This is the subtlest thing in the module.** Read it before trusting any message
-id, and before "fixing" the `mail.move_changed_id` warning.
+**Read this before "restoring" full-text search or adding an `$orderby`.** Both
+look like obvious improvements. One of them breaks every search outright.
+
+Searching a folder sends:
+
+```
+GET /users/{mailbox}/mailFolders/{id}/messages
+    ?$filter=contains(subject,'<term>')
+    &$select=<metadata>
+    &$top=<n>
+```
+
+### Why not `$search`
 
 `$search` **ignores** `Prefer: IdType="ImmutableId"`. The header is on the request
-— a test asserts that at the transport for every request without exception — and
-Graph returns standard ids from a search anyway.
+— a test asserts that for every request without exception — and Graph returns
+standard, folder-scoped ids from a search anyway.
 
-Same message, same folder, header present on both:
+Measured against the live mailbox, same message, same folder, header on both:
 
 ```
-listMessages    AAkALgAAAAAAHYQDEapmEc2byACqAC-EWg0A…TPFR8QAA   immutable
-searchMessages  AAMkADE0NjQyNmExLTYzMTEtNGYwYS04Mj…M8YDjAAA=   standard
+$filter listing   AAkALgAAAAAAHYQDEapmEc2byACqAC-EWg0A…TPFR8QAA   immutable
+$search           AAMkADE0NjQyNmExLTYzMTEtNGYwYS04Mj…M8YDjAAA=   standard
 ```
 
-The way to confirm the header still works at all is to strip it and compare:
-`listMessages` without it returns the `AAMkAD…` form, with it the `AAkALg…` form.
-So immutable ids are in effect everywhere except `$search`.
+The way to confirm the header still works at all is to strip it and compare: a
+listing without it returns the `AAMkAD…` form, with it the `AAkALg…` form.
 
-**Why it matters.** A standard id is folder-scoped and changes when the message
-moves — which is the entire reason the header exists, and Power Automate moves
-messages constantly. So an id from the search box dies on the next move, by
-anyone.
+**A standard id changes when the message moves**, which is the entire reason the
+header exists, and Power Automate moves messages constantly. So every id the
+search box produced was one move away from being dead — and a platform `move`
+performed with one succeeded while leaving the caller holding a 404. That was
+found by the Phase 8 move verification failing.
 
 **A GET cannot translate one.** Asking for a message by its standard id returns
 that same standard id; Graph echoes back whichever form addressed the resource.
-Only a collection request yields an immutable id.
+Only a collection request yields an immutable id, which is why the fix was to
+change how search queries rather than to convert its results.
 
-**What this does NOT currently break.** `moveMessage` returns the id the message
-has now, the route audits both, and the reading pane clears after a move — so the
-user sees the right outcome. A stale id on a read is already reported as
-`not_found`, which refreshes the list. Nothing is visibly wrong today.
+### The cost, which is real
 
-**If `"event":"mail.move_changed_id"` appears in the log**, the first thing to
-check is whether the id came from a search, NOT whether the middleware broke. An
-earlier version of that log line asserted the header had stopped working and cost
-an afternoon of looking in the wrong place.
+Subject only. Not the body, not the sender, not attachment names.
 
-### The two candidate fixes, and why neither has been applied
+Accepted because subjects here carry the bracketed project tag people actually
+search for — `[CCHMC RFI 229]` — and because a stale id is a correctness bug
+where a narrower search is a smaller feature. If somebody needs to find text
+inside a message, Outlook is still a fully working path and always will be.
 
-Choosing between these is a **product decision**, not a technical one, which is
-why the code is unchanged and this entry exists instead.
+Matching is case-insensitive: `zztest` finds `ZZTEST`.
 
-| Fix | What it costs |
+### Do not add an `$orderby`
+
+Exchange answers **`400 InefficientFilter`** to `$filter` combined with `$orderby`
+on a message collection. Verified for `contains` and `startswith`, both with and
+without the ordering:
+
+| Request | Result |
 |---|---|
-| Replace `$search` with `$filter=contains(subject,'…')` | One request, immutable ids, and `$orderby` works again — which also fixes the "results are by relevance, not date" wart. But search narrows from full-text to **subject only**: no body, no sender, no attachment names. |
-| Resolve each search hit to its immutable id | Keeps full-text search. But there is no cheap way to do it — a GET echoes the form back, so each hit needs locating in a folder listing, which is fragile (what do you match on?) and costs a request per result. |
+| `$filter=contains(subject,'x')` | 200, immutable ids |
+| `$filter=contains(subject,'x')` + `$orderby=receivedDateTime desc` | **400 InefficientFilter** |
+| `$filter=startswith(subject,'x')` | 200, immutable ids |
+| `$filter=startswith(subject,'x')` + `$orderby` | **400 InefficientFilter** |
+| `$search="x"` | 200, standard ids |
 
-Given this mailbox, subject-only search is arguably closer to how people actually
-look for a change order — they know the project tag. But that is the operator's
-call to make.
+So search results are **not in date order** and cannot be made so at the API. The
+order Exchange returns is neither date nor relevance — a real folder came back
+08-19, 08-19, 08-18, 08-25, 08-06. A plain folder listing, with no `$filter`, does
+order by `receivedDateTime desc`; only the search path is unordered. The UI says
+which one it is showing.
+
+`tests/mail-search.test.ts` asserts no `$orderby` is ever sent, with this reason
+attached. If search starts failing with *"Something went wrong reaching the
+mailbox"* and the log shows `code=InefficientFilter`, an ordering has been added
+back.
+
+### The apostrophe
+
+The term goes into an OData string literal, so a quote is escaped by **doubling**
+it — not with a backslash. Get it wrong and searching for `P&G Reese's` sends
+`contains(subject,'P&G Reese's')` and Graph answers 400 on a query that looks
+completely ordinary. This mailbox has a folder called `P&G Reese's`, so it is not
+hypothetical. Control characters are stripped rather than escaped.
+
+### Paging
+
+`$skip`, and Graph's `nextLink` repeats the filter. Paging into an unordered
+result set can in principle overlap or skip rows — but `$search` had exactly the
+same property, so this is not a regression, and it is why the API reports the
+results as unordered rather than letting the client assume.
 
 ---
 

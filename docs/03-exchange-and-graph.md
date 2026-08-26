@@ -72,15 +72,26 @@ Credentials:
 By default a message ID changes when the message moves folders — and Power Automate
 moves messages constantly. Any ID captured without this header goes stale silently.
 
-**`$search` ignores that header.** Verified against the live mailbox in Phase 8: the
-same message in the same folder comes back with an immutable ID (`AAkALg…`) from
-`listMessages` and a standard, folder-scoped ID (`AAMkAD…`) from `searchMessages`,
-with the header present on both requests. A standard ID **does** change on a move.
+**`$search` ignores that header, so the platform does not use `$search`.** Verified
+against the live mailbox in Phase 8: the same message in the same folder came back with
+an immutable ID (`AAkALg…`) from a `$filter` listing and a standard, folder-scoped ID
+(`AAMkAD…`) from `$search`, with the header present on both requests. A standard ID
+**does** change on a move, so every ID the search box produced was one move from dead.
 
-So an ID obtained through the search box is second-class, and a `move` performed with
-one succeeds but leaves the caller's ID dead. `move` returns the new ID for exactly
-this reason. A GET cannot be used to translate one: Graph echoes back whichever ID
-form addressed the resource, so only a collection request yields an immutable ID.
+A GET cannot translate one: Graph echoes back whichever ID form addressed the resource,
+so only a collection request yields an immutable ID.
+
+**Searching a folder therefore means `$filter=contains(subject,'…')`.** Subject only —
+not the body, not the sender, not attachment names. Accepted deliberately: subjects in
+this mailbox carry the bracketed project tag people actually search for, and a stale ID
+is a correctness bug where a narrower search is a smaller feature.
+
+**`$filter` and `$orderby` cannot be combined on messages.** Exchange answers
+`400 InefficientFilter`, for `contains` and `startswith` alike. So a subject search sends
+no ordering and Exchange returns neither date nor relevance order — a real folder came
+back 08-19, 08-19, 08-18, 08-25, 08-06. A plain folder listing (no `$filter`) *does*
+order by `receivedDateTime desc`. The UI says which one it is showing. Adding an
+`$orderby` to the search path does not degrade it, it breaks every search outright.
 
 **Reply and forward via Graph, not by hand.** Use `createReply`, `createReplyAll`,
 `createForward`. They return a real Exchange draft with quoting and threading intact.
