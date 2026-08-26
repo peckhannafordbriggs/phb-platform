@@ -102,6 +102,29 @@ export function DraftEditor({
   const latest = useRef<EditorState | null>(null);
   latest.current = state;
 
+  /**
+   * The parent's callbacks, held in a ref so they are not effect dependencies.
+   *
+   * This is not tidiness. `onGone` used to be in the open effect's dependency
+   * array, and the workspace passes it as an inline arrow - a new identity on
+   * every one of ITS renders. So the effect re-ran on every parent render, and
+   * that effect resets `loaded`, `state`, `saved`, `sourceMode` and `save` to
+   * their initial values, releases the advisory lock in its cleanup, and
+   * re-reads the draft.
+   *
+   * The workspace re-renders at least once a minute, because the message list
+   * polls. The result was an editor that wiped itself roughly every 60 seconds:
+   * anything typed since the last autosave was lost, the paragraph box emptied,
+   * and the lock was dropped and retaken. It presented as "the page refreshed
+   * mid-sentence".
+   *
+   * The effect's identity is the DRAFT - `messageId` and whether images are on -
+   * and nothing else. Callbacks are read through here at the moment they are
+   * needed, so a caller that rebuilds them every render costs nothing.
+   */
+  const callbacks = useRef({ onGone, onSent, onShowImages });
+  callbacks.current = { onGone, onSent, onShowImages };
+
   const draft = loaded?.draft ?? null;
 
   // ------------------------------------------------------------------ open
@@ -142,7 +165,7 @@ export function DraftEditor({
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
         if (error instanceof ApiError) {
-          if (error.code === "not_found") onGone();
+          if (error.code === "not_found") callbacks.current.onGone();
           else setLoadError(error);
         } else {
           setLoadError(
@@ -161,7 +184,11 @@ export function DraftEditor({
     // Re-opens when "show images" is switched on: the preview is sanitized on
     // the server, so images can only appear by re-reading it. The control
     // flushes any pending save first - see showImages below.
-  }, [messageId, remoteImagesAllowed, onGone]);
+    //
+    // `onGone` is deliberately NOT a dependency - see the callbacks ref above.
+    // Adding a prop the parent rebuilds each render back into this array makes
+    // the editor reset itself on every parent render.
+  }, [messageId, remoteImagesAllowed]);
 
   // -------------------------------------------------------------- autosave
 
@@ -323,7 +350,7 @@ export function DraftEditor({
       } catch (error) {
         if (error instanceof ApiError) {
           if (error.code === "not_found") {
-            onGone();
+            callbacks.current.onGone();
             return false;
           }
           // A silent failed save on a message someone is about to send is the
@@ -340,7 +367,7 @@ export function DraftEditor({
         return false;
       }
     },
-    [saved, buildPatch, messageId, remoteImagesAllowed, onGone],
+    [saved, buildPatch, messageId, remoteImagesAllowed],
   );
 
   const scheduleSave = useCallback(() => {
@@ -452,8 +479,8 @@ export function DraftEditor({
       if (!saved) return;
     }
 
-    onShowImages();
-  }, [dirty, persist, onShowImages]);
+    callbacks.current.onShowImages();
+  }, [dirty, persist]);
 
   const beginSend = useCallback(async () => {
     setSendError(null);
@@ -492,7 +519,7 @@ export function DraftEditor({
     try {
       const result = await sendDraft(messageId, changeKey);
       setConfirming(false);
-      onSent({
+      callbacks.current.onSent({
         subject: result.subject,
         recipients: [...result.to, ...result.cc].map((a) => a.address),
       });
@@ -500,7 +527,7 @@ export function DraftEditor({
       if (error instanceof ApiError) {
         if (error.code === "not_found") {
           setConfirming(false);
-          onGone();
+          callbacks.current.onGone();
         } else {
           setSendError(error);
         }
@@ -514,7 +541,7 @@ export function DraftEditor({
     } finally {
       setSending(false);
     }
-  }, [sending, messageId, changeKey, onSent, onGone]);
+  }, [sending, messageId, changeKey]);
 
   const recipients = useMemo(() => {
     if (state === null) return { addresses: [] as string[], invalid: [] as string[] };

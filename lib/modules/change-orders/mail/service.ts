@@ -197,6 +197,33 @@ const DEFAULT_MESSAGE_PAGE_SIZE = 25;
 const MAX_MESSAGE_PAGE_SIZE = 100;
 const FOLDER_PAGE_SIZE = 100;
 
+/**
+ * How long a folder tree stays usable without asking Graph again.
+ *
+ * Measured, which is why this exists: listFolders() costs **11 Graph requests
+ * and ~1.3 seconds** against the real mailbox. The walk is sequential by
+ * necessity - a level's paths are not known until the level above comes back -
+ * so it is 11 round trips of ~120ms each, and it runs on every mount of the
+ * Change Orders screen. It was the single largest thing between opening the tab
+ * and seeing anything.
+ *
+ * docs/03-exchange-and-graph.md permits exactly this and nothing more: "Short-
+ * lived in-memory cache only (seconds), for list views." Thirty seconds is
+ * chosen against how often the thing actually changes - a project folder is
+ * created every few weeks - so the staleness nobody will notice buys back a
+ * second and a bit on every navigation.
+ *
+ * What this is NOT: a message cache. Messages are read live on every request,
+ * because a stale message list during a review is a correctness problem where a
+ * stale folder list is a cosmetic one. Nothing here is persisted, and the cache
+ * dies with the process.
+ *
+ * The cost, stated plainly: a folder created or renamed in Outlook can take up
+ * to 30 seconds to appear. The folder pane's "Try again" and a reload after that
+ * window both pick it up.
+ */
+const FOLDER_CACHE_MS = 30_000;
+
 /** A mailbox with more top-level folder pages than this has bigger problems. */
 const MAX_FOLDER_PAGES = 10;
 
@@ -443,6 +470,18 @@ export class ChangeOrderMailService {
   private readonly mailbox: string;
   private readonly uploadFetch: typeof fetch;
 
+  /**
+   * The last folder tree read, and when. Per service instance, in memory only.
+   *
+   * Holding the in-flight promise rather than only the result is deliberate: the
+   * screen mounts the folder pane and the message list together, so two callers
+   * can ask for the tree within milliseconds of each other. Caching the promise
+   * makes the second one wait for the first instead of starting a second walk of
+   * 11 requests.
+   */
+  private folderCache: { at: number; folders: Promise<MailFolderSummary[]> } | null =
+    null;
+
   constructor(deps: {
     client: Client;
     mailbox: string;
@@ -498,6 +537,26 @@ export class ChangeOrderMailService {
    * this mailbox is small; this is a handful of requests, not a fan-out.
    */
   async listFolders(): Promise<MailFolderSummary[]> {
+    const cached = this.folderCache;
+    if (cached !== null && Date.now() - cached.at < FOLDER_CACHE_MS) {
+      return cached.folders;
+    }
+
+    const folders = this.readFolderTree();
+    this.folderCache = { at: Date.now(), folders };
+
+    try {
+      return await folders;
+    } catch (error) {
+      // A failed walk must not be cached, or one throttled read would break the
+      // folder pane for the next 30 seconds.
+      this.folderCache = null;
+      throw error;
+    }
+  }
+
+  /** The uncached walk. See listFolders() for why it is worth not repeating. */
+  private async readFolderTree(): Promise<MailFolderSummary[]> {
     const all: MailFolderSummary[] = await this.listFolderPage(
       this.path("/mailFolders"),
       "listFolders",

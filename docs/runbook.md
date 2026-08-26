@@ -174,6 +174,92 @@ underlying code is in the log as `"event":"mail.graph_call_failed"`. The
 
 ---
 
+## The Change Orders screen feels slow
+
+**Measure before changing anything.** `scripts/co-measure.ts` instruments the
+transport and attributes every Graph request to the operation that caused it:
+
+```bash
+npx tsx scripts/co-measure.ts     # read-only, writes nothing, never sends
+```
+
+What it reported against the live mailbox, and what each number means:
+
+| Operation | Graph requests | Wall | Note |
+|---|---|---|---|
+| `listFolders()` | **11** | **~1,300ms** | The folder pane, on every mount. Sequential by necessity. |
+| `listMessages()` | 1 | 90–520ms | The message list. |
+| `getMessage()` | 1 | ~120ms | Opening a message. |
+| `listAttachments()` | 1 | ~90ms | Second call the reading pane makes. |
+| `searchMessages()` | 1 | ~90ms | One subject search. |
+| `getDraftForEdit()` | 1 | ~95ms | One lock-refresh tick. |
+
+So a cold page load was ~1.3s of folder walking plus ~0.5s of message listing
+before anything was interactive, and **eleven of the fifteen requests were the
+folder tree**.
+
+### Why the folder walk is eleven requests
+
+One listing of the top level, then one per parent per level - a level's paths are
+not known until the level above comes back, so it cannot be parallelised - plus
+four well-known alias lookups (`/mailFolders/inbox`, `drafts`, `sentitems`,
+`deleteditems`) which do run in parallel. `wellKnownName` is beta-only, which is
+why those four exist at all.
+
+**It is now cached in memory for 30 seconds**, which docs/03 permits explicitly:
+"Short-lived in-memory cache only (seconds), for list views." Re-measured: the
+second read is **0 requests, 0ms**. The cache holds the in-flight promise, not
+just the result, so the folder pane and the message list mounting together share
+one walk instead of starting two.
+
+The cost: a folder created or renamed in Outlook can take up to 30 seconds to
+appear. The pane's *Try again* and any reload after that window pick it up.
+
+**Messages are deliberately NOT cached.** A stale folder list is cosmetic; a stale
+message list during a review means somebody could act on a draft that has already
+been sent. `tests/mail-folder-cache.test.ts` asserts four reads make four
+requests, so that boundary cannot drift.
+
+### What was NOT the cause
+
+Both were checked rather than assumed:
+
+- **Dev-mode compilation** is a one-off, not persistent. First hit to a route
+  ~640ms, then 25–50ms warm. Real, but it does not explain a screen that stays
+  slow. Note that authed API routes answer 401 in ~10ms because middleware
+  short-circuits before the route compiles, so timing those measures nothing.
+- **A fast polling loop.** The message list polls every **60s** and only while the
+  tab is visible; the draft lock refreshes every **45s** and only while the editor
+  is open. No effect in either component can re-trigger itself - the one that
+  could was the bug below. `reactStrictMode` is unset and there is no
+  `<StrictMode>` in the tree, so effects are not double-invoked in dev either.
+
+### The bug that was hiding in there: the editor reset itself every 60 seconds
+
+Found while auditing effect dependencies for a loop, and worth its own note
+because the symptom was reported as something else entirely.
+
+The draft editor's open effect had `onGone` in its dependency array, and the
+workspace passes `onGone` as an inline arrow - a new function identity on every
+one of ITS renders. That effect resets `loaded`, `state`, `saved`, `sourceMode`
+and `save` to their initial values, releases the advisory lock in its cleanup,
+and re-reads the draft.
+
+The workspace re-renders at least once a minute because the message list polls. So
+the editor wiped itself roughly **every 60 seconds**: anything typed since the
+last autosave was lost, the paragraph box emptied, and the lock was dropped and
+retaken. It was reported as *"the page refreshed mid-sentence and my text ended up
+in a different field"* - the same words as the append bug above, and both were
+real.
+
+**The rule this leaves behind:** an effect's dependency array must not contain a
+callback the parent rebuilds each render. Those callbacks live in a ref
+(`callbacks.current`) and the open effect is keyed on the draft only -
+`messageId` and whether images are on. If the editor ever starts losing keystrokes
+again, check that array first.
+
+---
+
 ## The dev overlay says `[object Event]` and the page keeps reloading
 
 **Symptom.** In development only: Next's error overlay shows a runtime error whose
