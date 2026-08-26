@@ -13,12 +13,16 @@ import type { MessageBody } from "@/lib/modules/change-orders/mail/types";
  * An allowlist of nothing, plus the few things a mail body legitimately needs.
  *
  * `img-src` is the only directive that changes with "show images". `data:` stays
- * permitted either way, because an inline logo is not a network request, and
- * `cid:` references an attachment the platform cannot resolve yet - it renders
- * as a marked placeholder rather than reaching the network.
+ * permitted either way, because an inline logo is not a network request.
+ *
+ * `cid:` is no longer listed, and that is not a tightening for its own sake: the
+ * sanitizer now removes a `cid:` src entirely, because a browser cannot resolve
+ * the scheme and the resulting broken-image glyph read as an application fault
+ * rather than as an image living in an attachment. Nothing in the document can
+ * carry one any more, so permitting it would describe a case that cannot arise.
  */
 export function contentSecurityPolicy(allowRemoteImages: boolean): string {
-  const imgSrc = allowRemoteImages ? "https: data: cid:" : "data: cid:";
+  const imgSrc = allowRemoteImages ? "https: data:" : "data:";
 
   return [
     "default-src 'none'",
@@ -50,8 +54,10 @@ const BODY_STYLES = `
   a { color: #1d4ed8; }
   img { max-width: 100%; height: auto; }
   /* A blocked or unresolvable image would otherwise collapse to a broken-image
-     glyph with no explanation of why it is missing. */
-  img[data-remote-blocked], img[src^="cid:"] {
+     glyph with no explanation of why it is missing. Both kinds have had their
+     src removed by the sanitizer, so the browser attempts no load at all and
+     draws this box with the alt text instead. */
+  img[data-remote-blocked], img[data-inline-image] {
     display: inline-block;
     min-width: 120px;
     min-height: 28px;

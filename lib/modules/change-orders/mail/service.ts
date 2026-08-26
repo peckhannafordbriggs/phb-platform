@@ -871,10 +871,12 @@ export class ChangeOrderMailService {
         content: sanitized.html,
         format: "html",
         remoteImagesBlocked: sanitized.remoteImagesBlocked,
+        inlineImages: sanitized.inlineImages,
       };
     }
 
-    return { content, format: "text", remoteImagesBlocked: 0 };
+    // Plain text cannot carry an image at all.
+    return { content, format: "text", remoteImagesBlocked: 0, inlineImages: 0 };
   }
 
   /**

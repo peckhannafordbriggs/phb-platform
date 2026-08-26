@@ -67,6 +67,22 @@ export function MessageBodyFrame({
         </div>
       )}
 
+      {/*
+        Inline images are attachments on this message, not remote content, so
+        there is nothing to consent to and no button - the honest statement is
+        that they exist and are not shown. Every message in the real mailbox
+        that has images has some of these, and before this said so they rendered
+        as unexplained placeholders that read as a bug.
+      */}
+      {body.inlineImages > 0 && (
+        <div className="border-b border-[var(--border)] bg-[var(--surface)] px-6 py-2 text-sm text-[var(--muted)]">
+          {body.inlineImages === 1
+            ? "1 inline image is part of this message and is not shown here yet."
+            : `${body.inlineImages} inline images are part of this message and are not shown here yet.`}{" "}
+          Open the message in Outlook to see them.
+        </div>
+      )}
+
       <iframe
         // No allow-scripts, no allow-same-origin, no allow-forms. allow-popups
         // (with escape) only so a link the sanitizer already hardened with

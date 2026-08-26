@@ -175,11 +175,48 @@ describe("remote content", () => {
     expect(result.html).toContain('src="https://vendor.invalid/logo.png"');
   });
 
-  it("does not treat a cid: inline image as remote", () => {
+  /**
+   * A `cid:` image is an attachment on this very message, so it is not remote -
+   * loading one would cost nothing and tell the sender nothing.
+   *
+   * But its src is removed anyway, and that changed after a browser pass: a
+   * browser cannot resolve the `cid:` scheme and the platform does not yet turn
+   * one into bytes, so leaving the src produced the broken-image glyph. That
+   * reads as "this application is broken" rather than "this image lives in an
+   * attachment". Without a src the stylesheet draws a marked placeholder with
+   * the alt text, and `inlineImages` drives an honest note beside it.
+   *
+   * Every message in the real mailbox that has images has some of these - the
+   * automation's own notification mail has two to four.
+   */
+  it("counts a cid: inline image and removes the src it cannot resolve", () => {
     const result = sanitizeEmailHtml('<img src="cid:logo123" alt="logo">');
 
+    // Not remote: this is not a privacy decision.
     expect(result.remoteImagesBlocked).toBe(0);
-    expect(result.html).toContain("cid:logo123");
+    expect(result.inlineImages).toBe(1);
+
+    // The unresolvable src is gone, so the browser attempts no load at all.
+    expect(result.html).not.toContain("cid:logo123");
+    expect(result.html).toContain('data-inline-image="true"');
+    // The alt text survives, because it is the only thing left describing it.
+    expect(result.html).toContain('alt="logo"');
+  });
+
+  it("keeps remote and inline images as separate counts", () => {
+    const result = sanitizeEmailHtml(
+      '<img src="cid:logo123"><img src="https://tracker.invalid/px.gif">' +
+        '<img src="cid:sig456"><img src="data:image/gif;base64,R0lGODlh">',
+    );
+
+    // They mean different things and drive different copy: one is blocked for
+    // privacy and offers a "show images" button, the other simply cannot be
+    // rendered yet and offers nothing.
+    expect(result.inlineImages).toBe(2);
+    expect(result.remoteImagesBlocked).toBe(1);
+
+    // A data: image is inert and needs no fetch, so it is left entirely alone.
+    expect(result.html).toContain("data:image/gif;base64,R0lGODlh");
   });
 
   it("never lets a javascript: URL through the blocked-image attribute", () => {
@@ -384,6 +421,10 @@ describe("legitimate business email survives", () => {
   });
 
   it("handles an empty body without throwing", () => {
-    expect(sanitizeEmailHtml("")).toEqual({ html: "", remoteImagesBlocked: 0 });
+    expect(sanitizeEmailHtml("")).toEqual({
+      html: "",
+      remoteImagesBlocked: 0,
+      inlineImages: 0,
+    });
   });
 });

@@ -460,6 +460,8 @@ describe("getMessage", () => {
     expect(message.body).toEqual({
       content: "Price is 4,200.00 <not html>",
       format: "text",
+      // Plain text cannot carry an image at all.
+      inlineImages: 0,
       remoteImagesBlocked: 0,
     });
   });

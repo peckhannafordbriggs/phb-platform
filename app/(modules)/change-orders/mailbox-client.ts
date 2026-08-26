@@ -50,6 +50,26 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Turns anything that is not an ApiError into something a person can see.
+ *
+ * Every catch in this module used to read `if (error instanceof ApiError)` and
+ * do nothing otherwise, which meant a genuine bug in our own code - a TypeError,
+ * a bad assumption - produced no message, no console entry, and no change on
+ * screen. "I clicked it and nothing happened" was the only symptom available,
+ * and it was reported exactly that way.
+ *
+ * A caught error is not re-thrown, deliberately: turning it into an unhandled
+ * rejection would replace a silent failure with a dev-overlay crash over a
+ * mailbox somebody is working in. It is surfaced and logged instead.
+ */
+export function describeUnexpected(error: unknown, what: string): string {
+  // Aborts are navigation, not failure, and callers filter them before here.
+  console.error(`[change-orders] ${what}`, error);
+
+  return "Something went wrong. The details are in the browser console.";
+}
+
 /** True when the thing being asked for is gone - a normal event, not a failure. */
 export function isMissing(error: unknown): boolean {
   return error instanceof ApiError && error.code === "not_found";

@@ -23,6 +23,7 @@ import {
 } from "./draft-client";
 import {
   ApiError,
+  describeUnexpected,
   ancestorsOf,
   buildFolderTree,
   fetchFolders,
@@ -354,6 +355,11 @@ export function MailboxWorkspace() {
         } else if (error instanceof ApiError) {
           setMessage(null);
           setMessageError(error);
+        } else {
+          setMessage(null);
+          setMessageError(
+            new ApiError("unexpected", describeUnexpected(error, "opening a message")),
+          );
         }
       } finally {
         setMessageLoading(false);
@@ -426,6 +432,10 @@ export function MailboxWorkspace() {
           }
         } else if (error instanceof ApiError) {
           setActionError(error.message);
+        } else {
+          // Not an ApiError, so this is our bug rather than the mailbox's.
+          // Saying so beats the button appearing to do nothing.
+          setActionError(describeUnexpected(error, "action failed"));
         }
       } finally {
         setActionBusy(false);

@@ -19,6 +19,7 @@ function render(html: string, allowRemoteImages = false): string {
     content: sanitized.html,
     format: "html",
     remoteImagesBlocked: sanitized.remoteImagesBlocked,
+    inlineImages: sanitized.inlineImages,
   };
   return buildBodyDocument(body, allowRemoteImages);
 }
@@ -51,12 +52,27 @@ describe("the content security policy", () => {
   it("permits no remote image source by default", () => {
     const csp = policy(render('<img src="https://tracker.invalid/px.gif">'));
 
-    expect(csp).toContain("img-src data: cid:");
+    expect(csp).toContain("img-src data:");
     expect(csp).not.toContain("https:");
   });
 
   it("permits https images only once a person asks", () => {
-    expect(policy(render("<p>hi</p>", true))).toContain("img-src https: data: cid:");
+    expect(policy(render("<p>hi</p>", true))).toContain("img-src https: data:");
+  });
+
+  /**
+   * `cid:` was in `img-src` until the sanitizer started removing a `cid:` src
+   * outright - a browser cannot resolve the scheme, and the broken-image glyph
+   * it produced read as an application fault. Nothing in the document can carry
+   * one any more, so permitting it would describe a case that cannot arise.
+   */
+  it("no longer permits cid:, because no cid: src reaches the document", () => {
+    const document = render('<img src="cid:logo123" alt="logo">');
+
+    expect(policy(document)).not.toContain("cid:");
+    expect(document).not.toContain("cid:logo123");
+    // Marked instead, so the stylesheet can draw it as a labelled placeholder.
+    expect(document).toContain("data-inline-image");
   });
 
   it("sends no referrer, so opening a message leaks no URL", () => {
@@ -117,6 +133,7 @@ describe("plain text bodies", () => {
         content: "<script>alert(1)</script> plain text",
         format: "text",
         remoteImagesBlocked: 0,
+        inlineImages: 0,
       },
       false,
     );
@@ -128,7 +145,7 @@ describe("plain text bodies", () => {
 
   it("preserve their line breaks", () => {
     const document = buildBodyDocument(
-      { content: "line one\nline two", format: "text", remoteImagesBlocked: 0 },
+      { content: "line one\nline two", format: "text", remoteImagesBlocked: 0, inlineImages: 0 },
       false,
     );
 

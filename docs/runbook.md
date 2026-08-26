@@ -162,6 +162,8 @@ most likely to be reported as bugs.
 | **"Nothing to review"** in Drafts | The Drafts folder is empty. It is empty most of the day — the automation produces drafts in bursts. | Nothing. This is the normal resting state and the default view. |
 | **"The mailbox is not connected yet"** | No Graph credential is configured. Every pane shows this together, not one pane failing. | *The mailbox is not connected*, above. |
 | **"That message is no longer here"** | The message was moved or sent between the list being drawn and the row being clicked. Power Automate moves messages constantly. | Nothing. The list refreshes itself. It is a normal event, not an error. |
+| **"N inline images are part of this message and are not shown here yet"** | The message has `cid:` images — attachments on the message itself, not remote content. The platform does not turn them into bytes yet. | Nothing, unless somebody needs to see them: Outlook renders them. See *Images in a message body* below. |
+| **"N remote images were blocked"** with a *Show images* button | Genuinely remote images. Loading one tells the sender the message was opened, by whom and when, so it is a per-message decision. | Nothing. Click it if the images matter. |
 | **"N subject matches, newest first. Search does not look inside messages."** | Search matches the subject only, by design — `$search` returns ids that go stale on a move, so it is not used. Results are sorted by the service, because Graph will not sort a filtered collection. | Nothing. To find text inside a message, use Outlook. See *Folder search* below. |
 | **"Showing the first N subject matches — there are more"** | The search hit its 500-match cap. | Narrow the term. The cap and why it is reported are under *Folder search* below. |
 
@@ -169,6 +171,52 @@ most likely to be reported as bugs.
 underlying code is in the log as `"event":"mail.graph_call_failed"`. The
 `outcome` field names which — `auth_failed`, `mailbox_forbidden`, `throttled`,
 `network`. Each has its own section above.
+
+---
+
+## The dev overlay says `[object Event]` and the page keeps reloading
+
+**Symptom.** In development only: Next's error overlay shows a runtime error whose
+whole message is `[object Event]`, attributed to `coerceError` /
+`onUnhandledRejection`. There is no stack worth reading and no clue what failed.
+The page reloads itself, repeatedly, and anything typed is lost.
+
+**This is not application code.** Next coerces a rejection with
+`new Error('' + reason)`, so `[object Event]` means the rejected value was a DOM
+`Event` rather than an `Error`. Nothing in this codebase rejects with an Event —
+every promise the mail module starts with `void` ends in a catch-all. The two
+places in the dependency tree that reject with an Event are:
+
+```
+react-dom-client.development.js    linkInstance.onerror = reject   (a stylesheet)
+next/dist/client/app-bootstrap.js  el.onerror = reject             (a script)
+```
+
+Both mean **a CSS or JS chunk failed to load**. The reload is Next's dev client
+trying to recover.
+
+**The usual cause: something rewrote `.next` while `next dev` was serving.**
+Running `npm run build` is the common one — `next build` and `next dev` share the
+same `distDir`, so a build replaces the chunk files a browser tab is already
+holding URLs for. The next chunk request 404s, the promise rejects with the load
+event, and the page reloads. Anything half-typed in the draft editor goes with
+it.
+
+**Fix.** Restart the dev server, then hard-reload the tab. To confirm that is all
+it was:
+
+```bash
+curl -s http://localhost:3000/signin -o /tmp/page.html
+grep -oE '/_next/static/[^"?]+' /tmp/page.html | sort -u |
+  while read -r a; do echo "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000$a") $a"; done
+```
+
+Every line should be `200`. A `404` is the whole story.
+
+**Avoid it:** do not run `npm run build`, `npm test` in watch mode, or anything
+else that writes `.next` while a dev server is up and somebody is using the page.
+Nothing about this can happen in production — the overlay does not exist there and
+chunks are immutable.
 
 ---
 
@@ -191,6 +239,42 @@ depth 5.
 **Do not add `wellKnownName` to a `$select` to "fix" a missing label.** It is a
 beta-only property and asking v1.0 for it fails every folder read — see the next
 section.
+
+---
+
+## Images in a message body — two kinds, two different notes
+
+Reported as a bug — *"I opened a message and only saw broken placeholders, and
+the Show images banner never appeared."* The banner was working. The message had
+no remote images at all.
+
+A mail body can carry three kinds of image, and they are not interchangeable:
+
+| In the source | What it is | What the platform does |
+|---|---|---|
+| `src="https://…"` | **Remote.** Loading it tells the sender the mail was opened, from which IP, and when. | src removed, counted as `remoteImagesBlocked`, amber note with a *Show images* button. |
+| `src="cid:…"` | **Inline.** An attachment on this very message. No privacy question — loading it costs nothing and tells nobody anything. | src removed, counted as `inlineImages`, neutral note with **no** button, because there is nothing to consent to. |
+| `src="data:…"` | Inline bytes, already in the body. | Left completely alone. It needs no fetch. |
+
+**Why a `cid:` src is removed rather than left in place.** A browser cannot
+resolve the `cid:` scheme, and the platform does not yet fetch the attachment and
+inline it. Leaving the src produced the browser's broken-image glyph, which reads
+as *"this application is broken"* rather than *"this image lives in an
+attachment"* — which is exactly how it was reported. With the src gone, the
+stylesheet draws a labelled placeholder with the image's alt text and the note
+above explains it. `cid:` was dropped from the CSP's `img-src` at the same time:
+nothing in the document can carry one any more.
+
+**In this mailbox, nearly every message with images has inline ones.** Measured
+across Inbox: the automation's own failure notifications carry 4 remote and 2–4
+inline; the `RE: Reminder — Change Order pricing` thread carries 2–3 inline and
+**no** remote at all. So a message showing only the inline note is the normal
+case, not a defect.
+
+**If somebody needs inline images rendered**, that is real work and deliberately
+not done: fetching each attachment and rewriting the body to `data:` URIs. It
+inflates the body, and the reading pane is the one screen where vendor content
+meets a send button. Outlook renders them today.
 
 ---
 
@@ -377,9 +461,54 @@ than by careful round-tripping.
 | The screen | What it writes |
 |---|---|
 | Message text fields | Only the edited runs, spliced by offset. Markup untouched. |
-| Add a paragraph | An insertion before `</body>`. Nothing existing is rewritten. |
+| Add a paragraph | An insertion before `</body>`, **on an explicit click only** — see below. |
 | Edit HTML source | **Replaces the whole body.** The escape hatch, for structural changes. |
 | Subject / recipients only | The body is not sent at all, so it cannot change. |
+
+### Adding a paragraph is a deliberate click, never an autosave
+
+**Do not move `appendNote` back into the debounced autosave.** It was there once
+and it mangled message bodies.
+
+An append is not idempotent. Autosaving it meant every 1.2-second pause committed
+whatever had been typed so far and then cleared the field, so one sentence typed
+with two pauses became three paragraphs. Measured against the live mailbox:
+
+```
+typed: "Hello Joel," ... " thanks for the pricing" ... " on RFI 229."
+stored: <p>Hello Joel,</p><p>thanks for the pricing</p><p>on RFI 229.</p>
+```
+
+To the reviewer it looked like the text jumping into a different box mid-sentence,
+because each committed chunk came back as its own editable segment while the note
+field emptied itself. It was reported as two separate bugs — "my text ended up in
+a different field" and "Add a paragraph did nothing" — and both were this.
+
+How it works now:
+
+- The debounced autosave carries **only idempotent writes**: subject, recipients,
+  segment splices, and the source-view body. Sending any of those twice is
+  harmless.
+- The paragraph is appended when somebody clicks **Add this paragraph**, or as
+  part of the flush immediately before a send — both single actions, so both
+  append once. The hint under the box says which state it is in.
+- Dropping a typed-but-uncommitted paragraph at send time would be worse than
+  either, so the send flush includes it.
+
+`tests/draft-note.test.ts` pins the operation down, including that calling it
+three times produces three paragraphs — the behaviour to avoid, asserted so the
+reason stays visible.
+
+### An autosave no longer overwrites what you are still typing
+
+The rebase after a successful save used to adopt the server's value for every
+field unconditionally, so a keystroke that landed while the request was in flight
+was silently reverted. It now compares what is on screen against what was
+actually sent: if they differ, the person has typed since and their text wins.
+
+`bodyEdits` is still reset on rebase, deliberately — segment ids are recomputed
+from the new body, and splicing with a stale id would write to the wrong place,
+which is worse than losing one in-flight character.
 
 Two consequences to keep in mind:
 

@@ -32,6 +32,8 @@ export function BodyEditor({
   disabled,
   onEditSegment,
   onNoteChange,
+  onCommitNote,
+  noteBusy,
   onShowImages,
   remoteImagesAllowed,
 }: {
@@ -44,6 +46,16 @@ export function BodyEditor({
   disabled: boolean;
   onEditSegment: (id: string, text: string) => void;
   onNoteChange: (text: string) => void;
+  /**
+   * Adds the typed paragraph to the message, once.
+   *
+   * Deliberate rather than autosaved, because an append is not idempotent.
+   * Autosaving it turned one sentence typed with two pauses into three
+   * paragraphs and emptied the box mid-sentence - see draft-editor.tsx.
+   */
+  onCommitNote: () => void;
+  /** A save is in flight, so committing again would be a second append. */
+  noteBusy: boolean;
   onShowImages: () => void;
   remoteImagesAllowed: boolean;
 }) {
@@ -143,21 +155,42 @@ export function BodyEditor({
 
           <div className="mt-5 border-t border-[var(--border)] pt-4">
             {showNote || note.length > 0 ? (
-              <label className="block">
-                <span className="mb-1 block text-xs text-[var(--muted)]">
-                  Add a paragraph at the end
-                </span>
-                <textarea
-                  value={note}
-                  disabled={disabled}
-                  rows={3}
-                  onChange={(e) => onNoteChange(e.target.value)}
-                  className="w-full resize-y rounded border border-[var(--border)] px-2 py-1.5 text-sm disabled:bg-[var(--surface)]"
-                />
-                <span className="mt-1 block text-xs text-[var(--muted)]">
-                  Appended to the end of the message. Nothing above it is changed.
-                </span>
-              </label>
+              <div>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-[var(--muted)]">
+                    Add a paragraph at the end
+                  </span>
+                  <textarea
+                    value={note}
+                    disabled={disabled}
+                    rows={3}
+                    onChange={(e) => onNoteChange(e.target.value)}
+                    className="w-full resize-y rounded border border-[var(--border)] px-2 py-1.5 text-sm disabled:bg-[var(--surface)]"
+                  />
+                </label>
+
+                {/*
+                  An explicit button, because appending is not idempotent and
+                  must not happen on a timer. Type the whole paragraph, pause as
+                  long as you like, then add it - once. Until it is clicked the
+                  text is only on screen, which is why the hint below says so.
+                */}
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={disabled || noteBusy || note.trim().length === 0}
+                    onClick={onCommitNote}
+                    className="rounded border border-[var(--border)] px-2.5 py-1 text-xs font-medium hover:bg-[var(--surface)] disabled:opacity-50"
+                  >
+                    {noteBusy ? "Adding…" : "Add this paragraph"}
+                  </button>
+                  <span className="text-xs text-[var(--muted)]">
+                    {note.trim().length === 0
+                      ? "Appended to the end. Nothing above it is changed."
+                      : "Not added yet — it goes in when you click, or when you send."}
+                  </span>
+                </div>
+              </div>
             ) : (
               <button
                 type="button"

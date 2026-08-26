@@ -46,6 +46,12 @@ export interface MessageBody {
   format: "html" | "text";
   /** Remote images removed by the sanitizer, for an honest UI prompt. */
   remoteImagesBlocked: number;
+  /**
+   * Inline (`cid:`) images - attachments on this message that cannot be
+   * rendered yet. Reported so the placeholder has an explanation beside it
+   * rather than looking like a failure.
+   */
+  inlineImages: number;
 }
 
 export interface MessageDetail extends MessageSummary {

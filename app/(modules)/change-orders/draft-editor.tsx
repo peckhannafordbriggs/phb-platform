@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AttachmentSummary } from "@/lib/modules/change-orders/mail/types";
-import { ApiError } from "./mailbox-client";
+import { ApiError, describeUnexpected } from "./mailbox-client";
 import { BodyEditor, BodySourceEditor } from "./body-editor";
 import { DraftAttachments } from "./attachments";
 import {
@@ -144,6 +144,10 @@ export function DraftEditor({
         if (error instanceof ApiError) {
           if (error.code === "not_found") onGone();
           else setLoadError(error);
+        } else {
+          setLoadError(
+            new ApiError("unexpected", describeUnexpected(error, "opening a draft")),
+          );
         }
       }
     })();
@@ -170,7 +174,25 @@ export function DraftEditor({
    * "preserved because the write happened to round-trip".
    */
   const buildPatch = useCallback(
-    (next: EditorState, base: EditorState): DraftPatch | null => {
+    (
+      next: EditorState,
+      base: EditorState,
+      /**
+       * Whether to include the appended paragraph.
+       *
+       * False for autosave, and that is the whole point - see commitNote. An
+       * append is not idempotent: autosaving it turned one sentence typed with
+       * two pauses into three separate paragraphs, because every debounce
+       * committed what had been typed so far and then cleared the field.
+       * Measured against the live mailbox: "Hello Joel," / " thanks for the
+       * pricing" / " on RFI 229." arrived as three <p> elements.
+       *
+       * True only when a person deliberately commits the paragraph, or as part
+       * of the flush immediately before a send - both of which are single
+       * actions, so they append once.
+       */
+      includeNote: boolean,
+    ): DraftPatch | null => {
       const patch: DraftPatch = { expectedChangeKey: changeKey };
       let changed = false;
 
@@ -212,7 +234,7 @@ export function DraftEditor({
           changed = true;
         }
 
-        if (next.note.trim().length > 0 && next.note !== base.note) {
+        if (includeNote && next.note.trim().length > 0) {
           patch.appendNote = next.note;
           changed = true;
         }
@@ -224,13 +246,13 @@ export function DraftEditor({
   );
 
   const persist = useCallback(
-    async (next: EditorState): Promise<boolean> => {
+    async (next: EditorState, includeNote = false): Promise<boolean> => {
       const base = saved;
       if (base === null) return false;
 
       let patch: DraftPatch | null;
       try {
-        patch = buildPatch(next, base);
+        patch = buildPatch(next, base, includeNote);
       } catch (error) {
         if (error instanceof ApiError) {
           setSave({ status: "failed", message: error.message });
@@ -251,15 +273,47 @@ export function DraftEditor({
         setChangeKey(result.draft.changeKey);
         setLock(result.lock);
 
-        // Segment ids are recomputed from the body Exchange now holds, so the
-        // editor rebases onto it rather than keeping stale edits.
+        /**
+         * Rebase onto what Exchange now holds - without throwing away anything
+         * typed while the request was in flight.
+         *
+         * The previous version adopted the server's value for every field
+         * unconditionally, so a keystroke that landed during a save was
+         * silently reverted. `keep` compares what is on screen NOW against what
+         * was actually sent: if they differ the person has typed since, and
+         * their text wins.
+         *
+         * Segment ids are recomputed from the new body, so `bodyEdits` is still
+         * reset - a stale id would splice into the wrong place, which is worse
+         * than losing an in-flight character.
+         */
+        const onScreen = latest.current;
+        const keep = (field: "subject" | "to" | "cc" | "bcc"): string => {
+          const typed = onScreen?.[field];
+          if (typed !== undefined && typed !== next[field]) return typed;
+
+          return field === "subject"
+            ? (result.draft.subject ?? "")
+            : addressesToText(result.draft[field]);
+        };
+
         const rebased: EditorState = {
-          subject: result.draft.subject ?? "",
-          to: addressesToText(result.draft.to),
-          cc: addressesToText(result.draft.cc),
-          bcc: addressesToText(result.draft.bcc),
+          subject: keep("subject"),
+          to: keep("to"),
+          cc: keep("cc"),
+          bcc: keep("bcc"),
           bodyEdits: {},
-          note: "",
+          /**
+           * Cleared only by the save that actually committed it. An autosave
+           * must never empty the box somebody is still typing in - that is what
+           * made a half-typed sentence appear to jump into another field.
+           */
+          note:
+            onScreen !== null && onScreen.note !== next.note
+              ? onScreen.note
+              : patch.appendNote !== undefined
+                ? ""
+                : next.note,
           source: next.source === null ? null : result.draft.body,
         };
         setState(rebased);
@@ -275,6 +329,13 @@ export function DraftEditor({
           // A silent failed save on a message someone is about to send is the
           // worst outcome in this phase, so this is loud and it blocks the send.
           setSave({ status: "failed", message: error.message });
+        } else {
+          // Same reasoning, and more so: an unexpected error here must not leave
+          // the indicator reading "Saved" over content that was never written.
+          setSave({
+            status: "failed",
+            message: describeUnexpected(error, "saving a draft"),
+          });
         }
         return false;
       }
@@ -334,14 +395,42 @@ export function DraftEditor({
 
   // ----------------------------------------------------------------- send
 
+  /**
+   * Whether an autosave has anything to write. Excludes the pending paragraph,
+   * which is committed deliberately rather than saved on a timer - `noteReady`
+   * below is what tracks that.
+   */
   const dirty = useMemo(() => {
     if (state === null || saved === null || draft === null) return false;
     try {
-      return buildPatch(state, saved) !== null;
+      return buildPatch(state, saved, false) !== null;
     } catch {
       return true;
     }
   }, [state, saved, draft, buildPatch]);
+
+  /** A paragraph has been typed and not yet added to the message. */
+  const noteReady = state !== null && state.note.trim().length > 0;
+
+  /**
+   * Adds the typed paragraph to the message, once.
+   *
+   * This is the deliberate action that replaced autosaving the append. It
+   * flushes any pending autosave first so the paragraph is appended to the body
+   * the person is actually looking at, not to a version missing their last
+   * subject edit.
+   */
+  const commitNote = useCallback(async () => {
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+
+    const current = latest.current;
+    if (current === null || current.note.trim().length === 0) return;
+
+    await persist(current, true);
+  }, [persist]);
 
   /**
    * Turning on remote images re-opens the draft, because the preview is
@@ -357,6 +446,8 @@ export function DraftEditor({
 
     const current = latest.current;
     if (dirty && current !== null) {
+      // Not the note: turning images on is not a decision to add a paragraph.
+      // It survives the re-open because the editor keeps it in state.
       const saved = await persist(current);
       if (!saved) return;
     }
@@ -375,15 +466,23 @@ export function DraftEditor({
       timer.current = null;
     }
 
-    if (dirty || save.status === "failed") {
+    /**
+     * Any pending paragraph goes in here too.
+     *
+     * Clicking send is one deliberate action, so appending once is right - and
+     * dropping a paragraph somebody had typed but not yet added would be worse
+     * than either alternative: they would send a message missing a sentence they
+     * had written and could still see on screen.
+     */
+    if (dirty || noteReady || save.status === "failed") {
       const current = latest.current;
       if (current === null) return;
-      const ok = await persist(current);
+      const ok = await persist(current, true);
       if (!ok) return;
     }
 
     setConfirming(true);
-  }, [dirty, save.status, persist]);
+  }, [dirty, noteReady, save.status, persist]);
 
   const confirmSend = useCallback(async () => {
     if (sending) return;
@@ -405,6 +504,12 @@ export function DraftEditor({
         } else {
           setSendError(error);
         }
+      } else {
+        // The one place silence would be worst: the sender is looking at a
+        // confirmation dialog and needs to know whether the message went.
+        setSendError(
+          new ApiError("unexpected", describeUnexpected(error, "sending a draft")),
+        );
       }
     } finally {
       setSending(false);
@@ -550,6 +655,8 @@ export function DraftEditor({
           disabled={lockedByOther}
           onEditSegment={editSegment}
           onNoteChange={(text) => edit({ note: text })}
+          onCommitNote={() => void commitNote()}
+          noteBusy={save.status === "saving"}
           onShowImages={showImages}
           remoteImagesAllowed={remoteImagesAllowed}
         />

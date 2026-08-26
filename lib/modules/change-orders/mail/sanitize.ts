@@ -43,7 +43,7 @@ const ALLOWED_TAGS = [
  */
 const ALLOWED_ATTRIBUTES: Record<string, string[]> = {
   a: ["href", "title", "rel", "target"],
-  img: ["alt", "src", "width", "height", "data-remote-blocked"],
+  img: ["alt", "src", "width", "height", "data-remote-blocked", "data-inline-image"],
   td: ["colspan", "rowspan", "align", "valign"],
   th: ["colspan", "rowspan", "align", "valign", "scope"],
   col: ["span", "width"],
@@ -184,9 +184,14 @@ const NON_TEXT_TAGS = [
 const SAFE_LINK_SCHEMES = ["http", "https", "mailto", "tel"];
 
 /**
- * `cid:` is an inline attachment already inside the mailbox, so it is not
- * remote. `data:` is inert in an <img> - a browser does not run script inside an
- * SVG loaded as an image - and it is how inline logos survive without a fetch.
+ * `data:` is inert in an <img> - a browser does not run script inside an SVG
+ * loaded as an image - and it is how an inline logo survives without a fetch.
+ *
+ * `cid:` is listed so the parser does not treat it as a disallowed scheme and
+ * discard the element, but the src is then removed by the transform below: a
+ * browser cannot resolve `cid:` and the platform does not yet turn it into
+ * bytes, so leaving it in place produced a broken-image glyph and no
+ * explanation. See INLINE image handling in sanitizeEmailHtml.
  */
 const SAFE_IMAGE_SCHEMES = ["cid", "data"];
 
@@ -197,6 +202,17 @@ export interface SanitizedBody {
    * contains remote images" prompt rather than a silently altered message.
    */
   remoteImagesBlocked: number;
+  /**
+   * How many `cid:` images were found - inline images that are attachments on
+   * this message rather than remote content.
+   *
+   * Counted for the same reason as the blocked ones: the message is being shown
+   * altered, and saying so is better than a placeholder with no explanation.
+   * These are not blocked for privacy - loading one costs nothing and tells the
+   * sender nothing - they simply cannot be resolved yet. Every message in the
+   * real mailbox that has images has some of these.
+   */
+  inlineImages: number;
 }
 
 export interface SanitizeOptions {
@@ -221,6 +237,7 @@ export function sanitizeEmailHtml(
 ): SanitizedBody {
   const allowRemoteImages = options.allowRemoteImages ?? false;
   let remoteImagesBlocked = 0;
+  let inlineImages = 0;
 
   const clean = sanitizeHtml(html, {
     allowedTags: ALLOWED_TAGS,
@@ -259,6 +276,32 @@ export function sanitizeEmailHtml(
       img: (tagName, attribs) => {
         const src = attribs.src;
 
+        /**
+         * An inline image: an attachment on this very message.
+         *
+         * The src is removed rather than kept, and that is a change from the
+         * first implementation. A browser cannot resolve the `cid:` scheme and
+         * the platform does not yet turn one into bytes, so leaving it produced
+         * the browser's broken-image glyph - which reads as "this application is
+         * broken" rather than "this image lives in an attachment". Without a src
+         * the element renders as the marked placeholder the stylesheet draws,
+         * with its alt text, and the count drives an honest note beside it.
+         *
+         * Removing it is also why `cid` may stay in the allowed-schemes list: it
+         * has to survive the parser to reach this transform at all.
+         */
+        if (src !== undefined && /^cid:/i.test(src.trim())) {
+          inlineImages += 1;
+
+          const withoutSrc = { ...attribs };
+          delete withoutSrc.src;
+
+          return {
+            tagName,
+            attribs: { ...withoutSrc, "data-inline-image": "true" },
+          };
+        }
+
         if (src === undefined || allowRemoteImages || !isRemoteHttpUrl(src)) {
           return { tagName, attribs };
         }
@@ -280,5 +323,5 @@ export function sanitizeEmailHtml(
     },
   });
 
-  return { html: clean, remoteImagesBlocked };
+  return { html: clean, remoteImagesBlocked, inlineImages };
 }
