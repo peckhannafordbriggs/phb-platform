@@ -187,7 +187,81 @@ Also handle: concurrent edits between Outlook and the platform (last write wins 
 an advisory lock and show it), API failures, rate limits (throttling concentrates on
 one mailbox through one app identity), and retry behavior.
 
-**Goal:** Outlook and the platform behave like two interfaces to one mailbox.
+### Conversation grouping
+
+Group messages by `conversationId` into collapsible threads, the way Outlook does.
+
+It belongs in this phase because a thread is the unit people actually reason about — "where
+did the CCHMC RFI 229 pricing land" is a question about a conversation, not about six rows
+that happen to share a subject. A flat list of near-identical subjects is the single most
+confusing thing about the current message pane.
+
+**The data is already there.** `conversationId` is selected on every message summary and
+has been since Phase 4, so nothing new needs fetching to group a folder that has already
+been listed. Phase 8 verified against the live mailbox that `createReply`,
+`createReplyAll` and `createForward` all preserve the source `conversationId`, so a draft
+the platform creates groups with its own thread without any help.
+
+**It aligns the UI with the automation, which is worth more than it sounds.** Intake 6
+matches replies by conversation ID. So grouping by that same key means the platform shows
+threads the way the automation files them — and a thread that looks wrong on screen is a
+thread the automation will also mis-file. The grouping doubles as a diagnostic for the
+filing bug that is otherwise silent.
+
+**The hard decision is folder scope, and it should be made deliberately rather than
+discovered.** A conversation spans folders: one thread routinely has messages in Inbox, a
+project folder, Sent Items and Drafts at the same time. Two options, and they are
+different products:
+
+```
+Within the open folder   group the rows already listed — cheap, no extra request,
+                         but every thread is partial and says so
+
+Across the mailbox       $filter=conversationId eq '<id>' on /messages — complete
+                         threads, one extra request per thread opened
+```
+
+**Both were tried against the live mailbox before writing this down**, and the gap is
+larger than it looks. One ZZTEST thread returned **1 message** from the folder-scoped
+query and **4** from the mailbox-wide one, spread across two folders. Whichever is chosen,
+a within-folder group has to say it is partial, because most of the time it will be.
+
+Three things confirmed while checking, all of which the eventual implementation depends
+on:
+
+- `conversationId` **is** filterable, on `/messages` and on a folder alike.
+- Both forms return **immutable ids**, because `$filter` is an ordinary collection
+  request. `$search` would not — see `docs/runbook.md`, *Folder search*.
+- `conversationIndex` is populated, so reply nesting is available if it is ever wanted.
+
+And one wrinkle that will otherwise be found the hard way: **a mailbox-wide conversation
+query includes Deleted Items.** The test thread's other three messages were drafts that
+had been deleted, and they came back as full members of the conversation. Outlook hides
+those from its conversation view; the platform will have to decide to as well, or a thread
+will show messages somebody deliberately threw away.
+
+`$filter` combined with `$orderby` is refused with `400 InefficientFilter` — the Phase 8
+finding — so a thread has to be ordered in-process, exactly as `searchMessages` already
+does. That comparator and its "undated sorts last" rule are reusable as-is.
+
+Order within a thread by `receivedDateTime`. `conversationIndex` encodes reply nesting, so
+it is the option if a thread ever needs to render as a tree rather than a list — but flat
+and chronological is what Outlook shows and what people expect.
+
+**No conversation table.** Grouping is computed from messages read live, like everything
+else in this module. `docs/03-exchange-and-graph.md` — no message index, no second copy
+of mailbox state; if the grouping cannot be rebuilt from Graph on demand, a mailbox has
+been built by accident.
+
+**The CO context panel will want this same grouping.** A change order *is* effectively a
+conversation — the thread is the change order's history — so the panel that eventually
+shows a draft next to its run report and Q&A log is assembling the same set of messages by
+the same key. Build the grouping as a reusable function over message summaries rather than
+as state inside the message-list component, and the context panel gets it for free instead
+of growing a second, subtly different implementation.
+
+**Goal:** Outlook and the platform behave like two interfaces to one mailbox, and a
+change-order thread reads as one thing in both.
 
 ---
 
