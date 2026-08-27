@@ -47,7 +47,7 @@ import type {
  *   npx tsx scripts/co-verify-phase9.ts watch <folderId> <needle> appear|vanish
  *       The instrument for the six sync directions. Do the thing in Outlook,
  *       and this reports how long Graph took to agree. Polls every 2s so the
- *       number measured is Exchange's propagation, not our 60s UI interval.
+ *       number measured is Exchange's propagation, not our 20s UI interval.
  *
  *   npx tsx scripts/co-verify-phase9.ts propagate <draftId>
  *       Edits a ZZTEST draft and times how long the change takes to appear in
@@ -258,7 +258,7 @@ async function groups(folderId: string): Promise<void> {
  *
  * This is the deliverable that decides Part B. It polls hard - every two seconds
  * - because the number wanted is Exchange's own propagation delay, not the
- * platform's 60-second UI interval. The UI latency is the sum of the two, and
+ * platform's 20-second UI interval. The UI latency is the sum of the two, and
  * saying so honestly needs them measured apart.
  */
 async function watch(
@@ -315,8 +315,8 @@ async function watch(
       say();
       say(`${mode.toUpperCase()} after ${(elapsed / 1000).toFixed(1)}s of Exchange propagation.`);
       say(
-        `In the platform a user would see it up to 60s later than that, ` +
-          `because the pane polls on a ${60}s interval while the tab is focused.`,
+        `In the platform a user would see it up to 20s later than that, ` +
+          "because the pane polls on a 20s interval while the tab is focused.",
       );
       return;
     }

@@ -20,8 +20,9 @@ conversation.
 **Reliability** — Outlook and the platform behave like two clients of one mailbox, and a
 throttle, a network failure, or a concurrent edit doesn't lose someone's work.
 
-Part A needs nothing from Azure. Part B is the webhook question and can't be built
-locally.
+Part A needs nothing from Azure. Part B was the webhook question — it was
+evaluated against Part A's measured latency and **declined**. See below; it is a
+record, not a plan.
 
 ---
 
@@ -98,30 +99,93 @@ number that decides whether Part B is worth doing at all.
 
 ---
 
-## Part B — needs Azure
+## Part B — evaluated and DECLINED, 2026-08-27
 
-Graph change notifications require a public HTTPS endpoint Microsoft can reach for the
-validation handshake, so this cannot be built or tested locally.
+**Not built. Do not build it without a new measurement.** The gate this section
+set for itself — "do not start Part B until Part A's latency numbers exist" — was
+honoured, the numbers exist, and they came back against it.
 
-**Do not start Part B until Part A's latency numbers exist.** The polling interval may
-already be good enough, in which case Part B is work that adds a subscription lifecycle,
-a renewal job, a validation endpoint, and dropped-notification reconciliation for no user
-benefit.
+### The measurement that decided it
 
-If it does go ahead:
+`scripts/co-verify-phase9.ts propagate`, three runs against the live mailbox:
 
-- Subscriptions on the mailbox, renewed on a schedule — mail subscriptions expire in
-  roughly three days
-- Lightweight notifications only: IDs, no encrypted resource data. The certificate
-  management isn't worth it
+```
+PATCH + re-read returned in 414ms.   Visible in the folder LISTING after 207ms (1 listing read).
+PATCH + re-read returned in 380ms.   Visible in the folder LISTING after 228ms (1 listing read).
+PATCH + re-read returned in 375ms.   Visible in the folder LISTING after 209ms (1 listing read).
+```
+
+The listing was polled every 250ms and the change was present on the **first**
+read every time, so those figures are an upper bound on Exchange's propagation
+rather than a measurement of it. **Exchange is not the slow part.** The delay a
+user experienced was the polling interval, in its entirety.
+
+### What was done instead
+
+`POLL_INTERVAL_MS` went from 60 seconds to **20**. One constant, in
+`app/(modules)/change-orders/mailbox-workspace.tsx`.
+
+Cost against the ~10,000 requests per 10 minutes per app per mailbox that
+Exchange allows: **180 requests an hour per focused tab**, which is 30 per
+10-minute window, **0.3% of the budget**. Three simultaneous users come to 0.9%.
+Polling stops entirely while the tab is backgrounded. The
+4-concurrent-per-mailbox limit is not approached — a poll is a single sequential
+request of roughly 200ms.
+
+That bought two-thirds of the available latency for one line and no new failure
+modes.
+
+### Why the remaining 20 seconds is not worth a subscription lifecycle
+
+Change notifications would have bought it in exchange for:
+
+- a subscription lifecycle to create and tear down
+- a renewal job, because mail subscriptions expire in roughly three days, plus
+  monitoring to notice a renewal that silently stopped happening
+- a public HTTPS validation endpoint Microsoft can reach — which means everyone
+  else can reach it too, so `clientState` validation and treating every
+  notification as untrusted input
+- reconciliation for dropped notifications, since delivery is best-effort, which
+  means keeping the polling anyway as the floor
+
+Four new failure modes, one a public endpoint and one a thing that expires, for
+20 seconds of latency on a screen used by one to three people. `CLAUDE.md`
+forbids introducing a credential that expires in production, and a three-day
+subscription renewal is that shape.
+
+### What would legitimately reopen this
+
+**Not user count.** The budget takes roughly 300 simultaneously-focused tabs at
+20 seconds; the expected number is one to three.
+
+The criterion `docs/03-exchange-and-graph.md` already sets is the right one:
+webhooks become worth their reliability cost when **a background job must react
+to inbound mail with no human present**. Nothing in the roadmap needs one. If
+that changes, re-measure before building — the numbers above are from August 2026
+and Exchange's behaviour is not a promise.
+
+**One honest gap.** Four of the six sync directions were never measured, because
+they need a person acting in Outlook (`docs/phase-9-verification.md` records them
+as not-run rather than assumed). They measure the same Exchange propagation from
+the other side and nothing suggests it differs — but if one ever comes back in
+minutes rather than milliseconds, that is a real reason to reopen this, and the
+numbers here do not cover it. `scripts/co-verify-phase9.ts watch` is the
+instrument.
+
+### If it is ever reinstated
+
+The original requirements, kept so they do not have to be rediscovered:
+
+- Subscriptions on the mailbox, renewed on a schedule — mail subscriptions expire
+  in roughly three days
+- Lightweight notifications only: IDs, no encrypted resource data. The
+  certificate management is not worth it
 - **Treat every notification as untrusted.** Validate `clientState`, return 202
-  immediately, and use the notification only as a signal to go read Graph. Never trust
-  payload content
+  immediately, and use the notification only as a signal to go read Graph. Never
+  trust payload content
 - **Keep polling as the floor.** Notification delivery is best-effort. A dropped
   notification should cost minutes, not days
 - A reconciliation pass that catches what notifications missed
-
----
 
 ## Out of scope
 
@@ -173,13 +237,20 @@ If it does go ahead:
 - [ ] All six sync directions verified, with observed latency recorded
 - [ ] `PHB_ALLOW_SEND` back to `false` afterward
 
-**Part B**
+**Part B — closed, not outstanding**
 
-- [ ] Only started if Part A's latency numbers justify it
-- [ ] Validation handshake succeeds; `clientState` verified on every notification
-- [ ] Subscriptions renew automatically; a missed renewal is visible, not silent
-- [ ] Polling still runs as the floor
-- [ ] A dropped notification is recovered by reconciliation
+- [x] Only started if Part A's latency numbers justify it — **they did not.**
+      Exchange propagates in under 250ms, so the interval was the whole delay.
+      It went to 20 seconds; Part B was declined. See above.
+
+The four criteria below are **void**, not pending. They describe a subscription
+lifecycle that does not exist and is not planned, and they are kept only so that
+reinstating Part B starts from the requirements rather than from scratch:
+
+- ~~Validation handshake succeeds; `clientState` verified on every notification~~
+- ~~Subscriptions renew automatically; a missed renewal is visible, not silent~~
+- ~~Polling still runs as the floor~~
+- ~~A dropped notification is recovered by reconciliation~~
 
 ---
 
@@ -193,9 +264,10 @@ Items, `$search` ignoring immutable IDs.
 **Grouping is display only.** The moment a group can be acted on as a unit, the
 one-human-one-message rule is at risk. Keep every action on individual messages.
 
-**Part A's latency numbers are the deliverable that decides Part B.** Measure them
-honestly. If polling at 60 seconds is fine in practice, saying so is a better outcome than
-building a subscription lifecycle.
+**Part A's latency numbers were the deliverable that decided Part B, and they
+decided against it.** Exchange propagates in under 250ms; the interval was the
+whole delay, so it went to 20 seconds and Part B was declined. Recorded above and
+in `docs/runbook.md` so the case does not get rebuilt from intuition.
 
 **Stop and ask** before adding a table, changing the paging model, weakening a guard, or
 anything that lets an action apply to more than one message.

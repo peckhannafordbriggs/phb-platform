@@ -138,8 +138,9 @@ export function DraftEditor({
    * their initial values, releases the advisory lock in its cleanup, and
    * re-reads the draft.
    *
-   * The workspace re-renders at least once a minute, because the message list
-   * polls. The result was an editor that wiped itself roughly every 60 seconds:
+   * The workspace re-renders on every poll of the message list - every 20
+   * seconds since Phase 9, and it was 60 when this bug was found, so the fix
+   * matters more now than it did then. The result was an editor that wiped itself roughly every 60 seconds:
    * anything typed since the last autosave was lost, the paragraph box emptied,
    * and the lock was dropped and retaken. It presented as "the page refreshed
    * mid-sentence".

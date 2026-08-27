@@ -181,9 +181,16 @@ records what Exchange actually did, including four claims the docs had wrong.
 Folder search is subject-only as a result: `$search` returns ids that go stale on a
 move, so it is not used. See the list above.
 
-**Phase 9 Part A complete.** Conversation grouping, concurrent-edit honesty and
-resilience. Part B — Graph change notifications — is **not started** and needs
-the Azure subscription plus the Outlook-side latency numbers.
+**Phase 9 Part A complete. Part B evaluated and DECLINED.** Conversation
+grouping, concurrent-edit honesty and resilience shipped. Graph change
+notifications were measured against and turned down: Exchange propagates a write
+into a folder listing in under 250ms, so the poll interval was the entire delay.
+It went from 60s to **20s** — 180 requests an hour per focused tab, 0.3% of the
+~10k-per-10-minutes budget — and a subscription lifecycle, a three-day renewal
+job, a public validation endpoint and dropped-notification reconciliation were
+judged not worth the remaining 20 seconds for one to three users. **Do not
+rebuild the case for webhooks without a new measurement**; the reasoning and the
+conditions that would reopen it are in `docs/PHASE-9.md` and `docs/runbook.md`.
 
 The one design decision that phase turned on: **a grouped listing collects the
 folder to a cap and groups the complete set. It does not group a page and it has
@@ -201,12 +208,13 @@ them would have produced one thread of eleven with a false count.
 
 Grouping is display only. No action anywhere takes a conversation.
 
-`docs/phase-9-verification.md` records what Exchange actually did, including the
-measurement that decides Part B: a platform write is visible in a folder listing
-on the first 250ms poll, so Exchange is not the slow part — the platform's own
-60-second poll interval is the entire user-visible delay. Four of the six sync
-directions still need a person acting in Outlook and are marked not-run rather
-than assumed.
+`docs/phase-9-verification.md` records what Exchange actually did. Four of the six
+sync directions still need a person acting in Outlook and are marked not-run
+rather than assumed.
+
+Grouping is scoped to the open folder, so a conversation row reads "7 in this
+folder" rather than "7 messages" — a thread spans folders, and the folder-scoped
+count would otherwise be a false claim about the thread.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

@@ -62,7 +62,7 @@ function byOldestFirst(a: MessageSummary, b: MessageSummary): number {
 
   // Ties broken on id so the order is stable across polls. Two messages in one
   // thread sharing a timestamp to the second is ordinary; a list that reshuffles
-  // under the reader every 60 seconds is not.
+  // under the reader every 20 seconds is not.
   return a.id.localeCompare(b.id);
 }
 

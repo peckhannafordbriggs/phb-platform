@@ -228,9 +228,10 @@ Both were checked rather than assumed:
   ~640ms, then 25–50ms warm. Real, but it does not explain a screen that stays
   slow. Note that authed API routes answer 401 in ~10ms because middleware
   short-circuits before the route compiles, so timing those measures nothing.
-- **A fast polling loop.** The message list polls every **60s** and only while the
-  tab is visible; the draft lock refreshes every **45s** and only while the editor
-  is open. No effect in either component can re-trigger itself - the one that
+- **A fast polling loop.** The message list polls every **20s** (**60s** when
+  this was investigated; lowered in Phase 9 once the latency was measured) and
+  only while the tab is visible; the draft lock refreshes every **45s** and only
+  while the editor is open. No effect in either component can re-trigger itself - the one that
   could was the bug below. `reactStrictMode` is unset and there is no
   `<StrictMode>` in the tree, so effects are not double-invoked in dev either.
 
@@ -245,7 +246,8 @@ one of ITS renders. That effect resets `loaded`, `state`, `saved`, `sourceMode`
 and `save` to their initial values, releases the advisory lock in its cleanup,
 and re-reads the draft.
 
-The workspace re-renders at least once a minute because the message list polls. So
+The workspace re-renders on every poll of the message list - every 20 seconds
+since Phase 9, and 60 when this was found, so the fix matters more now. So
 the editor wiped itself roughly **every 60 seconds**: anything typed since the
 last autosave was lost, the paragraph box emptied, and the lock was dropped and
 retaken. It was reported as *"the page refreshed mid-sentence and my text ended up
@@ -465,10 +467,37 @@ concurrent in practice. Retrying harder makes the throttle deeper and longer.
 If this becomes common, the cause is a polling interval that is too aggressive,
 not a retry count that is too low.
 
-**What the Change Orders screen contributes.** It polls the selected folder once
-a minute, and **only while the tab is visible** — switching away stops the timer,
-and returning fires one catch-up read. A search is never polled. So an idle open
-tab costs one request per minute, and a backgrounded one costs nothing.
+**What the Change Orders screen contributes.** It polls the selected folder every
+**20 seconds**, and **only while the tab is visible** — switching away stops the
+timer, and returning fires one catch-up read. A search is never polled, and
+neither is a flat list somebody has paged back through.
+
+The arithmetic, against the ~10,000 requests per 10 minutes above:
+
+| | requests / 10 min | share of budget |
+|---|---|---|
+| one focused tab | 30 | 0.3% |
+| three focused tabs | 90 | 0.9% |
+| one focused tab, folder over 100 messages | 150 | 1.5% |
+
+**180 requests an hour per focused tab.** One request per poll, because every
+folder in this mailbox fits inside a single page of 100; a folder that outgrew
+that would make a grouped poll up to 5 *sequential* requests, which is the 1.5%
+row. The budget would take roughly 300 simultaneously-focused tabs at this
+interval, against an expected 1–3.
+
+The **4-concurrent-per-mailbox** limit is not the binding one either. A poll is
+one sequential request of ~200ms, so a single tab never has more than one in
+flight, and three tabs at 20s overlap only by accident.
+
+A backgrounded tab costs nothing, which is the part that matters most — it is
+what stops a tab left open over a weekend being the real bill.
+
+**It was 60 seconds until Phase 9.** Lowered because the latency was measured
+rather than guessed: a platform write is visible in a folder listing on the first
+250ms poll, so Exchange contributes almost nothing and the interval was the
+entire user-visible delay. See *Is Part B (change notifications) worth building?*
+below.
 
 If throttling does become a problem, raise `POLL_INTERVAL_MS` in
 `app/(modules)/change-orders/mailbox-workspace.tsx` before touching anything in
@@ -2034,21 +2063,51 @@ npx tsx scripts/co-verify-phase9.ts watch <folderId> <needle> appear|vanish
 The script contains no call to `sendDraft`, and never reads or sets
 `PHB_ALLOW_SEND`.
 
-## Is Part B (change notifications) worth building?
+## Part B (Graph change notifications) was evaluated and DECLINED
 
-**The measured answer as of Phase 9 is: probably not, and the cheap lever is the
-poll interval.**
+**Do not rebuild the case for it without a new measurement.** This entry exists
+so the next person to think "we should use webhooks" finds the reason it was
+turned down rather than the intuition that it sounds better.
 
-A platform write was visible in the folder listing on the very first 250 ms poll,
-every time — so Exchange's propagation is sub-second and the entire user-visible
-delay is the platform's own 60-second poll interval. Webhooks would replace a
-60-second wait with a sub-second one at the cost of a subscription lifecycle, a
-three-day renewal job, a validation endpoint and dropped-notification
-reconciliation. Halving `POLL_INTERVAL_MS` costs one line.
+**The measurement.** A platform write was visible in a folder listing on the very
+first 250 ms poll, on every one of three runs
+(`scripts/co-verify-phase9.ts propagate`). Exchange's own propagation is
+sub-second. So the delay a user experienced was **not** Exchange — it was the
+platform's polling interval, in its entirety.
 
-What is **not** yet measured is the Outlook-initiated direction — four of the six
-sync rows in `docs/phase-9-verification.md` are unfilled because they need a
-person acting in Outlook. Fill them with `watch` before deciding.
+**The decision.** The interval went from 60 seconds to 20. That is one constant,
+it costs 0.3% of the throttling budget per focused tab, and it removed
+two-thirds of the delay that was actually there.
+
+Change notifications would have bought the remaining ~20 seconds in exchange for:
+
+- a subscription lifecycle to create and tear down
+- a renewal job, because mail subscriptions expire in roughly three days, plus
+  the monitoring to notice a renewal that silently stopped happening
+- a public HTTPS validation endpoint Microsoft can reach, which also means it is
+  reachable by everyone else, so `clientState` validation and treating every
+  notification as untrusted input
+- reconciliation for dropped notifications, since delivery is best-effort — which
+  means keeping the polling anyway, as the floor
+
+That is four new failure modes, one of them a public endpoint and one of them a
+credential-shaped thing that expires, for 20 seconds of latency on a screen used
+by one to three people. `CLAUDE.md` forbids introducing anything that expires in
+production; a three-day subscription renewal is exactly that shape.
+
+**What would change the answer.** Not user count on its own — the budget takes
+roughly 300 focused tabs at 20s. It would take a *background job that must react
+to inbound mail with no human present*, which is the criterion
+`docs/03-exchange-and-graph.md` already sets. Nothing in the roadmap needs one
+today. If one appears, re-measure first: the number above is from August 2026 and
+Exchange's behaviour is not a promise.
+
+**What was never measured.** Four of the six sync directions in
+`docs/phase-9-verification.md` need a person acting in Outlook and are recorded
+as not-run. They measure the same Exchange propagation from the other side, and
+nothing suggests it differs — but if one of them ever comes back in minutes
+rather than milliseconds, that is a genuine reason to reopen this and the numbers
+here do not cover it. `scripts/co-verify-phase9.ts watch` is the instrument.
 
 ---
 

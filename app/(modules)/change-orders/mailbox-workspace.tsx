@@ -69,8 +69,43 @@ import type {
  * no "apply to all", and above all no send that is not the editor's own.
  */
 
-/** Gentle on purpose. Throttling concentrates on one mailbox, one app identity. */
-const POLL_INTERVAL_MS = 60_000;
+/**
+ * How often the open folder is re-read while the tab is visible.
+ *
+ * Twenty seconds, chosen against a measurement rather than a feeling. Phase 9
+ * timed a platform write becoming visible in a folder listing: it was there on
+ * the first 250ms poll, every time. Exchange is not the slow part - this
+ * interval was the entire user-visible delay, which is why it, and not a
+ * subscription lifecycle, is where the latency was bought back. See
+ * docs/phase-9-verification.md.
+ *
+ * The cost, against the ~10,000 requests per 10 minutes per app per mailbox that
+ * Exchange allows (docs/runbook.md, *Graph throttling*):
+ *
+ *   one focused tab   1 request / 20s  =   30 per 10 min  =  0.3% of budget
+ *   three focused     90 per 10 min                       =  0.9% of budget
+ *
+ * 180 requests an hour per focused tab. One request per poll, because every
+ * folder in this mailbox fits inside a single page of 100 - a folder that grew
+ * past that would make a grouped poll up to 5 sequential requests, so 1.5% per
+ * tab, still nowhere near the ceiling. The 4-concurrent-per-mailbox limit is
+ * untouched either way: a poll is sequential and one tab never has more than one
+ * request in flight.
+ *
+ * Two things keep this honest and both are load-bearing:
+ *
+ *   - It runs **only while the tab is visible**. A backgrounded tab costs
+ *     nothing, which is what stops a forgotten tab being the real bill.
+ *   - Tripling the poll rate triples the rate at which this component
+ *     re-renders, and the editor used to reset itself on every parent render -
+ *     the 60-second version of that bug is written up in docs/runbook.md. The
+ *     callbacks ref in draft-editor.tsx is what makes a faster interval safe;
+ *     do not remove it.
+ *
+ * If throttling ever does become a problem, raise this before touching the retry
+ * path.
+ */
+const POLL_INTERVAL_MS = 20_000;
 const PAGE_SIZE = 25;
 
 /**
@@ -1310,8 +1345,27 @@ function ConversationHeaderRow({
         </p>
         <p className="mt-0.5 flex flex-wrap items-center gap-2 pl-5 text-xs text-[var(--muted)]">
           <span>{formatDate(group.newestDateTime)}</span>
+          {/*
+            "in this folder", not "messages", and the qualifier is the whole
+            point of the phrase.
+            
+            A conversation spans folders - one change-order thread routinely has
+            messages in Inbox, a project folder, Sent Items and Drafts at the same
+            time - and this pane is folder-scoped, so the count is the number of
+            messages from this thread IN THIS FOLDER. Measured while scoping the
+            phase: one ZZTEST thread returned 1 message folder-scoped and 4
+            mailbox-wide (docs/06-roadmap.md). A bare "1 message" on that row
+            would have been a false claim about the thread, which is the exact
+            failure grouping-by-page was rejected for.
+
+            Making it true across the mailbox needs a `conversationId eq` query
+            per thread and a decision about Deleted Items, which Outlook hides
+            from its conversation view and Graph does not. That is a bigger
+            change than a label, and PHASE-9 scoped this to a folder - so the
+            label tells the truth about what is being shown instead.
+          */}
           <span>
-            {group.messageCount} messages
+            {group.messageCount} in this folder
             {group.unreadCount > 0 ? ` · ${group.unreadCount} unread` : ""}
           </span>
           {group.hasAttachments && <span title="Has attachments">📎</span>}

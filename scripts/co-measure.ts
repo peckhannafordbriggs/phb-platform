@@ -123,7 +123,7 @@ void (async () => {
 
   say("");
   say("=== What repeats while the tab sits open ===");
-  say("  message list poll : every 60s, visible tabs only  -> listMessages");
+  say("  message list poll : every 20s, visible tabs only  -> listConversations");
   say("  draft lock refresh: every 45s, editor open only   -> getDraftForEdit");
 
   const draftPage =

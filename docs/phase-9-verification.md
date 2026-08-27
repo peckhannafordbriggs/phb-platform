@@ -148,7 +148,8 @@ only work as a pair.
 
 ## 3. Sync latency
 
-This is the number that decides whether Part B is worth building.
+This was the number that decided Part B. **It decided against it** — see
+`docs/PHASE-9.md`, *Part B — evaluated and DECLINED*.
 
 ### Measured: platform write → visible in a folder listing
 
@@ -170,10 +171,14 @@ consistently. The pane lists the folder, which is a different index. It is that
 index this measures.
 
 **Conclusion, and it is the important one for Part B: Exchange is not the slow
-part.** Propagation is sub-second. The entire user-visible delay is the
-platform's own 60-second poll interval. If 60 seconds turns out to be too long,
-the cheap lever is the poll interval — not a subscription lifecycle, a renewal
-job, a validation endpoint and dropped-notification reconciliation.
+part.** Propagation is sub-second. The entire user-visible delay was the
+platform's own poll interval.
+
+**Acted on.** `POLL_INTERVAL_MS` went from 60 seconds to **20** — 180 requests an
+hour per focused tab, 30 per 10-minute window, 0.3% of the ~10,000-per-10-minutes
+budget Exchange allows per app per mailbox. Part B was declined on the strength of
+this measurement; see `docs/PHASE-9.md` for the reasoning and the conditions that
+would reopen it.
 
 ### Not measured — needs a person in Outlook
 

@@ -167,7 +167,38 @@ Turn the mailbox view into a real client. All against Exchange, never a local co
 
 ---
 
-## Phase 9 — Two-Way Sync and Reliability
+## Phase 9 — Two-Way Sync and Reliability — PART A COMPLETE, PART B DECLINED
+
+**Part A shipped 2026-08-27.** Conversation grouping, concurrent-edit detection,
+and resilience. Details in `docs/PHASE-9.md`; what Exchange actually did is in
+`docs/phase-9-verification.md`.
+
+**Part B — Graph change notifications — was evaluated and declined.** This was
+the "pick based on measured need rather than ambition" call below, and the
+measurement came back against it:
+
+> A platform write is visible in a folder listing on the first 250ms poll, every
+> time. Exchange propagates in under a quarter of a second, so the polling
+> interval was the entire user-visible delay.
+
+So the interval went from 60 seconds to **20** — one constant, 0.3% of the
+throttling budget per focused tab, 180 requests an hour — and the remaining ~20
+seconds was judged not worth a subscription lifecycle, a three-day renewal job, a
+public validation endpoint and dropped-notification reconciliation, for a screen
+used by one to three people.
+
+**Do not rebuild the case for webhooks from intuition.** The reasoning, the
+numbers, and the specific circumstances that would legitimately reopen it are in
+`docs/PHASE-9.md` and `docs/runbook.md`. The short version: not user count — the
+budget takes ~300 focused tabs — but a background job that must react to inbound
+mail with no human present, which is the criterion
+`docs/03-exchange-and-graph.md` already sets and which nothing in this roadmap
+needs.
+
+The rest of this section is the original scoping, kept because its live-mailbox
+findings are still the reference for anyone touching grouping.
+
+---
 
 Make it feel live.
 
@@ -182,6 +213,11 @@ Investigate Graph change notifications versus polling here, and pick based on me
 need rather than ambition. Webhooks bring subscription renewal, a validation handshake,
 and dropped-notification reconciliation — real work. At low user counts, polling the
 open folder is close to indistinguishable.
+
+> **Outcome: polling, at 20 seconds.** It was measured, and "close to
+> indistinguishable" turned out to be right for a reason that was not obvious
+> beforehand — Exchange itself adds under 250ms, so the interval *was* the
+> latency. Webhooks were declined.
 
 Also handle: concurrent edits between Outlook and the platform (last write wins — take
 an advisory lock and show it), API failures, rate limits (throttling concentrates on
@@ -225,6 +261,12 @@ Across the mailbox       $filter=conversationId eq '<id>' on /messages — compl
 larger than it looks. One ZZTEST thread returned **1 message** from the folder-scoped
 query and **4** from the mailbox-wide one, spread across two folders. Whichever is chosen,
 a within-folder group has to say it is partial, because most of the time it will be.
+
+> **What shipped: within the open folder**, which is what `docs/PHASE-9.md`
+> scoped. The row therefore reads **"7 in this folder"** rather than "7
+> messages" — the count is true about the folder and would have been a false
+> claim about the thread. Going mailbox-wide is still open, and still needs the
+> Deleted Items decision below settled first.
 
 Three things confirmed while checking, all of which the eventual implementation depends
 on:
