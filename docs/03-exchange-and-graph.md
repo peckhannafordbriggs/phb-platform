@@ -103,6 +103,31 @@ Both listings are therefore newest-first, and a search additionally reports whet
 was `truncated` at the cap — silent truncation would look exactly like a complete
 answer.
 
+**Conversations are grouped on `conversationId`, and a grouped listing collects
+rather than pages.** `$orderby=conversationId` is not used; the grouping happens
+in our process, the same way search's ordering does.
+
+The reason it collects: a conversation assembled from one page is incomplete and
+looks complete. The collapsed row states a message count, and that count is wrong
+when the rest of the thread is on the next page — and Graph gives no per-message
+conversation size to detect it with, since `conversationIndex` encodes threading
+position rather than count. So a grouped read walks the folder to a cap
+(500 messages / 5 requests), groups the whole set, and returns **no cursor**.
+
+The cap is honest because the collection carries `$orderby=receivedDateTime desc`
+and no `$filter` — Exchange will order that, so what a cap drops is the oldest.
+A truncated grouped view can be missing early replies and can never be missing a
+thread's newest message. A truncated *search* makes no such promise, because
+`$filter` with `$orderby` is refused and its result set has no order at all, so
+the two truncation messages are deliberately different sentences.
+
+The flat listing is unchanged and still pages with a cursor. It is the escape
+hatch for a folder that outgrows the cap.
+
+Verified against the mailbox: subject is **not** a usable grouping key.
+`CCHMC Bulletin 12` holds two distinct conversations whose subject lines are
+byte-identical, because two vendors answered the same scope request.
+
 **Reply and forward via Graph, not by hand.** Use `createReply`, `createReplyAll`,
 `createForward`. They return a real Exchange draft with quoting and threading intact.
 

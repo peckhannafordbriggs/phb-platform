@@ -22,6 +22,7 @@ import {
   extractBodySegments,
 } from "./body-text";
 import { sanitizeEmailHtml } from "./sanitize";
+import { groupConversations, truncationOf } from "./conversations";
 import {
   MAX_ATTACHMENT_BYTES,
   SIMPLE_UPLOAD_MAX_BYTES,
@@ -33,6 +34,7 @@ import {
 import type {
   AttachmentDownload,
   AttachmentSummary,
+  ConversationPage,
   AttachmentUpload,
   DeleteResult,
   DerivedDraftMode,
@@ -192,6 +194,34 @@ const MAX_SEARCH_MATCHES = 500;
 
 /** A second bound, on requests rather than results. Belt and braces. */
 const MAX_SEARCH_PAGES = 5;
+
+/**
+ * A grouped read collects whole pages, for the same reason a search does.
+ *
+ * Bigger pages mean fewer round trips for the same answer, and the collection is
+ * `$orderby=receivedDateTime desc` with no `$filter`, so Exchange orders it and
+ * paging is honest. 100 is Graph's practical ceiling for a message page.
+ */
+const CONVERSATION_PAGE_SIZE = 100;
+
+/**
+ * The most messages a grouped listing will collect before saying it truncated.
+ *
+ * Deliberately the same number as MAX_SEARCH_MATCHES: the two are the same kind
+ * of promise, and a reader comparing the two banners should not have to work out
+ * why one says 500 and the other 400.
+ *
+ * The cost of the cap is bounded at the OLDEST end, which is what makes it
+ * acceptable. The collection is ordered newest-first by Exchange, so the
+ * messages that do not fit are the oldest in the folder: a conversation can come
+ * back missing early replies, and can never come back missing the newest one.
+ * Generous against this mailbox, where the largest folder holds 13 messages, so
+ * in practice a grouped folder read is a single request.
+ */
+const MAX_CONVERSATION_MESSAGES = 500;
+
+/** A second bound, on requests rather than results, as above. */
+const MAX_CONVERSATION_PAGES = 5;
 
 const DEFAULT_MESSAGE_PAGE_SIZE = 25;
 const MAX_MESSAGE_PAGE_SIZE = 100;
@@ -881,6 +911,114 @@ export class ChangeOrderMailService {
       nextCursor: null,
       truncated,
     };
+  }
+
+  /**
+   * A folder grouped into conversations, newest conversation first.
+   *
+   * ## Why this collects instead of paging
+   *
+   * This is the one design decision of Phase 9, and it is the same decision
+   * searchMessages already made, for a stronger reason.
+   *
+   * A conversation assembled from one page is incomplete and looks complete. The
+   * collapsed row does not merely show fewer messages - it renders a factual
+   * claim, "4 messages, newest 08-25", and if messages five through nine are on
+   * the next page that claim is false. There is no way to notice from the data
+   * either: Graph puts no conversation size on a message summary
+   * (`conversationIndex` encodes threading position, not count), so the service
+   * cannot mark the partial groups, only every group, which is noise nobody
+   * reads.
+   *
+   * So a grouped read collects the folder to a cap and groups the complete set.
+   * `nextCursor` is always null - there is nothing left to page through, exactly
+   * as with a search.
+   *
+   * ## What the cap costs, precisely
+   *
+   * The collection carries `$orderby=receivedDateTime desc` and no `$filter`, so
+   * Exchange really does order it (the `400 InefficientFilter` that stops a
+   * search being ordered does not apply without a filter). The messages that do
+   * not fit are therefore the OLDEST in the folder. A truncated grouped view is
+   * missing old messages at one named end, never a hole in the middle, and never
+   * the newest message of a thread. That is what makes the cap something a
+   * banner can describe truthfully.
+   *
+   * Flat mode still pages with a cursor and is untouched, which is the escape
+   * hatch for a folder that has genuinely outgrown the cap.
+   *
+   * ## Duplicates
+   *
+   * Deduplicated by id while collecting. `$skip` walks an offset into a
+   * collection that mail arriving mid-walk shifts underneath us, so page two can
+   * repeat a row from page one - and a duplicated row inside a thread would
+   * inflate the count on the row header. A message skipped by the same shift is
+   * possible and is corrected by the next poll; it is not worth a second pass to
+   * pre-empt.
+   */
+  async listConversations(folderId: string): Promise<ConversationPage> {
+    const collected = await this.collectFolder(folderId);
+
+    return {
+      conversations: groupConversations(collected.messages),
+      messageCount: collected.messages.length,
+      truncated: collected.truncated,
+      truncation: truncationOf(collected.truncated, "folder_cap"),
+    };
+  }
+
+  /**
+   * Reads a folder to the conversation cap, newest first, deduplicated.
+   *
+   * Built on listMessages rather than issuing its own requests, so the `$skip`
+   * versus `$skiptoken` handling and the `$orderby`-on-offset-pages rule have
+   * exactly one implementation. Getting either wrong silently corrupts paging -
+   * see cursorFrom() - and a second copy would be a second chance to.
+   */
+  private async collectFolder(
+    folderId: string,
+  ): Promise<{ messages: MessageSummary[]; truncated: boolean }> {
+    const byId = new Map<string, MessageSummary>();
+    let cursor: string | undefined;
+    let pages = 0;
+    let truncated = false;
+
+    for (;;) {
+      const page = await this.listMessages(folderId, {
+        top: CONVERSATION_PAGE_SIZE,
+        cursor,
+      });
+
+      for (const message of page.messages) {
+        if (message.id.length > 0) byId.set(message.id, message);
+      }
+
+      pages += 1;
+
+      // Exchange had nothing more to give. Not a truncation.
+      if (page.nextCursor === null || page.messages.length === 0) break;
+
+      if (byId.size >= MAX_CONVERSATION_MESSAGES || pages >= MAX_CONVERSATION_PAGES) {
+        truncated = true;
+        logger.warn("mail.conversations_capped", {
+          outcome: "truncated",
+          count: byId.size,
+          route: "listConversations",
+          reason:
+            byId.size >= MAX_CONVERSATION_MESSAGES
+              ? `MAX_CONVERSATION_MESSAGES (${MAX_CONVERSATION_MESSAGES})`
+              : `MAX_CONVERSATION_PAGES (${MAX_CONVERSATION_PAGES})`,
+        });
+        break;
+      }
+
+      cursor = page.nextCursor;
+    }
+
+    // Exchange ordered this, so the sort is defensive: a mid-walk shift can
+    // interleave a later page's rows among an earlier page's. Cheap, and it
+    // makes the returned order a property of this method rather than a hope.
+    return { messages: [...byId.values()].sort(byNewestFirst), truncated };
   }
 
   /**

@@ -7,6 +7,7 @@ import {
   readDraftLock,
   releaseDraftLock,
 } from "@/lib/modules/change-orders/mail/draft-locks";
+import { LOCK_REFRESH_MS } from "@/app/(modules)/change-orders/draft-client";
 import { createEmployee, disconnectDb, resetDb, testDb } from "./db";
 
 /**
@@ -124,6 +125,24 @@ describe("a lock cannot strand a draft", () => {
   it("expires in well under two minutes", async () => {
     // A long TTL turns a closed tab into a blocked send.
     expect(LOCK_TTL_MS).toBeLessThanOrEqual(120_000);
+  });
+
+  /**
+   * The other half of the guarantee, and the half a database test cannot see.
+   *
+   * Expiry stops an abandoned lock stranding a draft. What stops an ACTIVE
+   * editor losing its own lock is the refresh cadence, and the two numbers only
+   * work together: refresh at half the TTL means one lost refresh - a dropped
+   * request, a throttle, a laptop that slept - still leaves a whole interval
+   * before the lock lapses under somebody who is still typing.
+   *
+   * PHASE-9 asks for the pair to be verified rather than assumed. Pinned here
+   * because this is the file somebody changing the TTL will open.
+   */
+  it("renews at most every half-TTL, so one lost refresh cannot drop the lock", () => {
+    expect(LOCK_REFRESH_MS).toBeLessThanOrEqual(LOCK_TTL_MS / 2);
+    // And it is a renewal, not a no-op: zero would mean refreshing constantly.
+    expect(LOCK_REFRESH_MS).toBeGreaterThan(0);
   });
 });
 

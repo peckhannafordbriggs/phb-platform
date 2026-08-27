@@ -8,6 +8,7 @@ import { MailError } from "../mail/errors";
 import { graphTokenProvider, type TokenProvider } from "./credential";
 import { passThroughMailError, parseRetryAfter } from "./errors";
 import { getHeader, setHeader } from "./headers";
+import { noteThrottleRetry } from "./retry-notice";
 
 /**
  * The Graph client factory. Nothing outside lib/modules/change-orders/graph
@@ -134,6 +135,12 @@ class ThrottleRetryMiddleware implements Middleware {
     });
 
     setHeader(context.options, "Retry-Attempt", "1");
+
+    // Recorded before the wait, not after: if the retry itself fails the caller
+    // still gets a MailError, and the route still wants to say that the delay
+    // it just sat through was a throttle rather than a slow mailbox.
+    noteThrottleRetry(waitSeconds);
+
     await this.sleep(waitSeconds * 1000);
     await this.next?.execute(context);
 

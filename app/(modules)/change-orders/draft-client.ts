@@ -15,6 +15,21 @@ import { ApiError } from "./mailbox-client";
  * that in one short file.
  */
 
+/**
+ * How often an open editor renews the advisory lock.
+ *
+ * Half the server-side TTL, and that ratio is the point rather than the number:
+ * one refresh may be lost - a dropped request, a sleeping laptop, a throttle -
+ * and the lock still survives to the next one. It must also stay comfortably
+ * BELOW the TTL, or an editor somebody is actively typing in would keep losing
+ * its own lock and retaking it.
+ *
+ * The other half of "a lock never strands a draft" is the TTL itself: a closed
+ * tab sends no release, so expiry is the release mechanism. See
+ * lib/modules/change-orders/mail/draft-locks.ts.
+ */
+export const LOCK_REFRESH_MS = 45_000;
+
 export interface LockState {
   heldByYou: boolean;
   heldBy: { id: string; firstName: string; lastName: string } | null;

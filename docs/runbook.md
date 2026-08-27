@@ -1816,6 +1816,242 @@ seeding* for why that second guard is the one that matters.
 
 ---
 
+# Change Orders — conversations, sync and reliability (Phase 9)
+
+## A conversation row shows a message count that looks wrong
+
+**Symptom.** A collapsed thread says "4 messages" and expanding it shows four,
+but the folder plainly contains more of that conversation.
+
+**Cause, if it ever happens.** Grouping was applied to one page of a folder
+rather than to the whole folder. This is the failure the design exists to
+prevent, so seeing it means `listConversations` has been changed to page.
+
+**Why grouping collects instead of paging.** A group assembled from one page is
+incomplete and *looks complete*: the row does not merely show fewer messages, it
+renders a factual claim — "4 messages, newest 08-25" — that is false when the
+rest of the thread is on page two. Nor can the partial groups be marked, because
+Graph puts no conversation size on a message summary (`conversationIndex` encodes
+threading position, not count). The only honest options were "mark every group as
+possibly incomplete", which is noise nobody reads, or "collect the folder and
+group the complete set". The second was chosen — it is the same collect-then-order
+approach `searchMessages` already uses, for the same reason.
+
+So a grouped read has **no cursor**. `nextCursor` is always null and the *Load
+older messages* button does not appear. Turning grouping off restores the paged
+flat listing, which is the way to page back through a folder that has outgrown
+the cap.
+
+**The fix.** Do not add paging to `listConversations`. If a folder is too large
+to collect, that is what the truncation banner and the grouping toggle are for.
+
+## "Grouped from the newest 500 messages in this folder"
+
+**Symptom.** An amber banner above a grouped list.
+
+**Cause.** The folder holds more than `MAX_CONVERSATION_MESSAGES` (500) or needed
+more than `MAX_CONVERSATION_PAGES` (5) requests. As of Phase 9 the largest folder
+in this mailbox holds 17 messages, so nobody has seen this yet.
+
+**What it means, precisely.** The collection carries
+`$orderby=receivedDateTime desc` and no `$filter`, so Exchange really does order
+it and the messages that did not fit are **the oldest in the folder**. A
+conversation can be missing early replies. It cannot be missing its newest
+message, which is why the row's date and subject are still trustworthy.
+
+**The search banner is a different sentence and must stay different.** A search
+is `$filter=contains(subject,…)`, and Exchange refuses `$filter` with `$orderby`
+(`400 InefficientFilter`), so a search's result set comes back in no order at all
+— a capped search dropped an *arbitrary* subset and no such reassurance is
+available. `truncationNotice()` in `mailbox-client.ts` owns which sentence
+applies; a test asserts they are not the same string.
+
+**The fix.** Narrow the search, or switch grouping off to page through the folder.
+
+## Two threads in one folder have the same subject
+
+**This is correct.** `CCHMC Bulletin 12` genuinely contains two conversations
+whose subject line is byte-identical:
+
+```
+RE: CCHMC Liberty Expansion — Change Order Scope Request — Due 08-11-2026
+  AAQk…AHcoEcU5y8FHr_WeTEv1zng=   7 messages   changeorder · Brandon Parker · Horvath, Brian
+  AAQk…ADKTXXwiLfdLkdbBoawVZiE=   4 messages   Joel Schriner · Josh Bittner · Erich Knemeyer
+```
+
+Two vendors answering the same scope request start two threads. Grouping on
+subject would merge 11 messages into one thread with one false count and a
+participant list mixing two unrelated conversations. Grouping is on
+`conversationId` — the same field Intake 6 matches vendor replies by — and it
+separates them correctly.
+
+**Do not "fix" this by grouping on subject.**
+
+## A draft is inside a collapsed thread and I cannot see it
+
+**You can, and this is enforced.** `conversationRows()` emits every draft in a
+group whether the group is expanded or not — a collapsed row shows its header,
+then its drafts, and states how many read messages it is holding back. Reviewing
+drafts is the job the platform exists to do, so a draft folded behind a chevron
+is not an acceptable state.
+
+A `tests/mailbox-grouping-ui.test.ts` case fails if a collapsed group ever stops
+emitting its drafts.
+
+## "This draft changed in Outlook"
+
+**Symptom.** An amber panel in the editor. Saving and sending are blocked and a
+*Reload* button is offered.
+
+**Cause.** The `changeKey` the editor is holding no longer matches the one in
+Exchange, so something else wrote to the draft — almost always Outlook, which is
+a peer client of the same mailbox and has never heard of our editor.
+
+**This is not preventable and the platform does not pretend otherwise.** Graph
+offers no concurrency control worth the name; last write wins. What the platform
+does is *notice*, and refuse to be the write that wins over an edit somebody made
+deliberately.
+
+**Two things set it,** and the second is the useful one:
+
+1. A save refused by the service with `kind=conflict`.
+2. The lock-refresh poll. It already re-reads the draft every 45 s to renew the
+   advisory lock, so comparing the `changeKey` on that read costs nothing — and
+   it raises the banner while somebody is still typing rather than after they
+   have finished a paragraph they are about to lose.
+
+**The fix.** Copy anything still needed out of the fields, then reload. The
+button says so when there are unsaved changes; reloading replaces them with what
+Exchange holds. There is no merge, and there should not be one.
+
+**Verified against Exchange**, not assumed: a subject-only PATCH does change the
+`changeKey` (`…AABNDuK1` → `…AABND+Zx`), and a save carrying the stale key is
+refused. See `docs/phase-9-verification.md`.
+
+## Someone else is editing this draft — when does it free?
+
+The advisory lock has a **90-second TTL** and an open editor renews it every
+**45 seconds**. The banner now names the wall-clock time it lapses rather than
+saying only that saving is blocked.
+
+Those two numbers are a pair and neither is arbitrary. Expiry rather than an
+explicit release is what stops a closed tab stranding a draft — a closing tab
+never lands its release. Renewing at *half* the TTL is what stops an editor
+somebody is actively typing in losing its own lock: one lost renewal — a dropped
+request, a throttle, a laptop that slept — still leaves a whole interval.
+
+`tests/draft-locks.test.ts` fails if `LOCK_REFRESH_MS` ever exceeds half of
+`LOCK_TTL_MS`.
+
+The lock is a courtesy between colleagues in the platform, not an authorization
+boundary. An unlocked draft is writable, and Outlook holds no lock at all.
+
+## The pane says "the mailbox was busy, that took an extra Ns"
+
+**Cause.** Graph throttled one of the requests behind that response, and the
+middleware retried it once after honouring `Retry-After`.
+
+**Why it is said afterwards rather than during.** The retry happens *inside* the
+single HTTP request the browser made, so there is nothing to stream — by the time
+the browser has a response the wait is over. Two separate things cover the two
+halves:
+
+- **During**: any request outstanding for more than 2.5 s puts "Still loading —
+  the mailbox may be busy" under the list. That is the part the browser can
+  actually observe.
+- **After**: `withMailbox` runs every mail route inside an `AsyncLocalStorage`
+  scope and answers with `x-phb-mail-retried` and `x-phb-mail-retry-wait` when
+  something in it was throttled.
+
+**Why `AsyncLocalStorage` and not a counter.** The Graph client is memoised
+process-wide, so its middleware instances are shared by every concurrent request.
+A module-level counter would attribute one request's throttle to whichever other
+request read it next — a pane claiming the mailbox was busy when its own request
+sailed through, which is worse than saying nothing.
+
+**If it appears constantly**, the mailbox is genuinely being throttled; see
+*Graph throttling* above. Retrying harder is not the answer — throttling
+concentrates on one mailbox through one app identity, so a second retry makes it
+worse.
+
+## Older messages failed to load and I lost the ones I had
+
+**This was a real defect and it is fixed.** A failed *Load older messages* used
+to call `setListError`, which swaps the whole pane for an error state — throwing
+away every message already loaded in order to report a failure. The error now
+appears beside the button, the loaded messages stay, and the button reads *Try
+again*.
+
+The same class of problem existed on the *success* path: a poll re-reads page one,
+so in flat mode a poll landing after somebody had paged back would silently
+discard those pages. Polling now skips while extra pages are loaded, the same way
+it already skips during a search. Reselect the folder to go live again.
+
+## The mailbox pane says "Not connected to the mailbox"
+
+**Three different causes, one state**, deliberately — from the employee's side
+they are the same situation and have the same answer, which is Outlook.
+
+| code | cause | fix |
+|---|---|---|
+| `mail_not_configured` | no `GRAPH_*` credential | *The mailbox is not connected* above |
+| `mail_auth_failed` | Entra would not issue a token — an expired local secret, or a misconfigured federated credential after a redeploy | renew it; production must never hold one that expires |
+| `mail_access_denied` | the ApplicationAccessPolicy | *`mail_access_denied` — the access policy* above |
+
+What it must never be is a crash or a raw Graph error string. It is a whole-module
+state rather than a per-pane one, so three panes do not each report the same
+broken credential.
+
+## An error state with no button
+
+**Report it.** Phase 9 treats a dead end as a defect: every error state offers a
+retry, a way back, or both. `MailErrorState` takes `onRetry` and `onBack` and
+renders whichever it is given — a `not_found` gets the way back rather than a
+retry that cannot possibly work, a `mail_busy` gets the retry.
+
+## Re-running the Phase 9 checks
+
+```bash
+npx tsx scripts/co-verify-phase9.ts survey
+    Read-only. Groups every folder, and checks the grouped and flat listings
+    contain exactly the same messages. Prints each folderId.
+
+npx tsx scripts/co-verify-phase9.ts groups <folderId>
+    One folder in detail: conversations, participants, and each message in the
+    order the expanded pane shows them. Prints draft ids.
+
+npx tsx scripts/co-verify-phase9.ts propagate <draftId>
+    Times how long a platform write takes to appear in a folder LISTING.
+    ZZTEST only; restores the subject afterwards.
+
+npx tsx scripts/co-verify-phase9.ts conflict <draftId>
+    Proves the concurrent-edit refusal. ZZTEST only; restores the subject.
+
+npx tsx scripts/co-verify-phase9.ts watch <folderId> <needle> appear|vanish
+    Do the thing in Outlook; this times how long Graph takes to agree.
+```
+
+The script contains no call to `sendDraft`, and never reads or sets
+`PHB_ALLOW_SEND`.
+
+## Is Part B (change notifications) worth building?
+
+**The measured answer as of Phase 9 is: probably not, and the cheap lever is the
+poll interval.**
+
+A platform write was visible in the folder listing on the very first 250 ms poll,
+every time — so Exchange's propagation is sub-second and the entire user-visible
+delay is the platform's own 60-second poll interval. Webhooks would replace a
+60-second wait with a sub-second one at the cost of a subscription lifecycle, a
+three-day renewal job, a validation endpoint and dropped-notification
+reconciliation. Halving `POLL_INTERVAL_MS` costs one line.
+
+What is **not** yet measured is the Outlook-initiated direction — four of the six
+sync rows in `docs/phase-9-verification.md` are unfilled because they need a
+person acting in Outlook. Fill them with `watch` before deciding.
+
+---
+
 # BAS — Building Automation module
 
 ## The BAS schema lives in two places, and `schema.prisma` is not all of it

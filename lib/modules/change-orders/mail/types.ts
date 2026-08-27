@@ -105,6 +105,76 @@ export interface MessagePage {
   truncated: boolean;
 }
 
+/**
+ * Which cap a grouped listing hit, when it hit one.
+ *
+ * See truncationOf() in ./conversations.ts. The two are not interchangeable: a
+ * folder cap drops the oldest messages, a search cap drops an arbitrary subset,
+ * and only one of those lets a group claim its newest message is present.
+ */
+export type ConversationTruncation = "folder_cap" | "search_cap";
+
+/**
+ * One thread, as the message pane renders it.
+ *
+ * Display only. There is no operation anywhere that takes a `ConversationGroup`
+ * - `messages` is carried so the UI can render individual rows, and every move,
+ * delete, edit and send still names a single message id. CLAUDE.md: the moment a
+ * group can be acted on as a unit, the one-human-one-message rule is at risk.
+ */
+export interface ConversationGroup {
+  /**
+   * `c:<conversationId>`, or `m:<messageId>` for a message Exchange gave no
+   * conversation id. Not a Graph identifier and not addressable - it exists so
+   * React has a key and the UI can remember which rows are expanded.
+   */
+  id: string;
+  /** The NEWEST message's subject, preserved byte for byte. */
+  subject: string | null;
+  /** Senders in the order they first appear, or recipients if there are none. */
+  participants: MailAddress[];
+  messageCount: number;
+  /** Received and unread. A draft is never counted as unread. */
+  unreadCount: number;
+  /**
+   * Unsent drafts in this thread.
+   *
+   * Surfaced on the group rather than left inside `messages` because a collapsed
+   * group must still show its drafts - reviewing them is the job, and a draft
+   * hidden behind a collapsed row is the one message in this mailbox nobody can
+   * afford to miss.
+   */
+  draftCount: number;
+  hasAttachments: boolean;
+  /** Drives group ordering. Newest group first, like the flat list. */
+  newestDateTime: string | null;
+  /** Oldest first: PHASE-9 asks for the individual messages "newest last". */
+  messages: MessageSummary[];
+}
+
+/**
+ * A grouped listing.
+ *
+ * There is no cursor, and that is the design decision of this phase rather than
+ * an omission. A conversation assembled from one page is incomplete and looks
+ * complete: the row states "4 messages" when the thread has nine, and Graph
+ * offers no per-message conversation size to notice it with (`conversationIndex`
+ * encodes threading position, not count). So a grouped read collects the folder
+ * to a cap and groups the whole set - the same collect-then-order approach
+ * searchMessages already uses, and for the same reason: page-by-page ordering
+ * looks right and is not.
+ *
+ * `truncated` therefore carries real weight here. It is the only case in which a
+ * group can be missing messages, and `truncation` says which end they went off.
+ */
+export interface ConversationPage {
+  conversations: ConversationGroup[];
+  /** Messages grouped, after de-duplication. The sum of the group counts. */
+  messageCount: number;
+  truncated: boolean;
+  truncation: ConversationTruncation | null;
+}
+
 export interface ListMessagesOptions {
   top?: number;
   /** The `nextCursor` from a previous page. Never a Graph URL. */

@@ -181,6 +181,33 @@ records what Exchange actually did, including four claims the docs had wrong.
 Folder search is subject-only as a result: `$search` returns ids that go stale on a
 move, so it is not used. See the list above.
 
+**Phase 9 Part A complete.** Conversation grouping, concurrent-edit honesty and
+resilience. Part B — Graph change notifications — is **not started** and needs
+the Azure subscription plus the Outlook-side latency numbers.
+
+The one design decision that phase turned on: **a grouped listing collects the
+folder to a cap and groups the complete set. It does not group a page and it has
+no cursor.** A group assembled from one page renders a factual claim — "4
+messages, newest 08-25" — that is false when the rest of the thread is on page
+two, and Graph offers no per-message conversation size to notice it with. The
+collection is ordered newest-first with no `$filter`, so what a cap drops is the
+oldest; a thread can be missing early replies and never its newest message, and
+the banner says exactly that. Flat mode keeps the paged cursor and is the way
+past the cap. Do not add paging to `listConversations`.
+
+Grouping is on `conversationId`, never subject: `CCHMC Bulletin 12` really does
+hold two different conversations with a byte-identical subject line, and merging
+them would have produced one thread of eleven with a false count.
+
+Grouping is display only. No action anywhere takes a conversation.
+
+`docs/phase-9-verification.md` records what Exchange actually did, including the
+measurement that decides Part B: a platform write is visible in a folder listing
+on the first 250ms poll, so Exchange is not the slow part — the platform's own
+60-second poll interval is the entire user-visible delay. Four of the six sync
+directions still need a person acting in Outlook and are marked not-run rather
+than assumed.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -222,3 +249,5 @@ seen it.
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
 | `docs/runbook.md` | Failure modes, recovery, what expires and when |
 | `docs/phase-1-verification.md` | Manual verification record |
+| `docs/phase-8-verification.md` | What Exchange actually did for the email actions |
+| `docs/phase-9-verification.md` | Grouping, conflicts, and the latency that decides Part B |

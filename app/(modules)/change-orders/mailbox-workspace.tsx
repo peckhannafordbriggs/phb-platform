@@ -31,9 +31,14 @@ import {
   fetchMessage,
   fetchMessages,
   isMissing,
+  conversationIdOf,
+  conversationRows,
+  truncationNotice,
+  type ConversationRow as ConversationRowModel,
   type FolderNode,
   type FolderTreeNode,
   type MessageResult,
+  type RetryNotice,
 } from "./mailbox-client";
 import {
   MailErrorState,
@@ -41,6 +46,10 @@ import {
   PaneMessage,
   ReadingPaneSkeleton,
 } from "./states";
+import type {
+  ConversationGroup,
+  ConversationTruncation,
+} from "@/lib/modules/change-orders/mail/types";
 
 /**
  * The Change Orders mailbox.
@@ -64,11 +73,46 @@ import {
 const POLL_INTERVAL_MS = 60_000;
 const PAGE_SIZE = 25;
 
+/**
+ * How long a request may take before the pane admits it is still working.
+ *
+ * A throttled request is retried once inside the server, after honouring
+ * Retry-After - which can be up to thirty seconds inside a single HTTP request,
+ * during which the browser has nothing to show. This is the "not frozen, just
+ * slow" hint; the response itself then says whether it was actually a throttle.
+ */
+const SLOW_REQUEST_MS = 2_500;
+
+/**
+ * Grouping defaults ON, and is remembered per browser.
+ *
+ * PHASE-9: default on, because a thread is the unit people reason about. The
+ * toggle exists for someone hunting one specific message - and, less obviously,
+ * as the escape hatch for a folder that has outgrown the grouping cap, since
+ * flat mode is the paged one.
+ */
+const GROUPING_STORAGE_KEY = "phb.change-orders.group-conversations";
+
 interface ListState {
+  /** Which shape came back. Grouped responses carry no cursor. */
+  grouped: boolean;
+  /** Null in flat mode. */
+  conversations: ConversationGroup[] | null;
+  /** Empty in grouped mode - the messages live inside the conversations. */
   messages: MessageSummary[];
   nextCursor: string | null;
-  /** A search hit its cap. Never true for a folder listing, which pages. */
+  /** A capped listing. A flat folder listing pages instead, and never sets it. */
   truncated: boolean;
+  truncation: ConversationTruncation | null;
+  /** Set when Graph throttled something behind this response. */
+  retry: RetryNotice | null;
+}
+
+/** Every message in the list, whichever shape the response had. */
+function messagesOf(list: ListState | null): MessageSummary[] {
+  if (list === null) return [];
+  if (list.conversations === null) return list.messages;
+  return list.conversations.flatMap((c) => c.messages);
 }
 
 export function MailboxWorkspace() {
@@ -81,6 +125,18 @@ export function MailboxWorkspace() {
   const [listError, setListError] = useState<ApiError | null>(null);
   const [listLoading, setListLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  /**
+   * A failed "load older" must not replace the messages already on screen with
+   * an error pane - that would throw away work in order to report a failure. It
+   * is shown beside the button that failed, which still offers another go.
+   */
+  const [olderError, setOlderError] = useState<string | null>(null);
+  const [listSlow, setListSlow] = useState(false);
+
+  const [grouped, setGrouped] = useState(true);
+  const [expandedConversations, setExpandedConversations] = useState<Set<string>>(
+    new Set(),
+  );
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [message, setMessage] = useState<MessageResult | null>(null);
@@ -211,27 +267,43 @@ export function MailboxWorkspace() {
     async (
       folderId: string,
       query: string,
+      group: boolean,
       { quiet = false, signal }: { quiet?: boolean; signal?: AbortSignal } = {},
     ) => {
       if (!quiet) setListLoading(true);
+
+      // "Still working" rather than a frozen pane. A throttled request is
+      // retried once inside the server, after waiting out Retry-After, and the
+      // browser cannot see that happening - only that nothing has come back.
+      const slowTimer = setTimeout(() => setListSlow(true), SLOW_REQUEST_MS);
+
       try {
         const page = await fetchMessages(
           folderId,
-          { query, top: PAGE_SIZE },
+          // A grouped read has no cursor and ignores `top`; fetchMessages drops
+          // the paging options rather than sending ones the server discards.
+          { query, top: PAGE_SIZE, group },
           signal,
         );
         setList({
+          grouped: page.grouped,
+          conversations: page.conversations,
           messages: page.messages,
           nextCursor: page.nextCursor,
           truncated: page.truncated,
+          truncation: page.truncation,
+          retry: page.retry,
         });
         setListError(null);
+        setOlderError(null);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
         // A background poll that fails must not replace a list the user is
         // reading with an error pane. It will be retried on the next tick.
         if (error instanceof ApiError && !quiet) setListError(error);
       } finally {
+        clearTimeout(slowTimer);
+        setListSlow(false);
         if (!quiet) setListLoading(false);
       }
     },
@@ -242,21 +314,91 @@ export function MailboxWorkspace() {
     if (selectedFolder === null) return;
 
     const controller = new AbortController();
-    void loadMessages(selectedFolder.id, activeQuery, {
+    void loadMessages(selectedFolder.id, activeQuery, grouped, {
       signal: controller.signal,
     });
     return () => controller.abort();
-  }, [selectedFolder, activeQuery, loadMessages]);
+  }, [selectedFolder, activeQuery, grouped, loadMessages]);
 
+  /**
+   * The grouping preference, remembered per browser.
+   *
+   * Read in an effect rather than in the initial state so the server and the
+   * first client render agree - reading localStorage during render is a
+   * hydration mismatch. The cost is one extra fetch in the rare case where the
+   * stored value is `off`, which is preferable to a flash of the wrong list.
+   */
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(GROUPING_STORAGE_KEY) === "off") {
+        setGrouped(false);
+      }
+    } catch {
+      // Storage disabled or unavailable. The default stands.
+    }
+  }, []);
+
+  const toggleGrouping = useCallback(() => {
+    setGrouped((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(GROUPING_STORAGE_KEY, next ? "on" : "off");
+      } catch {
+        // Not remembering the preference is not worth failing over.
+      }
+      return next;
+    });
+    // Expansion is meaningless across a mode change, and a stale set would
+    // silently re-expand unrelated threads when grouping came back on.
+    setExpandedConversations(new Set());
+  }, []);
+
+  const toggleConversation = useCallback((conversationId: string) => {
+    setExpandedConversations((current) => {
+      const next = new Set(current);
+      if (next.has(conversationId)) next.delete(conversationId);
+      else next.add(conversationId);
+      return next;
+    });
+  }, []);
+
+  /**
+   * Keep the open message's conversation expanded.
+   *
+   * Without this, opening a message from a search, then switching back to the
+   * folder, leaves the reading pane showing a message whose row is folded away -
+   * which reads as the list having lost it.
+   */
+  useEffect(() => {
+    if (selectedId === null || list?.conversations == null) return;
+
+    const conversationId = conversationIdOf(list.conversations, selectedId);
+    if (conversationId === null) return;
+
+    setExpandedConversations((current) =>
+      current.has(conversationId) ? current : new Set(current).add(conversationId),
+    );
+  }, [selectedId, list]);
+
+  /**
+   * The next page, in flat mode only.
+   *
+   * Grouped mode has no cursor: it collects the folder to a cap and groups the
+   * complete set, because a group assembled from one page states a message count
+   * that is wrong. Turning grouping off is how someone pages back through a
+   * folder that has outgrown that cap.
+   */
   const loadOlder = useCallback(async () => {
     if (selectedFolder === null || list?.nextCursor == null) return;
 
     setLoadingMore(true);
+    setOlderError(null);
     try {
       const page = await fetchMessages(selectedFolder.id, {
         cursor: list.nextCursor,
         query: activeQuery,
         top: PAGE_SIZE,
+        group: false,
       });
       setList((current) =>
         current === null
@@ -265,10 +407,18 @@ export function MailboxWorkspace() {
               ...current,
               messages: [...current.messages, ...page.messages],
               nextCursor: page.nextCursor,
+              retry: page.retry ?? current.retry,
             },
       );
     } catch (error) {
-      if (error instanceof ApiError) setListError(error);
+      // Deliberately NOT setListError: that swaps the whole pane for an error
+      // state and discards every message already loaded. The failure belongs
+      // next to the button that failed.
+      setOlderError(
+        error instanceof ApiError
+          ? error.message
+          : describeUnexpected(error, "loading older messages"),
+      );
     } finally {
       setLoadingMore(false);
     }
@@ -282,7 +432,20 @@ export function MailboxWorkspace() {
     // A search is a point-in-time question, not a live view; re-running it on a
     // timer would reorder results under the reader.
     if (activeQuery.length > 0) return;
-    void loadMessages(selectedFolder.id, "", { quiet: true });
+    /**
+     * Nor when someone has paged back through a flat folder.
+     *
+     * A poll re-reads the FIRST page, so refreshing here would silently discard
+     * every older page they had loaded - a successful poll destroying work is no
+     * better than a failed one doing it. A deep scroll is a deliberate act, like
+     * a search, and the folder can be reselected to go live again. Grouped mode
+     * has no pages to lose, so it keeps polling.
+     */
+    if (!grouped && (list?.messages.length ?? 0) > PAGE_SIZE) return;
+    // Quiet: a failed poll leaves the list exactly as it is. Expansion state
+    // lives in a Set of conversation ids, so a poll that returns the same
+    // threads leaves them open.
+    void loadMessages(selectedFolder.id, "", grouped, { quiet: true });
   };
 
   useEffect(() => {
@@ -350,7 +513,7 @@ export function MailboxWorkspace() {
           setSelectedId(null);
           setVanished(true);
           if (selectedFolder !== null) {
-            void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+            void loadMessages(selectedFolder.id, activeQuery, grouped, { quiet: true });
           }
         } else if (error instanceof ApiError) {
           setMessage(null);
@@ -365,7 +528,7 @@ export function MailboxWorkspace() {
         setMessageLoading(false);
       }
     },
-    [selectedFolder, activeQuery, loadMessages],
+    [selectedFolder, activeQuery, grouped, loadMessages],
   );
 
   /**
@@ -428,7 +591,7 @@ export function MailboxWorkspace() {
           setPicking(false);
           setDeleting(false);
           if (selectedFolder !== null) {
-            void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+            void loadMessages(selectedFolder.id, activeQuery, grouped, { quiet: true });
           }
         } else if (error instanceof ApiError) {
           setActionError(error.message);
@@ -441,7 +604,7 @@ export function MailboxWorkspace() {
         setActionBusy(false);
       }
     },
-    [actionBusy, selectedFolder, activeQuery, loadMessages],
+    [actionBusy, selectedFolder, activeQuery, grouped, loadMessages],
   );
 
   /**
@@ -460,10 +623,10 @@ export function MailboxWorkspace() {
       // A reply lands in Drafts, not in the folder being looked at, so the list
       // is refreshed - otherwise the new draft is invisible until the next poll.
       if (selectedFolder !== null) {
-        void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+        void loadMessages(selectedFolder.id, activeQuery, grouped, { quiet: true });
       }
     },
-    [openMessage, selectedFolder, activeQuery, loadMessages],
+    [openMessage, selectedFolder, activeQuery, grouped, loadMessages],
   );
 
   const respond = useCallback(
@@ -509,12 +672,12 @@ export function MailboxWorkspace() {
           setSelectedId(null);
           setMoved({ subject: result.subject, idChanged: result.idChanged });
           if (selectedFolder !== null) {
-            void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+            void loadMessages(selectedFolder.id, activeQuery, grouped, { quiet: true });
           }
         },
       );
     },
-    [selectedId, runAction, selectedFolder, activeQuery, loadMessages],
+    [selectedId, runAction, selectedFolder, activeQuery, grouped, loadMessages],
   );
 
   const remove = useCallback(() => {
@@ -530,11 +693,11 @@ export function MailboxWorkspace() {
         setSelectedId(null);
         setDeletedSubject(result.subject);
         if (selectedFolder !== null) {
-          void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+          void loadMessages(selectedFolder.id, activeQuery, grouped, { quiet: true });
         }
       },
     );
-  }, [selectedId, runAction, selectedFolder, activeQuery, loadMessages]);
+  }, [selectedId, runAction, selectedFolder, activeQuery, grouped, loadMessages]);
 
   const selectFolder = useCallback((folder: FolderTreeNode) => {
     setSelectedFolder(folder);
@@ -560,11 +723,50 @@ export function MailboxWorkspace() {
     });
   }, []);
 
-  // The mailbox being unconfigured is a whole-module state, not a per-pane one.
-  if (folderError?.code === "mail_not_configured") {
+  /**
+   * The rows to render, in either mode.
+   *
+   * The grouped case is derived by conversationRows(), which is where the rule
+   * that matters lives: a collapsed group still emits its drafts. Flat mode is
+   * the same shape with every row un-indented, so there is one rendering path
+   * rather than two that have to be kept in step.
+   */
+  const rows = useMemo<ConversationRowModel[]>(() => {
+    if (list === null) return [];
+    if (list.conversations !== null) {
+      return conversationRows(list.conversations, expandedConversations);
+    }
+    return list.messages.map((message) => ({
+      kind: "message" as const,
+      message,
+      indented: false,
+    }));
+  }, [list, expandedConversations]);
+
+  /** Messages on screen, however they are arranged. */
+  const shownCount = useMemo(() => messagesOf(list).length, [list]);
+
+  /**
+   * Not being connected to the mailbox is a whole-module state, not a per-pane
+   * one - three panes each reporting the same broken credential is noise.
+   *
+   * `mail_auth_failed` and `mail_access_denied` join it here for Phase 9: an
+   * expired or rejected credential is the same situation as an unconfigured one
+   * from the employee's side, and both have the same answer, which is Outlook.
+   */
+  if (
+    folderError !== null &&
+    ["mail_not_configured", "mail_auth_failed", "mail_access_denied"].includes(
+      folderError.code,
+    )
+  ) {
     return (
       <div className="flex h-full items-center justify-center rounded border border-[var(--border)]">
-        <MailErrorState code={folderError.code} message={folderError.message} />
+        <MailErrorState
+          code={folderError.code}
+          message={folderError.message}
+          onRetry={() => void loadFolders()}
+        />
       </div>
     );
   }
@@ -633,6 +835,21 @@ export function MailboxWorkspace() {
             aria-label="Search subjects in this folder"
             className="w-full rounded border border-[var(--border)] px-2 py-1.5 text-sm"
           />
+
+          {/*
+            Grouping is on by default and off is a real mode, not a degraded
+            one: flat is the paged listing, so it is also how someone gets past
+            the grouping cap in a folder that has outgrown it.
+          */}
+          <label className="mt-2 flex items-center gap-2 text-xs text-[var(--muted)]">
+            <input
+              type="checkbox"
+              checked={grouped}
+              onChange={toggleGrouping}
+              className="h-3.5 w-3.5"
+            />
+            Group into conversations
+          </label>
         </form>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -642,13 +859,13 @@ export function MailboxWorkspace() {
               message={listError.message}
               onRetry={() => {
                 if (selectedFolder !== null) {
-                  void loadMessages(selectedFolder.id, activeQuery);
+                  void loadMessages(selectedFolder.id, activeQuery, grouped);
                 }
               }}
             />
           ) : listLoading || list === null ? (
             <MessageListSkeleton />
-          ) : list.messages.length === 0 ? (
+          ) : shownCount === 0 ? (
             <PaneMessage
               title={activeQuery.length > 0 ? "No matches" : "Nothing to review"}
               detail={
@@ -660,6 +877,20 @@ export function MailboxWorkspace() {
           ) : (
             <>
               {/*
+                Said after the fact, because it can only be said after the fact:
+                the retry happened inside the one request the browser made, so by
+                the time this renders the wait is already over. It is here so a
+                pane that sat still for ten seconds has a stated reason rather
+                than an implied fault.
+              */}
+              {list.retry !== null && (
+                <p className="border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900">
+                  The mailbox was busy. That took an extra{" "}
+                  {list.retry.waitedSeconds}s while the request was retried.
+                </p>
+              )}
+
+              {/*
                 Both listings are newest-first, so there is nothing to warn
                 about on ordering any more - the service sorts a search's whole
                 result set because Graph will not order a filtered collection.
@@ -668,45 +899,91 @@ export function MailboxWorkspace() {
               */}
               {activeQuery.length > 0 && (
                 <p className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-1.5 text-xs text-[var(--muted)]">
-                  {list.truncated ? (
-                    <>
-                      Showing the first {list.messages.length} subject matches,
-                      newest first — there are more. Narrow the search to see the
-                      rest.
-                    </>
-                  ) : (
-                    <>
-                      {list.messages.length === 1
-                        ? "1 subject match"
-                        : `${list.messages.length} subject matches`}
-                      , newest first. Search does not look inside messages.
-                    </>
-                  )}
+                  {shownCount === 1 ? "1 subject match" : `${shownCount} subject matches`}
+                  , newest first. Search does not look inside messages.
                 </p>
               )}
+
+              {/*
+                The one banner this phase exists to get right.
+                
+                Two different wordings for two different promises - a folder cap
+                dropped the OLDEST messages, a search cap dropped an arbitrary
+                subset - because a group that silently hides messages is the
+                failure this codebase cares about most, and a group that
+                describes what it is hiding wrongly is the same failure wearing a
+                notice. truncationNotice() owns which sentence applies.
+              */}
+              {truncationNotice(list.truncation, shownCount) !== null && (
+                <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+                  {truncationNotice(list.truncation, shownCount)}
+                </p>
+              )}
+
               <ul className="divide-y divide-[var(--border)]">
-                {list.messages.map((m) => (
-                  <MessageRow
-                    key={m.id}
-                    message={m}
-                    selected={m.id === selectedId}
-                    onOpen={() => void openMessage(m.id)}
-                  />
-                ))}
+                {rows.map((row) =>
+                  row.kind === "group" ? (
+                    <ConversationHeaderRow
+                      key={row.group.id}
+                      group={row.group}
+                      expanded={row.expanded}
+                      hiddenCount={row.hiddenCount}
+                      containsSelected={
+                        selectedId !== null &&
+                        row.group.messages.some((m) => m.id === selectedId)
+                      }
+                      onToggle={() => toggleConversation(row.group.id)}
+                    />
+                  ) : (
+                    <MessageRow
+                      key={row.message.id}
+                      message={row.message}
+                      selected={row.message.id === selectedId}
+                      indented={row.indented}
+                      onOpen={() => void openMessage(row.message.id)}
+                    />
+                  ),
+                )}
               </ul>
+
+              {/*
+                Flat mode only. A grouped read has no cursor: it collected the
+                folder to a cap and grouped the complete set, so there is no
+                "next page" that would not corrupt the counts on screen.
+              */}
               {list.nextCursor !== null && (
-                <div className="p-3">
+                <div className="space-y-2 p-3">
+                  {olderError !== null && (
+                    <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                      {olderError} The messages already loaded are still here.
+                    </p>
+                  )}
                   <button
                     type="button"
                     disabled={loadingMore}
                     onClick={() => void loadOlder()}
                     className="w-full rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)] disabled:opacity-50"
                   >
-                    {loadingMore ? "Loading…" : "Load older messages"}
+                    {loadingMore
+                      ? "Loading…"
+                      : olderError !== null
+                        ? "Try again"
+                        : "Load older messages"}
                   </button>
                 </div>
               )}
             </>
+          )}
+
+          {/*
+            Live, unlike the retry banner above: this is what the pane says
+            WHILE a request is outstanding and slow, which is the half of a
+            throttle the browser can actually observe.
+          */}
+          {listSlow && (
+            <p className="px-4 py-2 text-xs text-[var(--muted)]" role="status">
+              Still loading — the mailbox may be busy.
+            </p>
           )}
         </div>
       </div>
@@ -721,7 +998,7 @@ export function MailboxWorkspace() {
               setSelectedId(null);
               setMessage(null);
               if (selectedFolder !== null) {
-                void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+                void loadMessages(selectedFolder.id, activeQuery, grouped, { quiet: true });
               }
             }}
           />
@@ -772,6 +1049,14 @@ export function MailboxWorkspace() {
             code={messageError.code}
             message={messageError.message}
             onRetry={() => selectedId !== null && void openMessage(selectedId)}
+            // A message that will not open must not be a dead end: clearing the
+            // selection returns to a working pane rather than leaving the error
+            // in place until somebody guesses to click another row.
+            onBack={() => {
+              setMessageError(null);
+              setSelectedId(null);
+              setMessage(null);
+            }}
           />
         ) : messageLoading ? (
           <ReadingPaneSkeleton />
@@ -798,7 +1083,7 @@ export function MailboxWorkspace() {
               setEditing(false);
               // The draft no longer exists. Refresh so the list agrees.
               if (selectedFolder !== null) {
-                void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+                void loadMessages(selectedFolder.id, activeQuery, grouped, { quiet: true });
               }
             }}
             onGone={() => {
@@ -807,7 +1092,7 @@ export function MailboxWorkspace() {
               setSelectedId(null);
               setVanished(true);
               if (selectedFolder !== null) {
-                void loadMessages(selectedFolder.id, activeQuery, { quiet: true });
+                void loadMessages(selectedFolder.id, activeQuery, grouped, { quiet: true });
               }
             }}
           />
@@ -905,10 +1190,13 @@ function FolderSkeleton() {
 function MessageRow({
   message,
   selected,
+  indented = false,
   onOpen,
 }: {
   message: MessageSummary;
   selected: boolean;
+  /** A message inside a conversation, rather than a row of its own. */
+  indented?: boolean;
   onOpen: () => void;
 }) {
   // Real subjects are long and repetitive - "[CCHMC Bulletin 12] Change Order
@@ -921,7 +1209,8 @@ function MessageRow({
         onClick={onOpen}
         aria-current={selected ? "true" : undefined}
         className={
-          "block w-full px-4 py-3 text-left hover:bg-[var(--surface)] " +
+          "block w-full py-3 text-left hover:bg-[var(--surface)] " +
+          (indented ? "border-l-2 border-[var(--border)] pl-6 pr-4 " : "px-4 ") +
           (selected ? "bg-[var(--surface)]" : "")
         }
       >
@@ -944,6 +1233,105 @@ function MessageRow({
           {message.isDraft && (
             <span className="rounded bg-amber-100 px-1.5 text-[0.625rem] font-medium text-amber-900">
               Draft
+            </span>
+          )}
+        </p>
+      </button>
+    </li>
+  );
+}
+
+/**
+ * The collapsed (or expanded) header for one conversation.
+ *
+ * A header, not a target. It toggles disclosure and does nothing else - there is
+ * no action anywhere that takes a conversation, because the moment a group can
+ * be acted on as a unit the one-human-one-message rule is at risk. CLAUDE.md,
+ * and PHASE-9 repeats it.
+ *
+ * A single-message conversation never reaches here: conversationRows() emits it
+ * as an ordinary MessageRow, so a folder of unrelated drafts does not become a
+ * folder of groups of one.
+ */
+function ConversationHeaderRow({
+  group,
+  expanded,
+  hiddenCount,
+  containsSelected,
+  onToggle,
+}: {
+  group: ConversationGroup;
+  expanded: boolean;
+  hiddenCount: number;
+  containsSelected: boolean;
+  onToggle: () => void;
+}) {
+  /**
+   * Separated with a middle dot, not a comma.
+   *
+   * Exchange returns display names in "Last, First" form for a good number of
+   * senders in this mailbox - `Horvath, Brian` is a real one - so a comma-joined
+   * list reads as twice as many people as it contains.
+   */
+  const participants = group.participants
+    .map((p) => p.name ?? p.address)
+    .join(" · ");
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className={
+          "block w-full px-4 py-3 text-left hover:bg-[var(--surface)] " +
+          (containsSelected ? "bg-[var(--surface)]" : "")
+        }
+      >
+        <p className="flex items-start gap-1.5">
+          <span
+            aria-hidden="true"
+            className="mt-0.5 shrink-0 text-[var(--muted)]"
+          >
+            {expanded ? "▾" : "▸"}
+          </span>
+          <span
+            className={
+              "line-clamp-2 text-sm " +
+              (group.unreadCount > 0 ? "font-semibold" : "")
+            }
+            title={group.subject ?? undefined}
+          >
+            {group.subject ?? "(no subject)"}
+          </span>
+        </p>
+        <p className="mt-1 truncate pl-5 text-xs text-[var(--muted)]">
+          {participants.length > 0 ? participants : "Unknown participants"}
+        </p>
+        <p className="mt-0.5 flex flex-wrap items-center gap-2 pl-5 text-xs text-[var(--muted)]">
+          <span>{formatDate(group.newestDateTime)}</span>
+          <span>
+            {group.messageCount} messages
+            {group.unreadCount > 0 ? ` · ${group.unreadCount} unread` : ""}
+          </span>
+          {group.hasAttachments && <span title="Has attachments">📎</span>}
+          {/*
+            Stated on the collapsed row as well as shown beneath it. A draft
+            inside a thread is the message somebody has to act on, and "there is
+            a draft in here" has to survive the row being folded up.
+          */}
+          {group.draftCount > 0 && (
+            <span className="rounded bg-amber-100 px-1.5 text-[0.625rem] font-medium text-amber-900">
+              {group.draftCount === 1 ? "Draft" : `${group.draftCount} drafts`}
+            </span>
+          )}
+          {/*
+            What the collapsed row is holding back, said plainly - so the drafts
+            listed underneath it are not mistaken for the whole thread.
+          */}
+          {!expanded && hiddenCount > 0 && (
+            <span>
+              {hiddenCount} hidden — expand
             </span>
           )}
         </p>

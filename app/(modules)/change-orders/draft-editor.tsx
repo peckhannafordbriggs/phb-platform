@@ -10,6 +10,7 @@ import {
   openDraft,
   releaseDraft,
   saveDraft,
+  LOCK_REFRESH_MS,
   sendDraft,
   textToAddresses,
   type DraftPatch,
@@ -32,8 +33,6 @@ import { MailErrorState, PaneMessage, ReadingPaneSkeleton } from "./states";
 
 /** Long enough not to write on every keystroke, short enough to feel saved. */
 const AUTOSAVE_DEBOUNCE_MS = 1_200;
-/** The lock lapses at 90s, so refresh comfortably inside that. */
-const LOCK_REFRESH_MS = 45_000;
 
 type SaveState =
   | { status: "idle" }
@@ -92,6 +91,21 @@ export function DraftEditor({
   const [changeKey, setChangeKey] = useState<string | null>(null);
   const [lock, setLock] = useState<LockState | null>(null);
   const [sourceMode, setSourceMode] = useState(false);
+  /**
+   * The draft in Exchange is no longer the one this editor read.
+   *
+   * Outlook is a peer client of the same mailbox and always wins - Graph offers
+   * no concurrency control worth the name, so this is not prevention, it is
+   * noticing. Two things set it: a save refused with `mail_conflict`, and the
+   * lock-refresh poll seeing a changeKey it did not expect. The second is the
+   * one that matters, because it fires while somebody is still typing rather
+   * than after they have finished.
+   */
+  const [outOfDate, setOutOfDate] = useState<{ lastModified: string | null } | null>(
+    null,
+  );
+  /** Bumped to re-run the open effect - see reload(). */
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   const [save, setSave] = useState<SaveState>({ status: "idle" });
   const [confirming, setConfirming] = useState(false);
@@ -101,6 +115,18 @@ export function DraftEditor({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latest = useRef<EditorState | null>(null);
   latest.current = state;
+
+  /**
+   * The changeKey as of this render, for the lock-refresh poll to compare
+   * against.
+   *
+   * A ref rather than a dependency: the poll interval must not be town down and
+   * rebuilt every time a save settles on a new changeKey, or a draft saved every
+   * few seconds would never actually complete a refresh cycle and the lock would
+   * lapse under an active editor.
+   */
+  const changeKeyRef = useRef<string | null>(null);
+  changeKeyRef.current = changeKey;
 
   /**
    * The parent's callbacks, held in a ref so they are not effect dependencies.
@@ -139,6 +165,7 @@ export function DraftEditor({
     setSave({ status: "idle" });
     setConfirming(false);
     setSendError(null);
+    setOutOfDate(null);
 
     void (async () => {
       try {
@@ -188,7 +215,28 @@ export function DraftEditor({
     // `onGone` is deliberately NOT a dependency - see the callbacks ref above.
     // Adding a prop the parent rebuilds each render back into this array makes
     // the editor reset itself on every parent render.
-  }, [messageId, remoteImagesAllowed]);
+    //
+    // `reloadNonce` is the reload button: re-running this effect IS the reload,
+    // so there is one path that reads a draft into the editor rather than two
+    // that have to agree.
+  }, [messageId, remoteImagesAllowed, reloadNonce]);
+
+  /**
+   * Discards what is on screen and re-reads the draft from Exchange.
+   *
+   * Offered rather than performed. PHASE-9: detect that a draft changed
+   * underneath the editor and say so, "offering to reload rather than silently
+   * overwriting" - and reloading is itself destructive to anything typed since
+   * the last successful save, which is why it is a button with a label that says
+   * so and never something that happens on a timer.
+   */
+  const reload = useCallback(() => {
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    setReloadNonce((n) => n + 1);
+  }, []);
 
   // -------------------------------------------------------------- autosave
 
@@ -353,6 +401,13 @@ export function DraftEditor({
             callbacks.current.onGone();
             return false;
           }
+          /**
+           * The service refused the write because Exchange holds a different
+           * version. That refusal is the whole point - the alternative is this
+           * editor overwriting an Outlook edit with a body read minutes ago -
+           * so it is surfaced as a state with a way out, not as a bare failure.
+           */
+          if (error.code === "mail_conflict") setOutOfDate({ lastModified: null });
           // A silent failed save on a message someone is about to send is the
           // worst outcome in this phase, so this is loud and it blocks the send.
           setSave({ status: "failed", message: error.message });
@@ -413,8 +468,29 @@ export function DraftEditor({
 
     const interval = setInterval(() => {
       void openDraft(messageId, remoteImagesAllowed)
-        .then((result) => setLock(result.lock))
-        .catch(() => undefined);
+        .then((result) => {
+          setLock(result.lock);
+
+          /**
+           * The same request already tells us whether Outlook has been here.
+           *
+           * Comparing the changeKey costs nothing on top of the lock refresh,
+           * and it turns "your save will fail in a minute" into "this draft
+           * changed, here is a reload button" while the person is still typing.
+           * Only set, never cleared: the reload is what clears it, because
+           * clearing it on a later poll would hide a change nobody acted on.
+           */
+          const seen = result.draft.changeKey;
+          const held = changeKeyRef.current;
+          if (seen !== null && held !== null && seen !== held) {
+            setOutOfDate({ lastModified: result.draft.lastModifiedDateTime });
+          }
+        })
+        .catch(() => {
+          // A failed refresh is not a failure to report. The lock has a TTL, the
+          // editor keeps everything it holds, and the next tick tries again -
+          // PHASE-9: a transient network failure must not drop editor state.
+        });
     }, LOCK_REFRESH_MS);
 
     return () => clearInterval(interval);
@@ -555,7 +631,17 @@ export function DraftEditor({
   }, [state]);
 
   if (loadError !== null) {
-    return <MailErrorState code={loadError.code} message={loadError.message} />;
+    // Both actions, because either can be the right one: a throttled read wants
+    // another go, and a draft somebody else already sent wants the way out.
+    return (
+      <MailErrorState
+        code={loadError.code}
+        message={loadError.message}
+        onRetry={reload}
+        onBack={onClose}
+        backLabel="Close the editor"
+      />
+    );
   }
   if (draft === null || state === null) return <ReadingPaneSkeleton />;
 
@@ -563,7 +649,18 @@ export function DraftEditor({
   const canSend =
     !sending &&
     !lockedByOther &&
+    /**
+     * A failed save blocks the send. This is the rule Phase 6 established and
+     * PHASE-9 asks to have verified: sending a draft whose last edit did not
+     * persist sends content nobody approved.
+     */
     save.status !== "failed" &&
+    /**
+     * So does a draft that changed underneath us. The service would refuse the
+     * send anyway - sendDraft carries the same expectedChangeKey - but being
+     * told before the confirmation dialog beats being told inside it.
+     */
+    outOfDate === null &&
     recipients.invalid.length === 0 &&
     recipients.addresses.length > 0;
 
@@ -593,7 +690,55 @@ export function DraftEditor({
           <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             {lock?.heldBy?.firstName} {lock?.heldBy?.lastName} is editing this draft
             in the platform. Saving is blocked until they finish.
+            {/*
+              When it frees, said out loud. The lock is advisory and expires on
+              its own, so "blocked" without "until when" reads as stuck - and a
+              colleague who closed their tab releases it within 90 seconds
+              whether or not they ever told anyone.
+            */}
+            {lock?.expiresAt != null && (
+              <>
+                {" "}
+                Their hold lapses at {formatClockTime(lock.expiresAt)} unless they
+                are still working on it.
+              </>
+            )}
           </p>
+        )}
+
+        {/*
+          Outlook edited the same draft. This is the honest half of "last write
+          wins": the platform cannot stop it, so it notices it and offers the
+          only safe move rather than writing over the top.
+        */}
+        {outOfDate !== null && (
+          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p>
+              This draft changed in Outlook
+              {outOfDate.lastModified !== null
+                ? ` at ${formatClockTime(outOfDate.lastModified)}`
+                : ""}
+              . Saving and sending are blocked until it is reloaded, so nothing
+              here overwrites that change.
+            </p>
+            <div className="mt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={reload}
+                className="rounded border border-amber-400 bg-white px-2.5 py-1 text-xs font-medium hover:bg-amber-100"
+              >
+                {dirty || noteReady
+                  ? "Reload and discard my unsaved changes"
+                  : "Reload this draft"}
+              </button>
+              {(dirty || noteReady) && (
+                <span className="text-xs">
+                  Copy anything you need out of the fields first — reloading
+                  replaces them with what Exchange holds.
+                </span>
+              )}
+            </div>
+          </div>
         )}
 
         <Field label="To">
@@ -847,4 +992,20 @@ export function SentConfirmation({
       }
     />
   );
+}
+
+/**
+ * A wall-clock time for a lock expiry or an Outlook edit.
+ *
+ * Times, not durations: "lapses at 10:42" stays true while somebody reads it,
+ * where "lapses in 40 seconds" is wrong by the time they finish the sentence.
+ */
+function formatClockTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "an unknown time";
+
+  return parsed.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }

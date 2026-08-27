@@ -11,6 +11,7 @@ import { auth } from "@/auth";
 import { GET as foldersRoute } from "@/app/api/modules/change-orders/folders/route";
 import { GET as messagesRoute } from "@/app/api/modules/change-orders/folders/[folderId]/messages/route";
 import { GET as messageRoute } from "@/app/api/modules/change-orders/messages/[messageId]/route";
+import { readFlag } from "@/lib/modules/change-orders/mail/route-helpers";
 import {
   createEmployee,
   disconnectDb,
@@ -122,5 +123,36 @@ describe("every mail route is behind the module grant", () => {
     expect(raw).not.toContain("changeorder");
     expect(raw).not.toContain("GRAPH_");
     expect(raw).not.toContain("mailbox");
+  });
+});
+
+/**
+ * The parameter that decides whether a folder is grouped.
+ *
+ * Worth pinning because the two modes make different completeness promises -
+ * grouped is capped and cursorless, flat is paged - so a request that meant
+ * "off" and was read as "on" would silently change what the response is claiming
+ * about itself. Undefined is kept distinct from false so the route can tell
+ * "asked for off" from "did not ask".
+ */
+describe("reading the grouping flag", () => {
+  const flag = (qs: string) => readFlag(new URLSearchParams(qs), "group");
+
+  it("is undefined when the caller did not ask", () => {
+    expect(flag("")).toBeUndefined();
+    expect(flag("q=RFI")).toBeUndefined();
+  });
+
+  it("reads the affirmative forms", () => {
+    expect(flag("group=1")).toBe(true);
+    expect(flag("group=true")).toBe(true);
+    // Bare presence is affirmative - `?group` is how a hand-written URL says on.
+    expect(flag("group=")).toBe(true);
+  });
+
+  it("reads the negative forms, whatever the casing", () => {
+    expect(flag("group=0")).toBe(false);
+    expect(flag("group=false")).toBe(false);
+    expect(flag("group=FALSE")).toBe(false);
   });
 });
