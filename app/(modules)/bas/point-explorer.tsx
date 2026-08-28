@@ -440,7 +440,14 @@ function TrendPanel({
       ) : (
         <>
           {data.trendTruncated && (
-            <p className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+            <p
+              className="border-b px-4 py-2 text-xs"
+              style={{
+                color: "var(--phb-orange-ink)",
+                borderColor: "color-mix(in srgb, var(--phb-orange) 45%, transparent)",
+                background: "color-mix(in srgb, var(--phb-orange) 12%, transparent)",
+              }}
+            >
               This window holds more samples than the chart will carry, so only
               the most recent part is drawn. Narrow the range to see a complete
               picture.
@@ -452,7 +459,8 @@ function TrendPanel({
                 data={data.trend}
                 margin={{ top: 8, right: 12, bottom: 4, left: 4 }}
               >
-                <CartesianGrid stroke="var(--border)" vertical={false} />
+                {/* Neutral grid, horizontal only. It is a reference, not a feature. */}
+                <CartesianGrid stroke="var(--neutral-200)" vertical={false} />
                 <XAxis
                   dataKey="tsMs"
                   type="number"
@@ -500,10 +508,13 @@ function TrendPanel({
                     key={gap.fromMs}
                     x1={gap.fromMs}
                     x2={gap.toMs}
-                    fill="#dc2626"
-                    fillOpacity={0.1}
-                    stroke="#dc2626"
-                    strokeOpacity={0.35}
+                    // Maroon, from the palette, and deliberately NOT the module
+                    // accent: a gap is not sensor data and must not read as part
+                    // of the series.
+                    fill="var(--phb-maroon)"
+                    fillOpacity={0.09}
+                    stroke="var(--phb-maroon)"
+                    strokeOpacity={0.4}
                     strokeDasharray="3 3"
                     ifOverflow="visible"
                   />
@@ -511,7 +522,8 @@ function TrendPanel({
                 <Line
                   type="linear"
                   dataKey="value"
-                  stroke="var(--accent)"
+                  // One accent, and it is the module's. Sensor data is the content.
+                  stroke="var(--module-accent, var(--phb-cyan))"
                   strokeWidth={1.5}
                   dot={false}
                   // The whole point. Recharts defaults this to false, but it is

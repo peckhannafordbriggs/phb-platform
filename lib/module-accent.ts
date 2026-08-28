@@ -76,3 +76,21 @@ export function moduleAccent(moduleKey: string, index = 0): ModuleAccent {
 
   return fallback ?? PALETTE[0]!;
 }
+
+/**
+ * The accent variables as an inline style, for any element that needs to open a
+ * module's colour scope.
+ *
+ * ModuleHeader sets these on its own <header>, which is enough for the header
+ * itself - but a module's page content sits outside that element, so a chart
+ * line asking for `var(--module-accent)` would resolve to the platform default.
+ * A shell that wraps its whole page in this gets one scope for both.
+ */
+export function moduleAccentStyle(moduleKey: string): React.CSSProperties {
+  const accent = moduleAccent(moduleKey);
+
+  return {
+    "--module-accent": accent.fill,
+    "--module-accent-ink": accent.ink,
+  } as React.CSSProperties;
+}

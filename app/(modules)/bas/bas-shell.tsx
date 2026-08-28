@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { ModuleHeader } from "@/components/module-header";
+import { moduleAccentStyle } from "@/lib/module-accent";
 import { BAS_TABS, activeTabHref, tabHref } from "./tabs";
 
 /**
@@ -29,7 +30,12 @@ export function BasShell({
   children: React.ReactNode;
 }) {
   return (
-    <div>
+    /*
+      The accent scope wraps the whole module, not just its header. The tabs, the
+      tiles and the trend line all sit outside <header>, and a chart asking for
+      var(--module-accent) from out there would silently get the platform purple.
+    */
+    <div style={moduleAccentStyle(BAS_MODULE_KEY)}>
       <ModuleHeader moduleKey={BAS_MODULE_KEY} title="Building Automation" blurb={blurb}>
         {/*
           useSearchParams needs a Suspense boundary to be renderable in any
@@ -96,10 +102,17 @@ function Tabs({
                 href={hrefFor(tab.href)}
                 aria-current={isActive ? "page" : undefined}
                 className={
-                  "inline-block border-b-2 px-3 py-2 text-sm " +
+                  "inline-block border-b-2 px-3 py-2 text-[0.8125rem] transition-colors " +
                   (isActive
-                    ? "border-[var(--accent)] font-medium text-[var(--foreground)]"
-                    : "border-transparent text-[var(--muted)] hover:border-[var(--border)] hover:text-[var(--foreground)]")
+                    ? "font-medium text-[var(--foreground)]"
+                    : "border-transparent text-[var(--muted)] hover:border-[var(--neutral-300)] hover:text-[var(--foreground)]")
+                }
+                // The active tab's underline is the module's own colour, the
+                // same cyan as its diamond in the sidebar and its header rule.
+                style={
+                  isActive
+                    ? { borderColor: "var(--module-accent, var(--phb-cyan))" }
+                    : undefined
                 }
               >
                 {tab.label}

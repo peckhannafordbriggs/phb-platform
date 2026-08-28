@@ -1,4 +1,4 @@
-import { moduleAccent } from "@/lib/module-accent";
+import { moduleAccentStyle } from "@/lib/module-accent";
 
 /**
  * The header every module screen opens with.
@@ -31,18 +31,8 @@ export function ModuleHeader({
   /** Tabs, or anything else that belongs to the header rather than the page. */
   children?: React.ReactNode;
 }) {
-  const accent = moduleAccent(moduleKey);
-
   return (
-    <header
-      className="shrink-0"
-      style={
-        {
-          "--module-accent": accent.fill,
-          "--module-accent-ink": accent.ink,
-        } as React.CSSProperties
-      }
-    >
+    <header className="shrink-0" style={moduleAccentStyle(moduleKey)}>
       <div className="flex items-center gap-2.5">
         <span
           className="diamond diamond--filled"
