@@ -531,7 +531,7 @@ function TrendPanel({
             </div>
           )}
 
-          <div className="h-80 select-none px-3 pb-3 pt-1">
+          <div className="h-[22rem] select-none px-3 pb-3 pt-1">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
                 data={data.trend}
@@ -568,7 +568,11 @@ function TrendPanel({
                   </linearGradient>
                 </defs>
                 {/* Neutral grid, horizontal only. It is a reference, not a feature. */}
-                <CartesianGrid stroke="var(--neutral-200)" vertical={false} />
+                <CartesianGrid
+                  stroke="var(--neutral-200)"
+                  strokeDasharray="2 4"
+                  vertical={false}
+                />
                 <XAxis
                   dataKey="tsMs"
                   type="number"
@@ -607,7 +611,7 @@ function TrendPanel({
                   contentStyle={{
                     fontSize: "0.75rem",
                     border: "1px solid var(--border)",
-                    borderRadius: "0.25rem",
+                    borderRadius: "0.625rem",
                   }}
                 />
                 {/*

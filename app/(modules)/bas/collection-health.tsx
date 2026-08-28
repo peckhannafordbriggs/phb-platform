@@ -42,6 +42,8 @@ import {
   unclassifiedTone,
   atRiskShape,
   describeAtRisk,
+  computeHeadroom,
+  describeHeadroom,
   type Tone,
 } from "./health-client";
 import { ALL_SITES, DAYS_PARAM, SITE_PARAM, readFilters, withFilter } from "./filters";
@@ -305,16 +307,69 @@ export function CollectionHealth() {
         tab is open
       </p>
 
-      {/* ------------------------------------------------------- five tiles */}
+      {/* ------------------------------------------------------------- hero */}
+
+      {/*
+        At-risk is the hero because it is the question the screen exists to
+        answer. Everything else here is context for it.
+
+        Its badge is HEADROOM - hours until the station starts overwriting data
+        nobody collected. That is the BAS equivalent of the reference
+        dashboards' "+38% this week", and deliberately a different idiom: a
+        comparison dashboard asks whether a number moved, and this one asks how
+        much time is left. Inventing a week-over-week delta for "4 active points"
+        would have been filling a shape.
+      */}
+      <HeroTile
+        label="Points at risk of data loss"
+        value={formatCount(totals.pointsAtRisk)}
+        tone={atRiskTone(totals.riskCounts)}
+        headline={
+          totals.pointsAtRisk > 0 ? describeAtRisk(totals.riskCounts) : "Nothing at risk"
+        }
+        badge={describeHeadroom(computeHeadroom(health.points))}
+        detail={
+          totals.pointsAtRisk > 0 && atRiskShape(totals.riskCounts) === "unknown"
+            ? "Nothing is lost yet."
+            : undefined
+        }
+      >
+        {totals.pointsAtRisk > 0 && (
+          <ul className="mt-4 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+            {riskBreakdown(totals.riskCounts).map(({ risk, count }) => (
+              <li key={risk} title={RISK_EXPLANATION[risk]} className="tabular-nums">
+                <span className="font-semibold">{formatCount(count)}</span>{" "}
+                <span className="opacity-75">{RISK_LABEL[risk].toLowerCase()}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </HeroTile>
+
+      {/* ------------------------------------------- runs: the wide chart */}
+
+      <RunChart health={health} />
+
+      {/* -------------------------------------------------- secondary row */}
 
       <section
         aria-label="Collection summary"
-        className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
       >
         <Tile
           label="Active points"
           value={formatCount(totals.activePoints)}
           tone={activePointsTone()}
+          /*
+            A live ratio rather than a static count. It goes to "3 of 4" the
+            moment something stops reporting, which a bare 4 never would.
+          */
+          badge={`${formatCount(reportingPoints(health.points))} of ${formatCount(
+            totals.activePoints,
+          )} reporting`}
+          // Decorative fill, and only ever a colour the semantic set does not
+          // use - see .card--tinted in globals.css.
+          tint="var(--phb-cyan)"
         />
 
         <Tile
@@ -332,46 +387,12 @@ export function CollectionHealth() {
           }
         />
 
-        {/*
-          The one tile with two different problems behind a single count, so it
-          is the one tile that says which. "3 points, capacity unknown" and
-          "3 points losing data" call for different actions - fill in Workbench,
-          or find out why the collector stopped - and nobody should have to read
-          a stripe to tell them apart.
-
-          The stripe is the second signal rather than the only one, and it is
-          what keeps this distinguishable from the unclassified tile when both
-          are amber.
-        */}
-        <Tile
-          label="Points at risk of data loss"
-          value={formatCount(totals.pointsAtRisk)}
-          tone={atRiskTone(totals.riskCounts)}
-          headline={
-            totals.pointsAtRisk > 0 ? describeAtRisk(totals.riskCounts) : undefined
-          }
-          stripe={totals.pointsAtRisk > 0}
-          detail={
-            totals.pointsAtRisk > 0 && atRiskShape(totals.riskCounts) === "unknown"
-              ? "Nothing is lost yet."
-              : undefined
-          }
-        >
-          {totals.pointsAtRisk > 0 && (
-            <ul className="mt-2 space-y-0.5 text-xs">
-              {riskBreakdown(totals.riskCounts).map(({ risk, count }) => (
-                <li key={risk} title={RISK_EXPLANATION[risk]}>
-                  {formatCount(count)} {RISK_LABEL[risk].toLowerCase()}
-                </li>
-              ))}
-            </ul>
-          )}
-        </Tile>
-
         <Tile
           label="Since newest reading"
           value={formatMinutes(totals.minutesSinceNewestReading)}
           tone={stalenessTone(totals.minutesSinceNewestReading)}
+          // Not a delta - a reference value, so the number above is judgeable.
+          badge="every 15 min"
           detail={
             totals.minutesSinceNewestReading === null
               ? "No readings at all — not a healthy zero."
@@ -407,10 +428,7 @@ export function CollectionHealth() {
 
       {/* ------------------------------------------- runs: chart and history */}
 
-      <div className="grid grid-cols-1 gap-7 xl:grid-cols-2">
-        <RunChart health={health} />
-        <RunTable health={health} />
-      </div>
+      <RunTable health={health} />
 
       {/* ------------------------------------------------------ recorded gaps */}
 
@@ -421,6 +439,24 @@ export function CollectionHealth() {
 
 // ------------------------------------------------------------------ pieces
 
+/**
+ * A badge in the corner of a tile.
+ *
+ * The reference dashboards put a delta here. BAS has none worth showing, so what
+ * sits here instead is whatever is genuinely live about that tile - headroom,
+ * a reporting ratio, an expected cadence. Never a manufactured percentage.
+ */
+function Badge({ children, tone }: { children: React.ReactNode; tone: Tone }) {
+  return (
+    <span
+      className="shrink-0 rounded-full px-2.5 py-1 text-[0.6875rem] font-medium tabular-nums"
+      style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
+    >
+      {children}
+    </span>
+  );
+}
+
 function Tile({
   label,
   value,
@@ -428,36 +464,46 @@ function Tile({
   detail,
   headline,
   stripe = false,
+  badge,
+  tint,
   children,
 }: {
   label: string;
   value: string;
   tone: Tone;
   detail?: string;
-  /**
-   * A sentence under the number saying WHICH problem this is.
-   *
-   * Only the at-risk tile has two different problems behind one count, and it is
-   * the one place where the number alone is the least useful part of the answer.
-   */
   headline?: string;
   /**
-   * A severity bar down the left edge.
-   *
-   * Carried only by the tile that reports possible data loss. It is what keeps
-   * "we might be losing data" distinguishable from "this is less useful than it
-   * could be" when both are amber - the brief requires those two to stay
-   * visually distinct, and hue alone cannot do it once they share one.
+   * A severity bar down the left edge, carried only by a tile reporting possible
+   * data loss - it is what keeps "we might be losing data" distinguishable from
+   * "this is less useful than it could be" when both are amber.
    */
   stripe?: boolean;
+  badge?: string;
+  /**
+   * A decorative wash, for rhythm rather than meaning.
+   *
+   * Only ever cyan, purple or pink - the three quadrant colours the semantic set
+   * does not use. Teal, orange and maroon mean ok / warn / bad here, so a card
+   * tinted for rhythm can never be read as a card tinted for state.
+   */
+  tint?: string;
   children?: React.ReactNode;
 }) {
   return (
     <div
       className={
-        "card tile-wash relative overflow-hidden px-5 py-4 " + (stripe ? "pl-6" : "")
+        "card tile-wash relative overflow-hidden px-5 py-4 " +
+        (stripe ? "pl-6 " : "") +
+        (tint !== undefined ? "card--tinted" : "")
       }
-      style={{ ...TONE_STYLE[tone], ...TONE_WASH[tone] }}
+      style={{
+        ...TONE_STYLE[tone],
+        ...TONE_WASH[tone],
+        ...(tint !== undefined
+          ? ({ "--card-tint": `color-mix(in srgb, ${tint} 14%, transparent)` } as React.CSSProperties)
+          : {}),
+      }}
     >
       {stripe && (
         <span
@@ -466,10 +512,14 @@ function Tile({
           style={{ background: TONE_INK[tone] }}
         />
       )}
-      {/* Label small and quiet above; the number is what the tile is for. */}
-      <p className="text-[0.625rem] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
-        {label}
-      </p>
+
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[0.625rem] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
+          {label}
+        </p>
+        {badge !== undefined && <Badge tone={tone}>{badge}</Badge>}
+      </div>
+
       <p
         className="mt-1.5 font-display text-[2.125rem] font-semibold leading-none tabular-nums"
         style={{ color: TONE_INK[tone] }}
@@ -487,6 +537,82 @@ function Tile({
       )}
     </div>
   );
+}
+
+/**
+ * The hero: at-risk, filled and large.
+ *
+ * Same component shape as a Tile and deliberately not a variant prop - the hero
+ * is a different composition, not a bigger tile, and collapsing them would mean
+ * every size change to one silently moved the other.
+ */
+function HeroTile({
+  label,
+  value,
+  tone,
+  headline,
+  badge,
+  detail,
+  children,
+}: {
+  label: string;
+  value: string;
+  tone: Tone;
+  headline: string;
+  badge: string;
+  detail?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <section
+      className="card tile-wash relative overflow-hidden px-7 py-6"
+      style={{ ...TONE_STYLE[tone], ...TONE_WASH[tone] }}
+    >
+      {/* The severity bar, at hero weight. */}
+      <span
+        aria-hidden="true"
+        className="absolute inset-y-0 left-0 w-1.5"
+        style={{ background: TONE_INK[tone] }}
+      />
+
+      <div className="flex flex-wrap items-start justify-between gap-4 pl-2">
+        <p className="text-[0.6875rem] font-medium uppercase tracking-[0.12em] text-[var(--muted)]">
+          {label}
+        </p>
+        <Badge tone={tone}>{badge}</Badge>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-end gap-x-5 gap-y-1 pl-2">
+        <p
+          className="font-display text-[4rem] font-semibold leading-none tabular-nums"
+          style={{ color: TONE_INK[tone] }}
+        >
+          {value}
+        </p>
+        <p className="pb-1 text-base font-medium" style={{ color: TONE_INK[tone] }}>
+          {headline}
+        </p>
+      </div>
+
+      <div className="pl-2">{children}</div>
+
+      {detail !== undefined && (
+        <p className="mt-3 pl-2 text-xs text-[var(--muted)]">{detail}</p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Active points that are actually reporting.
+ *
+ * Anything in the `ok` risk state: collected inside half its roll horizon. A
+ * point that has never been collected, or whose horizon nobody filled in, is not
+ * reporting for this purpose - the ratio would otherwise call a silent sensor
+ * healthy.
+ */
+function reportingPoints(points: { risk: RollRisk }[]): number {
+  return points.filter((point) => point.risk === "ok").length;
 }
 
 function RiskBadge({ risk }: { risk: RollRisk }) {
@@ -653,13 +779,20 @@ function RunChart({ health }: { health: CollectionHealthData }) {
           )}
         </Empty>
       ) : (
-        <div className="h-64 p-3">
+        // Taller than anything beside it: it is the one time series on the
+        // screen, and everything else here is a single number.
+        <div className="h-[22rem] px-3 pb-3 pt-1">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={health.runRecords}
               margin={{ top: 8, right: 8, bottom: 4, left: 4 }}
             >
-              <CartesianGrid stroke="var(--border)" vertical={false} />
+              {/* Dotted and horizontal only. A reference, not a feature. */}
+              <CartesianGrid
+                stroke="var(--neutral-200)"
+                strokeDasharray="2 4"
+                vertical={false}
+              />
               <XAxis
                 dataKey="startedAtMs"
                 // The whole point of the panel. A category axis would space the
@@ -679,7 +812,7 @@ function RunChart({ health }: { health: CollectionHealthData }) {
                 allowDecimals={false}
               />
               <Tooltip
-                cursor={{ fill: "var(--surface)" }}
+                cursor={{ fill: "var(--neutral-100)" }}
                 // Recharts types these loosely (ReactNode / ValueType), so the
                 // narrowing happens here rather than in the signature.
                 labelFormatter={(ms) =>
@@ -694,13 +827,28 @@ function RunChart({ health }: { health: CollectionHealthData }) {
                 contentStyle={{
                   fontSize: "0.75rem",
                   border: "1px solid var(--border)",
-                  borderRadius: "0.25rem",
+                  borderRadius: "0.625rem",
                 }}
               />
+              <defs>
+                <linearGradient id="basRunBar" x1="0" y1="0" x2="0" y2="1">
+                  <stop
+                    offset="0%"
+                    stopColor="var(--module-accent, var(--phb-cyan))"
+                    stopOpacity={0.95}
+                  />
+                  <stop
+                    offset="100%"
+                    stopColor="var(--module-accent, var(--phb-cyan))"
+                    stopOpacity={0.35}
+                  />
+                </linearGradient>
+              </defs>
               <Bar
                 dataKey="recordsWritten"
-                fill="var(--accent)"
-                barSize={4}
+                fill="url(#basRunBar)"
+                barSize={6}
+                radius={[3, 3, 0, 0]}
                 isAnimationActive={false}
               />
             </BarChart>

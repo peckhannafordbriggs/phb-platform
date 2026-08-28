@@ -40,7 +40,17 @@ export function BasShell({
       a tile's label and its number a foot apart, and the five-across tile row
       becomes a line nobody can scan in one go.
     */
-    <div className="mx-auto max-w-[104rem]" style={moduleAccentStyle(BAS_MODULE_KEY)}>
+    /*
+      The tinted ground, bled to the edges of the shell's <main> so the cards sit
+      ON something. The negative margins undo that padding and the positive ones
+      put it back inside the tint - a panel that stopped at the content's edge
+      would read as one more card.
+    */
+    <div
+      className="dashboard-ground -mx-8 -my-8 px-8 py-8"
+      style={moduleAccentStyle(BAS_MODULE_KEY)}
+    >
+      <div className="mx-auto max-w-[104rem]">
       <ModuleHeader moduleKey={BAS_MODULE_KEY} title="Building Automation" blurb={blurb}>
         {/*
           useSearchParams needs a Suspense boundary to be renderable in any
@@ -53,7 +63,8 @@ export function BasShell({
         </Suspense>
       </ModuleHeader>
 
-      <div className="mt-6">{children}</div>
+        <div className="mt-6">{children}</div>
+      </div>
     </div>
   );
 }

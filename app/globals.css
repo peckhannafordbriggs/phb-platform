@@ -266,12 +266,43 @@ body {
 .card {
   background: var(--neutral-0);
   border: 1px solid var(--neutral-200);
-  border-radius: 0.625rem;
-  /* Soft and close rather than a drop shadow: the page is off-white, and a
-     heavy shadow on a light ground reads as a floating dialog. */
+  border-radius: 1.125rem;
+  /*
+    Tinted toward the palette rather than neutral black. The shadow colour is
+    the same 266deg hue the greys are built on, so a card sits on the ground
+    instead of being cut out of it.
+  */
   box-shadow:
-    0 1px 2px rgb(24 18 31 / 0.04),
-    0 4px 12px -4px rgb(24 18 31 / 0.06);
+    0 1px 2px rgb(38 24 61 / 0.05),
+    0 8px 24px -10px rgb(38 24 61 / 0.12);
+}
+
+/*
+  The ground a dashboard's cards sit on.
+
+  BAS only. Full-bleed inside the shell's <main>, which is why the negative
+  margins are here rather than a background on a child - a tinted panel that
+  stopped at the content's edge would read as another card.
+*/
+.dashboard-ground {
+  background: var(--neutral-100);
+  min-height: 100%;
+}
+
+/*
+  A decorative card fill.
+
+  Strictly disjoint from the semantic tones, and that separation is the point:
+  teal, orange and maroon mean ok / warn / bad on this screen, so a decorative
+  wash may only ever use cyan, purple or pink. A card tinted for rhythm can then
+  never be mistaken for a card tinted for state.
+*/
+.card--tinted {
+  background-image: linear-gradient(
+    155deg,
+    var(--card-tint, transparent) 0%,
+    transparent 70%
+  );
 }
 
 /* The tinted wash a metric tile sits on, in whatever colour it is given. */

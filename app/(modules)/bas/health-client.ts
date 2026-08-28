@@ -1,4 +1,5 @@
 import type {
+  PointHealthRow,
   CollectionHealth,
   PointExplorer,
   RollRisk,
@@ -431,6 +432,89 @@ export function describeRunGap(gap: RunGap | null): string | null {
   }
 
   return `Longest silence ${duration}, inside the ${horizon} roll horizon.`;
+}
+
+/**
+ * Headroom: how long until the station starts overwriting data nobody collected.
+ *
+ * This is the BAS equivalent of the delta badge, and it is a different idiom on
+ * purpose. A dashboard built around "+38% this week" is a COMPARISON system; the
+ * question there is whether a number moved. BAS is a COUNTDOWN system - the
+ * controller keeps roughly 42 hours and then overwrites - so the live question
+ * is not "has this changed" but "how much time do we have".
+ *
+ * Per point: `rollHorizonHours` minus how long ago it was last collected. The
+ * screen's headroom is the SMALLEST of those, because the first point to run out
+ * is the one that decides when data starts being lost.
+ *
+ * THE RULE THAT MATTERS
+ * --------------------
+ * A point whose horizon is unknown contributes NOTHING and is counted separately.
+ * `rollHorizonHours` is null for exactly the `roll_horizon_unknown` state, and
+ * quietly computing the minimum over the points that do have one would produce a
+ * clean, confident number that hides the very gap the screen exists to surface.
+ * Unknown is not safe, and that applies to the badge as much as to the tile.
+ *
+ * So a partly-known set says so out loud - "38 h across 3 of 4 points, 1
+ * unknown" - rather than "38 h".
+ */
+export interface Headroom {
+  /**
+   * Hours until the earliest KNOWN point starts losing data. Negative means it
+   * already is. Null when no point has a computable horizon.
+   */
+  hours: number | null;
+  /** Points that contributed a number. */
+  known: number;
+  /** Points with no computable horizon, which contributed nothing. */
+  unknown: number;
+  /** Active points considered. */
+  total: number;
+}
+
+export function computeHeadroom(points: PointHealthRow[]): Headroom {
+  let hours: number | null = null;
+  let known = 0;
+  let unknown = 0;
+
+  for (const point of points) {
+    /**
+     * Both halves are required. A null horizon is the unknown state; a null
+     * `minutesAgo` is a point never collected at all, which has no "time since"
+     * to subtract and so has no headroom either. Treating either as zero would
+     * invent a number.
+     */
+    if (point.rollHorizonHours === null || point.minutesAgo === null) {
+      unknown += 1;
+      continue;
+    }
+
+    known += 1;
+    const remaining = point.rollHorizonHours - point.minutesAgo / 60;
+    if (hours === null || remaining < hours) hours = remaining;
+  }
+
+  return { hours, known, unknown, total: points.length };
+}
+
+/**
+ * The badge text. Never a bare number when part of the set is unknown.
+ */
+export function describeHeadroom(headroom: Headroom): string {
+  const { hours, known, unknown, total } = headroom;
+
+  if (total === 0) return "No active points";
+  if (known === 0) return "Headroom unknown";
+
+  const measure =
+    hours !== null && hours <= 0 ? "No headroom left" : `${formatHours(hours ?? 0)} headroom`;
+
+  // Fully known: the number stands on its own.
+  if (unknown === 0) return measure;
+
+  // Partly known: the number is true of the points it covers and of no others,
+  // and the sentence has to carry that or it is a false clean answer.
+  return `${measure} across ${known} of ${total} points, ${unknown} unknown`;
 }
 
 // ------------------------------------------------------- B4: Point Explorer
