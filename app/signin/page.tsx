@@ -59,10 +59,6 @@ export default function SignInPage() {
           <span style={{ background: "var(--phb-teal)" }} />
         </div>
 
-        <p className="mt-6 text-sm leading-relaxed text-white/85">
-          Internal systems for change orders and building automation.
-        </p>
-
         <form action={signInAction} className="mt-8">
           <button
             type="submit"
