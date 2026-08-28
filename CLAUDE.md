@@ -275,6 +275,9 @@ seen it.
 | `docs/05-database-and-sources.md` | Schema ownership, migration vs seed, source of truth |
 | `docs/06-roadmap.md` | Phases 1–14 |
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
+| `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon |
+| `docs/09-bas-what-is-built.md` | BAS: what exists, and which of the two repos owns each piece |
+| `docs/WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 36 decisions, why each was made, and what breaks if you undo it |
 | `docs/runbook.md` | Failure modes, recovery, what expires and when |
 | `docs/phase-1-verification.md` | Manual verification record |
 | `docs/phase-8-verification.md` | What Exchange actually did for the email actions |
