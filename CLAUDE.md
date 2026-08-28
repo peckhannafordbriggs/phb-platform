@@ -216,6 +216,26 @@ Grouping is scoped to the open folder, so a conversation row reads "7 in this
 folder" rather than "7 messages" — a thread spans folders, and the folder-scoped
 count would otherwise be a false claim about the thread.
 
+**Phase 11 complete — the automation is verified undisturbed.** Nine phases of
+platform work have not touched the change-order pipeline, and this is now
+*observed* rather than argued from the design. No flow ran inside any of the three
+platform write windows, no new failure type appeared after the platform first
+connected on 2026-08-19, `Bid Tracker.xlsx` holds no ZZTEST row and its table
+binding still resolves, no sentinel was written during a platform window, and the
+scheduled tasks are on cadence. Three independent sources — portal run history,
+tracker state, mailbox contents — agree on the same events.
+
+Two things a repeat run will see and should not report as new: the tracker's
+pre-platform test rows use the **`ZZ`** prefix, not `ZZTEST`, so sweep it for `ZZ`
+and discriminate by date; and `CO Intake 1`'s documented no-CO-form stop now ends
+as **Cancelled** rather than Failed, after a deliberate change by the flow's
+owner. `docs/phase-11-verification.md` is the record, and `docs/runbook.md` has
+the repeatable procedure including the portal and SharePoint steps.
+
+Still open: the two Exchange admin checks (operator Full Access, and
+`Test-ApplicationAccessPolicy`), and one unexplained weekday gap in the
+scheduled-task reports on 2026-08-18 — pre-platform, so outside the phase.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -259,3 +279,4 @@ seen it.
 | `docs/phase-1-verification.md` | Manual verification record |
 | `docs/phase-8-verification.md` | What Exchange actually did for the email actions |
 | `docs/phase-9-verification.md` | Grouping, conflicts, and the latency that decides Part B |
+| `docs/phase-11-verification.md` | Evidence the platform has not disturbed the automation |

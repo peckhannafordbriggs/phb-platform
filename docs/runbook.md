@@ -2111,6 +2111,219 @@ here do not cover it. `scripts/co-verify-phase9.ts watch` is the instrument.
 
 ---
 
+# Change Orders — verifying the automation is undisturbed (Phase 11)
+
+## Has the platform disturbed the automation?
+
+**Run this after any phase that writes to the mailbox, and before trusting a
+release.** It is the check `docs/PHASE-11.md` specifies, and it was first run on
+2026-08-27/28 — that run is recorded in `docs/phase-11-verification.md`, which is
+also the worked example of what a clean result looks like.
+
+**A clean result is the expected result.** Do not manufacture findings. And do not
+fix anything you find in the automation — a flow, a sentinel, the tracker are
+outside the platform's scope, and a fix applied without understanding can break a
+daily process. Report and stop.
+
+### Before anything: this check is READ-ONLY
+
+- Do not modify, disable, re-authorize, rename or export a flow. Reading run
+  history is fine.
+- Do not write `scrub_result.json`, `vendor_drafts.json`, `transfer_ready.json`
+  or `classification_result.json`.
+- Do not write `Bid Tracker.xlsx`. Open it read-only; do not save, even if Excel
+  offers.
+- Do not create a message or file that would satisfy a trigger.
+- Do not run the scheduled tasks off-schedule.
+- `PHB_ALLOW_SEND` stays `false`.
+
+### Step 1 — write down the platform's write windows
+
+**Everything else is compared against these**, so get them first. A platform write
+window is any period the platform created, edited, moved or deleted a message in
+`changeorder@phb1899.com`.
+
+Sources, in order of reliability:
+
+- `git log --date=short` for the phase commits — the mailbox cannot have been
+  written before the code existed.
+- The `receivedDateTime` of the ZZTEST drafts the phase left behind (step 2).
+- Any verification script run recorded in that phase's own verification doc.
+
+The windows from the first run, kept as an example of the shape:
+
+```
+2026-08-26  14:35-16:05   Phase 8: drafts, replies, forwards, moves, deletes
+2026-08-19  18:00-19:00   Phase 6: draft edit testing
+2026-08-27  11:25-11:40   Phase 9: two subject edits, restored
+```
+
+Note the platform's first-ever mailbox connection: **2026-08-19**, Phase 4 Part B.
+Nothing before that date can be the platform's doing, and that single fact
+disposes of most apparent findings.
+
+### Step 2 — the mailbox half, from here
+
+Read-only, and the only part that needs no other person.
+
+```bash
+# Every folder: conversations, counts, and a grouped-vs-flat cross-check.
+npx tsx scripts/co-verify-phase9.ts survey
+
+# One folder in detail, including draft ids.
+npx tsx scripts/co-verify-phase9.ts groups <folderId>
+```
+
+What to pull out of it:
+
+- **Every message whose subject contains `ZZTEST`**, with its folder. Those are
+  the platform's artifacts, and step 3 checks whether any of them reached a flow.
+- **Where the platform's drafts ended up.** They should be in Deleted Items. The
+  first run found one that was not — see *One draft in the Projects tree* below.
+- **Whether the automation kept filing.** Automation-shaped subjects — `New CO
+  logged (Bid Tracker)`, `Change Order Scope Request`, `Additional Information
+  Needed`, `Reminder`, `Handoff` — appearing in Sent Items and in the `Projects`
+  tree on and after the write windows.
+- **The `Projects` tree is intact.** `Projects` is a child of Inbox; project
+  folders sit at depth 2 and their contents at depth 3. Intake 6 and 7 file into
+  it.
+
+**Why a `ZZTEST` search is sufficient here.** The non-production write fence
+(`isZzTestSubject`) strips `RE:`/`FW:`/`FWD:` and *then* still requires the
+subject to begin with `ZZTEST`. So every draft the platform wrote outside
+production contains that literal string. A draft without it — the first run found
+`Fw: Test run for Change Order Process` — was written by a person in Outlook, not
+by the platform.
+
+**This does not hold for the tracker.** See step 4.
+
+### Step 3 — the Power Automate portal (needs a person)
+
+`make.powerautomate.com`, default environment, flows owned by
+`changeorder@phb1899.com`. Eleven flows: `CO Intake 1-7`, `CO Response 1-4`.
+
+**The question that matters, first:** did any flow run *inside* a write window from
+step 1? A run inside one, on a ZZTEST conversation, is a leak. Everything else is
+ordinary traffic. On the first run the answer was none, and the closest approach
+was four hours clear.
+
+Then:
+
+- Per flow: last success, last failure, and the failure message.
+- **Any failure type that appears on or after the platform's first connection and
+  not before it.** This is the "did the pattern change" question, and it is the
+  one worth care — a flow that always failed is not news.
+- Confirm the two documented non-failures are still the only two:
+  `CO Intake 1`'s "ordinary email, no CO form, stop", and `CO Response 3`'s Bid
+  Tracker read hiccup of 6 August 2026.
+- If the Drafts folder looked empty in step 2, check whether `CO Intake 3` has run
+  recently. Empty Drafts means "caught up" if it has, and something worth chasing
+  if it has not.
+
+**`CO Intake 1`'s no-CO-form stop now ends as `Cancelled`, not `Failed`** — a
+deliberate change made by the flow's owner, observed 2026-08-27. `docs/02` calls
+it "a stop"; read that as Cancelled in the portal. Three benign cancellations a
+day are normal and are not a platform effect.
+
+### Step 4 — SharePoint (needs a person)
+
+Site `peckhannafordbriggs.sharepoint.com/sites/AISandbox`, library
+`AI Sandbox - Documents`, folder `CO Managment Process` — **one A, do not fix the
+spelling.**
+
+**`Bid Tracker.xlsx` — open read-only, do not save.**
+
+- **Search for `ZZ`, not `ZZTEST`.** This is the trap. The platform can only ever
+  write `ZZTEST` subjects, but the tracker's own test-data convention is `ZZ`, so
+  a `ZZTEST` search returns nothing and looks clean while `ZZ` rows sit in the
+  sheet. Search `ZZ`, then discriminate.
+- The known pre-platform test rows, so they are recognised rather than reported:
+
+  ```
+  ZZ FLOW1 | PR-04        8/6/2026
+  ZZ Test Owner | PR-77   7/17/2026
+  ```
+
+  Anything dated on or before 2026-08-18 predates the platform entirely.
+- **Confirm the ListObject still resolves**: click into the table and check the
+  **Table Design** tab appears in the ribbon. If it does not, the workbook has
+  been rewritten by a library and Power Automate will silently stop resolving the
+  table — that is the failure mode `docs/02` warns about, and it has happened in
+  production.
+- Spot-check that real rows look right: a recent CO with a plausible date and
+  status.
+
+**Sentinel files.** Read modification timestamps only, never write. None should
+fall inside a write window. The platform has no code path that writes any of the
+four names, so a hit here means something is badly wrong and is worth stopping
+for.
+
+**CO state JSON.** File count and modification times consistent with the
+automation writing them.
+
+### Step 5 — scheduled task evidence (needs the machine)
+
+The two Cowork tasks run on one Windows laptop and cannot be inspected remotely.
+
+- Run reports should appear **twice daily, morning and noon**.
+- **Weekend gaps are expected.** Check the day of week before reporting a gap —
+  the first run of this check found gaps on 08-22 and 08-23, which were Saturday
+  and Sunday, and one on 08-18, which was a Tuesday and is a real gap.
+- **Report a gap; do not investigate it by running anything.** Running a task
+  off-schedule is explicitly out of bounds.
+
+The reports sync locally to a path under the operator's user profile
+(`C:\Users\<user>\Peck Hannaford + Briggs\AI Sand…`). That path is
+machine-specific — the durable address is the SharePoint library.
+
+### Step 6 — the Outlook path (needs an Exchange admin)
+
+CLAUDE.md: the platform must never be the only route to change-order work.
+
+- The operator still has Full Access to `changeorder@phb1899.com`.
+- `Test-ApplicationAccessPolicy` still returns **Granted** for
+  `changeorder@phb1899.com` and **Denied** for another mailbox.
+
+### Answering "can this credential even see that?"
+
+The fastest way, and worth knowing before planning any check: base64-decode the
+middle segment of the Graph access token and read the `roles` claim. It lists the
+application permissions actually granted.
+
+As of 2026-08-28 that is **`Mail.ReadWrite` and `Mail.Send`, and nothing else** —
+so SharePoint, `Bid Tracker.xlsx`, the CO state JSON and the sentinel files return
+`403 accessDenied` from the platform and always will until someone grants more.
+
+**That limitation is a feature here.** A credential that cannot reach the tracker
+cannot corrupt it, and half of why this verification comes back clean is that
+there is no path from the platform to most of what it is checking.
+
+### Writing it up
+
+`docs/phase-11-verification.md` is the model. The one rule that matters:
+
+**Distinguish what was observed from what was inferred, and record anything that
+could not be checked as *not run*, never as a pass.** A verification document that
+rounds an unchecked item to "fine" is worse than no document, because the next
+person believes it.
+
+### Known findings carried forward
+
+Things a repeat run will see and should not re-report as new:
+
+- **One draft in the Projects tree.** `ZZTEST phase 8 attachment draft`
+  (2026-08-26 14:40) sits in `Projects/ZZ FLOW1 …/ZZ PR-04` instead of Deleted
+  Items. It triggered nothing and wrote nothing. Left in place deliberately —
+  removing it is the mailbox owner's decision, not a correction to make quietly.
+- **Two `ZZ` rows in the tracker**, `PR-04` and `PR-77`, both pre-platform.
+- **`CO Intake 1` cancellations**, roughly three a day, the documented no-CO-form
+  stop.
+- **The 2026-08-18 scheduled-task gap**, a Tuesday, unexplained and pre-platform.
+  Four odd things happened that day — the task gap, an `Intake 1` failure at
+  14:08, an afternoon `scrub_result` write at 15:10, and two ZZTEST test drafts at
+  19:05 and 19:11. Whether that is one event or four was never established, and it
+  is outside the platform's scope either way.
+
 # BAS — Building Automation module
 
 ## The BAS schema lives in two places, and `schema.prisma` is not all of it
