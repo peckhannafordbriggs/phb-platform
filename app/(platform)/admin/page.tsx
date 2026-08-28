@@ -46,12 +46,20 @@ export default async function AdminPage({
     <div>
       <header className="flex items-baseline justify-between">
         <h1 className="text-xl font-semibold">Admin</h1>
-        <Link
-          href="/admin/lists"
-          className="text-sm text-[var(--accent)] underline underline-offset-2"
-        >
-          Positions &amp; departments
-        </Link>
+        <nav className="flex items-baseline gap-4 text-sm">
+          <Link
+            href="/admin/audit"
+            className="text-[var(--accent)] underline underline-offset-2"
+          >
+            Audit log
+          </Link>
+          <Link
+            href="/admin/lists"
+            className="text-[var(--accent)] underline underline-offset-2"
+          >
+            Positions &amp; departments
+          </Link>
+        </nav>
       </header>
 
       <p className="mt-2 text-sm text-[var(--muted)]">

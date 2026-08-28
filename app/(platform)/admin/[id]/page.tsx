@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/authz";
 import { prisma } from "@/lib/db";
-import { getEmployeeDetail } from "@/lib/admin/service";
+import { getEmployeeDetail, moduleDisplayNames } from "@/lib/admin/service";
+import { AuditList } from "../audit-list";
 import { EmployeeControls } from "./employee-controls";
 import { ProfileControls } from "./profile-controls";
 
@@ -20,7 +21,7 @@ export default async function AdminEmployeePage({
   const employee = await getEmployeeDetail(id);
   if (employee === null) notFound();
 
-  const [modules, positions, departments] = await Promise.all([
+  const [modules, positions, departments, moduleNames] = await Promise.all([
     prisma.module.findMany({
       where: { status: "active" },
       select: { key: true, displayName: true },
@@ -38,6 +39,7 @@ export default async function AdminEmployeePage({
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    moduleDisplayNames(),
   ]);
 
   const grantedKeys = employee.grants.map((g) => g.moduleKey);
@@ -108,34 +110,34 @@ export default async function AdminEmployeePage({
         grantedModuleKeys={grantedKeys}
       />
 
+      {/*
+        PHASE-10: "the common question is 'why does this person have access' and
+        it should be answerable without leaving the page." So the history is
+        inline and readable, rendered by the same describeAuditEvent the audit
+        page uses rather than by a second, narrower renderer here - which is
+        what this section used to be, printing `grant.added` and two emails.
+      */}
       <section className="mt-6 rounded border border-[var(--border)]">
-        <h2 className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-semibold">
-          Audit history
+        <h2 className="flex items-baseline justify-between border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-semibold">
+          <span>History</span>
+          <Link
+            href={`/admin/audit?targetEmployeeId=${employee.id}`}
+            className="text-xs font-normal text-[var(--accent)] underline underline-offset-2"
+          >
+            Open in the audit log
+          </Link>
         </h2>
-        {employee.auditHistory.length === 0 ? (
-          <p className="px-4 py-4 text-sm text-[var(--muted)]">
-            No events recorded for this employee.
+        <AuditList
+          events={employee.auditHistory}
+          moduleNames={moduleNames}
+          // Every row here is about this person; repeating the name would be noise.
+          hideTarget
+          emptyMessage="Nothing has been recorded for this employee yet."
+        />
+        {employee.auditHistory.length === 100 && (
+          <p className="border-t border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
+            Showing the 100 most recent events. The audit log has the rest.
           </p>
-        ) : (
-          <ul className="divide-y divide-[var(--border)]">
-            {employee.auditHistory.map((event) => (
-              <li key={event.id} className="px-4 py-2.5 text-sm">
-                <span className="font-medium">{event.action}</span>
-                {event.moduleKey !== null && (
-                  <span className="text-[var(--muted)]"> · {event.moduleKey}</span>
-                )}
-                <span className="text-[var(--muted)]">
-                  {" "}
-                  · {formatDateTime(event.occurredAt)}
-                </span>
-                <span className="block text-xs text-[var(--muted)]">
-                  {event.actor === null
-                    ? "by the platform"
-                    : `by ${event.actor.email}`}
-                </span>
-              </li>
-            ))}
-          </ul>
         )}
       </section>
     </div>
@@ -166,12 +168,3 @@ function formatDate(value: Date | null): string {
   });
 }
 
-function formatDateTime(value: Date): string {
-  return value.toLocaleString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}

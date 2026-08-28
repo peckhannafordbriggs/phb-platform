@@ -124,17 +124,22 @@ export async function getEmployeeDetail(employeeId: string) {
 
   if (employee === null) return null;
 
+  /**
+   * This person's own history, inline.
+   *
+   * PHASE-10: "the common question is 'why does this person have access' and it
+   * should be answerable without leaving the page."
+   *
+   * Rows where they are the TARGET, plus rows where they were the ACTOR on
+   * themselves - which is the same set, since an actor-on-self row also carries
+   * them as the target. Selected through AUDIT_SELECT so the same describe()
+   * renders it as the audit page; a second, narrower select is how the two
+   * views would drift.
+   */
   const auditHistory = await prisma.auditEvent.findMany({
     where: { targetEmployeeId: employeeId },
-    select: {
-      id: true,
-      action: true,
-      moduleKey: true,
-      metadata: true,
-      occurredAt: true,
-      actor: { select: { id: true, firstName: true, lastName: true, email: true } },
-    },
-    orderBy: { occurredAt: "desc" },
+    select: AUDIT_SELECT,
+    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
     take: 100,
   });
 
@@ -412,29 +417,78 @@ export async function updateDepartment(
 
 // ------------------------------------------------------------------- audit
 
+/**
+ * The fields every audit reader needs.
+ *
+ * Names as well as emails, because the whole point of Phase 10 is that
+ * `grant.added` beside two UUIDs is not an answer - see
+ * ./audit-describe.ts, which turns one of these into a sentence.
+ */
+const AUDIT_SELECT = {
+  id: true,
+  action: true,
+  moduleKey: true,
+  metadata: true,
+  occurredAt: true,
+  actor: { select: { id: true, firstName: true, lastName: true, email: true } },
+  target: { select: { id: true, firstName: true, lastName: true, email: true } },
+} as const;
+
+/**
+ * Turns the `to` bound into an exclusive upper limit.
+ *
+ * A bare date from a filter means "up to the end of that day", so `to=2026-09-12`
+ * has to include everything on the 12th. Adding a day and comparing with `lt` is
+ * exact where `lte` on midnight would silently exclude all but the first instant
+ * of it - a filter that drops a day of history is the kind of quiet wrongness
+ * this whole phase exists to remove.
+ *
+ * A `to` that carries a time is used as given.
+ */
+function exclusiveUpperBound(to: Date): Date {
+  const midnightUtc =
+    to.getUTCHours() === 0 &&
+    to.getUTCMinutes() === 0 &&
+    to.getUTCSeconds() === 0 &&
+    to.getUTCMilliseconds() === 0;
+
+  if (!midnightUtc) return to;
+
+  const next = new Date(to);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next;
+}
+
 export async function listAuditEvents(query: AuditQuery) {
-  const { targetEmployeeId, actorEmployeeId, action, page, pageSize } = query;
+  const { targetEmployeeId, actorEmployeeId, action, from, to, page, pageSize } =
+    query;
+
+  const occurredAt =
+    from === undefined && to === undefined
+      ? {}
+      : {
+          occurredAt: {
+            ...(from !== undefined ? { gte: from } : {}),
+            ...(to !== undefined ? { lt: exclusiveUpperBound(to) } : {}),
+          },
+        };
 
   const where = {
     ...(targetEmployeeId !== undefined ? { targetEmployeeId } : {}),
     ...(actorEmployeeId !== undefined ? { actorEmployeeId } : {}),
     ...(action !== undefined && action.length > 0 ? { action } : {}),
+    ...occurredAt,
   };
 
   const [total, events] = await Promise.all([
     prisma.auditEvent.count({ where }),
     prisma.auditEvent.findMany({
       where,
-      select: {
-        id: true,
-        action: true,
-        moduleKey: true,
-        metadata: true,
-        occurredAt: true,
-        actor: { select: { id: true, email: true } },
-        target: { select: { id: true, email: true } },
-      },
-      orderBy: { occurredAt: "desc" },
+      select: AUDIT_SELECT,
+      // Newest first, with id as the tiebreak. Two events written inside one
+      // transaction can share a timestamp, and a list that reorders itself
+      // between two identical requests is not a log.
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
@@ -447,4 +501,63 @@ export async function listAuditEvents(query: AuditQuery) {
     total,
     totalPages: Math.max(1, Math.ceil(total / pageSize)),
   };
+}
+
+/**
+ * The people who appear in the audit log, for the filter dropdowns.
+ *
+ * Distinct actors and targets rather than every employee. Two reasons, and the
+ * second is the one that matters: the list is far shorter - actors are
+ * essentially the admins - and every option in it returns at least one row, so
+ * the filter cannot offer a choice that produces an empty page. A dropdown of
+ * 130 names where 120 of them yield nothing is worse than no dropdown.
+ */
+export async function auditFilterOptions() {
+  const [actorIds, targetIds] = await Promise.all([
+    prisma.auditEvent.findMany({
+      where: { actorEmployeeId: { not: null } },
+      select: { actorEmployeeId: true },
+      distinct: ["actorEmployeeId"],
+    }),
+    prisma.auditEvent.findMany({
+      where: { targetEmployeeId: { not: null } },
+      select: { targetEmployeeId: true },
+      distinct: ["targetEmployeeId"],
+    }),
+  ]);
+
+  const ids = new Set<string>();
+  for (const row of actorIds) if (row.actorEmployeeId !== null) ids.add(row.actorEmployeeId);
+  for (const row of targetIds) if (row.targetEmployeeId !== null) ids.add(row.targetEmployeeId);
+
+  const people = await prisma.employee.findMany({
+    where: { id: { in: [...ids] } },
+    select: { id: true, firstName: true, lastName: true, email: true },
+    orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+  });
+
+  const byId = new Map(people.map((p) => [p.id, p]));
+  const pick = (rows: { id: string | null }[]) =>
+    rows
+      .map((r) => (r.id === null ? undefined : byId.get(r.id)))
+      .filter((p): p is (typeof people)[number] => p !== undefined);
+
+  return {
+    actors: pick(actorIds.map((r) => ({ id: r.actorEmployeeId }))),
+    targets: pick(targetIds.map((r) => ({ id: r.targetEmployeeId }))),
+  };
+}
+
+/**
+ * Module display names, for rendering audit rows and the grant matrix.
+ *
+ * Includes inactive modules deliberately: an audit row naming a module that has
+ * since been deactivated still has to render, and falling back to the raw key
+ * there would make old history read worse than new history for no reason.
+ */
+export async function moduleDisplayNames(): Promise<Map<string, string>> {
+  const modules = await prisma.module.findMany({
+    select: { key: true, displayName: true },
+  });
+  return new Map(modules.map((m) => [m.key, m.displayName]));
 }

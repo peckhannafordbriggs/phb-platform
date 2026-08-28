@@ -74,6 +74,13 @@ export interface EmployeeFixture {
   status?: "active" | "disabled";
   isPlatformAdmin?: boolean;
   sessionsValidAfter?: Date | null;
+  /** Sorting and search tests need real names, not Person1..Person130. */
+  firstName?: string;
+  lastName?: string;
+  lastLoginAt?: Date | null;
+  positionId?: string | null;
+  positionOther?: string | null;
+  departmentId?: string | null;
 }
 
 let fixtureCounter = 0;
@@ -87,14 +94,89 @@ export async function createEmployee(fixture: EmployeeFixture = {}) {
       email: fixture.email ?? `person${n}@phb1899.com`,
       entraOid:
         fixture.entraOid === undefined ? `oid-${n}` : fixture.entraOid,
-      firstName: "Test",
-      lastName: `Person${n}`,
+      firstName: fixture.firstName ?? "Test",
+      lastName: fixture.lastName ?? `Person${n}`,
       profileCompleted: fixture.profileCompleted ?? true,
       status: fixture.status ?? "active",
       isPlatformAdmin: fixture.isPlatformAdmin ?? false,
       sessionsValidAfter: fixture.sessionsValidAfter ?? null,
+      lastLoginAt: fixture.lastLoginAt ?? null,
+      positionId: fixture.positionId ?? null,
+      positionOther: fixture.positionOther ?? null,
+      departmentId: fixture.departmentId ?? null,
     },
   });
+}
+
+/**
+ * A realistic admin list: 130 employees, the volume the dev seed produces.
+ *
+ * PHASE-10 is explicit that this is the bar - "sorting and pagination bugs only
+ * appear past a page", and four rows never cross one. Deterministic rather than
+ * random, so a failure is reproducible: the shape below is fixed by index.
+ *
+ *   - every 7th is disabled
+ *   - every 11th has never signed in
+ *   - every 5th has no grant at all
+ *   - every 13th has an incomplete profile
+ *   - names cycle through a fixed list so ordering is checkable by hand
+ *
+ * Created with createMany for speed: 130 individual inserts is several seconds
+ * per test file, and this fixture is used by more than one.
+ */
+const SURNAMES = [
+  "Adams", "Bittner", "Carver", "Delgado", "Ellery", "Fanning", "Gearhart",
+  "Horvath", "Ivers", "Jessup", "Knemeyer", "Lockhart", "Mercer",
+];
+const FORENAMES = ["Alex", "Brooke", "Casey", "Dana", "Erin", "Frank", "Gale"];
+
+export interface VolumeFixtureOptions {
+  count?: number;
+  moduleKey?: string;
+}
+
+export async function createEmployeeVolume(
+  options: VolumeFixtureOptions = {},
+): Promise<{ ids: string[]; total: number; withoutGrant: number }> {
+  const count = options.count ?? 130;
+  const moduleKey = options.moduleKey ?? "change-orders";
+
+  const base = fixtureCounter;
+  fixtureCounter += count;
+
+  const rows = Array.from({ length: count }, (_, i) => {
+    const n = base + i + 1;
+    return {
+      email: `bulk${n}@phb1899.com`,
+      entraOid: `oid-bulk-${n}`,
+      firstName: FORENAMES[i % FORENAMES.length] ?? "Alex",
+      lastName: `${SURNAMES[i % SURNAMES.length] ?? "Adams"}${i}`,
+      profileCompleted: i % 13 !== 0,
+      status: (i % 7 === 0 ? "disabled" : "active") as "active" | "disabled",
+      isPlatformAdmin: false,
+      lastLoginAt: i % 11 === 0 ? null : new Date(2026, 0, 1 + (i % 300)),
+    };
+  });
+
+  await testDb.employee.createMany({ data: rows });
+
+  const created = await testDb.employee.findMany({
+    where: { email: { in: rows.map((r) => r.email) } },
+    select: { id: true, email: true },
+  });
+
+  const byEmail = new Map(created.map((e) => [e.email, e.id]));
+  const ids = rows.map((r) => byEmail.get(r.email)).filter((id): id is string => id !== undefined);
+
+  // Every 5th gets no grant, which is what makes the "no grants" filter and the
+  // default "has at least one grant" scope testable at volume.
+  const granted = ids.filter((_, i) => i % 5 !== 0);
+  await testDb.moduleGrant.createMany({
+    data: granted.map((employeeId) => ({ employeeId, moduleKey })),
+    skipDuplicates: true,
+  });
+
+  return { ids, total: count, withoutGrant: ids.length - granted.length };
 }
 
 export async function grantModule(

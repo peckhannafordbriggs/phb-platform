@@ -55,13 +55,49 @@ export const employeeListQuerySchema = z.object({
 
 export type EmployeeListQuery = z.infer<typeof employeeListQuerySchema>;
 
-export const auditQuerySchema = z.object({
-  targetEmployeeId: z.uuid().optional(),
-  actorEmployeeId: z.uuid().optional(),
-  action: z.string().trim().max(100).optional(),
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(200).default(50),
-});
+/**
+ * A date bound from a query string.
+ *
+ * Accepts what a browser date input sends (`2026-09-12`) as well as a full
+ * ISO timestamp. A `yyyy-mm-dd` value is interpreted in UTC, which matches how
+ * `occurredAt` is stored - reading it as local time would silently shift the
+ * boundary by the timezone offset and drop or include a day's worth of events
+ * depending on which side of UTC the reader sits.
+ */
+const auditDateSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(40)
+  .transform((value, ctx) => {
+    const iso = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00.000Z` : value;
+    const parsed = new Date(iso);
+    if (Number.isNaN(parsed.getTime())) {
+      ctx.addIssue({ code: "custom", message: "Not a date." });
+      return z.NEVER;
+    }
+    return parsed;
+  });
+
+export const auditQuerySchema = z
+  .object({
+    targetEmployeeId: z.uuid().optional(),
+    actorEmployeeId: z.uuid().optional(),
+    action: z.string().trim().max(100).optional(),
+    /** Inclusive lower bound. */
+    from: auditDateSchema.optional(),
+    /**
+     * Upper bound, exclusive of nothing - a bare date means "to the end of that
+     * day", which is what somebody typing one into a filter means by it.
+     */
+    to: auditDateSchema.optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(200).default(50),
+  })
+  .refine((v) => v.from === undefined || v.to === undefined || v.from <= v.to, {
+    message: "The start of the range must not be after the end.",
+    path: ["from"],
+  });
 
 export type AuditQuery = z.infer<typeof auditQuerySchema>;
 
