@@ -35,7 +35,12 @@ export function BasShell({
       tiles and the trend line all sit outside <header>, and a chart asking for
       var(--module-accent) from out there would silently get the platform purple.
     */
-    <div style={moduleAccentStyle(BAS_MODULE_KEY)}>
+    /*
+      Capped width. A dashboard stretched edge to edge on a 34-inch monitor puts
+      a tile's label and its number a foot apart, and the five-across tile row
+      becomes a line nobody can scan in one go.
+    */
+    <div className="mx-auto max-w-[104rem]" style={moduleAccentStyle(BAS_MODULE_KEY)}>
       <ModuleHeader moduleKey={BAS_MODULE_KEY} title="Building Automation" blurb={blurb}>
         {/*
           useSearchParams needs a Suspense boundary to be renderable in any

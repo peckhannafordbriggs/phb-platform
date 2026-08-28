@@ -56,7 +56,8 @@ export function ModuleHeader({
         aria-hidden="true"
       />
 
-      {blurb !== undefined && (
+      {/* An empty blurb renders nothing rather than an empty paragraph's margin. */}
+      {blurb !== undefined && blurb.length > 0 && (
         <p className="mt-3 max-w-3xl text-sm text-[var(--muted)]">{blurb}</p>
       )}
 

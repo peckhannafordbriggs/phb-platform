@@ -35,10 +35,22 @@ describe("the tabs are real routes", () => {
     expect(BAS_TABS.map((tab) => tab.href)).toEqual(["/bas", "/bas/points"]);
   });
 
-  it("gives every tab a label and a blurb", () => {
+  /**
+   * WEAKENED DELIBERATELY: a blurb is no longer required, only a label.
+   *
+   * The Point Explorer's blurb listed what was on the screen - the trend, the
+   * summary, the gaps - which the screen shows. It is now empty. A blurb earns
+   * its place by saying something the reader cannot see, and the Collection
+   * Health one does: the controller keeps about two days and then overwrites,
+   * which appears nowhere else.
+   *
+   * What is still asserted, and is the part that mattered: a tab that HAS a
+   * blurb must have a real one, not a stub.
+   */
+  it("gives every tab a label, and a real blurb where it has one", () => {
     for (const tab of BAS_TABS) {
       expect(tab.label.length).toBeGreaterThan(0);
-      expect(tab.blurb.length).toBeGreaterThan(20);
+      if (tab.blurb.length > 0) expect(tab.blurb.length).toBeGreaterThan(20);
       // A real route, not a fragment or a query - so it bookmarks, refreshes and
       // middle-clicks.
       expect(tab.href.startsWith("/bas")).toBe(true);
@@ -181,7 +193,18 @@ describe("distinct values, not standard deviation", () => {
     // Measured on the live database: Temp1 gives 256 distinct across 286
     // readings in 24 hours.
     expect(distinctValuesTone(256, 286)).toBe("ok");
-    expect(describeDistinctValues(256, 286)).toContain("physical world");
+
+    /**
+     * CHANGED DELIBERATELY. This asserted the phrase "physical world", from
+     * "A sensor sampling the physical world looks like this" - a sentence that
+     * told the reader a healthy tile was healthy, which the tile already said.
+     *
+     * What survives is the part they cannot see: the denominator. The tile shows
+     * the distinct count; only the caption gives it something to be out of.
+     */
+    expect(describeDistinctValues(256, 286)).toContain("286 readings");
+    // And it must not hedge about a sensor that is plainly fine.
+    expect(describeDistinctValues(256, 286)).not.toContain("stuck");
   });
 
   it("calls a frozen sensor bad, however stable it looks", () => {
@@ -202,7 +225,7 @@ describe("distinct values, not standard deviation", () => {
   it("does not call 'no readings' a stuck sensor", () => {
     // No evidence is not bad evidence. Red here would be as wrong as green.
     expect(distinctValuesTone(0, 0)).toBe("neutral");
-    expect(describeDistinctValues(0, 0)).toContain("nothing to judge");
+    expect(describeDistinctValues(0, 0).toLowerCase()).toContain("nothing to judge");
   });
 
   it("handles a coarse but living sensor without crying stuck", () => {
@@ -217,9 +240,21 @@ describe("a null reading is not a missing reading", () => {
     const noRows = describeNullRecords(0, 0);
     const noNulls = describeNullRecords(286, 0);
 
-    expect(noRows).toContain("No rows at all");
-    expect(noRows).toContain("nothing was collected");
-    expect(noNulls).toContain("Every row carries a value");
+    /**
+     * CHANGED DELIBERATELY. The healthy case used to say "Every row carries a
+     * value. A null record would mean the station logged an entry with nothing
+     * in it." It now says nothing at all.
+     *
+     * The tile's own value is `286 / 0` against `0 / 0` - it already
+     * distinguishes the two, and the caption was explaining the numbers beside
+     * it. The 0-rows case keeps a line because `0 / 0` on its own is genuinely
+     * ambiguous.
+     *
+     * The assertion this test exists for is unchanged and is the last line:
+     * the two must not read the same.
+     */
+    expect(noRows.toLowerCase()).toContain("nothing collected");
+    expect(noNulls).toBe("");
 
     // The failure this prevents: both are "0 nulls" and they mean opposite
     // things.

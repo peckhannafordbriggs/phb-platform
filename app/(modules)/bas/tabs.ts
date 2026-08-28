@@ -22,17 +22,16 @@ export const BAS_TABS: readonly BasTab[] = [
   {
     href: "/bas",
     label: "Collection Health",
+    // The roll horizon is the one fact that makes this screen make sense and it
+    // is nowhere on screen. Everything else it used to say was visible.
     blurb:
-      "Is data arriving, and is any of it about to be lost. The controller keeps " +
-      "roughly two days and then overwrites, so this is the screen that has to " +
-      "notice before that happens.",
+      "The controller keeps roughly two days of history, then overwrites it.",
   },
   {
     href: "/bas/points",
     label: "Point Explorer",
-    blurb:
-      "What one point has been doing over a window - the trend, the summary, and " +
-      "the periods we were not collecting.",
+    // Was a list of what is on the screen. The screen shows it.
+    blurb: "",
   },
 ];
 

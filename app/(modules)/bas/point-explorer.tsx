@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
-  Line,
-  LineChart,
   ReferenceArea,
   ResponsiveContainer,
   Tooltip,
@@ -33,6 +33,7 @@ import {
   type Tone,
 } from "./health-client";
 import { ALL_SITES, DAYS_PARAM, POINT_PARAM, SITE_PARAM, readFilters, withFilter } from "./filters";
+import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 
 /**
  * Point Explorer - what one point has been doing.
@@ -51,19 +52,6 @@ import { ALL_SITES, DAYS_PARAM, POINT_PARAM, SITE_PARAM, readFilters, withFilter
 
 const POLL_INTERVAL_MS = 60_000;
 
-const TONE_TILE: Record<Tone, string> = {
-  ok: "border-emerald-300 bg-emerald-50",
-  warn: "border-amber-300 bg-amber-50",
-  bad: "border-red-300 bg-red-50",
-  neutral: "border-[var(--border)] bg-[var(--surface)]",
-};
-
-const TONE_VALUE: Record<Tone, string> = {
-  ok: "text-emerald-900",
-  warn: "text-amber-900",
-  bad: "text-red-900",
-  neutral: "text-[var(--foreground)]",
-};
 
 const GAP_CAUSE_LABEL: Record<string, string> = {
   roll_overwrite: "Station overwrote it",
@@ -298,7 +286,7 @@ export function PointExplorer() {
 
           <section
             aria-label="Point summary"
-            className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5"
+            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
           >
             <Tile
               label="Latest"
@@ -323,7 +311,6 @@ export function PointExplorer() {
                   : `${stats.minimum.toFixed(2)} – ${stats.maximum.toFixed(2)}`
               }
               tone="neutral"
-              detail={unit === null ? undefined : `In ${unit}.`}
             />
             <Tile
               label="Readings / null records"
@@ -369,11 +356,21 @@ function Tile({
   detail?: string;
 }) {
   return (
-    <div className={"rounded border p-4 " + TONE_TILE[tone]}>
-      <p className="text-xs font-medium text-[var(--muted)]">{label}</p>
-      <p className={"mt-1 text-2xl font-semibold " + TONE_VALUE[tone]}>{value}</p>
-      {detail !== undefined && (
-        <p className="mt-2 text-xs text-[var(--muted)]">{detail}</p>
+    <div
+      className="card tile-wash px-5 py-4"
+      style={{ ...TONE_STYLE[tone], ...TONE_WASH[tone] }}
+    >
+      <p className="text-[0.625rem] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
+        {label}
+      </p>
+      <p
+        className="mt-1.5 font-display text-[2.125rem] font-semibold leading-none tabular-nums"
+        style={{ color: TONE_INK[tone] }}
+      >
+        {value}
+      </p>
+      {detail !== undefined && detail.length > 0 && (
+        <p className="mt-2 text-xs leading-relaxed text-[var(--muted)]">{detail}</p>
       )}
     </div>
   );
@@ -389,11 +386,13 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded border border-[var(--border)]">
-      <header className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2.5">
-        <h2 className="text-sm font-medium">{title}</h2>
-        {description !== undefined && (
-          <p className="mt-0.5 text-xs text-[var(--muted)]">{description}</p>
+    <section className="card overflow-hidden">
+      <header className="px-5 pb-3 pt-4">
+        <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+          {title}
+        </h2>
+        {description !== undefined && description.length > 0 && (
+          <p className="mt-1 text-xs text-[var(--muted)]">{description}</p>
         )}
       </header>
       {children}
@@ -425,10 +424,72 @@ function TrendPanel({
   data: PointExplorerData;
   unit: string | null;
 }) {
+  /**
+   * The count and the longest are invisible from the chart; that the line stops
+   * at a break is not - it is the thing you are looking at. No breaks needs no
+   * sentence at all.
+   */
   const gapSummary =
     data.trendGaps.length === 0
-      ? "No breaks in collection over this window."
-      : `${formatCount(data.trendGaps.length)} break${data.trendGaps.length === 1 ? "" : "s"} in collection, shaded. Longest ${formatHours(Math.max(...data.trendGaps.map((g) => g.hours)))}. The line stops rather than crossing them - there are no readings in there to draw.`;
+      ? undefined
+      : `${formatCount(data.trendGaps.length)} break${data.trendGaps.length === 1 ? "" : "s"}, shaded. Longest ${formatHours(Math.max(...data.trendGaps.map((g) => g.hours)))}.`;
+
+  /**
+   * Drag across the plot to zoom into a range; Reset goes back.
+   *
+   * The zoom is a DOMAIN change, never a change to the data. That distinction is
+   * the whole safety of it: every sample stays in the array, including the
+   * explicit nulls that break the line, so no zoom level can smooth over a gap
+   * by filtering out the hole. The shaded bands are drawn from `trendGaps` at
+   * every level too, clipped to the plot rather than dropped.
+   *
+   * Mouse only, and deliberately not the only way to narrow the view - the time
+   * range control above does the same job for anyone not using a pointer.
+   */
+  const [zoom, setZoom] = useState<{ from: number; to: number } | null>(null);
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragTo, setDragTo] = useState<number | null>(null);
+
+  const domain: [number, number] | undefined =
+    zoom === null ? undefined : [zoom.from, zoom.to];
+
+  /**
+   * The y range of what is actually on screen.
+   *
+   * Recharts would otherwise keep scaling y to the whole window, so zooming into
+   * a quiet stretch would show a flat line across the middle of a tall axis and
+   * hide the very detail the zoom was for. Nulls are skipped, not treated as
+   * zero - a null is an absent reading, and folding it into the range would drag
+   * the axis to zero and flatten everything real.
+   */
+  const yDomain = ((): [number | "auto", number | "auto"] => {
+    if (zoom === null) return ["auto", "auto"];
+
+    const visible = data.trend
+      .filter((point) => point.tsMs >= zoom.from && point.tsMs <= zoom.to)
+      .map((point) => point.value)
+      .filter((value): value is number => value !== null);
+
+    if (visible.length === 0) return ["auto", "auto"];
+
+    const min = Math.min(...visible);
+    const max = Math.max(...visible);
+    // A flat stretch would otherwise collapse to a zero-height band.
+    const pad = max === min ? Math.max(Math.abs(max) * 0.05, 0.5) : (max - min) * 0.08;
+    return [min - pad, max + pad];
+  })();
+
+  function commitZoom(): void {
+    if (dragFrom === null || dragTo === null || dragFrom === dragTo) {
+      setDragFrom(null);
+      setDragTo(null);
+      return;
+    }
+
+    setZoom({ from: Math.min(dragFrom, dragTo), to: Math.max(dragFrom, dragTo) });
+    setDragFrom(null);
+    setDragTo(null);
+  }
 
   return (
     <Panel title="Trend" description={gapSummary}>
@@ -453,19 +514,69 @@ function TrendPanel({
               picture.
             </p>
           )}
-          <div className="h-72 p-3">
+          {/* Reset sits with the chart, and only exists once there is something to reset. */}
+          {zoom !== null && (
+            <div className="flex items-center gap-3 px-5 pb-1 pt-1 text-xs text-[var(--muted)]">
+              <span>
+                Zoomed to {formatTimestamp(new Date(zoom.from).toISOString())} –{" "}
+                {formatTimestamp(new Date(zoom.to).toISOString())}
+              </span>
+              <button
+                type="button"
+                onClick={() => setZoom(null)}
+                className="rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)]"
+              >
+                Reset zoom
+              </button>
+            </div>
+          )}
+
+          <div className="h-80 select-none px-3 pb-3 pt-1">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart
+              <AreaChart
                 data={data.trend}
                 margin={{ top: 8, right: 12, bottom: 4, left: 4 }}
+                onMouseDown={(e: { activeLabel?: string | number }) => {
+                  const at = Number(e?.activeLabel);
+                  if (Number.isFinite(at)) setDragFrom(at);
+                }}
+                onMouseMove={(e: { activeLabel?: string | number }) => {
+                  if (dragFrom === null) return;
+                  const at = Number(e?.activeLabel);
+                  if (Number.isFinite(at)) setDragTo(at);
+                }}
+                onMouseUp={commitZoom}
+                onMouseLeave={commitZoom}
               >
+                <defs>
+                  {/*
+                    The wash under the line, in the module's cyan. It fades to
+                    nothing well before the axis so it reads as depth rather than
+                    as a filled region with a value of its own.
+                  */}
+                  <linearGradient id="basTrendFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop
+                      offset="0%"
+                      stopColor="var(--module-accent, var(--phb-cyan))"
+                      stopOpacity={0.28}
+                    />
+                    <stop
+                      offset="85%"
+                      stopColor="var(--module-accent, var(--phb-cyan))"
+                      stopOpacity={0}
+                    />
+                  </linearGradient>
+                </defs>
                 {/* Neutral grid, horizontal only. It is a reference, not a feature. */}
                 <CartesianGrid stroke="var(--neutral-200)" vertical={false} />
                 <XAxis
                   dataKey="tsMs"
                   type="number"
                   scale="time"
-                  domain={["dataMin", "dataMax"]}
+                  // allowDataOverflow is what makes the domain a zoom rather
+                  // than a suggestion.
+                  allowDataOverflow
+                  domain={domain ?? ["dataMin", "dataMax"]}
                   tickFormatter={(ms: number) => formatChartTick(ms)}
                   stroke="var(--muted)"
                   tick={{ fontSize: 11 }}
@@ -475,7 +586,7 @@ function TrendPanel({
                   stroke="var(--muted)"
                   tick={{ fontSize: 11 }}
                   width={56}
-                  domain={["auto", "auto"]}
+                  domain={yDomain}
                   label={{
                     value: axisLabel(unit),
                     angle: -90,
@@ -516,23 +627,47 @@ function TrendPanel({
                     stroke="var(--phb-maroon)"
                     strokeOpacity={0.4}
                     strokeDasharray="3 3"
-                    ifOverflow="visible"
+                    // Clipped, not dropped: a gap half in view shows its half.
+                    ifOverflow="hidden"
                   />
                 ))}
-                <Line
-                  type="linear"
+                {/* The in-progress drag selection. */}
+                {dragFrom !== null && dragTo !== null && (
+                  <ReferenceArea
+                    x1={Math.min(dragFrom, dragTo)}
+                    x2={Math.max(dragFrom, dragTo)}
+                    fill="var(--module-accent, var(--phb-cyan))"
+                    fillOpacity={0.12}
+                    ifOverflow="hidden"
+                  />
+                )}
+                <Area
+                  /*
+                    Curved, because a smooth line reads as a physical quantity
+                    rather than a set of measurements joined with a ruler.
+                    `monotone` specifically: it will not overshoot between
+                    samples, so the curve never draws a peak the sensor did not
+                    record.
+                  */
+                  type="monotone"
                   dataKey="value"
                   // One accent, and it is the module's. Sensor data is the content.
                   stroke="var(--module-accent, var(--phb-cyan))"
-                  strokeWidth={1.5}
+                  strokeWidth={1.75}
+                  fill="url(#basTrendFill)"
                   dot={false}
-                  // The whole point. Recharts defaults this to false, but it is
-                  // stated because a future edit that flipped it would silently
-                  // draw a straight line across 22.7 hours of destroyed data.
+                  activeDot={{ r: 3 }}
+                  /*
+                    The whole point, and it survives the curve and every zoom
+                    level. Recharts defaults this to false, but it is stated
+                    because a future edit that flipped it would silently draw a
+                    line across 22.7 hours of destroyed data. The curve joins
+                    samples; it does not invent them across a null.
+                  */
                   connectNulls={false}
                   isAnimationActive={false}
                 />
-              </LineChart>
+              </AreaChart>
             </ResponsiveContainer>
           </div>
 
@@ -565,7 +700,8 @@ function GapTable({
   return (
     <Panel
       title="Known data gaps — periods we did not collect"
-      description="Recorded gaps, with the reason. A gap means we were not looking; do not read it as equipment being off."
+      // Same misreading, same one line, same wording as the health screen.
+      description="A gap means we were not watching, not that equipment was off."
     >
       {gaps.length === 0 ? (
         <p className="px-4 py-8 text-center text-sm text-[var(--muted)]">
@@ -633,7 +769,7 @@ function GapTable({
 function ExplorerSkeleton() {
   return (
     <div className="space-y-6" aria-hidden="true">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {Array.from({ length: 5 }, (_, i) => (
           <div
             key={i}

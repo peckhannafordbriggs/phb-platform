@@ -254,3 +254,31 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Dashboard cards.
+
+   BAS ONLY, deliberately. A dashboard has no competing content, so cards and
+   elevation give it presence. The Change Orders reading pane has a vendor's own
+   email in it - real competing content - so it keeps the quiet, near-monochrome
+   treatment the brief asks for. Two surfaces, two registers, on purpose.
+   --------------------------------------------------------------------------- */
+.card {
+  background: var(--neutral-0);
+  border: 1px solid var(--neutral-200);
+  border-radius: 0.625rem;
+  /* Soft and close rather than a drop shadow: the page is off-white, and a
+     heavy shadow on a light ground reads as a floating dialog. */
+  box-shadow:
+    0 1px 2px rgb(24 18 31 / 0.04),
+    0 4px 12px -4px rgb(24 18 31 / 0.06);
+}
+
+/* The tinted wash a metric tile sits on, in whatever colour it is given. */
+.tile-wash {
+  background-image: linear-gradient(
+    160deg,
+    var(--tile-wash, transparent) 0%,
+    transparent 62%
+  );
+}

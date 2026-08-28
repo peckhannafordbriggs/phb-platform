@@ -259,7 +259,20 @@ describe("the collector silence is described by its consequence", () => {
     ...overrides,
   });
 
-  it("says the data is gone when the silence outran the roll horizon", () => {
+  /**
+   * The assertion on the phrase "gone permanently" was REMOVED DELIBERATELY.
+   *
+   * The sentence used to end "...and they are gone permanently", which is what
+   * the whole screen is for - the reader already knows it by the time they are
+   * reading a collector-silence panel. What they cannot see is the comparison:
+   * 64.3 h of silence against a 41.7 h horizon. That is now the whole sentence,
+   * and the consequence is carried by the maroon tone and the gaps table.
+   *
+   * Nothing about the MEANING moved. The tone assertion below is unchanged, and
+   * the both-units rule it existed to protect is asserted more tightly than
+   * before.
+   */
+  it("compares the silence against the horizon, in both units", () => {
     // The dev database's real state: the laptop was closed over the weekend,
     // 21 Aug 16:05 to 24 Aug 08:20, against a 41.7-hour horizon.
     const sentence = describeRunGap(gap());
@@ -269,8 +282,17 @@ describe("the collector silence is described by its consequence", () => {
     expect(sentence).toContain("64.3 h");
     expect(sentence).toContain("2.7 days");
     expect(sentence).toContain("41.7 h");
-    expect(sentence).toContain("gone permanently");
+
+    // The severity is the tone's job, and it is unchanged.
     expect(runGapTone(gap())).toBe("bad");
+  });
+
+  it("stays one sentence, because it sits under a tile that already alarmed", () => {
+    // The cut that prompted this: the panel was three clauses where one carries
+    // the finding.
+    const sentence = describeRunGap(gap()) ?? "";
+
+    expect(sentence.split(". ").filter((part) => part.trim().length > 0)).toHaveLength(1);
   });
 
   it("does not raise an alarm for a silence inside the horizon", () => {

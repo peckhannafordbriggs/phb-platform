@@ -42,10 +42,10 @@ import {
   unclassifiedTone,
   atRiskShape,
   describeAtRisk,
-  windowLabel,
   type Tone,
 } from "./health-client";
 import { ALL_SITES, DAYS_PARAM, SITE_PARAM, readFilters, withFilter } from "./filters";
+import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 
 /**
  * Collection Health - is data arriving, and is any of it about to be lost.
@@ -71,45 +71,6 @@ import { ALL_SITES, DAYS_PARAM, SITE_PARAM, readFilters, withFilter } from "./fi
 const POLL_INTERVAL_MS = 60_000;
 
 
-
-/**
- * The semantic palette, from the sampled logo colours.
- *
- * Semantic colour is separate from the module accent and always has been: the
- * module's cyan says "you are in Building Automation" and never appears on a
- * tile, so a healthy teal tile cannot be mistaken for a module-coloured one.
- * Cyan is reserved for the header diamond, the active tab and the trend line.
- *
- * The mapping, and every value clears WCAG AA as text on its own tint - see the
- * ink tier in app/globals.css:
- *
- *   ok       teal      the "SINCE" lettering
- *   warn     orange    the lower-left quadrant
- *   bad      maroon    the lower tip
- *   neutral  greys     "we have no answer", which is not a colour
- */
-const tint = (token: string, percent: number) =>
-  `color-mix(in srgb, var(${token}) ${percent}%, transparent)`;
-
-const TONE_STYLE: Record<Tone, React.CSSProperties> = {
-  ok: { borderColor: tint("--phb-teal", 55), background: tint("--phb-teal", 12) },
-  warn: {
-    borderColor: tint("--phb-orange", 55),
-    background: tint("--phb-orange", 12),
-  },
-  bad: {
-    borderColor: tint("--phb-maroon", 40),
-    background: tint("--phb-maroon", 8),
-  },
-  neutral: { borderColor: "var(--border)", background: "var(--surface)" },
-};
-
-const TONE_INK: Record<Tone, string> = {
-  ok: "var(--phb-teal-ink)",
-  warn: "var(--phb-orange-ink)",
-  bad: "var(--phb-maroon)",
-  neutral: "var(--foreground)",
-};
 
 const RUN_STATUS_TONE: Record<IngestRunRow["status"], Tone> = {
   ok: "ok",
@@ -278,7 +239,7 @@ export function CollectionHealth() {
   const gapSentence = describeRunGap(health.longestRunGap);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm">
@@ -348,28 +309,18 @@ export function CollectionHealth() {
 
       <section
         aria-label="Collection summary"
-        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
       >
         <Tile
           label="Active points"
           value={formatCount(totals.activePoints)}
           tone={activePointsTone()}
-          detail={
-            totals.activePoints === 0
-              ? "No points have been discovered yet."
-              : undefined
-          }
         />
 
         <Tile
           label="Total readings"
           value={formatCount(totals.totalReadings)}
           tone={totalReadingsTone()}
-          detail={
-            totals.totalReadings === 0
-              ? "Nothing has been collected into this database."
-              : undefined
-          }
         />
 
         <Tile
@@ -377,9 +328,7 @@ export function CollectionHealth() {
           value={formatCount(totals.unclassifiedPoints)}
           tone={unclassifiedTone(totals.unclassifiedPoints)}
           detail={
-            totals.unclassifiedPoints === 0
-              ? "Every active point has a role."
-              : "No point_role, so invisible to every question phrased by what a point measures. A backlog, not a fault."
+            totals.unclassifiedPoints === 0 ? undefined : "A backlog, not a fault."
           }
         />
 
@@ -403,11 +352,9 @@ export function CollectionHealth() {
           }
           stripe={totals.pointsAtRisk > 0}
           detail={
-            totals.pointsAtRisk === 0
-              ? "Every active point was collected inside half its roll horizon."
-              : atRiskShape(totals.riskCounts) === "unknown"
-                ? "Nothing is lost yet. The roll horizon cannot be computed for these, so we cannot tell whether records are being overwritten."
-                : "The station has overwritten records that were never collected. Those are gone permanently."
+            totals.pointsAtRisk > 0 && atRiskShape(totals.riskCounts) === "unknown"
+              ? "Nothing is lost yet."
+              : undefined
           }
         >
           {totals.pointsAtRisk > 0 && (
@@ -427,8 +374,8 @@ export function CollectionHealth() {
           tone={stalenessTone(totals.minutesSinceNewestReading)}
           detail={
             totals.minutesSinceNewestReading === null
-              ? "There are no readings at all. This is not a healthy zero."
-              : "Well past the poll interval means the collector has stopped."
+              ? "No readings at all — not a healthy zero."
+              : undefined
           }
         />
       </section>
@@ -437,7 +384,7 @@ export function CollectionHealth() {
 
       {gapSentence !== null && (
         <section
-          className="rounded border p-4 text-sm"
+          className="card p-5 text-sm"
           style={{
             ...TONE_STYLE[runGapTone(health.longestRunGap)],
             color: TONE_INK[runGapTone(health.longestRunGap)],
@@ -460,7 +407,7 @@ export function CollectionHealth() {
 
       {/* ------------------------------------------- runs: chart and history */}
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-7 xl:grid-cols-2">
         <RunChart health={health} />
         <RunTable health={health} />
       </div>
@@ -507,8 +454,10 @@ function Tile({
 }) {
   return (
     <div
-      className={"relative overflow-hidden rounded border p-4 " + (stripe ? "pl-5" : "")}
-      style={TONE_STYLE[tone]}
+      className={
+        "card tile-wash relative overflow-hidden px-5 py-4 " + (stripe ? "pl-6" : "")
+      }
+      style={{ ...TONE_STYLE[tone], ...TONE_WASH[tone] }}
     >
       {stripe && (
         <span
@@ -517,11 +466,12 @@ function Tile({
           style={{ background: TONE_INK[tone] }}
         />
       )}
-      <p className="text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--muted)]">
+      {/* Label small and quiet above; the number is what the tile is for. */}
+      <p className="text-[0.625rem] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
         {label}
       </p>
       <p
-        className="mt-1 text-2xl font-semibold tabular-nums"
+        className="mt-1.5 font-display text-[2.125rem] font-semibold leading-none tabular-nums"
         style={{ color: TONE_INK[tone] }}
       >
         {value}
@@ -564,11 +514,13 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded border border-[var(--border)]">
-      <header className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2.5">
-        <h2 className="text-sm font-medium">{title}</h2>
-        {description !== undefined && (
-          <p className="mt-0.5 text-xs text-[var(--muted)]">{description}</p>
+    <section className="card overflow-hidden">
+      <header className="px-5 pb-3 pt-4">
+        <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+          {title}
+        </h2>
+        {description !== undefined && description.length > 0 && (
+          <p className="mt-1 text-xs text-[var(--muted)]">{description}</p>
         )}
       </header>
       {children}
@@ -612,7 +564,6 @@ function PointTable({
   return (
     <Panel
       title="Per-point collection status"
-      description="Active points, stalest first. A point that has never been collected sorts above one that is merely late."
     >
       {points.length === 0 ? (
         <Empty>
@@ -692,7 +643,6 @@ function RunChart({ health }: { health: CollectionHealthData }) {
   return (
     <Panel
       title="Records written per collector run"
-      description="Plotted on real time, not by run number - so a period when the collector did not run is a hole rather than nothing. A spike is a backfill catching up after an outage."
     >
       {health.runRecords.length === 0 ? (
         <Empty>
@@ -767,7 +717,6 @@ function RunTable({ health }: { health: CollectionHealthData }) {
   return (
     <Panel
       title="Recent collector runs"
-      description={`Inside the last ${windowLabel(health.windowDays)}, newest first, up to 30.`}
     >
       {runs.length === 0 ? (
         // Never "no runs" on its own. An empty list because the collector has
@@ -847,7 +796,8 @@ function DataGapTable({
   return (
     <Panel
       title="Recorded data gaps — periods we did not collect"
-      description="A gap means we were not watching. Before concluding equipment was off, check whether we were even reading."
+      // Survives the cut: somebody will read a gap as equipment being off.
+      description="A gap means we were not watching, not that equipment was off."
     >
       {gaps.length === 0 ? (
         <Empty>
@@ -925,8 +875,8 @@ function DataGapTable({
  */
 function HealthSkeleton() {
   return (
-    <div className="space-y-6" aria-hidden="true">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+    <div className="space-y-7" aria-hidden="true">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {Array.from({ length: 5 }, (_, i) => (
           <div
             key={i}

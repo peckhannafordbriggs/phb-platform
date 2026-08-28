@@ -418,16 +418,19 @@ export function describeRunGap(gap: RunGap | null): string | null {
   const duration = formatDurationAgainstHorizon(gap.hours);
 
   if (gap.rollHorizonHours === null) {
-    return `The collector did not run for ${duration}. No roll horizon is known for any active point, so whether the station overwrote records during that time cannot be determined.`;
+    return `Silent for ${duration}. No roll horizon known, so the effect cannot be determined.`;
   }
 
   const horizon = formatHours(gap.rollHorizonHours);
 
+  // The comparison IS the finding. What it means - the station overwrote what
+  // nobody collected - is what the maroon tone and the gaps table are for, and
+  // saying it here as well was telling the reader what the screen is for.
   if (gap.exceedsRollHorizon) {
-    return `The collector did not run for ${duration}, against a ${horizon} roll horizon. The station overwrote records during that silence and they are gone permanently.`;
+    return `Silent for ${duration}, against a ${horizon} roll horizon.`;
   }
 
-  return `The longest collector silence in this window was ${duration}, inside the ${horizon} roll horizon.`;
+  return `Longest silence ${duration}, inside the ${horizon} roll horizon.`;
 }
 
 // ------------------------------------------------------- B4: Point Explorer
@@ -509,16 +512,18 @@ export function describeDistinctValues(
   distinct: number,
   readings: number,
 ): string {
-  if (readings === 0) {
-    return "No readings in this window, so there is nothing to judge.";
-  }
-  if (distinct >= DISTINCT_VALUES_GREEN) {
-    return `${formatCount(distinct)} distinct values across ${formatCount(readings)} readings. A sensor sampling the physical world looks like this.`;
-  }
+  if (readings === 0) return "Nothing to judge in this window.";
+
+  const of = `Across ${formatCount(readings)} readings.`;
+
+  // The denominator is invisible from the tile, and the low cases prevent a real
+  // misreading: a flat line is a stable room OR a dead sensor, and they look
+  // identical. The healthy case gets the denominator and nothing else.
+  if (distinct >= DISTINCT_VALUES_GREEN) return of;
   if (distinct >= DISTINCT_VALUES_AMBER) {
-    return `Only ${formatCount(distinct)} distinct values across ${formatCount(readings)} readings. Worth a look - a sensor that has stopped responding repeats itself.`;
+    return `${of} A sensor that has stopped responding repeats itself.`;
   }
-  return `${formatCount(distinct)} distinct value${distinct === 1 ? "" : "s"} across ${formatCount(readings)} readings. This reads as a stuck sensor rather than a stable room.`;
+  return `${of} Reads as a stuck sensor, not a stable room.`;
 }
 
 /**
@@ -534,13 +539,12 @@ export function describeNullRecords(
   readings: number,
   nullRecords: number,
 ): string {
-  if (readings === 0) {
-    return "No rows at all in this window. That is not the same as null readings - it means nothing was collected.";
-  }
-  if (nullRecords === 0) {
-    return "Every row carries a value. A null record would mean the station logged an entry with nothing in it.";
-  }
-  return `${formatCount(nullRecords)} of ${formatCount(readings)} rows carry no value at all - the station logged an entry and had nothing to put in it. That is a sensor fault, not a missing row.`;
+  // Nothing to say when every row has a value - the numbers already said it.
+  if (readings === 0) return "Nothing collected in this window.";
+  if (nullRecords === 0) return "";
+
+  // The one real misreading here: a null row looks like a missing row and is not.
+  return `${formatCount(nullRecords)} of ${formatCount(readings)} rows logged with no value — a sensor fault, not a missing row.`;
 }
 
 /**
