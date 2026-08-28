@@ -32,6 +32,21 @@ export default async function AdminPage({
     ? parsed.data
     : employeeListQuerySchema.parse({});
 
+  /**
+   * Whether the view is narrowed at all.
+   *
+   * The default scope counts: "With a grant" hides everyone who signed in and
+   * never got access, which is a filter even though nobody chose it. An empty
+   * screen on a fresh platform and an empty screen because the default hid
+   * everybody are different problems.
+   */
+  const filtered =
+    flat.q !== undefined ||
+    flat.moduleKey !== undefined ||
+    flat.status !== undefined ||
+    flat.departmentId !== undefined ||
+    query.scope !== "all";
+
   const [result, departments, modules] = await Promise.all([
     listEmployees(query),
     listDepartments(false),
@@ -127,8 +142,19 @@ export default async function AdminPage({
           >
             <option value="granted">With a grant</option>
             <option value="all">Everyone</option>
+            {/*
+              Its own case, not the absence of a module filter. "Who signed in
+              and never got access" is a question an admin actually asks and
+              cannot express as any combination of the other filters.
+            */}
+            <option value="none">No grants at all</option>
           </select>
         </Labelled>
+
+        {/* Sorting travels in the URL like everything else, so a sorted view is
+            bookmarkable and survives Apply. */}
+        <input type="hidden" name="sort" value={query.sort} />
+        <input type="hidden" name="dir" value={query.dir} />
 
         <button
           type="submit"
@@ -150,7 +176,11 @@ export default async function AdminPage({
         page={result.page}
         pageSize={result.pageSize}
         total={result.total}
+        employeesTotal={result.employeesTotal}
         totalPages={result.totalPages}
+        sort={query.sort}
+        dir={query.dir}
+        filtered={filtered}
       />
     </div>
   );

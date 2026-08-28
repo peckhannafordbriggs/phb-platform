@@ -2111,6 +2111,176 @@ here do not cover it. `scripts/co-verify-phase9.ts watch` is the instrument.
 
 ---
 
+# Admin panel (Phase 10)
+
+## "Who has access to this, and when did that change?"
+
+**`/admin/audit`.** Filter by the person it was about, by who did it, by action,
+and by date range. An employee's own history is also inline on `/admin/<id>`,
+which is the faster route when the question is about one person.
+
+Under app-only Graph auth Exchange records the *application* as the sender, not
+the person — so for anything touching mail, these rows are the only record
+anywhere of who did it. That is why this table matters more than an audit log
+usually does, and why it is append-only at the database level rather than by
+convention.
+
+**Nothing can edit or delete a row**, including an administrator. There is no
+route, and the trigger refuses both regardless. If a row is wrong, the fix is
+another row, not a correction.
+
+## An audit row says "unrecognised action"
+
+**Symptom.** A row renders as `job.something` in monospace with an amber
+"unrecognised action" badge, instead of a sentence.
+
+**Cause.** The action exists in `lib/audit.ts` but has no sentence in
+`lib/admin/audit-describe.ts`. That happens when a phase adds an action and does
+not add its wording.
+
+**This is the designed behaviour, not a bug.** A viewer that invented plausible
+prose for an action it had never seen would be worse than one that admits it —
+the whole value of this table is that it is trustworthy.
+
+**The fix.** Add a case to `KNOWN_ACTIONS` and a label to `ACTION_LABELS` in
+`audit-describe.ts`. Both are typed as total records over `AuditAction`, so
+adding the action to the union without adding wording stops the build — which
+means this badge should only ever appear for a row written by an *older* build,
+never by the current one.
+
+## The audit date filter looks like it is dropping a day
+
+It is not, and the reason is worth knowing before "fixing" it.
+
+`to=2026-09-12` means "up to the end of the 12th" to whoever typed it, so the
+query uses `lt` against the start of the 13th rather than `lte` against midnight
+on the 12th. An `lte` would return an event at 09:00 and silently drop one at
+23:59 — most of a day, invisibly.
+
+Bare dates are parsed as **UTC**, matching how `occurred_at` is stored. Reading
+them as local time would shift the boundary by the reader's offset, so the same
+filter would return different rows depending on which machine ran it.
+
+A `to` that carries a time is used exactly as given.
+
+## Bulk grant, revoke, enable, disable
+
+Select rows, choose the action, confirm. The confirmation names the count and
+the module before anything happens.
+
+**One audit row per employee, never one for the batch.** The log has to answer
+"when did *this person* get access", which a single row covering forty people
+cannot.
+
+**Partial results are normal and are reported in full.** The summary separates:
+
+| | Means |
+|---|---|
+| changed | the grant or status actually changed |
+| already as requested | they already had it — no audit row written |
+| refused | a guardrail stopped it, named, with the reason |
+
+"Already as requested" is not a failure. Re-granting is idempotent and
+deliberately writes no second audit row, so a bulk grant run twice reports 40
+changed then 40 unchanged rather than 80 grants.
+
+**The guardrails apply to every member of a selection**, because the bulk path
+calls the same `setStatus` an individual change does rather than reimplementing
+the checks. A bulk disable cannot disable the acting admin and cannot leave the
+platform with zero active administrators; those members of the selection are
+refused by name while the rest proceed.
+
+The last-admin check runs per employee, in order, against the state at that
+moment — so disabling two of three admins works and disabling the last one is
+refused, rather than one check up front that the loop then invalidates.
+
+**Bulk applies to grants and status only.** Nothing else, and nothing that sends.
+`tests/admin-bulk.test.ts` asserts the complete set of audit actions a bulk
+operation can produce; adding a fifth breaks it deliberately.
+
+## The employee list is empty
+
+Two different states, and they read differently on purpose.
+
+- **"Nobody has signed in yet"** — the platform has no employee rows at all.
+  Employees appear on first sign-in; there is no way to create one.
+- **"No employees match these filters"** — rows exist, the filter hid them. The
+  message gives the real total and a link to show everyone.
+
+**The default view is already a filter.** "With a grant" hides everyone who
+signed in and never got access, which on a new platform is everybody. If the list
+looks emptier than expected, check the Show dropdown before anything else.
+
+**"No grants at all"** is its own option, not the absence of a module filter. It
+answers "who signed in and never got access", which no combination of the other
+filters expresses.
+
+## Sorting
+
+Name, status and last sign-in, by clicking the column heading. The sort travels
+in the URL, so a sorted view is bookmarkable and survives Apply.
+
+**Never-signed-in sorts to the end**, not scattered through the dates: it is the
+extreme of that column, so newest-first does not open with a screen of blanks.
+
+**Every sort ends with a name-then-id tiebreak**, and that is load-bearing rather
+than tidy. Sorting 130 employees by status puts ~111 of them in one
+undifferentiated run, and without a tiebreak PostgreSQL is free to order that run
+differently for each `OFFSET` — so a row appears on two pages and another on
+none. A four-row test never crosses a page boundary and never sees it;
+`tests/admin-list-volume.test.ts` walks every page at 130 rows for exactly this.
+
+## Renaming or hiding a position or department
+
+**There is no delete, and there never will be.** The foreign key is
+`ON DELETE RESTRICT`, so a delete of an assigned value fails at the database too.
+
+**Hiding** removes the value from the dropdowns *and* refuses any new assignment
+to it server-side — the dropdown omitting it is a convenience, the service check
+is the boundary. Employees already assigned keep the value, and it still renders
+on their record marked "hidden value", so nobody sees a blank field and assumes
+data loss.
+
+**The number beside each value is how many employees hold it**, including
+disabled ones — they still hold it and their record still shows it, so counting
+only active people would understate what a rename affects.
+
+**A free-text count appears above the lists** when anyone holds an "Other"
+position from onboarding. That is the cleanup backlog: add the real value and
+reassign them.
+
+**Ordering is case-insensitive by database collation.** Do not add a per-query
+`COLLATE` — it would work on that one query and hide a database created with the
+wrong collation, which then surfaces somewhere else entirely.
+
+## Adding a third module
+
+The grant matrix renders one column per active row in `modules`, and the filters
+read from the same place. Nothing in the admin screens names a module.
+
+`tests/admin-lists-and-modules.test.ts` greps every file under
+`app/(platform)/admin` for a literal module key and fails if one appears. If that
+test starts failing after a UI change, the fix is to read the key from the
+`modules` table rather than to relax the test — CLAUDE.md keys authorization on
+the stable `key`, never on a display label.
+
+## Testing admin changes
+
+**Use the seeded volume.** `npm run seed:dev` produces 130+ employees, some
+disabled, some never signed in, some with incomplete profiles and free-text
+positions. Four rows will not surface a paging or sorting bug.
+
+The automated equivalent is `createEmployeeVolume()` in `tests/db.ts` —
+deterministic by index, so a failure is reproducible: every 7th disabled, every
+11th never signed in, every 5th with no grant, every 13th with an incomplete
+profile.
+
+**Then click through it.** Two of the three bugs Phase 8 found came from a person
+using the screen rather than from a test, and that applies to an admin panel as
+much as to a mail client.
+
+---
+
 # Change Orders — verifying the automation is undisturbed (Phase 11)
 
 ## Has the platform disturbed the automation?

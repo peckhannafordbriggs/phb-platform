@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@/lib/generated/prisma/client";
 import { writeAuditEvent } from "@/lib/audit";
 import type { EmployeeListQuery, AuditQuery } from "@/lib/validation/admin";
 
@@ -43,8 +44,44 @@ async function otherActiveAdminCount(excludingEmployeeId: string): Promise<numbe
 
 // ---------------------------------------------------------------- employees
 
+/**
+ * The ORDER BY for each sortable column.
+ *
+ * Built here rather than from the query string: a caller-supplied column name
+ * would be both an injection surface and a way to order by something the table
+ * does not show. Every option ends with a name tiebreak, because a page boundary
+ * inside a run of equal values - forty people who have never signed in, or every
+ * active employee - otherwise reshuffles between requests and pages both repeat
+ * and drop rows.
+ */
+function orderFor(
+  sort: EmployeeListQuery["sort"],
+  dir: EmployeeListQuery["dir"],
+): Prisma.EmployeeOrderByWithRelationInput[] {
+  const name: Prisma.EmployeeOrderByWithRelationInput[] = [
+    { lastName: dir },
+    { firstName: dir },
+    { id: "asc" },
+  ];
+
+  if (sort === "name") return name;
+
+  if (sort === "lastLogin") {
+    return [
+      // Nulls last on the way down, first on the way up: "never signed in" is
+      // the extreme of that column, not an absence to be scattered through it.
+      { lastLoginAt: { sort: dir, nulls: dir === "desc" ? "last" : "first" } },
+      { lastName: "asc" },
+      { id: "asc" },
+    ];
+  }
+
+  return [{ status: dir }, { lastName: "asc" }, { firstName: "asc" }, { id: "asc" }];
+}
+
 export async function listEmployees(query: EmployeeListQuery) {
-  const { q, moduleKey, status, departmentId, scope, page, pageSize } = query;
+  const { q, moduleKey, status, departmentId, scope, sort, dir, page, pageSize } =
+    query;
 
   const where = {
     ...(status !== undefined ? { status } : {}),
@@ -58,16 +95,32 @@ export async function listEmployees(query: EmployeeListQuery) {
           ],
         }
       : {}),
-    // A module filter is a stricter form of "has at least one grant".
+    /**
+     * A module filter is a stricter form of "has at least one grant", so it wins
+     * over the scope. `none` is the opposite question and cannot be combined
+     * with one - a module filter asking for people who have no grants is a
+     * contradiction, and the module filter is the more specific request.
+     */
     ...(moduleKey !== undefined && moduleKey.length > 0
       ? { grants: { some: { moduleKey } } }
       : scope === "granted"
         ? { grants: { some: {} } }
-        : {}),
+        : scope === "none"
+          ? { grants: { none: {} } }
+          : {}),
   };
 
-  const [total, employees] = await Promise.all([
+  const [total, employeesTotal, employees] = await Promise.all([
     prisma.employee.count({ where }),
+    /**
+     * Everyone, ignoring every filter.
+     *
+     * PHASE-10: "no results from a filter reads differently from no employees at
+     * all". The screen cannot tell those apart from a filtered count of zero,
+     * and guessing from whether any filter is set is wrong in the case that
+     * matters - a brand-new platform with the default scope applied.
+     */
+    prisma.employee.count(),
     prisma.employee.findMany({
       where,
       select: {
@@ -84,7 +137,7 @@ export async function listEmployees(query: EmployeeListQuery) {
         department: { select: { id: true, name: true } },
         grants: { select: { moduleKey: true } },
       },
-      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+      orderBy: orderFor(sort, dir),
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
@@ -98,6 +151,8 @@ export async function listEmployees(query: EmployeeListQuery) {
     page,
     pageSize,
     total,
+    /** Every employee, before any filter. Distinguishes the two empty states. */
+    employeesTotal,
     totalPages: Math.max(1, Math.ceil(total / pageSize)),
   };
 }
@@ -210,33 +265,152 @@ export async function removeGrant(
   return { ok: true, data: { revoked: true } };
 }
 
+/**
+ * What happened to one employee in a bulk operation.
+ *
+ * PHASE-10: "Partial failure is possible. Report what succeeded and what didn't;
+ * never leave the admin guessing." A single `changed` count cannot do that - it
+ * conflates "already had it" with "refused by a guardrail", and those need
+ * different responses from the person who pressed the button.
+ */
+export interface BulkOutcome {
+  employeeId: string;
+  /** Best available label for the row, so the UI need not re-fetch names. */
+  label: string;
+  result: "changed" | "unchanged" | "failed";
+  /** Present only when `failed`. The guardrail message, verbatim. */
+  reason?: string;
+  code?: AdminFailure;
+}
+
+export interface BulkSummary {
+  changed: number;
+  unchanged: number;
+  failed: number;
+  outcomes: BulkOutcome[];
+}
+
+/** Labels for the bulk report, fetched once rather than per employee. */
+async function labelsFor(employeeIds: string[]): Promise<Map<string, string>> {
+  const people = await prisma.employee.findMany({
+    where: { id: { in: employeeIds } },
+    select: { id: true, firstName: true, lastName: true, email: true },
+  });
+
+  return new Map(
+    people.map((p) => {
+      const full = [p.firstName, p.lastName]
+        .filter((part) => part !== null && part.trim().length > 0)
+        .join(" ")
+        .trim();
+      return [p.id, full.length > 0 ? full : p.email];
+    }),
+  );
+}
+
+function summarise(outcomes: BulkOutcome[]): BulkSummary {
+  return {
+    changed: outcomes.filter((o) => o.result === "changed").length,
+    unchanged: outcomes.filter((o) => o.result === "unchanged").length,
+    failed: outcomes.filter((o) => o.result === "failed").length,
+    outcomes,
+  };
+}
+
+/**
+ * Grant or revoke one module across a selection.
+ *
+ * Sequential, not a transaction, and both of those are deliberate:
+ *
+ *   - **One audit row per employee.** PHASE-10 requires it - the log has to
+ *     answer "when did *this person* get access", which a single row covering
+ *     forty people cannot. Each call goes through addGrant/removeGrant, which
+ *     write their own audit event in their own transaction.
+ *   - **One employee's failure does not roll back the rest.** Wrapping the whole
+ *     thing would mean one missing employee undoing thirty-nine successful
+ *     grants, which is worse than a partial result that says exactly what
+ *     happened.
+ */
 export async function bulkGrants(
   actorId: string,
   employeeIds: string[],
   moduleKey: string,
   action: "grant" | "revoke",
-): Promise<AdminResult<{ changed: number }>> {
+): Promise<AdminResult<BulkSummary>> {
   const moduleRow = await prisma.module.findUnique({
     where: { key: moduleKey },
     select: { key: true },
   });
+  // An unknown module fails the whole operation rather than failing forty times
+  // identically - it is a fault in the request, not in any employee.
   if (moduleRow === null) return fail("unknown_module", "Module not found.");
 
-  let changed = 0;
+  const labels = await labelsFor(employeeIds);
+  const outcomes: BulkOutcome[] = [];
+
   for (const employeeId of employeeIds) {
+    const label = labels.get(employeeId) ?? employeeId;
     const result =
       action === "grant"
         ? await addGrant(actorId, employeeId, moduleKey)
         : await removeGrant(actorId, employeeId, moduleKey);
 
-    // A missing employee in a bulk selection is skipped rather than failing the
-    // whole operation; the count reports what actually happened.
-    if (result.ok && ("granted" in result.data ? result.data.granted : result.data.revoked)) {
-      changed += 1;
+    if (!result.ok) {
+      outcomes.push({ employeeId, label, result: "failed", reason: result.message, code: result.code });
+      continue;
     }
+
+    const didChange = "granted" in result.data ? result.data.granted : result.data.revoked;
+    outcomes.push({ employeeId, label, result: didChange ? "changed" : "unchanged" });
   }
 
-  return { ok: true, data: { changed } };
+  return { ok: true, data: summarise(outcomes) };
+}
+
+/**
+ * Enable or disable across a selection.
+ *
+ * The guardrails are not re-implemented here. Every employee goes through
+ * setStatus, which is where "you cannot disable yourself" and "never leave zero
+ * active admins" live - so a bulk disable is exactly as safe as forty individual
+ * ones, and a second copy of those rules could not drift out of step with the
+ * first. PHASE-10: "The guardrails apply to every member of the selection."
+ *
+ * The last-admin check is evaluated per employee, in order, against the state at
+ * that moment. Disabling two of the last three admins therefore stops at the
+ * one that would empty the platform, and reports why - rather than checking once
+ * up front against a count that the loop then invalidates.
+ */
+export async function bulkStatus(
+  actorId: string,
+  employeeIds: string[],
+  status: "active" | "disabled",
+): Promise<AdminResult<BulkSummary>> {
+  const labels = await labelsFor(employeeIds);
+  const outcomes: BulkOutcome[] = [];
+
+  for (const employeeId of employeeIds) {
+    const label = labels.get(employeeId) ?? employeeId;
+    const before = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { status: true },
+    });
+
+    const result = await setStatus(actorId, employeeId, status);
+
+    if (!result.ok) {
+      outcomes.push({ employeeId, label, result: "failed", reason: result.message, code: result.code });
+      continue;
+    }
+
+    outcomes.push({
+      employeeId,
+      label,
+      result: before !== null && before.status !== status ? "changed" : "unchanged",
+    });
+  }
+
+  return { ok: true, data: summarise(outcomes) };
 }
 
 // ------------------------------------------------------- status / admin flag
@@ -340,6 +514,13 @@ export async function setAdminFlag(
 
 // ------------------------------------------------- positions / departments
 
+/**
+ * Ordering relies on the database collation sorting case-insensitively.
+ *
+ * docs/runbook.md has the note. Do NOT add a per-query `COLLATE` here: it would
+ * work on this connection and hide the fact that the database was created with
+ * the wrong collation, which then surfaces somewhere else entirely.
+ */
 export async function listPositions(includeHidden: boolean) {
   return prisma.position.findMany({
     where: includeHidden ? {} : { status: "active" },
@@ -354,6 +535,69 @@ export async function listDepartments(includeHidden: boolean) {
     select: { id: true, name: true, status: true },
     orderBy: { name: "asc" },
   });
+}
+
+/**
+ * The same lists, with how many employees hold each value.
+ *
+ * PHASE-10: "Show how many employees hold each value, so an admin knows what a
+ * rename affects." A rename is invisible until you know whether it touches two
+ * people or ninety, and hiding a value that forty people hold is a different
+ * decision from hiding an unused one.
+ *
+ * The count deliberately includes disabled employees. They still hold the value,
+ * their record still displays it, and a rename still changes what their history
+ * reads - counting only active people would understate what is affected.
+ */
+export async function listPositionsWithCounts(includeHidden: boolean) {
+  const [positions, grouped] = await Promise.all([
+    listPositions(includeHidden),
+    prisma.employee.groupBy({
+      by: ["positionId"],
+      _count: { _all: true },
+      where: { positionId: { not: null } },
+    }),
+  ]);
+
+  const counts = new Map(
+    grouped.map((row) => [row.positionId, row._count._all] as const),
+  );
+
+  return positions.map((position) => ({
+    ...position,
+    employeeCount: counts.get(position.id) ?? 0,
+  }));
+}
+
+export async function listDepartmentsWithCounts(includeHidden: boolean) {
+  const [departments, grouped] = await Promise.all([
+    listDepartments(includeHidden),
+    prisma.employee.groupBy({
+      by: ["departmentId"],
+      _count: { _all: true },
+      where: { departmentId: { not: null } },
+    }),
+  ]);
+
+  const counts = new Map(
+    grouped.map((row) => [row.departmentId, row._count._all] as const),
+  );
+
+  return departments.map((department) => ({
+    ...department,
+    employeeCount: counts.get(department.id) ?? 0,
+  }));
+}
+
+/**
+ * How many employees hold a free-text position instead of a list value.
+ *
+ * Surfaced beside the positions list because that is the backlog it represents:
+ * "Other" during onboarding flags the row for admin cleanup, and the count is
+ * how anybody knows the backlog exists.
+ */
+export async function freeTextPositionCount(): Promise<number> {
+  return prisma.employee.count({ where: { positionOther: { not: null } } });
 }
 
 export async function createPosition(actorId: string, name: string) {

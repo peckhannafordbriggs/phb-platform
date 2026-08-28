@@ -12,6 +12,7 @@ import { DELETE as removeGrantRoute } from "@/app/api/admin/employees/[id]/grant
 import { POST as statusRoute } from "@/app/api/admin/employees/[id]/status/route";
 import { POST as adminFlagRoute } from "@/app/api/admin/employees/[id]/admin-flag/route";
 import { POST as bulkGrantsRoute } from "@/app/api/admin/grants/bulk/route";
+import { POST as bulkStatusRoute } from "@/app/api/admin/status/bulk/route";
 import { GET as auditRoute } from "@/app/api/admin/audit/route";
 import { seedBootstrapAdmins } from "@/lib/bootstrap-admins";
 import {
@@ -108,6 +109,9 @@ describe("admin route protection", () => {
         }),
       ),
       auditRoute(new NextRequest("http://localhost/api/admin/audit")),
+      bulkStatusRoute(
+        jsonRequest({ employeeIds: [target.id], status: "disabled" }),
+      ),
     ]);
 
     for (const response of responses) {

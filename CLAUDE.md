@@ -220,6 +220,29 @@ Grouping is scoped to the open folder, so a conversation row reads "7 in this
 folder" rather than "7 messages" — a thread spans folders, and the folder-scoped
 count would otherwise be a false claim about the thread.
 
+**Phase 10 complete — the admin panel holds up at volume.** The audit log is
+readable: `/admin/audit` filters by target, actor, action and date range, an
+employee's own history is inline on their page, and `describeAuditEvent` renders
+a row as a sentence rather than an action string beside two UUIDs. An action the
+build has no wording for renders as itself and says so — a viewer that invented
+prose for an unrecognised action would be worse than one that admits it, and
+`KNOWN_ACTIONS` is a total record so adding an action without wording stops the
+build.
+
+Bulk grant, revoke, enable and disable, with a confirmation naming the count and
+one audit row per employee. The bulk path calls the same guarded `setStatus` an
+individual change does, so the four guardrails apply to every member of a
+selection; refusals are reported by name and by reason rather than as a count.
+
+Sorting by name, status and last sign-in, a "no grants at all" scope, per-value
+employee counts on the positions and departments lists, and two visually distinct
+empty states. Every sort carries a name-then-id tiebreak, which is load-bearing:
+sorting 130 employees by status is one run of 111 ties, and without it a page
+boundary repeats one row and drops another.
+
+Tested against a deterministic 130-employee fixture, not four rows.
+`docs/runbook.md` has the operational notes under *Admin panel (Phase 10)*.
+
 **Phase 11 complete — the automation is verified undisturbed.** Nine phases of
 platform work have not touched the change-order pipeline, and this is now
 *observed* rather than argued from the design. No flow ran inside any of the three

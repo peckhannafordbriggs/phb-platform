@@ -7,6 +7,14 @@ interface ListItem {
   id: string;
   name: string;
   status: "active" | "hidden";
+  /**
+   * How many employees hold this value.
+   *
+   * PHASE-10: "so an admin knows what a rename affects". A rename that touches
+   * ninety records is a different decision from one that touches none, and
+   * hiding a value nobody holds is free where hiding a busy one is not.
+   */
+  employeeCount: number;
 }
 
 /** Add, rename, hide. There is deliberately no delete. */
@@ -114,14 +122,31 @@ export function ListEditor({
               </>
             ) : (
               <>
-                <span
-                  className={
-                    item.status === "hidden"
-                      ? "min-w-0 flex-1 truncate text-[var(--muted)] line-through"
-                      : "min-w-0 flex-1 truncate"
-                  }
-                >
-                  {item.name}
+                <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                  <span
+                    className={
+                      item.status === "hidden"
+                        ? "min-w-0 truncate text-[var(--muted)] line-through"
+                        : "min-w-0 truncate"
+                    }
+                  >
+                    {item.name}
+                  </span>
+                  <span
+                    className="shrink-0 text-xs text-[var(--muted)]"
+                    title={
+                      item.employeeCount === 0
+                        ? "Nobody holds this value"
+                        : "Includes disabled employees, who still hold it"
+                    }
+                  >
+                    {item.employeeCount === 0 ? "unused" : `${item.employeeCount}`}
+                  </span>
+                  {item.status === "hidden" && item.employeeCount > 0 && (
+                    <span className="shrink-0 text-xs italic text-[var(--muted)]">
+                      still assigned
+                    </span>
+                  )}
                 </span>
                 <button
                   type="button"
@@ -144,6 +169,11 @@ export function ListEditor({
                     )
                   }
                   className="text-xs text-[var(--muted)] underline underline-offset-2"
+                  title={
+                    item.status === "active" && item.employeeCount > 0
+                      ? `${item.employeeCount} employee(s) keep this value. Hiding only removes it from the dropdowns.`
+                      : undefined
+                  }
                 >
                   {item.status === "active" ? "Hide" : "Restore"}
                 </button>

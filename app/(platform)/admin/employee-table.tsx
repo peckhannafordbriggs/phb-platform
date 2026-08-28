@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { BulkBar } from "./bulk-bar";
 
 export interface AdminEmployeeRow {
   id: string;
@@ -25,21 +26,28 @@ export function EmployeeTable({
   page,
   pageSize,
   total,
+  employeesTotal,
   totalPages,
+  sort,
+  dir,
+  filtered,
 }: {
   employees: AdminEmployeeRow[];
   modules: { key: string; displayName: string }[];
   page: number;
   pageSize: number;
   total: number;
+  /** Every employee, before any filter. Distinguishes the two empty states. */
+  employeesTotal: number;
   totalPages: number;
+  sort: "name" | "lastLogin" | "status";
+  dir: "asc" | "desc";
+  filtered: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -58,40 +66,29 @@ export function EmployeeTable({
     );
   }
 
-  async function runBulk(moduleKey: string, action: "grant" | "revoke") {
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch("/api/admin/grants/bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          employeeIds: [...selected],
-          moduleKey,
-          action,
-        }),
-      });
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as
-          | { error?: { message?: string } }
-          | null;
-        setError(payload?.error?.message ?? "The action could not be completed.");
-        return;
-      }
-
-      setSelected(new Set());
-      router.refresh();
-    } catch {
-      setError("Could not reach the server.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function pageHref(target: number): string {
     const params = new URLSearchParams(searchParams.toString());
     params.set("page", String(target));
+    return `/admin?${params.toString()}`;
+  }
+
+  /**
+   * A sort link for one column.
+   *
+   * Clicking the active column flips direction; clicking another switches to it
+   * in its natural direction - ascending for a name, descending for a date,
+   * since "most recent first" is what somebody wants from a last-sign-in column
+   * and "A first" is what they want from a name.
+   *
+   * Always returns to page 1: staying on page 4 of a differently ordered list
+   * shows a slice nobody asked for.
+   */
+  function sortHref(column: "name" | "lastLogin" | "status"): string {
+    const params = new URLSearchParams(searchParams.toString());
+    const natural = column === "lastLogin" ? "desc" : "asc";
+    params.set("sort", column);
+    params.set("dir", sort === column ? (dir === "asc" ? "desc" : "asc") : natural);
+    params.set("page", "1");
     return `/admin?${params.toString()}`;
   }
 
@@ -100,46 +97,26 @@ export function EmployeeTable({
 
   return (
     <div className="mt-6">
-      {selected.size > 0 && (
-        <div className="mb-3 flex flex-wrap items-center gap-3 rounded border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          <span className="text-sm font-medium">
-            {selected.size} selected
-          </span>
-          {modules.map((m) => (
-            <span key={m.key} className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void runBulk(m.key, "grant")}
-                className="rounded border border-[var(--border)] bg-white px-3 py-1 text-xs disabled:opacity-50"
-              >
-                Grant {m.displayName}
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void runBulk(m.key, "revoke")}
-                className="rounded border border-[var(--border)] bg-white px-3 py-1 text-xs disabled:opacity-50"
-              >
-                Revoke {m.displayName}
-              </button>
-            </span>
-          ))}
-          <button
-            type="button"
-            onClick={() => setSelected(new Set())}
-            className="text-xs text-[var(--muted)] underline underline-offset-2"
-          >
-            Clear
-          </button>
-        </div>
-      )}
+      <BulkBar
+        selectedIds={[...selected]}
+        modules={modules}
+        onClear={() => setSelected(new Set())}
+        onDone={() => {
+          setSelected(new Set());
+          router.refresh();
+        }}
+      />
 
-      {error !== null && (
-        <p role="alert" className="mb-3 text-sm text-red-700">
-          {error}
-        </p>
-      )}
+      <p className="mb-2 text-sm text-[var(--muted)]">
+        {total === 0 ? "No employees" : `${total} ${total === 1 ? "employee" : "employees"}`}
+        {filtered && (
+          <>
+            {" "}
+            matching the current filters
+            {total !== employeesTotal && ` · ${employeesTotal} in total`}
+          </>
+        )}
+      </p>
 
       <div className="overflow-x-auto rounded border border-[var(--border)]">
         <table className="w-full min-w-[54rem] border-collapse text-sm">
@@ -155,7 +132,9 @@ export function EmployeeTable({
                   onChange={toggleAll}
                 />
               </th>
-              <Th>Name</Th>
+              <SortableTh column="name" active={sort} dir={dir} href={sortHref("name")}>
+                Name
+              </SortableTh>
               <Th>Email</Th>
               <Th>
                 Position{" "}
@@ -164,8 +143,17 @@ export function EmployeeTable({
                 </span>
               </Th>
               <Th>Department</Th>
-              <Th>Status</Th>
-              <Th>Last sign-in</Th>
+              <SortableTh column="status" active={sort} dir={dir} href={sortHref("status")}>
+                Status
+              </SortableTh>
+              <SortableTh
+                column="lastLogin"
+                active={sort}
+                dir={dir}
+                href={sortHref("lastLogin")}
+              >
+                Last sign-in
+              </SortableTh>
               {modules.map((m) => (
                 <Th key={m.key}>{m.displayName}</Th>
               ))}
@@ -176,9 +164,40 @@ export function EmployeeTable({
               <tr>
                 <td
                   colSpan={7 + modules.length}
-                  className="px-3 py-8 text-center text-[var(--muted)]"
+                  className="px-3 py-10 text-center text-[var(--muted)]"
                 >
-                  No employees match these filters.
+                  {/*
+                    PHASE-10: "no results from a filter reads differently from no
+                    employees at all". They call for different actions - one is
+                    "widen the filter", the other is "nobody has signed in yet" -
+                    and a single message would send an admin looking for a
+                    filter to clear on a platform that has no rows to show.
+                  */}
+                  {employeesTotal === 0 ? (
+                    <>
+                      <span className="block font-medium text-[var(--foreground)]">
+                        Nobody has signed in yet
+                      </span>
+                      <span className="mt-1 block text-sm">
+                        Employees appear here the first time they sign in. There
+                        is no way to create one.
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="block font-medium text-[var(--foreground)]">
+                        No employees match these filters
+                      </span>
+                      <span className="mt-1 block text-sm">
+                        {employeesTotal} {employeesTotal === 1 ? "employee" : "employees"}{" "}
+                        exist in total.{" "}
+                        <Link href="/admin?scope=all" className="underline underline-offset-2">
+                          Show everyone
+                        </Link>
+                        .
+                      </span>
+                    </>
+                  )}
                 </td>
               </tr>
             )}
@@ -284,6 +303,38 @@ export function EmployeeTable({
 
 function Th({ children }: { children: React.ReactNode }) {
   return <th className="px-3 py-2 font-medium">{children}</th>;
+}
+
+function SortableTh({
+  column,
+  active,
+  dir,
+  href,
+  children,
+}: {
+  column: "name" | "lastLogin" | "status";
+  active: string;
+  dir: "asc" | "desc";
+  href: string;
+  children: React.ReactNode;
+}) {
+  const isActive = active === column;
+
+  return (
+    <th
+      className="px-3 py-2 font-medium"
+      // Announced rather than only drawn: a caret is invisible to a screen
+      // reader, and this table is how access is administered.
+      aria-sort={isActive ? (dir === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <Link href={href} className="inline-flex items-center gap-1 hover:underline">
+        {children}
+        <span aria-hidden="true" className={isActive ? "" : "text-[var(--border)]"}>
+          {isActive && dir === "desc" ? "▾" : "▴"}
+        </span>
+      </Link>
+    </th>
+  );
 }
 
 function formatDate(value: Date | string | null): string {
