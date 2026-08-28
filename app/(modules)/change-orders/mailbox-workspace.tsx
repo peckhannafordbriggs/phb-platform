@@ -1265,7 +1265,9 @@ function MessageRow({
         aria-current={selected ? "true" : undefined}
         className={
           "relative block w-full py-2.5 text-left transition-colors hover:bg-[var(--neutral-50)] " +
-          (indented ? "border-l border-[var(--border)] pl-5 pr-3 " : "px-3 ") +
+          // Indent only. A rule down the left as well was saying the same thing
+          // twice, and it was the last border on this surface doing no work.
+          (indented ? "pl-7 pr-3 " : "px-3 ") +
           (selected ? "bg-[var(--neutral-100)]" : "")
         }
       >
