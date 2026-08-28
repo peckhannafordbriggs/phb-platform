@@ -86,7 +86,7 @@ destroyed 22.6 hours per point.
 Employee browser
       │  Microsoft sign-in (Entra ID)
       ▼
-Next.js app (Azure Container Apps)
+Next.js app (Azure Container Apps — once deployed; see below)
       │
       ├──► PostgreSQL  ── platform data: employees, grants, audit, BAS readings
       ├──► Microsoft Graph ──► changeorder@phb1899.com mailbox
@@ -97,6 +97,11 @@ Separately, and independently:
 Building controller ──► Python collector (phb-bas) ──► same PostgreSQL
 Change-order automation (11 Power Automate flows) ──► same mailbox
 ```
+
+**Not deployed yet.** That diagram is the shape once the Azure subscription exists. Today
+the app runs locally against a local PostgreSQL, the container image and the Bicep
+templates are written and exercised in CI, and nothing is hosted. See *Not built,
+deliberately* below.
 
 The platform and the change-order automation **never talk to each other.** Both talk to
 Exchange. That independence was verified in Phase 11 — no flow ran during any platform
@@ -219,6 +224,10 @@ up, this becomes a Niagara engineering job before it's a data job.
   the API budget and Exchange responds in 250 ms.
 - **BAS plain-English querying (B5)** — designed, not started. Blocked on a company
   Anthropic API key.
+- **Production deployment (Phase 7 Part B)** — blocked on the Azure subscription, which
+  has to be owned by an M365 group rather than a person, with Contributor rights on the
+  resource group. Part A is done: the Dockerfile, the CI pipeline and the Bicep templates
+  exist and are exercised on every push. What is missing is somewhere to deploy to.
 - **Moving the change-order AI off the laptop** — see below.
 
 ### Moving the AI layer off the laptop
@@ -246,8 +255,11 @@ module on. Effective immediately.
 both confirmed data loss and points whose capacity is unknown — **unknown is not safe and
 never renders green.**
 
-**Deploying a change.** Push to `main`. CI runs tests, builds the container, and deploys.
-Nothing deploys from a personal machine.
+**Deploying a change.** Push to `main`. CI runs the tests, builds the container image and
+boots it, and compiles the Bicep. Nothing deploys from a personal machine — and nothing
+deploys at all yet: `deploy.yml` is written and triggers on `main`, but its job is gated on
+the `AZURE_*` repository variables and skips while they are unset. Once the subscription
+exists and those are set, the same push deploys.
 
 **Restoring the BAS database.** `Test-BasRestore.ps1` in `phb-bas` restores to a scratch
 database and compares. Run it occasionally — an untested backup isn't a backup.
