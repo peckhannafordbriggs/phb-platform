@@ -80,7 +80,7 @@ import type {
  * docs/phase-9-verification.md.
  *
  * The cost, against the ~10,000 requests per 10 minutes per app per mailbox that
- * Exchange allows (docs/runbook.md, *Graph throttling*):
+ * Exchange allows (runbook.md, *Graph throttling*):
  *
  *   one focused tab   1 request / 20s  =   30 per 10 min  =  0.3% of budget
  *   three focused     90 per 10 min                       =  0.9% of budget
@@ -98,7 +98,7 @@ import type {
  *     nothing, which is what stops a forgotten tab being the real bill.
  *   - Tripling the poll rate triples the rate at which this component
  *     re-renders, and the editor used to reset itself on every parent render -
- *     the 60-second version of that bug is written up in docs/runbook.md. The
+ *     the 60-second version of that bug is written up in runbook.md. The
  *     callbacks ref in draft-editor.tsx is what makes a faster interval safe;
  *     do not remove it.
  *

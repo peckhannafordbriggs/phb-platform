@@ -21,7 +21,7 @@
 #
 # What IS platform-specific is the *schema* engine in @prisma/engines, used by
 # `prisma migrate deploy`. It is not in this image, and migrations deliberately
-# do not run here - see .github/workflows/deploy.yml and docs/runbook.md. Every
+# do not run here - see .github/workflows/deploy.yml and runbook.md. Every
 # replica running migrations on start is a race.
 #
 # Debian slim rather than Alpine anyway: Next.js pulls in prebuilt native
@@ -46,7 +46,7 @@ COPY package.json package-lock.json ./
 # because lib/generated/prisma is gitignored: without the hook a fresh clone, a
 # new machine or a CI runner has no Prisma client at all, and B1 sat for two
 # phases with a client twelve models out of date because nothing forced a
-# regenerate. See docs/runbook.md.
+# regenerate. See runbook.md.
 #
 # `prisma generate` reads prisma/schema.prisma and prisma.config.ts and nothing
 # else. It needs no database: prisma.config.ts resolves DATABASE_URL to "" when

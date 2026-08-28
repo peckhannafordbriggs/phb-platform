@@ -1,7 +1,7 @@
 # Phase 10 — Admin Panel Refinement
 
 Read `CLAUDE.md`, `docs/04-auth-and-permissions.md`, and
-`docs/WHY-ITS-BUILT-THIS-WAY.md` first. Those define **how**, and override anything here.
+`WHY-ITS-BUILT-THIS-WAY.md` first. Those define **how**, and override anything here.
 
 The admin panel's core shipped in Phase 3 and works. This phase is scale and polish, not
 new capability.
@@ -98,7 +98,7 @@ Both are admin-managed lists already. What's needed is the care around changing 
   sees a blank field and assumes data loss
 - Assigning a hidden value is refused server-side, not just absent from the dropdown
 - Show how many employees hold each value, so an admin knows what a rename affects
-- Display order relies on database collation sorting case-insensitively. `docs/runbook.md`
+- Display order relies on database collation sorting case-insensitively. `runbook.md`
   has the note; don't add per-query `COLLATE`
 
 ### 5. Two modules exist now

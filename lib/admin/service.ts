@@ -517,7 +517,7 @@ export async function setAdminFlag(
 /**
  * Ordering relies on the database collation sorting case-insensitively.
  *
- * docs/runbook.md has the note. Do NOT add a per-query `COLLATE` here: it would
+ * runbook.md has the note. Do NOT add a per-query `COLLATE` here: it would
  * work on this connection and hide the fact that the database was created with
  * the wrong collation, which then surfaces somewhere else entirely.
  */

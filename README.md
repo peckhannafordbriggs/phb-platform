@@ -45,7 +45,7 @@ Every variable is listed in `.env.example` with no real values. Fill in
 
 **Where each value comes from — what to generate yourself, what to copy, and the
 three things to request from IT — is in
-[`docs/runbook.md`](docs/runbook.md#filling-in-envlocal-on-a-new-machine).**
+[`runbook.md`](runbook.md#filling-in-envlocal-on-a-new-machine).**
 That includes what still works while you wait for a request to come back: the app
 boots and the whole test suite passes without any Microsoft credential.
 
@@ -103,7 +103,7 @@ Prisma 7 takes the connection URL from `prisma.config.ts` (which loads
 clean clone if your editor cannot resolve it.
 
 Prisma fields are camelCase; database tables and columns are snake_case via
-`@@map` / `@map`. That keeps the raw SQL in `docs/runbook.md` free of quoted
+`@@map` / `@map`. That keeps the raw SQL in `runbook.md` free of quoted
 identifiers, which matters because those queries are the recovery path for
 someone who has never seen this codebase.
 
@@ -161,4 +161,4 @@ Dependencies point one way.
 
 ## Operations
 
-Failure modes, symptoms and fixes: `docs/runbook.md`.
+Failure modes, symptoms and fixes: `runbook.md`.

@@ -265,7 +265,7 @@ async function main(): Promise<void> {
     // the answer is "you cannot import onto this". It reports the blocker and
     // exits 0. Exiting non-zero for a condition the script was asked to look
     // for is how you train someone to ignore the exit code - the same mistake
-    // the health check made by exiting 1 on a warning (see docs/runbook.md).
+    // the health check made by exiting 1 on a warning (see runbook.md).
     if (occupied.length > 0) {
       const message =
         `The target already has rows in: ${occupied.map((m) => m.target).join(", ")}.\n\n` +
@@ -381,7 +381,7 @@ async function main(): Promise<void> {
     // BY CONTENT, not by row count. The first run of this script reported
     // "12/12 tables reconciled, 3,481 rows" and had silently truncated every
     // microsecond and turned a jsonb array into a jsonb object. Counts were
-    // exact. See docs/runbook.md.
+    // exact. See runbook.md.
     //
     // Both sides are hashed with the same type-aware exact-text expressions -
     // float8 as IEEE 754 bytes, timestamps at microsecond precision normalised

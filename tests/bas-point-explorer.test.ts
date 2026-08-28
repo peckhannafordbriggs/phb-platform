@@ -134,7 +134,7 @@ describe("the point picker", () => {
     // Deliberately NOT asserted against a JavaScript sort. PostgreSQL orders by
     // the database collation and `localeCompare` does not agree with it about
     // underscores and hyphens, so that comparison tests the two collations
-    // against each other rather than testing this query. See docs/runbook.md,
+    // against each other rather than testing this query. See runbook.md,
     // *Deployment: check this when the Azure database is created*.
     const sites = first.points.map((p) => p.siteName);
     const firstIndex = new Map<string, number>();

@@ -34,7 +34,7 @@ function fail(message: string): never {
       `Fix it:\n\n  npm run db:test:setup\n\n` +
       `Why this is a hard stop: a suite running against a database that is ` +
       `missing tables reports green for every test that does not read them. ` +
-      `See docs/runbook.md, "The test database is a separate database, and ` +
+      `See runbook.md, "The test database is a separate database, and ` +
       `migrations do not reach it".\n`,
   );
 }
@@ -127,7 +127,7 @@ export async function setup(): Promise<void> {
 
     // Count what was actually compared and say so. A guard that silently
     // verified nothing is the failure mode this whole file is a reaction to -
-    // see the RESTORE VERIFIED note in docs/runbook.md.
+    // see the RESTORE VERIFIED note in runbook.md.
     console.log(
       `[test-db] ${expected.length}/${expected.length} migrations applied; ` +
         `latest ${expected[expected.length - 1]}`,

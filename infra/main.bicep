@@ -298,7 +298,7 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
 //
 // en_US.utf8 is also the Flexible Server default, and it is set explicitly here
 // anyway: a default is something that can change, and this cannot be corrected
-// later without a dump and restore. See docs/runbook.md.
+// later without a dump and restore. See runbook.md.
 resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
   parent: postgres
   name: databaseName

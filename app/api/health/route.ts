@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  * a process that was working, turning a short database blip into a restart loop
  * that outlasts it. Liveness answers "should this process be killed", and the
  * answer to that is no. Database health is diagnosed from the application logs
- * and docs/runbook.md.
+ * and runbook.md.
  *
  * Not to be confused with /api/modules/change-orders/mailbox/health, which is
  * grant-gated and reports configuration state. That one answers "can we reach

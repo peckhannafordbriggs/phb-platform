@@ -4,7 +4,7 @@
 Written August 2026, covering the platform, the Change Orders module through Phase 11, and
 the BAS module through B4.*
 
-`README.md` tells you how to run this. `docs/runbook.md` tells you what to do when it
+`README.md` tells you how to run this. `runbook.md` tells you what to do when it
 misbehaves. **This page is for when you want to change something** — because most of what
 looks odd here is odd on purpose, and nearly every item below was decided after something
 went wrong.

@@ -16,7 +16,7 @@ import {
  *
  * What is asserted here is the half of the schema Prisma cannot see: CHECK
  * constraints, the roll-horizon trigger, and the views. `schema.prisma` is not
- * the whole story (docs/runbook.md, *The BAS schema lives in two places*), and
+ * the whole story (runbook.md, *The BAS schema lives in two places*), and
  * nothing else in the repo would notice if the hand-written half were dropped.
  *
  * The vocabularies are covered separately, in `tests/bas-vocabularies.test.ts`.

@@ -143,10 +143,10 @@ jobs:
           done
 
           echo "The new revision never returned 200 from /api/health."
-          echo "See 'A deploy fails' in docs/runbook.md."
+          echo "See 'A deploy fails' in runbook.md."
           exit 1
 
       # NOTE: the production seed is NOT run here. It runs once, by hand, on the
-      # first deploy - see docs/runbook.md. It is idempotent, but running it on
+      # first deploy - see runbook.md. It is idempotent, but running it on
       # every deploy would mean a deploy could silently re-create an admin row
       # somebody had deliberately removed.

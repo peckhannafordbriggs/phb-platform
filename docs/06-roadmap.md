@@ -189,7 +189,7 @@ used by one to three people.
 
 **Do not rebuild the case for webhooks from intuition.** The reasoning, the
 numbers, and the specific circumstances that would legitimately reopen it are in
-`docs/PHASE-9.md` and `docs/runbook.md`. The short version: not user count — the
+`docs/PHASE-9.md` and `runbook.md`. The short version: not user count — the
 budget takes ~300 focused tabs — but a background job that must react to inbound
 mail with no human present, which is the criterion
 `docs/03-exchange-and-graph.md` already sets and which nothing in this roadmap
@@ -273,7 +273,7 @@ on:
 
 - `conversationId` **is** filterable, on `/messages` and on a folder alike.
 - Both forms return **immutable ids**, because `$filter` is an ordinary collection
-  request. `$search` would not — see `docs/runbook.md`, *Folder search*.
+  request. `$search` would not — see `runbook.md`, *Folder search*.
 - `conversationIndex` is populated, so reply nesting is available if it is ever wanted.
 
 And one wrinkle that will otherwise be found the hard way: **a mailbox-wide conversation

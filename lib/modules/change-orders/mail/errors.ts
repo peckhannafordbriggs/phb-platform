@@ -14,7 +14,7 @@ export type MailErrorKind =
   | "auth_failed"
   /**
    * Graph answered 403. Overwhelmingly the ApplicationAccessPolicy denying the
-   * mailbox - see docs/runbook.md. Never means "this employee lacks access";
+   * mailbox - see runbook.md. Never means "this employee lacks access";
    * employee authorization happens well before we reach Graph.
    */
   | "mailbox_forbidden"

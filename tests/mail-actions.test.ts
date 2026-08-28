@@ -166,7 +166,7 @@ describe("reply, reply-all and forward use Graph's own operations", () => {
 
     // Asserted on the fixture rather than on our code, deliberately: this is a
     // statement about what Exchange returns, and the live-mailbox check in
-    // docs/runbook.md is what actually proves it.
+    // runbook.md is what actually proves it.
     expect(DERIVED_DRAFT.conversationId).toBe(ZZTEST_SOURCE.conversationId);
   });
 });

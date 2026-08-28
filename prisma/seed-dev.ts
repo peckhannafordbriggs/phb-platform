@@ -196,7 +196,7 @@ async function main(): Promise<void> {
       // audit_events is append-only, enforced by a database trigger. The foreign
       // keys are ON DELETE SET NULL, which fires that trigger as an UPDATE, so an
       // employee with audit history cannot be deleted at all - see
-      // docs/runbook.md. Check first rather than letting the delete blow up.
+      // runbook.md. Check first rather than letting the delete blow up.
       const references = await prisma.auditEvent.findMany({
         where: {
           OR: [

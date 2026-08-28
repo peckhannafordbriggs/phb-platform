@@ -166,7 +166,7 @@ the flag at provisioning instead — both paths are covered.
 | Row exists, demoted through the UI, other active admins remain | **Nothing** — the demotion was a decision, and a deploy must not undo it |
 | Row exists, demoted, and **no active admin remains anywhere** | Promotes it — this is the lockout the list exists for |
 
-That last row is the recovery path in `docs/runbook.md`. Only the admin flag is
+That last row is the recovery path in `runbook.md`. Only the admin flag is
 touched: a disabled account stays disabled, because re-enabling one is a decision for
 a person rather than for a deploy. If the only bootstrap admin is also disabled, use
 the direct SQL in the runbook.

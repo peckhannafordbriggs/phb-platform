@@ -63,7 +63,7 @@ position list is `ORDER BY name ASC`, so the ordering belongs to the database. `
 `POSIX` compares raw bytes and sorts `AI` before `Administrative`. It is also the
 Flexible Server default — set anyway, because a default can change and this cannot be
 corrected later without a dump and restore. See the collation section of
-`docs/runbook.md`.
+`runbook.md`.
 
 **The identity is user-assigned, not system-assigned.** It has to exist before the
 container app so IT can bind a federated identity credential to it, and because
@@ -86,4 +86,4 @@ before Auth.js can build a callback. So the first pass is not a single command:
    redirect URI goes on the SSO app registration, and the federated credential is bound
    to that identity. Neither can be requested before this deployment exists.
 4. Push to `main`. CI builds the real image, runs migrations, and deploys it.
-5. Run the production seed **once**, by hand. See `docs/runbook.md`.
+5. Run the production seed **once**, by hand. See `runbook.md`.

@@ -3,7 +3,7 @@
 // message, folder, attachment, delta-token, subscription, prompt, or job table.
 //
 // Naming: Prisma fields are camelCase, database tables and columns are
-// snake_case via @@map / @map. The recovery procedures in docs/runbook.md are
+// snake_case via @@map / @map. The recovery procedures in runbook.md are
 // raw SQL run by someone who has never seen this codebase - unquoted snake_case
 // is what they can type without getting the quoting exactly right.
 
@@ -223,7 +223,7 @@ model AuditEvent {
 // no Prisma multi-schema, and docs/05 says match the existing pattern.
 //
 // THREE THINGS ARE NOT IN THIS FILE. Read this before assuming schema.prisma is
-// the whole truth - see docs/runbook.md, "the BAS schema lives in two places":
+// the whole truth - see runbook.md, "the BAS schema lives in two places":
 //
 //   1. bas_points.roll_horizon_s is kept equal to capacity *
 //      collection_interval_s by the bas_points_roll_horizon trigger. Here it is

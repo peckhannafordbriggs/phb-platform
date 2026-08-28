@@ -36,7 +36,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
  *
  * It changes only how this connection interprets and renders timestamps. Nothing
  * is stored differently: `timestamptz` is an absolute instant on disk in every
- * session. See docs/runbook.md, *Timestamps written through Prisma were four
+ * session. See runbook.md, *Timestamps written through Prisma were four
  * hours out*.
  */
 export function createPgAdapter(connectionString: string): PrismaPg {

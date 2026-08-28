@@ -10,8 +10,8 @@ Three other documents matter, in this order:
 
 | When | Read |
 |---|---|
-| Something is broken right now | `docs/runbook.md` |
-| You are about to change something | `docs/WHY-ITS-BUILT-THIS-WAY.md` |
+| Something is broken right now | `runbook.md` |
+| You are about to change something | `WHY-ITS-BUILT-THIS-WAY.md` |
 | You need to run it locally | `README.md` |
 
 ---

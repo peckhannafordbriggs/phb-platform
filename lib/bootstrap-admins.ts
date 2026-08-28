@@ -81,7 +81,7 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
  *     upsert cannot simply set isPlatformAdmin on update.
  *
  *  3. The exception is a total lockout - zero active admins anywhere. That is the
- *     situation this list exists for, and it is what docs/runbook.md tells the
+ *     situation this list exists for, and it is what runbook.md tells the
  *     next operator to fix by re-running the seed. Only then are existing rows
  *     promoted, and only the admin flag is touched: a disabled account stays
  *     disabled, because re-enabling one is a decision for a person, not a deploy.

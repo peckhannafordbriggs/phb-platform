@@ -270,7 +270,7 @@ interface SiteRow {
  *
  * Read-only. Nothing in this module writes to `bas_*` - the collector owns those
  * rows, and `bas_readings` cannot be re-fetched from anywhere once the station
- * has rolled past it (docs/runbook.md, *BAS irreplaceability*).
+ * has rolled past it (runbook.md, *BAS irreplaceability*).
  */
 export async function getCollectionHealth(
   viewer: Viewer,
@@ -741,7 +741,7 @@ export interface PointExplorerOptions {
  * line with nothing on screen saying they are different quantities. A
  * single-point chart cannot express that mistake. If this ever grows a compare
  * mode, it needs one axis per unit and an explicit refusal for unitless points -
- * see docs/runbook.md, *Two points on one axis*.
+ * see runbook.md, *Two points on one axis*.
  *
  * Same transaction discipline as `getCollectionHealth`: one `now()` for the
  * window, the stats and the trend, so the tiles cannot disagree with the chart
@@ -960,7 +960,7 @@ export async function getPointExplorer(
  * A straight segment across a gap asserts values that were never recorded, and
  * in this database that is not hypothetical: the station destroyed 22.7 hours of
  * every point on 21-22 August 2026 and a line drawn across it reads as a steady
- * temperature. See docs/runbook.md, *The trend chart must break across gaps*.
+ * temperature. See runbook.md, *The trend chart must break across gaps*.
  *
  * Exported so a test can drive it with a synthetic series and so the rule is
  * checkable without a database.

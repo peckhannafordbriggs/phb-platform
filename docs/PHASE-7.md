@@ -58,7 +58,7 @@ Resources:
 `en_US.utf8`, the Flexible Server default. `C` or `POSIX` sorts `AI` before
 `Administrative` and puts every department and position list in the wrong order.
 Set it explicitly in the Bicep rather than relying on the default, and see the collation
-section in `docs/runbook.md`.
+section in `runbook.md`.
 
 Scale to zero is fine for this user count. Set a budget alert.
 

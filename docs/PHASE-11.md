@@ -109,7 +109,7 @@ Intake 6 and 7 file into them.
 - A plain statement of what was **observed** versus what was **inferred**. Anything that
   couldn't be checked from here is recorded as not run, not assumed
 
-Then update `docs/runbook.md` with anything learned about how to perform this check again,
+Then update `runbook.md` with anything learned about how to perform this check again,
 since it should be repeatable by someone who has never seen the system.
 
 ---

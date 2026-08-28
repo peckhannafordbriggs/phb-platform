@@ -267,7 +267,7 @@ one-human-one-message rule is at risk. Keep every action on individual messages.
 **Part A's latency numbers were the deliverable that decided Part B, and they
 decided against it.** Exchange propagates in under 250ms; the interval was the
 whole delay, so it went to 20 seconds and Part B was declined. Recorded above and
-in `docs/runbook.md` so the case does not get rebuilt from intuition.
+in `runbook.md` so the case does not get rebuilt from intuition.
 
 **Stop and ask** before adding a table, changing the paging model, weakening a guard, or
 anything that lets an action apply to more than one message.

@@ -5,7 +5,7 @@ import { testDb } from "./db";
  *
  * Every test runs inside a transaction that is always rolled back. That is not
  * tidiness - `bas_readings` is the one table in this database whose rows cannot
- * be re-fetched from anywhere (docs/runbook.md, *BAS irreplaceability*), so the
+ * be re-fetched from anywhere (runbook.md, *BAS irreplaceability*), so the
  * BAS suite is written so that it cannot leave a row behind even if it throws
  * halfway through. It also means the tests do not care what is already in the
  * database, and `tests/db.ts` `resetDb()` is not involved at all.

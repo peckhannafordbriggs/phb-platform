@@ -452,7 +452,7 @@ describe("the route is behind the module grant", () => {
 
 describe("a timestamp written through Prisma survives a comparison in SQL", () => {
   /**
-   * The regression test for the defect this phase found. See docs/runbook.md,
+   * The regression test for the defect this phase found. See runbook.md,
    * *Timestamps written through Prisma were four hours out*.
    *
    * Prisma's driver adapter moves a `timestamptz` as a naive wall-clock string

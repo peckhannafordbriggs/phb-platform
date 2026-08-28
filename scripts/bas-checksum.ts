@@ -13,7 +13,7 @@ import type { Client } from "pg";
  *
  * Applied to the import itself, this module immediately found microsecond
  * timestamps truncated to milliseconds, on every timestamptz column, in an
- * import that had reported IMPORT VERIFIED. See docs/runbook.md.
+ * import that had reported IMPORT VERIFIED. See runbook.md.
  *
  * THE THREE RULES THIS MODULE IS BUILT ON
  *

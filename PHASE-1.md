@@ -33,7 +33,7 @@ Change Orders is a placeholder page in this phase.
 10. Admin screen — employee list, detail, grant toggles, enable/disable, admin flag
 11. Audit event writing for all Phase 1 actions
 12. Structured logging, error handling, error boundaries
-13. `README.md` (local setup) and `docs/runbook.md` (first entries)
+13. `README.md` (local setup) and `runbook.md` (first entries)
 
 ## Out of scope
 
@@ -243,7 +243,7 @@ document the manual steps and what was observed.
 
 **Documentation**
 - [ ] `README.md` covers local setup, env vars, migrations, seeding, tests
-- [ ] `docs/runbook.md` exists with entries for: SSO misconfiguration, a locked-out
+- [ ] `runbook.md` exists with entries for: SSO misconfiguration, a locked-out
       admin, a failed migration, and a database connection failure
 - [ ] `.env.example` lists every variable with no real values
 

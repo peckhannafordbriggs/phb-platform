@@ -97,7 +97,7 @@ that an ungranted request is rejected — not that a granted one succeeds.
 
 ## Runbook
 
-`docs/runbook.md`, written during each phase, not after. For every new failure mode:
+`runbook.md`, written during each phase, not after. For every new failure mode:
 
 - What the symptom looks like to a user
 - What causes it

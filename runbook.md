@@ -1,5 +1,13 @@
 # Runbook
 
+> **Three applied migrations still say `docs/runbook.md` in a SQL comment.**
+> This file moved to the repo root; those were left alone deliberately. Prisma
+> stores a checksum of every applied migration, so editing one that has already
+> run makes `prisma migrate` refuse to proceed against any database that has it.
+> A stale path in a comment is cheaper than that. New migrations should say
+> `runbook.md`.
+
+
 Failure modes, what they look like, and what to do. Written during each phase,
 not after.
 

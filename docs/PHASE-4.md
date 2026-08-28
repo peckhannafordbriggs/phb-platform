@@ -166,7 +166,7 @@ Cover:
    verification; this is ours. Delete the script afterward.
 4. Confirm a draft the automation created is visible through `getMessage`, and that its
    `[CO: Owner|Bulletin]` subject tag is intact.
-5. Record in `docs/runbook.md`: the Graph client ID, tenant ID, secret expiry date, the
+5. Record in `runbook.md`: the Graph client ID, tenant ID, secret expiry date, the
    symptom when the credential fails, and the fact that production uses a federated
    credential so an expiring secret can only ever affect a developer machine.
 

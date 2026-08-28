@@ -587,7 +587,7 @@ Exchange admin, not more work here.
 
 The full procedure — the mailbox half, the Power Automate portal half, the
 SharePoint half, and how to tell a real finding from the known pre-platform test
-data — is in **`docs/runbook.md`**, under *Has the platform disturbed the
+data — is in **`runbook.md`**, under *Has the platform disturbed the
 automation?*
 
 It lives there rather than here because this document is a dated record of one

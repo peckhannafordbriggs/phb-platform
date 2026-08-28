@@ -190,7 +190,7 @@ describe("how many employees hold each value", () => {
     const names = (await listPositionsWithCounts(true)).map((p) => p.name);
 
     // Case-insensitive ordering comes from the database collation - see
-    // docs/runbook.md. A per-query COLLATE would work here and hide a database
+    // runbook.md. A per-query COLLATE would work here and hide a database
     // created with the wrong one.
     expect(names).toEqual(["apprentice", "Estimator", "Foreman", "Zone Lead"]);
   });

@@ -225,7 +225,7 @@ async function respond(messageId: string): Promise<void> {
     check(quoted, "the original is quoted in the body", `${draft.body.length} bytes`);
 
     // The subject Exchange chose, and whether the fence accepts it. This is the
-    // reason isZzTestSubject skips RE:/FW: - see docs/runbook.md.
+    // reason isZzTestSubject skips RE:/FW: - see runbook.md.
     check(
       isZzTestSubject(draft.subject),
       "the derived subject is inside the ZZTEST fence",

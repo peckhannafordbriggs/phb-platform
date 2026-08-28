@@ -3,7 +3,7 @@
 What the module is, why it is shaped the way it is, and how to build it.
 
 Read this before touching anything under `bas_*`, `lib/modules/bas`, or
-`scripts/bas-import.ts`. Operational failure modes are in `docs/runbook.md`
+`scripts/bas-import.ts`. Operational failure modes are in `runbook.md`
 under *BAS — Building Automation module*.
 
 ---
@@ -256,7 +256,7 @@ Every signal points the wrong way:
 
 - **Burstable-tier Flexible Server can be stopped, and stays stopped.** That is a
   real, documented, deliberate Azure feature, and for most workloads it is good
-  advice. `docs/runbook.md` mentions the capability approvingly in a different
+  advice. `runbook.md` mentions the capability approvingly in a different
   context — diagnosing a server that turns out to be stopped.
 - Cost tooling will suggest it. Azure Advisor, cost-management recommendations,
   Dev/Test guidance and most start/stop automation samples all treat a
@@ -299,7 +299,7 @@ All of these are safe and none of them touch availability:
 - Reduce vCores or storage on the server. Small dataset, low write rate.
 - Buy reserved capacity for a server that is, by design, never switched off.
 - Shorten backup retention if it is over-provisioned, having first checked
-  `docs/runbook.md`, *BAS irreplaceability*.
+  `runbook.md`, *BAS irreplaceability*.
 
 **If a genuine maintenance stop is unavoidable**, it is safe only while the total
 outage stays well inside 41.7 hours, and only if someone confirms afterwards that
@@ -691,7 +691,7 @@ discards the offset on a `timestamptz` in both directions, so a Prisma round tri
 cancels out and every comparison against `now()` is wrong by the session's UTC
 offset. It had been true since Phase 1. Fixed by pinning the session to UTC in
 `lib/db/adapter.ts`, which every client now goes through. Full account in
-`docs/runbook.md`, *Timestamps written through Prisma were four hours out*.
+`runbook.md`, *Timestamps written through Prisma were four hours out*.
 
 *The tiles can be green while ninety point-hours are gone.* `roll_risk` asks a
 question about the present, so once collection resumes every point returns to
@@ -782,7 +782,7 @@ permanent hole.
 
 Changing that one line also repoints the nightly 02:15 backup, whose
 verification step then fails on every run - it looks for the standalone schema's
-table names. The dump is fine; the check is not. Both are in `docs/runbook.md`
+table names. The dump is fine; the check is not. Both are in `runbook.md`
 under *B6 is blocked* and *Repointing the collector also repoints the nightly
 backup*, with a tested patch for the backup script.
 

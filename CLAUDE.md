@@ -176,7 +176,7 @@ exposed nowhere and a test enforces that.
 One guard changed, deliberately: the ZZTEST fence now skips Exchange's own
 `RE:` / `FW:` prefixes, because `createReply` names its draft `RE: <original>`
 and every derived draft would otherwise be uneditable outside production. A reply
-to a real change order is still refused. See `docs/runbook.md`.
+to a real change order is still refused. See `runbook.md`.
 
 **Phase 8 complete.** Live verification is done and `docs/phase-8-verification.md`
 records what Exchange actually did, including four claims the docs had wrong.
@@ -194,7 +194,7 @@ It went from 60s to **20s** — 180 requests an hour per focused tab, 0.3% of th
 job, a public validation endpoint and dropped-notification reconciliation were
 judged not worth the remaining 20 seconds for one to three users. **Do not
 rebuild the case for webhooks without a new measurement**; the reasoning and the
-conditions that would reopen it are in `docs/PHASE-9.md` and `docs/runbook.md`.
+conditions that would reopen it are in `docs/PHASE-9.md` and `runbook.md`.
 
 The one design decision that phase turned on: **a grouped listing collects the
 folder to a cap and groups the complete set. It does not group a page and it has
@@ -241,7 +241,7 @@ sorting 130 employees by status is one run of 111 ties, and without it a page
 boundary repeats one row and drops another.
 
 Tested against a deterministic 130-employee fixture, not four rows.
-`docs/runbook.md` has the operational notes under *Admin panel (Phase 10)*.
+`runbook.md` has the operational notes under *Admin panel (Phase 10)*.
 
 **Phase 11 complete — the automation is verified undisturbed.** Nine phases of
 platform work have not touched the change-order pipeline, and this is now
@@ -256,7 +256,7 @@ Two things a repeat run will see and should not report as new: the tracker's
 pre-platform test rows use the **`ZZ`** prefix, not `ZZTEST`, so sweep it for `ZZ`
 and discriminate by date; and `CO Intake 1`'s documented no-CO-form stop now ends
 as **Cancelled** rather than Failed, after a deliberate change by the flow's
-owner. `docs/phase-11-verification.md` is the record, and `docs/runbook.md` has
+owner. `docs/phase-11-verification.md` is the record, and `runbook.md` has
 the repeatable procedure including the portal and SharePoint steps.
 
 Still open: the two Exchange admin checks (operator Full Access, and
@@ -285,13 +285,23 @@ holding mailbox data, requires broader Microsoft permissions, adds long-term
 infrastructure, or conflicts with this file.
 
 **Every phase ships operational docs.** For each new failure mode: the symptom, the
-cause, the fix. Written during the phase, in `docs/runbook.md`. The current operator
+cause, the fix. Written during the phase, in `runbook.md`. The current operator
 leaves in December 2026 and this platform must be operable by someone who has never
 seen it.
 
 ---
 
 ## Reference docs
+
+**At the repo root, because they are what somebody reaches for first:**
+
+| File | Contents |
+|---|---|
+| `HANDOVER.md` | **Start here if you are new.** What this is, what must not break, what will fail and when, what to do first |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 36 decisions, why each was made, and what breaks if you undo it |
+| `runbook.md` | Failure modes, recovery, what expires and when |
+
+**Reference, in `docs/`:**
 
 | File | Contents |
 |---|---|
@@ -304,8 +314,6 @@ seen it.
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
 | `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon |
 | `docs/09-bas-what-is-built.md` | BAS: what exists, and which of the two repos owns each piece |
-| `docs/WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 36 decisions, why each was made, and what breaks if you undo it |
-| `docs/runbook.md` | Failure modes, recovery, what expires and when |
 | `docs/phase-1-verification.md` | Manual verification record |
 | `docs/phase-8-verification.md` | What Exchange actually did for the email actions |
 | `docs/phase-9-verification.md` | Grouping, conflicts, and the latency that decides Part B |

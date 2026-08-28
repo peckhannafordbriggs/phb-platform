@@ -20,7 +20,7 @@ Run from a clean working tree against PostgreSQL 17 installed natively.
 | Migrations | `npx prisma migrate deploy` | Both applied, to the development and test databases |
 | Seed | `npm run seed` | 1 module, 9 positions, 7 departments, bootstrap admin |
 | Dev seed | `npm run seed:dev` | 130 employees — 14 disabled, 13 incomplete, 11 free-text position, 6 grants |
-| Runbook SQL | `psql -f` | Every query in `docs/runbook.md` executed against the live schema |
+| Runbook SQL | `psql -f` | Every query in `runbook.md` executed against the live schema |
 
 The tests run against a real database. The only mocked thing is `auth()`, so a
 test can act as a given employee; every query, guard and route handler in the

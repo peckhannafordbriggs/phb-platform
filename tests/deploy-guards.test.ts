@@ -215,7 +215,7 @@ describe("no deployment file hardcodes an organisation", () => {
       expect(source, `${file} must not name the company domain`).not.toContain(
         "phb1899.com",
       );
-      // The SSO tenant and client IDs recorded in docs/runbook.md.
+      // The SSO tenant and client IDs recorded in runbook.md.
       expect(source, `${file} must not embed the tenant id`).not.toContain(
         "48f37f84-1c36-4b3e-986c-b8b7196ad49d",
       );

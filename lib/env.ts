@@ -42,7 +42,7 @@ const schema = z.object({
 
   // Comma-separated, like ALLOWED_EMAIL_DOMAINS above; an array everywhere in
   // code. Absent means no bootstrap admin, which is valid - the platform still
-  // boots, nobody can reach /admin, and docs/runbook.md covers the recovery.
+  // boots, nobody can reach /admin, and runbook.md covers the recovery.
   BOOTSTRAP_ADMIN_EMAIL: z
     .string()
     .optional()
