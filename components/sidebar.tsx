@@ -42,6 +42,18 @@ export function moduleAccent(index: number): string {
   return QUADRANT_ACCENTS[index % QUADRANT_ACCENTS.length] ?? "var(--phb-red)";
 }
 
+/**
+ * Shared by the two footer actions so they cannot drift apart.
+ *
+ * `inline-flex` with a fixed height rather than relying on the text's own line
+ * box: a button and an anchor compute line-height differently, which is what put
+ * them on different baselines. `font-inherit` matters too - a button does not
+ * inherit the page font on its own.
+ */
+const FOOTER_ACTION =
+  "inline-flex h-5 items-center font-[family-name:var(--font-ui)] text-xs " +
+  "underline underline-offset-2 transition-colors hover:text-white";
+
 export function Sidebar({
   modules,
   isPlatformAdmin,
@@ -146,23 +158,35 @@ export function Sidebar({
         <p className="truncate font-[family-name:var(--font-mono)] text-[0.6875rem] text-[var(--chrome-muted)]">
           {employeeEmail}
         </p>
+        {/*
+          Profile is a Link and Sign out is a submit button inside a form, which
+          is not negotiable - signing out is a POST through a server action.
+          Left alone they sit on different baselines: the button carries the UA's
+          default font and line-height, and the form is a block box the flex row
+          aligns rather than the button inside it.
+
+          Fixed by making both leaf elements identical boxes - same class, same
+          font, `inline-flex` with a fixed height so the text centres on the same
+          line - and by making the form `contents`, so it contributes no box of
+          its own and the button becomes a direct flex child alongside the link.
+        */}
         <div className="mt-3 flex items-center gap-3">
           <Link
             href="/profile"
             aria-current={pathname === "/profile" ? "page" : undefined}
             className={
-              "text-xs underline underline-offset-2 transition-colors hover:text-white " +
+              FOOTER_ACTION +
               (pathname === "/profile"
-                ? "font-medium text-white"
-                : "text-[var(--chrome-muted)]")
+                ? " font-medium text-white"
+                : " text-[var(--chrome-muted)]")
             }
           >
             Profile
           </Link>
-          <form action={signOutAction}>
+          <form action={signOutAction} className="contents">
             <button
               type="submit"
-              className="text-xs text-[var(--chrome-muted)] underline underline-offset-2 transition-colors hover:text-white"
+              className={FOOTER_ACTION + " text-[var(--chrome-muted)]"}
             >
               Sign out
             </button>

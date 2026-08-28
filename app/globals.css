@@ -101,10 +101,30 @@
   --module-accent: var(--phb-purple);
   --module-accent-ink: var(--phb-purple);
 
-  /* --- type scale ------------------------------------------------------
-     Display: Archivo. UI: Inter Tight. Data: JetBrains Mono.
-     The stacks are set by next/font in app/layout.tsx; these names are what
-     components reference. */
+  /* The three families are declared in the @theme block below, NOT here.
+     See the note there - declaring them in both places is a circular
+     reference that silently disables all three. */
+}
+
+/* ---------------------------------------------------------------------------
+   Type families.
+
+   These live in `@theme` rather than in `:root`, and that is not a style
+   preference - it is a bug fix.
+
+   `@theme` already emits its custom properties into `:root`. Declaring
+   `--font-display` in `:root` AND `--font-display: var(--font-display)` in
+   `@theme inline` makes the property reference itself, which CSS treats as
+   invalid at computed-value time. The variable resolves to nothing, every
+   `var(--font-display)` falls back, and the whole platform renders in the
+   browser's default sans while the font files download perfectly and the
+   @font-face rules look correct. It fails silently and looks like next/font
+   not working.
+
+   Declared once, here. The `--font-archivo` style names come from next/font
+   in app/layout.tsx.
+   --------------------------------------------------------------------------- */
+@theme {
   --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
   --font-ui: var(--font-inter-tight), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", monospace;
@@ -142,10 +162,6 @@
   --color-neutral-700: var(--neutral-700);
   --color-neutral-800: var(--neutral-800);
   --color-neutral-900: var(--neutral-900);
-
-  --font-display: var(--font-display);
-  --font-ui: var(--font-ui);
-  --font-mono: var(--font-mono);
 }
 
 body {
