@@ -26,7 +26,7 @@ import { moduleAccent } from "@/lib/module-accent";
  * inherit the page font on its own.
  */
 const FOOTER_ACTION =
-  "inline-flex h-5 items-center font-[family-name:var(--font-ui)] text-xs " +
+  "inline-flex h-5 items-center font-ui text-xs " +
   "underline underline-offset-2 transition-colors hover:text-white";
 
 export function Sidebar({
@@ -61,7 +61,7 @@ export function Sidebar({
             priority
             className="shrink-0"
           />
-          <span className="font-[family-name:var(--font-display)] text-[0.8125rem] font-semibold uppercase leading-[1.15] tracking-[0.02em]">
+          <span className="font-display text-[0.8125rem] font-semibold uppercase leading-[1.15] tracking-[0.02em]">
             Peck Hannaford
             <br />
             <span className="text-[var(--chrome-muted)]">+ Briggs</span>
@@ -130,7 +130,7 @@ export function Sidebar({
           Mono for the address. It is an identifier rather than prose, and the
           same reasoning puts message ids and point names in mono.
         */}
-        <p className="truncate font-[family-name:var(--font-mono)] text-[0.6875rem] text-[var(--chrome-muted)]">
+        <p className="truncate font-mono text-[0.6875rem] text-[var(--chrome-muted)]">
           {employeeEmail}
         </p>
         {/*

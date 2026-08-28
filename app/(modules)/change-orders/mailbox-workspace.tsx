@@ -50,6 +50,7 @@ import type {
   ConversationGroup,
   ConversationTruncation,
 } from "@/lib/modules/change-orders/mail/types";
+import { splitSubjectTag } from "@/lib/modules/change-orders/mail/subject-tag";
 
 /**
  * The Change Orders mailbox.
@@ -1238,9 +1239,24 @@ function MessageRow({
   indented?: boolean;
   onOpen: () => void;
 }) {
-  // Real subjects are long and repetitive - "[CCHMC Bulletin 12] Change Order
-  // Request — Additional Information Needed". Two lines of subject beats one
-  // truncated line, because the distinguishing part is often at the end.
+  /**
+   * Real subjects are long and near-identical, and what distinguishes them is a
+   * bracket at the front: `[CCHMC Bulletin 12] Change Order Request —
+   * Additional Information Needed`. Pulling that bracket out as its own element
+   * is the one change worth making to this surface - it is the thing people
+   * scan for, and buried at the head of a sixty-character line it may as well
+   * not be there.
+   *
+   * The subject is not edited. splitSubjectTag returns two views of one string
+   * and the whole original stays in the title attribute.
+   *
+   * Two lines of subject beats one truncated line, because the distinguishing
+   * part is often at the END - two subjects can share their first forty
+   * characters and differ only in the due date.
+   */
+  const { tag, rest } = splitSubjectTag(message.subject);
+  const unread = !message.isRead && !message.isDraft;
+
   return (
     <li>
       <button
@@ -1248,35 +1264,88 @@ function MessageRow({
         onClick={onOpen}
         aria-current={selected ? "true" : undefined}
         className={
-          "block w-full py-3 text-left hover:bg-[var(--surface)] " +
-          (indented ? "border-l-2 border-[var(--border)] pl-6 pr-4 " : "px-4 ") +
-          (selected ? "bg-[var(--surface)]" : "")
+          "relative block w-full py-2.5 text-left transition-colors hover:bg-[var(--neutral-50)] " +
+          (indented ? "border-l border-[var(--border)] pl-5 pr-3 " : "px-3 ") +
+          (selected ? "bg-[var(--neutral-100)]" : "")
         }
       >
+        {/*
+          Selection is a rule in the module's colour, not a coloured background.
+          A filled row would be the accent filling an area, which the brief rules
+          out - and against a vendor's own message colours it would compete.
+        */}
+        {selected && (
+          <span
+            aria-hidden="true"
+            className="absolute inset-y-0 left-0 w-[2px]"
+            style={{ background: "var(--module-accent, var(--phb-purple))" }}
+          />
+        )}
+
+        {tag !== null && (
+          <span className="mb-1 inline-block max-w-full truncate rounded-[2px] bg-[var(--neutral-100)] px-1.5 py-px font-mono text-[0.625rem] leading-4 text-[var(--neutral-700)]">
+            {tag}
+          </span>
+        )}
+
         <p
-          className={
-            "line-clamp-2 text-sm " + (message.isRead ? "" : "font-semibold")
-          }
+          className={"line-clamp-2 text-[0.8125rem] leading-snug " + (unread ? "font-semibold" : "")}
           title={message.subject ?? undefined}
         >
-          {message.subject ?? "(no subject)"}
+          {rest.length > 0 ? rest : "(no subject)"}
         </p>
-        <p className="mt-1 truncate text-xs text-[var(--muted)]">
-          {message.isDraft
-            ? `To ${describeRecipients(message)}`
-            : (message.from?.name ?? message.from?.address ?? "Unknown sender")}
-        </p>
-        <p className="mt-0.5 flex items-center gap-2 text-xs text-[var(--muted)]">
-          <span>{formatDate(message.receivedDateTime)}</span>
-          {message.hasAttachments && <span title="Has attachments">📎</span>}
+
+        <p className="mt-1 flex items-center gap-1.5 truncate text-[0.6875rem] text-[var(--muted)]">
+          <span className="truncate">
+            {message.isDraft
+              ? `To ${describeRecipients(message)}`
+              : (message.from?.name ?? message.from?.address ?? "Unknown sender")}
+          </span>
+          <span aria-hidden="true">·</span>
+          <span className="shrink-0 font-mono tabular-nums">
+            {formatDate(message.receivedDateTime)}
+          </span>
+          {message.hasAttachments && <AttachmentGlyph />}
           {message.isDraft && (
-            <span className="rounded bg-amber-100 px-1.5 text-[0.625rem] font-medium text-amber-900">
+            <span
+              className="shrink-0 rounded-[2px] px-1 py-px text-[0.5625rem] font-medium uppercase tracking-wide"
+              style={{
+                color: "var(--phb-orange-ink)",
+                background: "color-mix(in srgb, var(--phb-orange) 20%, transparent)",
+              }}
+            >
               Draft
             </span>
           )}
         </p>
       </button>
     </li>
+  );
+}
+
+/**
+ * The attachment marker.
+ *
+ * An inline SVG rather than the 📎 emoji it replaces: an emoji renders at the
+ * mercy of the platform's font, arrives in full colour into a surface the brief
+ * asks to keep near-monochrome, and cannot be told to match the muted text
+ * beside it.
+ */
+function AttachmentGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-3 w-3 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label="Has attachments"
+    >
+      <path d="M10.5 5.5 6 10a1.5 1.5 0 0 0 2.1 2.1l4.6-4.6a3 3 0 0 0-4.2-4.2L3.8 7.9a4.5 4.5 0 0 0 6.4 6.4l3.6-3.6" />
+    </svg>
   );
 }
 
@@ -1316,6 +1385,9 @@ function ConversationHeaderRow({
     .map((p) => p.name ?? p.address)
     .join(" · ");
 
+  // Same treatment as a message row: the bracket is what people scan for.
+  const { tag, rest } = splitSubjectTag(group.subject);
+
   return (
     <li>
       <button
@@ -1327,28 +1399,33 @@ function ConversationHeaderRow({
           (containsSelected ? "bg-[var(--surface)]" : "")
         }
       >
+        {tag !== null && (
+          <span className="mb-1 ml-5 inline-block max-w-full truncate rounded-[2px] bg-[var(--neutral-100)] px-1.5 py-px font-mono text-[0.625rem] leading-4 text-[var(--neutral-700)]">
+            {tag}
+          </span>
+        )}
         <p className="flex items-start gap-1.5">
           <span
             aria-hidden="true"
-            className="mt-0.5 shrink-0 text-[var(--muted)]"
+            className="mt-px shrink-0 text-[0.6875rem] text-[var(--muted)]"
           >
             {expanded ? "▾" : "▸"}
           </span>
           <span
             className={
-              "line-clamp-2 text-sm " +
+              "line-clamp-2 text-[0.8125rem] leading-snug " +
               (group.unreadCount > 0 ? "font-semibold" : "")
             }
             title={group.subject ?? undefined}
           >
-            {group.subject ?? "(no subject)"}
+            {rest.length > 0 ? rest : "(no subject)"}
           </span>
         </p>
-        <p className="mt-1 truncate pl-5 text-xs text-[var(--muted)]">
+        <p className="mt-1 truncate pl-5 text-[0.6875rem] text-[var(--muted)]">
           {participants.length > 0 ? participants : "Unknown participants"}
         </p>
-        <p className="mt-0.5 flex flex-wrap items-center gap-2 pl-5 text-xs text-[var(--muted)]">
-          <span>{formatDate(group.newestDateTime)}</span>
+        <p className="mt-0.5 flex flex-wrap items-center gap-2 pl-5 text-[0.6875rem] text-[var(--muted)]">
+          <span className="font-mono tabular-nums">{formatDate(group.newestDateTime)}</span>
           {/*
             "in this folder", not "messages", and the qualifier is the whole
             point of the phrase.
@@ -1372,14 +1449,20 @@ function ConversationHeaderRow({
             {group.messageCount} in this folder
             {group.unreadCount > 0 ? ` · ${group.unreadCount} unread` : ""}
           </span>
-          {group.hasAttachments && <span title="Has attachments">📎</span>}
+          {group.hasAttachments && <AttachmentGlyph />}
           {/*
             Stated on the collapsed row as well as shown beneath it. A draft
             inside a thread is the message somebody has to act on, and "there is
             a draft in here" has to survive the row being folded up.
           */}
           {group.draftCount > 0 && (
-            <span className="rounded bg-amber-100 px-1.5 text-[0.625rem] font-medium text-amber-900">
+            <span
+              className="shrink-0 rounded-[2px] px-1 py-px text-[0.5625rem] font-medium uppercase tracking-wide"
+              style={{
+                color: "var(--phb-orange-ink)",
+                background: "color-mix(in srgb, var(--phb-orange) 20%, transparent)",
+              }}
+            >
               {group.draftCount === 1 ? "Draft" : `${group.draftCount} drafts`}
             </span>
           )}

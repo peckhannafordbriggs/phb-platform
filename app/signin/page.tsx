@@ -45,7 +45,7 @@ export default function SignInPage() {
           priority
         />
 
-        <h1 className="mt-7 font-[family-name:var(--font-display)] text-[1.75rem] font-semibold uppercase leading-[1.1] tracking-[0.01em]">
+        <h1 className="mt-7 font-display text-[1.75rem] font-semibold uppercase leading-[1.1] tracking-[0.01em]">
           Peck Hannaford
           <br />
           <span className="text-[var(--chrome-muted)]">+ Briggs</span>
@@ -62,7 +62,7 @@ export default function SignInPage() {
         <form action={signInAction} className="mt-8">
           <button
             type="submit"
-            className="w-full rounded bg-white px-4 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-[var(--phb-purple)] transition-colors hover:bg-[var(--neutral-100)]"
+            className="w-full rounded bg-white px-4 py-2.5 font-display text-sm font-semibold text-[var(--phb-purple)] transition-colors hover:bg-[var(--neutral-100)]"
           >
             Sign in with Microsoft
           </button>

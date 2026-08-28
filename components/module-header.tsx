@@ -49,7 +49,7 @@ export function ModuleHeader({
           style={{ color: "var(--module-accent)" }}
           aria-hidden="true"
         />
-        <h1 className="font-[family-name:var(--font-display)] text-[1.0625rem] font-semibold uppercase tracking-[0.06em]">
+        <h1 className="font-display text-[1.0625rem] font-semibold uppercase tracking-[0.06em]">
           {title}
         </h1>
       </div>

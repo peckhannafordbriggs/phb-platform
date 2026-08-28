@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { moduleAccent } from "@/lib/module-accent";
 import { BulkBar } from "./bulk-bar";
 
 export interface AdminEmployeeRow {
@@ -119,8 +120,13 @@ export function EmployeeTable({
       </p>
 
       <div className="overflow-x-auto rounded border border-[var(--border)]">
-        <table className="w-full min-w-[54rem] border-collapse text-sm">
-          <thead className="bg-[var(--surface)] text-left">
+        <table className="w-full min-w-[54rem] border-collapse text-[0.8125rem]">
+          {/*
+            Hairline rules, not zebra striping. The brief says pick one, and
+            stripes on a table this wide add a second horizontal rhythm competing
+            with the row separators for no gain in scannability.
+          */}
+          <thead className="text-left">
             <tr>
               <th className="w-10 px-3 py-2">
                 <input
@@ -223,7 +229,7 @@ export function EmployeeTable({
                     {employee.firstName} {employee.lastName}
                   </Link>
                   {employee.isPlatformAdmin && (
-                    <span className="ml-2 rounded bg-[var(--accent)] px-1.5 py-0.5 text-[0.625rem] font-medium uppercase text-white">
+                    <span className="ml-2 rounded-[2px] bg-[var(--phb-purple)] px-1.5 py-px text-[0.5625rem] font-medium uppercase tracking-wide text-white">
                       Admin
                     </span>
                   )}
@@ -233,7 +239,9 @@ export function EmployeeTable({
                     </span>
                   )}
                 </td>
-                <td className="px-3 py-2 text-[var(--muted)]">{employee.email}</td>
+                <td className="px-3 py-2 font-mono text-[0.6875rem] text-[var(--muted)]">
+                  {employee.email}
+                </td>
                 <td className="px-3 py-2">
                   {employee.position?.name ??
                     (employee.positionOther !== null ? (
@@ -251,21 +259,53 @@ export function EmployeeTable({
                   )}
                 </td>
                 <td className="px-3 py-2">
+                  {/*
+                    A pill, not just a colour. The brief and CLAUDE.md both
+                    forbid encoding meaning in colour alone, so the two states
+                    differ in shape and word as well as hue.
+                  */}
                   {employee.status === "active" ? (
-                    "Active"
+                    <span
+                      className="rounded-[2px] px-1.5 py-px text-[0.6875rem]"
+                      style={{
+                        color: "var(--phb-teal-ink)",
+                        background: "color-mix(in srgb, var(--phb-teal) 22%, transparent)",
+                      }}
+                    >
+                      Active
+                    </span>
                   ) : (
-                    <span className="text-red-700">Disabled</span>
+                    <span
+                      className="rounded-[2px] px-1.5 py-px text-[0.6875rem] font-medium"
+                      style={{
+                        color: "var(--phb-maroon)",
+                        background: "color-mix(in srgb, var(--phb-maroon) 12%, transparent)",
+                      }}
+                    >
+                      Disabled
+                    </span>
                   )}
                 </td>
-                <td className="px-3 py-2 text-[var(--muted)]">
+                <td className="px-3 py-2 font-mono text-[0.6875rem] tabular-nums text-[var(--muted)]">
                   {formatDate(employee.lastLoginAt)}
                 </td>
-                {modules.map((m) => (
+                {modules.map((m, i) => (
                   <td key={m.key} className="px-3 py-2">
+                    {/*
+                      The same diamond as the sidebar and the module header, in
+                      the same colour - filled for granted, absent otherwise.
+                      aria-label carries the meaning, so the colour is never
+                      doing the work on its own.
+                    */}
                     {employee.grantedModuleKeys.includes(m.key) ? (
-                      <span aria-label="granted">Yes</span>
+                      <span
+                        className="diamond diamond--filled"
+                        style={{ color: moduleAccent(m.key, i).fill }}
+                        role="img"
+                        aria-label={`${m.displayName} granted`}
+                      />
                     ) : (
-                      <span className="text-[var(--muted)]" aria-label="not granted">
+                      <span className="text-[var(--neutral-300)]" aria-label="not granted">
                         —
                       </span>
                     )}
@@ -302,7 +342,11 @@ export function EmployeeTable({
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="px-3 py-2 font-medium">{children}</th>;
+  return (
+    <th className="border-b border-[var(--border)] px-3 pb-1.5 pt-2 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--muted)]">
+      {children}
+    </th>
+  );
 }
 
 function SortableTh({
@@ -322,7 +366,7 @@ function SortableTh({
 
   return (
     <th
-      className="px-3 py-2 font-medium"
+      className="border-b border-[var(--border)] px-3 pb-1.5 pt-2 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--muted)]"
       // Announced rather than only drawn: a caret is invisible to a screen
       // reader, and this table is how access is administered.
       aria-sort={isActive ? (dir === "asc" ? "ascending" : "descending") : "none"}

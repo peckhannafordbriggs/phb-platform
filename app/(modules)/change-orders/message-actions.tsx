@@ -86,7 +86,7 @@ export function MessageActions({
         disabled={busy}
         onClick={onDelete}
         title="Move this message to Deleted Items"
-        className="rounded border border-[var(--border)] px-2.5 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+        className="rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--phb-maroon)] hover:bg-[var(--neutral-100)] disabled:opacity-50"
       >
         Delete…
       </button>
@@ -168,7 +168,7 @@ export function FolderPicker({
       )}
 
       {error !== null && (
-        <p role="alert" className="mt-2 text-xs text-red-700">
+        <p role="alert" className="mt-2 text-xs text-[var(--phb-maroon)]">
           {error}
         </p>
       )}
@@ -221,7 +221,7 @@ export function DeleteConfirmation({
       </p>
 
       {error !== null && (
-        <p role="alert" className="mt-2 text-xs text-red-700">
+        <p role="alert" className="mt-2 text-xs text-[var(--phb-maroon)]">
           {error}
         </p>
       )}
@@ -291,7 +291,7 @@ export function ComposePrompt({
       </p>
 
       {error !== null && (
-        <p role="alert" className="mt-2 text-xs text-red-700">
+        <p role="alert" className="mt-2 text-xs text-[var(--phb-maroon)]">
           {error}
         </p>
       )}
@@ -370,7 +370,9 @@ function DialogButtons({
         disabled={busy || confirmDisabled}
         className={
           "rounded px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50 " +
-          (confirmTone === "danger" ? "bg-red-700" : "bg-[var(--accent)]")
+          (confirmTone === "danger"
+            ? "bg-[var(--phb-maroon)]"
+            : "bg-[var(--phb-purple)]")
         }
       >
         {confirmLabel}

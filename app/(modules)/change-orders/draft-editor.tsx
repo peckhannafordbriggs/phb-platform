@@ -669,7 +669,10 @@ export function DraftEditor({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 space-y-2 border-b border-[var(--border)] px-6 py-3">
         <div className="flex items-center justify-between gap-3">
-          <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">
+          <span
+            className="rounded-[2px] px-2 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide"
+            style={{ color: "var(--phb-orange-ink)", background: "color-mix(in srgb, var(--phb-orange) 20%, transparent)" }}
+          >
             Draft
           </span>
           <SaveIndicator state={save} dirty={dirty} />
@@ -688,7 +691,10 @@ export function DraftEditor({
         </div>
 
         {lockedByOther && (
-          <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <p
+            className="rounded border px-3 py-2 text-sm"
+            style={{ color: "var(--phb-orange-ink)", borderColor: "color-mix(in srgb, var(--phb-orange) 45%, transparent)", background: "color-mix(in srgb, var(--phb-orange) 12%, transparent)" }}
+          >
             {lock?.heldBy?.firstName} {lock?.heldBy?.lastName} is editing this draft
             in the platform. Saving is blocked until they finish.
             {/*
@@ -713,7 +719,10 @@ export function DraftEditor({
           only safe move rather than writing over the top.
         */}
         {outOfDate !== null && (
-          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <div
+            className="rounded border px-3 py-2 text-sm"
+            style={{ color: "var(--phb-orange-ink)", borderColor: "color-mix(in srgb, var(--phb-orange) 45%, transparent)", background: "color-mix(in srgb, var(--phb-orange) 12%, transparent)" }}
+          >
             <p>
               This draft changed in Outlook
               {outOfDate.lastModified !== null
@@ -726,7 +735,8 @@ export function DraftEditor({
               <button
                 type="button"
                 onClick={reload}
-                className="rounded border border-amber-400 bg-white px-2.5 py-1 text-xs font-medium hover:bg-amber-100"
+                className="rounded border bg-white px-2.5 py-1 text-xs font-medium"
+                style={{ color: "var(--phb-orange-ink)", borderColor: "color-mix(in srgb, var(--phb-orange) 55%, transparent)" }}
               >
                 {dirty || noteReady
                   ? "Reload and discard my unsaved changes"
@@ -837,12 +847,12 @@ export function DraftEditor({
 
       <div className="shrink-0 border-t border-[var(--border)] px-6 py-3">
         {sendError !== null && (
-          <p role="alert" className="mb-2 text-sm text-red-700">
+          <p role="alert" className="mb-2 text-sm text-[var(--phb-maroon)]">
             {sendError.message}
           </p>
         )}
         {save.status === "failed" && (
-          <p role="alert" className="mb-2 text-sm text-red-700">
+          <p role="alert" className="mb-2 text-sm text-[var(--phb-maroon)]">
             The last change did not save, so this cannot be sent yet. {save.message}
           </p>
         )}
@@ -851,7 +861,8 @@ export function DraftEditor({
           type="button"
           disabled={!canSend}
           onClick={() => void beginSend()}
-          className="rounded bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded px-4 py-2 font-display text-sm font-semibold text-white disabled:opacity-50"
+          style={{ background: "var(--phb-red-btn)" }}
         >
           Review and send…
         </button>
@@ -887,7 +898,7 @@ function SaveIndicator({ state, dirty }: { state: SaveState; dirty: boolean }) {
     return <span className="text-xs text-[var(--muted)]">Saving…</span>;
   }
   if (state.status === "failed") {
-    return <span className="text-xs font-medium text-red-700">Not saved</span>;
+    return <span className="text-xs font-medium text-[var(--phb-maroon)]">Not saved</span>;
   }
   if (dirty) {
     return <span className="text-xs text-[var(--muted)]">Unsaved changes</span>;
@@ -961,7 +972,8 @@ function SendConfirmation({
             type="button"
             onClick={onConfirm}
             disabled={sending}
-            className="rounded bg-[var(--accent)] px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded px-4 py-1.5 font-display text-sm font-semibold text-white disabled:opacity-50"
+            style={{ background: "var(--phb-red-btn)" }}
           >
             {sending ? "Sending…" : "Send now"}
           </button>
