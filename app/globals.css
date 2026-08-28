@@ -1,12 +1,113 @@
 @import "tailwindcss";
 
+/* ===========================================================================
+   PHB Internal Platform — design tokens
+   ---------------------------------------------------------------------------
+   Every colour below is SAMPLED from public/phb-logo.png, not invented. The
+   census, rounded to whole percent of the mark's opaque pixels:
+
+     33%  #5B3192  purple    the dominant field
+     18%  #EE2924  red       the PH+B letters
+     12%  #2892C9  cyan      lower-right quadrant
+     10%  #F3A11E  orange    lower-left quadrant
+      6%  #88183C  maroon    the lower tip
+      5%  #E875A0  pink      the "1899" lettering
+      5%  #6FC9C1  teal      the "SINCE" lettering
+       ·  #FFE94D  gold      the centre X, ~89px of pure value
+
+   TWO TIERS, AND THE RULE THAT CONNECTS THEM
+   ------------------------------------------
+   A bright logo colour may FILL a shape. It may never carry a glyph.
+
+   Measured against neutral-0, only purple (8.65) and maroon (8.87) clear WCAG
+   AA as text. Red is 3.99, cyan 3.29, orange 2.00, pink 2.66, teal 1.84, and
+   gold is 1.17 - very nearly invisible. So each fill has an `-ink` sibling: the
+   same hue darkened until it reaches 4.5:1, used for text, icons and rules.
+   The ink values are derived, not chosen.
+
+   Two consequences worth stating because they contradict a first instinct:
+
+     - The Send button cannot be --phb-red. White on it is 4.22, under AA, and
+       that is the most important control in the platform. It uses --phb-red-btn.
+     - A gold focus ring on a light surface is 1.17 and fails WCAG 2.2's 3:1 for
+       focus indicators. --phb-gold-ring is the light-surface value; the bright
+       gold is only ever used on the purple chrome, where it measures 7.40.
+
+   NEUTRALS
+   --------
+   Nine steps on the sampled purple's own hue (266deg) at low saturation, so the
+   greys relate to the palette instead of sitting beside it. Most of the
+   interface is neutral and this scale does more work than any accent.
+   neutral-500 (4.99) is the lightest step usable for small text.
+   =========================================================================== */
+
 :root {
-  --background: #ffffff;
-  --foreground: #14171a;
-  --muted: #5b6570;
-  --border: #dfe3e8;
-  --surface: #f6f7f9;
-  --accent: #1f4e79;
+  /* --- logo colours, as sampled -------------------------------------- */
+  --phb-purple: #5b3192;
+  --phb-red: #ee2924;
+  --phb-cyan: #2892c9;
+  --phb-orange: #f3a11e;
+  --phb-maroon: #88183c;
+  --phb-pink: #e875a0;
+  --phb-teal: #6fc9c1;
+  --phb-gold: #ffe94d;
+
+  /* --- ink tier: same hue, darkened to clear AA as text --------------- */
+  --phb-red-ink: #e21712; /* 4.56 */
+  --phb-cyan-ink: #2179a7; /* 4.56 */
+  --phb-orange-ink: #9e6408; /* 4.65 */
+  --phb-pink-ink: #d72467; /* 4.58 */
+  --phb-teal-ink: #2f7d76; /* 4.61 */
+  --phb-gold-ink: #817100; /* 4.63 */
+
+  /* Special cases, both derived from a failing measurement. */
+  --phb-red-btn: #ea1712; /* white on it: 4.54 */
+  --phb-gold-ring: #a38f00; /* on light: 3.07 */
+
+  /* --- neutrals, 266deg ---------------------------------------------- */
+  --neutral-0: #faf8fb;
+  --neutral-50: #f6f4f9;
+  --neutral-100: #edeaf1;
+  --neutral-200: #ddd9e2;
+  --neutral-300: #c1bbc9;
+  --neutral-400: #988fa3;
+  --neutral-500: #736781; /* 4.99 - floor for small text */
+  --neutral-600: #53495f; /* 8.00 */
+  --neutral-700: #3b3246;
+  --neutral-800: #27202f;
+  --neutral-900: #18121f; /* 17.36 */
+
+  /* --- semantic aliases ----------------------------------------------
+     Everything in the app refers to these, never to a raw colour. A module
+     that needs a colour reads it from --module-accent, which the module
+     header sets - so no component knows any module key. */
+  --background: var(--neutral-0);
+  --foreground: var(--neutral-900);
+  --muted: var(--neutral-600);
+  --border: var(--neutral-200);
+  --surface: var(--neutral-50);
+  --accent: var(--phb-purple);
+
+  --chrome: var(--phb-purple);
+  --chrome-text: var(--neutral-0);
+  --chrome-muted: var(--neutral-300); /* 5.51 on purple */
+
+  --success: var(--phb-teal-ink);
+  --warning: var(--phb-orange-ink);
+  --danger: var(--phb-maroon);
+  --focus: var(--phb-gold-ring);
+
+  /* Set per module by the module header; falls back to chrome. */
+  --module-accent: var(--phb-purple);
+  --module-accent-ink: var(--phb-purple);
+
+  /* --- type scale ------------------------------------------------------
+     Display: Archivo. UI: Inter Tight. Data: JetBrains Mono.
+     The stacks are set by next/font in app/layout.tsx; these names are what
+     components reference. */
+  --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-ui: var(--font-inter-tight), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", monospace;
 }
 
 @theme inline {
@@ -16,15 +117,124 @@
   --color-border: var(--border);
   --color-surface: var(--surface);
   --color-accent: var(--accent);
+
+  --color-chrome: var(--chrome);
+  --color-chrome-text: var(--chrome-text);
+  --color-chrome-muted: var(--chrome-muted);
+
+  --color-phb-purple: var(--phb-purple);
+  --color-phb-red: var(--phb-red);
+  --color-phb-cyan: var(--phb-cyan);
+  --color-phb-orange: var(--phb-orange);
+  --color-phb-maroon: var(--phb-maroon);
+  --color-phb-pink: var(--phb-pink);
+  --color-phb-teal: var(--phb-teal);
+  --color-phb-gold: var(--phb-gold);
+
+  --color-neutral-0: var(--neutral-0);
+  --color-neutral-50: var(--neutral-50);
+  --color-neutral-100: var(--neutral-100);
+  --color-neutral-200: var(--neutral-200);
+  --color-neutral-300: var(--neutral-300);
+  --color-neutral-400: var(--neutral-400);
+  --color-neutral-500: var(--neutral-500);
+  --color-neutral-600: var(--neutral-600);
+  --color-neutral-700: var(--neutral-700);
+  --color-neutral-800: var(--neutral-800);
+  --color-neutral-900: var(--neutral-900);
+
+  --font-display: var(--font-display);
+  --font-ui: var(--font-ui);
+  --font-mono: var(--font-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    "Segoe UI",
-    Arial,
-    sans-serif;
+  font-family: var(--font-ui);
+  /* Dense tables at 13-14px are the whole job. */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------------------
+   Focus.
+   Visible everywhere, and gold - but the LIGHT-SURFACE gold, which is the one
+   that measures 3.07 rather than the 1.17 the bright value manages. On the
+   purple chrome the bright gold is used instead, where it reaches 7.40.
+   --------------------------------------------------------------------------- */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.chrome :where(a, button, input, select, [tabindex]):focus-visible {
+  outline-color: var(--phb-gold);
+}
+
+/* ---------------------------------------------------------------------------
+   The eyebrow: condensed uppercase with wide tracking.
+   Echoes the logo's lettering without imitating it. Used for section labels in
+   the sidebar and above module sections.
+   --------------------------------------------------------------------------- */
+.eyebrow {
+  font-family: var(--font-display);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-stretch: 87.5%;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* ---------------------------------------------------------------------------
+   The diamond: a square rotated 45deg. One shape, three uses.
+
+   Not the logo redrawn in CSS - just the shape the logo is built on. Filled
+   for the active module in that module's colour, hollow otherwise.
+   --------------------------------------------------------------------------- */
+.diamond {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  transform: rotate(45deg);
+  border: 1.5px solid currentColor;
+  flex: none;
+}
+
+.diamond--filled {
+  background: currentColor;
+}
+
+/* ---------------------------------------------------------------------------
+   THE ONE DIAGONAL.
+
+   Four skewed segments in the four quadrant colours, directly under the sidebar
+   logo block. The entire identity sits on the 45deg diagonal, so it is used
+   here, once, in the chrome where no data lives - and nowhere else. A diagonal
+   in a dense mail list would be a gimmick within a day.
+   --------------------------------------------------------------------------- */
+.quad-band {
+  display: flex;
+  height: 3px;
+  overflow: hidden;
+}
+
+.quad-band > span {
+  flex: 1;
+  transform: skewX(-45deg);
+  transform-origin: bottom left;
+}
+
+/* ---------------------------------------------------------------------------
+   Respect prefers-reduced-motion. Every transition, per the brief.
+   --------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
