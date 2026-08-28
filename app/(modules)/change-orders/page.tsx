@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireModuleAccess } from "@/lib/authz";
 import { CHANGE_ORDERS_MODULE_KEY } from "@/lib/modules/change-orders/constants";
+import { ModuleHeader } from "@/components/module-header";
 import { MailboxWorkspace } from "./mailbox-workspace";
 
 export const dynamic = "force-dynamic";
@@ -26,12 +27,12 @@ export default async function ChangeOrdersPage() {
     // height of its own, and three independently scrolling panes need one.
     // 4rem is the shell's vertical padding.
     <div className="flex h-[calc(100vh-4rem)] min-h-0 flex-col">
-      <div className="mb-4 shrink-0">
-        <h1 className="text-xl font-semibold">Change Orders</h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Reading {"changeorder@phb1899.com"} live. Outlook remains a fully
-          working path and is unaffected by anything here.
-        </p>
+      <div className="mb-4">
+        <ModuleHeader
+          moduleKey={CHANGE_ORDERS_MODULE_KEY}
+          title="Change Orders"
+          blurb="Reading changeorder@phb1899.com live. Outlook remains a fully working path and is unaffected by anything here."
+        />
       </div>
 
       <div className="min-h-0 flex-1">

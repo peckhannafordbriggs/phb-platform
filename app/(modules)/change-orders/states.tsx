@@ -7,30 +7,69 @@
  * day, and it is the first thing the primary user sees.
  */
 
+/**
+ * The quartered diamond, at low opacity, behind an empty state.
+ *
+ * The same shape as the active module indicator and the section eyebrows - one
+ * idea at three sizes rather than three ideas. It is quiet on purpose: the
+ * Drafts folder is empty for most of the working day, and that state has to read
+ * as "nothing to review" rather than as a failure. A large sad icon would make
+ * an ordinary Tuesday morning look like an outage.
+ *
+ * Decorative, so it is hidden from assistive technology entirely - the state's
+ * meaning is in its words.
+ */
+export function QuarteredDiamond({ className = "" }: { className?: string }) {
+  return (
+    <div
+      aria-hidden="true"
+      className={"pointer-events-none rotate-45 opacity-[0.07] " + className}
+    >
+      <div className="grid h-full w-full grid-cols-2 grid-rows-2">
+        <span style={{ background: "var(--phb-red)" }} />
+        <span style={{ background: "var(--phb-orange)" }} />
+        <span style={{ background: "var(--phb-cyan)" }} />
+        <span style={{ background: "var(--phb-teal)" }} />
+      </div>
+    </div>
+  );
+}
+
 export function PaneMessage({
   title,
   detail,
   tone = "neutral",
   action,
+  /**
+   * Whether this is an ordinary empty state rather than something being wrong.
+   *
+   * Only these get the diamond. An error with a decorative mark behind it reads
+   * as branding applied to a failure, which is worse than a plain one.
+   */
+  calm = false,
 }: {
   title: string;
   detail?: string;
   tone?: "neutral" | "error";
   action?: React.ReactNode;
+  calm?: boolean;
 }) {
   return (
-    <div className="flex h-full items-center justify-center p-8">
-      <div className="max-w-sm text-center">
+    <div className="relative flex h-full items-center justify-center p-8">
+      {calm && (
+        <QuarteredDiamond className="absolute h-32 w-32" />
+      )}
+      <div className="relative max-w-sm text-center">
         <p
           className={
             "text-sm font-medium " +
-            (tone === "error" ? "text-red-800" : "text-[var(--foreground)]")
+            (tone === "error" ? "text-[var(--phb-maroon)]" : "text-[var(--foreground)]")
           }
         >
           {title}
         </p>
         {detail !== undefined && (
-          <p className="mt-1.5 text-sm text-[var(--muted)]">{detail}</p>
+          <p className="mt-1.5 text-sm leading-relaxed text-[var(--muted)]">{detail}</p>
         )}
         {action !== undefined && <div className="mt-4">{action}</div>}
       </div>
@@ -157,6 +196,7 @@ export function MailErrorState({
 
     return (
       <PaneMessage
+        calm
         title="Not connected to the mailbox"
         detail={`${detail} Outlook is unaffected and still works normally.`}
         action={actions}

@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { MeModule } from "@/lib/me";
+import { moduleAccent } from "@/lib/module-accent";
 
 /**
  * The sidebar is the constant, so it carries the brand and the rest does not.
@@ -15,32 +16,6 @@ import type { MeModule } from "@/lib/me";
  * Hiding an item is not authorization. Every route behind these links is
  * independently guarded server-side.
  */
-
-/**
- * The quadrant colours, in the order the mark reads them.
- *
- * A module's colour comes from its POSITION in the granted list, never from its
- * key - CLAUDE.md keys authorization on the stable `key` and the design brief
- * forbids naming a module in the UI, so a lookup table of key-to-colour would
- * break both. With the seeded sortOrder (Change Orders 100, BAS 200) this gives
- * Change Orders red and BAS cyan, which is what the brief specifies.
- *
- * The honest cost: reordering the modules table reassigns the colours. That is
- * acceptable because the colour's job is "which system am I in", which is
- * answered by consistency across one session rather than permanence across
- * years - and because the alternative is a component that knows module keys.
- */
-const QUADRANT_ACCENTS = [
-  "var(--phb-red)",
-  "var(--phb-cyan)",
-  "var(--phb-orange)",
-  "var(--phb-teal)",
-  "var(--phb-pink)",
-] as const;
-
-export function moduleAccent(index: number): string {
-  return QUADRANT_ACCENTS[index % QUADRANT_ACCENTS.length] ?? "var(--phb-red)";
-}
 
 /**
  * Shared by the two footer actions so they cannot drift apart.
@@ -122,7 +97,7 @@ export function Sidebar({
                 key={module.key}
                 href={href}
                 label={module.displayName}
-                accent={moduleAccent(index)}
+                accent={moduleAccent(module.key, index).fill}
                 active={pathname === href || pathname.startsWith(`${href}/`)}
               />
             );

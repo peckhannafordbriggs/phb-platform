@@ -902,6 +902,9 @@ export function MailboxWorkspace() {
             <MessageListSkeleton />
           ) : shownCount === 0 ? (
             <PaneMessage
+              // The one state that must read as an ordinary Tuesday rather than
+              // as something wrong. Drafts is empty for most of the working day.
+              calm
               title={activeQuery.length > 0 ? "No matches" : "Nothing to review"}
               detail={
                 activeQuery.length > 0
@@ -1097,6 +1100,7 @@ export function MailboxWorkspace() {
           <ReadingPaneSkeleton />
         ) : message === null ? (
           <PaneMessage
+            calm
             title="No message selected"
             detail="Choose a message from the list to read it."
           />

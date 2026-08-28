@@ -126,7 +126,7 @@
    --------------------------------------------------------------------------- */
 @theme {
   --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
-  --font-ui: var(--font-inter-tight), ui-sans-serif, system-ui, sans-serif;
+  --font-ui: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", monospace;
 }
 

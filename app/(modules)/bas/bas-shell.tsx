@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
+import { ModuleHeader } from "@/components/module-header";
 import { BAS_TABS, activeTabHref, tabHref } from "./tabs";
 
 /**
@@ -28,19 +30,17 @@ export function BasShell({
 }) {
   return (
     <div>
-      <h1 className="text-xl font-semibold">Building Automation</h1>
-
-      {/*
-        useSearchParams needs a Suspense boundary to be renderable in any
-        context. The fallback is the same bar without the carried query string,
-        so a tab is never missing while it resolves - it just briefly forgets
-        the filters, which is a link that still goes to the right screen.
-      */}
-      <Suspense fallback={<TabBar carryQuery={false} />}>
-        <TabBar carryQuery />
-      </Suspense>
-
-      <p className="mt-4 max-w-3xl text-sm text-[var(--muted)]">{blurb}</p>
+      <ModuleHeader moduleKey={BAS_MODULE_KEY} title="Building Automation" blurb={blurb}>
+        {/*
+          useSearchParams needs a Suspense boundary to be renderable in any
+          context. The fallback is the same bar without the carried query string,
+          so a tab is never missing while it resolves - it just briefly forgets
+          the filters, which is a link that still goes to the right screen.
+        */}
+        <Suspense fallback={<TabBar carryQuery={false} />}>
+          <TabBar carryQuery />
+        </Suspense>
+      </ModuleHeader>
 
       <div className="mt-6">{children}</div>
     </div>

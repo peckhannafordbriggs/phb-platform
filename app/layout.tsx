@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Archivo, Inter_Tight, JetBrains_Mono } from "next/font/google";
+import { Archivo, Figtree, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
 /**
@@ -8,17 +8,22 @@ import "./globals.css";
  * Loaded through next/font so nothing renders unstyled and no request leaves the
  * browser for a font at runtime.
  *
- * ARCHIVO — display. Headings, the wordmark, module titles, and the condensed
- * uppercase eyebrows. Chosen over Bricolage because its character is in the
- * proportions rather than in quirks, and a header seen two hundred times a day
- * should not have quirks. It carries a genuinely condensed cut in the same
- * family, which is what the eyebrows need without loading a fourth face.
+ * ARCHIVO — signage. The wordmark, buttons, and module headers: the things that
+ * label rather than inform. A hard grotesque against Figtree's soft geometric,
+ * so the two read as two deliberate voices rather than as one face that drifted.
  *
- * INTER TIGHT — everything dense. The only criterion is legibility at 13-14px in
- * a table, and this face should be invisible. Tighter default tracking than
- * Inter, which matters here: the subjects in this mailbox run past sixty
- * characters (`[CCHMC Bulletin 12] Change Order Request — Additional
- * Information Needed`) and every character of fit is a character less truncated.
+ * FIGTREE — everything read rather than scanned: nav, eyebrows, headings, body
+ * copy, and every table. Soft geometric, so it answers the Memphis diamond the
+ * logo is built from, but drawn FOR interfaces rather than adapted to them -
+ * circular bowls, open apertures, a tall x-height, terminals cut on the
+ * horizontal. The 13px table row is the test that counts, because that is where
+ * most of the platform's text actually lives.
+ *
+ * The split with Archivo is by ROLE, never by size. Archivo is signage -
+ * wordmark, buttons, module headers. Figtree is everything a person reads.
+ * Splitting on size instead would put two faces on the same job with no visible
+ * logic, at a size where the difference is too small to read as intent, which
+ * looks like a bug rather than a decision.
  *
  * JETBRAINS MONO — data. Timestamps, immutable message ids, Niagara point names,
  * sensor values, and the bracketed project tag. Chosen over Geist Mono for one
@@ -34,9 +39,9 @@ const archivo = Archivo({
   display: "swap",
 });
 
-const interTight = Inter_Tight({
+const figtree = Figtree({
   subsets: ["latin"],
-  variable: "--font-inter-tight",
+  variable: "--font-figtree",
   weight: ["400", "500", "600"],
   display: "swap",
 });
@@ -59,7 +64,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${archivo.variable} ${interTight.variable} ${jetbrainsMono.variable}`}
+      className={`${archivo.variable} ${figtree.variable} ${jetbrainsMono.variable}`}
     >
       <body className="min-h-screen antialiased">{children}</body>
     </html>
