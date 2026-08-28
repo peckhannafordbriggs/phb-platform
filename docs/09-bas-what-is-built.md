@@ -6,10 +6,39 @@ says *what exists*.
 
 Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
-**Last updated:** 28 August 2026 — checked against the repository and corrected.
-The prose was written from session reports; every claim below that the repo can
-settle has now been settled against it. Corrections are noted where they matter
-rather than silently applied.
+**Last updated:** 28 August 2026 — checked against the repositories and
+corrected. The prose was written from session reports; every claim below that a
+repository can settle has now been settled against it. Corrections are noted
+where they matter rather than silently applied.
+
+---
+
+## Two repositories, one system
+
+**This document describes the whole BAS system, which spans two repositories.**
+Read that before checking any claim in it, because which repository a claim falls
+under decides where to look and what can hold it to account.
+
+| | Owns |
+|---|---|
+| **`phb-platform`** (this repo) | The `bas_*` schema and migrations, the Building Automation module and its two screens, the module guard, and the verification tooling — `bas-import`, `bas-checksum`, `bas-verify-import`, `bas-health-oracle`, `bas-tables` |
+| **`phb-bas`** | The Python collector, the Grafana dashboards, the `bas-mcp` server, and the database backup and restore scripts |
+
+**The database is the seam, and it is the only one.** The collector knows Niagara
+and nothing about the platform. The platform knows the schema and nothing about
+Niagara. Neither can break the other except through the database — which is the
+property that makes them separately deployable.
+
+**Neither repository's tests can exercise the other.** `npm test` here covers the
+schema, the module and the tooling, and reaches none of the collector, the
+dashboards, the MCP server or the backups. The reverse holds too. So a claim in
+this document is checkable in `phb-platform`, checkable in `phb-bas`, or
+checkable in neither because it is about the JACE, the network or an operational
+event — and it is worth knowing which before going looking.
+
+Everything below that belongs to the other side is marked **(phb-bas)**. Nothing
+in this document should send a reader hunting through `phb-platform` for a file
+that was never in it.
 
 ---
 
@@ -30,16 +59,14 @@ write anything back.
 |---|---|---|
 | **JACE** | the building, `196.1.1.213` | Runs the equipment. Logs each point every 5 min, keeps ~42 h |
 | **`bas_collector` Niagara account** | on the station | Read-only. The only thing added to the JACE |
-| **Collector** | `C:\dev\bas-collector`, repo `phb-bas` | Python. Reads oBIX every 15 min, writes to Postgres |
+| **Collector** *(phb-bas)* | `C:\dev\bas-collector` | Python. Reads oBIX every 15 min, writes to Postgres |
 | **`bas_*` tables** | platform database | 12 tables, 6 views. Permanent |
 | **Building Automation module** | `phb-platform` | Two tabbed dashboards behind the platform's own login and grants |
-| **Grafana** | `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
-| **`bas-mcp`** | `C:\dev\bas-mcp` | Lets Claude Desktop query the data. Superseded by B5 when that ships |
-| **Nightly backup** | 02:15, to OneDrive | Load-bearing — see *Irreplaceability* |
+| **Grafana dashboards** *(phb-bas)* | `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
+| **`bas-mcp`** *(phb-bas)* | `C:\dev\bas-mcp` | Lets Claude Desktop query the data. Superseded by B5 when that ships |
+| **Nightly backup** *(phb-bas)* | 02:15, to OneDrive | Load-bearing — see *Irreplaceability* |
 
-**Two deployables, and the database is the seam.** The collector knows Niagara
-and nothing about the platform. The platform knows the schema and nothing about
-Niagara. Neither can break the other except through the database.
+Two deployables, one per repository — see *Two repositories, one system* above.
 
 ---
 
@@ -53,7 +80,7 @@ Niagara. Neither can break the other except through the database.
 | **Three fixes** | Vocabularies into the seed, SQL comments restored, `postinstall` forcing `prisma generate` | `6aa6521` (2026-08-21) |
 | **Content verification** | `scripts/bas-checksum.ts`, `npm run bas:verify` — comparison by content, not row counts | `278b723` (2026-08-24, with B3) |
 | **B3** | Collection Health screen, time range and building filter | `278b723` (2026-08-24) |
-| **Cutover** | Collector retargeted at the platform database, Grafana and MCP repointed | **not in this repo** — see below |
+| **Cutover** | Collector retargeted at the platform database, Grafana and MCP repointed | `abcacf3`, `78776fd` **(phb-bas)** |
 | **B4** | Point Explorer, tabbed layout | `e76eba4` (2026-08-24) |
 
 Four later BAS commits the earlier version of this table omitted, all 2026-08-24:
@@ -72,11 +99,12 @@ Four later BAS commits the earlier version of this table omitted, all 2026-08-24
   schema"*. All three verification scripts — `bas-checksum.ts`,
   `bas-verify-import.ts`, `bas-health-oracle.ts` — were added by `278b723`,
   the B3 commit.
-- **`abcacf3` and `78776fd` do not exist in `phb-platform`.** `git log` does not
-  resolve either. The cutover retargeted the *collector*, Grafana and the MCP
-  server, none of which live in this repository, so those hashes are most likely
-  from `phb-bas`. They are left unresolved here rather than guessed at; if the
-  cutover needs a citation, it belongs in the collector repo's history.
+- **`abcacf3` and `78776fd` are `phb-bas` hashes**, and the earlier version of
+  this table cited them bare, as though they were in `phb-platform`. They do not
+  resolve here and never will — the cutover retargeted the collector, the Grafana
+  dashboards and the MCP server, all of which live in `phb-bas`. They are now
+  labelled, which is the fix: a hash without its repository sends a reader
+  looking through the wrong history and finding nothing.
 
 ### Test count
 
@@ -238,18 +266,18 @@ hidden from.
 | `… --apply` | Import. One transaction, verified before commit |
 | `npx tsx scripts/bas-checksum.ts` | Content checksum of the `bas_*` tables |
 | `npm run bas:verify` | Independent content comparison of two databases |
-| `npm run bas:oracle` | Compares the screens against Grafana's own SQL, same moment |
+| `npm run bas:oracle` | Compares the screens against the Grafana dashboards' own SQL *(phb-bas)*, same moment |
 | `npx tsx scripts/bas-tables.ts` | Table inspection |
 
-**Elsewhere** — real, but not in this repository, so nothing here can confirm
-their behaviour:
+**In `phb-bas`** — version controlled there, alongside the collector. Nothing in
+`phb-platform` can exercise them, but they are owned, committed and reviewable:
 
-| Command | Where | What |
-|---|---|---|
-| `python -m collector check` | `phb-bas` | Connectivity and configuration |
-| `python -m collector status` | `phb-bas` | Points, readings, risk, recent runs |
-| `Backup-BasDatabase.ps1` | not in `phb-platform` | Nightly dump, verified and rotated |
-| `Test-BasRestore.ps1` | not in `phb-platform` | Restores to a scratch database and compares |
+| Command | What |
+|---|---|
+| `python -m collector check` | Connectivity and configuration |
+| `python -m collector status` | Points, readings, risk, recent runs |
+| `Backup-BasDatabase.ps1` | Nightly dump, verified and rotated. Committed 21 August 2026 |
+| `Test-BasRestore.ps1` | Restores to a scratch database and compares. Committed 21 August 2026 |
 
 ### Corrections to the tooling table
 
@@ -257,14 +285,18 @@ their behaviour:
   `package.json` defines exactly two BAS scripts, `bas:verify` and `bas:oracle`.
   `scripts/bas-checksum.ts` does exist and is real — it simply has no alias, and
   is run with `npx tsx`.
-- **`Backup-BasDatabase.ps1` and `Test-BasRestore.ps1` are not in this
-  repository** — not tracked by git and not present on disk. They are presumably
-  on the collector machine or in `phb-bas`. The earlier version listed them
-  beside the repo commands without distinction, which read as though
-  `npm test` covers them. It does not, and neither does anything else here.
-  **Given that backups are called a correctness requirement under
-  *Irreplaceability*, a backup script no repository owns is worth someone's
-  attention rather than a table row.**
+- **`Backup-BasDatabase.ps1` and `Test-BasRestore.ps1` live in `phb-bas`**, version
+  controlled alongside the collector and committed on 21 August 2026. The earlier
+  version of this table listed them beside the `phb-platform` commands without
+  distinction, which read as though `npm test` covers them — it does not, and it
+  cannot. They are now under the `phb-bas` heading.
+
+  An intermediate revision of this document went further and called them
+  unowned, on the strength of their absence from `phb-platform`. That was wrong,
+  and wrong in the way this whole section is about: absence from one repository
+  is not absence from version control. Since backups are a correctness
+  requirement under *Irreplaceability*, the difference between "in `phb-bas`" and
+  "nobody owns this" is not a detail.
 
 **Verification is by content, not row counts.** The import once reported
 "12/12 tables reconciled, 3,481 rows" and was wrong: every timestamp had lost its
@@ -337,10 +369,10 @@ recorded is a gap analysis can account for.
 
 ---
 
-## What was checked against the repository
+## What was checked, and where
 
-Everything in this section was verified on 2026-08-28 against the files, not
-against a session report.
+Everything in the first table was verified on 2026-08-28 against the files in
+`phb-platform`, not against a session report.
 
 **Confirmed exactly as described:**
 
@@ -359,15 +391,22 @@ against a session report.
 | Chart breaks across gaps with `connectNulls={false}` | `app/(modules)/bas/point-explorer.tsx` |
 | `postinstall` forces `prisma generate` | `package.json` |
 
-**Not checkable from this repository**, and therefore taken on trust rather than
-verified: the JACE and its address, the Niagara `bas_collector` account, the
-collector at `C:\dev\bas-collector`, `bas-mcp`, Grafana on `localhost:3001`, the
-nightly backup at 02:15, the two PowerShell scripts, the Postgres roles and their
-grants, the synthetic-data claims, the sensor fault of 24 August and the 64.3-hour
-collector outage. All of those are about systems outside `phb-platform`.
+**Checkable in `phb-bas`, not here** — real, version controlled, and reviewable,
+just not by anything in this repository: the collector, the Grafana dashboards,
+the `bas-mcp` server, and `Backup-BasDatabase.ps1` / `Test-BasRestore.ps1`.
+Verifying a claim about any of them means opening that repository.
 
-That split is the useful part: roughly half of this document describes things no
-test in this repository can hold to account.
+**Checkable in neither**, and therefore taken on trust: the JACE and its address,
+the Niagara `bas_collector` account, the Postgres roles and their grants, the
+synthetic-data claims, the sensor fault of 24 August and the 64.3-hour collector
+outage. Those are facts about a building, a network and a set of events, and no
+repository holds them.
+
+That three-way split is the useful part, and it is why *Two repositories, one
+system* is at the top rather than only here. Roughly half of this document
+describes things `npm test` in `phb-platform` will never catch drifting — which
+is not a defect, but it is worth a reader knowing before they treat a green suite
+as covering the page.
 
 ---
 
@@ -375,7 +414,8 @@ test in this repository can hold to account.
 
 **B5 — asking questions in plain English.** Eight tools, a guarded SQL escape
 hatch on its own read-only connection, an audit event per question. Designed, not
-started. Blocked on a company Anthropic API key.
+started. Blocked on a company Anthropic API key. It would live in `phb-platform`,
+and it is what supersedes `bas-mcp` *(phb-bas)* when it ships.
 
 **Point classification tooling.** Bulk role assignment, equipment creation and
 linking. Deliberately deferred — the right shape depends on how a given
@@ -384,6 +424,8 @@ which nothing currently sets.
 
 **Production deployment.** Firewall rule for the site's egress IP, a scoped role
 on the Azure database, and an always-on host. Blocked on the Azure subscription.
+Both repositories are affected: the platform needs the host, and the collector
+*(phb-bas)* needs the firewall rule and the database role.
 
 **Multiple buildings.** The schema supports it throughout and the filters are
 already built for it. The plan is one central station importing other JACEs'
