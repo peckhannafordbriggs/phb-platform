@@ -9,6 +9,8 @@ import {
   RISK_LABEL,
   WINDOW_PRESETS,
   atRiskTone,
+  atRiskShape,
+  describeAtRisk,
   basRiskTone,
   describeEmptyRuns,
   describeRunGap,
@@ -72,6 +74,16 @@ describe("unknown is never rendered as safe", () => {
   });
 });
 
+/** A full risk-count record with only the named states set. */
+const atRisk = (partial: Partial<Record<RollRisk, number>>): Record<RollRisk, number> => ({
+  ok: 0,
+  at_risk: 0,
+  data_lost: 0,
+  roll_horizon_unknown: 0,
+  never_collected: 0,
+  ...partial,
+});
+
 describe("the tile thresholds mirror the Grafana panels", () => {
   it("makes unclassified points amber from one, and green only at zero", () => {
     // Amber by design, per docs/08 - a backlog item, not an error. Green at
@@ -81,9 +93,98 @@ describe("the tile thresholds mirror the Grafana panels", () => {
     expect(unclassifiedTone(300)).toBe("warn");
   });
 
-  it("makes points at risk red from one", () => {
-    expect(atRiskTone(0)).toBe("ok");
-    expect(atRiskTone(1)).toBe("bad");
+  /**
+   * REPLACED DELIBERATELY. The previous assertion was:
+   *
+   *     expect(atRiskTone(0)).toBe("ok");
+   *     expect(atRiskTone(1)).toBe("bad");
+   *
+   * "red from one" mirrored the Grafana panel, and the panel is wrong about
+   * this: it treats "capacity has not been filled in from Workbench" and "the
+   * station has destroyed records nobody collected" as the same severity. The
+   * first is a gap in what we know, the second is permanent loss, and they call
+   * for different actions.
+   *
+   * This is a change to what the screen claims, not a fix to a broken
+   * implementation - the old behaviour matched its old test exactly. It is a
+   * stronger assertion than the one it replaces: it pins the invariant the old
+   * one only implied, that the tile is never `ok` above zero, AND it pins the
+   * distinction the old one could not express.
+   */
+  it("never renders any at-risk total as ok, whatever it is made of", () => {
+    // The rule the whole screen exists for. Unknown is not safe, and amber is
+    // its floor rather than its ceiling.
+    for (const shape of [
+      atRisk({ roll_horizon_unknown: 1 }),
+      atRisk({ at_risk: 1 }),
+      atRisk({ never_collected: 1 }),
+      atRisk({ data_lost: 1 }),
+      atRisk({ roll_horizon_unknown: 400 }),
+    ]) {
+      expect(atRiskTone(shape)).not.toBe("ok");
+    }
+  });
+
+  it("is ok only at zero", () => {
+    expect(atRiskTone(atRisk({}))).toBe("ok");
+  });
+
+  it("reserves the worst tone for a total that includes real loss", () => {
+    expect(atRiskTone(atRisk({ data_lost: 1 }))).toBe("bad");
+    // One lost point among many unknowns is still loss.
+    expect(atRiskTone(atRisk({ data_lost: 1, roll_horizon_unknown: 40 }))).toBe("bad");
+  });
+
+  it("warns rather than alarms when nothing is lost yet", () => {
+    expect(atRiskTone(atRisk({ roll_horizon_unknown: 3 }))).toBe("warn");
+    expect(atRiskTone(atRisk({ at_risk: 2, never_collected: 1 }))).toBe("warn");
+  });
+
+  it("classifies the shape behind the count", () => {
+    expect(atRiskShape(atRisk({}))).toBe("none");
+    expect(atRiskShape(atRisk({ roll_horizon_unknown: 3 }))).toBe("unknown");
+    expect(atRiskShape(atRisk({ data_lost: 1 }))).toBe("losing");
+  });
+});
+
+describe("the tile says which problem it has, not just how many", () => {
+  /**
+   * The count alone is the least useful part of the answer. "3 points, capacity
+   * unknown" and "3 points losing data" are different sentences about the same
+   * number, and somebody glancing at the screen should not have to decode a
+   * stripe or a hue to tell them apart.
+   */
+  it("names capacity when nothing is lost", () => {
+    expect(describeAtRisk(atRisk({ roll_horizon_unknown: 3 }))).toBe(
+      "3 points, capacity unknown",
+    );
+  });
+
+  it("names loss when data is gone", () => {
+    expect(describeAtRisk(atRisk({ data_lost: 3 }))).toBe("3 points losing data");
+  });
+
+  it("says how many of the total are actually losing, when it is mixed", () => {
+    // "1 of 4 points losing data" is more use than either "4 at risk" or
+    // "1 losing" on its own.
+    expect(describeAtRisk(atRisk({ data_lost: 1, roll_horizon_unknown: 3 }))).toBe(
+      "1 of 4 points losing data",
+    );
+  });
+
+  it("uses the singular for one point", () => {
+    expect(describeAtRisk(atRisk({ data_lost: 1 }))).toBe("1 point losing data");
+    expect(describeAtRisk(atRisk({ roll_horizon_unknown: 1 }))).toBe(
+      "1 point, capacity unknown",
+    );
+  });
+
+  it("says nothing alarming at zero", () => {
+    expect(describeAtRisk(atRisk({}))).toBe("None at risk");
+  });
+
+  it("never describes a non-zero total as none", () => {
+    expect(describeAtRisk(atRisk({ at_risk: 1 }))).not.toContain("None");
   });
 
   it("walks the staleness boundaries at 30 and 60 minutes", () => {

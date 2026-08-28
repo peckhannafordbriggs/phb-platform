@@ -208,9 +208,72 @@ export function unclassifiedTone(count: number): Tone {
   return count >= 1 ? "warn" : "ok";
 }
 
-/** Grafana: green at 0, red from 1. */
-export function atRiskTone(count: number): Tone {
-  return count >= 1 ? "bad" : "ok";
+/**
+ * What kind of problem the at-risk total is, which is not the same question as
+ * how big it is.
+ *
+ *   losing   at least one point has data_lost - the station has already
+ *            overwritten records nobody collected, and they are gone
+ *   unknown  nothing is lost yet: the total is at_risk, roll_horizon_unknown
+ *            and never_collected, which are "we cannot tell" and "not yet"
+ *   none     zero
+ *
+ * The distinction is the difference between "go fill in capacity in Workbench"
+ * and "data is being destroyed right now", and a single count cannot carry it.
+ */
+export type AtRiskShape = "none" | "losing" | "unknown";
+
+export function atRiskShape(counts: Record<RollRisk, number>): AtRiskShape {
+  const total = RISK_SEVERITY_ORDER.reduce((sum, risk) => sum + counts[risk], 0);
+  if (total === 0) return "none";
+  return counts.data_lost > 0 ? "losing" : "unknown";
+}
+
+/**
+ * Grafana had one step here: green at 0, red from 1. This is deliberately
+ * stronger than the panel it mirrors.
+ *
+ * Red from one treats "capacity has not been filled in from Workbench" and "the
+ * station has destroyed records we never read" as the same severity. The first
+ * is a gap in what we know, the second is a permanent loss - and a screen that
+ * shouts equally at both trains somebody to stop reading it.
+ *
+ * What has NOT changed is the rule this file exists for: above zero is never
+ * `ok`. Unknown is not safe, and amber is its floor rather than its ceiling.
+ */
+export function atRiskTone(counts: Record<RollRisk, number>): Tone {
+  switch (atRiskShape(counts)) {
+    case "none":
+      return "ok";
+    case "unknown":
+      return "warn";
+    case "losing":
+      return "bad";
+  }
+}
+
+/**
+ * The tile's headline, which has to say WHICH problem it is without anybody
+ * decoding a stripe or a hue.
+ *
+ * "3 points, capacity unknown" and "3 points losing data" are different
+ * sentences about the same number, and the number alone is the least useful part
+ * of either.
+ */
+export function describeAtRisk(counts: Record<RollRisk, number>): string {
+  const total = RISK_SEVERITY_ORDER.reduce((sum, risk) => sum + counts[risk], 0);
+  const points = `${formatCount(total)} point${total === 1 ? "" : "s"}`;
+
+  switch (atRiskShape(counts)) {
+    case "none":
+      return "None at risk";
+    case "losing":
+      return counts.data_lost === total
+        ? `${points} losing data`
+        : `${formatCount(counts.data_lost)} of ${points} losing data`;
+    case "unknown":
+      return `${points}, capacity unknown`;
+  }
 }
 
 /**

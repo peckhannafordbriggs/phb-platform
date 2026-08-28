@@ -40,6 +40,8 @@ import {
   stalenessTone,
   totalReadingsTone,
   unclassifiedTone,
+  atRiskShape,
+  describeAtRisk,
   windowLabel,
   type Tone,
 } from "./health-client";
@@ -70,25 +72,43 @@ const POLL_INTERVAL_MS = 60_000;
 
 
 
-const TONE_TILE: Record<Tone, string> = {
-  ok: "border-emerald-300 bg-emerald-50",
-  warn: "border-amber-300 bg-amber-50",
-  bad: "border-red-300 bg-red-50",
-  neutral: "border-[var(--border)] bg-[var(--surface)]",
+/**
+ * The semantic palette, from the sampled logo colours.
+ *
+ * Semantic colour is separate from the module accent and always has been: the
+ * module's cyan says "you are in Building Automation" and never appears on a
+ * tile, so a healthy teal tile cannot be mistaken for a module-coloured one.
+ * Cyan is reserved for the header diamond, the active tab and the trend line.
+ *
+ * The mapping, and every value clears WCAG AA as text on its own tint - see the
+ * ink tier in app/globals.css:
+ *
+ *   ok       teal      the "SINCE" lettering
+ *   warn     orange    the lower-left quadrant
+ *   bad      maroon    the lower tip
+ *   neutral  greys     "we have no answer", which is not a colour
+ */
+const tint = (token: string, percent: number) =>
+  `color-mix(in srgb, var(${token}) ${percent}%, transparent)`;
+
+const TONE_STYLE: Record<Tone, React.CSSProperties> = {
+  ok: { borderColor: tint("--phb-teal", 55), background: tint("--phb-teal", 12) },
+  warn: {
+    borderColor: tint("--phb-orange", 55),
+    background: tint("--phb-orange", 12),
+  },
+  bad: {
+    borderColor: tint("--phb-maroon", 40),
+    background: tint("--phb-maroon", 8),
+  },
+  neutral: { borderColor: "var(--border)", background: "var(--surface)" },
 };
 
-const TONE_VALUE: Record<Tone, string> = {
-  ok: "text-emerald-900",
-  warn: "text-amber-900",
-  bad: "text-red-900",
-  neutral: "text-[var(--foreground)]",
-};
-
-const TONE_BADGE: Record<Tone, string> = {
-  ok: "border-emerald-300 bg-emerald-50 text-emerald-900",
-  warn: "border-amber-300 bg-amber-50 text-amber-900",
-  bad: "border-red-300 bg-red-50 text-red-900",
-  neutral: "border-[var(--border)] bg-[var(--surface)] text-[var(--muted)]",
+const TONE_INK: Record<Tone, string> = {
+  ok: "var(--phb-teal-ink)",
+  warn: "var(--phb-orange-ink)",
+  bad: "var(--phb-maroon)",
+  neutral: "var(--foreground)",
 };
 
 const RUN_STATUS_TONE: Record<IngestRunRow["status"], Tone> = {
@@ -363,14 +383,31 @@ export function CollectionHealth() {
           }
         />
 
+        {/*
+          The one tile with two different problems behind a single count, so it
+          is the one tile that says which. "3 points, capacity unknown" and
+          "3 points losing data" call for different actions - fill in Workbench,
+          or find out why the collector stopped - and nobody should have to read
+          a stripe to tell them apart.
+
+          The stripe is the second signal rather than the only one, and it is
+          what keeps this distinguishable from the unclassified tile when both
+          are amber.
+        */}
         <Tile
           label="Points at risk of data loss"
           value={formatCount(totals.pointsAtRisk)}
-          tone={atRiskTone(totals.pointsAtRisk)}
+          tone={atRiskTone(totals.riskCounts)}
+          headline={
+            totals.pointsAtRisk > 0 ? describeAtRisk(totals.riskCounts) : undefined
+          }
+          stripe={totals.pointsAtRisk > 0}
           detail={
             totals.pointsAtRisk === 0
               ? "Every active point was collected inside half its roll horizon."
-              : undefined
+              : atRiskShape(totals.riskCounts) === "unknown"
+                ? "Nothing is lost yet. The roll horizon cannot be computed for these, so we cannot tell whether records are being overwritten."
+                : "The station has overwritten records that were never collected. Those are gone permanently."
           }
         >
           {totals.pointsAtRisk > 0 && (
@@ -400,12 +437,11 @@ export function CollectionHealth() {
 
       {gapSentence !== null && (
         <section
-          className={
-            "rounded border p-4 text-sm " +
-            TONE_TILE[runGapTone(health.longestRunGap)] +
-            " " +
-            TONE_VALUE[runGapTone(health.longestRunGap)]
-          }
+          className="rounded border p-4 text-sm"
+          style={{
+            ...TONE_STYLE[runGapTone(health.longestRunGap)],
+            color: TONE_INK[runGapTone(health.longestRunGap)],
+          }}
         >
           <p className="font-medium">Longest collector silence</p>
           <p className="mt-1">{gapSentence}</p>
@@ -443,23 +479,61 @@ function Tile({
   value,
   tone,
   detail,
+  headline,
+  stripe = false,
   children,
 }: {
   label: string;
   value: string;
   tone: Tone;
   detail?: string;
+  /**
+   * A sentence under the number saying WHICH problem this is.
+   *
+   * Only the at-risk tile has two different problems behind one count, and it is
+   * the one place where the number alone is the least useful part of the answer.
+   */
+  headline?: string;
+  /**
+   * A severity bar down the left edge.
+   *
+   * Carried only by the tile that reports possible data loss. It is what keeps
+   * "we might be losing data" distinguishable from "this is less useful than it
+   * could be" when both are amber - the brief requires those two to stay
+   * visually distinct, and hue alone cannot do it once they share one.
+   */
+  stripe?: boolean;
   children?: React.ReactNode;
 }) {
   return (
-    <div className={"rounded border p-4 " + TONE_TILE[tone]}>
-      <p className="text-xs font-medium text-[var(--muted)]">{label}</p>
-      <p className={"mt-1 text-2xl font-semibold " + TONE_VALUE[tone]}>
+    <div
+      className={"relative overflow-hidden rounded border p-4 " + (stripe ? "pl-5" : "")}
+      style={TONE_STYLE[tone]}
+    >
+      {stripe && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-y-0 left-0 w-1"
+          style={{ background: TONE_INK[tone] }}
+        />
+      )}
+      <p className="text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--muted)]">
+        {label}
+      </p>
+      <p
+        className="mt-1 text-2xl font-semibold tabular-nums"
+        style={{ color: TONE_INK[tone] }}
+      >
         {value}
       </p>
+      {headline !== undefined && (
+        <p className="mt-0.5 text-[0.8125rem] font-medium" style={{ color: TONE_INK[tone] }}>
+          {headline}
+        </p>
+      )}
       {children}
       {detail !== undefined && (
-        <p className="mt-2 text-xs text-[var(--muted)]">{detail}</p>
+        <p className="mt-2 text-xs leading-relaxed text-[var(--muted)]">{detail}</p>
       )}
     </div>
   );
@@ -469,10 +543,11 @@ function RiskBadge({ risk }: { risk: RollRisk }) {
   return (
     <span
       title={RISK_EXPLANATION[risk]}
-      className={
-        "inline-block rounded border px-1.5 py-0.5 text-xs font-medium " +
-        TONE_BADGE[basRiskTone(risk)]
-      }
+      className="inline-block rounded-[2px] border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+      style={{
+        ...TONE_STYLE[basRiskTone(risk)],
+        color: TONE_INK[basRiskTone(risk)],
+      }}
     >
       {RISK_LABEL[risk]}
     </span>
@@ -725,10 +800,11 @@ function RunTable({ health }: { health: CollectionHealthData }) {
                   </td>
                   <td className="px-3 py-2">
                     <span
-                      className={
-                        "inline-block rounded border px-1.5 py-0.5 text-xs font-medium " +
-                        TONE_BADGE[RUN_STATUS_TONE[run.status]]
-                      }
+                      className="inline-block rounded-[2px] border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+                      style={{
+                        ...TONE_STYLE[RUN_STATUS_TONE[run.status]],
+                        color: TONE_INK[RUN_STATUS_TONE[run.status]],
+                      }}
                     >
                       {run.status}
                     </span>
@@ -823,12 +899,11 @@ function DataGapTable({
                     </td>
                     <td className="px-3 py-2">
                       <span
-                        className={
-                          "inline-block rounded border px-1.5 py-0.5 text-xs font-medium " +
-                          TONE_BADGE[
-                            gap.cause === "roll_overwrite" ? "bad" : "warn"
-                          ]
-                        }
+                        className="inline-block rounded-[2px] border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+                        style={{
+                          ...TONE_STYLE[gap.cause === "roll_overwrite" ? "bad" : "warn"],
+                          color: TONE_INK[gap.cause === "roll_overwrite" ? "bad" : "warn"],
+                        }}
                       >
                         {GAP_CAUSE_LABEL[gap.cause] ?? gap.cause}
                       </span>
