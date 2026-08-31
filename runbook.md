@@ -1824,6 +1824,109 @@ Then commit the `package.json` change. Do not disable the check globally.
 
 ---
 
+## `next build` warns about CompressionStream in the Edge Runtime
+
+**Symptom.** A clean `next build` prints, twice:
+
+```
+./node_modules/jose/dist/webapi/lib/deflate.js
+A Node.js API is used (CompressionStream at line: 10) which is not supported in the Edge Runtime.
+```
+
+once for `CompressionStream` and once for `DecompressionStream`, with an import
+trace running `next-auth` → `@auth/core/jwt.js` → `jose` → `jwe_decrypt.js` →
+`deflate.js`. The build then says `✓ Compiled successfully` and exits 0.
+
+It only appears on a **cold** build. `.next` caches the middleware compilation,
+so a second `next build` prints nothing and the warning looks like it went away.
+`rm -rf .next` brings it back. Do not read its absence as a fix.
+
+**This is expected. Nothing is wrong. Do not spend a day on it.**
+
+**Cause — two separate things, both benign.**
+
+*One:* the message is misfiled. `CompressionStream` is a WHATWG web API, not a
+Node.js API. It is on a hardcoded deny list in
+`next/dist/shared/lib/constants.js` (`EDGE_UNSUPPORTED_NODE_APIS`), which is a
+hand-maintained list of global *names* — it also contains `DomException`, which
+is not the real global (`DOMException`). The check is a static scan for an
+identifier, not a reachability analysis.
+
+*Two:* the list is nevertheless right that the global is missing. Evaluated
+inside Next's own middleware sandbox:
+
+```bash
+node -e "const {EdgeRuntime}=require('next/dist/compiled/edge-runtime');
+const rt=new EdgeRuntime();
+console.log(rt.evaluate('typeof CompressionStream'))"   # undefined
+```
+
+So the warning is accurate about availability. It is wrong only about whether
+that matters, and it is wrong about that because the code is never reached.
+
+**Why it is unreachable.** `jose` calls `compress()` / `decompress()` on exactly
+one condition — `joseHeader.zip === 'DEF'`:
+
+- **Encoding.** `@auth/core/jwt.js` `encode()` sets
+  `.setProtectedHeader({ alg, enc, kid })`. It never sets `zip`. Our session
+  cookies cannot carry it.
+- **Decoding.** In `jose/dist/webapi/lib/jwe_decrypt.js` the `zip === 'DEF'`
+  branch sits *after* `await decrypt(encEntry, cek, ciphertext, iv, tag,
+  additionalData)`. The protected header is the AAD, so a tampered `zip` fails
+  the authentication tag and throws before the branch is reached. Producing a
+  token that gets that far requires `AUTH_SECRET` — and anyone holding
+  `AUTH_SECRET` can mint any session they like, which makes compression the
+  least of it.
+
+**Import is not evaluation.** In the built bundle (`.next/server/middleware.js`)
+the reference lives inside a function body:
+
+```js
+function dx(a){if(void 0===globalThis[a])throw new cr(`JWE "zip" ... requires the ${a} API.`)}
+async function dy(a){dx("CompressionStream");let b=new CompressionStream("deflate-raw"); ...}
+```
+
+Loading the module does nothing. And `jose` feature-detects first, so even in
+the impossible case the result is a thrown `JOSENotSupported`, not a
+`ReferenceError`.
+
+**Can it break production on Azure?** No, on three counts.
+
+1. The branch cannot be entered without our own signing secret.
+2. If it somehow were, Auth.js fails closed: `@auth/core/lib/actions/session.js`
+   catches any decode error, logs `JWTSessionError`, clears the session cookie
+   and returns no session. `req.auth` is `null`, and `middleware.ts` redirects to
+   `/signin`. There is no crash and no auth bypass.
+3. It is a compile-time warning. `next build` exits 0, so CI's `npm run build`
+   step is green and the container image builds and boots as normal.
+
+**The fix, and why it is not worth taking.** There are three, and all cost more
+than the warning does:
+
+| Option | Why not |
+|---|---|
+| Build with `--turbopack` | Verified: it silences the warning because Turbopack does not implement this check — not because anything changed. The same code ships (middleware went 86.9 kB → 91.7 kB). Swapping the bundler under a verified build to hide one line is the wrong trade. |
+| `ignoreWarnings` in `next.config.ts` | Suppresses the whole class, so the next Edge warning — one that might be real — disappears silently too. **UNVERIFIED**: not tested here. |
+| Import `jose` by subpath to skip `deflate.js` | The import is inside `@auth/core/jwt.js`, which imports the `"jose"` barrel. We do not control it. This needs a patched dependency for a warning that changes nothing. |
+
+The correct action is to leave it alone and read this entry instead.
+
+**What would reopen this.** Any one of:
+
+- Auth.js starts setting `zip` on the protected header in `encode()` — check
+  `@auth/core/jwt.js` after a `next-auth` upgrade.
+- The platform begins decrypting a JWE minted by something other than itself
+  (a partner token, a Graph-issued JWE), where the header is no longer ours to
+  guarantee.
+- The warning changes to naming a global that is genuinely reached at module
+  load, i.e. it appears with `✗` rather than alongside `✓ Compiled successfully`.
+
+Observed on `next@15.5.23`, `next-auth@5.0.0-beta.32`, `jose@6.2.8`, 31 August
+2026. Everything above was read from the installed source or evaluated, not
+inferred from documentation.
+
+---
+
 ## Rebuilding a development database needs BOTH seeds
 
 **Symptom.** After a reset the platform works and you can sign in, but the
