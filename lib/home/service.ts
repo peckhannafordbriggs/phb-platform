@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { Viewer } from "@/lib/authz";
 import { buildMe, type MeModule } from "@/lib/me";
+import { classifyLastVisit, type LastVisit } from "./last-visit";
 import { CHANGE_ORDERS_MODULE_KEY } from "@/lib/modules/change-orders/constants";
 import {
   mailService,
@@ -30,6 +31,8 @@ import {
  * the way in, because the way in is the point of the card.
  */
 
+export { classifyLastVisit, type LastVisit };
+
 /** A live figure, or an honest account of why there isn't one. */
 export type Figure =
   | { state: "ok"; value: string; status: string }
@@ -52,14 +55,13 @@ export interface HomeGreeting {
   positionName: string | null;
   departmentName: string | null;
   /**
-   * The sign-in BEFORE this one. Null on a first visit.
-   *
    * Deliberately NOT `lastLoginAt`: that column is overwritten with now() during
    * the sign-in that is currently rendering this page, so it would always read
    * as a few seconds ago. See the comment on Employee.previousLoginAt.
    */
-  previousLoginAt: Date | null;
+  lastVisit: LastVisit;
 }
+
 
 /** One line in "since you last signed in". Never a count with no subject. */
 export interface SinceItem {
@@ -88,6 +90,9 @@ export async function getHomeData(viewer: Viewer): Promise<HomeData> {
         firstName: true,
         positionOther: true,
         previousLoginAt: true,
+        // Both needed to tell a genuine first visit from a pre-column row.
+        lastLoginAt: true,
+        firstSeenAt: true,
         position: { select: { name: true } },
         department: { select: { name: true } },
       },
@@ -105,7 +110,10 @@ export async function getHomeData(viewer: Viewer): Promise<HomeData> {
      */
     positionName: employee?.position?.name ?? employee?.positionOther ?? null,
     departmentName: employee?.department?.name ?? null,
-    previousLoginAt,
+    lastVisit:
+      employee === null
+        ? { state: "first" }
+        : classifyLastVisit(employee),
   };
 
   const granted = new Set(me.grantedModuleKeys);

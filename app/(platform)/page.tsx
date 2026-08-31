@@ -2,7 +2,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireAuthenticated } from "@/lib/authz";
 import { moduleAccent } from "@/lib/module-accent";
-import { getHomeData, type Figure, type HomeModuleCard } from "@/lib/home/service";
+import {
+  getHomeData,
+  type Figure,
+  type HomeModuleCard,
+  type LastVisit,
+} from "@/lib/home/service";
 
 export const dynamic = "force-dynamic";
 
@@ -69,12 +74,12 @@ function Greeting({
   firstName,
   positionName,
   departmentName,
-  previousLoginAt,
+  lastVisit,
 }: {
   firstName: string;
   positionName: string | null;
   departmentName: string | null;
-  previousLoginAt: Date | null;
+  lastVisit: LastVisit;
 }) {
   /**
    * Position and department are joined only when both exist, so somebody who
@@ -93,13 +98,23 @@ function Greeting({
         <p className="mt-4 text-sm text-[var(--muted)]">{role}</p>
       )}
 
-      <p className="mt-1.5 text-sm text-[var(--muted)]">
-        {previousLoginAt === null
-          ? // A first visit has no previous sign-in, and saying so is better
-            // than dating the page from the sign-in happening right now.
-            "This is your first time here"
-          : `Last signed in ${formatSignIn(previousLoginAt)}`}
-      </p>
+      {/*
+        Three states, and the third renders NOTHING on purpose.
+
+        "unknown" is somebody who has been here before while their
+        previous_login_at predates the column - true of every existing employee
+        the day it shipped. Telling them "this is your first time here" would be
+        a false claim about their own history, and there is no honest timestamp
+        to offer instead, so the line is simply absent. It fills itself in on
+        their next sign-in.
+      */}
+      {lastVisit.state !== "unknown" && (
+        <p className="mt-1.5 text-sm text-[var(--muted)]">
+          {lastVisit.state === "first"
+            ? "This is your first time here"
+            : `Last signed in ${formatSignIn(lastVisit.at)}`}
+        </p>
+      )}
     </header>
   );
 }

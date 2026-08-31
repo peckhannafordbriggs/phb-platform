@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { applyLoginGate } from "@/lib/auth/signin";
 import { moduleAccent } from "@/lib/module-accent";
+import { classifyLastVisit } from "@/lib/home/last-visit";
 import {
   createEmployee,
   resetDb,
@@ -144,6 +145,94 @@ describe("the previous sign-in", () => {
      */
     expect(after?.previousLoginAt).toBeNull();
     expect(after?.lastLoginAt).toBeInstanceOf(Date);
+  });
+});
+
+describe("what Home may claim about a previous visit", () => {
+  const firstSeenAt = new Date("2026-08-01T09:00:00Z");
+
+  it("dates the visit when the column holds one", () => {
+    const at = new Date("2026-08-30T17:12:00Z");
+    expect(
+      classifyLastVisit({
+        previousLoginAt: at,
+        lastLoginAt: new Date("2026-08-31T08:00:00Z"),
+        firstSeenAt,
+      }),
+    ).toEqual({ state: "known", at });
+  });
+
+  it("calls it a first visit only when the sign-in wrote both columns at once", () => {
+    // Sign-in sets firstSeenAt and lastLoginAt to the SAME instant the first time.
+    expect(
+      classifyLastVisit({
+        previousLoginAt: null,
+        lastLoginAt: firstSeenAt,
+        firstSeenAt,
+      }),
+    ).toEqual({ state: "first" });
+  });
+
+  it("refuses to call a returning employee new when the column predates them", () => {
+    /**
+     * The regression this exists for. On the day previous_login_at shipped
+     * every employee had NULL, including people who had used the platform for
+     * weeks - one of them in the real development database. Reading NULL as
+     * "first visit" tells them something false about their own history.
+     *
+     * lastLoginAt > firstSeenAt proves a second visit happened even though
+     * nothing recorded when.
+     */
+    expect(
+      classifyLastVisit({
+        previousLoginAt: null,
+        lastLoginAt: new Date("2026-08-31T08:00:00Z"),
+        firstSeenAt,
+      }),
+    ).toEqual({ state: "unknown" });
+  });
+
+  it("treats a row that has never signed in as first, not unknown", () => {
+    // A bootstrap row seeded ahead of its owner.
+    expect(
+      classifyLastVisit({ previousLoginAt: null, lastLoginAt: null, firstSeenAt }),
+    ).toEqual({ state: "first" });
+  });
+
+  it("says nothing at all in the unknown state", async () => {
+    const page = await readFile(
+      path.join(process.cwd(), "app/(platform)/page.tsx"),
+      "utf8",
+    );
+
+    /**
+     * There is no honest timestamp to offer, so the line is absent rather than
+     * filled with copy. Guarded because the tempting fix - some cheerful
+     * fallback string - is the thing that would reintroduce a false claim.
+     */
+    expect(page).toContain('lastVisit.state !== "unknown"');
+  });
+
+  it("carries a real sign-in through to a dateable visit", async () => {
+    await applyLoginGate(claims);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await applyLoginGate(claims);
+
+    const employee = await testDb.employee.findUnique({
+      where: { entraOid: "oid-home" },
+    });
+
+    const visit = classifyLastVisit(employee!);
+    expect(visit.state).toBe("known");
+  });
+
+  it("reads a once-only sign-in as first, end to end", async () => {
+    await applyLoginGate(claims);
+    const employee = await testDb.employee.findUnique({
+      where: { entraOid: "oid-home" },
+    });
+
+    expect(classifyLastVisit(employee!)).toEqual({ state: "first" });
   });
 });
 

@@ -1963,17 +1963,71 @@ psql "$DATABASE_URL" -c \
 
 - `previous_login_at` **NULL for everyone** — the migration
   `20260831120000_add_previous_login_at` has not been applied, or nobody has
-  signed in twice since it was.
+  signed in twice since it was. **A migration is applied per database.**
+  `npm run db:test:setup` reaches only the test database; the development one
+  needs `npx prisma migrate deploy` as well, and missing that is what produces
+  `column employees.previous_login_at does not exist` at runtime while the test
+  suite is green. Check with `npx prisma migrate status`.
 - `previous_login_at` **equal to `last_login_at`** — the ordering above has been
   reversed. This is the real bug; the tests catch it.
-- **NULL for one person** — correct and not a fault. They have signed in once.
-  Home says "This is your first time here" and omits the section, which is
-  deliberate: a first visit has no previous visit to compare against, and that
-  is a different state from "you were here and nothing happened".
+- **NULL for one person** — correct and not a fault. See the three states
+  below; Home works out which one it is.
 
 Every row that existed before the migration is NULL until its owner signs in
 twice more. There is no backfill and there should not be: inventing a value
 would date a "what changed" list from a moment nobody visited.
+
+---
+
+## Home tells a long-standing employee "This is your first time here"
+
+**This was a real bug and it is fixed. If it comes back, the three states below
+have been collapsed into two.**
+
+A NULL `previous_login_at` does **not** mean "first visit". It also means "this
+row predates the column", which was true of *every* employee the day the column
+shipped — including people who had used the platform for weeks. On the
+development database at the time, that was one real returning user and zero
+genuine first-timers, so reading NULL as "first visit" was wrong for literally
+everyone it applied to.
+
+`first_seen_at` separates them exactly rather than by heuristic. Sign-in writes
+`first_seen_at` and `last_login_at` at the same instant the first time, and
+moves only `last_login_at` afterwards:
+
+| `previous_login_at` | vs `first_seen_at` | State | Greeting says |
+|---|---|---|---|
+| set | — | `known` | "Last signed in …" |
+| NULL | `last_login_at` = `first_seen_at` | `first` | "This is your first time here" |
+| NULL | `last_login_at` > `first_seen_at` | `unknown` | **nothing** |
+
+The `unknown` line renders **nothing at all**, and that is deliberate. There is
+no honest timestamp to offer and no true sentence to replace it with, so the
+line is absent and fills itself in on that person's next sign-in. The tempting
+fix — some cheerful fallback string — is exactly what would reintroduce a false
+claim, which is why a test asserts the page still contains
+`lastVisit.state !== "unknown"`.
+
+The rule lives in `lib/home/last-visit.ts`, deliberately a plain module with no
+imports so a node test can load it — `lib/home/service.ts` reaches Prisma and
+next-auth and cannot be imported by the suite. Same reason
+`app/(modules)/bas/health-client.ts` is split that way.
+
+To see the distribution on any database:
+
+```sql
+SELECT count(*)                                                   AS employees,
+       count(previous_login_at)                                   AS known,
+       count(*) FILTER (WHERE previous_login_at IS NULL
+                          AND last_login_at > first_seen_at)      AS unknown,
+       count(*) FILTER (WHERE previous_login_at IS NULL
+                          AND last_login_at = first_seen_at)      AS first_visit,
+       count(*) FILTER (WHERE last_login_at IS NULL)              AS never_signed_in
+FROM employees;
+```
+
+`unknown` should fall to zero on its own as people sign in. If it is *rising*,
+the carry-across in `lib/auth/signin.ts` has broken.
 
 ---
 
