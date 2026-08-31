@@ -258,10 +258,16 @@ body {
 /* ---------------------------------------------------------------------------
    Dashboard cards.
 
-   BAS ONLY, deliberately. A dashboard has no competing content, so cards and
-   elevation give it presence. The Change Orders reading pane has a vendor's own
-   email in it - real competing content - so it keeps the quiet, near-monochrome
+   BAS AND HOME, deliberately - and not the mail screens. The test is competing
+   content, not which route it is: a dashboard has none, so cards and elevation
+   give it presence. The Change Orders reading pane has a vendor's own email in
+   it - real competing content - so it keeps the quiet, near-monochrome
    treatment the brief asks for. Two surfaces, two registers, on purpose.
+
+   Home was a placeholder when this rule was written and said "BAS only". Home
+   is now a launcher whose whole content is its own cards, which is the same
+   condition, so it uses the same surface rather than a second one that would
+   have to be kept in step.
    --------------------------------------------------------------------------- */
 .card {
   background: var(--neutral-0);
@@ -280,9 +286,9 @@ body {
 /*
   The ground a dashboard's cards sit on.
 
-  BAS only. Full-bleed inside the shell's <main>, which is why the negative
-  margins are here rather than a background on a child - a tinted panel that
-  stopped at the content's edge would read as another card.
+  BAS and Home. Full-bleed inside the shell's <main>, which is why the negative
+  margins are applied by the page rather than a background on a child - a tinted
+  panel that stopped at the content's edge would read as another card.
 */
 .dashboard-ground {
   /*
@@ -382,5 +388,138 @@ body {
     160deg,
     var(--tile-wash, transparent) 0%,
     transparent 62%
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   HOME: the watermark.
+
+   The mark, very large and very faint, centred in the ground behind the
+   content. Atmosphere, not an element - it is deliberately below the threshold
+   where you would call it a logo on the page.
+
+   This is safe on Home in a way it was not on BAS: there is no chart, no gap
+   band and no trend line for it to be misread as. It is not used anywhere a
+   figure is drawn.
+
+   THE OPACITY IS MEASURED, NOT CHOSEN
+   -----------------------------------
+   The binding case is `--muted` (#53495F) small text sitting over the darkest
+   part of the mark (#4A1896, its purple field) over the darkest possible
+   ground - all four washes at full strength at once, which cannot physically
+   happen and is therefore a safe bound. Against that composite:
+
+     a=0.03  4.71    a=0.04  4.63    a=0.05  4.56    a=0.06  4.48
+
+   0.05 is the ceiling and 0.04 is what ships, leaving margin. 0.06 is the first
+   value that stops being defensible rather than the first that clearly fails:
+   it measures 4.48 on unrounded floats and 4.51 if the ground is rounded to
+   8-bit first, so it sits inside the precision of the method. 0.05 clears under
+   both treatments, which is what makes it the ceiling.
+
+   The greeting itself is `--foreground` and measures ~10:1 over the same
+   composite; it was never the constraint. Re-measure before changing this value
+   - the number that matters is small muted text, not the large type above it.
+
+   IT CANNOT AFFECT LAYOUT
+   -----------------------
+   An absolutely positioned pseudo-element at `inset: 0` fills the parent's
+   padding box exactly, and a background-image is painted, never laid out. A
+   background-size larger than the box is clipped, not overflowed. So there is
+   no width at which this adds a scrollbar or moves anything - which is why it
+   is a background layer rather than an <img>.
+   --------------------------------------------------------------------------- */
+.home-ground {
+  position: relative;
+  isolation: isolate;
+}
+
+.home-ground::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("/phb-logo-mark.png");
+  background-repeat: no-repeat;
+  background-position: center center;
+  /*
+    vmin, so the mark is bounded by the SHORTER axis and cannot grow past the
+    viewport on a wide-and-short window. The rem ceiling stops it becoming
+    absurd on a large monitor.
+  */
+  background-size: min(44rem, 76vmin) auto;
+  opacity: 0.04;
+}
+
+/* ---------------------------------------------------------------------------
+   HOME: a module card, filled in its own colour.
+
+   The hero elements on the page. Filled rather than outlined because they are
+   the two things a person came here to do, and an outlined card at this size
+   reads as a container rather than a destination.
+
+   WHY THE FILL IS THE INK VALUE AND NOT THE BRIGHT ONE
+   ---------------------------------------------------
+   White on the sampled brights fails AA for the status line: --phb-red is 4.22
+   and --phb-cyan is 3.47. The ink siblings were derived for text ON a light
+   surface, but they are the right fill here for the same reason - white on
+   --phb-red-ink measures 4.81 and on --phb-cyan-ink 4.82. The large number
+   would have cleared 3:1 on the brights; the sentence under it would not, and
+   a card whose headline is legible and whose meaning is not is worse than one
+   that is simply darker.
+
+   Those two measurements are a FLOOR rather than an average, because the shade
+   over the fill only ever darkens - see .card--filled::after below.
+
+   NO SEMANTIC COLOUR GOES ON THESE CARDS.
+   The module colour here is identity - red IS Change Orders, cyan IS Building
+   Automation, as set in lib/module-accent.ts. Neither is a semantic tone: this
+   palette says ok/warn/bad in teal/orange/maroon and `--danger` is deliberately
+   maroon, not red. That separation only holds if state stays in words on this
+   surface. A number tinted for state on a card filled for identity would
+   collapse the two, and the red card would start reading as an alarm.
+   --------------------------------------------------------------------------- */
+.card--filled {
+  /* The ::after highlight positions against this. */
+  position: relative;
+  border-radius: 1.125rem;
+  background: var(--card-fill);
+  color: #fff;
+  /* A near-white edge, the same highlight the neutral cards get on this ground. */
+  border: 1px solid color-mix(in srgb, #fff 22%, transparent);
+  box-shadow:
+    0 1px 2px rgb(38 24 61 / 0.10),
+    0 14px 32px -14px color-mix(in srgb, var(--card-fill) 55%, transparent);
+}
+
+/*
+  A single diagonal shade, deepening toward the far corner.
+
+  IT DARKENS. IT MUST NEVER LIGHTEN, and that is a correctness rule rather than
+  a preference. White on the ink fill measures 4.81 (red) and 4.82 (cyan);
+  anything that lightens the card eats into that, and the card's own bright hue
+  is the worst offender - white on --phb-red is 4.22 and on --phb-cyan 3.47.
+  Shading downward instead makes the plain ink the LIGHTEST point on the card,
+  so those two measurements become a floor that holds at every pixel and at any
+  gradient strength.
+
+  It is also why there is no color-mix() here. An earlier version mixed the
+  bright hue in at a measured 15%, which was safe as authored - but the bundler
+  emits a no-color-mix fallback, and that fallback drops the percentage and
+  paints the bright hue at FULL strength. Both cards then shipped below AA on
+  any engine taking the fallback, from a rule that measured fine in the source.
+  A plain rgb() with alpha has no second code path to disagree with.
+*/
+.card--filled::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image: linear-gradient(
+    155deg,
+    transparent 38%,
+    rgb(0 0 0 / 0.16) 100%
   );
 }

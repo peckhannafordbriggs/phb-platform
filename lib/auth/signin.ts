@@ -57,13 +57,13 @@ async function provision(identity: GatedIdentity): Promise<SignInOutcome> {
   const existing =
     (await prisma.employee.findUnique({
       where: { entraOid: identity.entraOid },
-      select: { id: true, status: true, email: true },
+      select: { id: true, status: true, email: true, lastLoginAt: true },
     })) ??
     // A row seeded ahead of its owner's first sign-in - the bootstrap admin -
     // has a matching email and no entraOid yet.
     (await prisma.employee.findFirst({
       where: { email: identity.email, entraOid: null },
-      select: { id: true, status: true, email: true },
+      select: { id: true, status: true, email: true, lastLoginAt: true },
     }));
 
   // Check 4 - status. Evaluated before any write, so a disabled employee's
@@ -83,6 +83,18 @@ async function provision(identity: GatedIdentity): Promise<SignInOutcome> {
         // Entra is authoritative for the address; people get renamed. Names are
         // not overwritten because onboarding lets the employee correct them.
         email: identity.email,
+        /**
+         * The previous sign-in, carried across before it is lost.
+         *
+         * Read from `existing`, which was selected BEFORE this update - so it
+         * is the value from the last visit, not the one being written on the
+         * next line. This ordering is the entire mechanism behind "since you
+         * last signed in"; reversing the two fields would make the window
+         * always empty and nothing would fail loudly.
+         *
+         * Stays null on a first sign-in, because there is no previous visit.
+         */
+        previousLoginAt: existing.lastLoginAt,
         lastLoginAt: now,
       },
     });
@@ -105,6 +117,8 @@ async function provision(identity: GatedIdentity): Promise<SignInOutcome> {
         isPlatformAdmin: isBootstrapAdmin,
         firstSeenAt: now,
         lastLoginAt: now,
+        // previousLoginAt is deliberately absent, so it stays null: this IS the
+        // first sign-in and there is no earlier visit to date a window from.
       },
       select: { id: true },
     });

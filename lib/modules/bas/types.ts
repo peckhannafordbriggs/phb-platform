@@ -121,6 +121,16 @@ export interface DataGapRow {
   siteName: string;
   gapStart: string;
   gapEnd: string;
+  /**
+   * When the gap was RECORDED, which is not when it happened.
+   *
+   * A gap is discovered after the fact - `gap_start` can be weeks before anyone
+   * noticed - so this is the only field that can answer "is this new to me
+   * since I last looked". Home dates its "since you last signed in" list from
+   * here; dating it from `gapStart` would hide a gap recorded this morning
+   * about a silence last month, which is exactly the one worth surfacing.
+   */
+  detectedAt: string;
   hoursLost: number;
   cause: string;
   notes: string | null;

@@ -239,6 +239,7 @@ interface GapRow {
   site_name: string;
   gap_start: Date;
   gap_end: Date;
+  detected_at: Date;
   hours_lost: number;
   cause: string;
   notes: string | null;
@@ -482,6 +483,7 @@ export async function getCollectionHealth(
         h.site_name,
         g.gap_start,
         g.gap_end,
+        g.detected_at,
         round((EXTRACT(EPOCH FROM (g.gap_end - g.gap_start)) / 3600.0)::numeric, 1)::float8
           AS hours_lost,
         g.cause,
@@ -640,6 +642,7 @@ function toDataGapRow(row: GapRow): DataGapRow {
     siteName: row.site_name,
     gapStart: row.gap_start.toISOString(),
     gapEnd: row.gap_end.toISOString(),
+    detectedAt: row.detected_at.toISOString(),
     hoursLost: row.hours_lost,
     cause: row.cause,
     notes: row.notes,
@@ -883,6 +886,7 @@ export async function getPointExplorer(
         h.site_name,
         g.gap_start,
         g.gap_end,
+        g.detected_at,
         round((EXTRACT(EPOCH FROM (g.gap_end - g.gap_start)) / 3600.0)::numeric, 1)::float8
           AS hours_lost,
         g.cause,

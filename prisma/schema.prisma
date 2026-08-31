@@ -70,6 +70,20 @@ model Employee {
   firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz(3)
   lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
 
+  /// The sign-in BEFORE the current one, and the only thing that can date
+  /// "since you last signed in".
+  ///
+  /// `lastLoginAt` cannot do it. It is overwritten with now() during the
+  /// sign-in itself (lib/auth/signin.ts), so by the time any page renders it
+  /// reads as seconds ago and every "since" window it could open is empty.
+  /// A successful sign-in writes no audit row either - only `login.denied`
+  /// exists - so before this column the previous sign-in was stored nowhere.
+  ///
+  /// Null on a first-ever sign-in, and that is a real state rather than a
+  /// missing value: there is no previous visit to compare against, so Home
+  /// omits the section instead of showing an empty one.
+  previousLoginAt DateTime? @map("previous_login_at") @db.Timestamptz(3)
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 

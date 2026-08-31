@@ -1927,6 +1927,253 @@ inferred from documentation.
 
 ---
 
+# Home
+
+## "Since you last signed in" is always empty
+
+**Symptom.** The section never appears, or appears once and never again, for
+everyone.
+
+**Cause.** Almost certainly `previousLoginAt`. `lastLoginAt` cannot date this
+section: `lib/auth/signin.ts` sets it to `now()` as part of authenticating,
+*before* any page renders, so by the time Home runs it is a few milliseconds
+old and the window it would open is zero seconds wide. A successful sign-in
+writes no audit row either — the only login action is `login.denied` — so
+before the `previous_login_at` column the previous sign-in was stored nowhere
+at all.
+
+The mechanism is one line and its **ordering is the whole thing**:
+
+```ts
+// lib/auth/signin.ts - `existing` was SELECTed before this update ran
+previousLoginAt: existing.lastLoginAt,   // the value from the last visit
+lastLoginAt: now,                        // overwritten here
+```
+
+Write `now` into both and the page still renders perfectly, the tests are the
+only thing that notices, and the section is empty forever. That is why
+`tests/home.test.ts` has four assertions on it rather than one.
+
+**Fix.** Check the column is populated:
+
+```bash
+psql "$DATABASE_URL" -c \
+  "SELECT email, previous_login_at, last_login_at FROM employees ORDER BY last_login_at DESC NULLS LAST LIMIT 5;"
+```
+
+- `previous_login_at` **NULL for everyone** — the migration
+  `20260831120000_add_previous_login_at` has not been applied, or nobody has
+  signed in twice since it was.
+- `previous_login_at` **equal to `last_login_at`** — the ordering above has been
+  reversed. This is the real bug; the tests catch it.
+- **NULL for one person** — correct and not a fault. They have signed in once.
+  Home says "This is your first time here" and omits the section, which is
+  deliberate: a first visit has no previous visit to compare against, and that
+  is a different state from "you were here and nothing happened".
+
+Every row that existed before the migration is NULL until its owner signs in
+twice more. There is no backfill and there should not be: inventing a value
+would date a "what changed" list from a moment nobody visited.
+
+---
+
+## Home renders but a module card says "Status unavailable"
+
+**This is working correctly.** Home reads two live systems and either can be
+down while the other is fine. The card keeps its way in, because the way in is
+the point of the card — Home never becomes an error page.
+
+The wording tells you which state it is, and they are not the same:
+
+| Card says | Means | Where to look |
+|---|---|---|
+| `Mailbox not connected` | No Graph credential configured at all | *The mailbox is not connected* |
+| `Status unavailable` | A credential exists and the call failed | `home.change_orders_figure_failed` / `home.bas_figure_failed` in the logs |
+| `BAS data unavailable` | The `bas_*` tables are not in this database | *`bas_unavailable` — the BAS tables are not in this database* |
+| `Headroom unknown …` | Reached BAS fine; no point has a computable horizon | *Collection Health disagrees with Grafana* |
+
+A figure that cannot be obtained is **never rendered as zero**. "0 drafts
+waiting" and "we could not ask Exchange" are opposite claims, and the card
+shows no number at all in the second case. If you ever see a Home card showing
+`0` while Exchange is unreachable, that is a real bug.
+
+The drafts count is **one** Graph request — `getFolder("drafts")`, which
+resolves the well-known alias and returns `totalItemCount`. It deliberately
+does not call `listFolders()`; that is the eleven-request folder walk, and Home
+needs one number from one folder. See *Why the folder walk is eleven requests*.
+
+---
+
+## The red Change Orders card looks like an alarm
+
+It is not, and the palette is what guarantees it rather than taste.
+
+Red is **identity**, not state. `lib/module-accent.ts` settles red for Change
+Orders and cyan for Building Automation, and both appear in the sidebar diamond
+and module header already. The semantic tones are teal / orange / maroon —
+`--danger` is deliberately maroon, *not* red — so red carries no state meaning
+anywhere in this platform.
+
+That only holds while **no semantic tone appears on these cards**. State on a
+Home card is said in words ("3 points at risk of data loss"), never in colour.
+A tone-coloured number on an identity-filled card would let the fill itself be
+read as a state, and then the red card really would look like an alarm.
+`tests/home.test.ts` asserts that `app/(platform)/page.tsx` mentions none of
+`--phb-teal`, `--phb-orange` or `--phb-maroon`.
+
+---
+
+## Changing the Home card colours, the shade, or the watermark
+
+Three numbers on this page are **measured, not chosen**. Each has a test, and
+each guards a failure that is invisible in a screenshot.
+
+**1. The cards are filled with the INK value, never the bright one.**
+
+| Fill | White on it | |
+|---|---|---|
+| `--phb-red` | 4.22 | fails AA |
+| `--phb-cyan` | 3.47 | fails AA |
+| `--phb-red-ink` | 4.81 | passes |
+| `--phb-cyan-ink` | 4.82 | passes |
+
+The large number would clear 3:1 on the brights; the status line under it would
+not. A card whose headline is legible and whose meaning is not is worse than
+one that is simply darker.
+
+**2. The card's shade must DARKEN, never lighten.** This is a correctness rule.
+Darkening keeps the plain ink as the lightest pixel on the card, which makes
+4.81 / 4.82 a floor that holds everywhere rather than an average.
+
+This one has already failed once, in a way worth knowing about. The shade was
+first written as `color-mix(in srgb, var(--card-bright) 15%, transparent)` —
+measured, safe as authored, and **unsafe as shipped**. The bundler emits a
+no-`color-mix` fallback, and that fallback drops the percentage and paints the
+bright hue at *full strength*:
+
+```css
+/* what the build actually emitted */
+.card--filled:after{background-image:linear-gradient(155deg,var(--card-bright) 0,transparent 62%)}
+@supports (color:color-mix(in lab,red,red)){ /* the 15% version */ }
+```
+
+Both cards went under AA on any engine taking that path, from a rule that
+measured fine in the source. **Check the built CSS, not just the stylesheet:**
+
+```bash
+npx next build && grep -o '[^}]*card--filled:after{[^}]*}' .next/static/css/*.css
+```
+
+There should be exactly **one** rule and no `@supports` twin.
+
+**3. The watermark opacity is 0.04, and 0.05 is the ceiling.** The binding case
+is `--muted` small text over the darkest part of the mark (`#4A1896`) over the
+darkest possible ground — all four washes at full strength, which cannot
+physically co-occur and is therefore a safe bound:
+
+```
+a=0.03  4.71    a=0.04  4.63    a=0.05  4.56    a=0.06  4.48
+```
+
+0.06 is the first value that stops being defensible rather than the first that
+clearly fails: it measures 4.48 on unrounded floats and 4.51 if the ground is
+rounded to 8-bit first, so it sits inside the precision of the method. The test
+asserts `opacity <= 0.05` rather than asserting 0.06 fails, because an
+assertion either way there would be testing the rounding.
+
+The greeting is `--foreground` at roughly 10:1 and was never the constraint.
+**Re-measure against small muted text, not the large type it sits under.**
+
+---
+
+## The watermark is a white square, or the logo has vanished
+
+Home uses `public/phb-logo-mark.png`, **not** `public/phb-logo.png`.
+
+`phb-logo.png` is a 554×554 *palette* PNG with **no alpha channel** — 53.1% of
+it is opaque white. Used as a watermark it paints a white square over the
+four-light ground instead of reading as atmosphere. `phb-logo-mark.png` is the
+same mark with the outer white flood-filled to transparent (interior white
+preserved — there turned out to be none, which was checked rather than assumed).
+
+To regenerate it after a logo change:
+
+```bash
+node -e "
+const sharp=require('sharp');
+(async()=>{
+const {data,info}=await sharp('public/phb-logo.png').raw().toBuffer({resolveWithObject:true});
+const {width:W,height:H,channels:C}=info;
+const isWhite=i=>{const o=i*C;return data[o]>246&&data[o+1]>246&&data[o+2]>246;};
+const outer=new Uint8Array(W*H),stack=[];
+for(let x=0;x<W;x++)stack.push(x,(H-1)*W+x);
+for(let y=0;y<H;y++)stack.push(y*W,y*W+W-1);
+while(stack.length){const i=stack.pop();
+  if(outer[i]||!isWhite(i))continue; outer[i]=1;
+  const x=i%W,y=(i-x)/W;
+  if(x>0)stack.push(i-1); if(x<W-1)stack.push(i+1);
+  if(y>0)stack.push(i-W); if(y<H-1)stack.push(i+W);}
+const out=Buffer.alloc(W*H*4);
+for(let i=0;i<W*H;i++){const o=i*C,q=i*4;
+  out[q]=data[o];out[q+1]=data[o+1];out[q+2]=data[o+2];out[q+3]=outer[i]?0:255;}
+await sharp(out,{raw:{width:W,height:H,channels:4}}).png({compressionLevel:9})
+  .toFile('public/phb-logo-mark.png');
+})();"
+```
+
+**Flood fill from the border, never "make all white transparent".** The second
+would hollow out any white inside the mark. Re-measure the watermark opacity
+afterwards if the new mark is darker than `#4A1896`.
+
+The watermark cannot add a scrollbar or move anything at any width, and that is
+structural rather than tuned: it is a `background-image` on a pseudo-element at
+`inset: 0`, so it fills the parent's padding box exactly, and a background is
+painted rather than laid out. A `background-size` larger than the box is
+clipped, not overflowed. The test asserts the rule declares no `width` or
+`height` — an `<img>` or a sized block *could* overflow, which is why it is
+neither.
+
+---
+
+## Home shows a module with no figure
+
+A granted module with no card builder renders with its name, "No summary for
+this module yet", and a working way in. That is deliberate: `getHomeData` maps
+over the module registry and falls back to a plain card, so **adding a module
+can never produce a Home that silently omits it**. Cards are ordered by the
+registry's own `sortOrder`, the same order the sidebar uses, so the two cannot
+disagree.
+
+To give a new module a real figure, add a resolver in `lib/home/service.ts`
+alongside `changeOrdersCard` and `basCardFor`. Two rules it must follow:
+
+- Convert its own failures into an `unavailable` figure. It must not throw —
+  one dead system must not cost the page.
+- Return `none` rather than `unavailable` for a real, reachable zero. They are
+  different claims and Home renders them differently.
+
+---
+
+## What Home counts, stated plainly
+
+Worth knowing before somebody reports one of these as wrong:
+
+- **"N new messages in the change-order mailbox"** is Inbox traffic since the
+  previous sign-in — vendor and automation mail included. It is *not* mail
+  addressed to the person reading it, and the wording says "in the change-order
+  mailbox" for exactly that reason. Capped at 50 and rendered as "50+" when it
+  reaches the cap; a capped count shown as exact would be a quiet false claim.
+- **New BAS gaps** are dated by `detected_at`, never `gap_start`. A gap is
+  recorded once it is discovered, so a silence from last month found this
+  morning is genuinely new to the reader — filtering on when it happened would
+  hide precisely the one worth surfacing.
+- **Access changes** are the six actions in `ACCESS_ACTIONS`, targeting the
+  viewer, and are phrased in the second person ("You were granted access to
+  bas"). Their own mail actions also carry their id and are deliberately
+  excluded — they did those, so they are not news.
+
+---
+
 ## Rebuilding a development database needs BOTH seeds
 
 **Symptom.** After a reset the platform works and you can sign in, but the

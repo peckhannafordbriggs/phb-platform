@@ -273,6 +273,16 @@ const MAX_FOLDER_DEPTH = 5;
 /** Total folders returned, however deep. Truncation is always logged. */
 const MAX_FOLDERS = 300;
 
+/**
+ * The most messages countMessagesSince will look at.
+ *
+ * A ceiling, not a page size. Home wants "is there anything new and roughly how
+ * much" - past about fifty the exact number stops changing what anyone does, and
+ * this mailbox receives automation traffic in bursts. Reaching the cap is
+ * reported as "50+" rather than as fifty.
+ */
+const MESSAGES_SINCE_CAP = 50;
+
 interface GraphCollection<T> {
   value?: T[];
   "@odata.nextLink"?: string;
@@ -734,6 +744,53 @@ export class ChangeOrderMailService {
    * that is the only case where it is known without four extra requests. A
    * caller that needs the labels for a whole tree uses listFolders().
    */
+  /**
+   * How many messages arrived in a folder since an instant.
+   *
+   * Home's "since you last signed in" line, and the only counting read in this
+   * class. It exists rather than reusing listMessages because the answer is a
+   * number, and paging a listing to count it would be several requests for one
+   * integer.
+   *
+   * NO $orderby, and that is not an oversight. `$filter` and `$orderby` together
+   * on messages are refused with `400 InefficientFilter` - see the class notes on
+   * searchMessages. A count does not care what order it is given, so the filter
+   * goes on alone and nothing is sorted.
+   *
+   * CAPPED, AND IT SAYS SO. Graph will not return a reliable `$count` for a
+   * filtered message collection, so this reads one page of ids and reports
+   * whether more exist. A caller renders `atLeast` as "50+" rather than "50" -
+   * a capped count presented as exact is the kind of quiet false claim the rest
+   * of this module is built to avoid.
+   *
+   * `receivedDateTime ge <ISO>` is inclusive, so a message that landed in the
+   * same second as the previous sign-in counts. That is the right side to err
+   * on: showing one extra message is recoverable, silently hiding one is not.
+   */
+  async countMessagesSince(
+    folderId: string,
+    since: Date,
+    cap = MESSAGES_SINCE_CAP,
+  ): Promise<{ count: number; atLeast: boolean }> {
+    const page = await this.call("countMessagesSince", () =>
+      this.client
+        .api(this.path(`/mailFolders/${encodeURIComponent(folderId)}/messages`))
+        .select("id")
+        .filter(`receivedDateTime ge ${since.toISOString()}`)
+        .top(cap)
+        .get() as Promise<GraphCollection<Message>>,
+    );
+
+    const count = (page.value ?? []).length;
+
+    return {
+      count,
+      // A nextLink means Graph has more to give; so does landing exactly on the
+      // cap, which is the boundary case where a nextLink may be absent.
+      atLeast: count >= cap || cursorFrom(page["@odata.nextLink"]) !== null,
+    };
+  }
+
   async getFolder(folderId: string): Promise<MailFolderSummary> {
     const folder = await this.call("getFolder", () =>
       this.client
