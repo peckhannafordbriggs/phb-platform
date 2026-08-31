@@ -142,3 +142,42 @@ describe("the palette keeps its measured values", () => {
     expect(css).toMatch(/--focus:\s*var\(--phb-gold-ring\)/);
   });
 });
+
+describe("the dashboard ground stays readable", () => {
+  /**
+   * The tinted ground is the one background in the platform that is not a flat
+   * token, so the contrast it produces cannot be read off a variable. These pin
+   * the two things that were measured before it was built.
+   */
+  it("keeps the ground's base neutral, so the washes only ever lighten a grey", async () => {
+    const css = await declarations();
+
+    // A saturated base would make every composite unpredictable.
+    expect(css).toMatch(/\.dashboard-ground\s*\{[^}]*background-color:\s*var\(--neutral-100\)/);
+  });
+
+  it("overrides the card edge on the tinted ground", async () => {
+    const css = await declarations();
+
+    /**
+     * neutral-200 measures 1.00:1 against the purple region of the wash - the
+     * border disappears rather than fading. Without this rule a card keeps its
+     * edge in one corner of the page and loses it in another.
+     */
+    expect(css).toMatch(/\.dashboard-ground\s+\.card\s*\{/);
+  });
+
+  it("draws the washes from the quadrant colours and nothing else", async () => {
+    const css = await declarations();
+    const ground = /\.dashboard-ground\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? "";
+
+    expect(ground).toContain("--phb-purple");
+    expect(ground).toContain("--phb-cyan");
+    expect(ground).toContain("--phb-orange");
+    expect(ground).toContain("--phb-teal");
+
+    // Not the semantic reds. The ground is atmosphere, not state.
+    expect(ground).not.toContain("--phb-maroon");
+    expect(ground).not.toContain("--phb-red");
+  });
+});
