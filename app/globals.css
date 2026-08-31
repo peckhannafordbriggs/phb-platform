@@ -293,33 +293,52 @@ body {
     coloured atmosphere rather than four bands meeting at a seam. The base stays
     neutral-100, so the page is still a grey ground that happens to be lit.
 
-    MEASURED, not guessed. Against the composited worst case - two washes
-    overlapping - `--muted` (#53495F) reads 5.56:1, comfortably over AA, and a
-    single wash at peak is 6.07. The binding constraint here was never text
-    contrast; it was the card edge, which is why .dashboard-ground .card exists
-    below.
+    THE GEOMETRY, AND WHY IT IS THE PLACEMENT RATHER THAN A SHAPE
+    ------------------------------------------------------------
+    The four centres sit at the CARDINAL points - top, right, bottom, left - and
+    four points arranged that way describe a diamond. That is the logo's own
+    arrangement: the same four colours in the same rotational relationship,
+    expressed purely as where the light falls. Purple takes the top because it is
+    the mark's dominant upper field; orange and cyan take left and right as their
+    quadrants sit; teal takes what remains.
+
+    Nothing is drawn. There is no edge, no line and no boundary anywhere in it,
+    which is the entire point - a faint 45-degree line behind a trend chart reads
+    as a trend line, and that is the one misreading a data screen cannot afford.
+    The reference lives in the composition of the colour field, so there is
+    literally nothing here for the chart to compete with.
+
+    (Corners were the first version. Four points at the corners describe a
+    SQUARE, which references nothing.)
+
+    MEASURED, not guessed. These centres converge toward the middle of the page
+    more than corners do, so the composite was re-checked: `--muted` (#53495F)
+    reads 6.22:1 where all four overlap faintly, 5.79 between two edges, and 4.94
+    even in the physically impossible case of all four at full strength at once.
+    The binding constraint here was never text contrast; it was the card edge,
+    which is why .dashboard-ground .card exists below.
   */
   background-color: var(--neutral-100);
   background-image:
     radial-gradient(
-      60% 55% at 0% 0%,
+      72% 52% at 50% 0%,
       color-mix(in srgb, var(--phb-purple) 12%, transparent) 0%,
       transparent 62%
     ),
     radial-gradient(
-      55% 50% at 100% 0%,
+      52% 72% at 100% 50%,
       color-mix(in srgb, var(--phb-cyan) 12%, transparent) 0%,
       transparent 60%
     ),
     radial-gradient(
-      55% 55% at 0% 100%,
-      color-mix(in srgb, var(--phb-orange) 11%, transparent) 0%,
-      transparent 58%
-    ),
-    radial-gradient(
-      60% 55% at 100% 100%,
+      72% 52% at 50% 100%,
       color-mix(in srgb, var(--phb-teal) 12%, transparent) 0%,
       transparent 60%
+    ),
+    radial-gradient(
+      52% 72% at 0% 50%,
+      color-mix(in srgb, var(--phb-orange) 11%, transparent) 0%,
+      transparent 58%
     );
   background-repeat: no-repeat;
   min-height: 100%;
