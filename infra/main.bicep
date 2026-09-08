@@ -91,12 +91,12 @@ param postgresSkuTier string
 @description('Provisioned storage in GB.')
 param postgresStorageGb int = 32
 
-@description('Grow storage automatically when it approaches full. Defaults to Disabled, which is also the Azure default. A full disk makes the server refuse writes, which for this deployment is indistinguishable from the server being down - see the note above the resource.')
+@description('Grow storage automatically when it approaches full. Defaults to Enabled, which is NOT the Azure default - a full disk makes the server refuse writes, which for this deployment is indistinguishable from the server being down. See the note above the resource before turning it off.')
 @allowed([
   'Enabled'
   'Disabled'
 ])
-param postgresStorageAutoGrow string = 'Disabled'
+param postgresStorageAutoGrow string = 'Enabled'
 
 @description('Administrator login for the database server. Not an email address, and not a person.')
 param postgresAdminUsername string
@@ -289,8 +289,11 @@ resource keyVaultRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 //   A full disk. This one is real and reachable. At 100% the server refuses
 //   writes, which for the collector is indistinguishable from the server being
 //   down, and recovery needs a person to notice and resize. `autoGrow` is the
-//   guard, and Azure defaults it to Disabled - hence the explicit parameter
-//   rather than an omission that reads as a decision nobody made.
+//   guard. Azure defaults it to Disabled; this template defaults it to Enabled
+//   and states so, because the failure it prevents destroys data that exists
+//   nowhere else, and the cost of growing a disk is recoverable while the
+//   readings are not. Turning it off is a decision to monitor free space by
+//   hand.
 //
 // No budget action, cost policy or automation is attached to this server. The
 // budget below only sends mail; a budget that could stop a resource would put

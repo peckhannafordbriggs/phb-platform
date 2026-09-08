@@ -97,9 +97,11 @@ one either.
 scales to zero freely; the database must not, because the BAS collector's source data
 rolls off the JACE after about 42 hours. PostgreSQL Flexible Server has no auto-stop
 property to disable — only a manual `stop` — so the reachable failure is a full disk,
-which makes the server refuse writes. `postgresStorageAutoGrow` is the guard and Azure
-defaults it to `Disabled`, hence an explicit parameter rather than an omission. The
-budget carries notification contacts only and no action group.
+which makes the server refuse writes. `postgresStorageAutoGrow` is the guard: Azure
+defaults it to `Disabled` and this template defaults it to `Enabled`, because the
+failure it prevents destroys data held nowhere else while the cost of a larger disk is
+recoverable. The budget carries notification contacts only and no action group, so no
+spending threshold can stop the server.
 
 ## First deployment ordering
 

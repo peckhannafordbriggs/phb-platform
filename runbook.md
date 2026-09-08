@@ -1754,10 +1754,13 @@ Server has no auto-stop, auto-pause or auto-shutdown property, and no such flag 
 auto-restarts after seven days. (Auto-pause is an Azure SQL serverless feature. It does
 not apply here — do not go looking for it again.)
 
-`autoGrow` is the real exposure and Azure defaults it to `Disabled`. A full disk makes
-the server refuse writes, which for the collector is the same outcome as a stopped
-server, and recovery needs a person to notice and resize. See
-`postgresStorageAutoGrow` in `infra/main.bicep`.
+`autoGrow` is the real exposure. A full disk makes the server refuse writes, which for
+the collector is the same outcome as a stopped server, and recovery needs a person to
+notice and resize. **Azure defaults it to `Disabled`; this deployment sets it to
+`Enabled`**, so `autoGrow` above must read `Enabled` — if it reads `Disabled`, the
+parameter did not reach the server and free space is now something a person has to
+watch. The reasoning is in the note above the resource in `infra/main.bicep`: growing a
+disk costs money that can be recovered, and readings that roll off the JACE cannot be.
 
 Confirm no cost automation can stop it:
 

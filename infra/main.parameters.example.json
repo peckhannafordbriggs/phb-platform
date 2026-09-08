@@ -45,6 +45,9 @@
     "postgresStorageGb": {
       "value": 32
     },
+    "postgresStorageAutoGrow": {
+      "value": "Enabled"
+    },
     "postgresAdminUsername": {
       "value": "<database-admin-login, not a person>"
     },
