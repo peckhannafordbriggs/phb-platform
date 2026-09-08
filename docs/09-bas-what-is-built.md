@@ -6,9 +6,13 @@ says *what exists*.
 
 Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
-**Last updated:** 28 August 2026 — checked against the repositories and
-corrected. The prose was written from session reports; every claim below that a
-repository can settle has now been settled against it. Corrections are noted
+**Last updated:** 8 September 2026 — a second pass, which added the
+repository-relative locations below and rewrote *Proven in operation* after a
+third and much worse outage. Its figures were read out of
+`public.bas_data_gaps` and `public.bas_ingest_runs`, not recalled.
+
+The 28 August pass checked every claim a repository can settle against the
+repository rather than against a session report. Corrections from it are noted
 where they matter rather than silently applied.
 
 ---
@@ -19,10 +23,10 @@ where they matter rather than silently applied.
 Read that before checking any claim in it, because which repository a claim falls
 under decides where to look and what can hold it to account.
 
-| | Owns |
-|---|---|
-| **`phb-platform`** (this repo) | The `bas_*` schema and migrations, the Building Automation module and its two screens, the module guard, and the verification tooling — `bas-import`, `bas-checksum`, `bas-verify-import`, `bas-health-oracle`, `bas-tables` |
-| **`phb-bas`** | The Python collector, the Grafana dashboards, the `bas-mcp` server, and the database backup and restore scripts |
+| | Owns | Where |
+|---|---|---|
+| **`phb-platform`** (this repo) | The `bas_*` schema and migrations, the API routes, the Building Automation module and its two screens, the module guard, the BAS tests, the verification tooling — `bas-import`, `bas-checksum`, `bas-verify-import`, `bas-health-oracle`, `bas-tables` — and these docs | `prisma/migrations/`, `app/(modules)/bas/`, `app/api/modules/bas/`, `lib/modules/bas/`, `tests/bas-*.test.ts`, `scripts/bas-*.ts`, `docs/` |
+| **`phb-bas`** | `bas-collector` — the Python collector, `healthcheck.py`, `Backup-BasDatabase.ps1`, `Test-BasRestore.ps1`, `Install-BasTasks.ps1` — plus `bas-db`, `bas-mcp` and `bas-grafana` | those four directories at the repo root, checked out locally at `C:\dev\` |
 
 **The database is the seam, and it is the only one.** The collector knows Niagara
 and nothing about the platform. The platform knows the schema and nothing about
@@ -36,9 +40,9 @@ this document is checkable in `phb-platform`, checkable in `phb-bas`, or
 checkable in neither because it is about the JACE, the network or an operational
 event — and it is worth knowing which before going looking.
 
-Everything below that belongs to the other side is marked **(phb-bas)**. Nothing
-in this document should send a reader hunting through `phb-platform` for a file
-that was never in it.
+Everything below that belongs to the other side is labelled, either in a repo
+column or inline as **(phb-bas)**. Nothing in this document should send a reader
+hunting through `phb-platform` for a file that was never in it.
 
 ---
 
@@ -55,16 +59,20 @@ write anything back.
 
 ## The pieces
 
-| Piece | Where it lives | What it does |
-|---|---|---|
-| **JACE** | the building, `196.1.1.213` | Runs the equipment. Logs each point every 5 min, keeps ~42 h |
-| **`bas_collector` Niagara account** | on the station | Read-only. The only thing added to the JACE |
-| **Collector** *(phb-bas)* | `C:\dev\bas-collector` | Python. Reads oBIX every 15 min, writes to Postgres |
-| **`bas_*` tables** | platform database | 12 tables, 6 views. Permanent |
-| **Building Automation module** | `phb-platform` | Two tabbed dashboards behind the platform's own login and grants |
-| **Grafana dashboards** *(phb-bas)* | `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
-| **`bas-mcp`** *(phb-bas)* | `C:\dev\bas-mcp` | Lets Claude Desktop query the data. Superseded by B5 when that ships |
-| **Nightly backup** *(phb-bas)* | 02:15, to OneDrive | Load-bearing — see *Irreplaceability* |
+| Piece | Repo | Where it lives | What it does |
+|---|---|---|---|
+| **JACE** | — | the building, `196.1.1.213` | Runs the equipment. Logs each point every 5 min, keeps ~42 h |
+| **`bas_collector` Niagara account** | — | on the station | Read-only. The only thing added to the JACE |
+| **Collector** | `phb-bas` | `bas-collector/` | Python. Reads oBIX every 15 min, writes to Postgres |
+| **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 12 tables, 6 views. Permanent |
+| **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Two tabbed dashboards behind the platform's own login and grants |
+| **Grafana dashboards** | `phb-bas` | `bas-grafana/`, served at `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
+| **`bas-mcp`** | `phb-bas` | `bas-mcp/` | Lets Claude Desktop query the data. Superseded by B5 when that ships |
+| **Nightly backup** | `phb-bas` | `bas-collector/Backup-BasDatabase.ps1`, running at 02:15 to OneDrive | Load-bearing — see *Irreplaceability* |
+
+Paths are relative to the repository named beside them; `phb-bas` is checked out
+locally at `C:\dev\`. A dash means the piece is in neither repository, because it
+is a fact about the building rather than a file.
 
 Two deployables, one per repository — see *Two repositories, one system* above.
 
@@ -276,8 +284,8 @@ hidden from.
 |---|---|
 | `python -m collector check` | Connectivity and configuration |
 | `python -m collector status` | Points, readings, risk, recent runs |
-| `Backup-BasDatabase.ps1` | Nightly dump, verified and rotated. Committed 21 August 2026 |
-| `Test-BasRestore.ps1` | Restores to a scratch database and compares. Committed 21 August 2026 |
+| `bas-collector/Backup-BasDatabase.ps1` | Nightly dump, verified and rotated. Added by `11557b8` (2026-08-21) |
+| `bas-collector/Test-BasRestore.ps1` | Restores to a scratch database and compares. Added by `11557b8` (2026-08-21) |
 
 ### Corrections to the tooling table
 
@@ -286,7 +294,8 @@ hidden from.
   `scripts/bas-checksum.ts` does exist and is real — it simply has no alias, and
   is run with `npx tsx`.
 - **`Backup-BasDatabase.ps1` and `Test-BasRestore.ps1` live in `phb-bas`**, version
-  controlled alongside the collector and committed on 21 August 2026. The earlier
+  controlled alongside the collector at `bas-collector/`, added by `11557b8` on
+  21 August 2026 — re-checked against `git log` in that repository. The earlier
   version of this table listed them beside the `phb-platform` commands without
   distinction, which read as though `npm test` covers them — it does not, and it
   cannot. They are now under the `phb-bas` heading.
@@ -344,7 +353,15 @@ backup first.
 The container app may be scaled to zero freely. **The PostgreSQL server must not
 be stopped.** A stopped database means the collector cannot write, and anything
 past ~42 hours is destroyed at the station while nothing is reading. Overnight is
-survivable. A weekend — about 61 hours — is not.
+survivable.
+
+**A weekend is not, and that is measured rather than estimated.** Three real
+stretches of silence are recorded in `bas_ingest_runs` — **64.3 h**, **64.5 h**
+and **113.4 h** — and every one of them is past the 41.7-hour roll horizon. In
+those three it was the collector host that stopped rather than the database, but
+the arithmetic does not care which end of the seam fails: whatever is longer than
+the roll horizon is destroyed at the station either way. See *Proven in
+operation*.
 
 ---
 
@@ -359,13 +376,80 @@ cross-checks our timestamps, since 13:05 UTC is 09:05 EDT.
 Nothing told us. The station sends no status. It was found because −40 is not a
 temperature.
 
-**A real data loss, recorded honestly.** The collector was silent for 64.3 hours
-over the weekend of 21–24 August because the laptop was closed. Against a
-41.7-hour buffer that destroyed **22.6 hours per point**, recorded as
-`roll_overwrite` gaps and visible on the Collection Health screen.
+**Real data loss, recorded honestly — three times.** Every figure here was read
+out of `public.bas_data_gaps` and `public.bas_ingest_runs` on 8 September 2026,
+and each outage is four `roll_overwrite` gaps, one per active point.
+
+| Collection silent | For | Destroyed per point | Detected |
+|---|---|---|---|
+| Fri 21 Aug 16:05 → Mon 24 Aug 08:20 | 64.3 h | **22.6 h** | 24 Aug |
+| Fri 28 Aug 15:50 → Mon 31 Aug 08:20 | 64.5 h | **22.8 h** | 31 Aug |
+| Thu 3 Sep 16:20 → Tue 8 Sep 09:44 | 113.4 h | **71.7 h** | 8 Sep |
+
+The arithmetic is the roll horizon: silence minus the 41.7-hour buffer is what
+the station overwrote before we read it. That is also why the sixteen-hour
+weeknight gaps that run all through `bas_ingest_runs` cost nothing, and why the
+second weekend cost almost exactly what the first did.
+
+**The 3–8 September outage is the worst so far, and collection has not resumed.**
+The newest reading for all four points is `2026-09-03 16:20` and every row in
+`bas_sync_checkpoints` reads `error`. All four points report:
+
+```
+DATA LOST — station overwrote records between
+2026-09-03T16:20-04:00 and 2026-09-06T20:04Z
+```
+
+### Two causes, not one
+
+The second has never been written down anywhere before, and it is the more
+important finding.
+
+1. **The laptop sleeps** — no collection. The scheduled task never fires because
+   the machine is not awake. This is the whole of the August pattern.
+2. **Mahi works from home** — no collection *even with the laptop awake*, because
+   the JACE at `196.1.1.213` is on the building network and there is no VPN. The
+   scheduled task fires perfectly and collects nothing.
+
+Both appear in the September event, in that order. There is no run at all between
+3 and 8 September, so the machine was away or asleep for the long weekend. Then
+the task fired on 8 September at 09:44 and run `344` recorded
+`points_attempted 4`, `points_succeeded 0`, `records_written 0`, with the same
+error against every point:
+
+```
+Timed out connecting to https://196.1.1.213/obix/histories/…/~historyQuery/
+```
+
+**So the availability requirement is not "a machine that stays on". It is a
+machine that stays on and never leaves the building network.** A host awake in
+the wrong place looks healthy, runs on cadence, writes a run row every fifteen
+minutes and collects nothing — and cause 2 is invisible in a way cause 1 is not,
+because there is a run history to read rather than a silence.
 
 The system did not pretend otherwise. That is the behaviour that matters — a gap
 recorded is a gap analysis can account for.
+
+### Recording a failure is not the same as noticing it
+
+**The 28–31 August outage sat in `bas_data_gaps` for eleven days without
+appearing in a single document.** The mechanism worked perfectly: four
+`roll_overwrite` rows, 22.8 hours per point, `detected_at` 31 August 08:20,
+captured exactly as designed. Nobody read them. Eleven days passed between the
+loss and its first appearance in any document — eight from the moment it was
+recorded — and in that time five commits edited `runbook.md` and `CLAUDE.md`,
+two on 31 August and three on 8 September, without one of them mentioning it.
+
+So the gap-recording machinery was never the weak link. Reading it was. **A gap
+recorded and unread is indistinguishable from no gap at all**, to everyone except
+the database — and the tiles go green again the moment collection resumes, so
+nothing on the screen brings it back up.
+
+That is the reason `healthcheck.py` *(phb-bas)* check **1b** exists as of
+8 September: it reports outages that have **already recovered**, because those are
+precisely the ones no other check will ever mention again. A failure that reports
+itself only while it is happening will be missed by anyone who was away for it —
+which, for both of the causes above, is exactly who was away.
 
 ---
 
@@ -398,9 +482,17 @@ Verifying a claim about any of them means opening that repository.
 
 **Checkable in neither**, and therefore taken on trust: the JACE and its address,
 the Niagara `bas_collector` account, the Postgres roles and their grants, the
-synthetic-data claims, the sensor fault of 24 August and the 64.3-hour collector
-outage. Those are facts about a building, a network and a set of events, and no
+synthetic-data claims, the sensor fault of 24 August, and *why* each collector
+outage happened — a sleeping laptop, or a laptop away from the building network.
+Those are facts about a building, a network and a set of events, and no
 repository holds them.
+
+**Checkable in the database, which is neither repository's files:** the extent of
+each outage. `bas_data_gaps`, `bas_ingest_runs` and `bas_sync_checkpoints` hold
+the three outages, their durations, and the failed run's per-point errors — which
+is how the figures under *Proven in operation* were measured rather than
+remembered. A reader can re-derive every one of them with `psql`, and nothing in
+`npm test` will.
 
 That three-way split is the useful part, and it is why *Two repositories, one
 system* is at the top rather than only here. Roughly half of this document
@@ -423,7 +515,9 @@ building's integrator named things, and most fault rules need `equipment_id`,
 which nothing currently sets.
 
 **Production deployment.** Firewall rule for the site's egress IP, a scoped role
-on the Azure database, and an always-on host. Blocked on the Azure subscription.
+on the Azure database, and an always-on host **that stays on the building
+network** — see *Proven in operation*, where a host that fired on cadence from
+the wrong network collected nothing at all. Blocked on the Azure subscription.
 Both repositories are affected: the platform needs the host, and the collector
 *(phb-bas)* needs the firewall rule and the database role.
 

@@ -4473,6 +4473,37 @@ have drawn 21 August and 24 August adjacent and shown nothing at all.
 
 ---
 
+## The collector fires on cadence and collects nothing
+
+**This is the failure mode that looks most like health.** The scheduled task
+succeeds, the machine is awake, and not one reading arrives.
+
+| | |
+|---|---|
+| **Symptom** | `BAS Collector Sync` shows `LastTaskResult 0` and fires on cadence, and the health check may read OK — but no new readings appear. `logs\collector.log` shows `Timed out connecting to https://196.1.1.213/obix/...` on every point, and `bas_ingest_runs` gains rows with `points_succeeded 0`. |
+| **Cause** | **The collector host is not on the building network.** The JACE at `196.1.1.213` is a private address and there is no VPN. Working from home, or a laptop carried off site, produces zero collection even with the machine awake and the task firing perfectly. |
+| **Fix** | Run the collector on a machine that stays on the building network. `Test-NetConnection 196.1.1.213 -Port 443` confirms reachability. This is why the always-on host must be **at the office**, not merely always on. |
+
+**Telling the two outage causes apart.** They are indistinguishable in the tiles
+and they need different fixes, so count the run rows inside the gap:
+
+| Inside the gap | What happened | Fix |
+|---|---|---|
+| **No `bas_ingest_runs` rows at all** | The machine was off or asleep, so the task never fired | Keep the machine awake |
+| **Rows present, `points_succeeded 0`** | The machine was on but off the building network | Get it back on the building network |
+
+`healthcheck.py` *(phb-bas)* check **1b** now makes that distinction
+automatically. It reports outages that have **already recovered** — which check 1
+structurally cannot, because check 1 asks whether collection is healthy *right
+now* and goes green the moment collection resumes — and it counts the failed runs
+inside each gap to say which of the two causes it was. Before 1b existed, both
+causes went unreported as soon as collection came back.
+
+What each real outage destroyed is in `docs/09-bas-what-is-built.md` under
+*Proven in operation*.
+
+---
+
 ## The Building Automation screen is blank, or every panel errors at once
 
 **First, `/api/modules/bas/ping`.** It reads no BAS rows and answers 200 only if

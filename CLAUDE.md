@@ -36,9 +36,11 @@ fully working path forever. Never build anything the platform is the sole route 
 One repo. One app. No microservices, no message queue, no Redis, no Docker Compose
 sprawl. If a task seems to need one of those, stop and ask.
 
-(That is about *this* application. The BAS collector, the Grafana dashboards and
-the `bas-mcp` server live in a separate repository, `phb-bas`, and always have —
-the database is the only seam between them. See `docs/09-bas-what-is-built.md`.)
+(That is about *this* application. The BAS collector, the Grafana dashboards, the
+`bas-mcp` server and the database backup and restore scripts live in a separate
+repository, `phb-bas`, and always have — the database is the only seam between
+them. A file's absence from this repo is not absence from version control. See
+`docs/09-bas-what-is-built.md`.)
 
 ---
 
