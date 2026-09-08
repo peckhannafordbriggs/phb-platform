@@ -1606,6 +1606,125 @@ three the request needs. Nothing about this step is guessable in advance — a f
 credential is bound to a specific identity's issuer and subject, and an Entra redirect
 URI must match the deployed hostname exactly.
 
+Vitis Technologies owns Azure, Entra and both app registrations (see `HANDOVER.md`), so
+both requests below go to them. They are written out verbatim because the person sending
+them may not be the person who deployed this.
+
+### Request 1 — Azure access, needed before anything can be deployed
+
+Send this now. Nothing below it can happen until this is done.
+
+> Subject: Azure access for the PH+B internal platform deployment
+>
+> We are deploying the PH+B internal platform into the existing subscription,
+> resource group `<resource-group>` in East US. I have Contributor on that
+> resource group and have confirmed it works, but the deployment needs two
+> things Contributor cannot do. Both are confirmed against the live
+> subscription, not assumed.
+>
+> **1. Register six resource providers on the subscription.** They are all
+> currently `NotRegistered`, and registration is a subscription-scoped action:
+>
+>     Microsoft.App
+>     Microsoft.DBforPostgreSQL
+>     Microsoft.ContainerRegistry
+>     Microsoft.KeyVault
+>     Microsoft.OperationalInsights
+>     Microsoft.ManagedIdentity
+>
+>     az provider register -n <each of the above> --subscription <subscription-id>
+>
+> This is one-off and never needed again.
+>
+> **2. Grant me `User Access Administrator` on the resource group
+> `<resource-group>`** — scoped to that group only, not the subscription.
+>
+> The deployment template creates two role assignments, and
+> `Microsoft.Authorization/roleAssignments/write` is excluded from Contributor:
+>
+>   - `AcrPull` for a user-assigned managed identity on the container registry,
+>     so the container app can pull its own image
+>   - `Key Vault Secrets User` for the same identity on the key vault, so the
+>     app reads its database connection string and session secret at runtime
+>     instead of having them written into the deployment
+>
+> Both assignments are to a managed identity created by the same template, not
+> to any person. If granting `User Access Administrator` is a problem, `Owner`
+> on that resource group also works, but the narrower one is preferred.
+>
+> Happy to run the deployment myself once both are in place.
+
+### Request 2 — federated credential and redirect URI, AFTER the first deployment
+
+**Do not send this until the deployment has run.** Three of its values do not
+exist until then, and two of them cannot be guessed — a federated credential is
+bound to one specific identity's object ID, and Entra matches a redirect URI
+against the deployed hostname exactly.
+
+Fill in the three bracketed values from the deployment outputs first:
+
+```bash
+az deployment group show \
+  --resource-group <resource-group> --name main \
+  --query "{principalId:properties.outputs.managedIdentityPrincipalId.value, \
+            clientId:properties.outputs.managedIdentityClientId.value, \
+            redirectUri:properties.outputs.ssoRedirectUri.value}"
+```
+
+> Subject: Two Entra changes for the PH+B internal platform — federated credential and redirect URI
+>
+> The platform is deployed and needs two changes in Entra. Both are on app
+> registrations you created for us. Neither introduces anything that expires,
+> which is deliberate — the platform is not permitted to depend on a secret or
+> certificate in production.
+>
+> **1. Add a federated identity credential to the Change Order Graph app
+> registration.**
+>
+> App registration: `d1795907-d017-4a5e-9da3-033c4bee4ec1`
+> (the mail one with `Mail.ReadWrite` + `Mail.Send`, **not** the SSO app)
+>
+> Under *Certificates & secrets → Federated credentials → Add credential*,
+> choose the **Managed identity** scenario and select the identity below. If
+> that scenario is not offered, the equivalent values are:
+>
+>     Name:      phb-platform-prod
+>     Issuer:    https://login.microsoftonline.com/48f37f84-1c36-4b3e-986c-b8b7196ad49d/v2.0
+>     Subject:   <managedIdentityPrincipalId>
+>     Audience:  api://AzureADTokenExchange
+>
+> The subject is the **object (principal) ID** of the user-assigned managed
+> identity `phbplat-prod-identity` in resource group `<resource-group>` — not
+> its client ID.
+>
+> What this does: the managed identity gets a token from Entra for the
+> `api://AzureADTokenExchange` audience and presents it as a client assertion to
+> the app registration above, which is what actually holds the mail permissions.
+> The managed identity itself needs no Graph permissions, and please do not add
+> any. **No new Graph permission or admin consent is required for this** — the
+> app registration's existing `Mail.ReadWrite` and `Mail.Send` are unchanged, as
+> is the ApplicationAccessPolicy scoping them to `changeorder@phb1899.com`.
+>
+> **2. Add a production redirect URI to the SSO app registration.**
+>
+> App registration: `220921c1-f23e-4d01-b354-736884ba3d00`
+> Platform: **Web**
+> Redirect URI: `<ssoRedirectUri>`
+>
+> Please **add** it and leave `http://localhost:3000/api/auth/callback/microsoft-entra-id`
+> in place — local development still needs it.
+>
+> Nothing else on either registration needs to change. No new permissions, no
+> new consent, no client secret.
+
+**While you have their attention**, two Exchange checks left over from Phase 11
+are still open and are quick for someone with Exchange admin:
+
+- Confirm the current operator has Full Access to `changeorder@phb1899.com`
+- `Test-ApplicationAccessPolicy -Identity changeorder@phb1899.com -AppId d1795907-d017-4a5e-9da3-033c4bee4ec1`
+  should report `Granted`, and `Denied` for any other mailbox
+
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not
