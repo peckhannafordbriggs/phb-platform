@@ -19,6 +19,7 @@ export type Denial =
   | "employee_inactive"
   | "profile_incomplete"
   | "no_grant"
+  | "not_module_admin"
   | "not_admin";
 
 export interface Viewer {
@@ -132,6 +133,65 @@ export async function requireModuleAccess(
   }
 
   return base;
+}
+
+/**
+ * The full check for a module's ADMINISTRATIVE surface - for `bas`, the
+ * Settings tab (B7.2).
+ *
+ * Two things this is not.
+ *
+ * It is not `requireAdmin`. `isPlatformAdmin` is the person who grants module
+ * access and disables employees; this is someone who may change what one module
+ * collects. Jake can be trusted to add a building without being trusted to
+ * remove Jake's colleagues. Deliberately no `isPlatformAdmin` branch here: a
+ * platform admin has no implicit module access anywhere else in this file
+ * either, and making the admin surface the one exception would mean the audit
+ * row "granted BAS admin to Jake" no longer describes everyone who can add a
+ * building.
+ *
+ * It is not a second grant to look up. `isModuleAdmin` is a column on the grant
+ * row, so no grant means no admin rights, and revoking access revokes them too.
+ *
+ * `not_module_admin` maps to 404, exactly like `no_grant`. An administrative
+ * surface is a surface, and the platform does not confirm to someone who cannot
+ * use it that one exists.
+ */
+export async function requireModuleAdmin(
+  moduleKey: string,
+): Promise<AccessResult> {
+  const base = await requireModuleAccess(moduleKey);
+  if (!base.ok) return base;
+
+  if (!(await hasModuleAdmin(base.viewer.id, moduleKey))) {
+    return { ok: false, denial: "not_module_admin" };
+  }
+
+  return base;
+}
+
+/**
+ * The flag on its own, for a caller that has already passed
+ * `requireModuleAccess` and only needs to know whether to render something.
+ *
+ * Exists so the tab bar can hide Settings without paying for the whole chain a
+ * second time, and so the rule "the grant row carries the flag" is written once
+ * rather than in every page that wants to know.
+ *
+ * NOT a security boundary and never to be used as one. Hiding a tab is not
+ * authorization (docs/04); the page behind it calls `requireModuleAdmin` and so
+ * does every route it fetches.
+ */
+export async function hasModuleAdmin(
+  employeeId: string,
+  moduleKey: string,
+): Promise<boolean> {
+  const grant = await prisma.moduleGrant.findUnique({
+    where: { employeeId_moduleKey: { employeeId, moduleKey } },
+    select: { isModuleAdmin: true },
+  });
+
+  return grant?.isModuleAdmin === true;
 }
 
 /**

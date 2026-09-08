@@ -31,8 +31,30 @@ import {
  */
 
 describe("the tabs are real routes", () => {
-  it("registers Collection Health at /bas and Point Explorer at /bas/points", () => {
-    expect(BAS_TABS.map((tab) => tab.href)).toEqual(["/bas", "/bas/points"]);
+  /**
+   * The exact list, so adding a tab is a deliberate decision rather than
+   * something that happens. Settings joined it in B7.2 and is `adminOnly`; what
+   * a given viewer is actually OFFERED is `visibleBasTabs`, covered in
+   * tests/bas-settings.test.ts.
+   */
+  it("registers Collection Health, Point Explorer and Settings, in that order", () => {
+    expect(BAS_TABS.map((tab) => tab.href)).toEqual([
+      "/bas",
+      "/bas/points",
+      "/bas/settings",
+    ]);
+  });
+
+  /**
+   * Settings is the only admin-gated tab, and the default matters: a tab added
+   * without `adminOnly` is offered to every BAS user. That is the right default
+   * for a dashboard and the wrong one for an administrative surface, so the
+   * list of exceptions is pinned rather than left to whoever adds the next tab.
+   */
+  it("gates only Settings behind the module-admin flag", () => {
+    expect(
+      BAS_TABS.filter((tab) => tab.adminOnly === true).map((tab) => tab.href),
+    ).toEqual(["/bas/settings"]);
   });
 
   /**

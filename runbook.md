@@ -5087,6 +5087,144 @@ ones that existed on 8 September 2026.
 
 ---
 
+## Station credentials, and the one secret that lives in two places
+
+**B7.4, 8 September 2026.** Niagara logins are stored in
+`bas_station_credentials`, encrypted with AES-256-GCM under `BAS_CREDENTIAL_KEY`.
+
+**The key is never in the database.** A dump of `phb_platform` on its own
+decrypts to nothing, which is the only property that makes storing these worth
+doing. `bas_readonly_platform` is refused that table outright — see *The
+read-only grant script is an allowlist* above.
+
+**A missing key breaks one feature and nothing else.** It is read lazily, the
+same way `GRAPH_*` is. The platform boots, the Settings tab loads, projects,
+buildings and stations can all be created; only setting a password is refused,
+and the screen names the variable. If Settings is otherwise working and only the
+credential panel says something is wrong, this is why.
+
+```powershell
+# Generate one. 32 bytes, base64.
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+### There is no way to read a password back, and that is deliberate
+
+No API returns one. `GET` answers `{ username, passwordSet: true,
+passwordUpdatedAt }`; the form shows `•••••` and a **Replace** button. If
+somebody has lost the Niagara password, it is recovered from Niagara, not from
+here — the platform is not a password manager and must not become one.
+
+`tests/bas-credentials.test.ts` walks every settings route and fails on any
+response body containing the plaintext or the ciphertext. It was checked by
+making the tree return the ciphertext and watching it go red.
+
+### `BAS_CREDENTIAL_KEY` will exist in two places, and that is the risk
+
+Once B7.5 lands, the collector in `phb-bas` reads its targets and credentials
+from this database and needs the **same** key. Two systems, one secret.
+
+**Out of step means the collector cannot decrypt and collection stops.** Against
+a 41.7-hour roll horizon that destroys data — the station overwrites what was
+never collected and there is no second copy anywhere. When rotating, change the
+platform and the collector in the same maintenance window, and confirm a
+collector run afterwards rather than assuming.
+
+### Rotating the key
+
+`key_version` is stored per row so this does not have to be a flag day:
+
+1. Set `BAS_CREDENTIAL_KEY` to the new key and `BAS_CREDENTIAL_KEY_VERSION` to
+   the next number.
+2. Re-enter each station's password through Settings. Each save re-encrypts
+   under the new key and stamps the new version.
+3. Rows still carrying the old version have not been rotated.
+   `SELECT station_id, key_version FROM bas_station_credentials` says which.
+
+A row whose `key_version` names a key nobody has any more is undecryptable and
+unrecoverable from here. Re-enter it.
+
+---
+
+## `discover` failing after a station was registered in Settings
+
+**Symptom.** A station added through the Settings tab is not collected, or the
+collector 404s against it.
+
+**Almost always the Niagara station name.** It is stored **byte for byte** —
+not trimmed, not case-folded — because it appears literally in every oBIX URL
+and `SpringGroveLabComputer` is not `springgrovelabcomputer`. The form says so
+and the field is monospace, and it is still the first thing to check:
+
+```sql
+SELECT station_id, '[' || niagara_station_name || ']' AS exact, base_url
+  FROM bas_stations ORDER BY station_id;
+```
+
+The brackets are there to make a leading or trailing space visible. A space
+somebody pasted is stored, deliberately — the platform does not get to decide
+that Niagara does not want it.
+
+**Second most likely: a trailing slash on `base_url`.** The live value is
+`https://196.1.1.213` with none. One produces `//obix` in every URL the
+collector builds. Also stored verbatim, in both directions.
+
+---
+
+## The TLS fingerprint is recorded but not yet used
+
+`bas_stations.tls_sha256` holds the SHA-256 of the station's certificate, 64
+lowercase hex characters, enforced by `bas_stations_tls_sha256_shape`. The lab
+station's was backfilled by the `add_station_tls_and_display_name` migration:
+
+```
+483bc6d6cbefa12914398e7e27010b6275b287503ac19e0c783482278dc186b4
+```
+
+**A value here does not mean anything is verified.** The collector still runs
+with certificate verification off entirely — outstanding for weeks. The JACE is
+self-signed, so ordinary chain validation cannot work and pinning is the correct
+answer; recording the fingerprint is the first half of that, and using it is
+collector work in `phb-bas` that has not been done.
+
+Unlike the station name and the URL, this value **is** normalised on write —
+colons stripped, lowercased. A fingerprint is a number written in hex, so case
+and separators carry no meaning, and Workbench and openssl print it differently.
+Two spellings of one value would defeat the only comparison it exists for.
+
+---
+
+## Why there is no "Test connection" button, and must not be
+
+**Asked for repeatedly. The answer is no, for a reason that will not change.**
+
+A test button opens a socket from wherever the platform is running. That works
+on a laptop on the building network and breaks **permanently** the moment this
+moves to Azure: Azure cannot reach the building network, and Tridium's own
+guidance is that a Niagara station is never internet-exposed. Only the collector
+can talk to a JACE.
+
+A button that works in development and cannot work in production is worse than
+no button — somebody will rely on it, and its absence in Azure will read as a
+platform fault.
+
+**What the screen shows instead** is derived from what the collector already
+wrote: the last run from `bas_ingest_runs`, and the newest record from
+`bas_sync_checkpoints`. Those are true from anywhere, including Azure, and they
+answer the real question — is data arriving — rather than "can this host open a
+socket right now".
+
+The newest **record** is the headline rather than the newest run, deliberately:
+a run that completed successfully while collecting nothing is not data arriving,
+and that difference is exactly the failure this module keeps finding weeks late.
+Past 42 hours the row goes red, because that is the roll horizon and anything
+not collected by then is gone.
+
+`tests/bas-stations.test.ts` asserts no route under
+`app/api/modules/bas/settings/**` is named for testing, probing or connecting.
+
+---
+
 ## A BAS fixture leaves an org behind and the next test file blames a previous run
 
 **Cost about fifteen minutes on 8 September 2026, and the error message points

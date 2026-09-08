@@ -173,7 +173,9 @@ export async function getEmployeeDetail(employeeId: string) {
       lastLoginAt: true,
       position: { select: { id: true, name: true, status: true } },
       department: { select: { id: true, name: true, status: true } },
-      grants: { select: { moduleKey: true, grantedAt: true } },
+      grants: {
+        select: { moduleKey: true, grantedAt: true, isModuleAdmin: true },
+      },
     },
   });
 
@@ -263,6 +265,62 @@ export async function removeGrant(
   });
 
   return { ok: true, data: { revoked: true } };
+}
+
+/**
+ * Module-admin rights on an existing grant (B7.2).
+ *
+ * REQUIRES THE GRANT TO EXIST, and does not create one. "Administrator of a
+ * module you cannot open" is not a state worth being able to express, and
+ * silently granting access as a side effect of ticking an admin box would mean
+ * one click did two things the audit log records as one.
+ *
+ * Idempotent in both directions, like addGrant and removeGrant: setting what is
+ * already set writes no audit row. An admin clicking twice has not done
+ * anything twice.
+ *
+ * No self-demotion guardrail, deliberately. The admin screen refuses to remove
+ * your own platform-admin flag or leave zero platform admins, because that is a
+ * lockout nobody can recover from. Zero BAS administrators is not a lockout -
+ * any platform admin can grant it back - so inventing a symmetric rule here
+ * would invent a trap that does not exist.
+ */
+export async function setModuleAdmin(
+  actorId: string,
+  employeeId: string,
+  moduleKey: string,
+  isModuleAdmin: boolean,
+): Promise<AdminResult<{ changed: boolean }>> {
+  const existing = await prisma.moduleGrant.findUnique({
+    where: { employeeId_moduleKey: { employeeId, moduleKey } },
+    select: { id: true, isModuleAdmin: true },
+  });
+
+  if (existing === null) {
+    return fail(
+      "not_found",
+      "That employee does not have access to this module. Grant access first.",
+    );
+  }
+
+  if (existing.isModuleAdmin === isModuleAdmin) {
+    return { ok: true, data: { changed: false } };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.moduleGrant.update({
+      where: { id: existing.id },
+      data: { isModuleAdmin },
+    });
+    await writeAuditEvent(tx, {
+      action: isModuleAdmin ? "grant.admin_added" : "grant.admin_removed",
+      actorEmployeeId: actorId,
+      targetEmployeeId: employeeId,
+      moduleKey,
+    });
+  });
+
+  return { ok: true, data: { changed: true } };
 }
 
 /**

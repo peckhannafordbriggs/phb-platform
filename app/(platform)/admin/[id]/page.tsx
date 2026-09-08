@@ -43,6 +43,9 @@ export default async function AdminEmployeePage({
   ]);
 
   const grantedKeys = employee.grants.map((g) => g.moduleKey);
+  const moduleAdminKeys = employee.grants
+    .filter((g) => g.isModuleAdmin)
+    .map((g) => g.moduleKey);
 
   return (
     <div className="max-w-3xl">
@@ -108,6 +111,7 @@ export default async function AdminEmployeePage({
         isPlatformAdmin={employee.isPlatformAdmin}
         modules={modules}
         grantedModuleKeys={grantedKeys}
+        moduleAdminKeys={moduleAdminKeys}
       />
 
       {/*

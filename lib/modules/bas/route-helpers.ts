@@ -1,5 +1,11 @@
 import type { NextResponse } from "next/server";
-import { denialResponse, requireModuleAccess, type Viewer } from "@/lib/authz";
+import {
+  denialResponse,
+  requireModuleAccess,
+  requireModuleAdmin,
+  type AccessResult,
+  type Viewer,
+} from "@/lib/authz";
 import { fail, ok, validationFailed } from "@/lib/api/response";
 import { prisma } from "@/lib/db";
 import { logUnexpected, logger } from "@/lib/logger";
@@ -119,7 +125,39 @@ export async function withBas<T = undefined>(
   handler: (viewer: Viewer, input: T) => Promise<NextResponse>,
   parse?: () => Promise<ParsedInput<T>>,
 ): Promise<NextResponse> {
-  const access = await requireModuleAccess(BAS_MODULE_KEY);
+  return guarded(requireModuleAccess(BAS_MODULE_KEY), route, handler, parse);
+}
+
+/**
+ * The same wrapper for the module's SETTINGS routes, differing in one line: the
+ * guard is `requireModuleAdmin`, so the caller needs the BAS grant AND that
+ * grant's `is_module_admin` flag (B7.2).
+ *
+ * A separate wrapper rather than a boolean argument to `withBas`. A flag would
+ * make the unguarded-by-default case the one you get by forgetting to pass
+ * something, and the whole point of these wrappers is that the guard is not
+ * something a route can forget. `tests/bas-settings.test.ts` walks
+ * app/api/modules/bas/settings/** and fails any handler that does not use this.
+ *
+ * The denial is 404, not 403 - see requireModuleAdmin. Everything after the
+ * guard is shared with withBas, including the schema-availability check, so the
+ * two cannot drift on how they report an unmigrated database.
+ */
+export async function withBasSettings<T = undefined>(
+  route: string,
+  handler: (viewer: Viewer, input: T) => Promise<NextResponse>,
+  parse?: () => Promise<ParsedInput<T>>,
+): Promise<NextResponse> {
+  return guarded(requireModuleAdmin(BAS_MODULE_KEY), route, handler, parse);
+}
+
+async function guarded<T>(
+  guard: Promise<AccessResult>,
+  route: string,
+  handler: (viewer: Viewer, input: T) => Promise<NextResponse>,
+  parse?: () => Promise<ParsedInput<T>>,
+): Promise<NextResponse> {
+  const access = await guard;
   if (!access.ok) return denialResponse(access.denial);
 
   let input = undefined as T;

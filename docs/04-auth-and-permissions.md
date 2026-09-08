@@ -104,6 +104,34 @@ Request
 **404, not 403**, on a missing grant. Do not confirm the existence of modules the
 person can't access.
 
+### Module administrators (B7.2)
+
+A grant can carry `is_module_admin`. It gates the module's *administrative*
+surface - for `bas`, the Settings tab, which decides what gets collected.
+
+```
+Request to a module's admin surface
+  → everything above                     → as normal
+  → has grant for <key>?           no → 404
+  → grant.is_module_admin?         no → 404
+  → execute
+```
+
+| | Can | Cannot |
+|---|---|---|
+| BAS grant | See Collection Health and Point Explorer | Open Settings — 404, and the tab is not rendered |
+| BAS grant + `is_module_admin` | Also open Settings | Reach `/admin`, grant anything, disable anyone |
+| `is_platform_admin` | Grant module admin to others | Open Settings without being granted it — **404**, same as anyone |
+
+**A platform admin gets no implicit module access**, here or anywhere:
+`requireModuleAccess` has never had an `isPlatformAdmin` branch, and the admin
+surface is not the place to introduce one. If it did, the audit row *"granted
+BAS admin to Jake"* would stop describing everyone who can add a building.
+
+**Hiding the tab is not authorization.** `visibleBasTabs` omits Settings for a
+non-admin so the tab bar does not announce a surface the 404 conceals. The page
+behind it calls `requireModuleAdmin` and so does every route it fetches.
+
 ### Rules
 
 - **Grants are read from the database on every request.** Never baked into a session
@@ -177,6 +205,14 @@ Nothing in the seed ever resets a name, an email, a status, or a completed profi
 
 - **Roles.** There is no role system. There is `is_platform_admin` and there are
   module grants. Do not add a `roles` field to the session context.
-- **Per-module admins.** Leave schema room; do not implement.
+- ~~**Per-module admins.**~~ **Implemented 8 September 2026 (B7.2).** Reversed
+  deliberately, and this line is kept rather than deleted so the reversal is
+  visible. `module_grants.is_module_admin` carries administrative rights over
+  ONE module; `requireModuleAdmin(key)` checks it and denies with **404**, the
+  same as a missing grant, because a module's administrative surface is a
+  surface. It is a column on the grant row, so revoking access revokes admin
+  rights in the same statement. It is still **not** a role system: there is no
+  list of permissions, no role table, and nothing in the session context.
+  See below.
 - **Group-based grants** mapped to Entra security groups. Worth revisiting past ~50
   employees.

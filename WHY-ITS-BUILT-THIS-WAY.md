@@ -649,6 +649,42 @@ buildings, beyond which a Niagara Supervisor is a purchase nobody has owned.
 else), per-module admins (schema room left, not implemented), group-based grants mapped to
 Entra security groups (worth revisiting past ~50 employees).
 
+## 37 · A module administrator is not a platform administrator
+
+**The decision.** `module_grants.is_module_admin` — a boolean on the grant row — carries
+administrative rights over exactly one module. For `bas` that is the Settings tab, which
+decides what gets collected. Checked by `requireModuleAdmin(key)`, which denies with
+**404**, not 403.
+
+**Why it exists.** Viewing building data and changing what gets collected are different
+privileges. A misconfigured station stops collection silently, and silent is the failure
+mode this project keeps paying for. Before B7.2 the only way to express "may change BAS
+settings" was `is_platform_admin`, which also means "may disable employees" — so adding a
+building would have required trusting someone with the employee directory.
+
+**What it reverses.** `docs/04-auth-and-permissions.md` listed per-module admins under
+*Deferred — do not build*. That line is struck through rather than deleted, so the
+reversal is visible to whoever reads it next.
+
+**Why a column and not a table.** Revoking someone's module access deletes the grant row,
+which takes their admin rights with it in the same statement. A `module_admins` table
+would let a revoked employee keep an orphaned admin row that nothing would notice — and
+nothing checks for that, because nothing would think to.
+
+**Why 404 and not 403.** 403 answers "is there a settings screen?" with yes. The whole
+point of the separate right is that this surface is not for everyone, so someone probing
+for it should not learn it is there. Same reasoning as a missing module grant, and the
+same status.
+
+**Why a platform admin gets nothing implicitly.** `requireModuleAccess` has never had an
+`isPlatformAdmin` branch — a platform admin already gets 404 on `/bas` itself without a
+grant. Making the admin surface the one exception would mean the audit row *"granted BAS
+admin to Jake"* no longer describes everyone who can add a building.
+
+**What breaks if you undo it.** Either building administration goes back to requiring the
+platform admin flag — which puts the employee directory in the hands of whoever adds a
+building — or the check moves into the routes, where forgetting it is possible again.
+
 ## 36 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

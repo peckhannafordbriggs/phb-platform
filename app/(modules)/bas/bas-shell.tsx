@@ -6,7 +6,7 @@ import { Suspense } from "react";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { ModuleHeader } from "@/components/module-header";
 import { moduleAccentStyle } from "@/lib/module-accent";
-import { BAS_TABS, activeTabHref, tabHref } from "./tabs";
+import { activeTabHref, tabHref, visibleBasTabs, type BasTab } from "./tabs";
 
 /**
  * The chrome every Building Automation tab sits inside: the module heading and
@@ -24,11 +24,23 @@ import { BAS_TABS, activeTabHref, tabHref } from "./tabs";
  */
 export function BasShell({
   blurb,
+  canAdminister = false,
   children,
 }: {
   blurb: string;
+  /**
+   * Whether to offer the Settings tab. Resolved on the server by the page that
+   * renders this, from `hasModuleAdmin` - never inferred in the browser.
+   *
+   * Defaults to false so a page that forgets to pass it hides the tab rather
+   * than showing it. The wrong default here is a leak; the right one is a
+   * missing link somebody reports.
+   */
+  canAdminister?: boolean;
   children: React.ReactNode;
 }) {
+  const tabs = visibleBasTabs(canAdminister);
+
   return (
     /*
       The accent scope wraps the whole module, not just its header. The tabs, the
@@ -58,8 +70,8 @@ export function BasShell({
           so a tab is never missing while it resolves - it just briefly forgets
           the filters, which is a link that still goes to the right screen.
         */}
-        <Suspense fallback={<TabBar carryQuery={false} />}>
-          <TabBar carryQuery />
+        <Suspense fallback={<TabBar carryQuery={false} tabs={tabs} />}>
+          <TabBar carryQuery tabs={tabs} />
         </Suspense>
       </ModuleHeader>
 
@@ -69,25 +81,32 @@ export function BasShell({
   );
 }
 
-function TabBar({ carryQuery }: { carryQuery: boolean }) {
-  return carryQuery ? <LiveTabBar /> : <StaticTabBar />;
+function TabBar({
+  carryQuery,
+  tabs,
+}: {
+  carryQuery: boolean;
+  tabs: readonly BasTab[];
+}) {
+  return carryQuery ? <LiveTabBar tabs={tabs} /> : <StaticTabBar tabs={tabs} />;
 }
 
-function LiveTabBar() {
+function LiveTabBar({ tabs }: { tabs: readonly BasTab[] }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const active = activeTabHref(pathname);
 
   return (
     <Tabs
+      tabs={tabs}
       active={active}
       hrefFor={(href) => tabHref(href, searchParams)}
     />
   );
 }
 
-function StaticTabBar() {
-  return <Tabs active={null} hrefFor={(href) => href} />;
+function StaticTabBar({ tabs }: { tabs: readonly BasTab[] }) {
+  return <Tabs tabs={tabs} active={null} hrefFor={(href) => href} />;
 }
 
 /**
@@ -98,9 +117,11 @@ function StaticTabBar() {
  * people already know how to read.
  */
 function Tabs({
+  tabs,
   active,
   hrefFor,
 }: {
+  tabs: readonly BasTab[];
   active: string | null;
   hrefFor: (href: string) => string;
 }) {
@@ -110,7 +131,7 @@ function Tabs({
       className="mt-3 border-b border-[var(--border)]"
     >
       <ul className="-mb-px flex gap-1">
-        {BAS_TABS.map((tab) => {
+        {tabs.map((tab) => {
           const isActive = tab.href === active;
           return (
             <li key={tab.href}>

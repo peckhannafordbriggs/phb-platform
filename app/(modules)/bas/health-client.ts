@@ -1,4 +1,5 @@
 import type {
+  BasSettingsTree,
   PointHealthRow,
   CollectionHealth,
   PointExplorer,
@@ -648,4 +649,320 @@ export function formatValue(value: number | null, unit: string | null): string {
   if (value === null) return "—";
   const rendered = value.toFixed(2);
   return unit === null ? rendered : `${rendered} ${unit}`;
+}
+
+
+/**
+ * The Settings tree (B7.2).
+ *
+ * No parameters and no polling. The hierarchy changes when somebody changes it,
+ * which in B7.2 is never - the two dashboards poll because collection moves on
+ * its own, and this does not.
+ *
+ * A 404 here is the expected answer for a BAS user without the module-admin
+ * flag, not a bug. The page above would already have 404'd, so a 404 from this
+ * fetch means the grant was revoked while the tab was open, and `basSettingsUi`
+ * says exactly that rather than showing an empty tree.
+ */
+export async function fetchBasSettings(
+  signal?: AbortSignal,
+): Promise<BasSettingsTree> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/settings`, { signal, cache: "no-store" });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  if (response.status === 404) {
+    throw new ApiError(
+      "no_access",
+      "You no longer have access to Building Automation settings.",
+    );
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: BasSettingsTree; error?: { code?: string; message?: string } }
+    | null;
+
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+
+  if (payload?.data === undefined) {
+    throw new ApiError("unexpected", "The server returned nothing.");
+  }
+
+  return payload.data;
+}
+
+/**
+ * How one station's reach reads on screen, and in what tone.
+ *
+ * A plain function so `tests/bas-settings.test.ts` can prove it without a DOM -
+ * the same reason every other rule in this file lives here rather than in the
+ * component.
+ *
+ * `unconfigured` is amber and never green. It is a station that says its history
+ * arrives through another station without saying which, which is what a JACE
+ * linked in Workbench and never labelled here looks like. It may well be
+ * collecting; nobody has said how. Rendering that as settled is the silent gap
+ * this module keeps paying for.
+ */
+export function describeReach(station: {
+  reach: string;
+  baseUrl: string | null;
+  parentStationName: string | null;
+}): { label: string; detail: string; tone: Tone } {
+  switch (station.reach) {
+    case "direct":
+      return {
+        label: "Direct",
+        detail: station.baseUrl ?? "no address recorded",
+        tone: station.baseUrl === null ? "warn" : "ok",
+      };
+    case "via_parent":
+      return {
+        label: "Via parent",
+        detail: `history imported by ${station.parentStationName ?? "?"}`,
+        tone: "ok",
+      };
+    default:
+      return {
+        label: "Discovered, unassigned",
+        detail: "no parent station recorded - nobody has said how this is reached",
+        tone: "warn",
+      };
+  }
+}
+
+
+/**
+ * The Settings write API (B7.3).
+ *
+ * One helper, because all five routes answer with the same envelope and the
+ * same status vocabulary. The interesting statuses are 409 (a name collision,
+ * or something that still has children under it) and 422 (validation) - both
+ * carry a message written for the person on the screen, so the component shows
+ * `error.message` rather than composing its own.
+ *
+ * A 404 from any of these is the module-admin grant having gone away mid-session,
+ * not a missing row: the row ids came from the tree this page just loaded.
+ */
+async function settingsWrite<T>(
+  path: string,
+  init: RequestInit,
+): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/settings${path}`, {
+      ...init,
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  if (response.status === 404) {
+    throw new ApiError(
+      "no_access",
+      "You no longer have access to Building Automation settings.",
+    );
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: T; error?: { code?: string; message?: string } }
+    | null;
+
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+
+  return payload?.data as T;
+}
+
+export const createProject = (body: {
+  orgId: string;
+  name: string;
+  notes?: string | null;
+}) =>
+  settingsWrite<{ projectId: string }>("/projects", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateProject = (
+  projectId: string,
+  body: { name?: string; notes?: string | null },
+) =>
+  settingsWrite<{ changed: boolean }>(
+    `/projects/${encodeURIComponent(projectId)}`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
+
+export const deleteProject = (projectId: string) =>
+  settingsWrite<{ deleted: boolean }>(
+    `/projects/${encodeURIComponent(projectId)}`,
+    { method: "DELETE" },
+  );
+
+export const createBuilding = (body: {
+  projectId: string;
+  name: string;
+  timezone: string;
+  address?: string | null;
+}) =>
+  settingsWrite<{ siteId: string }>("/buildings", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateBuilding = (
+  siteId: string,
+  body: { name?: string; timezone?: string; address?: string | null },
+) =>
+  settingsWrite<{ changed: boolean }>(
+    `/buildings/${encodeURIComponent(siteId)}`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
+
+export const deleteBuilding = (siteId: string) =>
+  settingsWrite<{ deleted: boolean }>(
+    `/buildings/${encodeURIComponent(siteId)}`,
+    { method: "DELETE" },
+  );
+
+/**
+ * Timezones offered in the building form.
+ *
+ * A convenience list, NOT the validation. The server checks against
+ * `pg_timezone_names`, so a zone missing from here is still accepted if typed -
+ * which is why the control is an input with a datalist rather than a select
+ * that can only offer these six. Hardcoding a closed list would be a second
+ * source of truth that goes stale the first time PH+B works outside these
+ * zones.
+ */
+export const COMMON_TIMEZONES: readonly string[] = [
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Phoenix",
+  "America/Los_Angeles",
+  "UTC",
+];
+
+
+// --------------------------------------------------------- stations (B7.4)
+
+export interface StationPayload {
+  siteId?: string;
+  niagaraStationName?: string;
+  displayName?: string | null;
+  connectionMode?: "direct" | "via_parent";
+  baseUrl?: string | null;
+  parentStationId?: string | null;
+  tlsSha256?: string | null;
+  isActive?: boolean;
+}
+
+export const createStation = (body: StationPayload) =>
+  settingsWrite<{ stationId: string }>("/stations", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateStation = (stationId: string, body: StationPayload) =>
+  settingsWrite<{ changed: boolean }>(
+    `/stations/${encodeURIComponent(stationId)}`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
+
+export const deleteStation = (stationId: string) =>
+  settingsWrite<{ deleted: boolean }>(
+    `/stations/${encodeURIComponent(stationId)}`,
+    { method: "DELETE" },
+  );
+
+/**
+ * Replace the stored Niagara login.
+ *
+ * The password leaves the browser once and is never sent back. There is no
+ * matching read function in this file, because there is no route to call: the
+ * settings tree carries the username, whether a password is set, and when - and
+ * nothing else exists to fetch.
+ */
+export const setStationCredential = (
+  stationId: string,
+  body: { username: string; password: string },
+) =>
+  settingsWrite<{ passwordSet: true }>(
+    `/stations/${encodeURIComponent(stationId)}/credential`,
+    { method: "PUT", body: JSON.stringify(body) },
+  );
+
+export const clearStationCredential = (stationId: string) =>
+  settingsWrite<{ cleared: boolean }>(
+    `/stations/${encodeURIComponent(stationId)}/credential`,
+    { method: "DELETE" },
+  );
+
+/**
+ * How a station's collection history reads on screen.
+ *
+ * This is what stands in for a "test connection" button. It is derived from
+ * bas_ingest_runs and bas_sync_checkpoints - things the collector already
+ * wrote - so it is equally true from a laptop on the building network and from
+ * Azure, which cannot reach a JACE at all and never will.
+ *
+ * The newest RECORD is the headline, not the newest run: a run that completed
+ * successfully while collecting nothing is not the same as data arriving, and
+ * the difference is precisely the failure this module keeps finding late.
+ */
+export function describeActivity(activity: {
+  lastRunAt: string | null;
+  lastRunStatus: string | null;
+  newestRecordAt: string | null;
+}): { label: string; tone: Tone } {
+  if (activity.newestRecordAt === null && activity.lastRunAt === null) {
+    return { label: "Never collected", tone: "neutral" };
+  }
+
+  if (activity.newestRecordAt === null) {
+    return {
+      label: `Runs recorded, no data yet (last run ${activity.lastRunStatus ?? "unknown"})`,
+      tone: "warn",
+    };
+  }
+
+  const age = Date.now() - new Date(activity.newestRecordAt).getTime();
+  const hours = age / 3_600_000;
+
+  // The station keeps roughly 42 hours of history and then overwrites it. Past
+  // that, whatever was not collected is gone - so the threshold is the roll
+  // horizon and not a round number.
+  if (hours > 42) {
+    return {
+      label: `Newest record ${formatTimestamp(activity.newestRecordAt)} - past the roll horizon`,
+      tone: "bad",
+    };
+  }
+  if (hours > 2) {
+    return {
+      label: `Newest record ${formatTimestamp(activity.newestRecordAt)}`,
+      tone: "warn",
+    };
+  }
+  return {
+    label: `Collecting - newest record ${formatTimestamp(activity.newestRecordAt)}`,
+    tone: "ok",
+  };
 }

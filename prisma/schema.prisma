@@ -130,6 +130,28 @@ model ModuleGrant {
   moduleKey String @map("module_key")
   module    Module @relation(fields: [moduleKey], references: [key], onDelete: Cascade)
 
+  /// Administrative rights over THIS module, and nothing else (B7.2).
+  ///
+  /// A module admin can change what the module collects or how it is
+  /// configured - for BAS, that is the Settings tab. They cannot reach /admin,
+  /// grant anyone anything, or disable an employee: `isPlatformAdmin` is a
+  /// different and much larger thing, and this is deliberately not it.
+  ///
+  /// A COLUMN ON THE GRANT, not a table of its own, and that is the whole
+  /// design. Revoking someone's module access deletes this row, so it revokes
+  /// their module admin rights in the same statement. A separate module_admins
+  /// table would let a revoked employee keep an orphaned admin row that nothing
+  /// would ever notice.
+  ///
+  /// Generic on purpose - nothing here knows the string 'bas'. Change Orders
+  /// gets the same capability by ticking a box.
+  ///
+  /// docs/04-auth-and-permissions.md listed per-module admins under "do not
+  /// implement" until 8 September 2026. B7 D14 reversed that: viewing building
+  /// data and changing what gets collected are different privileges, and a
+  /// misconfigured station stops collection silently.
+  isModuleAdmin Boolean @default(false) @map("is_module_admin")
+
   /// Null means the grant was issued by the system (seeding), not by an admin.
   /// SetNull rather than Cascade: losing the granting admin must not silently
   /// revoke everyone they ever granted.
@@ -432,6 +454,13 @@ model BasStation {
   /// The station name EXACTLY as Niagara spells it, including capitalisation.
   /// This appears literally in every oBIX URL. Get the case wrong and every
   /// request 404s.
+  /// What a person calls it. Free text, and deliberately NOT the identifier.
+  ///
+  /// niagaraStationName below is what Niagara answers to; this is what reads
+  /// on a screen. Null means nobody has given it one, and the UI falls back to
+  /// the Niagara name rather than inventing a prettier version of it.
+  displayName String? @map("display_name")
+
   niagaraStationName String @map("niagara_station_name")
 
   /// How this station's history is reached. 'direct' means we open an oBIX
@@ -457,6 +486,25 @@ model BasStation {
   /// been discovered but not yet configured is a real state the Settings tab
   /// has to be able to show, and a constraint here would refuse to store it.
   baseUrl        String? @map("base_url")
+
+  /// SHA-256 of the station's TLS certificate, lowercase hex, no colons.
+  ///
+  /// The JACE presents a self-signed certificate, so ordinary chain validation
+  /// cannot work and the collector has been running with verification off
+  /// entirely. Pinning this fingerprint is the correct answer for a
+  /// self-signed cert, and storing it is the first half of doing that.
+  ///
+  /// USING it is collector work in phb-bas and has not happened yet. A value
+  /// here does not mean verification is on - it means somebody recorded what
+  /// the certificate was.
+  ///
+  /// Normalised on write, unlike niagaraStationName and baseUrl: a fingerprint
+  /// is a number written in hex, so case and colons carry no meaning and two
+  /// spellings of one value would defeat the comparison this exists for.
+  /// The 64-hex-character shape is enforced by a CHECK constraint in the
+  /// migration, which Prisma does not model.
+  tlsSha256 String? @map("tls_sha256")
+
   hostId         String? @map("host_id")
   model          String?
   niagaraVersion String? @map("niagara_version")

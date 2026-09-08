@@ -16,6 +16,7 @@ export function EmployeeControls({
   isPlatformAdmin,
   modules,
   grantedModuleKeys,
+  moduleAdminKeys,
 }: {
   employeeId: string;
   isSelf: boolean;
@@ -23,6 +24,8 @@ export function EmployeeControls({
   isPlatformAdmin: boolean;
   modules: { key: string; displayName: string }[];
   grantedModuleKeys: string[];
+  /** Subset of grantedModuleKeys whose grant carries is_module_admin (B7.2). */
+  moduleAdminKeys: string[];
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -63,6 +66,17 @@ export function EmployeeControls({
     );
   }
 
+  function setAdmin(moduleKey: string, isModuleAdmin: boolean) {
+    void call(
+      `/api/admin/employees/${employeeId}/grants/${encodeURIComponent(moduleKey)}/admin`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isModuleAdmin }),
+      },
+    );
+  }
+
   return (
     <section className="mt-6 rounded border border-[var(--border)]">
       <h2 className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-semibold">
@@ -75,16 +89,42 @@ export function EmployeeControls({
           <div className="mt-2 space-y-2">
             {modules.map((module) => {
               const granted = grantedModuleKeys.includes(module.key);
+              const isAdmin = moduleAdminKeys.includes(module.key);
               return (
-                <label key={module.key} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={granted}
-                    disabled={busy}
-                    onChange={() => setGrant(module.key, !granted)}
-                  />
-                  {module.displayName}
-                </label>
+                <div key={module.key}>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={granted}
+                      disabled={busy}
+                      onChange={() => setGrant(module.key, !granted)}
+                    />
+                    {module.displayName}
+                  </label>
+
+                  {/*
+                    Administrator of this ONE module - for Building Automation,
+                    the Settings tab. Not the platform admin flag below, which is
+                    a much larger thing.
+
+                    Only offered once access is granted. The server refuses it
+                    outright without a grant, because "administrator of a module
+                    you cannot open" is not a state worth being able to reach,
+                    and a checkbox that quietly granted access as a side effect
+                    would do two things the audit log records as one.
+                  */}
+                  {granted && (
+                    <label className="mt-1 ml-6 flex items-center gap-2 text-xs text-[var(--muted)]">
+                      <input
+                        type="checkbox"
+                        checked={isAdmin}
+                        disabled={busy}
+                        onChange={() => setAdmin(module.key, !isAdmin)}
+                      />
+                      Can change settings for {module.displayName}
+                    </label>
+                  )}
+                </div>
               );
             })}
             {modules.length === 0 && (

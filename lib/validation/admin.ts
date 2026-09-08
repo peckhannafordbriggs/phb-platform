@@ -13,6 +13,14 @@ export const grantBodySchema = z.object({
   moduleKey: z.string().trim().min(1).max(100),
 });
 
+/**
+ * The module-admin toggle (B7.2). The module comes from the URL, so only the
+ * new value is in the body.
+ */
+export const moduleAdminBodySchema = z.object({
+  isModuleAdmin: z.boolean(),
+});
+
 export const statusBodySchema = z.object({
   status: employeeStatusSchema,
 });

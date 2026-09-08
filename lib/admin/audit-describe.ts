@@ -148,6 +148,86 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "grant.removed": ({ actor, target, module }) =>
     `${actor} revoked ${module} from ${target ?? "an employee"}`,
 
+  // "administrator for", not "administrator" - the sentence has to survive
+  // being read next to employee.admin_granted without the two looking alike.
+  "grant.admin_added": ({ actor, target, module }) =>
+    `${actor} made ${target ?? "an employee"} an administrator for ${module}`,
+
+  // Named subjects, because "created a project" with two UUIDs beside it is the
+  // exact unreadability audit-describe exists to fix. The name comes from
+  // metadata rather than a join: the row it describes may since have been
+  // renamed or deleted, and the log should say what happened at the time.
+  "bas.project_created": ({ actor, meta }) =>
+    `${actor} created the project ${stringField(meta, "name") ?? "(unnamed)"}`,
+
+  "bas.project_updated": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a project";
+    const previous = stringField(meta, "previousName");
+    return previous !== null && previous !== name
+      ? `${actor} renamed the project ${previous} to ${name}`
+      : `${actor} updated the project ${name}`;
+  },
+
+  "bas.project_deleted": ({ actor, meta }) =>
+    `${actor} deleted the project ${stringField(meta, "name") ?? "(unnamed)"}`,
+
+  "bas.building_created": ({ actor, meta }) =>
+    `${actor} added the building ${stringField(meta, "name") ?? "(unnamed)"}` +
+    `${stringField(meta, "timezone") !== null ? ` (${stringField(meta, "timezone")})` : ""}`,
+
+  "bas.building_updated": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a building";
+    const previousName = stringField(meta, "previousName");
+    const zone = stringField(meta, "timezone");
+    const previousZone = stringField(meta, "previousTimezone");
+
+    // The timezone is called out ahead of a rename. A rename is cosmetic; a
+    // zone change silently re-reads every stored reading in that building.
+    if (zone !== null && previousZone !== null && zone !== previousZone) {
+      return `${actor} changed ${name}'s timezone from ${previousZone} to ${zone}`;
+    }
+    return previousName !== null && previousName !== name
+      ? `${actor} renamed the building ${previousName} to ${name}`
+      : `${actor} updated the building ${name}`;
+  },
+
+  "bas.building_deleted": ({ actor, meta }) =>
+    `${actor} deleted the building ${stringField(meta, "name") ?? "(unnamed)"}`,
+
+  "bas.station_created": ({ actor, meta }) =>
+    `${actor} registered the station ${stringField(meta, "niagaraStationName") ?? "(unnamed)"}`,
+
+  "bas.station_updated": ({ actor, meta }) => {
+    const name = stringField(meta, "niagaraStationName") ?? "a station";
+    const previous = stringField(meta, "previousNiagaraStationName");
+    const mode = stringField(meta, "connectionMode");
+    const previousMode = stringField(meta, "previousConnectionMode");
+
+    // A renamed Niagara station is not cosmetic - that string is in every oBIX
+    // URL - so it is called out ahead of a mode change.
+    if (previous !== null && previous !== name) {
+      return `${actor} renamed the station ${previous} to ${name}`;
+    }
+    if (mode !== null && previousMode !== null && mode !== previousMode) {
+      return `${actor} changed how ${name} is reached, from ${previousMode} to ${mode}`;
+    }
+    return `${actor} updated the station ${name}`;
+  },
+
+  "bas.station_deleted": ({ actor, meta }) =>
+    `${actor} deleted the station ${stringField(meta, "niagaraStationName") ?? "(unnamed)"}`,
+
+  // Says THAT it changed and who did it. The value is not here and never will
+  // be - see the note on the action in lib/audit.ts.
+  "bas.credential_set": ({ actor, meta }) =>
+    `${actor} set the Niagara login for station ${stringField(meta, "stationId") ?? "(unknown)"}`,
+
+  "bas.credential_cleared": ({ actor, meta }) =>
+    `${actor} removed the stored Niagara login for station ${stringField(meta, "stationId") ?? "(unknown)"}`,
+
+  "grant.admin_removed": ({ actor, target, module }) =>
+    `${actor} removed ${target ?? "an employee"}'s administrator access for ${module}`,
+
   "position.created": ({ actor, meta }) => {
     const name = stringField(meta, "name");
     return `${actor} added the position ${name ?? "(unnamed)"}`;
@@ -361,6 +441,19 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "employee.admin_revoked": "Administrator access removed",
   "grant.added": "Module granted",
   "grant.removed": "Module revoked",
+  "grant.admin_added": "Made a module administrator",
+  "grant.admin_removed": "Module administrator access removed",
+  "bas.project_created": "BAS project created",
+  "bas.project_updated": "BAS project updated",
+  "bas.project_deleted": "BAS project deleted",
+  "bas.building_created": "BAS building added",
+  "bas.building_updated": "BAS building updated",
+  "bas.building_deleted": "BAS building deleted",
+  "bas.station_created": "BAS station registered",
+  "bas.station_updated": "BAS station updated",
+  "bas.station_deleted": "BAS station deleted",
+  "bas.credential_set": "BAS station login set",
+  "bas.credential_cleared": "BAS station login removed",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

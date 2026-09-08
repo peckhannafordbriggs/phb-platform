@@ -9,6 +9,8 @@
  * The sidebar shows ONE "Building Automation" entry regardless. Tabs are
  * navigation within a module, not modules; `components/sidebar.tsx` renders from
  * the `modules` table and knows nothing about this file.
+ *
+ * Settings is last and is `adminOnly`. See `visibleBasTabs`.
  */
 export interface BasTab {
   /** A real route. Bookmarkable, refreshable, middle-clickable. */
@@ -16,6 +18,16 @@ export interface BasTab {
   label: string;
   /** One line under the heading, so a tab says what it is for before it loads. */
   blurb: string;
+  /**
+   * Needs the BAS grant's `is_module_admin` flag, not just the grant (B7.2).
+   *
+   * This hides the tab. It does not protect it - `visibleBasTabs` is a
+   * rendering decision and docs/04 is explicit that hiding a nav item is not
+   * authorization. The page calls `requireModuleAdmin` and returns 404, and so
+   * does every route it fetches. What this buys is that the tab bar does not
+   * announce the existence of a surface the 404 is there to conceal.
+   */
+  adminOnly?: boolean;
 }
 
 export const BAS_TABS: readonly BasTab[] = [
@@ -33,7 +45,25 @@ export const BAS_TABS: readonly BasTab[] = [
     // Was a list of what is on the screen. The screen shows it.
     blurb: "",
   },
+  {
+    href: "/bas/settings",
+    label: "Settings",
+    // Read-only in B7.2. The blurb says what the screen is FOR rather than what
+    // it can do, so it does not have to be rewritten when B7.3 adds the forms.
+    blurb: "Which buildings and controllers this platform collects from.",
+    adminOnly: true,
+  },
 ];
+
+/**
+ * The tabs this viewer should be offered.
+ *
+ * `canAdminister` comes from `hasModuleAdmin` in the page that renders the
+ * shell - never from anything the browser sent.
+ */
+export function visibleBasTabs(canAdminister: boolean): readonly BasTab[] {
+  return BAS_TABS.filter((tab) => tab.adminOnly !== true || canAdminister);
+}
 
 /**
  * The tab with this href, or a loud failure.

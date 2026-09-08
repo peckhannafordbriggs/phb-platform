@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireModuleAccess } from "@/lib/authz";
+import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { BasShell } from "../bas-shell";
 import { PointExplorer } from "../point-explorer";
@@ -19,8 +19,13 @@ export default async function BasPointsPage() {
   const access = await requireModuleAccess(BAS_MODULE_KEY);
   if (!access.ok) notFound();
 
+  // Whether to OFFER the Settings tab. Not a guard - /bas/settings runs
+  // requireModuleAdmin itself and 404s. This only stops the tab bar naming a
+  // surface that the 404 exists to keep quiet about.
+  const canAdminister = await hasModuleAdmin(access.viewer.id, BAS_MODULE_KEY);
+
   return (
-    <BasShell blurb={basTab("/bas/points").blurb}>
+    <BasShell blurb={basTab("/bas/points").blurb} canAdminister={canAdminister}>
       <PointExplorer />
     </BasShell>
   );

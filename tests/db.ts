@@ -190,6 +190,24 @@ export async function grantModule(
   });
 }
 
+/**
+ * Give an existing grant the module-admin flag (B7.2).
+ *
+ * Separate from `grantModule` and never folded into it. Every test that has to
+ * prove a BAS user WITHOUT admin rights gets a 404 depends on the plain grant
+ * staying plain, and a helper that quietly made every grant an admin one would
+ * turn those negative tests green while proving nothing.
+ */
+export async function grantModuleAdmin(
+  employeeId: string,
+  moduleKey = "bas",
+): Promise<void> {
+  await testDb.moduleGrant.update({
+    where: { employeeId_moduleKey: { employeeId, moduleKey } },
+    data: { isModuleAdmin: true },
+  });
+}
+
 export async function revokeModule(
   employeeId: string,
   moduleKey = "change-orders",

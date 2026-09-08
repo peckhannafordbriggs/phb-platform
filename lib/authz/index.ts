@@ -2,6 +2,8 @@ export {
   requireAuthenticated,
   requireEmployee,
   requireModuleAccess,
+  requireModuleAdmin,
+  hasModuleAdmin,
   requireAdmin,
   listGrantedModules,
   type AccessResult,

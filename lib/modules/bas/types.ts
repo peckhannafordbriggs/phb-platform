@@ -292,3 +292,166 @@ export interface PointExplorer {
   trendTruncated: boolean;
   dataGaps: DataGapRow[];
 }
+
+// ---------------------------------------------------------------------------
+// Settings (B7.2) - the read-only hierarchy.
+// ---------------------------------------------------------------------------
+
+/**
+ * How a station's history reaches us, as the Settings tree reports it.
+ *
+ * `unconfigured` is not a value in the database. It is the pair
+ * `connection_mode = 'via_parent'` with no `parent_station_id` - a station that
+ * says its history arrives through another station, and does not say which. The
+ * add_bas_projects migration deliberately allows that row rather than
+ * CHECK-ing it away, because it is what a JACE linked in Workbench and not yet
+ * labelled here actually looks like.
+ */
+export type StationReach = "direct" | "via_parent" | "unconfigured";
+
+/**
+ * What is known about a stored Niagara login - and it is deliberately not much.
+ *
+ * The username, that a password exists, and when it was last set. NEVER the
+ * password and never the ciphertext: no API returns either, and
+ * tests/bas-credentials.test.ts walks every settings route to prove it.
+ *
+ * `passwordSet` is always true when this object is present. It is a literal
+ * rather than a boolean because the alternative - a credential row with no
+ * password - is not a state that can exist, and a `false` here would invite a
+ * caller to handle one.
+ */
+export interface SettingsCredential {
+  username: string;
+  passwordSet: true;
+  passwordUpdatedAt: string;
+}
+
+/**
+ * Whether the station is actually collecting, derived from what the collector
+ * already wrote.
+ *
+ * THIS IS WHY THERE IS NO "TEST CONNECTION" BUTTON. Such a button would open a
+ * socket from wherever the platform is running, which works on a laptop on the
+ * building network and breaks permanently the moment this moves to Azure -
+ * Azure cannot reach the building network, and Tridium's own guidance is that a
+ * station is never internet-exposed. Only the collector can talk to a JACE.
+ *
+ * These three facts come from bas_ingest_runs and bas_sync_checkpoints, so they
+ * are true from anywhere, including from Azure, and they answer the question
+ * the button was for: is data arriving.
+ */
+export interface StationActivity {
+  /** When a collector run last touched this station, whatever the outcome. */
+  lastRunAt: string | null;
+  /** That run's status: ok, partial, failed, running. */
+  lastRunStatus: string | null;
+  /** Newest record timestamp across this station's points. The real answer. */
+  newestRecordAt: string | null;
+}
+
+export interface SettingsStation {
+  stationId: string;
+  /** Exactly as Niagara spells it. Never normalised - it is in every oBIX URL. */
+  niagaraStationName: string;
+  /** What a person calls it. Null means nobody has, and the UI shows the Niagara name. */
+  displayName: string | null;
+  reach: StationReach;
+  /** Only meaningful when reach is 'direct'. Stored verbatim, trailing slash and all. */
+  baseUrl: string | null;
+  /** The station importing this one's history, when reach is 'via_parent'. */
+  parentStationName: string | null;
+  parentStationId: string | null;
+  /**
+   * SHA-256 of the station's TLS certificate, or null.
+   *
+   * Returned in full, unlike anything to do with the credential. A certificate
+   * fingerprint is public by construction - anyone who can reach the station
+   * can compute it - and its whole purpose is to be compared against.
+   */
+  tlsSha256: string | null;
+  isActive: boolean;
+  activePoints: number;
+  totalPoints: number;
+  lastSeenAt: string | null;
+  /** True when this station has a credential row. Never the credential itself. */
+  hasCredential: boolean;
+  credential: SettingsCredential | null;
+  activity: StationActivity;
+}
+
+export interface SettingsBuilding {
+  siteId: string;
+  name: string;
+  timezone: string;
+  address: string | null;
+  stations: SettingsStation[];
+}
+
+export interface SettingsProject {
+  projectId: string;
+  name: string;
+  orgName: string;
+  buildings: SettingsBuilding[];
+}
+
+export interface SettingsOrg {
+  orgId: string;
+  name: string;
+}
+
+export interface BasSettingsTree {
+  /**
+   * Organisations a project can be created under. One row today.
+   *
+   * Carried in the tree so the create-project form has something to bind to
+   * without a second round trip. Orgs are NOT managed on this screen - there is
+   * no form for them, and a deployment with none disables project creation
+   * rather than inventing one.
+   */
+  orgs: SettingsOrg[];
+
+  projects: SettingsProject[];
+
+  /**
+   * Stations the hierarchy does not account for.
+   *
+   * Empty today and structurally so: `bas_stations.site_id` and
+   * `bas_sites.project_id` are both NOT NULL, so every station has a building
+   * and every building has a project. The bucket exists anyway because the
+   * requirement is that a station collecting data is never invisible here, and
+   * that has to be a property of the code rather than of a constraint someone
+   * may relax later. `stationsAccountedFor` is what proves it.
+   */
+  unassignedStations: SettingsStation[];
+
+  /**
+   * Every station row in the database, counted independently of the tree.
+   *
+   * The screen compares this with what it rendered. If they ever disagree the
+   * banner says so, because a tree that quietly drops a station is exactly the
+   * silent gap this module keeps finding weeks late.
+   */
+  stationsAccountedFor: { rendered: number; inDatabase: number };
+
+  /**
+   * Whether BAS_CREDENTIAL_KEY is configured on this server.
+   *
+   * Read lazily. A missing key disables credential management and NOTHING else
+   * - the tree, the projects, the buildings and the station forms all still
+   * work. The screen says so rather than failing a save with an error nobody
+   * can act on from a browser.
+   */
+  credentialStorage: { available: boolean; message: string | null };
+
+  /**
+   * Every station, flat, for the parent picker. Includes stations in other
+   * buildings: a central station commonly imports history for JACEs across a
+   * whole property, which is the arrangement D12 assumes.
+   */
+  allStations: Array<{
+    stationId: string;
+    niagaraStationName: string;
+    siteName: string;
+  }>;
+}

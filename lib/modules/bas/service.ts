@@ -56,12 +56,16 @@ import type {
  * scoping arrives this reads `bas_site_grant` and returns a list, `siteFilter`
  * turns it into a WHERE clause, and nothing else moves.
  *
+ * Exported so the Settings service (B7.2) uses this exact function rather than
+ * its own copy. Two entitlement functions is how one of them gets updated and
+ * the other does not.
+ *
  * Kept rigidly separate from SELECTION below. They look alike - both end up as a
  * list of site ids - and collapsing them is how a filter becomes an
  * authorization hole: a screen that asked for one building and got it would
  * work identically whether the employee was entitled to it or not.
  */
-async function basSiteScope(
+export async function basSiteScope(
   viewer: Viewer,
 ): Promise<{ employeeId: string; entitled: bigint[] | null }> {
   return { employeeId: viewer.id, entitled: null };
