@@ -76,8 +76,12 @@ choice isn't "store it or read it live" — it's "store it or lose it."
 **And it is why the Azure database must never be stopped.** The container app can scale to
 zero freely. A stopped database means the collector cannot write, and everything past ~42
 hours is destroyed at the station while nothing is watching. Overnight is survivable. A
-weekend — about 61 hours — is not. This has already happened once: a closed laptop over the
-weekend of 21–24 August cost 22.6 hours per point.
+weekend is not, and that is now measured rather than estimated: 64.3 h, 64.5 h and 113.4 h
+of real silence. This has already happened three times, costing 22.6, 22.8 and 71.7 hours
+per point. There are two causes: a sleeping laptop, which is the whole of the August
+pattern, and — new in September, and never written down before — a laptop away from the
+building network, which collects nothing even awake and firing perfectly on cadence,
+because the JACE is a private address and there is no VPN.
 
 **If you undo it,** you need a different place for the data to live, not no place.
 

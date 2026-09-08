@@ -72,11 +72,13 @@ database is the only copy of that data in existence.
 - The web app can be stopped or scaled to zero freely.
 - **The PostgreSQL database cannot.** A stopped database means the collector can't write,
   and data is destroyed at the source while nothing is watching.
-- Overnight is survivable. A weekend — about 61 hours — is not.
+- Overnight is survivable. A weekend is not — measured at 64.3 h, 64.5 h and 113.4 h.
 - Backups are a correctness requirement, not hygiene.
 
-This has already cost real data once: a closed laptop over the weekend of 21–24 August
-destroyed 22.6 hours per point.
+This has already cost real data three times: 22.6 hours per point over 21–24 August,
+22.8 over 28–31 August, and 71.7 over 3–8 September. Two causes, not one — a sleeping
+laptop, and a laptop away from the building network, which collects nothing even while
+awake and firing on cadence. See `docs/09-bas-what-is-built.md`, *Proven in operation*.
 
 ---
 
