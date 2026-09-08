@@ -1524,6 +1524,204 @@ Then re-run `npx prisma migrate deploy`.
 
 ---
 
+# Deploying to Azure (Phase 7 Part B)
+
+The subscription and resource group are **not** in this repository, and a test enforces
+that (`tests/deploy-guards.test.ts`). They live in `infra/main.parameters.json`, which
+is gitignored, and in the GitHub Actions **variables**. Get them from whoever owns the
+subscription, or from `az account show`.
+
+## Contributor on the resource group is not enough to deploy this
+
+Verified against the real subscription on 2026-09-08, and it is the thing that will stop
+a first deploy dead. `Contributor` scoped to a resource group cannot do two of the things
+`infra/main.bicep` needs, and neither failure is obvious from the role name.
+
+**1. It cannot register a resource provider.** Registration is a subscription-scoped
+action. Every provider this deployment needs was `NotRegistered` on a new subscription:
+
+```bash
+az provider show -n Microsoft.App --query registrationState -o tsv
+```
+
+Attempting it as an RG Contributor fails:
+
+```
+AuthorizationFailed: The client '<user>' does not have authorization to perform
+action 'Microsoft.OperationalInsights/register/action' over scope
+'/subscriptions/<id>'
+```
+
+The six that must be `Registered` before deploying: `Microsoft.App`,
+`Microsoft.DBforPostgreSQL`, `Microsoft.ContainerRegistry`, `Microsoft.KeyVault`,
+`Microsoft.OperationalInsights`, `Microsoft.ManagedIdentity`.
+
+**2. It cannot create a role assignment.** `Microsoft.Authorization/*/Write` is in
+Contributor's `notActions`, and the template creates two — `AcrPull` on the registry and
+`Key Vault Secrets User` on the vault — without which the container app cannot pull its
+image or read its secrets. `az deployment group what-if` reports it before anything is
+created:
+
+```
+InvalidTemplateDeployment: Authorization failed for template resource ... of type
+'Microsoft.Authorization/roleAssignments' ... does not have permission to perform
+action 'Microsoft.Authorization/roleAssignments/write'
+```
+
+**The fix is one of two grants, and it is a decision, not a formality:**
+
+| Grant | What it allows | Why you might prefer it |
+|---|---|---|
+| `User Access Administrator` on the **resource group**, plus provider registration done once by a subscription Owner | Exactly the two role assignments in the template, and nothing outside the group | Narrower. The provider registration is one-off and never needed again |
+| `Owner` on the **resource group**, plus the same one-off provider registration | The above, and anything else added later | Fewer round trips if the template grows |
+
+Provider registration cannot be delegated at resource-group scope at all — it is
+subscription-level by definition, so it is always somebody else's one-off action.
+
+**Do not work around this by removing the role assignments from the template.** Granting
+the identity its two roles by hand afterwards produces a deployment whose output does not
+describe the running system, and the next `az deployment group create` does not put them
+back — it is a resource that exists in Azure and in nobody's record.
+
+## What to ask IT for, and when
+
+Two requests, and the order matters because the second one cannot be written until the
+first has been deployed.
+
+**Before deploying** — the access above.
+
+**After deploying** — the federated credential and the redirect URI. Both need values
+that do not exist until the managed identity and the container app do, and both come
+from the deployment outputs:
+
+```bash
+az deployment group show \
+  --resource-group <resource-group> \
+  --name main \
+  --query properties.outputs
+```
+
+`managedIdentityClientId`, `managedIdentityPrincipalId` and `ssoRedirectUri` are the
+three the request needs. Nothing about this step is guessable in advance — a federated
+credential is bound to a specific identity's issuer and subject, and an Entra redirect
+URI must match the deployed hostname exactly.
+
+## Deploy order
+
+`infra/README.md` has the canonical list. The part worth repeating here is why it is not
+one command: **the container app needs its own URL before Auth.js can build a callback**,
+so `authUrl` is empty on the first pass and set on a second deployment. A first pass with
+`authUrl` already guessed will produce a sign-in loop that looks like an SSO
+misconfiguration.
+
+## Verify the deployment before migrating
+
+In this order. Step 2 is the one with a closing window.
+
+**1. The database is not going to stop accepting writes.** The container app scales to
+zero by design; the database must not, because the BAS collector's source data is gone
+from the JACE after about 42 hours.
+
+```bash
+az postgres flexible-server show \
+  --resource-group <resource-group> --name <server> \
+  --query "{state:state, tier:sku.tier, autoGrow:storage.autoGrow, sizeGb:storage.storageSizeGb}"
+```
+
+`state` must be `Ready`. **There is no auto-stop to disable** — PostgreSQL Flexible
+Server has no auto-stop, auto-pause or auto-shutdown property, and no such flag on
+`az postgres flexible-server create`. Only a manual
+`az postgres flexible-server stop` exists, which a person has to run and which
+auto-restarts after seven days. (Auto-pause is an Azure SQL serverless feature. It does
+not apply here — do not go looking for it again.)
+
+`autoGrow` is the real exposure and Azure defaults it to `Disabled`. A full disk makes
+the server refuse writes, which for the collector is the same outcome as a stopped
+server, and recovery needs a person to notice and resize. See
+`postgresStorageAutoGrow` in `infra/main.bicep`.
+
+Confirm no cost automation can stop it:
+
+```bash
+az consumption budget list --query "[].{name:name, amount:amount, notifications:notifications}"
+```
+
+The budget must have **notification contacts only**. A budget with an action group
+attached can trigger automation, and this server is not something a spending threshold
+may switch off.
+
+**2. The collation, by actual values.** This is the step with a deadline: the cheap fix
+is to drop and recreate the database, and it is available only until migrations run.
+
+```bash
+DATABASE_URL="postgresql://...?sslmode=require" npm run db:verify:prod
+```
+
+`scripts/verify-prod-database.ts` is read-only and asserts on **behaviour, not on the
+collation name**: it asks the database to sort `Administrative` and `AI` and checks which
+comes first. Reading back `en_US.utf8` proves the name was accepted, not that comparison
+behaves the way five `ORDER BY name ASC` clauses need — the ICU and libc providers
+disagree, and a locale-aware *name* with bytewise *behaviour* is exactly the failure this
+catches. The full explanation is under *Deployment: check this when the Azure database is
+created* below.
+
+**3. `BOOTSTRAP_ADMIN_EMAIL` holds every intended admin, before the seed runs.** If it is
+wrong when the seed runs, production comes up with zero admins and there is **no UI path
+to fix it** — see *Zero admins after seeding*.
+
+```bash
+az containerapp show --name <app> --resource-group <resource-group> \
+  --query "properties.template.containers[0].env[?name=='BOOTSTRAP_ADMIN_EMAIL'].value" -o tsv
+```
+
+Read the addresses one at a time against the intended list. A missing address is a
+lockout; a typo is a lockout that looks like a working deployment until somebody tries to
+sign in.
+
+**4. The send gate is closed.** `PHB_ALLOW_SEND` must be `false` — sending has not been
+verified in the deployed environment, and `false` is what the template pins.
+`tests/deploy-guards.test.ts` asserts the template; this asserts the running app.
+
+```bash
+az containerapp show --name <app> --resource-group <resource-group> \
+  --query "properties.template.containers[0].env[?name=='PHB_ALLOW_SEND'].value" -o tsv
+```
+
+Also confirm `GRAPH_CLIENT_SECRET` is absent entirely, not empty:
+
+```bash
+az containerapp show --name <app> --resource-group <resource-group> \
+  --query "properties.template.containers[0].env[].name" -o tsv | grep GRAPH
+```
+
+`GRAPH_CLIENT_SECRET` must not appear. The credential factory refuses to start if it is
+set with `NODE_ENV=production`, so a deployment that has it fails closed — but it fails
+at boot, which is a worse way to learn this than a one-line check.
+
+## GitHub Actions variables
+
+The Deploy workflow is skipped — a grey check, not a red one — until the first three are
+set. Settings → Secrets and variables → Actions → **Variables**:
+
+| Variable | Where it comes from |
+|---|---|
+| `AZURE_CLIENT_ID` | The **deploy** app registration's client ID, federated to this repo. Not the SSO or Graph one |
+| `AZURE_TENANT_ID` | `az account show --query tenantId` |
+| `AZURE_SUBSCRIPTION_ID` | `az account show --query id` |
+| `AZURE_RESOURCE_GROUP` | Chosen when the group was created |
+| `AZURE_CONTAINER_APP` | `containerAppName` output |
+| `AZURE_REGISTRY` | `registryName` output |
+| `AZURE_POSTGRES_SERVER` | `postgresServerName` output |
+
+One **secret**, not a variable: `PRODUCTION_DATABASE_URL`, used only by
+`prisma migrate deploy`. Everything else the app reads comes from Key Vault at runtime.
+
+These are identifiers, not credentials, and they are variables rather than secrets
+because the `secrets` context cannot be read in a job-level `if`. That is why the job can
+skip itself cleanly instead of failing.
+
+---
+
 ## A deploy fails
 
 **Symptom.** The Deploy workflow is red, or it is green and the site still serves the

@@ -18,7 +18,8 @@
     "seed:dev": "tsx prisma/seed-dev.ts",
     "db:test:setup": "tsx scripts/setup-test-db.ts",
     "bas:verify": "tsx scripts/bas-verify-import.ts",
-    "bas:oracle": "tsx scripts/bas-health-oracle.ts"
+    "bas:oracle": "tsx scripts/bas-health-oracle.ts",
+    "db:verify:prod": "tsx scripts/verify-prod-database.ts"
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",

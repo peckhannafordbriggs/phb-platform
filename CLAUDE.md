@@ -163,8 +163,32 @@ self-provisioning and onboarding, employees / grants / audit, authorization midd
 admin screen, Graph connection, read-only mailbox with folder tree and search, and draft
 review / edit / send verified end to end.
 
-**Phase 7 Part A complete** — Dockerfile, CI, Bicep. Part B waits on the Azure
-subscription.
+**Phase 7 Part A complete** — Dockerfile, CI, Bicep.
+
+**Part B is BLOCKED ON AZURE ACCESS, not on the subscription.** The subscription and an
+empty `eastus` resource group exist and `Contributor` on that group is confirmed working.
+Contributor is not enough to deploy this template, and this was measured rather than
+inferred: resource provider registration is a subscription-scoped action and all six
+providers are `NotRegistered`, and the two role assignments in the template
+(`AcrPull`, `Key Vault Secrets User`) need `Microsoft.Authorization/roleAssignments/write`,
+which is in Contributor's `notActions`. `what-if` refuses the deployment on the second
+one before creating anything. The unblock is `User Access Administrator` or `Owner` **on
+the resource group** plus a one-off provider registration by someone with subscription
+scope. Do not work around it by deleting the role assignments from the Bicep — that
+produces two permissions that exist in Azure and in nobody's record.
+
+Everything not requiring Azure is done and verified: the collation is explicit in the
+Bicep *and* checked by behaviour in `scripts/verify-prod-database.ts`
+(`npm run db:verify:prod`) rather than by reading the collation name back; the auto-stop
+question is settled — PostgreSQL Flexible Server **has no auto-stop property**, so the
+reachable failure is a full disk and `postgresStorageAutoGrow` is the guard; the budget
+carries notification contacts only and no action group, so no spending threshold can stop
+the database the BAS collector writes into. `runbook.md` has the whole procedure and the
+verification order under *Deploying to Azure (Phase 7 Part B)*.
+
+The subscription id and resource group are in `infra/main.parameters.json` (gitignored)
+and CI variables only; `tests/deploy-guards.test.ts` fails the build if either is
+committed.
 
 **Phase 8 implemented, live verification outstanding.** Reply / reply-all /
 forward via Graph's own `createReply*` operations, compose from scratch, move,

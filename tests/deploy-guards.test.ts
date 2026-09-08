@@ -222,6 +222,60 @@ describe("no deployment file hardcodes an organisation", () => {
       expect(source, `${file} must not embed the SSO client id`).not.toContain(
         "220921c1-f23e-4d01-b354-736884ba3d00",
       );
+      // The subscription and resource group are chosen on the az command line
+      // and set as CI variables. They are not secret, but committing them is
+      // what turns a generic template into this company's template.
+      expect(source, `${file} must not embed the subscription id`).not.toContain(
+        "3d468153-f247-431b-a1b2-8055517630fa",
+      );
+      expect(source, `${file} must not embed the resource group`).not.toContain(
+        "rg-phb-platform-prod",
+      );
     }
+  });
+
+  it("keeps the filled-in parameters file out of git", async () => {
+    const fs = await import("node:fs/promises");
+    const gitignore = await fs.readFile(path.join(projectRoot, ".gitignore"), "utf8");
+
+    // This is the file that legitimately holds the subscription, tenant and
+    // admin addresses. The check above only passes because it is ignored.
+    expect(gitignore).toContain("infra/main.parameters.json");
+  });
+});
+
+describe("the database collation is set explicitly", () => {
+  /**
+   * Every department and position list is ORDER BY name ASC, so the ordering
+   * belongs to the database. `C` and `POSIX` compare raw bytes and sort `AI`
+   * ahead of `Administrative`. It cannot be corrected after the database has
+   * data in it without a dump and restore, which is why it is asserted at
+   * deploy-preparation time rather than discovered afterwards.
+   *
+   * This tests the TEMPLATE. It cannot test the running database, because the
+   * collation a server actually applies is not necessarily the one it was
+   * asked for - scripts/verify-prod-database.ts does that against real values,
+   * and has to be run against the deployed server before migrating.
+   */
+  it("names a locale-aware collation, not C or POSIX", async () => {
+    const bicep = await import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+    const match = /collation:\s*'([^']+)'/.exec(bicep);
+    expect(match, "infra/main.bicep must set a collation explicitly").not.toBeNull();
+    expect(["C", "POSIX"]).not.toContain(match?.[1]);
+    expect(match?.[1]).toBe("en_US.utf8");
+  });
+
+  it("has a verification script that asserts on values rather than the name", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "scripts/verify-prod-database.ts"), "utf8"),
+    );
+
+    // The ordering assertion, not a datcollate string comparison, is the test.
+    expect(source).toContain("'Administrative'");
+    expect(source).toContain("'AI'");
+    expect(source).toMatch(/ORDER BY name/);
   });
 });

@@ -91,6 +91,13 @@ param postgresSkuTier string
 @description('Provisioned storage in GB.')
 param postgresStorageGb int = 32
 
+@description('Grow storage automatically when it approaches full. Defaults to Disabled, which is also the Azure default. A full disk makes the server refuse writes, which for this deployment is indistinguishable from the server being down - see the note above the resource.')
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param postgresStorageAutoGrow string = 'Disabled'
+
 @description('Administrator login for the database server. Not an email address, and not a person.')
 param postgresAdminUsername string
 
@@ -261,6 +268,33 @@ resource keyVaultRead 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 // PostgreSQL Flexible Server
 // ---------------------------------------------------------------------------
 
+// THIS SERVER MUST NOT STOP ACCEPTING WRITES.
+//
+// The container app scales to zero freely - a cold start costs a few seconds.
+// The database is not equivalent: the BAS collector writes into bas_readings on
+// a cadence, and the JACE only retains about 42 hours before the controller
+// rolls the data off. Time the database spends unable to accept a write is data
+// that stops existing anywhere. See docs/08-bas-and-niagara.md.
+//
+// Two mechanisms could take writes away, and they are NOT the same thing:
+//
+//   Auto-stop. Does not exist for PostgreSQL Flexible Server. There is no
+//   auto-stop, auto-pause or auto-shutdown property on this resource type and
+//   no such flag on `az postgres flexible-server create` - only a MANUAL
+//   `az postgres flexible-server stop`, which a person has to run and which
+//   auto-restarts after 7 days. (Auto-pause is an Azure SQL serverless
+//   feature. Do not go looking for it here again.) Nothing below disables it
+//   because there is nothing to set.
+//
+//   A full disk. This one is real and reachable. At 100% the server refuses
+//   writes, which for the collector is indistinguishable from the server being
+//   down, and recovery needs a person to notice and resize. `autoGrow` is the
+//   guard, and Azure defaults it to Disabled - hence the explicit parameter
+//   rather than an omission that reads as a decision nobody made.
+//
+// No budget action, cost policy or automation is attached to this server. The
+// budget below only sends mail; a budget that could stop a resource would put
+// the paragraph above at the mercy of a spending threshold.
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: postgresServerName
   location: location
@@ -275,6 +309,7 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
     administratorLoginPassword: postgresAdminPassword
     storage: {
       storageSizeGB: postgresStorageGb
+      autoGrow: postgresStorageAutoGrow
     }
     backup: {
       backupRetentionDays: 7

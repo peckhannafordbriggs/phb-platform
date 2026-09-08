@@ -41,9 +41,28 @@ az deployment group create \
 The two `@secure()` parameters are passed on the command line and never written to a
 file. Azure does not log the value of a secure parameter.
 
-**`Contributor` on the resource group is required.** It is the permission most often
-forgotten when a subscription is created, and without it every command above fails
-after the parameters have been filled in.
+**`Contributor` on the resource group is NOT sufficient.** Verified against a real
+subscription, not inferred from the role name. Two things in this template are outside
+it:
+
+- **Resource provider registration** is a subscription-scoped action. On a new
+  subscription all six providers this template needs are `NotRegistered`, and an RG
+  Contributor gets `AuthorizationFailed` on `.../register/action`. Someone with
+  subscription scope has to do it once.
+- **The two role assignments** (`AcrPull`, `Key Vault Secrets User`) need
+  `Microsoft.Authorization/roleAssignments/write`, which is in Contributor's
+  `notActions`. `az deployment group what-if` reports this before creating anything.
+
+So the deploying principal needs `User Access Administrator` (or `Owner`) **on the
+resource group**, plus that one-off provider registration. The full detail, the exact
+error text, and the two grant options are under *Deploying to Azure (Phase 7 Part B)* in
+`runbook.md`.
+
+Run `what-if` first — it catches both without creating anything:
+
+```bash
+az deployment group what-if   --subscription <subscription-id>   --resource-group <resource-group>   --template-file infra/main.bicep   --parameters @infra/main.parameters.json   --parameters postgresAdminPassword="$PGPASSWORD" authSecret="$AUTH_SECRET"
+```
 
 ## What gets created
 
@@ -56,7 +75,7 @@ after the parameters have been filled in.
   `Key Vault Secrets User` on the vault
 - Optionally a resource-group budget (`enableBudget`, off by default)
 
-## Three things that are deliberate
+## Four things that are deliberate
 
 **The database collation is set explicitly to `en_US.utf8`.** Every department and
 position list is `ORDER BY name ASC`, so the ordering belongs to the database. `C` or
@@ -73,6 +92,14 @@ container app so IT can bind a federated identity credential to it, and because
 the managed identity and a federated credential. `createGraphCredential` throws if a
 secret is present with `NODE_ENV=production` — a test asserts the Bicep does not supply
 one either.
+
+**The database has no auto-stop, and the budget cannot stop anything.** The container app
+scales to zero freely; the database must not, because the BAS collector's source data
+rolls off the JACE after about 42 hours. PostgreSQL Flexible Server has no auto-stop
+property to disable — only a manual `stop` — so the reachable failure is a full disk,
+which makes the server refuse writes. `postgresStorageAutoGrow` is the guard and Azure
+defaults it to `Disabled`, hence an explicit parameter rather than an omission. The
+budget carries notification contacts only and no action group.
 
 ## First deployment ordering
 
