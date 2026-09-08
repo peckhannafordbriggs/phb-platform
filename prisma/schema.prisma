@@ -95,6 +95,8 @@ model Employee {
 
   draftLocks DraftLock[]
 
+  basCredentialsUpdated BasStationCredential[] @relation("BasCredentialUpdatedBy")
+
   @@index([status])
   @@index([departmentId])
   @@index([positionId])
@@ -236,7 +238,7 @@ model AuditEvent {
 // separate `bas` Postgres schema (decision D3) - the repo uses one schema with
 // no Prisma multi-schema, and docs/05 says match the existing pattern.
 //
-// THREE THINGS ARE NOT IN THIS FILE. Read this before assuming schema.prisma is
+// FOUR THINGS ARE NOT IN THIS FILE. Read this before assuming schema.prisma is
 // the whole truth - see runbook.md, "the BAS schema lives in two places":
 //
 //   1. bas_points.roll_horizon_s is kept equal to capacity *
@@ -246,14 +248,24 @@ model AuditEvent {
 //      be abandoned: Prisma reads the generated expression as a DEFAULT and
 //      emits `ALTER COLUMN roll_horizon_s DROP DEFAULT` on every subsequent
 //      migrate dev, which PostgreSQL then refuses. Read it, never write it.
-//   2. Thirteen CHECK constraints. Prisma does not model CHECK at all, so it
+//   2. Fourteen CHECK constraints. Prisma does not model CHECK at all, so it
 //      neither generates them nor notices them missing. They are appended to
 //      the migration by hand and are load-bearing - reading_at_most_one_value
-//      is what stops a reading carrying two typed values.
+//      is what stops a reading carrying two typed values, and
+//      bas_stations_connection_mode_check is what makes connection_mode a
+//      closed set rather than free text (add_bas_projects).
 //   3. Six views (v_point, v_reading, v_setpoint_pair, v_command_status_pair,
 //      v_collection_health, v_data_dictionary). Queried through $queryRaw with
 //      hand-written types in lib/modules/bas/; the `views` preview feature was
 //      deliberately not enabled.
+//
+//      bas_v_data_dictionary excludes bas_station_credentials BY NAME. That
+//      view feeds an LLM prompt and its predicate is `bas\_%`, which the
+//      credentials table matches. See add_bas_projects, Section 5.
+//   4. Two triggers, bas_sites_project_org_match and bas_projects_org_match,
+//      keeping bas_sites.org_id equal to the org of its project. The column is
+//      redundant with bas_projects.org_id and is kept only because
+//      scripts/bas-tables.ts moves it (add_bas_projects, Section 4).
 //
 // Timestamps here are plain @db.Timestamptz() with no precision argument,
 // unlike the platform's own models which use (3). Niagara returns sub-second
@@ -324,9 +336,40 @@ model BasOrg {
   notes     String?
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
 
-  sites BasSite[]
+  projects BasProject[]
+  sites    BasSite[]
 
   @@map("bas_orgs")
+}
+
+/// A property or campus - the level between the org and a building. Liberty
+/// Center and Kenwood Mall are projects; each holds several buildings.
+///
+/// A real table rather than a text label on bas_sites (B7 D11). Building and
+/// station are not 1:1 in either direction - a large building can have two
+/// JACEs in separate mechanical rooms, and one JACE can serve several small
+/// buildings on a strip - so the levels have to be addressable separately. A
+/// label works until the first exception and then has to be migrated against
+/// live data.
+///
+/// Only created_at, no updated_at. That matches BasOrg and BasSite; the whole
+/// metadata layer is written this way and one table keeping a modification
+/// time would be the odd one out rather than an improvement.
+model BasProject {
+  projectId BigInt @id @default(autoincrement()) @map("project_id")
+
+  orgId BigInt @map("org_id")
+  org   BasOrg @relation(fields: [orgId], references: [orgId], onDelete: Restrict)
+
+  name      String
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  sites BasSite[]
+
+  @@unique([orgId, name])
+  @@index([orgId])
+  @@map("bas_projects")
 }
 
 /// A building.
@@ -335,6 +378,17 @@ model BasSite {
 
   orgId BigInt @map("org_id")
   org   BasOrg @relation(fields: [orgId], references: [orgId], onDelete: Restrict)
+
+  /// The property this building belongs to. Required: a building with no
+  /// project cannot be placed in the two-step filter (B7.6) and would be
+  /// invisible rather than merely unlabelled.
+  ///
+  /// org_id is kept alongside it and is redundant with project.org_id. Removing
+  /// it would change the column list scripts/bas-tables.ts moves from the
+  /// standalone database, so it stays and the bas_sites_project_org_match
+  /// trigger keeps the two in agreement - see the migration.
+  projectId BigInt     @map("project_id")
+  project   BasProject @relation(fields: [projectId], references: [projectId], onDelete: Restrict)
 
   name    String
   address String?
@@ -358,7 +412,13 @@ model BasSite {
   stations  BasStation[]
   equipment BasEquipment[]
 
-  @@unique([orgId, name])
+  /// Scoped to the project, not the org. Every other level in this schema is
+  /// unique within its immediate parent - equipment within a site, a station
+  /// within a site - and building names repeat across properties: two projects
+  /// each having a "North Building" is ordinary, and an org-scoped key would
+  /// refuse the second one.
+  @@unique([projectId, name])
+  @@index([projectId])
   @@map("bas_sites")
 }
 
@@ -372,11 +432,34 @@ model BasStation {
   /// The station name EXACTLY as Niagara spells it, including capitalisation.
   /// This appears literally in every oBIX URL. Get the case wrong and every
   /// request 404s.
-  niagaraStationName String  @map("niagara_station_name")
-  baseUrl            String? @map("base_url")
-  hostId             String? @map("host_id")
-  model              String?
-  niagaraVersion     String? @map("niagara_version")
+  niagaraStationName String @map("niagara_station_name")
+
+  /// How this station's history is reached. 'direct' means we open an oBIX
+  /// connection to baseUrl ourselves; 'via_parent' means another station
+  /// imports its history over the NiagaraNetwork and we read it from there
+  /// (B7 D12 - direct oBIX to every JACE needs obixDriver-rt and a
+  /// commissioning firmware upgrade with downtime on each one).
+  ///
+  /// The two permitted values are enforced by a CHECK constraint in the
+  /// migration, not here: Prisma does not model CHECK at all. A Postgres enum
+  /// was rejected for the same reason as every other closed set in this schema
+  /// - it would change how the collector's inserts bind their parameters.
+  ///
+  /// Defaults to 'via_parent', which is the mode that takes no action. A row
+  /// that appears without anyone stating a mode is a station discovered behind
+  /// a central collector, and defaulting to 'direct' would instead describe it
+  /// as something we connect to at an address it does not have.
+  connectionMode String @default("via_parent") @map("connection_mode")
+
+  /// The oBIX base URL. Meaningful only when connectionMode is 'direct';
+  /// ignored for 'via_parent', whose history arrives through parentStation.
+  /// Not CHECK-enforced against connectionMode on purpose - a station that has
+  /// been discovered but not yet configured is a real state the Settings tab
+  /// has to be able to show, and a constraint here would refuse to store it.
+  baseUrl        String? @map("base_url")
+  hostId         String? @map("host_id")
+  model          String?
+  niagaraVersion String? @map("niagara_version")
 
   /// The Supervisor this station reports to, if any. NULL for a standalone
   /// JACE. This single nullable self-reference is how a Supervisor stays
@@ -392,10 +475,67 @@ model BasStation {
 
   points     BasPoint[]
   ingestRuns BasIngestRun[]
+  credential BasStationCredential?
 
   @@unique([siteId, niagaraStationName])
   @@index([siteId])
   @@map("bas_stations")
+}
+
+/// The Niagara login the collector uses to reach one station.
+///
+/// ITS OWN TABLE, NOT COLUMNS ON bas_stations, and that is the entire point of
+/// it. `bas_readonly_platform` - Grafana, the MCP server, and eventually the
+/// AI's SQL tool - is granted table by table on `bas\_%`, so a secret stored as
+/// a column on bas_stations would be readable by all three the moment the
+/// grant script was next run. As a separate table it can be denied outright
+/// while everything else stays readable.
+///
+/// For the same reason it is excluded from bas_v_data_dictionary by name. It is
+/// the one bas_ object that is not described to the model.
+///
+/// Keyed by stationId: one credential per collection endpoint, which after D12
+/// is one per central station rather than one per JACE.
+///
+/// No encryption code exists yet - this step is the table only. The intended
+/// scheme is AES-256-GCM with the key in BAS_CREDENTIAL_KEY, never in the
+/// database beside the ciphertext.
+model BasStationCredential {
+  stationId BigInt @id @map("station_id")
+
+  /// Cascade, unlike every other foreign key in this schema, which is Restrict.
+  /// A deleted station must not leave a stored secret behind with nothing
+  /// pointing at it.
+  station BasStation @relation(fields: [stationId], references: [stationId], onDelete: Cascade)
+
+  username String
+
+  /// AES-256-GCM output, base64. The nonce and the auth tag travel inside this
+  /// string - see the column comment in the migration for the envelope. Text
+  /// rather than bytea so the value survives every path that reads this
+  /// database, including psql in a recovery procedure.
+  ///
+  /// Never returned by any API, never logged, never in an audit payload.
+  passwordCiphertext String @map("password_ciphertext")
+
+  /// Which key encrypted the value above. No default: a row whose key_version
+  /// was guessed is a row that cannot be decrypted, and there is no way to
+  /// discover the right answer afterwards.
+  keyVersion Int @map("key_version")
+
+  /// @default(now()) as well as @updatedAt: Prisma supplies the value on its
+  /// own writes, but without a database default an INSERT typed into psql
+  /// during a recovery fails on a NOT NULL with nothing to say why.
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  /// Who last set it. SetNull rather than Cascade - an employee leaving must
+  /// not delete the station's credential. Null means the platform itself wrote
+  /// the row.
+  updatedById String?   @map("updated_by") @db.Uuid
+  updatedBy   Employee? @relation("BasCredentialUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([updatedById])
+  @@map("bas_station_credentials")
 }
 
 /// A physical piece of equipment: AHU-3, VAV-204, Chiller-1. Expect this to be

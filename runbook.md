@@ -4971,7 +4971,158 @@ cd C:\dev\bas-mcp
 psql "$dsn" -v pw=<the existing password> -f setup_readonly_role_platform.sql
 ```
 
-Re-running is safe and is also how the password is rotated.
+Re-running is also how the password is rotated.
+
+**It is no longer an unconditional step.** As of 8 September 2026 that script
+is an explicit allowlist, and it **refuses to run** when it finds a `bas_*`
+object it has never been told about - granting nothing and rotating nothing
+until a person decides whether Grafana, the MCP server and the AI may read it.
+Read the next section before running this after a migration; the
+`bas_station_credentials` table is why.
+
+---
+
+## The read-only grant script is an allowlist, and re-running it is no longer a blanket step
+
+**Found and fixed 8 September 2026, alongside the `add_bas_projects` migration
+(B7.1). The fix is in `phb-bas`, not here.**
+
+**What went wrong.** `bas_readonly_platform` — Grafana, the MCP server, and
+eventually the AI's SQL tool — was granted `SELECT` table by table on everything
+matching `bas\_%`. That is narrower than a blanket grant on `public`, but it is
+still a rule that says yes to objects nobody has looked at.
+
+`add_bas_projects` added `bas_station_credentials`, holding AES-256-GCM
+ciphertext of the Niagara logins. It matches `bas\_%`. And re-running that script
+is exactly what the section above tells you to do after any migration adding a
+`bas_` object — so **following the documented procedure was the thing that would
+have granted the credentials to all three consumers.** Silently, with no error
+anywhere.
+
+Being a separate table rather than columns on `bas_stations` is the *entire*
+mechanism by which that role can be refused. A pattern grant undoes it in one
+command.
+
+**Why the fix is not `AND relname <> 'bas_station_credentials'`.** That is a
+denylist: it fixes this table and leaves the next one exposed. This project
+already rejected `ALTER DEFAULT PRIVILEGES` for precisely that reason — it
+cannot be filtered by name, so it grants whatever gets created next. A name
+pattern is the same flaw wearing a different hat. Neither can be filtered by
+what an object actually *contains*, and only a human knows that.
+
+**What it does now.** `setup_readonly_role_platform.sql` names every object the
+role may read — 19 today, 13 tables and 6 views — plus a separate, explicitly
+reasoned list of `bas_*` objects that are withheld. Before it creates a role,
+rotates a password, or grants anything, a gate refuses three disagreements:
+
+| Condition | Why it stops |
+|---|---|
+| A `bas_*` object in the database that is on neither list | The point of the rewrite. A new table is classified by a person, not by a pattern |
+| A name on the allowlist that does not exist | A typo grants nothing and would surface much later as a broken panel |
+| A name on both lists | A contradiction; the resolution is a human decision |
+
+**The gate runs before the password rotation, deliberately.** A run that fails
+changes *nothing* — measured, not assumed. The alternative ordering leaves
+Grafana holding a password that no longer works, which is a worse place to stop.
+
+**So re-running it after a migration is no longer safe as a blanket step.** It
+will now **refuse** until somebody classifies the new object. That refusal is
+the feature. Do not satisfy it by reflexively adding the name to the allowlist:
+if the object holds anything a dashboard, the MCP server or the AI should not
+read, it goes in the withheld list.
+
+The withheld objects are actively `REVOKE`d, not merely omitted — on any
+database where the old script already ran, the grant exists and omission alone
+would leave it.
+
+**Ordering constraint this introduces.** The allowlist names `bas_projects`, so
+the script refuses to run against a database where `add_bas_projects` has not
+been applied. Apply the migration first, then run the script. The error says so.
+
+**Prove it, which is the only part that counts.** A grant that lets the right
+thing through proves nothing:
+
+```powershell
+$ro = "postgresql://bas_readonly_platform:<password>@localhost:5432/phb_platform"
+psql "$ro" -c "SELECT count(*) FROM bas_points"               # must succeed
+psql "$ro" -c "SELECT count(*) FROM bas_station_credentials"  # must be DENIED
+psql "$ro" -c "SELECT count(*) FROM employees"                # must be DENIED
+```
+
+Or run all of them at once, which is now part of the MCP suite:
+
+```powershell
+cd C:\dev\bas-mcp
+$env:BAS_READONLY_URL = $ro
+python test_tools.py     # section: "What the role must NOT be able to read"
+```
+
+That section asserts the **refusals**, and it was checked by granting the table
+and watching it go red — a refusal test that cannot fail is worse than none. It
+also asserts `bas_readings` is still readable, because a role that can read
+nothing would pass every refusal.
+
+One subtlety in that test: `UndefinedTable` counts as a **failure**, not a pass.
+A table that does not exist proves nothing about the grant, and treating it as a
+pass would let the suite go green against an unmigrated database.
+
+`bas_collector` is a different matter and must **keep** read access: under D15
+the collector reads its own targets and credentials from this table.
+
+**The second copy of the same mistake, handled here.** `bas_v_data_dictionary`
+selects on the same `bas\_%` pattern and feeds an LLM prompt. The migration
+excludes the credentials table from that view by name, and
+`tests/bas-schema.test.ts` fails the build if it reappears. No password would
+have leaked through the view — it exposes structure, not rows — but telling a
+model there is a `password_ciphertext` column is the first half of asking for
+it.
+
+**The third copy**, found in the same sweep, was a convenience one-liner in
+`phb-bas/bas-collector/RUNBOOK.md` that generated `GRANT SELECT` for every
+`bas\_%` object and piped it into `psql`. It is gone; that section now points at
+the script.
+
+Anything else that enumerates `bas\_%` has the same bug. Those three were the
+ones that existed on 8 September 2026.
+
+---
+
+## A BAS fixture leaves an org behind and the next test file blames a previous run
+
+**Cost about fifteen minutes on 8 September 2026, and the error message points
+at the wrong run.**
+
+**Symptom.** `npm test` reports something like 138 failures across five files.
+The first readable error is:
+
+```
+Error: The test database has 1 leftover bas_* rows. A previous run did not
+clean up, and every count in this file would be wrong. Clear them before
+re-running.
+```
+
+Truncating the `bas_*` tables makes it all pass, so it looks like a stale
+database rather than a defect — and then it comes back on the next run.
+
+**Cause.** `cleanup()` in `tests/bas-fixture.ts` deletes in dependency order.
+`bas_projects.org_id` is `RESTRICT`, so once a fixture creates a project,
+deleting the org first fails. The org survives, `expectBasTablesEmpty()` in the
+*next* file trips, and its message talks about "a previous run" — which is true
+but describes the previous *file*, not the previous invocation of `npm test`.
+One ordering bug becomes 138 failures in files that have nothing wrong with
+them.
+
+This is the same trap the point-role deletions carry a comment about:
+`setpoint_for` and `status_of` are `RESTRICT` self-references and have to be
+deleted parent-last too.
+
+**Fix.** Delete projects before the org. Already done — the ordering is
+commented in `cleanup()`. If you add another `bas_` table that a fixture writes
+and an org or a project points at, it goes in the same list, in the same order.
+
+**Confirming a cleanup fix actually works** takes two consecutive runs of
+`npm test` with **no** truncation in between. A single green run after a manual
+truncate proves only that the truncate worked.
 
 ---
 

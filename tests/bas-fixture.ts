@@ -92,6 +92,7 @@ export async function expectRejection(
 
 export interface BasFixture {
   orgId: bigint;
+  projectId: bigint;
   siteId: bigint;
   stationId: bigint;
   equipmentId: bigint;
@@ -122,12 +123,24 @@ export const ROLES = {
 /** America/New_York, so the DST assertions in bas-views.test.ts have teeth. */
 export const SITE_TIMEZONE = "America/New_York";
 export const SITE_NAME = "ZZTEST_SITE";
+export const PROJECT_NAME = "ZZTEST_PROJECT";
 export const EQUIPMENT_NAME = "AHU-ZZTEST";
 
 export async function createBasFixture(tx: Tx): Promise<BasFixture> {
   const org = await tx.basOrg.create({ data: { name: "ZZTEST_ORG" } });
+  // A building needs a project (B7.1). orgId is carried on both and the
+  // bas_sites_project_org_match trigger refuses a fixture where they disagree,
+  // so this is not decoration - passing the wrong org here fails the insert.
+  const project = await tx.basProject.create({
+    data: { orgId: org.orgId, name: PROJECT_NAME },
+  });
   const site = await tx.basSite.create({
-    data: { orgId: org.orgId, name: SITE_NAME, timezone: SITE_TIMEZONE },
+    data: {
+      orgId: org.orgId,
+      projectId: project.projectId,
+      name: SITE_NAME,
+      timezone: SITE_TIMEZONE,
+    },
   });
   const station = await tx.basStation.create({
     data: { siteId: site.siteId, niagaraStationName: "ZZTestStation" },
@@ -220,6 +233,7 @@ export async function createBasFixture(tx: Tx): Promise<BasFixture> {
 
   return {
     orgId: org.orgId,
+    projectId: project.projectId,
     siteId: site.siteId,
     stationId: station.stationId,
     equipmentId: equipment.equipmentId,
@@ -399,8 +413,16 @@ export async function createHealthFixture(): Promise<HealthFixture> {
 
   // --- the second building ------------------------------------------------
 
+  // Same project as the first building. Two buildings on one property is the
+  // ordinary case, and bas_sites is unique on (project_id, name) rather than
+  // (org_id, name), so the distinct names are what keep them apart.
   const siteB = await testDb.basSite.create({
-    data: { orgId: base.orgId, name: SITE_B_NAME, timezone: "America/Chicago" },
+    data: {
+      orgId: base.orgId,
+      projectId: base.projectId,
+      name: SITE_B_NAME,
+      timezone: "America/Chicago",
+    },
   });
   const stationB = await testDb.basStation.create({
     data: { siteId: siteB.siteId, niagaraStationName: "ZZTestStationB" },
@@ -505,6 +527,13 @@ export async function createHealthFixture(): Promise<HealthFixture> {
     await testDb.basEquipment.deleteMany({ where: { siteId: base.siteId } });
     await testDb.basSite.deleteMany({
       where: { siteId: { in: [base.siteId, siteB.siteId] } },
+    });
+    // Projects before the org: bas_projects.org_id is RESTRICT, so deleting the
+    // org first fails, leaves it behind, and the NEXT file trips
+    // expectBasTablesEmpty with a message about a previous run instead of this
+    // one. Same ordering trap as the point roles below.
+    await testDb.basProject.deleteMany({
+      where: { projectId: base.projectId },
     });
     await testDb.basOrg.deleteMany({ where: { orgId: base.orgId } });
     await testDb.basEquipmentType.deleteMany({

@@ -293,9 +293,13 @@ describe("seedBasVocabularies", () => {
       // A minimal real fixture using the SEEDED vocabulary rather than the
       // zztest_ one, so this exercises the shipped role names end to end.
       const org = await tx.basOrg.create({ data: { name: "ZZTEST_VOCAB_ORG" } });
+      const project = await tx.basProject.create({
+        data: { orgId: org.orgId, name: "ZZTEST_VOCAB_PROJECT" },
+      });
       const site = await tx.basSite.create({
         data: {
           orgId: org.orgId,
+          projectId: project.projectId,
           name: "ZZTEST_VOCAB_SITE",
           timezone: "America/New_York",
         },

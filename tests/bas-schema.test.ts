@@ -52,11 +52,27 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
     "bas_point_links",
     "bas_point_roles",
     "bas_points",
+    "bas_projects",
     "bas_readings",
     "bas_sites",
     "bas_stations",
     "bas_sync_checkpoints",
   ];
+
+  /**
+   * The one bas_ table that must NOT be in the dictionary.
+   *
+   * The predicate matches `bas\_%`, so this table qualifies on its name and is
+   * excluded by an explicit `<> 'bas_station_credentials'`. Without that, the
+   * existence and column names of the credential store go into the prompt of
+   * the AI whose SQL tool is supposed to be denied the table outright - which
+   * is the entire reason the credentials are a separate table rather than
+   * columns on bas_stations.
+   *
+   * No password leaks either way. That is not the bar: telling a model there is
+   * a password_ciphertext column is the first half of asking for it.
+   */
+  const EXCLUDED_BAS_TABLES = ["bas_station_credentials"];
 
   const BAS_VIEWS = [
     "bas_v_collection_health",
@@ -92,6 +108,27 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
     // the two documented ways to get this wrong.
     for (const expected of [...BAS_TABLES, ...BAS_VIEWS]) {
       expect(names, `${expected} must be in the dictionary`).toContain(expected);
+    }
+  });
+
+  it("excludes the credentials table, which matches the bas_ prefix", async () => {
+    const names = await objectNames();
+
+    for (const forbidden of EXCLUDED_BAS_TABLES) {
+      expect(names, `${forbidden} must NOT be in the dictionary`).not.toContain(
+        forbidden,
+      );
+    }
+
+    // The column names are the payload, so check for them directly rather than
+    // trusting that excluding the object was enough.
+    const rows = await testDb.$queryRaw<Array<{ column_name: string }>>`
+      SELECT DISTINCT column_name FROM bas_v_data_dictionary`;
+    const columns = new Set(rows.map((r) => r.column_name));
+    for (const forbidden of ["password_ciphertext", "key_version"]) {
+      expect(columns.has(forbidden), `${forbidden} must not be exposed`).toBe(
+        false,
+      );
     }
   });
 
