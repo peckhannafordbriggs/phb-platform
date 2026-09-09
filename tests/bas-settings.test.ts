@@ -44,6 +44,15 @@ function signedInAs(entraOid: string) {
  * than merely "it threw" is the difference between proving a 404 and proving
  * the page has a bug of some kind. Same constant as tests/bas-module.test.ts.
  */
+/**
+ * The settings tree route takes a Request as of B7.6, so it can read the search
+ * and filter parameters out of the query string. Unfiltered unless a test
+ * passes one.
+ */
+function treeRequest(query = ""): Request {
+  return new Request("http://localhost/api/modules/bas/settings" + query);
+}
+
 const NOT_FOUND_DIGEST = "NEXT_HTTP_ERROR_FALLBACK;404";
 
 async function expectPageNotFound(run: () => Promise<unknown>): Promise<void> {
@@ -151,7 +160,7 @@ describe("a BAS user WITHOUT the module-admin grant is told nothing exists", () 
     await grantModule(employee.id, BAS_MODULE_KEY);
     signedInAs(employee.entraOid!);
 
-    const response = await settingsRoute();
+    const response = await settingsRoute(treeRequest());
     expect(response.status).toBe(404);
   });
 
@@ -160,7 +169,7 @@ describe("a BAS user WITHOUT the module-admin grant is told nothing exists", () 
     await grantModule(employee.id, BAS_MODULE_KEY);
     signedInAs(employee.entraOid!);
 
-    const response = await settingsRoute();
+    const response = await settingsRoute(treeRequest());
     expect(response.status).not.toBe(403);
     expect(response.status).toBe(404);
   });
@@ -171,7 +180,7 @@ describe("a BAS user WITHOUT the module-admin grant is told nothing exists", () 
     await grantModule(employee.id, BAS_MODULE_KEY);
     signedInAs(employee.entraOid!);
 
-    const body = await (await settingsRoute()).text();
+    const body = await (await settingsRoute(treeRequest())).text();
 
     // Not merely "no data key" - the names must not appear anywhere in the
     // response, including inside an error message that echoed a query back.
@@ -194,7 +203,7 @@ describe("a BAS user WITHOUT the module-admin grant is told nothing exists", () 
     await grantModule(employee.id, BAS_MODULE_KEY);
     signedInAs(employee.entraOid!);
 
-    expect((await settingsRoute()).status).toBe(404);
+    expect((await settingsRoute(treeRequest())).status).toBe(404);
     const Page = await importSettingsPage();
     await expectPageNotFound(() => Page());
   });
@@ -203,12 +212,12 @@ describe("a BAS user WITHOUT the module-admin grant is told nothing exists", () 
     const employee = await createEmployee();
     signedInAs(employee.entraOid!);
 
-    expect((await settingsRoute()).status).toBe(404);
+    expect((await settingsRoute(treeRequest())).status).toBe(404);
   });
 
   it("gets 401, not 404, when not signed in - a different question", async () => {
     authMock.mockResolvedValue(null as never);
-    expect((await settingsRoute()).status).toBe(401);
+    expect((await settingsRoute(treeRequest())).status).toBe(401);
   });
 
   /**
@@ -221,14 +230,14 @@ describe("a BAS user WITHOUT the module-admin grant is told nothing exists", () 
     await grantModule(employee.id, BAS_MODULE_KEY);
     await grantModuleAdmin(employee.id, BAS_MODULE_KEY);
     signedInAs(employee.entraOid!);
-    expect((await settingsRoute()).status).toBe(200);
+    expect((await settingsRoute(treeRequest())).status).toBe(200);
 
     await testDb.moduleGrant.deleteMany({
       where: { employeeId: employee.id, moduleKey: BAS_MODULE_KEY },
     });
     await grantModule(employee.id, BAS_MODULE_KEY);
 
-    expect((await settingsRoute()).status).toBe(404);
+    expect((await settingsRoute(treeRequest())).status).toBe(404);
   });
 });
 
@@ -244,7 +253,7 @@ describe("a BAS user WITH the module-admin grant gets in", () => {
     await grantModuleAdmin(employee.id, BAS_MODULE_KEY);
     signedInAs(employee.entraOid!);
 
-    expect((await settingsRoute()).status).toBe(200);
+    expect((await settingsRoute(treeRequest())).status).toBe(200);
 
     const Page = await importSettingsPage();
     await expect(Page()).resolves.toBeTruthy();
@@ -257,7 +266,7 @@ describe("a BAS user WITH the module-admin grant gets in", () => {
     await grantModuleAdmin(employee.id, BAS_MODULE_KEY);
     signedInAs(employee.entraOid!);
 
-    const body = await (await settingsRoute()).text();
+    const body = await (await settingsRoute(treeRequest())).text();
     expect(body).toContain(project.name);
     expect(body).toContain(site.name);
     expect(body).toContain(station.niagaraStationName);
@@ -292,7 +301,7 @@ describe("a BAS user WITH the module-admin grant gets in", () => {
     await grantModuleAdmin(employee.id, BAS_MODULE_KEY);
     signedInAs(employee.entraOid!);
 
-    const body = await (await settingsRoute()).text();
+    const body = await (await settingsRoute(treeRequest())).text();
 
     expect(body).toContain('"hasCredential":true');
     expect(body).toContain('"passwordSet":true');

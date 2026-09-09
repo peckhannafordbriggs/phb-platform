@@ -5087,6 +5087,34 @@ ones that existed on 8 September 2026.
 
 ---
 
+## The collector reads its targets from the database (B7.5)
+
+As of B7.5 the collector no longer finds the JACE from its own config file. It
+reads `bas_stations` and `bas_station_credentials` - the rows the BAS Settings
+tab writes - and the config file is a fallback used only when the database names
+no station. Every run logs which source it used.
+
+**The cutover procedure lives in the collector's runbook**, because every step
+is run on the collector host: `C:\devas-collector\RUNBOOK.md`, under
+*Cutting the collector over to database targets*. It is nine steps, each
+verifiable before the next, and a failure at any of them leaves collection
+running on the config file.
+
+Two things worth knowing from this side:
+
+**Verify from the readings, never from the run status.** A run that reports `ok`
+having collected nothing is indistinguishable from a healthy quiet period. The
+question is always `SELECT max(ts) FROM bas_readings` and whether it moved.
+
+**Six failure modes now write a `failed` row to `bas_ingest_runs`** rather than
+returning quietly - a missing key, a wrong key, no stations, no station set to
+`direct`, a certificate that does not match its pin, and a station with no
+stored login. `healthcheck.py` check 1b reads that table, so all six are visible
+to it. Preserve that property if you touch the collector: a failure that writes
+nothing there is a failure nothing will ever report.
+
+---
+
 ## Station credentials, and the one secret that lives in two places
 
 **B7.4, 8 September 2026.** Niagara logins are stored in

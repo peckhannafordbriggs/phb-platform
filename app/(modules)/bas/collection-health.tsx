@@ -46,7 +46,17 @@ import {
   describeHeadroom,
   type Tone,
 } from "./health-client";
-import { ALL_SITES, DAYS_PARAM, SITE_PARAM, readFilters, withFilter } from "./filters";
+import {
+  ALL_SITES,
+  DAYS_PARAM,
+  PROJECT_PARAM,
+  SITE_PARAM,
+  STATION_PARAM,
+  readFilters,
+  withCascade,
+  withFilter,
+} from "./filters";
+import { describeHiddenRisk, scopeSuffix } from "@/lib/modules/bas/types";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 
 /**
@@ -100,13 +110,14 @@ export function CollectionHealth() {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // The two controls live in the URL, not in React state, so they survive a tab
-  // switch, a refresh and a bookmark. See filters.ts. The filtering itself still
-  // happens in SQL - see lib/modules/bas/service.ts, `siteFilter`.
+  // All FOUR controls live in the URL, not in React state, so they survive a
+  // tab switch, a refresh and a bookmark. See filters.ts. The filtering itself
+  // still happens in SQL - see lib/modules/bas/service.ts, `resolveSelection`.
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { siteId, windowDays } = readFilters(searchParams);
+  const { siteId, windowDays, projectId, stationId } =
+    readFilters(searchParams);
 
   const setParam = (key: string, value: string | null) => {
     router.replace(`${pathname}${withFilter(searchParams, key, value)}`, {
@@ -114,9 +125,21 @@ export function CollectionHealth() {
     });
   };
 
+  /** A cascade level: changes this one and clears everything below it. */
+  const setCascade = (key: string, value: string | null) => {
+    router.replace(`${pathname}${withCascade(searchParams, key, value)}`, {
+      scroll: false,
+    });
+  };
+
   const load = useCallback(
     async (
-      selection: { days: number; siteId: string | null },
+      selection: {
+        days: number;
+        siteId: string | null;
+        projectId: string | null;
+        stationId: string | null;
+      },
       options: { quiet?: boolean } = {},
     ) => {
       if (options.quiet !== true) setLoading(true);
@@ -124,6 +147,8 @@ export function CollectionHealth() {
         const data = await fetchCollectionHealth({
           days: selection.days,
           siteId: selection.siteId,
+          projectId: selection.projectId,
+          stationId: selection.stationId,
         });
         setHealth(data);
         setError(null);
@@ -144,8 +169,8 @@ export function CollectionHealth() {
   );
 
   useEffect(() => {
-    void load({ days: windowDays, siteId });
-  }, [load, windowDays, siteId]);
+    void load({ days: windowDays, siteId, projectId, stationId });
+  }, [load, windowDays, siteId, projectId, stationId]);
 
   /**
    * A selected building that has stopped being visible - removed, or a site
@@ -158,22 +183,41 @@ export function CollectionHealth() {
    * change would rebuild it and fire a second request.
    */
   useEffect(() => {
-    if (error?.code === "not_found" && siteId !== null) {
-      router.replace(`${pathname}${withFilter(searchParams, SITE_PARAM, null)}`, {
+    if (error?.code !== "not_found") return;
+
+    // Clear the DEEPEST level first. A 404 says one of the three no longer
+    // resolves, and dropping the narrowest is the smallest change that can
+    // recover - clearing all three would throw away a project selection that
+    // was probably still fine.
+    const stale =
+      stationId !== null
+        ? STATION_PARAM
+        : siteId !== null
+          ? SITE_PARAM
+          : projectId !== null
+            ? PROJECT_PARAM
+            : null;
+
+    if (stale !== null) {
+      router.replace(`${pathname}${withCascade(searchParams, stale, null)}`, {
         scroll: false,
       });
     }
-  }, [error, siteId, router, pathname, searchParams]);
+  }, [error, siteId, projectId, stationId, router, pathname, searchParams]);
 
   // Same shape as the mailbox workspace: poll only while the tab is visible,
   // catch up on return, and never leave a timer behind.
   //
   // The ref carries the CURRENT selection, not the one that was current when the
   // timer was installed. Without it the poll would quietly revert the screen to
-  // seven days and all buildings a minute after someone changed either control.
+  // seven days and all buildings a minute after someone changed a control - and
+  // with four controls there is four times as much to silently revert.
   const pollRef = useRef<() => void>(() => {});
   pollRef.current = () => {
-    void load({ days: windowDays, siteId }, { quiet: true });
+    void load(
+      { days: windowDays, siteId, projectId, stationId },
+      { quiet: true },
+    );
   };
 
   useEffect(() => {
@@ -226,7 +270,9 @@ export function CollectionHealth() {
         <p className="mt-1 text-sm text-red-900">{error.message}</p>
         <button
           type="button"
-          onClick={() => void load({ days: windowDays, siteId })}
+          onClick={() =>
+            void load({ days: windowDays, siteId, projectId, stationId })
+          }
           className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm hover:bg-red-100"
         >
           Try again
@@ -240,26 +286,41 @@ export function CollectionHealth() {
   const { totals } = health;
   const gapSentence = describeRunGap(health.longestRunGap);
 
+  // What the tiles are counting, and what they are not. Both come from the
+  // service so the scope line, the tile suffixes and the banner cannot describe
+  // the same selection three different ways.
+  const suffix = scopeSuffix(health.scope);
+  const hiddenRisk = describeHiddenRisk(health);
+
   return (
     <div className="space-y-7">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-[var(--muted)]">Building</span>
-            <select
-              value={health.selectedSiteId ?? ALL_SITES}
-              onChange={(event) => setParam(SITE_PARAM, event.target.value)}
-              disabled={health.sites.length === 0}
-              className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
-            >
-              <option value={ALL_SITES}>All</option>
-              {health.sites.map((site) => (
-                <option key={site.siteId} value={site.siteId}>
-                  {site.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {/*
+            Project -> Building -> JACE, left to right, each defaulting to All.
+            Changing one CLEARS everything below it (withCascade): a building
+            that is not in the selected project makes the server answer 404, so
+            without the clear the cascade would be a dead end rather than a
+            filter.
+          */}
+          <Picker
+            label="Project"
+            value={health.selectedProjectId}
+            onChange={(v) => setCascade(PROJECT_PARAM, v)}
+            options={health.projects.map((row) => [row.projectId, row.name])}
+          />
+          <Picker
+            label="Building"
+            value={health.selectedSiteId}
+            onChange={(v) => setCascade(SITE_PARAM, v)}
+            options={health.sites.map((row) => [row.siteId, row.name])}
+          />
+          <Picker
+            label="JACE"
+            value={health.selectedStationId}
+            onChange={(v) => setCascade(STATION_PARAM, v)}
+            options={health.stations.map((row) => [row.stationId, row.name])}
+          />
 
           <div
             className="flex items-center gap-2 text-sm"
@@ -297,15 +358,46 @@ export function CollectionHealth() {
 
       {/*
         The selection restated in words, next to the data rather than only in the
-        controls that set it. Two controls change what every panel means, and a
-        reader who has lost track of which building is selected cannot tell a
-        real zero from a filtered one.
+        controls that set it. Four controls change what every panel means, and a
+        reader who has lost track of which one is set cannot tell a real zero
+        from a filtered one.
       */}
       <p className="-mt-3 text-xs text-[var(--muted)]">
-        {describeScope(health.selectedSiteName, health.windowDays)} · as of{" "}
+        {health.scope.filtered && health.scope.label !== null ? (
+          <span className="font-medium text-[var(--foreground)]">
+            {health.scope.label}
+          </span>
+        ) : (
+          "All buildings"
+        )}
+        {" · "}
+        {describeScope(null, health.windowDays)} · as of{" "}
         {formatTimestamp(health.observedAt)} · refreshes every minute while this
         tab is open
       </p>
+
+      {/*
+        THE TRAP.
+
+        Every tile below counts only the filtered set. That is correct, and it
+        is also how somebody filters to one building, reads "0 points at risk",
+        and concludes nothing anywhere is at risk. Three outages have already
+        destroyed about 117 hours per point, and one of them sat unnoticed in
+        the database for eight days.
+
+        So a filtered view is never allowed to look healthier than the estate
+        is. `describeHiddenRisk` is a pure function in the service's types
+        module - the rule is worth testing without rendering anything.
+      */}
+      {hiddenRisk !== null && (
+        <p
+          className="rounded-md border px-4 py-2.5 text-sm"
+          style={{ ...TONE_STYLE.warn, color: TONE_INK.warn }}
+          role="status"
+        >
+          {hiddenRisk}
+        </p>
+      )}
 
       {/* ------------------------------------------------------------- hero */}
 
@@ -321,11 +413,15 @@ export function CollectionHealth() {
         would have been filling a shape.
       */}
       <HeroTile
-        label="Points at risk of data loss"
+        // The label carries the scope, so "Points at risk of data loss" never
+        // reads as a claim about the whole estate while a filter is on.
+        label={`Points at risk of data loss${suffix}`}
         value={formatCount(totals.pointsAtRisk)}
         tone={atRiskTone(totals.riskCounts)}
         headline={
-          totals.pointsAtRisk > 0 ? describeAtRisk(totals.riskCounts) : "Nothing at risk"
+          totals.pointsAtRisk > 0
+            ? describeAtRisk(totals.riskCounts)
+            : `Nothing at risk${suffix}`
         }
         badge={describeHeadroom(computeHeadroom(health.points))}
         detail={
@@ -357,7 +453,7 @@ export function CollectionHealth() {
         className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
       >
         <Tile
-          label="Active points"
+          label={`Active points${suffix}`}
           value={formatCount(totals.activePoints)}
           tone={activePointsTone()}
           /*
@@ -373,13 +469,13 @@ export function CollectionHealth() {
         />
 
         <Tile
-          label="Total readings"
+          label={`Total readings${suffix}`}
           value={formatCount(totals.totalReadings)}
           tone={totalReadingsTone()}
         />
 
         <Tile
-          label="Unclassified points"
+          label={`Unclassified points${suffix}`}
           value={formatCount(totals.unclassifiedPoints)}
           tone={unclassifiedTone(totals.unclassifiedPoints)}
           detail={
@@ -388,7 +484,7 @@ export function CollectionHealth() {
         />
 
         <Tile
-          label="Since newest reading"
+          label={`Since newest reading${suffix}`}
           value={formatMinutes(totals.minutesSinceNewestReading)}
           tone={stalenessTone(totals.minutesSinceNewestReading)}
           // Not a delta - a reference value, so the number above is judgeable.
@@ -964,9 +1060,26 @@ function DataGapTable({
               cadence was wrong for that point.
             </p>
           )}
-          <div className="overflow-x-auto">
+          {/*
+            Capped and scrolled, like the collector runs table above. The list
+            grows without limit - one row per recorded gap, forever - and an
+            unbounded table pushes everything below it off the page.
+
+            The red summary line is deliberately OUTSIDE this container. It is
+            the honest headline about permanently destroyed data, and it has to
+            be readable without scrolling, always. Moving it inside would let
+            the one sentence that matters scroll away from the rows it counts.
+
+            max-h-72 is about seven rows plus the header at this row height.
+          */}
+          <div className="max-h-72 overflow-auto">
             <table className="w-full min-w-[46rem] border-collapse text-sm">
-              <thead className="bg-[var(--surface)] text-left">
+              {/*
+                Sticky, so you can still tell which column you are reading
+                halfway down. Needs its own background or the rows show through,
+                and z-10 so the tone badges in the cells do not paint over it.
+              */}
+              <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
                 <tr>
                   <Th>Point</Th>
                   <Th>Site</Th>
@@ -1044,5 +1157,48 @@ function HealthSkeleton() {
         ))}
       </div>
     </div>
+  );
+}
+
+
+/**
+ * One level of the Project -> Building -> JACE cascade.
+ *
+ * Always offers All and always defaults to it: nobody should have to drill
+ * three levels to see everything. Disabled only when there is genuinely nothing
+ * to choose from, which after a narrowing above is a real state - a project
+ * with no JACEs yet - and reads better as an empty control than as one holding
+ * a stale value.
+ */
+function Picker({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string | null;
+  options: Array<[string, string]>;
+  onChange: (value: string | null) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <span className="text-[var(--muted)]">{label}</span>
+      <select
+        value={value ?? ALL_SITES}
+        onChange={(event) =>
+          onChange(event.target.value === ALL_SITES ? null : event.target.value)
+        }
+        disabled={options.length === 0}
+        className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
+      >
+        <option value={ALL_SITES}>All</option>
+        {options.map(([key, text]) => (
+          <option key={key} value={key}>
+            {text}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

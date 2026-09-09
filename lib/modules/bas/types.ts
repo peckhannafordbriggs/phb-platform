@@ -143,6 +143,49 @@ export interface SiteOption {
   orgName: string;
 }
 
+export interface ProjectOption {
+  projectId: string;
+  name: string;
+  orgName: string;
+}
+
+export interface StationOption {
+  stationId: string;
+  /** display_name falling back to the Niagara name, as the pickers show it. */
+  name: string;
+  siteName: string;
+}
+
+/**
+ * What the four controls currently select, and what that means (B7.6).
+ *
+ * `label` is the selection in words - "Liberty Center -> North Building" - and
+ * it is on the payload rather than composed in the component so the scope line,
+ * the per-tile qualifiers and the outside-this-filter warning cannot describe
+ * the same selection three slightly different ways.
+ */
+export interface BasScope {
+  filtered: boolean;
+  label: string | null;
+}
+
+/**
+ * The same figures WITHOUT the filter, and the reason this exists.
+ *
+ * With a filter active every tile counts only the filtered set. That is right,
+ * and it is also how somebody reads "0 points at risk" in one building and
+ * concludes nothing anywhere is at risk. Three outages have already destroyed
+ * about 117 hours per point and one of them went unnoticed for eight days.
+ *
+ * `null` when nothing is filtered, because then it would be the same numbers
+ * twice. Scoped to the employee's entitlement, so "outside this filter" never
+ * means "outside your permissions".
+ */
+export interface UnfilteredTotals {
+  activePoints: number;
+  pointsAtRisk: number;
+}
+
 export interface CollectionHealth {
   /**
    * Days of history the run list, the run chart and the run-gap calculation
@@ -159,11 +202,26 @@ export interface CollectionHealth {
    */
   sites: SiteOption[];
 
-  /** `null` is "All buildings", which is the default. */
-  selectedSiteId: string | null;
+  /**
+   * The other two levels of the cascade (B7.6). Each list is narrowed by the
+   * level above it - buildings by the chosen project, JACEs by both - which is
+   * what stops somebody selecting a building that is not in the project they
+   * picked and getting a blank screen with nothing saying why.
+   */
+  projects: ProjectOption[];
+  stations: StationOption[];
 
+  /** `null` is "All", which is the default at every level. */
+  selectedSiteId: string | null;
   /** Resolved here so the screen never has to look it up in `sites`. */
   selectedSiteName: string | null;
+  selectedProjectId: string | null;
+  selectedProjectName: string | null;
+  selectedStationId: string | null;
+  selectedStationName: string | null;
+
+  scope: BasScope;
+  unfiltered: UnfilteredTotals | null;
   /** The server's `now()`, shared by every figure in this payload. */
   observedAt: string;
   totals: CollectionHealthTotals;
@@ -265,6 +323,14 @@ export interface PointExplorer {
   observedAt: string;
 
   sites: SiteOption[];
+  /** The other two levels of the cascade (B7.6). They narrow the POINT list. */
+  projects: ProjectOption[];
+  stations: StationOption[];
+  selectedProjectId: string | null;
+  selectedProjectName: string | null;
+  selectedStationId: string | null;
+  selectedStationName: string | null;
+  scope: BasScope;
   selectedSiteId: string | null;
   selectedSiteName: string | null;
 
@@ -432,7 +498,39 @@ export interface BasSettingsTree {
    * banner says so, because a tree that quietly drops a station is exactly the
    * silent gap this module keeps finding weeks late.
    */
-  stationsAccountedFor: { rendered: number; inDatabase: number };
+  /**
+   * Station accounting, and the reason it has three numbers instead of two.
+   *
+   * B7.2 shipped `{ rendered, inDatabase }` and turned the screen red when they
+   * disagreed, to catch a bad join silently dropping stations. B7.6 adds
+   * filtering, which hides stations ON PURPOSE - so a naive version of that
+   * check fires every time somebody types in the search box, and a false alarm
+   * is how people learn to ignore a real one.
+   *
+   *   rendered   - stations the assembled tree actually contains
+   *   matched    - stations matching the active filters, counted by a SEPARATE
+   *                query that does not go through the tree's joins or its
+   *                assembly in TypeScript
+   *   inDatabase - every station in scope, ignoring filters entirely
+   *
+   * RED is `rendered !== matched`, and only that. It still means what it always
+   * meant: the tree produced fewer stations than the database says match, which
+   * nobody asked for.
+   *
+   * `matched < inDatabase` is ordinary text - "showing 4 of 37" - because that
+   * is a filter doing its job.
+   *
+   * `matched` is a separate query on purpose. Deriving it from the same rows
+   * the tree was built from would make the check tautological, and the whole
+   * point is an independent second opinion.
+   */
+  stationsAccountedFor: {
+    rendered: number;
+    matched: number;
+    inDatabase: number;
+    /** Whether any filter narrowed the result. Drives text, never colour. */
+    filtered: boolean;
+  };
 
   /**
    * Whether BAS_CREDENTIAL_KEY is configured on this server.
@@ -454,4 +552,156 @@ export interface BasSettingsTree {
     niagaraStationName: string;
     siteName: string;
   }>;
+}
+
+
+/**
+ * How a station's collection state is bucketed for filtering (B7.6).
+ *
+ * The thresholds are the same ones `describeActivity` colours by, and they are
+ * shared rather than restated: a filter that disagreed with the badge beside it
+ * would be worse than no filter.
+ *
+ *   collecting - a record within COLLECTING_WITHIN_HOURS
+ *   stale      - has records, but older than that
+ *   never      - no record has ever arrived for any of its points
+ */
+export type StationState = "collecting" | "stale" | "never";
+
+/**
+ * How a station is reached, as the Settings filter offers it.
+ *
+ * `unconfigured` is split out of `via_parent` deliberately (B7.6). In the data
+ * it IS via_parent - the pair is connection_mode = 'via_parent' with no
+ * parent_station_id - but as a filter the two mean completely different things.
+ * "Via parent" is a category; "discovered, unassigned" is a WORK QUEUE, the
+ * stations nobody has finished configuring, and at scale that is the one people
+ * reach for. Burying it inside a category nobody needs to filter by would hide
+ * the only actionable list of the three.
+ */
+export type StationModeFilter = "direct" | "via_parent" | "unconfigured";
+export type CredentialFilter = "set" | "unset";
+
+/** Newest record inside this many hours counts as collecting. */
+export const COLLECTING_WITHIN_HOURS = 2;
+
+export interface BasSettingsFilters {
+  /**
+   * Free text over project name, building name, station display name, Niagara
+   * station name and base URL.
+   *
+   * base_url is in there because somebody will paste "196.1.1" to find a
+   * station by its address, which is how the one station anybody can name is
+   * actually identified in conversation.
+   */
+  q: string;
+  mode: StationModeFilter | null;
+  state: StationState | null;
+  credential: CredentialFilter | null;
+}
+
+export const NO_SETTINGS_FILTERS: BasSettingsFilters = {
+  q: "",
+  mode: null,
+  state: null,
+  credential: null,
+};
+
+export function settingsFiltersActive(f: BasSettingsFilters): boolean {
+  return (
+    f.q.trim().length > 0 ||
+    f.mode !== null ||
+    f.state !== null ||
+    f.credential !== null
+  );
+}
+
+
+/**
+ * Whether the station count is a genuine problem, or a filter doing its job.
+ *
+ * A pure function, and separate from the component, because it is the rule
+ * B7.6 most needed to get right and a rule that can only be checked by
+ * rendering a screen is a rule nobody checks.
+ *
+ * `alarm` is `rendered !== matched` and NOTHING else. Both numbers are counted
+ * after the same filter, one by assembling the tree and one by a separate
+ * query, so a disagreement means the assembly lost stations nobody asked it to
+ * lose. Comparing against `inDatabase` instead is the bug this exists to
+ * prevent: it would fire on every keystroke in the search box.
+ *
+ * At the current schema a genuine mismatch is unreachable - every join the tree
+ * walks is backed by a NOT NULL foreign key - so this is defence against a
+ * future change that relaxes one, and it is checked at this level because it
+ * cannot be provoked through the database.
+ */
+export interface StationCounts {
+  rendered: number;
+  matched: number;
+  inDatabase: number;
+  filtered: boolean;
+}
+
+export function settingsCountState(counts: StationCounts): {
+  alarm: boolean;
+  hiding: boolean;
+} {
+  return {
+    alarm: counts.rendered !== counts.matched,
+    hiding: counts.filtered && counts.matched !== counts.inDatabase,
+  };
+}
+
+
+/**
+ * What the screen must say when a filter is hiding a problem (B7.6).
+ *
+ * A pure function, and separate from the component for the same reason
+ * `settingsCountState` is: this is the rule the phase most needed to get right,
+ * and a rule that can only be checked by rendering a screen is a rule nobody
+ * checks.
+ *
+ * The danger is not that the tiles are wrong. They are right - they count the
+ * filtered set, which is what was asked for. The danger is somebody filtering
+ * to one building, reading "0 at risk", and concluding nothing anywhere is at
+ * risk. One of this project's three outages sat unnoticed in the database for
+ * eight days.
+ *
+ * So: whenever the unfiltered estate has more at-risk points than the filtered
+ * view does, the screen says so. Including - especially - when the filtered
+ * number is zero, which is the case that reads as all-clear.
+ */
+export function describeHiddenRisk(health: {
+  totals: { pointsAtRisk: number };
+  unfiltered: UnfilteredTotals | null;
+  scope: BasScope;
+}): string | null {
+  const { unfiltered, scope } = health;
+  if (unfiltered === null || !scope.filtered) return null;
+
+  const hidden = unfiltered.pointsAtRisk - health.totals.pointsAtRisk;
+  if (hidden <= 0) return null;
+
+  const where = scope.label === null ? "this filter" : scope.label;
+
+  return health.totals.pointsAtRisk === 0
+    ? `No points are at risk in ${where}, but ${hidden} ${
+        hidden === 1 ? "is" : "are"
+      } at risk elsewhere. Clear the filter to see ${
+        hidden === 1 ? "it" : "them"
+      }.`
+    : `${hidden} more ${
+        hidden === 1 ? "point is" : "points are"
+      } at risk outside ${where}.`;
+}
+
+/**
+ * The suffix every tile carries while a filter is active.
+ *
+ * "0 at risk" and "0 at risk in Liberty Center" are different claims, and only
+ * one of them is true. Empty string when nothing is filtered, so the unfiltered
+ * screen reads exactly as it did before.
+ */
+export function scopeSuffix(scope: BasScope): string {
+  return scope.filtered && scope.label !== null ? ` in ${scope.label}` : "";
 }

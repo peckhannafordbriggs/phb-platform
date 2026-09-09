@@ -7,7 +7,9 @@ import {
   MIN_WINDOW_DAYS,
   getPointExplorer,
   parsePointId,
+  parseProjectId,
   parseSiteId,
+  parseStationId,
 } from "@/lib/modules/bas/service";
 import { ok, withBas } from "@/lib/modules/bas/route-helpers";
 
@@ -33,6 +35,8 @@ const QuerySchema = z.object({
     .max(MAX_WINDOW_DAYS)
     .default(DEFAULT_WINDOW_DAYS),
   site: z.string().trim().max(32).optional(),
+  project: z.string().trim().max(32).optional(),
+  station: z.string().trim().max(32).optional(),
   point: z.string().trim().max(32).optional(),
 });
 
@@ -46,12 +50,23 @@ const QuerySchema = z.object({
 export async function GET(request: Request) {
   return withBas(
     ROUTE,
-    async (viewer, input: { days: number; site?: string; point?: string }) => {
+    async (
+      viewer,
+      input: {
+        days: number;
+        site?: string;
+        point?: string;
+        project?: string;
+        station?: string;
+      },
+    ) => {
       try {
         return ok(
           await getPointExplorer(viewer, {
             windowDays: input.days,
             siteId: parseSiteId(input.site),
+            projectId: parseProjectId(input.project),
+            stationId: parseStationId(input.station),
             pointId: parsePointId(input.point),
           }),
         );
@@ -72,6 +87,8 @@ export async function GET(request: Request) {
       const parsed = QuerySchema.safeParse({
         days: search.get("days") ?? undefined,
         site: search.get("site") ?? undefined,
+        project: search.get("project") ?? undefined,
+        station: search.get("station") ?? undefined,
         point: search.get("point") ?? undefined,
       });
 

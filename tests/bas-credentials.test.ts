@@ -63,6 +63,15 @@ function json(body: unknown, method = "POST"): Request {
   });
 }
 
+/**
+ * The settings tree route takes a Request as of B7.6, so it can read the search
+ * and filter parameters out of the query string. Unfiltered unless a test
+ * passes one.
+ */
+function treeRequest(query = ""): Request {
+  return new Request("http://localhost/api/modules/bas/settings" + query);
+}
+
 const stationParams = (stationId: string) => ({
   params: Promise.resolve({ stationId }),
 });
@@ -215,7 +224,7 @@ describe("the key is read lazily and its absence disables one feature", () => {
     delete process.env.BAS_CREDENTIAL_KEY;
     await signInAsAdmin();
 
-    const response = await settingsTree();
+    const response = await settingsTree(treeRequest());
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as {
@@ -337,7 +346,7 @@ describe("no settings route ever returns the password or the ciphertext", () => 
     // failures - an error message is a response body too.
     const bodies: string[] = [
       await setResponse.clone().text(),
-      await (await settingsTree()).text(),
+      await (await settingsTree(treeRequest())).text(),
       await (
         await createStation(
           json({
@@ -400,7 +409,7 @@ describe("no settings route ever returns the password or the ciphertext", () => 
       stationParams(station.stationId.toString()),
     );
 
-    const body = (await (await settingsTree()).json()) as {
+    const body = (await (await settingsTree(treeRequest())).json()) as {
       data: {
         projects: Array<{
           buildings: Array<{
@@ -505,7 +514,7 @@ describe("a failure during a save does not put the password in the error", () =>
    * append-only, enforced by a trigger, so anything written there can never be
    * deleted or redacted.
    */
-  it("writes no password and no username into the audit log", async () => {
+  it("writes the username but never the password into the audit log", async () => {
     await signInAsAdmin();
     const station = await testDb.basStation.create({
       data: { siteId, niagaraStationName: "ZZTestAuditStation" },
@@ -523,11 +532,21 @@ describe("a failure during a save does not put the password in the error", () =>
 
     const serialised = JSON.stringify(events);
     expect(serialised).not.toContain(PLAINTEXT);
-    expect(serialised).not.toContain("ZZTEST_svc_user");
-    // What it DOES carry.
-    expect((events[0]!.metadata as { stationId?: string }).stationId).toBe(
-      station.stationId.toString(),
-    );
-    expect((events[0]!.metadata as { keyVersion?: number }).keyVersion).toBe(1);
+
+    // What it DOES carry: the station, the account, and which key encrypted it.
+    //
+    // The username is here deliberately, and was added after the first cut left
+    // it out. Swapping a station's login from bas_collector to admin is a
+    // privilege escalation on a building controller, and a log recording only
+    // "the credential changed" cannot show it. Append-only is the argument FOR
+    // recording a username, not against.
+    const meta = events[0]!.metadata as {
+      stationId?: string;
+      username?: string;
+      keyVersion?: number;
+    };
+    expect(meta.stationId).toBe(station.stationId.toString());
+    expect(meta.username).toBe("ZZTEST_svc_user");
+    expect(meta.keyVersion).toBe(1);
   });
 });

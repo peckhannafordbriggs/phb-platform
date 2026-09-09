@@ -53,6 +53,15 @@ function json(body: unknown, method = "POST"): Request {
   });
 }
 
+/**
+ * The settings tree route takes a Request as of B7.6, so it can read the search
+ * and filter parameters out of the query string. Unfiltered unless a test
+ * passes one.
+ */
+function treeRequest(query = ""): Request {
+  return new Request("http://localhost/api/modules/bas/settings" + query);
+}
+
 const stationParams = (stationId: string) => ({
   params: Promise.resolve({ stationId }),
 });
@@ -894,7 +903,7 @@ describe("registering a station keeps the accounting honest", () => {
       }),
     );
 
-    const response = await settingsTree();
+    const response = await settingsTree(treeRequest());
     const payload = (await response.json()) as {
       data: { stationsAccountedFor: { rendered: number; inDatabase: number } };
     };

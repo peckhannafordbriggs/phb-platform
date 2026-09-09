@@ -217,10 +217,16 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "bas.station_deleted": ({ actor, meta }) =>
     `${actor} deleted the station ${stringField(meta, "niagaraStationName") ?? "(unnamed)"}`,
 
-  // Says THAT it changed and who did it. The value is not here and never will
-  // be - see the note on the action in lib/audit.ts.
-  "bas.credential_set": ({ actor, meta }) =>
-    `${actor} set the Niagara login for station ${stringField(meta, "stationId") ?? "(unknown)"}`,
+  // Names the account. "The login changed" cannot show an escalation from
+  // bas_collector to admin; "changed it to admin" can. The password is not here
+  // and never will be - see the note on the action in lib/audit.ts.
+  "bas.credential_set": ({ actor, meta }) => {
+    const username = stringField(meta, "username");
+    const station = stringField(meta, "stationId") ?? "(unknown)";
+    return username === null
+      ? `${actor} set the Niagara login for station ${station}`
+      : `${actor} set the Niagara login for station ${station} to ${username}`;
+  },
 
   "bas.credential_cleared": ({ actor, meta }) =>
     `${actor} removed the stored Niagara login for station ${stringField(meta, "stationId") ?? "(unknown)"}`,

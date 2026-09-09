@@ -20,7 +20,13 @@ import type {
   UpdateProjectInput,
   UpdateStationInput,
 } from "@/lib/validation/bas-settings";
+import {
+  COLLECTING_WITHIN_HOURS,
+  NO_SETTINGS_FILTERS,
+  settingsFiltersActive,
+} from "./types";
 import type {
+  BasSettingsFilters,
   BasSettingsTree,
   SettingsBuilding,
   SettingsProject,
@@ -137,10 +143,107 @@ function toStation(row: StationRow): SettingsStation {
   };
 }
 
+/**
+ * The filter, as SQL (B7.6).
+ *
+ * FILTERED IN THE QUERY, not in the browser. With one project the two are
+ * indistinguishable; at ten they are not, and a screen that ships every station
+ * to the client and hides most of them is a screen that got slower for no
+ * reason and leaked rows into a response that claimed to exclude them.
+ *
+ * Two predicates, because they are applied at different levels. `stationWhere`
+ * decides which STATIONS survive; `searchWhere` also lets a project or building
+ * surface on its own name when no station filter is narrowing things.
+ */
+function stationPredicate(f: BasSettingsFilters): Prisma.Sql {
+  const clauses: Prisma.Sql[] = [];
+
+  const q = f.q.trim();
+  if (q.length > 0) {
+    // One term, matched against everything a person might type. Escaped for
+    // LIKE so a name containing % or _ searches for itself rather than
+    // becoming a wildcard.
+    const like = `%${q.replace(/([%_\\])/g, "\\$1")}%`;
+    clauses.push(Prisma.sql`(
+         st.display_name          ILIKE ${like} ESCAPE '\\'
+      OR st.niagara_station_name  ILIKE ${like} ESCAPE '\\'
+      OR st.base_url              ILIKE ${like} ESCAPE '\\'
+      OR s.name                   ILIKE ${like} ESCAPE '\\'
+      OR p.name                   ILIKE ${like} ESCAPE '\\'
+    )`);
+  }
+
+  if (f.mode !== null) {
+    // `unconfigured` is not a stored value - it is via_parent with nothing to
+    // be a parent, which the add_bas_projects migration deliberately allows so
+    // that a JACE linked in Workbench and never labelled here can exist as a
+    // row rather than being refused. Splitting it out here is what turns that
+    // tolerated state into a work queue somebody can actually pull from.
+    clauses.push(
+      f.mode === "unconfigured"
+        ? Prisma.sql`(st.connection_mode = 'via_parent' AND st.parent_station_id IS NULL)`
+        : f.mode === "via_parent"
+          ? Prisma.sql`(st.connection_mode = 'via_parent' AND st.parent_station_id IS NOT NULL)`
+          : Prisma.sql`st.connection_mode = ${f.mode}`,
+    );
+  }
+
+  if (f.credential !== null) {
+    clauses.push(
+      f.credential === "set"
+        ? Prisma.sql`cred.station_id IS NOT NULL`
+        : Prisma.sql`cred.station_id IS NULL`,
+    );
+  }
+
+  if (f.state !== null) {
+    // Bucketed on the newest RECORD, not the newest run: a run that completed
+    // successfully having collected nothing is not a station that is
+    // collecting, and that distinction is the whole reason this filter is
+    // worth having.
+    const newest = Prisma.sql`(
+      SELECT max(ck.last_record_ts)
+        FROM bas_points pt2
+        LEFT JOIN bas_sync_checkpoints ck ON ck.point_id = pt2.point_id
+       WHERE pt2.station_id = st.station_id
+    )`;
+    const cutoff = Prisma.sql`now() - ${`${COLLECTING_WITHIN_HOURS} hours`}::interval`;
+
+    if (f.state === "never") {
+      clauses.push(Prisma.sql`${newest} IS NULL`);
+    } else if (f.state === "collecting") {
+      clauses.push(Prisma.sql`${newest} >= ${cutoff}`);
+    } else {
+      clauses.push(Prisma.sql`(${newest} IS NOT NULL AND ${newest} < ${cutoff})`);
+    }
+  }
+
+  if (clauses.length === 0) return Prisma.sql`TRUE`;
+  return clauses.reduce((all, one) => Prisma.sql`${all} AND ${one}`);
+}
+
+/**
+ * Whether a filter narrows STATIONS specifically.
+ *
+ * When one does, a building with no surviving station is not interesting and a
+ * project with no surviving building is noise. Search on its own is different:
+ * typing a project name should show that project even if it holds nothing yet,
+ * because "did my new project save?" is a question this screen has to answer.
+ */
+function narrowsStations(f: BasSettingsFilters): boolean {
+  return f.mode !== null || f.state !== null || f.credential !== null;
+}
+
 export async function getBasSettingsTree(
   viewer: Viewer,
+  filters: BasSettingsFilters = NO_SETTINGS_FILTERS,
 ): Promise<BasSettingsTree> {
   const { entitled } = await basSiteScope(viewer);
+  const active = settingsFiltersActive(filters);
+  const where = stationPredicate(filters);
+  const stationsOnly = narrowsStations(filters);
+  const q = filters.q.trim();
+  const like = `%${q.replace(/([%_\\])/g, "\\$1")}%`;
 
   // The entitlement, applied to both queries. `null` is everyone today.
   const siteScope = (column: Prisma.Sql): Prisma.Sql =>
@@ -150,7 +253,8 @@ export async function getBasSettingsTree(
         ? Prisma.sql`FALSE`
         : Prisma.sql`${column} IN (${Prisma.join(entitled)})`;
 
-  const [orgs, hierarchy, stations, stationTotal] = await Promise.all([
+  const [orgs, hierarchy, stations, stationTotal, stationMatched] =
+    await Promise.all([
     prisma.basOrg.findMany({
       select: { orgId: true, name: true },
       orderBy: { name: "asc" },
@@ -174,6 +278,45 @@ export async function getBasSettingsTree(
       LEFT JOIN bas_sites s
         ON s.project_id = p.project_id
        AND ${siteScope(Prisma.sql`s.site_id`)}
+       -- A building survives the join if one of its stations survives the
+       -- filter, or - when no STATION filter is narrowing - if its own name or
+       -- its project's name matches the search. The s and p referenced inside
+       -- the EXISTS are the OUTER aliases, which is what lets a station match
+       -- on the name of the building it sits in.
+       --
+       -- No backticks in these comments: this whole query is a TypeScript
+       -- template literal and a backtick ends it.
+       AND (
+         ${active ? Prisma.sql`FALSE` : Prisma.sql`TRUE`}
+         OR EXISTS (
+           SELECT 1
+             FROM bas_stations st
+             LEFT JOIN bas_station_credentials cred ON cred.station_id = st.station_id
+            WHERE st.site_id = s.site_id AND ${where}
+         )
+         OR (
+           ${stationsOnly ? Prisma.sql`FALSE` : Prisma.sql`TRUE`}
+           AND ${
+             q.length === 0
+               ? Prisma.sql`FALSE`
+               : Prisma.sql`(s.name ILIKE ${like} ESCAPE '' OR p.name ILIKE ${like} ESCAPE '')`
+           }
+         )
+       )
+      -- A project survives if a building survived the join above - which the
+      -- LEFT JOIN reports as a non-null s.site_id - or if its own name matched.
+      -- A project with no buildings at all yields one row with s.site_id NULL,
+      -- so it is kept only when nothing is filtering or its name matched.
+      WHERE ${active ? Prisma.sql`FALSE` : Prisma.sql`TRUE`}
+         OR s.site_id IS NOT NULL
+         OR (
+           ${stationsOnly ? Prisma.sql`FALSE` : Prisma.sql`TRUE`}
+           AND ${
+             q.length === 0
+               ? Prisma.sql`FALSE`
+               : Prisma.sql`p.name ILIKE ${like} ESCAPE ''`
+           }
+         )
       ORDER BY o.name, p.name, s.name`,
 
     prisma.$queryRaw<StationRow[]>`
@@ -204,6 +347,11 @@ export async function getBasSettingsTree(
         run.status                                     AS last_run_status,
         max(ck.last_record_ts)                         AS newest_record_at
       FROM bas_stations st
+      -- Joined so the search can match a station by its BUILDING or PROJECT
+      -- name. LEFT, so a station whose building is missing is still returned
+      -- and lands in unassignedStations rather than disappearing.
+      LEFT JOIN bas_sites s ON s.site_id = st.site_id
+      LEFT JOIN bas_projects p ON p.project_id = s.project_id
       LEFT JOIN bas_stations parent ON parent.station_id = st.parent_station_id
       LEFT JOIN bas_points pt ON pt.station_id = st.station_id
       LEFT JOIN bas_sync_checkpoints ck ON ck.point_id = pt.point_id
@@ -218,17 +366,31 @@ export async function getBasSettingsTree(
       -- OR site_id IS NULL matches what the ingest-run queries already do: a
       -- station attached to no building is not "somebody else's building", and
       -- filtering it out would hide the row this screen exists to surface.
-      WHERE ${siteScope(Prisma.sql`st.site_id`)} OR st.site_id IS NULL
+      WHERE (${siteScope(Prisma.sql`st.site_id`)} OR st.site_id IS NULL)
+        AND ${where}
       GROUP BY st.station_id, parent.niagara_station_name,
                cred.username, cred.updated_at, run.started_at, run.status
       ORDER BY st.niagara_station_name`,
 
-    // Counted separately and deliberately unfiltered by the tree's joins, so it
-    // cannot agree with the tree by construction. See stationsAccountedFor.
+    // Counted separately and deliberately NOT through the tree's joins or its
+    // assembly, so it cannot agree with the tree by construction.
+    // See stationsAccountedFor.
     prisma.$queryRaw<Array<{ n: bigint }>>`
       SELECT count(*) AS n
       FROM bas_stations st
       WHERE ${siteScope(Prisma.sql`st.site_id`)} OR st.site_id IS NULL`,
+
+    // The same, WITH the filter applied. This is what `rendered` is compared
+    // against, and comparing against the unfiltered count instead is exactly
+    // the false alarm B7.6 exists to avoid.
+    prisma.$queryRaw<Array<{ n: bigint }>>`
+      SELECT count(*) AS n
+      FROM bas_stations st
+      LEFT JOIN bas_sites s ON s.site_id = st.site_id
+      LEFT JOIN bas_projects p ON p.project_id = s.project_id
+      LEFT JOIN bas_station_credentials cred ON cred.station_id = st.station_id
+      WHERE (${siteScope(Prisma.sql`st.site_id`)} OR st.site_id IS NULL)
+        AND ${where}`,
   ]);
 
   const stationsBySite = new Map<string, SettingsStation[]>();
@@ -317,7 +479,9 @@ export async function getBasSettingsTree(
     unassignedStations,
     stationsAccountedFor: {
       rendered,
+      matched: Number(stationMatched[0]?.n ?? 0),
       inDatabase: Number(stationTotal[0]?.n ?? 0),
+      filtered: active,
     },
   };
 }
@@ -1097,9 +1261,18 @@ async function writeCredential(
     action: "bas.credential_set",
     actorEmployeeId: args.actorId,
     moduleKey: BAS_MODULE_KEY,
-    // The station and the key version. Never the username, never the value.
+    // Station, username, key version. NEVER the password.
+    //
+    // The username was deliberately left out at first, on the grounds that
+    // audit_events is append-only and so anything written here can never be
+    // redacted. That reasoning was backwards. Append-only is a reason TO record
+    // it: swapping a station's login from `bas_collector` to `admin` is a
+    // privilege escalation on a building controller, and without the username
+    // the log shows only that *something* changed. A username is not a secret;
+    // the password is, and it is not here.
     metadata: {
       stationId: args.stationId.toString(),
+      username: args.username,
       keyVersion,
     },
   });

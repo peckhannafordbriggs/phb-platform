@@ -252,3 +252,32 @@ export const setCredentialSchema = z.object({
 export type CreateStationInput = z.infer<typeof createStationSchema>;
 export type UpdateStationInput = z.infer<typeof updateStationSchema>;
 export type SetCredentialInput = z.infer<typeof setCredentialSchema>;
+
+// ---------------------------------------------------------------------------
+// The Settings tree's filters (B7.6), read from the query string
+// ---------------------------------------------------------------------------
+
+/**
+ * Tolerant, like readFilters in app/(modules)/bas/filters.ts and for the same
+ * reason: these arrive from a URL a person may have edited or a bookmark from
+ * an older build. An unrecognised `mode` means "no mode filter", not a 422 -
+ * refusing to render the screen because one query parameter is stale would be
+ * a worse answer than showing it unfiltered.
+ *
+ * The search term is capped. It goes into an ILIKE, and there is no sensible
+ * reason for a 4KB one.
+ */
+export const settingsQuerySchema = z.object({
+  q: z.string().trim().max(200).catch("").default(""),
+  mode: z
+    .enum(["direct", "via_parent", "unconfigured"])
+    .nullable()
+    .catch(null)
+    .default(null),
+  state: z
+    .enum(["collecting", "stale", "never"])
+    .nullable()
+    .catch(null)
+    .default(null),
+  cred: z.enum(["set", "unset"]).nullable().catch(null).default(null),
+});

@@ -52,11 +52,15 @@ export type AuditAction =
   /**
    * Stations and their Niagara logins (B7.4).
    *
-   * `bas.credential_set` carries the station and the key version and NOTHING
-   * else. Not the password, and not even the username: audit_events is
-   * append-only and enforced so by a trigger, so anything written here can
-   * never be redacted. The one place a credential must not end up is the one
-   * table that cannot forget it.
+   * `bas.credential_set` carries the station, the USERNAME and the key version.
+   * Never the password.
+   *
+   * The username was left out at first, on the grounds that audit_events is
+   * append-only so anything written here can never be redacted. That reasoning
+   * was backwards. Append-only is the reason TO record it: changing a station's
+   * login from `bas_collector` to `admin` is a privilege escalation on a
+   * building controller, and a log saying only "the credential changed" cannot
+   * show that. A username is not a secret. The password is, and it is not here.
    */
   | "bas.station_created"
   | "bas.station_updated"

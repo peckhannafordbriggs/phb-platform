@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { settingsCountState } from "@/lib/modules/bas/types";
 import type {
   BasSettingsTree,
   SettingsBuilding,
@@ -26,6 +28,15 @@ import {
   updateProject,
   updateStation,
 } from "./health-client";
+import {
+  CRED_PARAM,
+  MODE_PARAM,
+  SEARCH_PARAM,
+  STATE_PARAM,
+  readSettingsFilters,
+  settingsQuery,
+  withFilter,
+} from "./filters";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /**
@@ -61,19 +72,44 @@ export function BasSettings() {
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    try {
-      setTree(await fetchBasSettings(signal));
-      setError(null);
-    } catch (cause) {
-      if (cause instanceof DOMException && cause.name === "AbortError") return;
-      setError(
-        cause instanceof ApiError
-          ? cause
-          : new ApiError("unexpected", "Something went wrong."),
-      );
-    }
-  }, []);
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+
+  // The filters ARE the URL. Nothing here mirrors them into component state,
+  // so a refresh, a bookmark and a tab switch all reproduce the same screen -
+  // the same reason the other two tabs keep their time range and building
+  // selection there.
+  const filters = useMemo(() => readSettingsFilters(params), [params]);
+  const query = useMemo(() => settingsQuery(filters), [filters]);
+
+  const setParam = useCallback(
+    (key: string, value: string | null) => {
+      // replace, not push: typing in a search box should not fill the back
+      // button with one entry per keystroke.
+      router.replace(`${pathname}${withFilter(params, key, value)}`, {
+        scroll: false,
+      });
+    },
+    [router, pathname, params],
+  );
+
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        setTree(await fetchBasSettings(query, signal));
+        setError(null);
+      } catch (cause) {
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
+        setError(
+          cause instanceof ApiError
+            ? cause
+            : new ApiError("unexpected", "Something went wrong."),
+        );
+      }
+    },
+    [query],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -117,7 +153,26 @@ export function BasSettings() {
     );
   }
 
-  const { rendered, inDatabase } = tree.stationsAccountedFor;
+  const { rendered, matched, inDatabase, filtered } =
+    tree.stationsAccountedFor;
+
+  /**
+   * THE TRAP, and the reason this is two separate conditions.
+   *
+   * B7.2 turned the screen red when the tree held fewer stations than the
+   * database did, to catch a bad join silently dropping rows. Filtering hides
+   * rows on purpose, so comparing against the UNFILTERED count would make that
+   * alarm fire on every keystroke - and a false alarm is how somebody learns
+   * to ignore a real one.
+   *
+   * So: red is `rendered !== matched`, where `matched` is counted by a separate
+   * query applying the same filter. That still means what it always meant -
+   * the tree lost stations nobody asked it to lose. `matched < inDatabase` is
+   * a filter working, and it is plain text.
+   */
+  const { alarm: mismatch, hiding } = settingsCountState(
+    tree.stationsAccountedFor,
+  );
 
   return (
     <div className="space-y-6">
@@ -137,14 +192,26 @@ export function BasSettings() {
         it is not enough for the query to be right - the screen states that what
         it drew is everything there is.
       */}
-      {rendered !== inDatabase && (
+      {mismatch && (
         <p className="rounded-md border p-4 text-sm" style={TONE_STYLE.bad}>
-          This tree shows {rendered} of {inDatabase} stations.{" "}
-          {inDatabase - rendered} could not be placed in the hierarchy and are
-          not on this screen. Report this - a station missing from Settings may
-          still be collecting.
+          This tree shows {rendered} of the {matched} stations that match, so{" "}
+          {matched - rendered} could not be placed in the hierarchy and are not
+          on this screen. Report this - a station missing from Settings may
+          still be collecting. This is not the filter: it is counted after the
+          filter is applied.
         </p>
       )}
+
+      <SettingsControls
+        filters={filters}
+        setParam={setParam}
+        busy={busy}
+        summary={
+          hiding
+            ? `Showing ${matched} of ${inDatabase} stations.`
+            : `${inDatabase} station${inDatabase === 1 ? "" : "s"}.`
+        }
+      />
 
       {tree.unassignedStations.length > 0 && (
         <section>
@@ -174,10 +241,21 @@ export function BasSettings() {
 
       {tree.projects.length === 0 ? (
         <p className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-6 text-sm text-[var(--muted)]">
-          No projects yet. Create one above to add a building under it.
+          {filtered
+            ? "Nothing matches. Clear the search or the filters."
+            : "No projects yet. Create one above to add a building under it."}
         </p>
       ) : (
-        <ul className="space-y-6">
+        /*
+          Capped and scrolled. This is planned to hold hundreds of stations
+          across many projects, and an unbounded list pushes the search box
+          that finds them off the top of the screen.
+
+          Scrolling alone would not be enough - a tall box of fully expanded
+          projects is no more usable than a tall page - which is why the cards
+          collapse too.
+        */
+        <ul className="max-h-[42rem] space-y-6 overflow-y-auto pr-1">
           {tree.projects.map((project) => (
             <li key={project.projectId}>
               <ProjectCard
@@ -185,6 +263,12 @@ export function BasSettings() {
                 tree={tree}
                 busy={busy}
                 run={run}
+                // Expanded when there are few enough to read at once, which
+                // keeps today's single project opening exactly as it did. Above
+                // that, collapsed - and a search overrides both, because a
+                // result you cannot see has not been found.
+                defaultOpen={tree.projects.length <= 2}
+                forceOpen={filtered}
               />
             </li>
           ))}
@@ -322,15 +406,32 @@ function ProjectCard({
   tree,
   busy,
   run,
+  defaultOpen,
+  forceOpen,
 }: {
   project: SettingsProject;
   tree: BasSettingsTree;
   busy: boolean;
   run: Run;
+  defaultOpen: boolean;
+  /** A search is active, so everything returned matched and should be visible. */
+  forceOpen: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(project.name);
   const [addingBuilding, setAddingBuilding] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+
+  // Expansion is component state rather than URL state, deliberately: it is a
+  // reading affordance and not a filter. Nobody bookmarks which cards were
+  // open, and putting it in the URL would mean a search had to rewrite it.
+  const expanded = forceOpen || open;
+
+  const buildings = project.buildings.length;
+  const stations = project.buildings.reduce(
+    (total, building) => total + building.stations.length,
+    0,
+  );
 
   return (
     <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-5">
@@ -371,11 +472,37 @@ function ProjectCard({
         </form>
       ) : (
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-medium text-[var(--foreground)]">
-              {project.name}
-            </h2>
-            <p className="mt-0.5 text-xs text-[var(--muted)]">{project.orgName}</p>
+          <div className="flex items-baseline gap-2">
+            {/*
+              The whole heading is the toggle, not a separate chevron - a bigger
+              target and one obvious thing to click. Disabled while a search is
+              active, because collapsing a card the search just surfaced would
+              hide the match.
+            */}
+            <button
+              type="button"
+              className="text-left disabled:cursor-default"
+              aria-expanded={expanded}
+              disabled={forceOpen}
+              onClick={() => setOpen((current) => !current)}
+            >
+              <h2 className="text-sm font-medium text-[var(--foreground)]">
+                <span
+                  aria-hidden="true"
+                  className="mr-1.5 inline-block text-[var(--muted)]"
+                >
+                  {expanded ? "\u25be" : "\u25b8"}
+                </span>
+                {project.name}
+              </h2>
+              <p className="mt-0.5 text-xs text-[var(--muted)]">
+                {project.orgName}
+                {" \u00b7 "}
+                {buildings} building{buildings === 1 ? "" : "s"}
+                {", "}
+                {stations} station{stations === 1 ? "" : "s"}
+              </p>
+            </button>
           </div>
           <div className="flex gap-2">
             <button
@@ -407,7 +534,7 @@ function ProjectCard({
         </div>
       )}
 
-      {project.buildings.length === 0 ? (
+      {!expanded ? null : project.buildings.length === 0 ? (
         <p className="mt-4 text-sm text-[var(--muted)]">
           No buildings in this project.
         </p>
@@ -429,7 +556,7 @@ function ProjectCard({
         </ul>
       )}
 
-      <div className="mt-4">
+      <div className={expanded ? "mt-4" : "hidden"}>
         {addingBuilding ? (
           <BuildingForm
             title="New building"
@@ -1120,5 +1247,152 @@ function CredentialPanel({
         </button>
       </div>
     </form>
+  );
+}
+
+
+/**
+ * Search and filters (B7.6).
+ *
+ * Every control writes to the URL and nothing else. There is no local copy of
+ * the search term, so the input is driven by `filters.q` and a refresh
+ * reproduces exactly what was on screen - which is the property the other two
+ * tabs already have and the reason their filters live there too.
+ *
+ * The filters are the ones worth having among hundreds of stations: how a
+ * station is reached, whether data is actually arriving, and whether anybody
+ * has entered its login. Narrowing to one project is what the search box is
+ * for, so there is deliberately no project dropdown.
+ */
+function SettingsControls({
+  filters,
+  setParam,
+  busy,
+  summary,
+}: {
+  filters: { q: string; mode: string | null; state: string | null; cred: string | null };
+  setParam: (key: string, value: string | null) => void;
+  busy: boolean;
+  summary: string;
+}) {
+  const anyActive =
+    filters.q.trim().length > 0 ||
+    filters.mode !== null ||
+    filters.state !== null ||
+    filters.cred !== null;
+
+  return (
+    <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-[18rem] flex-1">
+          <Field
+            label="Search"
+            hint="Project, building, display name, Niagara name, or address."
+          >
+            <input
+              className={FIELD}
+              type="search"
+              value={filters.q}
+              disabled={busy}
+              placeholder="e.g. Spring Grove, SpringGroveLabComputer, 196.1.1"
+              onChange={(e) => setParam(SEARCH_PARAM, e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <Select
+          label="Reached by"
+          value={filters.mode}
+          disabled={busy}
+          onChange={(v) => setParam(MODE_PARAM, v)}
+          options={[
+            ["direct", "Direct"],
+            ["via_parent", "Via parent"],
+            // The work queue, and the reason it is not folded into Via parent:
+            // these are the stations nobody has finished configuring.
+            ["unconfigured", "Discovered, unassigned"],
+          ]}
+        />
+
+        <Select
+          label="Collection"
+          value={filters.state}
+          disabled={busy}
+          onChange={(v) => setParam(STATE_PARAM, v)}
+          options={[
+            ["collecting", "Collecting"],
+            ["stale", "Stale"],
+            ["never", "Never collected"],
+          ]}
+        />
+
+        <Select
+          label="Credentials"
+          value={filters.cred}
+          disabled={busy}
+          onChange={(v) => setParam(CRED_PARAM, v)}
+          options={[
+            ["set", "Stored"],
+            ["unset", "Not stored"],
+          ]}
+        />
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        {/*
+          Plain text, never a colour. This is a filter reporting what it did.
+          The red banner above is for a count that disagrees with the database
+          AFTER filtering, which is a different claim entirely.
+        */}
+        <p className="text-xs text-[var(--muted)]">{summary}</p>
+        {anyActive && (
+          <button
+            type="button"
+            className="text-xs underline decoration-dotted"
+            onClick={() => {
+              setParam(SEARCH_PARAM, null);
+              setParam(MODE_PARAM, null);
+              setParam(STATE_PARAM, null);
+              setParam(CRED_PARAM, null);
+            }}
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Select({
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: string | null;
+  options: ReadonlyArray<readonly [string, string]>;
+  disabled: boolean;
+  onChange: (value: string | null) => void;
+}) {
+  return (
+    <Field label={label}>
+      <select
+        className={FIELD}
+        value={value ?? ""}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
+      >
+        {/* Absent IS all, so the empty value clears the parameter. */}
+        <option value="">Any</option>
+        {options.map(([key, text]) => (
+          <option key={key} value={key}>
+            {text}
+          </option>
+        ))}
+      </select>
+    </Field>
   );
 }

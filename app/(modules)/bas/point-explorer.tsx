@@ -32,7 +32,17 @@ import {
   windowLabel,
   type Tone,
 } from "./health-client";
-import { ALL_SITES, DAYS_PARAM, POINT_PARAM, SITE_PARAM, readFilters, withFilter } from "./filters";
+import {
+  ALL_SITES,
+  DAYS_PARAM,
+  POINT_PARAM,
+  PROJECT_PARAM,
+  SITE_PARAM,
+  STATION_PARAM,
+  readFilters,
+  withCascade,
+  withFilter,
+} from "./filters";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 
 /**
@@ -72,11 +82,17 @@ export function PointExplorer() {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const { siteId, windowDays, pointId } = filters;
+  const { siteId, windowDays, pointId, projectId, stationId } = filters;
 
   const load = useCallback(
     async (
-      selection: { days: number; siteId: string | null; pointId: string | null },
+      selection: {
+        days: number;
+        siteId: string | null;
+        pointId: string | null;
+        projectId: string | null;
+        stationId: string | null;
+      },
       options: { quiet?: boolean } = {},
     ) => {
       if (options.quiet !== true) setLoading(true);
@@ -99,14 +115,17 @@ export function PointExplorer() {
   );
 
   useEffect(() => {
-    void load({ days: windowDays, siteId, pointId });
-  }, [load, windowDays, siteId, pointId]);
+    void load({ days: windowDays, siteId, pointId, projectId, stationId });
+  }, [load, windowDays, siteId, pointId, projectId, stationId]);
 
   // The ref carries the CURRENT selection, so a poll cannot revert the screen to
   // whatever was selected when the timer was installed.
   const pollRef = useRef<() => void>(() => {});
   pollRef.current = () => {
-    void load({ days: windowDays, siteId, pointId }, { quiet: true });
+    void load(
+      { days: windowDays, siteId, pointId, projectId, stationId },
+      { quiet: true },
+    );
   };
 
   useEffect(() => {
@@ -151,6 +170,13 @@ export function PointExplorer() {
    * twenty entries in the back button. Tab links use a normal <Link>, so moving
    * between tabs IS in the history.
    */
+  /** A cascade level: sets it and clears every level below, the point too. */
+  const setCascade = (key: string, value: string | null) => {
+    router.replace(`${pathname}${withCascade(searchParams, key, value)}`, {
+      scroll: false,
+    });
+  };
+
   const setParam = (key: string, value: string | null) => {
     router.replace(`${pathname}${withFilter(searchParams, key, value)}`, {
       scroll: false,
@@ -170,7 +196,9 @@ export function PointExplorer() {
         <p className="mt-1 text-sm text-red-900">{error.message}</p>
         <button
           type="button"
-          onClick={() => void load({ days: windowDays, siteId, pointId })}
+          onClick={() =>
+            void load({ days: windowDays, siteId, pointId, projectId, stationId })
+          }
           className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm hover:bg-red-100"
         >
           Try again
@@ -189,22 +217,32 @@ export function PointExplorer() {
       {/* ------------------------------------------------------- controls */}
 
       <div className="flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-[var(--muted)]">Building</span>
-          <select
-            value={data.selectedSiteId ?? ALL_SITES}
-            onChange={(event) => setParam(SITE_PARAM, event.target.value)}
-            disabled={data.sites.length === 0}
-            className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
-          >
-            <option value={ALL_SITES}>All</option>
-            {data.sites.map((site) => (
-              <option key={site.siteId} value={site.siteId}>
-                {site.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {/*
+          Project -> Building -> JACE, and here they narrow WHICH POINTS ARE
+          SELECTABLE: the point list below is built from the same intersection,
+          so picking a JACE shortens the picker rather than just annotating the
+          chart. Changing a level clears the ones under it, the point included -
+          a point belongs to a station in a building, so narrowing above it can
+          strand it.
+        */}
+        <Picker
+          label="Project"
+          value={data.selectedProjectId}
+          onChange={(v) => setCascade(PROJECT_PARAM, v)}
+          options={data.projects.map((row) => [row.projectId, row.name])}
+        />
+        <Picker
+          label="Building"
+          value={data.selectedSiteId}
+          onChange={(v) => setCascade(SITE_PARAM, v)}
+          options={data.sites.map((row) => [row.siteId, row.name])}
+        />
+        <Picker
+          label="JACE"
+          value={data.selectedStationId}
+          onChange={(v) => setCascade(STATION_PARAM, v)}
+          options={data.stations.map((row) => [row.stationId, row.name])}
+        />
 
         <label className="flex items-center gap-2 text-sm">
           <span className="text-[var(--muted)]">Point</span>
@@ -789,5 +827,47 @@ function ExplorerSkeleton() {
         <div className="h-72 animate-pulse bg-[var(--surface)]" />
       </div>
     </div>
+  );
+}
+
+
+/**
+ * One level of the Project -> Building -> JACE cascade.
+ *
+ * The same control as Collection Health's. Duplicated rather than shared
+ * because the two screens style their control rows differently and a shared
+ * component would have grown a `variant` prop to express that - which is more
+ * coupling than twenty lines of select is worth.
+ */
+function Picker({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string | null;
+  options: Array<[string, string]>;
+  onChange: (value: string | null) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <span className="text-[var(--muted)]">{label}</span>
+      <select
+        value={value ?? ALL_SITES}
+        onChange={(event) =>
+          onChange(event.target.value === ALL_SITES ? null : event.target.value)
+        }
+        disabled={options.length === 0}
+        className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
+      >
+        <option value={ALL_SITES}>All</option>
+        {options.map(([key, text]) => (
+          <option key={key} value={key}>
+            {text}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

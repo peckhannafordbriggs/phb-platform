@@ -145,12 +145,18 @@ describe("reading filters out of a URL", () => {
       siteId: null,
       windowDays: DEFAULT_WINDOW_DAYS,
       pointId: null,
+      // B7.6 added the two levels either side of the building. Both default to
+      // All, so nobody has to drill three levels to see everything.
+      projectId: null,
+      stationId: null,
     });
   });
 
   it("reads a full selection", () => {
-    expect(read("site=5&days=30&point=41")).toEqual({
+    expect(read("project=2&site=5&station=9&days=30&point=41")).toEqual({
+      projectId: "2",
       siteId: "5",
+      stationId: "9",
       windowDays: 30,
       pointId: "41",
     });

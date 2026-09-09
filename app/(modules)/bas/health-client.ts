@@ -30,7 +30,12 @@ export class ApiError extends Error {
 const BASE = "/api/modules/bas";
 
 export async function fetchCollectionHealth(
-  options: { days?: number; siteId?: string | null } = {},
+  options: {
+    days?: number;
+    siteId?: string | null;
+    projectId?: string | null;
+    stationId?: string | null;
+  } = {},
   signal?: AbortSignal,
 ): Promise<CollectionHealth> {
   const params = new URLSearchParams();
@@ -38,6 +43,8 @@ export async function fetchCollectionHealth(
   // Absent, not "all": the server's default IS all, and sending a sentinel it
   // has to recognise is one more string to keep in step across two files.
   if (options.siteId != null) params.set("site", options.siteId);
+  if (options.projectId != null) params.set("project", options.projectId);
+  if (options.stationId != null) params.set("station", options.stationId);
   const suffix = params.toString();
 
   let response: Response;
@@ -521,13 +528,21 @@ export function describeHeadroom(headroom: Headroom): string {
 // ------------------------------------------------------- B4: Point Explorer
 
 export async function fetchPointExplorer(
-  options: { days?: number; siteId?: string | null; pointId?: string | null } = {},
+  options: {
+    days?: number;
+    siteId?: string | null;
+    pointId?: string | null;
+    projectId?: string | null;
+    stationId?: string | null;
+  } = {},
   signal?: AbortSignal,
 ): Promise<PointExplorer> {
   const params = new URLSearchParams();
   if (options.days !== undefined) params.set("days", String(options.days));
   if (options.siteId != null) params.set("site", options.siteId);
   if (options.pointId != null) params.set("point", options.pointId);
+  if (options.projectId != null) params.set("project", options.projectId);
+  if (options.stationId != null) params.set("station", options.stationId);
   const suffix = params.toString();
 
   let response: Response;
@@ -665,11 +680,18 @@ export function formatValue(value: number | null, unit: string | null): string {
  * says exactly that rather than showing an empty tree.
  */
 export async function fetchBasSettings(
+  query = "",
   signal?: AbortSignal,
 ): Promise<BasSettingsTree> {
   let response: Response;
   try {
-    response = await fetch(`${BASE}/settings`, { signal, cache: "no-store" });
+    // The filters travel as a query string and are applied in SQL. Nothing is
+    // filtered in this file: a screen that fetched every station and hid most
+    // of them would have shipped the rows it claimed to exclude.
+    response = await fetch(`${BASE}/settings${query}`, {
+      signal,
+      cache: "no-store",
+    });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new ApiError("network", "Could not reach the server.");

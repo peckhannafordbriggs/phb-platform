@@ -107,6 +107,199 @@ function siteFilter(siteIds: bigint[] | null, column: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`${column} IN (${Prisma.join(siteIds)})`;
 }
 
+interface SiteRow {
+  site_id: bigint;
+  name: string;
+  org_name: string;
+}
+
+/**
+ * SELECTION, three levels deep (B7.6).
+ *
+ * Project -> Building -> JACE. Each narrows the next, each defaults to All, and
+ * all three are intersected with the ENTITLEMENT before any query is built.
+ *
+ * The separation between the two is the same one `basSiteScope` documents and
+ * it matters more now, not less: three controls that a person can set is three
+ * more ways to ask for something they may not have. `entitled` decides what
+ * exists as far as this request is concerned; the selection can only ever
+ * narrow within it, never widen.
+ *
+ * An id that is not in its own option list is `site_not_found`, which the route
+ * renders as 404 - the same answer as a building that does not exist, for the
+ * same reason as the module guard. That includes a coherent-looking but stale
+ * combination: `?project=1&site=5` where building 5 has since moved to another
+ * project produces a building list that does not contain 5, and 5 is refused.
+ * Showing the data anyway would render something the URL did not ask for.
+ */
+export interface BasSelectionRequest {
+  projectId?: bigint | null;
+  siteId?: bigint | null;
+  stationId?: bigint | null;
+}
+
+interface ProjectRow {
+  project_id: bigint;
+  name: string;
+  org_name: string;
+}
+
+interface StationRow {
+  station_id: bigint;
+  name: string;
+  site_name: string;
+}
+
+export interface ResolvedSelection {
+  /** Option lists, each narrowed by the level above it. */
+  projects: ProjectRow[];
+  sites: SiteRow[];
+  stations: StationRow[];
+
+  selectedProject: ProjectRow | null;
+  selectedSite: SiteRow | null;
+  selectedStation: StationRow | null;
+
+  /**
+   * The site ids every query is built from: the entitlement, narrowed by
+   * whichever of project/building was chosen. `null` means "every entitled
+   * site" and an empty array means "none", which `siteFilter` renders as FALSE
+   * rather than as an empty IN list.
+   */
+  siteIds: bigint[] | null;
+
+  /** `null` unless a JACE was chosen. Applied on top of siteIds. */
+  stationId: bigint | null;
+
+  /** Whether anything narrower than "all" was asked for. */
+  filtered: boolean;
+}
+
+/**
+ * Resolve all three levels inside the caller's transaction.
+ *
+ * `tx` rather than `prisma` so the option lists are read at the same instant as
+ * the figures beside them - a dropdown listing a building that had already been
+ * deleted when the tiles were counted is a screen that disagrees with itself.
+ */
+async function resolveSelection(
+  tx: Prisma.TransactionClient,
+  entitled: bigint[] | null,
+  request: BasSelectionRequest,
+): Promise<ResolvedSelection> {
+  const requestedProject = request.projectId ?? null;
+  const requestedSite = request.siteId ?? null;
+  const requestedStation = request.stationId ?? null;
+
+  // --- projects: every one the employee may see, never narrowed by the
+  // selection. A dropdown that lost its other options the moment you picked
+  // one could not be used to pick again.
+  const projects = await tx.$queryRaw<ProjectRow[]>`
+    SELECT DISTINCT pr.project_id, pr.name, o.name AS org_name
+    FROM bas_projects pr
+    JOIN bas_orgs o ON o.org_id = pr.org_id
+    JOIN bas_sites s ON s.project_id = pr.project_id
+    WHERE ${siteFilter(entitled, Prisma.sql`s.site_id`)}
+    ORDER BY o.name, pr.name
+  `;
+
+  const selectedProject =
+    requestedProject === null
+      ? null
+      : (projects.find((row) => row.project_id === requestedProject) ?? null);
+
+  if (requestedProject !== null && selectedProject === null) {
+    throw new BasError("site_not_found", "That project is not available.");
+  }
+
+  // --- buildings: narrowed by the chosen project, because that is what makes
+  // the cascade honest. A building list that still offered every building
+  // would let someone pick one outside the project and see an empty screen
+  // with nothing saying why.
+  const projectScope =
+    selectedProject === null
+      ? Prisma.sql`TRUE`
+      : Prisma.sql`s.project_id = ${selectedProject.project_id}`;
+
+  const sites = await tx.$queryRaw<SiteRow[]>`
+    SELECT s.site_id, s.name, o.name AS org_name
+    FROM bas_sites s
+    JOIN bas_orgs o USING (org_id)
+    WHERE ${siteFilter(entitled, Prisma.sql`s.site_id`)} AND ${projectScope}
+    ORDER BY o.name, s.name
+  `;
+
+  const selectedSite =
+    requestedSite === null
+      ? null
+      : (sites.find((row) => row.site_id === requestedSite) ?? null);
+
+  if (requestedSite !== null && selectedSite === null) {
+    throw new BasError("site_not_found", "That building is not available.");
+  }
+
+  // The site ids the rest of the request is built from. Narrowed by the
+  // building if one was chosen, otherwise by the project's buildings, otherwise
+  // the whole entitlement.
+  const siteIds: bigint[] | null =
+    selectedSite !== null
+      ? effectiveSiteIds(entitled, selectedSite.site_id)
+      : selectedProject !== null
+        ? sites.map((row) => row.site_id)
+        : entitled;
+
+  // --- JACEs: narrowed by both levels above.
+  const stationSiteScope = siteFilter(siteIds, Prisma.sql`st.site_id`);
+
+  const stations = await tx.$queryRaw<StationRow[]>`
+    SELECT st.station_id,
+           COALESCE(st.display_name, st.niagara_station_name) AS name,
+           s.name AS site_name
+    FROM bas_stations st
+    JOIN bas_sites s ON s.site_id = st.site_id
+    WHERE ${stationSiteScope} AND st.is_active
+    ORDER BY s.name, name
+  `;
+
+  const selectedStation =
+    requestedStation === null
+      ? null
+      : (stations.find((row) => row.station_id === requestedStation) ?? null);
+
+  if (requestedStation !== null && selectedStation === null) {
+    throw new BasError("site_not_found", "That station is not available.");
+  }
+
+  return {
+    projects,
+    sites,
+    stations,
+    selectedProject,
+    selectedSite,
+    selectedStation,
+    siteIds,
+    stationId: selectedStation?.station_id ?? null,
+    filtered:
+      selectedProject !== null ||
+      selectedSite !== null ||
+      selectedStation !== null,
+  };
+}
+
+/**
+ * The chosen JACE as a SQL fragment, or TRUE.
+ *
+ * Separate from `siteFilter` rather than folded into it, because they are
+ * applied to different columns in different queries and a single helper
+ * guessing which one it was given is how a filter silently stops filtering.
+ */
+function stationFilter(
+  stationId: bigint | null,
+  column: Prisma.Sql,
+): Prisma.Sql {
+  return stationId === null ? Prisma.sql`TRUE` : Prisma.sql`${column} = ${stationId}`;
+}
+
 /**
  * A site id from a query string.
  *
@@ -123,6 +316,52 @@ export function parseSiteId(value: string | null | undefined): bigint | null {
     throw new BasError("site_not_found", "That building is not available.");
   }
   return BigInt(trimmed);
+}
+
+/**
+ * A project or station id from a query string.
+ *
+ * Same contract as `parseSiteId`: bigint because these are PostgreSQL bigints
+ * and a JS number rounds silently past 2^53, and an unparseable value is simply
+ * not a project rather than a 500. `resolveSelection` then refuses it the same
+ * way it refuses one that exists but is not this employee's.
+ */
+export function parseProjectId(value: string | null | undefined): bigint | null {
+  return parseBigIntParam(value, "That project is not available.");
+}
+
+export function parseStationId(value: string | null | undefined): bigint | null {
+  return parseBigIntParam(value, "That station is not available.");
+}
+
+function parseBigIntParam(
+  value: string | null | undefined,
+  message: string,
+): bigint | null {
+  if (value === undefined || value === null) return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.toLowerCase() === "all") return null;
+  if (!/^[0-9]+$/.test(trimmed)) {
+    throw new BasError("site_not_found", message);
+  }
+  return BigInt(trimmed);
+}
+
+/**
+ * The active selection in words, or null when nothing is selected.
+ *
+ * Built here rather than in the component so the scope line, the per-tile
+ * qualifiers and the "outside this filter" warning cannot describe the
+ * selection three slightly different ways.
+ */
+function describeSelection(selection: ResolvedSelection): string | null {
+  const parts = [
+    selection.selectedProject?.name,
+    selection.selectedSite?.name,
+    selection.selectedStation?.name,
+  ].filter((part): part is string => part !== undefined && part !== null);
+
+  return parts.length === 0 ? null : parts.join(" \u2192 ");
 }
 
 /** Window bounds. The Grafana dashboard opens on `now-7d`. */
@@ -249,17 +488,9 @@ interface GapRow {
   notes: string | null;
 }
 
-export interface CollectionHealthOptions {
+export interface CollectionHealthOptions extends BasSelectionRequest {
   /** Days of run history. Clamped here as well as parsed at the route. */
   windowDays?: number;
-  /** One building, or `null`/absent for all of the ones this employee may see. */
-  siteId?: bigint | null;
-}
-
-interface SiteRow {
-  site_id: bigint;
-  name: string;
-  org_name: string;
 }
 
 /**
@@ -282,7 +513,6 @@ export async function getCollectionHealth(
   options: CollectionHealthOptions = {},
 ): Promise<CollectionHealth> {
   const windowDays = clampWindowDays(options.windowDays);
-  const requestedSiteId = options.siteId ?? null;
   const scope = await basSiteScope(viewer);
   const entitled = scope.entitled;
 
@@ -294,37 +524,18 @@ export async function getCollectionHealth(
 
     // --- the building filter, before anything reads a row ------------------
 
-    // Scoped to the ENTITLEMENT and never to the selection: this list is the
-    // dropdown's options, and a dropdown that lost its other options the moment
-    // you picked one could not be used to pick again.
-    const siteRows = await tx.$queryRaw<SiteRow[]>`
-      SELECT s.site_id, s.name, o.name AS org_name
-      FROM bas_sites s
-      JOIN bas_orgs o USING (org_id)
-      WHERE ${siteFilter(entitled, Prisma.sql`s.site_id`)}
-      ORDER BY o.name, s.name
-    `;
+    // Project -> Building -> JACE, each narrowed by the one above and all three
+    // intersected with the entitlement. See resolveSelection.
+    const selection = await resolveSelection(tx, entitled, options);
+    const { siteIds, stationId } = selection;
 
-    // The first of the two narrowings. A site the employee cannot list is not a
-    // site as far as this request is concerned, whether it is missing or merely
-    // not theirs - see lib/modules/bas/errors.ts for why those answer alike.
-    const selected =
-      requestedSiteId === null
-        ? null
-        : (siteRows.find((row) => row.site_id === requestedSiteId) ?? null);
-
-    if (requestedSiteId !== null && selected === null) {
-      throw new BasError("site_not_found", "That building is not available.");
-    }
-
-    // The second. Belt and braces: even with the check above, every query below
-    // is built from the intersection rather than from the request.
-    const siteIds = effectiveSiteIds(entitled, requestedSiteId);
-
-    // bas_v_collection_health exposes site_id directly; bas_readings and
-    // bas_ingest_runs reach it through bas_stations, exactly as Grafana does.
-    const healthSites = siteFilter(siteIds, Prisma.sql`site_id`);
-    const stationSites = siteFilter(siteIds, Prisma.sql`st.site_id`);
+    // bas_v_collection_health exposes site_id AND station_id directly;
+    // bas_readings and bas_ingest_runs reach both through bas_stations, exactly
+    // as Grafana does.
+    const healthSites = Prisma.sql`${siteFilter(siteIds, Prisma.sql`site_id`)}
+      AND ${stationFilter(stationId, Prisma.sql`station_id`)}`;
+    const stationSites = Prisma.sql`${siteFilter(siteIds, Prisma.sql`st.site_id`)}
+      AND ${stationFilter(stationId, Prisma.sql`st.station_id`)}`;
 
     // --- the five tiles -----------------------------------------------------
 
@@ -499,10 +710,43 @@ export async function getCollectionHealth(
       LIMIT ${DATA_GAPS_LIMIT}
     `;
 
+    /**
+     * THE SAME TILES, WITHOUT THE FILTER.
+     *
+     * Every tile on this screen counts only what the filter selected, which is
+     * correct and is also how somebody reads "0 points at risk" in one building
+     * and concludes nothing anywhere is at risk. This project has lost about
+     * 117 hours per point across three outages and one of them sat unnoticed in
+     * the database for eight days; a reassuring number that is only true of a
+     * subset is exactly that failure.
+     *
+     * So when a filter is active the screen is also told what the answer would
+     * have been without it, and says so when the unfiltered answer is worse.
+     *
+     * Scoped to the ENTITLEMENT, not to the whole table - "outside your filter"
+     * must never mean "outside your permissions".
+     *
+     * Skipped entirely when nothing is filtered, where it would be the same
+     * scan for the same numbers.
+     */
+    const unfiltered = selection.filtered
+      ? firstRow(
+          await tx.$queryRaw<Array<{ active_points: number; points_at_risk: number }>>`
+            SELECT
+              count(*) FILTER (WHERE is_active)::int AS active_points,
+              count(*) FILTER (WHERE is_active AND roll_risk <> 'ok')::int
+                AS points_at_risk
+            FROM bas_v_collection_health
+            WHERE ${siteFilter(entitled, Prisma.sql`site_id`)}
+          `,
+          "unfiltered totals",
+        )
+      : null;
+
     return {
       observedAt,
-      siteRows,
-      selected,
+      selection,
+      unfiltered,
       totals,
       readingTotals,
       points,
@@ -550,12 +794,42 @@ export async function getCollectionHealth(
             result.runGap.gap_hours > rollHorizonHours,
         };
 
+  const { selection } = result;
+
   const health: CollectionHealth = {
     windowDays,
-    sites: result.siteRows.map(toSiteOption),
-    selectedSiteId:
-      result.selected === null ? null : result.selected.site_id.toString(),
-    selectedSiteName: result.selected === null ? null : result.selected.name,
+
+    projects: selection.projects.map((row) => ({
+      projectId: row.project_id.toString(),
+      name: row.name,
+      orgName: row.org_name,
+    })),
+    sites: selection.sites.map(toSiteOption),
+    stations: selection.stations.map((row) => ({
+      stationId: row.station_id.toString(),
+      name: row.name,
+      siteName: row.site_name,
+    })),
+
+    selectedProjectId: selection.selectedProject?.project_id.toString() ?? null,
+    selectedProjectName: selection.selectedProject?.name ?? null,
+    selectedSiteId: selection.selectedSite?.site_id.toString() ?? null,
+    selectedSiteName: selection.selectedSite?.name ?? null,
+    selectedStationId: selection.selectedStation?.station_id.toString() ?? null,
+    selectedStationName: selection.selectedStation?.name ?? null,
+
+    scope: {
+      filtered: selection.filtered,
+      label: describeSelection(selection),
+    },
+    unfiltered:
+      result.unfiltered === null
+        ? null
+        : {
+            activePoints: result.unfiltered.active_points,
+            pointsAtRisk: result.unfiltered.points_at_risk,
+          },
+
     observedAt: result.observedAt.toISOString(),
     totals: {
       activePoints: result.totals.active_points,
@@ -731,9 +1005,8 @@ interface TrendRow {
   value_num: number | null;
 }
 
-export interface PointExplorerOptions {
+export interface PointExplorerOptions extends BasSelectionRequest {
   windowDays?: number;
-  siteId?: bigint | null;
   /** Absent means "the first point the picker would offer". */
   pointId?: bigint | null;
 }
@@ -759,7 +1032,6 @@ export async function getPointExplorer(
   options: PointExplorerOptions = {},
 ): Promise<PointExplorer> {
   const windowDays = clampWindowDays(options.windowDays);
-  const requestedSiteId = options.siteId ?? null;
   const requestedPointId = options.pointId ?? null;
   const scope = await basSiteScope(viewer);
   const entitled = scope.entitled;
@@ -770,25 +1042,13 @@ export async function getPointExplorer(
       "now()",
     ).now;
 
-    const siteRows = await tx.$queryRaw<SiteRow[]>`
-      SELECT s.site_id, s.name, o.name AS org_name
-      FROM bas_sites s
-      JOIN bas_orgs o USING (org_id)
-      WHERE ${siteFilter(entitled, Prisma.sql`s.site_id`)}
-      ORDER BY o.name, s.name
-    `;
-
-    const selectedSite =
-      requestedSiteId === null
-        ? null
-        : (siteRows.find((row) => row.site_id === requestedSiteId) ?? null);
-
-    if (requestedSiteId !== null && selectedSite === null) {
-      throw new BasError("site_not_found", "That building is not available.");
-    }
-
-    const siteIds = effectiveSiteIds(entitled, requestedSiteId);
-    const healthSites = siteFilter(siteIds, Prisma.sql`site_id`);
+    // The same three-level cascade as Collection Health, and it narrows WHICH
+    // POINTS ARE SELECTABLE - the picker below is built from healthSites, so a
+    // JACE filter reduces the list rather than merely greying out the chart.
+    const selection = await resolveSelection(tx, entitled, options);
+    const { siteIds, stationId } = selection;
+    const healthSites = Prisma.sql`${siteFilter(siteIds, Prisma.sql`site_id`)}
+      AND ${stationFilter(stationId, Prisma.sql`station_id`)}`;
 
     // Grafana's $point variable query, plus the two columns the screen needs
     // that a dropdown does not: the unit, and the interval the break threshold
@@ -821,8 +1081,7 @@ export async function getPointExplorer(
     if (selectedPoint === null) {
       return {
         observedAt,
-        siteRows,
-        selectedSite,
+        selection,
         pointRows,
         selectedPoint: null,
         stats: null,
@@ -904,8 +1163,7 @@ export async function getPointExplorer(
 
     return {
       observedAt,
-      siteRows,
-      selectedSite,
+      selection,
       pointRows,
       selectedPoint,
       stats,
@@ -924,10 +1182,29 @@ export async function getPointExplorer(
   const explorer: PointExplorer = {
     windowDays,
     observedAt: result.observedAt.toISOString(),
-    sites: result.siteRows.map(toSiteOption),
-    selectedSiteId:
-      result.selectedSite === null ? null : result.selectedSite.site_id.toString(),
-    selectedSiteName: result.selectedSite === null ? null : result.selectedSite.name,
+    projects: result.selection.projects.map((row) => ({
+      projectId: row.project_id.toString(),
+      name: row.name,
+      orgName: row.org_name,
+    })),
+    sites: result.selection.sites.map(toSiteOption),
+    stations: result.selection.stations.map((row) => ({
+      stationId: row.station_id.toString(),
+      name: row.name,
+      siteName: row.site_name,
+    })),
+    selectedProjectId:
+      result.selection.selectedProject?.project_id.toString() ?? null,
+    selectedProjectName: result.selection.selectedProject?.name ?? null,
+    selectedSiteId: result.selection.selectedSite?.site_id.toString() ?? null,
+    selectedSiteName: result.selection.selectedSite?.name ?? null,
+    selectedStationId:
+      result.selection.selectedStation?.station_id.toString() ?? null,
+    selectedStationName: result.selection.selectedStation?.name ?? null,
+    scope: {
+      filtered: result.selection.filtered,
+      label: describeSelection(result.selection),
+    },
     points: result.pointRows.map(toPointOption),
     selectedPoint:
       result.selectedPoint === null ? null : toPointOption(result.selectedPoint),
