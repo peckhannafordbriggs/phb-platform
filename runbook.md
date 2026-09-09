@@ -1617,7 +1617,7 @@ Send this now. Nothing below it can happen until this is done.
 > Subject: Azure access for the PH+B internal platform deployment
 >
 > We are deploying the PH+B internal platform into the existing subscription,
-> resource group `<resource-group>` in East US. I have Contributor on that
+> resource group `<resource-group>` in East US 2. I have Contributor on that
 > resource group and have confirmed it works, but the deployment needs two
 > things Contributor cannot do. Both are confirmed against the live
 > subscription, not assumed.
@@ -1819,6 +1819,132 @@ az containerapp show --name <app> --resource-group <resource-group> \
 `GRAPH_CLIENT_SECRET` must not appear. The credential factory refuses to start if it is
 set with `NODE_ENV=production`, so a deployment that has it fails closed — but it fails
 at boot, which is a worse way to learn this than a one-line check.
+
+## The Postgres server fails with `Version should be in: []`
+
+**Symptom.** The deployment fails on
+`Microsoft.DBforPostgreSQL/flexibleServers` with:
+
+```
+ParameterOutOfRange: The value of the 'Version' should be in: []
+```
+
+Every other resource in the template succeeds, so the resource group ends up
+about a third built.
+
+**The empty list is the whole message.** This is not a version problem and
+changing `postgresVersion` will not fix it. An empty set of valid versions means
+the region offers *no* versions to this subscription — the service is not
+available to provision there at all:
+
+```bash
+az postgres flexible-server list-skus -l <region> --subscription <id> \
+  --query "[0].{reason:reason, versions:supportedServerVersions}"
+```
+
+A restricted region answers:
+
+> Provisioning is restricted in this region. Please choose a different region.
+> For exceptions to this rule please open a support request with Issue type of
+> 'Service and subscription limits'.
+
+**Cause.** A per-subscription regional offer restriction, not a capacity blip
+and not something a retry clears. It is common on CSP (partner-managed)
+subscriptions — check with:
+
+```bash
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/<id>?api-version=2022-12-01" \
+  --query "subscriptionPolicies.quotaId"
+```
+
+A `CSP_*` quota id means the partner — Vitis, here — is who files the exception.
+
+**Observed 2026-09-09.** `eastus` was restricted for this subscription and
+**every** other region tried was not: `eastus2`, `centralus`, `southcentralus`,
+`northcentralus`, `westus2`, `westus3` and `canadacentral` all offered versions
+11 through 18. Do not assume the restriction is widespread — enumerate before
+concluding anything:
+
+```bash
+for r in eastus2 centralus southcentralus westus2; do
+  echo -n "$r: "
+  az postgres flexible-server list-skus -l $r --subscription <id> \
+    --query "[0].supportedServerVersions[].name" -o tsv | tr '\n' ',' ; echo
+done
+```
+
+**Fix.** Change `location` in `infra/main.parameters.json` and redeploy. It is
+one parameter and every resource reads it, so the whole deployment moves
+together — which is what you want, because a database in a different region
+from the app pays cross-region latency on every query.
+
+Moving region means deleting what was already created. See the next entry
+before you do: **the key vault is the one that bites.**
+
+---
+
+## A key vault name cannot be reused, and `list-deleted` will lie to you
+
+**Symptom.** After deleting a key vault and redeploying, vault creation fails
+with `VaultAlreadyExists` — or `az keyvault purge` fails with:
+
+```
+AuthorizationFailed: ... does not have authorization to perform action
+'Microsoft.KeyVault/locations/deletedVaults/read'
+```
+
+**Cause.** `infra/main.bicep` enables soft delete with 90-day retention, so a
+deleted vault keeps its globally-unique name until it is purged. Purge is a
+**subscription-scope** operation — a deleted vault lives at
+`/subscriptions/<id>/providers/Microsoft.KeyVault/locations/<region>/deletedVaults/<name>`,
+which is not under `/resourceGroups/`. `Contributor` and `User Access
+Administrator` on the *resource group* therefore cannot purge, however complete
+they look.
+
+**`az keyvault list-deleted` returns `[]` when you lack that permission rather
+than erroring.** An empty list reads exactly like "nothing is soft-deleted" and
+is the wrong conclusion. **Do not use it to decide a name is free.** Use
+name-availability instead, which is a different permission and answers
+truthfully:
+
+```bash
+az rest --method post \
+  --url "https://management.azure.com/subscriptions/<id>/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
+  --headers "Content-Type=application/json" \
+  --body '{"name":"<vault-name>","type":"Microsoft.KeyVault/vaults"}'
+```
+
+`"nameAvailable": false` with `"reason": "AlreadyExists"` and a message about a
+recoverable state is a held name, not a coincidence of global uniqueness.
+
+**Fix — one of two, and neither is renaming the vault.** A name carrying a
+`-2` suffix outlives the 90 days that caused it and becomes permanent confusion
+about which vault is real.
+
+- **Somebody with subscription scope runs the purge.** Least privilege, nothing
+  standing:
+
+  ```bash
+  az keyvault purge -n <vault-name> --location <ORIGINAL region> --subscription <id>
+  ```
+
+  `--location` is the region the vault was **deleted from**, not the one being
+  deployed to. A vault deleted from `eastus` is purged from `eastus` even when
+  the redeployment targets `eastus2`.
+
+- **Or grant `Key Vault Purge Operator` at subscription scope.** It is the only
+  built-in role carrying `Microsoft.KeyVault/locations/deletedVaults/purge/action`
+  — Key Vault Administrator, Secrets Officer and Reader all grant
+  `deletedVaults/read` and stop short of purge. It cannot be scoped to the
+  resource group, because the thing it acts on is not in one.
+
+**Avoiding it next time.** Purge protection is deliberately *not* enabled in
+`infra/main.bicep` precisely so a first deployment can be iterated on; if it had
+been on, the name would be unusable for 90 days with no purge available to
+anyone. Leave it off until the deployment has settled, then turn it on.
+
+---
 
 ## GitHub Actions variables
 

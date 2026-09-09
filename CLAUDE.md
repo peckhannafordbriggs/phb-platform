@@ -168,7 +168,7 @@ review / edit / send verified end to end.
 **Phase 7 Part A complete** — Dockerfile, CI, Bicep.
 
 **Part B is BLOCKED ON AZURE ACCESS, not on the subscription.** The subscription and an
-empty `eastus` resource group exist and `Contributor` on that group is confirmed working.
+empty `eastus2` resource group exist and `Contributor` on that group is confirmed working.
 Contributor is not enough to deploy this template, and this was measured rather than
 inferred: resource provider registration is a subscription-scoped action and all six
 providers are `NotRegistered`, and the two role assignments in the template
