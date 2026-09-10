@@ -195,24 +195,67 @@ What it reported against the live mailbox, and what each number means:
 
 | Operation | Graph requests | Wall | Note |
 |---|---|---|---|
-| `listFolders()` | **11** | **~1,300ms** | The folder pane, on every mount. Sequential by necessity. |
-| `listMessages()` | 1 | 90–520ms | The message list. |
+| `listFolders()` | **11** | **~800ms** | The folder pane, on every mount. Was ~1,300ms — see below. |
+| `listConversations()` | 1 | 90–170ms | **The default list path.** Grouping is on. |
+| `listMessages()` | 1 | 90–520ms | Flat mode only. |
 | `getMessage()` | 1 | ~120ms | Opening a message. |
 | `listAttachments()` | 1 | ~90ms | Second call the reading pane makes. |
 | `searchMessages()` | 1 | ~90ms | One subject search. |
 | `getDraftForEdit()` | 1 | ~95ms | One lock-refresh tick. |
 
-So a cold page load was ~1.3s of folder walking plus ~0.5s of message listing
-before anything was interactive, and **eleven of the fifteen requests were the
-folder tree**.
+Plus **~400ms of token acquisition** on the first Graph call in a process, which
+`@azure/identity` performs on its own HTTP pipeline and so does not appear in the
+request counts above. Cached in-process afterwards, so it is paid once per
+container instance rather than per page load.
+
+A cold mount is therefore **12 requests and ~830ms of Graph time**, and eleven of
+those twelve are still the folder tree.
+
+### Conversation grouping is not what makes it slow
+
+Worth stating because it is the obvious suspect and it is wrong. Grouping
+defaults on, and a grouped read collects the folder to a cap — up to 5 pages of
+100 — so it *could* be five requests. Measured, it is **one**: every folder in
+this mailbox fits in a single page, Drafts holds 0 messages and Inbox 11. The cap
+has never engaged. A folder that grew past 100 messages would change that, and
+`co-measure.ts` reports the conversation count and whether the read was capped —
+so re-run it rather than assuming.
+
+The per-request grant check is not it either: `requireModuleAccess` is two
+indexed queries at 0.7ms and 0.9ms median.
+
+### The alias lookups used to be serialised behind the walk
+
+`resolveWellKnownFolders()` resolves four fixed names to four ids and has **no
+data dependency on the folder walk**, but it was awaited after it — so four
+requests that already ran in parallel with each other were queued behind a chain
+they never needed to wait for. Started alongside the walk instead:
+
+```
+before   11 requests, ~1,300ms wall, 1,400ms summed, concurrency 1.08x
+after    11 requests,   ~800ms wall, 1,600ms summed, concurrency 1.8x
+```
+
+Same requests, same results, ~450ms off every cold mount. If a `catch` is ever
+added to that promise, keep it attached rather than awaited, or the
+serialisation comes back silently and nothing fails.
+
+**If the screen still feels slow after this, check which environment.** In
+`npm run dev` Next.js compiles a route on first hit, which can add seconds that
+do not exist in a production build. A transport measurement will not show it,
+because it is not transport.
 
 ### Why the folder walk is eleven requests
 
-One listing of the top level, then one per parent per level - a level's paths are
-not known until the level above comes back, so it cannot be parallelised - plus
-four well-known alias lookups (`/mailFolders/inbox`, `drafts`, `sentitems`,
-`deleteditems`) which do run in parallel. `wellKnownName` is beta-only, which is
-why those four exist at all.
+One listing of the top level, then one per parent per level — a level's paths are
+not known until the level above comes back, so *that* part cannot be
+parallelised — plus four well-known alias lookups (`/mailFolders/inbox`,
+`drafts`, `sentitems`, `deleteditems`) which run in parallel with each other and,
+since the fix above, with the walk as well. `wellKnownName` is beta-only, which
+is why those four exist at all.
+
+Eleven is therefore the floor for a cold walk of this mailbox, and the time is
+now roughly the walk's own depth rather than the walk plus the aliases.
 
 **It is now cached in memory for 30 seconds**, which docs/03 permits explicitly:
 "Short-lived in-memory cache only (seconds), for list views." Re-measured: the
