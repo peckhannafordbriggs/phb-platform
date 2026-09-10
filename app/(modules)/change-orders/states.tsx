@@ -84,12 +84,15 @@ export function PaneMessage({
  */
 export function MessageListSkeleton({ rows = 6 }: { rows?: number }) {
   return (
-    <ul className="divide-y divide-[var(--border)]" aria-hidden="true">
+    <ul className="space-y-1 p-2" aria-hidden="true">
       {Array.from({ length: rows }, (_, i) => (
-        <li key={i} className="px-4 py-3">
-          <div className="h-3 w-3/4 animate-pulse rounded bg-[var(--border)]" />
-          <div className="mt-2 h-2.5 w-1/2 animate-pulse rounded bg-[var(--border)]" />
-          <div className="mt-1.5 h-2.5 w-1/4 animate-pulse rounded bg-[var(--border)]" />
+        <li
+          key={i}
+          className="rounded-[var(--radius-row)] bg-[var(--neutral-50)] px-3.5 py-3"
+        >
+          <div className="h-3 w-3/4 animate-pulse rounded-full bg-[var(--neutral-200)]" />
+          <div className="mt-2 h-2.5 w-1/2 animate-pulse rounded-full bg-[var(--neutral-200)]" />
+          <div className="mt-1.5 h-2.5 w-1/4 animate-pulse rounded-full bg-[var(--neutral-200)]" />
         </li>
       ))}
     </ul>
@@ -99,13 +102,13 @@ export function MessageListSkeleton({ rows = 6 }: { rows?: number }) {
 export function ReadingPaneSkeleton() {
   return (
     <div className="p-6" aria-hidden="true">
-      <div className="h-4 w-2/3 animate-pulse rounded bg-[var(--border)]" />
-      <div className="mt-3 h-3 w-1/3 animate-pulse rounded bg-[var(--border)]" />
+      <div className="h-4 w-2/3 animate-pulse rounded-full bg-[var(--neutral-200)]" />
+      <div className="mt-3 h-3 w-1/3 animate-pulse rounded-full bg-[var(--neutral-200)]" />
       <div className="mt-8 space-y-2.5">
         {Array.from({ length: 8 }, (_, i) => (
           <div
             key={i}
-            className="h-3 animate-pulse rounded bg-[var(--border)]"
+            className="h-3 animate-pulse rounded-full bg-[var(--neutral-200)]"
             style={{ width: `${90 - (i % 4) * 12}%` }}
           />
         ))}
@@ -144,7 +147,7 @@ export function MailErrorState({
       <button
         type="button"
         onClick={onRetry}
-        className="rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)]"
+        className="rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3.5 py-2 text-sm transition-colors hover:bg-[var(--neutral-50)]"
       >
         Try again
       </button>
@@ -155,7 +158,7 @@ export function MailErrorState({
       <button
         type="button"
         onClick={onBack}
-        className="rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)]"
+        className="rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3.5 py-2 text-sm transition-colors hover:bg-[var(--neutral-50)]"
       >
         {backLabel}
       </button>

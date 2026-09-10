@@ -6,6 +6,13 @@ import type {
   MessageSummary,
 } from "@/lib/modules/change-orders/mail/types";
 import { FolderTree } from "./folder-tree";
+import {
+  PANE_LIMITS,
+  useLayoutMode,
+  usePaneWidths,
+  useResizeHandle,
+  type PaneKey,
+} from "./use-pane-layout";
 import { MessageBodyFrame } from "./message-body";
 import { DraftEditor, SentConfirmation } from "./draft-editor";
 import { AttachmentList } from "./attachments";
@@ -186,6 +193,30 @@ export function MailboxWorkspace() {
 
   const [searchInput, setSearchInput] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
+
+  // ------------------------------------------------------------ layout
+  const layout = useLayoutMode();
+  const { widths, setWidth, resetWidth } = usePaneWidths();
+
+  /**
+   * Whether the folder tree is showing, below the three-pane breakpoint.
+   *
+   * Closed by default: at that width the tree is the pane worth giving up, and
+   * opening it is one click when a folder change is actually wanted.
+   */
+  const [treeOpen, setTreeOpen] = useState(false);
+
+  /**
+   * Which list row the keyboard is on.
+   *
+   * Separate from `selectedId` on purpose. Moving through the list must not
+   * fetch a message per keypress - that would be one Graph round trip per
+   * arrow key - so the cursor moves freely and Enter is what opens. It is an
+   * index into `rows`, not an id, because a conversation header is a row the
+   * cursor lands on too.
+   */
+  const [activeRow, setActiveRow] = useState(0);
+  const listRef = useRef<HTMLUListElement | null>(null);
 
   /**
    * Phase 8 actions.
@@ -782,6 +813,115 @@ export function MailboxWorkspace() {
   /** Messages on screen, however they are arranged. */
   const shownCount = useMemo(() => messagesOf(list).length, [list]);
 
+  // ------------------------------------------------------- keyboard in the list
+
+  /**
+   * Keep the cursor inside the list when the list changes underneath it.
+   *
+   * A poll can shorten the folder while the cursor is on the last row, and a
+   * folder change replaces the list wholesale. Clamping rather than resetting
+   * means a poll that added a message at the top does not throw away where
+   * somebody was.
+   */
+  useEffect(() => {
+    setActiveRow((current) => {
+      if (rows.length === 0) return 0;
+      return Math.min(current, rows.length - 1);
+    });
+  }, [rows.length]);
+
+  /** Back to the top when the folder or the query changes. */
+  useEffect(() => {
+    setActiveRow(0);
+  }, [selectedFolder, activeQuery]);
+
+  const focusRow = useCallback((index: number) => {
+    const el = listRef.current?.querySelector<HTMLElement>(
+      `[data-row-index="${index}"]`,
+    );
+    el?.focus();
+    el?.scrollIntoView({ block: "nearest" });
+  }, []);
+
+  /**
+   * Arrow keys and j/k move; Enter opens; Escape leaves.
+   *
+   * Handled on the <ul> rather than per row, so it works wherever focus sits
+   * inside the list and there is one place that knows the key map. j/k are here
+   * because this is a mail list and the people using it live in Outlook and a
+   * terminal; they cost nothing to support and they are what a keyboard user
+   * reaches for first.
+   *
+   * Moving does NOT open. Opening a message is a Graph round trip, so a held
+   * arrow key would be one request per row - Enter is the deliberate act. This
+   * is the same separation Outlook has between the reading cursor and the
+   * reading pane.
+   */
+  const onListKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLUListElement>) => {
+      if (rows.length === 0) return;
+
+      const move = (delta: number) => {
+        event.preventDefault();
+        const next = Math.min(rows.length - 1, Math.max(0, activeRow + delta));
+        setActiveRow(next);
+        focusRow(next);
+      };
+
+      switch (event.key) {
+        case "ArrowDown":
+        case "j":
+          move(1);
+          return;
+        case "ArrowUp":
+        case "k":
+          move(-1);
+          return;
+        case "Home":
+          event.preventDefault();
+          setActiveRow(0);
+          focusRow(0);
+          return;
+        case "End":
+          event.preventDefault();
+          setActiveRow(rows.length - 1);
+          focusRow(rows.length - 1);
+          return;
+        case "Enter":
+        case " ": {
+          const row = rows[activeRow];
+          if (row === undefined) return;
+          event.preventDefault();
+          if (row.kind === "group") toggleConversation(row.group.id);
+          else void openMessage(row.message.id);
+          return;
+        }
+        /**
+         * Left and right collapse and expand a conversation, which is what a
+         * tree does everywhere else. Only meaningful on a group row, so on a
+         * message row they fall through and do nothing rather than moving the
+         * cursor somewhere surprising.
+         */
+        case "ArrowRight":
+        case "ArrowLeft": {
+          const row = rows[activeRow];
+          if (row === undefined || row.kind !== "group") return;
+          event.preventDefault();
+          const wantOpen = event.key === "ArrowRight";
+          if (wantOpen !== row.expanded) toggleConversation(row.group.id);
+          return;
+        }
+        case "Escape":
+          event.preventDefault();
+          setSelectedId(null);
+          setMessage(null);
+          return;
+        default:
+      }
+    },
+    [rows, activeRow, focusRow, toggleConversation, openMessage],
+  );
+
   /**
    * Not being connected to the mailbox is a whole-module state, not a per-pane
    * one - three panes each reporting the same broken credential is noise.
@@ -797,7 +937,7 @@ export function MailboxWorkspace() {
     )
   ) {
     return (
-      <div className="flex h-full items-center justify-center rounded border border-[var(--border)]">
+      <div className="flex h-full items-center justify-center rounded-[var(--radius-pane)] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-soft)]">
         <MailErrorState
           code={folderError.code}
           message={folderError.message}
@@ -807,34 +947,112 @@ export function MailboxWorkspace() {
     );
   }
 
+  const folderPane = (
+    <>
+      {folderError !== null ? (
+        <MailErrorState
+          code={folderError.code}
+          message={folderError.message}
+          onRetry={() => void loadFolders()}
+        />
+      ) : folders === null ? (
+        <FolderSkeleton />
+      ) : (
+        <FolderTree
+          nodes={tree}
+          selectedId={selectedFolder?.id ?? null}
+          expandedIds={expanded}
+          onSelect={selectFolder}
+          onToggle={toggleFolder}
+        />
+      )}
+    </>
+  );
+
+  /**
+   * Which panes are on screen.
+   *
+   * `wide` is the three-pane desk. `medium` drops the folder tree to a
+   * disclosure above the list, because the tree is navigated a few times a
+   * session where the list is scanned continuously. `narrow` shows one pane at
+   * a time and uses the open message as the switch: a message open means the
+   * reading pane, nothing open means the list.
+   */
+  const showTreePane = layout === "wide";
+  const readingOpen = selectedId !== null || sent !== null || moved !== null;
+  const showListPane = layout !== "narrow" || !readingOpen;
+  const showReadingPane = layout !== "narrow" || readingOpen;
+
   return (
-    <div className="flex h-full min-h-0 overflow-hidden rounded border border-[var(--border)] bg-[var(--surface)]">
-      {/* Folders */}
-      <div className="flex w-52 shrink-0 flex-col border-r border-[var(--border)]">
-        <PaneHeader>Folders</PaneHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {folderError !== null ? (
-            <MailErrorState
-              code={folderError.code}
-              message={folderError.message}
-              onRetry={() => void loadFolders()}
-            />
-          ) : folders === null ? (
-            <FolderSkeleton />
-          ) : (
-            <FolderTree
-              nodes={tree}
-              selectedId={selectedFolder?.id ?? null}
-              expandedIds={expanded}
-              onSelect={selectFolder}
-              onToggle={toggleFolder}
-            />
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[var(--radius-pane)] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-soft)]">
+      {/*
+        The folder tree as a disclosure, below the three-pane breakpoint. Not
+        rendered at all above it - two copies of the tree mounted at once would
+        double the expansion state that has to stay in step.
+      */}
+      {!showTreePane && (
+        <div className="shrink-0 border-b border-[var(--divider-soft)] bg-[var(--surface)]">
+          <button
+            type="button"
+            onClick={() => setTreeOpen((open) => !open)}
+            aria-expanded={treeOpen}
+            className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium text-[var(--foreground)]"
+          >
+            <span
+              aria-hidden="true"
+              className={
+                "text-[0.6rem] text-[var(--muted)] transition-transform " +
+                (treeOpen ? "rotate-90" : "")
+              }
+            >
+              ▸
+            </span>
+            <span className="truncate">
+              {selectedFolder?.displayName ?? "Folders"}
+            </span>
+            <span className="ml-auto shrink-0 text-xs font-normal text-[var(--muted)]">
+              {treeOpen ? "Hide folders" : "Change folder"}
+            </span>
+          </button>
+          {treeOpen && (
+            <div className="max-h-64 overflow-y-auto border-t border-[var(--divider-soft)]">
+              {folderPane}
+            </div>
           )}
         </div>
-      </div>
+      )}
+
+      <div className="flex min-h-0 flex-1">
+        {/* Folders */}
+        {showTreePane && (
+          <>
+            <div
+              className="flex shrink-0 flex-col"
+              style={{ width: `${widths.folders}px` }}
+            >
+              <PaneHeader>Folders</PaneHeader>
+              <div className="min-h-0 flex-1 overflow-y-auto">{folderPane}</div>
+            </div>
+            <ResizeHandle
+              paneKey="folders"
+              label="Folder pane width"
+              width={widths.folders}
+              setWidth={setWidth}
+              resetWidth={resetWidth}
+            />
+          </>
+        )}
 
       {/* Message list */}
-      <div className="flex w-80 shrink-0 flex-col border-r border-[var(--border)] bg-white">
+      {showListPane && (
+      <div
+        className="flex min-w-0 flex-col bg-white"
+        style={
+          showReadingPane && layout !== "narrow"
+            ? { width: `${widths.list}px`, flexShrink: 0 }
+            : { flex: "1 1 0%" }
+        }
+      >
         <PaneHeader>
           <span className="truncate">{selectedFolder?.displayName ?? "Messages"}</span>
           {/*
@@ -857,35 +1075,90 @@ export function MailboxWorkspace() {
         </PaneHeader>
 
         <form
-          className="border-b border-[var(--border)] p-2"
+          className="shrink-0 border-b border-[var(--divider-soft)] px-3 py-3"
           onSubmit={(event) => {
             event.preventDefault();
             setActiveQuery(searchInput.trim());
           }}
         >
-          <input
-            type="search"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search subjects in this folder"
-            aria-label="Search subjects in this folder"
-            className="w-full rounded border border-[var(--border)] px-2 py-1.5 text-sm"
-          />
+          {/*
+            Enter to search, deliberately, and no search-as-you-type. Every
+            search is a Graph round trip against a live mailbox, so a request
+            per keystroke is the wrong trade even debounced.
+
+            What was missing was the way back out. Clearing the field is not
+            enough on its own, because the RESULTS are driven by activeQuery
+            rather than by the input - so the × clears both, and the list
+            returns to the folder without a second Enter.
+          */}
+          <div className="relative">
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search subjects in this folder"
+              aria-label="Search subjects in this folder"
+              className="w-full rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 py-2 pr-9 text-sm transition-shadow placeholder:text-[var(--neutral-400)] focus:border-[var(--neutral-300)] focus:shadow-[var(--shadow-row)] focus:outline-none [&::-webkit-search-cancel-button]:hidden"
+            />
+            {(searchInput.length > 0 || activeQuery.length > 0) && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                onClick={() => {
+                  setSearchInput("");
+                  setActiveQuery("");
+                }}
+                className="absolute inset-y-0 right-0 flex w-9 items-center justify-center rounded-r-[var(--radius-control)] text-[var(--muted)] transition-colors hover:text-[var(--foreground)]"
+              >
+                <span aria-hidden="true" className="text-base leading-none">
+                  ×
+                </span>
+              </button>
+            )}
+          </div>
 
           {/*
-            Grouping is on by default and off is a real mode, not a degraded
-            one: flat is the paged listing, so it is also how someone gets past
-            the grouping cap in a folder that has outgrown it.
+            Grouping was a 14px checkbox under the search box - the smallest
+            control on the surface, for a switch that changes what the list
+            PROMISES: grouped is capped and has no cursor, flat is paged and can
+            reach the whole folder. Now a labelled two-option control.
+
+            The words matter more than the widget. "Conversations" is Outlook's
+            own term for this, so the people using this every day already know
+            it and there is nothing to learn. "All messages" is the honest
+            description of the other side rather than a description of the
+            implementation: it is the paged listing, so it really is the one
+            that can show everything, which is also why someone reaches for it.
+            "Threads" and "Flat" were both rejected - the first is Slack's word
+            and the second is ours.
           */}
-          <label className="mt-2 flex items-center gap-2 text-xs text-[var(--muted)]">
-            <input
-              type="checkbox"
-              checked={grouped}
-              onChange={toggleGrouping}
-              className="h-3.5 w-3.5"
-            />
-            Group into conversations
-          </label>
+          <div
+            role="group"
+            aria-label="How the list is arranged"
+            className="mt-2.5 flex rounded-[var(--radius-control)] bg-[var(--neutral-100)] p-0.5"
+          >
+            {[
+              { label: "Conversations", want: true },
+              { label: "All messages", want: false },
+            ].map(({ label, want }) => (
+              <button
+                key={label}
+                type="button"
+                aria-pressed={grouped === want}
+                onClick={() => {
+                  if (grouped !== want) toggleGrouping();
+                }}
+                className={
+                  "flex-1 rounded-[calc(var(--radius-control)-0.125rem)] px-3 py-1.5 text-xs font-medium transition-colors " +
+                  (grouped === want
+                    ? "bg-white text-[var(--foreground)] shadow-[var(--shadow-row)]"
+                    : "text-[var(--muted)] hover:text-[var(--foreground)]")
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </form>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -972,8 +1245,23 @@ export function MailboxWorkspace() {
                 </p>
               )}
 
-              <ul className="divide-y divide-[var(--border)]">
-                {rows.map((row) =>
+              {/*
+                Rows are cards now, so they are separated by space rather than
+                by a hairline between every pair - a rule beside a card own
+                edge draws the same boundary twice.
+
+                One keydown handler on the list, and a roving tabindex: exactly
+                one row is in the tab order, so Tab moves past the list rather
+                than through fifty rows, and the arrow keys move within it. That
+                is the listbox pattern, and it is what makes j/k work no matter
+                which row holds focus.
+              */}
+              <ul
+                ref={listRef}
+                onKeyDown={onListKeyDown}
+                className="space-y-1 p-2"
+              >
+                {rows.map((row, index) =>
                   row.kind === "group" ? (
                     <ConversationHeaderRow
                       key={row.group.id}
@@ -985,6 +1273,9 @@ export function MailboxWorkspace() {
                         row.group.messages.some((m) => m.id === selectedId)
                       }
                       onToggle={() => toggleConversation(row.group.id)}
+                      rowIndex={index}
+                      active={index === activeRow}
+                      onFocusRow={() => setActiveRow(index)}
                     />
                   ) : (
                     <MessageRow
@@ -993,6 +1284,9 @@ export function MailboxWorkspace() {
                       selected={row.message.id === selectedId}
                       indented={row.indented}
                       onOpen={() => void openMessage(row.message.id)}
+                      rowIndex={index}
+                      active={index === activeRow}
+                      onFocusRow={() => setActiveRow(index)}
                     />
                   ),
                 )}
@@ -1006,7 +1300,7 @@ export function MailboxWorkspace() {
               {list.nextCursor !== null && (
                 <div className="space-y-2 p-3">
                   {olderError !== null && (
-                    <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                    <p className="rounded-[var(--radius-control)] border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
                       {olderError} The messages already loaded are still here.
                     </p>
                   )}
@@ -1014,7 +1308,7 @@ export function MailboxWorkspace() {
                     type="button"
                     disabled={loadingMore}
                     onClick={() => void loadOlder()}
-                    className="w-full rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)] disabled:opacity-50"
+                    className="w-full rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 py-2 text-sm transition-colors hover:bg-[var(--neutral-50)] disabled:opacity-50"
                   >
                     {loadingMore
                       ? "Loading…"
@@ -1038,10 +1332,56 @@ export function MailboxWorkspace() {
             </p>
           )}
         </div>
+
+        {/*
+          A feature nobody can find is not a feature. One muted line, outside
+          the scroll container so it does not move, and only once there is
+          something to move through.
+        */}
+        {rows.length > 0 && (
+          <p className="shrink-0 border-t border-[var(--divider-soft)] px-4 py-2 text-[0.6875rem] text-[var(--muted)]">
+            <kbd className="font-mono">↑</kbd> <kbd className="font-mono">↓</kbd>{" "}
+            or <kbd className="font-mono">j</kbd> <kbd className="font-mono">k</kbd> to
+            move, <kbd className="font-mono">Enter</kbd> to open
+          </p>
+        )}
       </div>
+      )}
+
+      {showListPane && showReadingPane && layout !== "narrow" && (
+        <ResizeHandle
+          paneKey="list"
+          label="Message list width"
+          width={widths.list}
+          setWidth={setWidth}
+          resetWidth={resetWidth}
+        />
+      )}
 
       {/* Reading pane. Relative, so the send confirmation can cover it. */}
+      {showReadingPane && (
       <div className="relative flex min-w-0 flex-1 flex-col bg-white">
+        {/*
+          One pane at a time means the reading pane is a place you can get
+          stuck. Escape already returns to the list from the keyboard; this is
+          the same exit for a thumb, and it only exists in the mode that needs
+          it - above 700px the list never went away.
+        */}
+        {layout === "narrow" && (
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedId(null);
+              setMessage(null);
+              setSent(null);
+              setMoved(null);
+            }}
+            className="flex shrink-0 items-center gap-2 border-b border-[var(--divider-soft)] px-4 py-3 text-left text-sm font-medium text-[var(--foreground)]"
+          >
+            <span aria-hidden="true">&larr;</span>
+            {selectedFolder?.displayName ?? "Back to the list"}
+          </button>
+        )}
         {sent !== null ? (
           <SentConfirmation
             summary={sent}
@@ -1214,13 +1554,73 @@ export function MailboxWorkspace() {
           />
         )}
       </div>
+      )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The draggable separator between two panes.
+ *
+ * A real `separator` with `aria-valuenow`, not a styled div: assistive
+ * technology gets told what it is, which axis it moves on, and where it
+ * currently sits. It is 1px of visible rule inside a 7px hit area, because a
+ * 1px target is not a target - the padding is what makes it grabbable without
+ * making the seam look thick.
+ */
+function ResizeHandle({
+  paneKey,
+  label,
+  width,
+  setWidth,
+  resetWidth,
+}: {
+  paneKey: PaneKey;
+  label: string;
+  width: number;
+  setWidth: (key: PaneKey, px: number) => void;
+  resetWidth: (key: PaneKey) => void;
+}) {
+  const handle = useResizeHandle(paneKey, width, setWidth, resetWidth);
+  const { min, max } = PANE_LIMITS[paneKey];
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      aria-valuenow={width}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      tabIndex={0}
+      title={`${label} — drag, or arrow keys. Enter restores the default.`}
+      onPointerDown={handle.onPointerDown}
+      onPointerMove={handle.onPointerMove}
+      onPointerUp={handle.onPointerUp}
+      onPointerCancel={handle.onPointerUp}
+      onKeyDown={handle.onKeyDown}
+      className={
+        "group relative z-10 flex w-[7px] shrink-0 cursor-col-resize touch-none items-stretch justify-center " +
+        "focus-visible:outline-none"
+      }
+    >
+      <span
+        aria-hidden="true"
+        className={
+          "w-px transition-colors " +
+          (handle.dragging
+            ? "bg-[var(--module-accent,var(--phb-purple))]"
+            : "bg-[var(--divider-soft)] group-hover:bg-[var(--neutral-300)] group-focus-visible:bg-[var(--focus)]")
+        }
+      />
     </div>
   );
 }
 
 function PaneHeader({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex shrink-0 items-center border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+    <div className="flex shrink-0 items-center gap-2 border-b border-[var(--divider-soft)] bg-[var(--surface)] px-4 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
       {children}
     </div>
   );
@@ -1228,12 +1628,12 @@ function PaneHeader({ children }: { children: React.ReactNode }) {
 
 function FolderSkeleton() {
   return (
-    <div className="space-y-2 p-3" aria-hidden="true">
+    <div className="space-y-1.5 p-2" aria-hidden="true">
       {Array.from({ length: 7 }, (_, i) => (
         <div
           key={i}
-          className="h-4 animate-pulse rounded bg-[var(--border)]"
-          style={{ width: `${85 - (i % 3) * 15}%` }}
+          className="h-8 animate-pulse rounded-[var(--radius-row)] bg-[var(--neutral-100)]"
+          style={{ width: `${92 - (i % 3) * 10}%` }}
         />
       ))}
     </div>
@@ -1245,12 +1645,20 @@ function MessageRow({
   selected,
   indented = false,
   onOpen,
+  rowIndex,
+  active,
+  onFocusRow,
 }: {
   message: MessageSummary;
   selected: boolean;
   /** A message inside a conversation, rather than a row of its own. */
   indented?: boolean;
   onOpen: () => void;
+  /** Position in the flattened row list, for the keyboard cursor. */
+  rowIndex: number;
+  /** Whether the keyboard cursor is on this row. */
+  active: boolean;
+  onFocusRow: () => void;
 }) {
   /**
    * Real subjects are long and near-identical, and what distinguishes them is a
@@ -1275,13 +1683,23 @@ function MessageRow({
       <button
         type="button"
         onClick={onOpen}
+        data-row-index={rowIndex}
+        tabIndex={active ? 0 : -1}
+        onFocus={onFocusRow}
         aria-current={selected ? "true" : undefined}
         className={
-          "relative block w-full py-2.5 text-left transition-colors hover:bg-[var(--neutral-50)] " +
+          "relative block w-full overflow-hidden rounded-[var(--radius-row)] py-3 text-left transition-shadow " +
           // Indent only. A rule down the left as well was saying the same thing
           // twice, and it was the last border on this surface doing no work.
-          (indented ? "pl-7 pr-3 " : "px-3 ") +
-          (selected ? "bg-[var(--neutral-100)]" : "")
+          (indented ? "pl-8 pr-3.5 " : "px-3.5 ") +
+          (selected
+            ? "bg-white shadow-[var(--shadow-row)] ring-1 ring-[var(--neutral-200)] "
+            : "hover:bg-[var(--neutral-50)] ") +
+          // The keyboard cursor, distinct from selection: selection is what the
+          // reading pane is showing, the cursor is where the next Enter lands.
+          // Usually the same row, and they must stay separable when they are
+          // not - so one is a surface and the other is a ring.
+          (active && !selected ? "ring-1 ring-[var(--neutral-200)] " : "")
         }
       >
         {/*
@@ -1292,7 +1710,7 @@ function MessageRow({
         {selected && (
           <span
             aria-hidden="true"
-            className="absolute inset-y-0 left-0 w-[2px]"
+            className="absolute inset-y-0 left-0 w-[3px]"
             style={{ background: "var(--module-accent, var(--phb-purple))" }}
           />
         )}
@@ -1382,12 +1800,18 @@ function ConversationHeaderRow({
   hiddenCount,
   containsSelected,
   onToggle,
+  rowIndex,
+  active,
+  onFocusRow,
 }: {
   group: ConversationGroup;
   expanded: boolean;
   hiddenCount: number;
   containsSelected: boolean;
   onToggle: () => void;
+  rowIndex: number;
+  active: boolean;
+  onFocusRow: () => void;
 }) {
   /**
    * Separated with a middle dot, not a comma.
@@ -1409,9 +1833,15 @@ function ConversationHeaderRow({
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
+        data-row-index={rowIndex}
+        tabIndex={active ? 0 : -1}
+        onFocus={onFocusRow}
         className={
-          "block w-full px-4 py-3 text-left hover:bg-[var(--surface)] " +
-          (containsSelected ? "bg-[var(--surface)]" : "")
+          "block w-full rounded-[var(--radius-row)] px-3.5 py-3 text-left transition-shadow " +
+          (containsSelected
+            ? "bg-white shadow-[var(--shadow-row)] ring-1 ring-[var(--neutral-200)] "
+            : "hover:bg-[var(--neutral-50)] ") +
+          (active && !containsSelected ? "ring-1 ring-[var(--neutral-200)] " : "")
         }
       >
         {tag !== null && (

@@ -274,7 +274,18 @@ describe("listFolders", () => {
     const folders = await createMailService(stub.transport).listFolders();
 
     expect(folders.map((f) => f.displayName)).toEqual(["Inbox", "Drafts"]);
-    expect(stub.requests[1]?.url.toLowerCase()).toContain("skiptoken=page2");
+    /**
+     * That SOME request carried the token, not that the second one did.
+     *
+     * The alias lookups now start alongside the folder walk rather than after
+     * it - they have no data dependency on it, and awaiting them afterwards was
+     * adding their whole latency to every cold mount. That makes the request
+     * ORDER a race between two independent groups, so asserting a position here
+     * would be asserting the serialisation that change removed.
+     */
+    expect(
+      stub.requests.some((r) => r.url.toLowerCase().includes("skiptoken=page2")),
+    ).toBe(true);
     // The second page's folder is the drafts folder, labelled from the alias.
     expect(folders[1]?.wellKnownName).toBe("drafts");
   });

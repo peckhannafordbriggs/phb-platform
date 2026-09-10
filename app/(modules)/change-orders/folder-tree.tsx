@@ -24,7 +24,7 @@ export function FolderTree({
   onToggle: (folderId: string) => void;
 }) {
   return (
-    <ul className="py-1">
+    <ul className="space-y-0.5 p-2">
       {nodes.map((node) => (
         <FolderRow
           key={node.id}
@@ -58,12 +58,20 @@ function FolderRow({
 
   return (
     <li>
+      {/*
+        A row reads as a rounded card rather than a strip: its own radius, and
+        on selection its own surface and a soft lift. Indentation is padding on
+        the card, not a margin outside it, so nested rows stay the same width
+        and the column keeps one left edge instead of a ragged staircase.
+      */}
       <div
         className={
-          "flex items-center gap-0.5 pr-2 " +
-          (selected ? "bg-white shadow-sm" : "hover:bg-white/70")
+          "flex items-center gap-1 rounded-[var(--radius-row)] pr-2 transition-colors " +
+          (selected
+            ? "bg-white shadow-[var(--shadow-row)]"
+            : "hover:bg-white/70")
         }
-        style={{ paddingLeft: `${node.depth * 12 + 4}px` }}
+        style={{ paddingLeft: `${node.depth * 12 + 6}px` }}
       >
         {hasChildren ? (
           <button
@@ -71,12 +79,12 @@ function FolderRow({
             aria-label={expanded ? `Collapse ${node.displayName}` : `Expand ${node.displayName}`}
             aria-expanded={expanded}
             onClick={() => onToggle(node.id)}
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[0.6rem] text-[var(--muted)] hover:bg-[var(--border)]"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[0.6rem] text-[var(--muted)] transition-colors hover:bg-[var(--neutral-100)]"
           >
             {expanded ? "▾" : "▸"}
           </button>
         ) : (
-          <span className="h-5 w-5 shrink-0" />
+          <span className="h-6 w-6 shrink-0" />
         )}
 
         <button
@@ -85,7 +93,7 @@ function FolderRow({
           aria-current={selected ? "true" : undefined}
           title={node.displayName}
           className={
-            "min-w-0 flex-1 truncate py-1.5 text-left text-sm " +
+            "min-w-0 flex-1 truncate rounded-[var(--radius-row)] py-2 text-left text-sm " +
             (selected ? "font-medium text-[var(--accent)]" : "text-[var(--foreground)]")
           }
         >
@@ -93,14 +101,14 @@ function FolderRow({
         </button>
 
         {node.unreadItemCount > 0 && (
-          <span className="shrink-0 rounded-full bg-[var(--accent)] px-1.5 py-0.5 text-[0.625rem] font-medium text-white">
+          <span className="shrink-0 rounded-full bg-[var(--accent)] px-2 py-0.5 text-[0.625rem] font-medium text-white">
             {node.unreadItemCount}
           </span>
         )}
       </div>
 
       {hasChildren && expanded && (
-        <ul>
+        <ul className="mt-0.5 space-y-0.5">
           {node.children.map((child) => (
             <FolderRow
               key={child.id}

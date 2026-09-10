@@ -101,6 +101,29 @@
   --module-accent: var(--phb-purple);
   --module-accent-ink: var(--phb-purple);
 
+  /* --- soft chrome ----------------------------------------------------
+     One radius scale and one shadow, so "softer" is a token change rather
+     than a number invented per component. Declared here, next to the other
+     semantic aliases, because BAS and the admin screens should be able to
+     adopt them without a second vocabulary being introduced first.
+
+     The shadow is tinted toward the palette on the same 266deg hue the greys
+     are built on - the same reasoning as .card. A neutral-black shadow on
+     these greys reads as grime.
+
+     --divider-soft is what replaces a hairline BETWEEN rows once the rows are
+     cards: at 55% of neutral-200 it separates regions without drawing a second
+     edge beside every card's own. It is not for anything load-bearing; a real
+     boundary still uses --border. */
+  --radius-pane: 1.125rem;
+  --radius-row: 0.75rem;
+  --radius-control: 0.625rem;
+  --shadow-soft:
+    0 1px 2px rgb(38 24 61 / 0.05),
+    0 8px 24px -10px rgb(38 24 61 / 0.12);
+  --shadow-row: 0 1px 2px rgb(38 24 61 / 0.05);
+  --divider-soft: color-mix(in srgb, var(--neutral-200) 55%, transparent);
+
   /* The three families are declared in the @theme block below, NOT here.
      See the note there - declaring them in both places is a circular
      reference that silently disables all three. */
@@ -258,11 +281,20 @@ body {
 /* ---------------------------------------------------------------------------
    Dashboard cards.
 
-   BAS AND HOME, deliberately - and not the mail screens. The test is competing
-   content, not which route it is: a dashboard has none, so cards and elevation
-   give it presence. The Change Orders reading pane has a vendor's own email in
-   it - real competing content - so it keeps the quiet, near-monochrome
-   treatment the brief asks for. Two surfaces, two registers, on purpose.
+   The test is COMPETING CONTENT, not which route it is: a dashboard has none,
+   so cards and elevation give it presence.
+
+   Originally BAS and Home only, "and not the mail screens". That has been
+   narrowed rather than reversed, because the test still holds and it was always
+   about one pane. The Change Orders READING PANE renders a vendor's own email -
+   real competing content - so the message body keeps the quiet, near-monochrome
+   treatment: no card around it, no elevation competing with the sender's own
+   markup.
+
+   Its chrome is a different matter. A folder row and a message row are the
+   platform's own furniture with nothing competing inside them, so they now use
+   the soft language below. Two registers, still on purpose - but the seam runs
+   between the frame and the letter, not between two routes.
 
    Home was a placeholder when this rule was written and said "BAS only". Home
    is now a launcher whose whole content is its own cards, which is the same
