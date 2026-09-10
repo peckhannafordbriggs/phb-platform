@@ -167,17 +167,28 @@ review / edit / send verified end to end.
 
 **Phase 7 Part A complete** — Dockerfile, CI, Bicep.
 
-**Part B is BLOCKED ON AZURE ACCESS, not on the subscription.** The subscription and an
-empty `eastus2` resource group exist and `Contributor` on that group is confirmed working.
-Contributor is not enough to deploy this template, and this was measured rather than
-inferred: resource provider registration is a subscription-scoped action and all six
-providers are `NotRegistered`, and the two role assignments in the template
-(`AcrPull`, `Key Vault Secrets User`) need `Microsoft.Authorization/roleAssignments/write`,
-which is in Contributor's `notActions`. `what-if` refuses the deployment on the second
-one before creating anything. The unblock is `User Access Administrator` or `Owner` **on
-the resource group** plus a one-off provider registration by someone with subscription
-scope. Do not work around it by deleting the role assignments from the Bicep — that
-produces two permissions that exist in Azure and in nobody's record.
+**Part B is IN FLIGHT, and its blocker has moved twice.** Do not trust a summary
+of it — `runbook.md` → *Deploying to Azure (Phase 7 Part B)* is the live account
+and is kept current. The short version, as of 2026-09-10:
+
+- The subscription and resource group exist. The earlier RBAC blocker
+  (`roleAssignments/write` in Contributor's `notActions`) and the six
+  unregistered resource providers are **both resolved**.
+- The deployment **moved from `eastus` to `eastus2`**, because PostgreSQL
+  Flexible Server is offer-restricted in `eastus` for this subscription and was
+  available in every other region tried. That is a subscription-level
+  restriction, not a quota, so it cannot be raised by asking for more capacity.
+- It is now blocked on a **Key Vault purge**. A soft-deleted vault keeps its
+  globally-unique name until purged, and purge is a subscription-scoped action
+  that `User Access Administrator` on the resource group cannot perform. A vault
+  deleted from `eastus` is purged **from `eastus`**, even though the
+  redeployment targets `eastus2` — the region argument is where it was, not
+  where it is going.
+
+Do not work around any of these by editing the Bicep. Deleting the role
+assignments produces two permissions that exist in Azure and in nobody's record;
+renaming the vault to dodge the purge leaves a soft-deleted vault holding a name
+somebody will want back.
 
 Everything not requiring Azure is done and verified: the collation is explicit in the
 Bicep *and* checked by behaviour in `scripts/verify-prod-database.ts`
@@ -192,21 +203,19 @@ The subscription id and resource group are in `infra/main.parameters.json` (giti
 and CI variables only; `tests/deploy-guards.test.ts` fails the build if either is
 committed.
 
-**Phase 8 implemented, live verification outstanding.** Reply / reply-all /
-forward via Graph's own `createReply*` operations, compose from scratch, move,
-delete to Deleted Items, and attachment download / add / remove. Every one of
-them produces or edits a draft that opens in the **Phase 6 editor** — there is
-one editing surface and adding a second is a mistake. `permanentDelete` is
-exposed nowhere and a test enforces that.
+**Phase 8 complete, verified live.** Reply / reply-all / forward via Graph's own
+`createReply*` operations, compose from scratch, move, delete to Deleted Items,
+and attachment download / add / remove. Every one of them produces or edits a
+draft that opens in the **Phase 6 editor** — there is one editing surface and
+adding a second is a mistake. `permanentDelete` is exposed nowhere and a test
+enforces that. `docs/phase-8-verification.md` records what Exchange actually
+did, including four claims the docs had wrong; `scripts/co-verify-phase8.ts`
+re-runs it and never sends.
 
 One guard changed, deliberately: the ZZTEST fence now skips Exchange's own
 `RE:` / `FW:` prefixes, because `createReply` names its draft `RE: <original>`
 and every derived draft would otherwise be uneditable outside production. A reply
 to a real change order is still refused. See `runbook.md`.
-
-**Phase 8 complete.** Live verification is done and `docs/phase-8-verification.md`
-records what Exchange actually did, including four claims the docs had wrong.
-`scripts/co-verify-phase8.ts` re-runs it and never sends.
 
 Folder search is subject-only as a result: `$search` returns ids that go stale on a
 move, so it is not used. See the list above.
@@ -289,6 +298,45 @@ Still open: the two Exchange admin checks (operator Full Access, and
 `Test-ApplicationAccessPolicy`), and one unexplained weekday gap in the
 scheduled-task reports on 2026-08-18 — pre-platform, so outside the phase.
 
+**The UI redesign shipped.** Not a numbered phase; it landed across several. The
+palette is sampled from `public/phb-logo.png` rather than invented, and every
+value carries the measurement that justifies it — a two-tier fill/ink split
+exists because only purple and maroon clear WCAG AA as text. Archivo and Figtree
+are split **by role, never by size**: Archivo is signage, Figtree is anything a
+person reads. The quartered diamond is the signature at three sizes, and the
+tinted radial ground carries the dashboards. BAS was rebuilt around a hero tile,
+Home became a personal launcher, and Change Orders was softened with resizable
+panes, breakpoints and keyboard navigation.
+
+Two rules from it that are easy to undo by accident, both enforced in code:
+**decorative colour and semantic colour are disjoint sets**, and **the Change
+Orders reading pane stays quiet while its chrome went soft** — the test is
+competing content, and a vendor's own email is competing content. See
+`WHY-ITS-BUILT-THIS-WAY.md` §§ 38–39, `docs/DESIGN-BRIEF.md`, and the token
+comments in `app/globals.css`, which are the authority on any colour value.
+
+**Phase 12 Parts A and B complete. Part C onward not started.** The change-order
+engine — `run_workflow.py`, ~196 KB, which had no version control at all — is
+now a repository, `phb-co-engine`, with the first commit verified byte-identical
+to the SharePoint copy. `docs/12-ai-layer-inventory.md` is the inventory every
+later part depends on, and it distinguishes what was observed from what was
+inferred.
+
+Two findings from it that change what a later part may assume:
+
+- **A dormant `Bid Tracker.xlsx` write was found in the engine and removed** —
+  the one deliberate logic change in Part B. It is the exact operation that
+  silently breaks a Power Automate table binding, it had run before, and the
+  broken-table artifact is still on disk. Guarded now by a test.
+  `WHY-ITS-BUILT-THIS-WAY.md` § 40.
+- **Conversation grouping is not what makes the mail screen slow.** The folder
+  tree is, and its cost was serialisation rather than volume. Measured, fixed,
+  and recorded in `runbook.md` → *The Change Orders screen feels slow*.
+
+Part B extracted one file-access interface with two implementations.
+`GraphFileStore` is written and **has never run** — Part C is what selects it,
+against a copy, and its open questions are marked `GRAPH-TODO` in place.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -324,7 +372,7 @@ seen it.
 | File | Contents |
 |---|---|
 | `HANDOVER.md` | **Start here if you are new.** What this is, what must not break, what will fail and when, what to do first |
-| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 36 decisions, why each was made, and what breaks if you undo it |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 43 decisions, why each was made, and what breaks if you undo it |
 | `runbook.md` | Failure modes, recovery, what expires and when |
 
 **Reference, in `docs/`:**
@@ -338,9 +386,12 @@ seen it.
 | `docs/05-database-and-sources.md` | Schema ownership, migration vs seed, source of truth |
 | `docs/06-roadmap.md` | Phases 1–14 |
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
-| `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon |
+| `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon, headroom |
 | `docs/09-bas-what-is-built.md` | BAS: what exists, and which of the two repos owns each piece |
+| `docs/12-ai-layer-inventory.md` | **Phase 12: what the change-order engine reads, writes and decides.** The input to every later part |
+| `docs/DESIGN-BRIEF.md` | The redesign brief as issued, plus what the build actually chose where the two differ |
 | `docs/phase-1-verification.md` | Manual verification record |
 | `docs/phase-8-verification.md` | What Exchange actually did for the email actions |
 | `docs/phase-9-verification.md` | Grouping, conflicts, and the latency that decides Part B |
 | `docs/phase-11-verification.md` | Evidence the platform has not disturbed the automation |
+| `docs/phase-12-part-b-verification.md` | The file-access extraction: what was measured, and what is still unproven |

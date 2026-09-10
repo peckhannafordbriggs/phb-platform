@@ -447,13 +447,21 @@ function Panel({
  * reads as a steady temperature - the most confident possible rendering of data
  * that was destroyed.
  *
- * Two mechanisms, because one is not enough to be noticed:
+ * THREE mechanisms, because one is not enough to be noticed and two can still
+ * be dismissed. This comment said "two" for a while and undercounted its own
+ * code; the list below is what the component actually renders:
  *
  *  1. `connectNulls={false}` plus an explicit null sample inserted by
  *     `buildTrend` in the service. This is what actually stops the line.
  *  2. A shaded band over every gap, with its duration written on the panel
  *     header. A break alone can read as a rendering artifact; a labelled band
  *     cannot.
+ *  3. A written list of every gap beneath the chart, with both timestamps and
+ *     a duration. A band says where; only prose says how long, and only prose
+ *     survives being described to somebody over the phone.
+ *
+ * All three are load-bearing and none is decoration. See
+ * WHY-ITS-BUILT-THIS-WAY.md § 30.
  */
 function TrendPanel({
   data,

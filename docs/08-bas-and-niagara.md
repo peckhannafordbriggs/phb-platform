@@ -312,7 +312,7 @@ knowingly rather than discovered later.
 
 ## The data model
 
-Twelve tables, `bas_`-prefixed in `public`, defined in `prisma/schema.prisma`
+Fourteen tables, `bas_`-prefixed in `public`, defined in `prisma/schema.prisma`
 plus hand-written SQL in the `add_bas_tables` migration. **`schema.prisma` is
 not the whole story** — see the runbook section *The BAS schema lives in two
 places*.
@@ -467,9 +467,14 @@ Until somebody looks, the honest answer is that we do not know.
 
 ### Collection Health
 
-Is data arriving, and is any of it about to be lost. Five tiles, a per-point
-table, the recent collector runs and the recorded data gaps, reading
-`bas_ingest_runs`, `bas_data_gaps` and `bas_v_collection_health`.
+Is data arriving, and is any of it about to be lost. A **headroom hero tile**, a
+full-width run chart, four summary tiles, a per-point table, the recent collector
+runs and the recorded data gaps — reading `bas_ingest_runs`, `bas_data_gaps` and
+`bas_v_collection_health`.
+
+*(This said "five tiles" until 2026-09-10 and described the pre-redesign screen.
+The layout is in `09-bas-what-is-built.md` → *Collection Health*; the headroom
+metric and its honesty rule have their own section below.)*
 
 **Two controls, and they scope different things.** *Building* — All or one site
 — scopes every panel without exception. *Range* — 24 hours, 7 days, 30 days —
@@ -480,12 +485,12 @@ hiding rows in the browser. Whatever is selected is restated in words above the
 data, because a reader who has lost track of the filter cannot tell a real zero
 from a filtered one.
 
-**Two tiles have semantics worth stating.** *Points at risk* counts `data_lost`
-— the station overwrote records before we collected them, permanently — and
-`roll_horizon_unknown`, meaning capacity has not been filled in from Workbench
-so we cannot tell. **Unknown is not the same as safe and must never render
-green.** *Unclassified points* is amber by design: an unclassified point is a
-backlog item, not an error.
+**Two things have semantics worth stating.** The headroom hero tile replaced the
+old *points at risk* count and carries the same rule in a harder place — a
+partly-unknown set never renders as a bare number, because `roll_horizon_unknown`
+means capacity was never filled in from Workbench and **unknown is not the same
+as safe**. See *Headroom is the hero metric* below. *Unclassified points* is
+amber by design: an unclassified point is a backlog item, not an error.
 
 ### Point Explorer
 
@@ -651,10 +656,11 @@ before B3), typecheck, lint and build clean.
 **What was built.** One route, `/api/modules/bas/collection-health`, answering
 the whole screen in one payload; `getCollectionHealth` reads all of it inside
 one transaction so that `now()` is the same instant for the tiles, the per-point
-"minutes ago" and the view's `roll_risk`. Five tiles, the per-point table,
-records-per-run, recent runs, and — added deliberately — the recorded data gaps,
-which is the ninth Grafana panel and the only one that shows data already
-destroyed.
+"minutes ago" and the view's `roll_risk`. As built for B3 that was five tiles;
+the redesign made it a headroom hero tile plus four, and the payload and the
+transaction are unchanged. The per-point table, records-per-run, recent runs,
+and — added deliberately — the recorded data gaps, which is the ninth Grafana
+panel and the only one that shows data already destroyed.
 
 **Recharts, added here rather than in B4.** The records-per-run panel needs a
 real time axis: a bar chart spaced evenly by run number draws 21 August and 24
@@ -789,6 +795,95 @@ backup*, with a tested patch for the backup script.
 **Still done when** seven consecutive days of collection land with no gaps.
 
 ---
+
+## Headroom is the hero metric, and unknown horizons govern how it is said
+
+The dashboard used to lead with a count of points at risk. It now leads with
+**headroom**: how long until data starts being lost.
+
+**Why the change.** A count answers "is something wrong". Headroom answers "how
+long have I got", which is the question somebody actually has when they open the
+screen — and it is the question this system exists to answer, because the
+failure here is a station overwriting history that was never collected.
+
+**How it is computed.** Per point: `rollHorizonHours` minus how long ago that
+point was last collected. The screen's headroom is the **smallest** of those,
+because the first point to run out is the one that decides when data starts
+being lost. Not the mean, which would be reassuring and wrong.
+
+**The honesty rule, which is the whole reason this is written down.** A point
+whose horizon is unknown contributes **nothing**, and is counted separately.
+`rollHorizonHours` is null for exactly the `roll_horizon_unknown` state —
+capacity was never filled in from Workbench — and quietly taking the minimum
+over the points that *do* have one produces a clean, confident number that hides
+the very gap the screen exists to surface.
+
+So a partly-known set says so out loud:
+
+    38 h headroom across 3 of 4 points, 1 unknown
+
+rather than `38 h`. A point never collected at all is also unknown rather than
+zero: it has no "time since" to subtract, and treating either half as zero would
+invent a number.
+
+This is the same rule as *Unknown never renders green*
+(`WHY-ITS-BUILT-THIS-WAY` § 28), applied to a number instead of a colour. It has
+to hold in the badge as much as in the tile, because the badge is what somebody
+quotes.
+
+**Watch for.** The temptation is a fallback — "use the mean where the minimum is
+unknown", or "assume 42 hours, the station default". Both replace a stated gap
+with a plausible figure, which is the failure mode this whole module is designed
+against.
+
+## Decorative colour and semantic colour are disjoint on this screen
+
+BAS is where this constraint bites hardest, because it is the screen with both
+the most colour and the most meaning.
+
+Teal, orange and maroon mean ok / warn / bad. A card tinted for rhythm may
+therefore only use cyan, purple or pink. The module accent — cyan — is outside
+the semantic set too: it says *you are in Building Automation* on the header
+diamond, the active tab and the trend line, and never appears on a tile. That is
+what stops a healthy teal tile reading as merely module-coloured.
+
+The full reasoning is `WHY-ITS-BUILT-THIS-WAY` § 38. What is BAS-specific:
+`--danger` is maroon rather than red *so that* red stays available for
+decoration, and the trend line takes the module accent because sensor data is
+the content of that screen — one accent, and it is the module's.
+
+## The chart's zoom is a domain change, not a data filter
+
+Dragging across the plot sets an explicit x domain with `allowDataOverflow`, and
+recomputes the y domain from the points inside the window. It does not filter
+the series.
+
+**Why it matters here specifically.** The nulls that break the line across a gap
+are members of the series. A zoom implemented by filtering the array would drop
+the null that marks a hole and reconnect the line — producing, at exactly the
+zoom level somebody uses to look closely at an outage, the most confident
+possible rendering of destroyed data. The gap treatment and the zoom are the
+same decision seen twice.
+
+The y recompute is not cosmetic either: Recharts would otherwise keep scaling y
+to the whole window, so zooming into a flat stretch would show a flat line and
+hide the detail the zoom was for.
+
+## The curve is `monotone`, and that is a correctness choice
+
+Curved, because a smooth line reads as a physical quantity rather than a set of
+measurements joined with a ruler — a room temperature is continuous even though
+the samples are not.
+
+`monotone` rather than a natural or cardinal spline because those **overshoot**
+between samples. An overshooting spline draws a peak the sensor never recorded,
+which on this screen is the same class of error as interpolating across a gap:
+the chart asserting a reading that does not exist. `monotone` cannot exceed the
+range of the samples it joins.
+
+The curve joins samples. It never invents them across a null — `connectNulls`
+is stated as `false` even though that is the Recharts default, because a future
+edit flipping it would silently draw a line across 22.7 hours of destroyed data.
 
 ## Decisions, with reasons
 

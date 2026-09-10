@@ -182,6 +182,32 @@ underlying code is in the log as `"event":"mail.graph_call_failed"`. The
 
 ---
 
+## A complete CO scrubs but `vendor_drafts.json` never appears
+
+**Phase 12 Part B, and found by the differential test rather than by reading.**
+
+**Symptom.** A complete CO scrubs and routes to *3 - Ready for Vendor Pricing*
+normally. `scrub_result.json` is written. But `vendor_drafts.json` is absent,
+a `vendor_drafts.json.tmp` is left in the attempt folder, and the run report
+carries `WARN: '<CO>' vendor_drafts.json write error`. Gate B therefore drafts
+no vendor emails and the CO stops silently.
+
+**Cause.** The file-access interface refuses to write any of the four Power
+Automate sentinel filenames unless the caller passes `allow_sentinel=` naming
+which one it means. `write_text_via_tmp` authorised the *destination* but not
+the rename that completes the write — so the temp file landed and the rename
+onto `vendor_drafts.json` was refused by the guard protecting it.
+
+**Fix.** The authorisation is carried through to `replace()`. A test pins the
+rule that a sentinel name plus a suffix is **not** a sentinel:
+`vendor_drafts.json.tmp` cannot trigger a flow and must not be blocked.
+
+**Why it is in this runbook at all.** It is fixed and cannot recur in that exact
+form. It is here because the shape recurs: a guard that refuses the operation it
+was installed to permit, failing on the half of the pipeline that has vendors in
+it, with the only symptom a WARN in a report nobody reads. If a sentinel stops
+appearing, check the guard before checking Exchange.
+
 ## The Change Orders screen feels slow
 
 **Measure before changing anything.** `scripts/co-measure.ts` instruments the

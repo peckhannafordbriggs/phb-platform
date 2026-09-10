@@ -100,10 +100,13 @@ Building controller ──► Python collector (phb-bas) ──► same PostgreS
 Change-order automation (11 Power Automate flows) ──► same mailbox
 ```
 
-**Not deployed yet.** That diagram is the shape once the Azure subscription exists. Today
-the app runs locally against a local PostgreSQL, the container image and the Bicep
-templates are written and exercised in CI, and nothing is hosted. See *Not built,
-deliberately* below.
+**Not deployed yet, but no longer waiting for a subscription.** That diagram is the shape
+once Phase 7 Part B lands. Today the app runs locally against a local PostgreSQL, the
+container image and the Bicep templates are written and exercised in CI, and nothing is
+hosted. The subscription and resource group exist; what remains is one Azure action
+nobody here can perform. See *Production deployment* below, and `runbook.md` →
+*Deploying to Azure (Phase 7 Part B)* for the live account — that section is kept current
+and this one is a summary.
 
 The platform and the change-order automation **never talk to each other.** Both talk to
 Exchange. That independence was verified in Phase 11 — no flow ran during any platform
@@ -204,13 +207,24 @@ message list, reading pane, search, attachments. Draft review, editing and sendi
 verified end to end against the live mailbox. Reply, reply-all, forward, compose, move,
 delete. Conversation grouping.
 
-Roughly 911 automated tests, plus verification records in `docs/` for Phases 1, 8, 9 and
-11.
+1,272 automated tests as of 2026-09-10, plus verification records in `docs/` for Phases
+1, 8, 9, 11 and 12 Part B.
+
+**The UI redesign shipped too**, across several phases rather than as one. The palette is
+sampled from the logo and every value carries the WCAG measurement that justifies it;
+Archivo and Figtree are split by role rather than by size; the quartered diamond is the
+signature. BAS was rebuilt around a headroom hero tile, Home became a personal launcher,
+and Change Orders gained resizable panes, breakpoints and keyboard navigation. The record
+is `docs/DESIGN-BRIEF.md` and the token comments in `app/globals.css`.
 
 ### BAS — working, on synthetic data
 
-Twelve tables, six views, the collector running, two dashboards, three scoped database
+Fourteen tables, six views, the collector running, three tabs — Collection Health, Point
+Explorer and a Settings tab behind a module-admin permission — three scoped database
 accounts, nightly backups with a tested restore.
+
+B7 added a project level above buildings and encrypted station credentials. The record is
+`docs/09-bas-what-is-built.md`; the reasoning is `docs/08-bas-and-niagara.md`.
 
 **The open dependency:** everything runs against four synthetic points on a lab station
 that isn't PH+B's asset. The real question isn't the controller's address — it's whether
@@ -226,16 +240,40 @@ up, this becomes a Niagara engineering job before it's a data job.
   the API budget and Exchange responds in 250 ms.
 - **BAS plain-English querying (B5)** — designed, not started. Blocked on a company
   Anthropic API key.
-- **Production deployment (Phase 7 Part B)** — blocked on the Azure subscription, which
-  has to be owned by an M365 group rather than a person, with Contributor rights on the
-  resource group. Part A is done: the Dockerfile, the CI pipeline and the Bicep templates
-  exist and are exercised on every push. What is missing is somewhere to deploy to.
-- **Moving the change-order AI off the laptop** — see below.
+- **Moving the change-order AI off the laptop** — see below. Parts A and B are done.
+
+### Production deployment (Phase 7 Part B) — in flight, not deliberate
+
+This was listed under *deliberately not built* for a while, which was wrong: it is
+blocked, not chosen. Part A is done — the Dockerfile, the CI pipeline and the Bicep
+templates exist and are exercised on every push.
+
+The blocker has moved twice, so **do not act on this paragraph without reading
+`runbook.md` → *Deploying to Azure (Phase 7 Part B)***, which is kept current. As of
+2026-09-10:
+
+| | |
+|---|---|
+| Resolved | The subscription and resource group exist. The RBAC blocker and the six unregistered resource providers are both cleared |
+| Changed | Moved from `eastus` to `eastus2` — PostgreSQL Flexible Server is **offer-restricted** in `eastus` for this subscription. A restriction, not a quota, so more capacity cannot be requested |
+| Blocking now | A **Key Vault purge**. A soft-deleted vault holds its globally-unique name until purged, and purge is subscription-scoped — `User Access Administrator` on the resource group cannot do it. Ask Vitis |
+
+One trap worth carrying: a vault deleted from `eastus` is purged **from `eastus`**, even
+though the redeployment targets `eastus2`. The region argument is where it was, not where
+it is going.
 
 ### Moving the AI layer off the laptop
 
 The two scheduled AI tasks that drive the change-order automation still run on one Windows
-machine. Moving them into Azure is planned as Phases 12–14.
+machine — **this one**, under `C:\Users\Msheth`, not the previous operator's. The Cowork
+app log settles that, and the crons match what `docs/09_Scheduled_Task_Prompts_VERBATIM.md`
+recorded. Moving them into Azure is Phases 12–14.
+
+**Phase 12 Parts A and B are done.** The engine is in version control for the first time
+(`phb-co-engine`), the inventory that every later part depends on is written
+(`docs/12-ai-layer-inventory.md`), a dormant `Bid Tracker.xlsx` write was found and
+removed, and one file-access interface has been extracted with two implementations. The
+Graph one has never run. Parts C, D and E are not started.
 
 It's the only work in this project that can break a pipeline the business depends on daily,
 so the sequence matters: extract a file-access layer from a ~196 KB Python script,

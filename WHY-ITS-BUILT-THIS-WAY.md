@@ -685,7 +685,133 @@ admin to Jake"* no longer describes everyone who can add a building.
 platform admin flag — which puts the employee directory in the hands of whoever adds a
 building — or the check moves into the routes, where forgetting it is possible again.
 
-## 36 · The judgment I'd most want to pass on
+## 38 · Decorative colour and semantic colour are disjoint sets
+
+**The decision.** Teal, orange and maroon mean ok / warn / bad. A card tinted for
+rhythm rather than for state may therefore only use cyan, purple or pink. The two
+sets share no member, and `.card--tinted` in `app/globals.css` enforces which
+side of the line a fill is on.
+
+**Why.** A dashboard needs some colour for identity or it reads as a spreadsheet.
+But a tile filled red for visual interest, sitting beside a tile filled maroon
+because something is broken, teaches the reader that colour means nothing here —
+and then the maroon one stops working. Keeping the palettes disjoint is what lets
+a coloured card be decorative *and* a coloured tile be a fact, on the same
+screen, without either weakening the other.
+
+**Watch for.** `--danger` is deliberately maroon rather than red, which is what
+frees red for decoration. Anyone "fixing" that to the more obvious red collapses
+the two sets in one edit. The module accent is also outside the semantic set:
+BAS's cyan says *you are in Building Automation* and appears on the header
+diamond, the active tab and the trend line, but never on a tile — that is what
+stops a healthy teal tile reading as merely module-coloured.
+
+**If you undo it.** Nothing breaks visibly. The screen just stops being able to
+say anything with colour, and the failure is that nobody notices.
+
+## 39 · The Change Orders reading pane stays quiet while its chrome went soft
+
+**The decision.** The soft language — larger radius, tinted shadow, rows as
+rounded cards — applies to the module's own furniture: panes, folder rows,
+message rows, controls. It stops at the message body. No card around a vendor's
+email, no elevation competing with it.
+
+**Why.** The test is **competing content, not which route it is**. A dashboard
+has none of its own, so cards and elevation give it presence. The reading pane
+renders a vendor's actual email HTML, with the vendor's own colours, tables and
+signature block. Framing that in a lifted card puts the platform's styling in
+argument with the sender's, and the sender's is the thing being read.
+
+**What it costs.** The module is not uniformly styled, and that looks like an
+oversight to anyone who has not read this. It is the opposite: the seam runs
+between the frame and the letter.
+
+**Watch for.** `app/globals.css` originally recorded this as "BAS AND HOME,
+deliberately — and not the mail screens". That was narrowed rather than
+reversed when the chrome went soft, because the test still holds and it was
+always about one pane. A comment claiming the mail screens are excluded would
+now be false, so it does not say that any more.
+
+## 40 · The `Bid Tracker.xlsx` write was removed, and what justified it
+
+**The decision.** `run_workflow.py` contained `seed_response_bid_tracker()`,
+which loaded `Bid Tracker.xlsx` with openpyxl, appended a row, re-set the
+`COTracker` table ref and saved the workbook back. It was removed in Phase 12
+Part B — the one deliberate logic change in a part whose whole rule was that
+nothing but file access changes.
+
+**Why.** Power Automate binds to that workbook's Excel `ListObject`. Rewriting
+the file with a library regenerates the internal table IDs; the file still looks
+correct and the flow silently stops resolving the table. `docs/02` had already
+recorded that as something which happened in production.
+
+**The evidence, because "it might break" would not have been enough.** It had
+run for real — `.BidTracker_pre_seed_backup.xlsx`, a filename only that code
+ever wrote, is in the response engine's archive. And the failure it produces has
+an artifact on disk beside the live workbook:
+`.Bid Tracker.broken_table_uid_2026-07-31_1003.xlsx`, preserved next to a backup
+taken the same minute. That the seeding caused that particular break is
+inference; that it is the break the seeding produces is not.
+
+**What kept it quiet was luck, not design.** Both candidate paths had stopped
+resolving, so every call returned "skipped, not reachable" — and the maintainer
+knowledge base was telling new operators to set `CO_BID_TRACKER_PATH`, which is
+the one variable that would have armed it. Verified afterwards in six places
+that it is set nowhere.
+
+**Watch for.** Do not "fix" this by routing the write through the Part B
+FileStore. That satisfies the letter of *the tracker is unreachable through the
+interface* and none of its intent: the harm is the workbook rewrite, not the
+plumbing that reaches it. `tests/test_no_bid_tracker_write.py` in `phb-co-engine`
+fails on a path to that workbook, a `BID_TRACKER`-shaped identifier, a read of
+that env var, or any workbook write to an unapproved destination. Run against
+the pre-removal engine it reports eleven violations, so it is known to have
+teeth.
+
+## 41 · Arrow keys move the cursor; they do not open the message
+
+**The decision.** In the Change Orders list, arrows and `j`/`k` move a cursor,
+and `Enter` opens. Moving does not fetch.
+
+**Why.** Opening a message is a Graph round trip. Bound to arrow keys, a held
+key is one request per row against a live mailbox — and the throttle budget is
+shared with the automation that actually matters. So the cursor is free and the
+fetch is deliberate, which is the same separation Outlook has between its
+reading cursor and its reading pane.
+
+**What follows.** Selection and the cursor are two different states and are drawn
+differently: selection is a surface plus the accent rule, the cursor is a ring.
+They are usually the same row, and they have to stay legible when they are not.
+
+**Watch for.** A roving `tabIndex` keeps exactly one row in the tab order. Without
+it `Tab` walks through every row in the folder before reaching the reading pane,
+which is worse than no keyboard support at all.
+
+## 42 · The run lock was routed through the interface, not fixed
+
+**The decision.** Phase 12 Part B put the engine's `.run_workflow.lock` through
+the same `FileStore` as every other file — `create_exclusive`, `truncate_write`,
+`remove` — and changed none of its behaviour.
+
+**Why.** It is not a mutex and was never one. One of its three outcomes is
+literally *proceeding unlocked*: any failure to manage the lock file logs a
+warning and continues, deliberately, so lock infrastructure can never wedge a
+pipeline the business runs on. And it coordinates one machine only — the
+engine's own comment says so, because an `O_EXCL` create on a OneDrive-synced
+folder says nothing about what another machine is doing.
+
+**Why not fix it in Part B.** Part B's guarantee is that the extraction changed
+no behaviour, and that guarantee is what the differential test could prove.
+Rewriting the lock in the same commit would have made "the output is identical"
+untestable — and the lock is not what protects Phase 12 anyway. **Isolation is:**
+the container points only at a copy, so it can never contend for the live lock.
+
+**Watch for.** Whether the mechanism should change at all is a Phase 14
+question, decided at cutover with the live path in view. Until then, do not
+describe this lock as mutual exclusion in any document — including a Part C
+write-up that would find it convenient to.
+
+## 43 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
 

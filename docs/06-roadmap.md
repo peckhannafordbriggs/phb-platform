@@ -1,4 +1,29 @@
 # Roadmap
+
+**Status is on every heading below, and this line says where each status comes
+from.** A phase marked COMPLETE has its work merged; one marked *verified* also
+has a verification record in `docs/`. Nothing here is a plan for a phase already
+marked complete — the plan documents (`docs/PHASE-*.md`) are kept as written,
+including the parts that were declined, because a phase's reasoning is worth
+more than its checklist.
+
+| Phase | Status | Where the detail is |
+|---|---|---|
+| 1–3 | Complete | `docs/phase-1-verification.md` |
+| 4–6 | Complete | `docs/PHASE-4.md`, `docs/PHASE-5.md`, `docs/PHASE-6.md` |
+| 7 | Part A complete, **Part B in flight** | `runbook.md` → *Deploying to Azure* |
+| 8 | Complete, verified live | `docs/phase-8-verification.md` |
+| 9 | Part A complete, **Part B declined on a measurement** | `docs/phase-9-verification.md` |
+| 10 | Complete | `docs/PHASE-10.md` |
+| 11 | Complete, verified | `docs/phase-11-verification.md` |
+| 12 | **Parts A and B complete** | `docs/12-ai-layer-inventory.md`, `docs/phase-12-part-b-verification.md` |
+| 13–14 | Not started | `docs/PHASE-12.md` for the sequencing they depend on |
+| B1–B4, B6, B7 | See below | `docs/09-bas-what-is-built.md` |
+| B5 | Blocked on an Anthropic API key | `docs/08-bas-and-niagara.md` |
+
+The **UI redesign** is not a numbered phase and shipped across several of them.
+Its record is `docs/DESIGN-BRIEF.md` (the brief, plus what the build actually
+chose) and the token comments in `app/globals.css`.
 Two things hold across every phase:
 
 - **Exchange stays the source of truth for mail.** No duplicate mailbox in our database.
@@ -60,7 +85,7 @@ Employee
 
 ---
 
-## Phase 4 — Microsoft 365 Connection
+## Phase 4 — Microsoft 365 Connection — COMPLETE
 
 Connect the backend to Microsoft. No email UI yet.
 
@@ -84,7 +109,7 @@ every mailbox in the company.
 
 ---
 
-## Phase 5 — Read-Only Change Order Mailbox
+## Phase 5 — Read-Only Change Order Mailbox — COMPLETE
 
 First genuinely useful screen. Read-only, because the worst bug in a read-only feature
 is showing nothing.
@@ -111,7 +136,7 @@ Power Automate flow files something, and every cached ID goes stale silently.
 
 ---
 
-## Phase 6 — Drafts: Review, Edit, Send
+## Phase 6 — Drafts: Review, Edit, Send — COMPLETE
 
 The actual daily human job and the highest-value part of the platform.
 
@@ -136,7 +161,7 @@ end to end and confirm it lands in `changeorder@` Sent Items in Outlook.
 
 ---
 
-## Phase 7 — Deploy to Production
+## Phase 7 — Deploy to Production — PART A COMPLETE, PART B IN FLIGHT
 
 Somewhere other than one laptop, deployed from CI, reachable at a URL.
 
@@ -152,7 +177,7 @@ into it — that permission is routinely forgotten when a subscription is create
 
 ---
 
-## Phase 8 — Full Email Actions
+## Phase 8 — Full Email Actions — COMPLETE, verified live
 
 Turn the mailbox view into a real client. All against Exchange, never a local copy.
 
@@ -307,7 +332,7 @@ change-order thread reads as one thing in both.
 
 ---
 
-## Phase 10 — Admin Panel Refinement
+## Phase 10 — Admin Panel Refinement — COMPLETE
 
 The core shipped in Phase 3. What's left is scale and polish.
 
@@ -333,7 +358,7 @@ computer.
 
 ---
 
-## Phase 11 — Verify the Existing Automation Still Works
+## Phase 11 — Verify the Existing Automation Still Works — COMPLETE, verified
 
 Mostly a verification phase, not a build phase. The platform and the flows never talk
 to each other — both talk to Exchange and SharePoint. That independence is what makes
@@ -355,7 +380,7 @@ untouched while employees use the platform as their interface.
 
 ---
 
-## Phase 12 — Centralize the AI Logic
+## Phase 12 — Centralize the AI Logic — PARTS A AND B COMPLETE
 
 Reproduce the current AI behavior in the backend without changing the employee
 experience. **Do not shut down the existing setup during this phase.**
@@ -387,7 +412,7 @@ this project exists to prevent.
 
 ---
 
-## Phase 13 — Centralize the Scheduled Jobs
+## Phase 13 — Centralize the Scheduled Jobs — NOT STARTED
 
 Move the two morning tasks off a personal laptop.
 
@@ -412,7 +437,7 @@ point of failure in the current system and costs a day.
 
 ---
 
-## Phase 14 — Cutover and Production Hardening
+## Phase 14 — Cutover and Production Hardening — NOT STARTED
 
 Prove the centralized version is correct, then retire the old path.
 

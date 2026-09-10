@@ -6,6 +6,8 @@ says *what exists*.
 
 Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
+B7's plan, as written before it was built, is `docs/B7_settings_and_hierarchy_plan.md`.
+
 **Last updated:** 8 September 2026 — a second pass, which added the
 repository-relative locations below and rewrote *Proven in operation* after a
 third and much worse outage. Its figures were read out of
@@ -65,7 +67,7 @@ write anything back.
 | **`bas_collector` Niagara account** | — | on the station | Read-only. The only thing added to the JACE |
 | **Collector** | `phb-bas` | `bas-collector/` | Python. Reads oBIX every 15 min, writes to Postgres |
 | **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 12 tables, 6 views. Permanent |
-| **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Two tabbed dashboards behind the platform's own login and grants |
+| **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Three tabs behind the platform's own login and grants |
 | **Grafana dashboards** | `phb-bas` | `bas-grafana/`, served at `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
 | **`bas-mcp`** | `phb-bas` | `bas-mcp/` | Lets Claude Desktop query the data. Superseded by B5 when that ships |
 | **Nightly backup** | `phb-bas` | `bas-collector/Backup-BasDatabase.ps1`, running at 02:15 to OneDrive | Load-bearing — see *Irreplaceability* |
@@ -90,6 +92,10 @@ Two deployables, one per repository — see *Two repositories, one system* above
 | **B3** | Collection Health screen, time range and building filter | `278b723` (2026-08-24) |
 | **Cutover** | Collector retargeted at the platform database, Grafana and MCP repointed | `abcacf3`, `78776fd` **(phb-bas)** |
 | **B4** | Point Explorer, tabbed layout | `e76eba4` (2026-08-24) |
+| **B7.1** | A project level above buildings, and a place for station credentials | `61336b6` |
+| **B7.2–B7.4** | The Settings tab, behind a module-admin permission that is **not** platform admin | `1669e63` |
+| **B7.5–B7.6** | Credential audit gains a username; the BAS filters grow up | `a409366` |
+| **Redesign** | Module accent scope, chart accent and chrome — tile colours untouched | `5235b76` |
 
 Four later BAS commits the earlier version of this table omitted, all 2026-08-24:
 
@@ -116,8 +122,9 @@ Four later BAS commits the earlier version of this table omitted, all 2026-08-24
 
 ### Test count
 
-**911 tests, measured 2026-08-28** on the current `main`, of which roughly 280 are
-BAS tests.
+**1,272 tests, measured 2026-09-10** on the current `main`, of which roughly 280
+are BAS tests. The previously recorded figure was 911, measured 2026-08-28; the
+growth since is Phases 10-12 and the redesign, not BAS.
 
 **The previously recorded "710, from a 416 baseline" is unverified**, not
 disproved. Establishing it would mean checking out `e76eba4`, rebuilding the test
@@ -134,20 +141,29 @@ that is measured.
 
 ## The database
 
-Twelve tables under `public` with a `bas_` prefix, managed by Prisma.
+**Fourteen** tables under `public` with a `bas_` prefix, managed by Prisma.
+Counted from `@@map("bas_*")` in `prisma/schema.prisma`; this said twelve until
+2026-09-10, which predated B7.
 
 ```
 bas_orgs
- └── bas_sites                     a building
-      └── bas_stations             a JACE (or a Supervisor)
-           └── bas_points          one trended value
-                └── bas_readings   the numbers
-      └── bas_equipment            AHU-3, VAV-204
+ └── bas_projects                  a job — added by B7.1
+      └── bas_sites                a building
+           └── bas_stations        a JACE (or a Supervisor)
+                └── bas_points     one trended value
+                     └── bas_readings   the numbers
+           └── bas_equipment       AHU-3, VAV-204
 ```
 
+**`bas_projects` sits above buildings**, which is the order the business works
+in: a job comes first and the buildings belong to it. A site with no project is
+still valid — the level was added above an existing hierarchy without making
+every existing row wrong.
+
 Plus `bas_point_roles` and `bas_equipment_types` (controlled vocabularies, 91 and
-25 rows, seeded), `bas_point_links`, and three operational tables —
-`bas_sync_checkpoints`, `bas_ingest_runs`, `bas_data_gaps`.
+25 rows, seeded), `bas_point_links`, `bas_station_credentials` (B7.1 — see
+*Security*), and three operational tables — `bas_sync_checkpoints`,
+`bas_ingest_runs`, `bas_data_gaps`.
 
 Six views, all prefixed `bas_v_`. That prefix is **load-bearing**:
 `bas_v_data_dictionary` selects objects matching `bas\_%`, so an unprefixed view
@@ -182,21 +198,37 @@ it ignores constraints and triggers.
 
 ## The screens
 
-One module, two tabs — real routes, not client-side state, so each is
-bookmarkable and each guards itself independently.
+One module, **three** tabs — real routes, not client-side state, so each is
+bookmarkable and each guards itself independently. Listed in
+`app/(modules)/bas/tabs.ts`, which is the one place that knows they exist.
 
 ### Collection Health — `/bas`
 
-Five tiles: active points, total readings, unclassified points, points at risk of
-data loss, time since the newest reading. A per-point status table. Records
-written per collector run. Recent collector runs. Recorded data gaps.
+**Rebuilt in the redesign.** It is no longer five equal tiles. The shape now, in
+render order:
 
-**Two tiles have semantics that must not drift.** *Points at risk* counts
-`data_lost` — the station overwrote records before we collected them, gone
-permanently — and `roll_horizon_unknown`, meaning capacity has not been filled in
-from Workbench so we cannot tell. **Unknown is not safe and must never render
-green.** *Unclassified points* is amber by design: a point with no role is
+| | What |
+|---|---|
+| **Hero tile** | Headroom — *how long until data starts being lost* — with the per-point breakdown behind it |
+| **Run chart** | Records written per collector run, full width |
+| **Four tiles** | Active points (with a live *n of m reporting* badge), total readings, unclassified points, time since the newest reading |
+| **Tables** | Per-point status, recent collector runs, recorded data gaps |
+
+The tile the old five had and this does not is *points at risk*. It was not
+dropped — it was **promoted and made quantitative**. A count of at-risk points
+answers "is something wrong"; headroom answers "how long have I got", which is
+the question an operator actually has. See `08` → *Headroom is the hero metric*
+for why, and for the honesty rule that governs it.
+
+**Two things here have semantics that must not drift.** Headroom over a partly
+unknown set never renders as a bare number — the rule and its reasoning are in
+`08`. And *unclassified points* is amber by design: a point with no role is
 invisible to role-based questions, which is a backlog item rather than a fault.
+
+Semantic tone lives in one place, `app/(modules)/bas/tone.ts`. Both screens
+render tones and both used to carry their own copy; two copies free to drift
+about what amber means is the wrong kind of duplication when the tones encode
+data loss.
 
 ### Point Explorer — `/bas/points`
 
@@ -212,16 +244,51 @@ is unit-independent.
 through a hole asserts readings that never existed and in fact were destroyed.
 Three mechanisms, because a break alone reads as a rendering artifact: an
 inserted null with `connectNulls={false}`, a shaded band, and a written list of
-gaps beneath the chart.
+gaps beneath the chart. All three are load-bearing — see `WHY-ITS-BUILT-THIS-WAY`
+§ 30. The comment above `TrendPanel` said "two mechanisms" for a while and
+undercounted its own code; it now lists three.
+
+**Drag across the plot to zoom; Reset returns.** The zoom is a **domain change,
+never a filter on the data** — `allowDataOverflow` with an explicit x domain,
+and the y domain recomputed from the points inside the window so zooming into a
+flat stretch actually resolves it. The distinction is the point: the nulls that
+break the line are still in the series at every zoom level, so no zoom can
+smooth over a gap. A zoom implemented by filtering the array would drop the null
+that marks the hole and quietly reconnect the line.
+
+**The curve is `monotone`.** Curved because a smooth line reads as a physical
+quantity rather than measurements joined with a ruler; `monotone` specifically
+because it will not overshoot between samples, so the curve never draws a peak
+the sensor did not record.
 
 **One point at a time**, matching Grafana. That avoids overlaying °F and °C on
 one axis. Where a point has no unit recorded the axis says so rather than going
 bare — bare reads as "none needed," and the truth is "unknown."
 
+### Settings — `/bas/settings`
+
+**B7.2–B7.4.** What gets collected: projects, buildings, stations and their
+credentials. Behind `requireModuleAdmin('bas')`, which is **not** the platform
+admin flag — `module_grants.is_module_admin` carries administrative rights over
+exactly one module, and denies with 404 rather than 403.
+
+Why the separate permission: viewing building data and changing what gets
+collected are different privileges. A misconfigured station stops collection
+silently, and silent is the failure mode this module is built against. Putting
+it behind the platform admin flag would have handed the employee directory to
+whoever adds a building. See `WHY-ITS-BUILT-THIS-WAY` § 37.
+
+Station credentials live in `bas_station_credentials`, encrypted at rest with
+`BAS_CREDENTIAL_KEY`. B7.5 added a username to the credential audit, because
+knowing a credential changed without knowing which account it was for is not an
+audit trail.
+
 ### Filters
 
 Time range (24 h / 7 d / 30 d) and a building dropdown with "All". Both live in
-the URL, so they survive a refresh, a bookmark, and a tab switch.
+the URL, so they survive a refresh, a bookmark, and a tab switch. B7.6 widened
+them to the project level, so the hierarchy the settings tab manages is the
+hierarchy the dashboards filter by.
 
 Filtering happens in the `WHERE` clause, not by fetching everything and hiding
 rows. With one building those look identical; at ten they do not.

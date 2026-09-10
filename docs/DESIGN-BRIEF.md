@@ -3,6 +3,18 @@
 Read `CLAUDE.md` first. This brief covers **appearance only**. It changes no behaviour, no
 authorization, no service logic, and no test assertion about how the platform works.
 
+> ## This is the brief as issued, and the redesign has shipped
+>
+> Kept as written, because the intent is worth more than a tidied version of it —
+> but **it is not a description of what was built**, and three things in it were
+> superseded by measurement. Those are recorded in *What the build actually
+> chose* at the end.
+>
+> **The authority on any colour value is `app/globals.css`**, where every hex
+> carries the contrast measurement that justifies it. The authority on type is
+> `app/layout.tsx`. Where this brief and those files disagree, they are right.
+> Nothing is duplicated here.
+
 ---
 
 ## The subject, pinned down
@@ -230,3 +242,50 @@ transition is doing the least work.
 An estimator opens the platform on a Tuesday morning, reviews four vendor drafts, and sends
 them. They don't notice the design at all — but if you showed them a screenshot of this and
 a screenshot of any other internal tool, they'd know instantly which one was theirs.
+
+---
+
+## What the build actually chose
+
+Where the shipped design differs from the brief above, and why. Added 2026-09-10,
+because this file had been read as a record of the redesign and is not one.
+
+**The hexes here are approximate; the real ones are sampled.** The brief says
+"sample the real file rather than trusting these hexes" and that is what
+happened, so every value differs slightly — `phb-purple` is `#5b3192`, not
+`#532A85`. `app/globals.css` carries the sampled census as percentages of the
+mark's opaque pixels, and it is the authority.
+
+**Colour split into two tiers, which the brief did not anticipate.** Measured
+against the ground, only purple (8.65) and maroon (8.87) clear WCAG AA as text —
+red is 3.99, cyan 3.29, orange 2.00, teal 1.84, gold 1.17. So a bright logo
+colour may *fill* a shape and may never *carry a glyph*, and each fill has an
+`-ink` sibling darkened until it reaches 4.5:1. The ink values are derived, not
+chosen.
+
+**Red is not the primary action colour.** The brief assigns red to "primary
+action, and the Change Orders module". White on `--phb-red` measures 4.22, under
+AA, and the Send button is the most important control in the platform — so it
+uses `--phb-red-btn` (4.54). A gold focus ring likewise fails 3:1 on a light
+surface and has its own `--phb-gold-ring` value. Two cases where the brief's
+assignment lost to a measurement.
+
+**The typefaces are Archivo, Figtree and JetBrains Mono.** The brief offered
+Archivo / Bricolage Grotesque / Instrument Sans for display and Inter Tight /
+Instrument Sans for body. Figtree was not on the list and is what shipped: a
+soft geometric against Archivo's hard grotesque. **The split is by ROLE, never
+by size** — Archivo is signage (wordmark, buttons, module headers), Figtree is
+anything a person reads. That rule is stated in `app/layout.tsx` and is easy to
+undo by reaching for the display face because a heading is large.
+
+**A constraint the brief did not have: decorative colour and semantic colour are
+disjoint sets.** Teal, orange and maroon mean ok / warn / bad, so a card tinted
+for rhythm may only use cyan, purple or pink. `WHY-ITS-BUILT-THIS-WAY` § 38.
+
+**And one the brief's own rule produced.** "Identity lives in the chrome, the
+work surface stays quiet" is why the Change Orders reading pane keeps a flat,
+near-monochrome treatment while its folder rows and message rows became soft
+cards. The test is competing content, and a vendor's own email is competing
+content. `WHY-ITS-BUILT-THIS-WAY` § 39.
+
+**The Process section above is historical.** Both passes happened.
