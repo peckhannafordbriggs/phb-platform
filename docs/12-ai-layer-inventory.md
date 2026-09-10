@@ -28,6 +28,7 @@ Local only — there is no remote yet, because creating one under the
 |---|---|
 | `f8645b7` | `run_workflow.py` + `co_state.py`, unmodified, plus `.gitignore` and `.gitattributes` |
 | `8ffbf3a` | The companions: docs, specs, the two scheduled-task prompts, the response-engine runtime |
+| `61da407` | The Bid Tracker seeding removed, with a guard — the one deliberate logic change in Part B, §3b |
 
 The first commit is a photograph and was verified as one rather than assumed:
 `git hash-object` of each SharePoint file equals the blob in the commit, and
@@ -204,17 +205,21 @@ inside a per-attempt directory. **[observed]**
 the Excel `ListObject` and a library rewrite regenerates the internal table IDs —
 the file still looks right and the flow silently stops resolving the table.
 
-**`run_workflow.py` contains code that does exactly that.** **[observed]**
+**`run_workflow.py` contained code that did exactly that.** **[observed]** It has
+since been removed — see the resolution at the end of this section. What follows
+describes it as Part A found it, and every line number is from the pre-removal
+engine (`phb-co-engine` `f8645b7`); the laptop still runs that version until the
+Phase 14 cutover.
 
-`seed_response_bid_tracker` (`:2434`) loads the workbook with `openpyxl`, appends
-a `collecting` row, **re-sets `tbl.ref` to extend the table over the new row**,
-and saves through `atomic_save_xlsx` — a full workbook rewrite. It writes a
-rolling `.BidTracker_pre_seed_backup.xlsx` next to the tracker first. It is
+`seed_response_bid_tracker` (`:2434`) loaded the workbook with `openpyxl`,
+appended a `collecting` row, **re-set `tbl.ref` to extend the table over the new
+row**, and saved through `atomic_save_xlsx` — a full workbook rewrite. It wrote a
+rolling `.BidTracker_pre_seed_backup.xlsx` next to the tracker first. It was
 gated on `RESPONSE_AGENT_INTEGRATION = True` (`:145`), documented as a one-line
-kill switch. Failures are swallowed and never block Gate A.
+kill switch. Failures were swallowed and never blocked Gate A.
 
-**It is unreachable today, which is the only reason it is not currently a
-problem.** `_resolve_bid_tracker_path` (`:2416`) tries exactly two candidates:
+**It was unreachable, which is the only reason it was not already a problem.**
+`_resolve_bid_tracker_path` (`:2416`) tried exactly two candidates:
 
 1. `CO_BID_TRACKER_PATH`, defaulting to
    `~\OneDrive - Peck Hannaford + Briggs\Documents\Claude\Projects\Change Order Intake\Bid Tracker.xlsx`
@@ -224,7 +229,7 @@ problem.** `_resolve_bid_tracker_path` (`:2416`) tries exactly two candidates:
 
 Neither exists. **[observed]** — checked both, and the only `Bid Tracker.xlsx`
 anywhere under `CO Managment Process` is in `Change Order Step 2`, which neither
-candidate points at. The function returns
+candidate points at. The function returned
 `skipped — Bid Tracker.xlsx not reachable`.
 
 Supporting evidence that it is genuinely dormant rather than merely quiet: no run
@@ -240,17 +245,51 @@ repaired at the same minute. **[observed]** That this particular code caused tha
 particular break is **[inferred]**; the timestamps and the failure mode match,
 but the repair is not attributed in anything I read.
 
-**Consequences, and nothing done about them in Part A.** Part A changes no
-behaviour, so this is reported, not fixed. It matters concretely later:
+**Resolved — removed in `phb-co-engine` `61da407`.** Reported by Part A, then
+removed on an explicit decision as **the one deliberate logic change in Part B**,
+in its own commit so the FileStore extraction stays a pure refactor. The
+reasoning for making it an exception: leaving it makes the Part B acceptance
+criterion unmeetable, and routing the seed through the FileStore would satisfy
+the letter of "the tracker is unreachable through the interface" and none of its
+intent, because the harm is the workbook rewrite rather than the plumbing that
+reaches it.
 
-- Anything that sets `CO_BID_TRACKER_PATH`, or puts a `Bid Tracker.xlsx` into
-  `Change Order Intake`, arms this on the next complete CO.
-- Part B says `Bid Tracker.xlsx` must be unreachable through the FileStore
-  interface. It cannot simply be routed through the interface — the write must
-  not exist. **Whether to remove the seed or leave it dormant behind its kill
-  switch is an engine-logic decision and needs asking, not deciding.**
-- Part C's container resolves paths differently. A container that mounts the
-  library such that either candidate resolves would write the live tracker.
+Gone: `seed_response_bid_tracker`, `_resolve_bid_tracker_path`, the three
+`BID_TRACKER_*` constants, the `CO_BID_TRACKER_PATH` override and the call site.
+Kept deliberately: `RESPONSE_AGENT_INTEGRATION`, which gated **two** things —
+the seeding *and* the vendor-email subject prefix. Deleting the constant would
+have silently changed every vendor subject line; it now gates the prefix alone.
+Also kept byte for byte: `vendor_roster` and `co_key` in the `vendor_drafts`
+payload, because Power Automate seeds that tracker row from the payload and
+always could. The seed was a second writer of a row Power Automate already owns.
+
+**No output bytes change**, verified by reading rather than asserted: the removed
+code's only effects were the workbook write, its backup copy, a
+`_meta["bid_tracker_seed"]` key and a stdout line. `_meta` is never serialized —
+both `json.dump` sites write a separately-built `payload` dict with no `_meta`
+member — and that key had no reader, which is why the string appears in 0 of 159
+run reports. The §7 fixtures remain the bar for Part B, unmoved.
+
+Guarded by `phb-co-engine/tests/test_no_bid_tracker_write.py`: five checks, no
+third-party dependencies. It fails if a path to that workbook reappears, if a
+`BID_TRACKER`-shaped identifier is defined, if `CO_BID_TRACKER_PATH` is read, or
+if any workbook write targets a destination outside an explicit allowlist — so a
+new `.xlsx` write anywhere in the engine becomes a reviewed act. It asserts it
+actually scanned the files it means to, and it carries two canaries: a synthetic
+module that must trip every check, and a prose sample that must trip none,
+because the engine legitimately writes *"here's how it's logged in our Bid
+Tracker"* into the PM reply email and the first version of the guard flagged it.
+The hazard is a path, not the words. Run against the pre-removal blob from
+`f8645b7` it reports 11 violations, catching the original at five independent
+layers.
+
+**Two things remain true of production.** SharePoint stays authoritative until
+the Phase 14 cutover, so the laptop still runs the version carrying this code —
+the path is removed from the repo lineage Parts B–E build on, not yet from the
+machine. Until cutover the live mitigation is operational and unchanged: do not
+set `CO_BID_TRACKER_PATH`, and do not put a `Bid Tracker.xlsx` into
+`Change Order Intake`. And Part C must not mount the library such that either
+retired candidate path resolves.
 
 ### 3c · Everything else written
 
@@ -356,7 +395,7 @@ non-event, honouring the hold list, and writing the run summary. **[observed]**
 | `/tmp`, writable | Staging for **every** workbook and PDF write | See §6 |
 | The Cowork mount `/sessions/*/mnt/<name>` | Path discovery | Glob; session names change every run, so nothing is hardcoded |
 | OneDrive sync client | Getting SharePoint onto local disk | The source of most defensive code here |
-| `Bid Tracker.xlsx` + its `COTracker` table | The dormant seed | §3b |
+| ~~`Bid Tracker.xlsx` + its `COTracker` table~~ | Was the dormant seed. **No longer a dependency of the engine** — removed, §3b. Still a dependency of the laptop's copy until Phase 14 | §3b |
 | Master tracker, sheet `Active Estimates`, table `ActiveBids` | Bid leader lookup, read-only | Classifier |
 | `bid_leaders.json` | First name → email | **Not in git** — real names and addresses |
 | Two Office Scripts in a personal OneDrive | Intake 1 | Pre-existing single point of failure, recorded in `docs/02` |
@@ -535,24 +574,27 @@ Two requirements on that normalizer, both consequences of §7c:
   rewrites `docs/09` tells a new operator to paste. Which text the scheduler
   sends today is unconfirmed. Part D versions prompts in the repo — it needs to
   know which of the three representations is live first.
-- Whether `CO_BID_TRACKER_PATH` is set in the scheduled tasks' environment. If it
-  is, §3b is armed rather than dormant. The prompts do not set it **[observed]**,
-  but the app's own environment is not visible from here.
+- Whether `CO_BID_TRACKER_PATH` is set in the scheduled tasks' environment. This
+  still matters: the repo no longer reads that variable, but the laptop runs the
+  pre-removal engine until Phase 14, and if the variable is set there, §3b is
+  armed rather than dormant *on the machine that actually runs the pipeline*.
+  The prompts do not set it **[observed]**, but the app's own environment is not
+  visible from here. **Worth checking on the operator's machine before Part C.**
 - Whether the 2026-08-10..13, 08-18 and 08-24 report gaps are late fires, absent
   fires, or skipped report writes.
 - Who repaired the broken Bid Tracker table on 2026-07-31, and what wrote it.
 
-**Needs a decision before Part B, not by me**
+**Decided**
 
-- The dormant `Bid Tracker.xlsx` write in §3b. Removing it is an engine-logic
-  change and Phase 12 says to stop and ask before one. Leaving it means Part B
-  ships an interface whose stated guarantee — that the tracker is unreachable —
-  is true only because two paths happen not to exist.
+- The dormant `Bid Tracker.xlsx` write in §3b: **removed**, as the one
+  deliberate engine-logic change in Part B, with a guard that fails if it comes
+  back. See §3b for what went, what was kept, and what is still true of the
+  laptop until the Phase 14 cutover.
 
 **Outstanding in Part A**
 
 - Push `phb-co-engine` to the `peckhannafordbriggs` org. The repo, the ignore
-  rules and both commits exist locally; only the remote is missing.
+  rules and all three commits exist locally; only the remote is missing.
 
 ---
 
