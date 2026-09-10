@@ -8,8 +8,10 @@ Everything after this depends on this file being right, so every claim is tagged
 - **[observed]** — read out of the code, or measured against the live library.
 - **[inferred]** — a reasonable reading that nobody has confirmed. Treat as a
   question, not a fact.
-- **[not observable from here]** — needs the operator's machine or the Power
-  Platform portal. Listed rather than guessed.
+- **[not observable from here]** — needs something this session cannot reach,
+  such as the Power Platform portal. Listed rather than guessed. Three items
+  originally filed here turned out to be observable after all, from this machine;
+  §8 records what they were and what they said.
 
 Written 2026-09-10, read-only against the live SharePoint library. Nothing ran
 against the live folders; the two scheduled tasks were untouched and the
@@ -29,6 +31,7 @@ Local only — there is no remote yet, because creating one under the
 | `f8645b7` | `run_workflow.py` + `co_state.py`, unmodified, plus `.gitignore` and `.gitattributes` |
 | `8ffbf3a` | The companions: docs, specs, the two scheduled-task prompts, the response-engine runtime |
 | `61da407` | The Bid Tracker seeding removed, with a guard — the one deliberate logic change in Part B, §3b |
+| `81035bc` | The live scheduled-task prompts, which were in no repository, plus the `CO_BID_TRACKER_PATH` verification, §8 |
 
 The first commit is a photograph and was verified as one rather than assumed:
 `git hash-object` of each SharePoint file equals the blob in the commit, and
@@ -70,9 +73,10 @@ filed ones.**
 
 ## 1 · The two scheduled tasks, in order
 
-They are **Cowork scheduled tasks** — Claude running on the operator's Windows
-laptop with the SharePoint library mounted into a Linux sandbox at
-`/sessions/<session>/mnt/…`. They are the **only scheduled actors in the whole
+They are **Cowork scheduled tasks** — Claude running on a Windows laptop with the
+SharePoint library mounted into a Linux sandbox at `/sessions/<session>/mnt/…`.
+That laptop is **this machine**, `C:\Users\Msheth`, not the previous operator's;
+the app log proves it and §8 has the evidence. They are the **only scheduled actors in the whole
 pipeline**; every Power Automate gate is event-driven off a sentinel file. If
 these two tasks stop existing, nothing scrubs and nothing classifies and *there
 is no error anywhere* — the pipeline just goes quiet. **[observed** — stated in
@@ -445,8 +449,8 @@ are reached*, which is exactly the Part B seam.
 | **`/tmp` exists and is writable** | `atomic_save_xlsx` `:470`, `render_xlsx_to_pdf` `:1735`. Hardcoded, no fallback | On a bare Windows host `/tmp` resolves to `C:\tmp`; the stage write raises and `atomic_save_xlsx` turns it into a `RuntimeError`. Every workbook write would fail. The intake prompt already warns `/tmp` may not be writable and to use a workdir under the outputs mount **[observed]**; the engine has no such option **[observed]** |
 | **`/sessions/*/mnt/<name>` layout** | `_glob_session_mount` `:377` | Auto-detection returns nothing outside Cowork. The scheduled task passes `--live-path` and `--sharepoint-root` explicitly, so it does not rely on the glob |
 | **`~\OneDrive - Peck Hannaford + Briggs`** and **`~\Peck Hannaford + Briggs\AI Sandbox - Documents`** | `:107`, `:116` | Derived from `expanduser("~")` **on purpose** — "derive the base from the current user instead of baking in a specific person." The library name is identical for every PH+B user |
-| **`C:\Users\Aaichele\…` hardcoded in code** | `archive_handed_off_cos.py:47`, `DEFAULT_STEP2_ROOT` | The one place that *does* bake in a person, against the pattern `run_workflow.py` follows and against `CLAUDE.md` prohibition 6. Overridable by `CO_STEP2_ROOT` or `--root`, and the scheduled task sets `CO_STEP2_ROOT` **[observed]** — so it is a latent, not active, failure. **The operator leaves in December 2026; when that account goes, this default breaks** |
-| **`C:\Users\Aaichele\…` hardcoded in both task prompts** | `Schedlued\*\SKILL.md` | Same problem, in the prompts. `docs/09` supplies *portable* rewrites that resolve the root per-machine, and says the hardcoded ones were superseded 2026-08-04 |
+| **`C:\Users\Aaichele\…` hardcoded in code** | `archive_handed_off_cos.py:47`, `DEFAULT_STEP2_ROOT` | The one place that *does* bake in a person, against the pattern `run_workflow.py` follows and against `CLAUDE.md` prohibition 6. **That default is already wrong** — the pipeline runs under `C:\Users\Msheth` (§8), so the path it names is not the machine's. It is masked, not correct: the live classifier prompt sets `CO_STEP2_ROOT` **[observed]**, and the archive sweep would break the moment anything invoked the script without it |
+| ~~**`C:\Users\Aaichele\…` hardcoded in both task prompts**~~ | `Schedlued\*\SKILL.md` | **Not a live hazard — corrected 2026-09-10.** Those are the superseded pre-2026-08-04 archive copies. The prompts that actually fire, in `%USERPROFILE%\Claude\Scheduled\`, contain zero references to that path: they are the portable rewrites `docs/09` prescribes. See §8 **[observed]** |
 | **OneDrive refuses deletes** | ~10 `os.remove` sites, the lock, the Inbox sweep | Every one catches and continues. Not a bug — the platform behaviour that shaped this code |
 | **OneDrive can serve a truncated file** | Task prompt step 2 | The reason for `py_compile` + design-marker verification before every run |
 | **Windows path constraints in state filenames** | `co_state._safe_name` | Non-alphanumerics → `_`, trailing dots stripped, 80-char cap, plus 8 hex of `sha1` of the exact name so sanitisation cannot collide |
@@ -565,23 +569,88 @@ Two requirements on that normalizer, both consequences of §7c:
 
 ## 8 · What I could not observe, and what still needs an answer
 
-**[not observable from here]**
+### Resolved 2026-09-10 — this machine *is* the machine
 
-- The scheduled tasks' actual configuration. It lives in the Claude app on the
-  operator's machine under a different Windows account. The
-  `Schedlued\*\SKILL.md` copies I committed hardcode `C:\Users\Aaichele\…`, so
-  they correspond to the pre-2026-08-04 originals, **not** to the portable
-  rewrites `docs/09` tells a new operator to paste. Which text the scheduler
-  sends today is unconfirmed. Part D versions prompts in the repo — it needs to
-  know which of the three representations is live first.
-- Whether `CO_BID_TRACKER_PATH` is set in the scheduled tasks' environment. This
-  still matters: the repo no longer reads that variable, but the laptop runs the
-  pre-removal engine until Phase 14, and if the variable is set there, §3b is
-  armed rather than dormant *on the machine that actually runs the pipeline*.
-  The prompts do not set it **[observed]**, but the app's own environment is not
-  visible from here. **Worth checking on the operator's machine before Part C.**
+Three of these were listed as needing the operator's machine. They did not: this
+machine is the one running the pipeline, and the Cowork app keeps both the task
+schedule and the task prompts locally. **[observed]**
+
+**`CO_BID_TRACKER_PATH` is set nowhere. The path was never armed.** Checked in
+six places, all negative: the process environment (no `CO_*` at all),
+`HKCU\Environment`, the `HKLM` Session Manager environment, all three Cowork task
+prompts (the only variables they set are `CO_REPORT_DIR` and `CO_STEP2_ROOT`),
+three weeks of Cowork app logs (2026-08-21 → 2026-09-10, the string does not
+appear once), and any `.env` / wrapper / config file in the app directories or
+the live engine folder (there are none). Both candidate paths are absent in the
+real execution environment too: candidate 1's default has no parent chain —
+there is no `Documents\Claude` under this user's OneDrive — and inside the Cowork
+sandbox `expanduser("~")` is the sandbox's Linux home, further still from
+resolving; candidate 2 resolves into `Change Order Intake`, where no such
+workbook exists.
+
+So §3b was theoretically reachable and never armed. The gap between "not armed"
+and "cannot be armed" was one environment variable — and
+`docs/02_Maintainer_Knowledge_Base.md` §7 was *pointing at it*, listing
+`CO_BID_TRACKER_PATH` as one of four variables "a new operator/machine can set
+(no code edit)". That line is now a "do not set this" with the verification
+recorded beside it (`phb-co-engine` `81035bc`).
+
+A whole-library sweep found the variable named in exactly three files on the live
+SharePoint tree, and no config, `.env` or wrapper among them: that knowledge-base
+doc, `run_workflow.py`, and a `__pycache__` bytecode copy of the latter.
+**[observed]**
+
+> **Open, and the operator's call.** The fix to that doc is repo-only. SharePoint
+> is authoritative until Phase 14, so the copy on the laptop still tells a new
+> operator to set `CO_BID_TRACKER_PATH`, next to an engine that still reads it.
+> That is a documentation edit rather than an engine change, so it is lower risk
+> than touching `run_workflow.py` — but it is still a live edit to the
+> authoritative copy and has not been made.
+
+**The scheduler's configuration, from the app log.** Both tasks fire on this
+machine with the crons `docs/09` recorded as verified on 2026-07-31:
+
+```
+[ScheduledTasks] Spawning new session for scheduled task co-intake-scrub
+    { cronExpression: '0 7,12 * * 1-5', ... }
+[ScheduledTasks] Spawning new session for scheduled task co-response-classifier
+    { cronExpression: '0 8,13 * * 1-5', ... }
+```
+
+196 and 192 mentions respectively across the log window.
+
+**The prompts that actually fire were in no repository.** They live in
+`%USERPROFILE%\Claude\Scheduled\`, and they are **not** the `AI Files\Schedlued\`
+copies committed in `8ffbf3a`: those hardcode `C:\Users\Aaichele\…` and are the
+superseded pre-2026-08-04 originals. The live three contain zero references to
+that path — they are the portable rewrites `docs/09` §1–§2 prescribe — and they
+differ in content, not only in a path: the live classifier carries at least one
+rule the archive lacks (skip an item whose CO row is `Status = cancelled`). Sizes
+3,677 / 9,299 / 9,153 B live against 3,076 / 9,158 / absent archived.
+
+They existed only in an app data directory on one laptop. `docs/09` makes exactly
+this point about the *previous* operator's machine — "both of those disappear
+when the machine is wiped … could not have been reconstructed" — and it had
+quietly become true again of a different machine. Now captured, byte-verified, in
+`phb-co-engine/_live-scheduled-tasks/`. **Part D versions prompts in the repo:
+those are the ones to version, not the archive.**
+
+**A duplicate classifier definition exists.** A third task directory,
+`co-response-side-clasification`, is byte-identical to `co-response-classifier`
+apart from its frontmatter `name` and a one-line `description` — same
+instructions, paths, hard rules and archive step. It has **zero** log mentions in
+three weeks, so it is not scheduled and is not firing. It is committed with a
+warning rather than left undiscovered: two classifier passes over the same live
+`_to_classify` queue is the double-run Phase 12 calls actively dangerous rather
+than redundant, since the queue drain and the duplicate detection both assume a
+single actor. **Deleting it, or confirming in the Cowork UI that it carries no
+schedule, is an operational call and has not been done.**
+
+**[still not observable from here]**
+
 - Whether the 2026-08-10..13, 08-18 and 08-24 report gaps are late fires, absent
-  fires, or skipped report writes.
+  fires, or skipped report writes. The app log only reaches back to 2026-08-21,
+  so it covers 08-24 but not the earlier gaps.
 - Who repaired the broken Bid Tracker table on 2026-07-31, and what wrote it.
 
 **Decided**
@@ -594,7 +663,7 @@ Two requirements on that normalizer, both consequences of §7c:
 **Outstanding in Part A**
 
 - Push `phb-co-engine` to the `peckhannafordbriggs` org. The repo, the ignore
-  rules and all three commits exist locally; only the remote is missing.
+  rules and all four commits exist locally; only the remote is missing.
 
 ---
 
