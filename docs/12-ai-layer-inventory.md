@@ -32,6 +32,7 @@ Local only — there is no remote yet, because creating one under the
 | `8ffbf3a` | The companions: docs, specs, the two scheduled-task prompts, the response-engine runtime |
 | `61da407` | The Bid Tracker seeding removed, with a guard — the one deliberate logic change in Part B, §3b |
 | `81035bc` | The live scheduled-task prompts, which were in no repository, plus the `CO_BID_TRACKER_PATH` verification, §8 |
+| `b32b23c` | **Part B** — one file-access interface, every read and write behind it. `docs/phase-12-part-b-verification.md` |
 
 The first commit is a photograph and was verified as one rather than assumed:
 `git hash-object` of each SharePoint file equals the blob in the commit, and
@@ -153,6 +154,11 @@ files; ask rather than guess. **[observed]**
 
 ## 2 · Everything the engine reads
 
+> **Since Part B (`b32b23c`) every one of these goes through a `FileStore`**
+> rather than a direct filesystem call. What is read and in what order is
+> unchanged — only how the engine reaches it. See
+> `docs/phase-12-part-b-verification.md`.
+
 All paths relative to the live root, `CO Managment Process\Change Order Intake`,
 unless stated. **[observed]** throughout unless tagged.
 
@@ -178,6 +184,11 @@ scheduled task mounts the parent and passes `--sharepoint-root`.
 ---
 
 ## 3 · Everything the engine writes
+
+> **Since Part B every write goes through the `FileStore` too**, which refuses
+> the bid-tracker workbooks outright and refuses a flow sentinel unless the
+> caller names it explicitly. The two sanctioned sentinel writes below are the
+> only two places that pass `allow_sentinel=`, and a test asserts it stays two.
 
 ### 3a · The load-bearing filenames
 
@@ -557,7 +568,9 @@ and not just an option.
    normalize regardless, so building it once serves B, C and E.
 3. Pinning would **hide** the `Z` defect. Normalizing surfaces it.
 
-Two requirements on that normalizer, both consequences of §7c:
+That normalizer now exists: `phb-co-engine/tests/co_output_diff.py`, written
+for Part B and extended by Part E. Two requirements on it, both consequences
+of §7c:
 
 - It carries an **explicit allowlist** of time-derived fields — the table in §7b
   — and **fails on any timestamp-shaped value it has no rule for**. A new time
