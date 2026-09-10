@@ -905,12 +905,25 @@ export function MailboxWorkspace() {
             <PaneMessage
               // The one state that must read as an ordinary Tuesday rather than
               // as something wrong. Drafts is empty for most of the working day.
+              //
+              // Folder-aware on purpose. This pane renders for every folder, so
+              // one drafts-specific sentence was wrong in every folder that is
+              // not Drafts — an empty project folder read as though the
+              // automation were about to put drafts in it.
               calm
-              title={activeQuery.length > 0 ? "No matches" : "Nothing to review"}
+              title={
+                activeQuery.length > 0
+                  ? "No matches"
+                  : selectedFolder?.wellKnownName === "drafts"
+                    ? "No drafts in the mailbox right now."
+                    : "Nothing in this folder"
+              }
               detail={
                 activeQuery.length > 0
                   ? `Nothing in ${selectedFolder?.displayName ?? "this folder"} matches “${activeQuery}”.`
-                  : "This folder is empty. Drafts the automation creates will appear here."
+                  : selectedFolder?.wellKnownName === "drafts"
+                    ? undefined
+                    : `${selectedFolder?.displayName ?? "This folder"} is empty.`
               }
             />
           ) : (
