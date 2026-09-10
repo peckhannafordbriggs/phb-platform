@@ -17,7 +17,8 @@ more than its checklist.
 | 10 | Complete | `docs/PHASE-10.md` |
 | 11 | Complete, verified | `docs/phase-11-verification.md` |
 | 12 | **Parts A and B complete** | `docs/12-ai-layer-inventory.md`, `docs/phase-12-part-b-verification.md` |
-| 13–14 | Not started | `docs/PHASE-12.md` for the sequencing they depend on |
+| 13 | Not started, planned | `docs/PHASE-13.md` |
+| 14 | Not started | `docs/PHASE-12.md` for the sequencing it depends on |
 | B1–B4, B6, B7 | See below | `docs/09-bas-what-is-built.md` |
 | B5 | Blocked on an Anthropic API key | `docs/08-bas-and-niagara.md` |
 
