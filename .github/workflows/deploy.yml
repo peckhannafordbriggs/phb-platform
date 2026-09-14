@@ -77,6 +77,11 @@ jobs:
       # so a fixed rule is not an option and permanent public access is not
       # acceptable.
       # ---------------------------------------------------------------------
+      # MIND THE FLAGS. `-s`/`--server-name` is the SERVER; `-n`/`--name` is the
+      # RULE. Passing the server as `--name` fails with "the following arguments
+      # are required: --server-name/-s", which reads like an unset workflow
+      # variable rather than a wrong flag, and only ever fails in CI - where the
+      # step that follows it is the migration.
       - name: Open the database firewall for this runner
         id: firewall
         run: |
@@ -85,8 +90,8 @@ jobs:
           echo "rule=$RULE" >> "$GITHUB_OUTPUT"
           az postgres flexible-server firewall-rule create \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-            --name "${{ vars.AZURE_POSTGRES_SERVER }}" \
-            --rule-name "$RULE" \
+            --server-name "${{ vars.AZURE_POSTGRES_SERVER }}" \
+            --name "$RULE" \
             --start-ip-address "$RUNNER_IP" \
             --end-ip-address "$RUNNER_IP" \
             --output none
@@ -111,8 +116,8 @@ jobs:
         run: |
           az postgres flexible-server firewall-rule delete \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-            --name "${{ vars.AZURE_POSTGRES_SERVER }}" \
-            --rule-name "${{ steps.firewall.outputs.rule }}" \
+            --server-name "${{ vars.AZURE_POSTGRES_SERVER }}" \
+            --name "${{ steps.firewall.outputs.rule }}" \
             --yes --output none
 
       - name: Deploy the new image

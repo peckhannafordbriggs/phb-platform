@@ -244,6 +244,44 @@ describe("no deployment file hardcodes an organisation", () => {
   });
 });
 
+describe("the deploy workflow addresses the database server correctly", () => {
+  /**
+   * `az postgres flexible-server firewall-rule` takes the SERVER as
+   * `-s`/`--server-name` and the RULE as `-n`/`--name`. Passing the server as
+   * `--name` fails with "the following arguments are required:
+   * --server-name/-s", which reads like an unset workflow variable rather than
+   * a wrong flag.
+   *
+   * This is asserted because it cannot be caught any other way: the command
+   * runs only on a GitHub runner, and the step immediately after it is the
+   * migration. It shipped wrong once.
+   */
+  it("passes the server as --server-name, not --name", async () => {
+    const workflow = await import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, ".github/workflows/deploy.yml"), "utf8"),
+    );
+
+    const firewallCommands = workflow
+      .split("az postgres flexible-server firewall-rule")
+      .slice(1);
+
+    expect(firewallCommands.length).toBe(2);
+
+    for (const command of firewallCommands) {
+      // Only look at the flags belonging to this invocation.
+      const body = command.split("- name:")[0] ?? "";
+      expect(body).toContain("--server-name");
+      expect(body, "--rule-name is not a flag on this command").not.toContain(
+        "--rule-name",
+      );
+      expect(
+        body,
+        "the server must not be passed as --name",
+      ).not.toMatch(/--name "\$\{\{ vars\.AZURE_POSTGRES_SERVER \}\}"/);
+    }
+  });
+});
+
 describe("the database collation is set explicitly", () => {
   /**
    * Every department and position list is ORDER BY name ASC, so the ordering
