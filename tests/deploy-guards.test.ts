@@ -206,6 +206,37 @@ describe("no deployment file hardcodes an organisation", () => {
     "Dockerfile",
   ];
 
+  /**
+   * A wider net for the two identifiers that must never be committed anywhere,
+   * as opposed to the tenant and app registration ids, which runbook.md
+   * legitimately records. The runbook is included because it carries the
+   * verbatim access requests, and filling a real value into one of those
+   * templates is the easiest way to commit a subscription id by accident - it
+   * has happened once.
+   */
+  const everywhere = [
+    ...files,
+    "runbook.md",
+    "CLAUDE.md",
+    "HANDOVER.md",
+    "infra/README.md",
+  ];
+
+  it("never commits the subscription id or resource group, in any file", async () => {
+    const fs = await import("node:fs/promises");
+
+    for (const file of everywhere) {
+      const source = await fs.readFile(path.join(projectRoot, file), "utf8");
+
+      expect(source, `${file} must not embed the subscription id`).not.toContain(
+        "3d468153-f247-431b-a1b2-8055517630fa",
+      );
+      expect(source, `${file} must not embed the resource group`).not.toContain(
+        "rg-phb-platform-prod",
+      );
+    }
+  });
+
   it("contains no PH+B address, tenant, or subscription identifier", async () => {
     const fs = await import("node:fs/promises");
 

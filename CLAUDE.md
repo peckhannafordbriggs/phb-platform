@@ -167,41 +167,57 @@ review / edit / send verified end to end.
 
 **Phase 7 Part A complete** — Dockerfile, CI, Bicep.
 
-**Part B is IN FLIGHT, and its blocker has moved twice.** Do not trust a summary
-of it — `runbook.md` → *Deploying to Azure (Phase 7 Part B)* is the live account
-and is kept current. The short version, as of 2026-09-10:
+**Part B is DEPLOYED and seeded, as of 2026-09-09.** Production runs in
+**eastus2**, not eastus: PostgreSQL Flexible Server is offer-restricted in
+`eastus` for this CSP subscription and was available in every other region
+tried, so `location` moved and every resource followed it — it is one parameter
+and the whole deployment reads it. All seven resources are up, the twelve
+migrations are applied, and the production seed has run **once**, by hand.
 
-- The subscription and resource group exist. The earlier RBAC blocker
-  (`roleAssignments/write` in Contributor's `notActions`) and the six
-  unregistered resource providers are **both resolved**.
-- The deployment **moved from `eastus` to `eastus2`**, because PostgreSQL
-  Flexible Server is offer-restricted in `eastus` for this subscription and was
-  available in every other region tried. That is a subscription-level
-  restriction, not a quota, so it cannot be raised by asking for more capacity.
-- It is now blocked on a **Key Vault purge**. A soft-deleted vault keeps its
-  globally-unique name until purged, and purge is a subscription-scoped action
-  that `User Access Administrator` on the resource group cannot perform. A vault
-  deleted from `eastus` is purged **from `eastus`**, even though the
-  redeployment targets `eastus2` — the region argument is where it was, not
-  where it is going.
+Four things were verified against the **live** resources rather than the
+template, each being expensive or impossible to correct later:
 
-Do not work around any of these by editing the Bicep. Deleting the role
-assignments produces two permissions that exist in Azure and in nobody's record;
-renaming the vault to dodge the purge leaves a soft-deleted vault holding a name
-somebody will want back.
+- the collation sorts `Administrative` before `AI` **by actual values**, checked
+  while the database was still empty (`npm run db:verify:prod`)
+- the container app carries all four bootstrap addresses — a wrong value here
+  means zero admins and no UI path back
+- `PHB_ALLOW_SEND` is `false`, and `GRAPH_CLIENT_SECRET` is **absent** rather
+  than blank
+- the server reports `autoGrow: Enabled` and `state: Ready`, no auto-stop
+  property exists on the resource type at all, and the budget carries contacts
+  with no action group
 
-Everything not requiring Azure is done and verified: the collation is explicit in the
-Bicep *and* checked by behaviour in `scripts/verify-prod-database.ts`
-(`npm run db:verify:prod`) rather than by reading the collation name back; the auto-stop
-question is settled — PostgreSQL Flexible Server **has no auto-stop property**, so the
-reachable failure is a full disk and `postgresStorageAutoGrow` is the guard; the budget
-carries notification contacts only and no action group, so no spending threshold can stop
-the database the BAS collector writes into. `runbook.md` has the whole procedure and the
-verification order under *Deploying to Azure (Phase 7 Part B)*.
+Four employee rows exist, all `is_platform_admin`, all with `entra_oid` null
+until each person's first sign-in stamps it. No module grants: being an admin is
+not a grant.
 
-The subscription id and resource group are in `infra/main.parameters.json` (gitignored)
-and CI variables only; `tests/deploy-guards.test.ts` fails the build if either is
-committed.
+**Three permission walls were hit in order, all from scope rather than from the
+role names**, and all written up in `runbook.md`: provider registration is
+subscription-scoped; `roleAssignments/write` is in Contributor's `notActions`;
+and key vault **purge** is subscription-scoped, because a soft-deleted vault
+does not live in a resource group. On that last one — `az keyvault list-deleted`
+returns an **empty array rather than an error** when you lack permission, which
+reads exactly like "the name is free" and is not. Use `checkNameAvailability`.
+
+**What is NOT done.** The container app still runs the placeholder image and so
+answers nothing; that is expected until CI pushes a real one, not a fault. CI is
+switched off until `AZURE_CLIENT_ID` is set, which needs a third app
+registration federated to `peckhannafordbriggs/phb-platform` with entity type
+**Environment** (`production`) — the deploy job declares an environment, so a
+`ref:refs/heads/main` credential looks right and never matches. The Graph
+federated credential and the production redirect URI are also still with Vitis.
+All three are written out verbatim in `runbook.md` under *What to ask IT for*.
+
+A defect Part B surfaced: the deploy workflow's firewall step passed the server
+as `--name` and the rule as `--rule-name`, so it could never have run. `-s` is
+the server and `-n` is the rule. It only executes on a GitHub runner, one step
+before the migration, so nothing local would ever have caught it; a test now
+asserts both invocations.
+
+The subscription id and resource group are in `infra/main.parameters.json`
+(gitignored) and CI variables only; `tests/deploy-guards.test.ts` fails the build
+if either appears in any deployment file **or** in the documentation, including
+the verbatim access requests in `runbook.md`.
 
 **Phase 8 complete, verified live.** Reply / reply-all / forward via Graph's own
 `createReply*` operations, compose from scratch, move, delete to Deleted Items,
