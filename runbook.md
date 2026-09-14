@@ -1384,8 +1384,8 @@ broken auth callback. **Do not remove the `-p`.**
 
 | Credential | Where | Expires | Breaks what |
 |---|---|---|---|
-| SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local development only |
-| Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only |
+| SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local sign-in. Production: **unresolved** — see *Does production sign-in need the SSO client secret?* |
+| Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only. **Cannot affect production** |
 
 > **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
 > carries a note reading `Expiry Date of Entra : 8/13/2028`, but the same note
@@ -1395,8 +1395,9 @@ broken auth callback. **Do not remove the `-p`.**
 > on trust. Open the Graph app registration → Certificates & secrets, read the
 > real date, and correct this row.
 
-Nothing in Azure expires. Both secrets above exist solely because a developer
-machine cannot use a managed identity.
+Nothing in Azure expires **for Graph**. Both secrets above exist because a
+developer machine cannot use a managed identity; for the SSO secret, whether that
+is the *only* reason is the open question linked in its row.
 
 For the Graph credential this is enforced in code, not by convention:
 `createGraphCredential` in
@@ -1414,10 +1415,19 @@ tenant `48f37f84-1c36-4b3e-986c-b8b7196ad49d`. Neither is a secret. It is a
 Application permissions: `Mail.ReadWrite` + `Mail.Send`, scoped to
 `changeorder@phb1899.com` alone by an Exchange ApplicationAccessPolicy.
 
-### The Graph secret cannot affect production
+### The Graph secret cannot affect production — and is not in `HANDOVER.md`
 
-Same reasoning as the SSO secret above, and worth repeating because it is the
-question someone will ask when this expires.
+**If you are a developer in 2028 and the mailbox stopped working locally, this is
+why, and it is the whole answer.** The Graph client secret in your `.env.local`
+expired. Regenerate it in the Graph app registration, paste the new value into
+`.env.local`, restart `npm run dev`. Nothing in Azure needs touching and nothing
+is broken for anyone else — production has never held this secret and cannot.
+
+It is deliberately absent from the *What will break, and when* table in
+`HANDOVER.md`, because that table is about the deployed system and this cannot
+reach it. Do not add it back; add to this section instead.
+
+The reasoning, worth stating because it is the question someone will ask:
 
 Production authenticates to Graph with a **managed identity and a federated
 identity credential**. Nothing in that path expires, and there is no
@@ -1456,17 +1466,58 @@ tenant `48f37f84-1c36-4b3e-986c-b8b7196ad49d`. Neither is a secret; both appear
 in every authorization URL the app generates. They are recorded here so the next
 operator can find the right registration without guessing.
 
-### This secret must never reach Azure
+### Does production sign-in need the SSO client secret?
 
-`CLAUDE.md` prohibition 7: no credential that expires may exist in production.
-Production authenticates with a **managed identity plus a federated identity
-credential**, which does not expire. The client secret exists solely because
-local development cannot use a managed identity.
+**Open question, and it needs answering the first time anyone signs in to
+production.** This section previously asserted that production authenticates with
+a managed identity plus a federated identity credential, the same as Graph. That
+is true of the *Graph* path and there is reason to doubt it for *sign-in*.
 
-So when this expires on 13 August 2028, **production is unaffected** — only
-developer machines stop being able to sign in. If an expiring secret ever *does*
-break production, the real fault is that a secret was deployed at all; fix that,
-do not rotate it.
+**Observed, in this repository:**
+
+- `auth.config.ts` passes `clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET`
+  to the Auth.js Entra provider, with a comment reading *"Production uses a
+  managed identity."*
+- `infra/main.bicep` sets `AUTH_MICROSOFT_ENTRA_ID_ID` and
+  `AUTH_MICROSOFT_ENTRA_ID_TENANT_ID` on the container app, and **not** the secret.
+- `lib/env.ts` marks `AUTH_MICROSOFT_ENTRA_ID_SECRET` optional, so production
+  boots without it.
+- `auth.ts` contains no client-assertion or custom token-request handling.
+
+So in production that provider is constructed with `clientSecret: undefined`.
+
+**Inferred, not observed:** a managed identity issues tokens for the application
+itself — the client-credentials, app-only path, which is exactly what the Graph
+module uses. Signing a *user* in is an authorization-code exchange, and Entra
+requires the token request to carry either `client_secret` or `client_assertion`.
+A managed identity does not supply either for someone else's authorization code,
+and nothing here builds an assertion. If that reading is right, the first
+production sign-in fails at the token exchange with
+**`AADSTS7000218: The request body must contain the following parameter:
+'client_assertion' or 'client_secret'`** — which names neither expiry nor the
+managed identity, and so looks nothing like its cause.
+
+**Why this is still open.** Sign-in has never run in production: it needs the
+redirect URI on the SSO app registration, which is item 1 of *Request 2* and was
+still with Vitis at the time of writing. The prediction is from reading the code
+and the protocol, not from a failure anyone has seen. **Do not treat it as
+established, and do not "fix" it by deploying a secret** until it has actually
+been observed — a secret in Azure violates `CLAUDE.md` prohibition 7, and if the
+flow turns out to work, deploying one would introduce the very expiry this
+architecture avoids.
+
+**How to settle it:** sign in to production once the redirect URI exists. If it
+works, delete this section and correct the comment in `auth.config.ts`. If it
+fails with `AADSTS7000218`, the options are a federated credential on the SSO app
+registration with a matching client assertion in the provider config, or an
+accepted, documented, calendar-tracked client secret — which is a decision about
+prohibition 7 and belongs to whoever owns the platform, not to whoever hits the
+error.
+
+**Meanwhile, on expiry:** when the secret expires on 13 August 2028, local
+development stops being able to sign in. Regenerate it and put the new value in
+`.env.local`. Whether production also needs that rotation depends on the answer
+above.
 
 ### Symptom when it expires
 

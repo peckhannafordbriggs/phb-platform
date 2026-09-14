@@ -219,7 +219,14 @@ with entity type **Environment** (`production`), not Branch — the deploy job
 declares an environment, so a `ref:refs/heads/main` credential looks right and
 never matches (`AADSTS70021`). The Graph federated credential and the production
 redirect URI are also still with Vitis; sign-in cannot be tested until the
-redirect URI exists. All three are one email, written out verbatim in
+redirect URI exists.
+
+**When it can be, test it first.** Production builds the Auth.js Entra provider
+with `clientSecret: undefined`, because the Bicep sets only the client id and
+tenant id. Whether a user sign-in completes without a secret or a client
+assertion is unproven — see `runbook.md` → *Does production sign-in need the SSO
+client secret?*. If it fails, **do not fix it by adding a secret to Azure**:
+that is prohibition 7, and the decision is the platform owner's. All three are one email, written out verbatim in
 `runbook.md` → *What to ask IT for* → *Request 2*.
 
 A defect Part B surfaced: the deploy workflow's firewall step passed the server

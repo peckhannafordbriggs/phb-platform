@@ -191,12 +191,19 @@ This is the section to keep. Everything here is a known future failure with a kn
 
 | What | When | Symptom | What to do |
 |---|---|---|---|
-| SSO client secret expires | **13 August 2028** | Nobody can sign in. The error will not say "expired" | Ask IT for a new secret. `runbook.md` → *What expires, and when* |
-| Graph client secret expires | Unconfirmed — verify in Entra | Mailbox reads fail; the rest of the platform works | Same |
+| SSO client secret expires | **13 August 2028** | Local sign-in fails with `AADSTS7000215`. Whether production is affected is an **open question** — see `runbook.md` → *Does production sign-in need the SSO client secret?* | Ask IT for a new secret. `runbook.md` → *What expires, and when* |
 | BAS database stopped | If anyone applies a cost policy that stops it | Silent data destruction at the controller | Restart immediately; check for gaps on the Collection Health screen |
 | Azure spend alert | If misconfigured, or growth | Email at $150/month | Expected spend is $60–100 |
 | Collector host offline | Laptop closed, machine rebooted, network down | Gaps appear on Collection Health | Restart the collector. Anything past ~42 hours is already gone |
 | Node or dependency EOL | Eventually | Build or deploy failures | Routine maintenance |
+
+**The Graph client secret is deliberately not in that table.** Production
+authenticates to Graph with a managed identity and a federated identity credential,
+and `createGraphCredential` throws on startup if a `GRAPH_CLIENT_SECRET` is present
+with `NODE_ENV=production` — so the secret cannot reach production, and its expiry
+cannot break it. It still exists in `.env.local` and will expire eventually, which
+will break the mailbox **on developer machines only**. That is in `runbook.md` →
+*What expires, and when*, where a developer hitting it will look.
 
 **None of these fail loudly.** That's the pattern across this whole system — the
 characteristic bug isn't a crash, it's something that quietly didn't happen. `runbook.md`

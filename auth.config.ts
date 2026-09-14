@@ -14,7 +14,18 @@ export const authConfig = {
   providers: [
     MicrosoftEntraID({
       clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
-      // Local development only. Production uses a managed identity.
+      // Set locally; NOT set in Azure - infra/main.bicep defines only the client
+      // id and tenant id, so this is `undefined` in production.
+      //
+      // This comment used to read "Production uses a managed identity", which is
+      // true of the Graph module and unproven here: a managed identity is an
+      // app-only credential, and signing a user in is an authorization-code
+      // exchange that Entra expects to carry a client_secret or a
+      // client_assertion. Production sign-in has never run - it needs a redirect
+      // URI that does not exist yet - so whether this works is an open question,
+      // not a settled design. Do NOT resolve it by putting a secret in Azure
+      // without reading runbook.md -> "Does production sign-in need the SSO
+      // client secret?"; that would breach CLAUDE.md prohibition 7.
       clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET,
       issuer: `https://login.microsoftonline.com/${process.env.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID}/v2.0`,
     }),
