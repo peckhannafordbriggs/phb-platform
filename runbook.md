@@ -1725,10 +1725,18 @@ Send this now. Nothing below it can happen until this is done.
 
 ### Request 2 — the three Entra changes, AFTER the first deployment
 
-**Values below are the real ones, from the deployment of 2026-09-09.** If the
-deployment is ever torn down and rebuilt, the managed identity is recreated with
-a **different object ID** and the hostname changes, so re-read them before
-reusing this text:
+One email, three items, ordered by what they unblock: **1 blocks sign-in, 3
+blocks CI, 2 blocks the mailbox.** The values below are real, from the
+deployment of 2026-09-09.
+
+**Substitute two values before sending.** The resource group and subscription id
+are deliberately not written in this repository (`tests/deploy-guards.test.ts`
+fails the build if either appears), so item 3b below carries
+`<resource-group>` and `<subscription-id>` placeholders. Fill them from
+`infra/main.parameters.json` or `az account show`.
+
+**If the deployment is ever rebuilt, re-read the rest.** The managed identity is
+recreated with a **different object ID** and the hostname changes:
 
 ```bash
 az deployment group show \
@@ -1740,61 +1748,78 @@ az deployment group show \
 
 > Subject: Three Entra changes for the PH+B internal platform
 >
-> The platform is deployed to Azure and needs three changes in Entra. Two are on
+> Hi Zac,
+>
+> The platform is deployed to Azure and needs three things in Entra. Two are on
 > app registrations you already created for us; the third is a new registration
-> for CI. None of them introduces a secret or certificate — that is deliberate,
-> the platform is not permitted to depend on anything that expires in
-> production, so all three use federated credentials.
+> for our GitHub Actions deployment.
 >
-> **1. Add a federated identity credential to the Change Order Graph app
+> None of them involves a client secret or a certificate. That is deliberate —
+> the platform is not allowed to depend on anything that expires in production,
+> so both the mailbox and the deployment authenticate with federated credentials
+> instead.
+>
+> ---
+>
+> **1. Add a production redirect URI to the SSO app registration.**
+> *(This one blocks sign-in — nobody can log in to the deployed site until it is
+> in place.)*
+>
+>     App registration:  220921c1-f23e-4d01-b354-736884ba3d00
+>     Platform:          Web
+>     Redirect URI:      https://phbplat-prod-app.agreeablebeach-60711c65.eastus2.azurecontainerapps.io/api/auth/callback/microsoft-entra-id
+>
+> Please **add** it rather than replace, and leave
+> `http://localhost:3000/api/auth/callback/microsoft-entra-id` in place — local
+> development still signs in through that one.
+>
+> The URI has to match exactly, including the `/api/auth/callback/microsoft-entra-id`
+> path and with no trailing slash; Entra does not do partial matches.
+>
+> ---
+>
+> **2. Add a federated identity credential to the Change Order Graph app
 > registration.**
+> *(This is what lets the deployed app read the change-order mailbox.)*
 >
-> App registration: `d1795907-d017-4a5e-9da3-033c4bee4ec1`
-> (the mail one with `Mail.ReadWrite` + `Mail.Send` — **not** the SSO app)
+>     App registration:  d1795907-d017-4a5e-9da3-033c4bee4ec1
 >
-> Under *Certificates & secrets → Federated credentials → Add credential*,
-> choose the **Managed identity** scenario and pick
-> `phbplat-prod-identity` in resource group `<resource-group>`. If that
-> scenario is not offered, the equivalent values are:
+> That is the mail registration with `Mail.ReadWrite` + `Mail.Send` — **not** the
+> SSO one in item 1.
+>
+> Under *Certificates & secrets → Federated credentials → Add credential*, choose
+> the **Managed identity** scenario and select `phbplat-prod-identity` in
+> resource group `<resource-group>`. If that scenario is not offered, the
+> equivalent values are:
 >
 >     Name:      phb-platform-prod
 >     Issuer:    https://login.microsoftonline.com/48f37f84-1c36-4b3e-986c-b8b7196ad49d/v2.0
 >     Subject:   282bcb43-60e4-4d90-aa62-cea74fd719ae
 >     Audience:  api://AzureADTokenExchange
 >
-> That subject is the **object (principal) ID** of the managed identity, not its
-> client ID. For reference the client ID is
-> `d6ed7dd3-a599-444b-b043-90f1e7282bea` — the application reads that one
-> separately, so please do not swap them.
+> The subject is the managed identity's **object (principal) ID**. Its client ID
+> is `d6ed7dd3-a599-444b-b043-90f1e7282bea` — the application reads that one
+> separately for a different purpose, so please don't swap them.
 >
 > What this does: the managed identity gets a token for the
 > `api://AzureADTokenExchange` audience and presents it as a client assertion to
 > the app registration above, which is what actually holds the mail permissions.
-> The managed identity itself needs no Graph permissions and should not be given
-> any. **No new Graph permission or admin consent is required** — the existing
+>
+> **No new Graph permission and no admin consent is needed.** The existing
 > `Mail.ReadWrite` and `Mail.Send` are unchanged, as is the
-> ApplicationAccessPolicy scoping them to `changeorder@phb1899.com`.
+> ApplicationAccessPolicy scoping them to `changeorder@phb1899.com`. The managed
+> identity itself needs no Graph permissions and should not be given any.
 >
-> **2. Add a production redirect URI to the SSO app registration.**
->
-> App registration: `220921c1-f23e-4d01-b354-736884ba3d00`
-> Platform: **Web**
-> Redirect URI:
-> `https://phbplat-prod-app.agreeablebeach-60711c65.eastus2.azurecontainerapps.io/api/auth/callback/microsoft-entra-id`
->
-> Please **add** it and leave
-> `http://localhost:3000/api/auth/callback/microsoft-entra-id` in place — local
-> development still signs in through that one.
+> ---
 >
 > **3. Create a new app registration for the GitHub Actions deployment.**
->
-> This one does not exist yet. It is what lets CI build the image, run database
-> migrations and roll out a new revision, without a stored credential.
+> *(This one blocks CI — it builds the image, runs database migrations and rolls
+> out new revisions. Until it exists our deploy workflow skips itself.)*
 >
 >     Name:  phb-platform-github-deploy
 >
 > No API permissions, no redirect URI, no client secret, no certificate. It needs
-> only a federated credential and an Azure role.
+> only a federated credential and one Azure role.
 >
 > **3a. Federated credential** — under *Certificates & secrets → Federated
 > credentials → Add credential*, scenario **GitHub Actions deploying Azure
@@ -1812,34 +1837,41 @@ az deployment group show \
 >     Subject:   repo:peckhannafordbriggs/phb-platform:environment:production
 >     Audience:  api://AzureADTokenExchange
 >
-> **The entity type must be Environment, not Branch.** The deploy job declares
-> `environment: production`, and when a job does that GitHub issues the token
-> with the `:environment:` subject. A credential built on
-> `ref:refs/heads/main` looks correct, is the more common default, and will
-> simply never match — the sign-in fails with `AADSTS70021: No matching
-> federated identity record found`.
+> **Entity type must be Environment, not Branch.** Our deploy job declares
+> `environment: production`, and GitHub then issues the token with the
+> `:environment:` subject shown above. A credential built on Branch /
+> `ref:refs/heads/main` is the more common default, looks entirely correct, and
+> will never match — it fails as `AADSTS70021: No matching federated identity
+> record found`, which gives no hint that the subject is the wrong shape. I have
+> created the `production` environment on the repository already, so the name can
+> be confirmed against the credential rather than discovered during a deploy.
 >
 > **3b. Azure role** — assign the new registration's service principal
-> **Contributor** on the resource group `<resource-group>`
-> (subscription `<subscription-id>`). Resource group scope
-> only, not the subscription. It does not need User Access Administrator: it
-> creates no role assignments, it only pushes images, opens and closes a
-> temporary database firewall rule for the migration step, and updates the
-> container app.
+> **Contributor**, scoped to the resource group `<resource-group>` in
+> subscription `<subscription-id>`. Resource group scope only, not the
+> subscription.
 >
-> Please send back the new registration's **Application (client) ID** — it goes
-> into the repository's Actions variables as `AZURE_CLIENT_ID`, and CI stays
-> switched off until it is set.
+> It does **not** need User Access Administrator: it creates no role assignments.
+> It only pushes container images, opens and closes a temporary database firewall
+> rule for the migration step, and updates the container app.
+>
+> **Please send back the new registration's Application (client) ID.** It goes
+> into the repository's Actions variables as `AZURE_CLIENT_ID`, and our
+> deployment pipeline stays switched off until it is set.
+>
+> ---
 >
 > Nothing else on any of the three needs to change.
-
-**While you have their attention**, two Exchange checks left over from Phase 11
-are still open and are quick for someone with Exchange admin:
-
-- Confirm the current operator has Full Access to `changeorder@phb1899.com`
-- `Test-ApplicationAccessPolicy -Identity changeorder@phb1899.com -AppId d1795907-d017-4a5e-9da3-033c4bee4ec1`
-  should report `Granted`, and `Denied` for any other mailbox
-
+>
+> While you are in there, two quick Exchange checks would help us close out an
+> earlier piece of work, if you have the access:
+>
+> - Confirm I still have Full Access to `changeorder@phb1899.com`
+> - `Test-ApplicationAccessPolicy -Identity changeorder@phb1899.com -AppId d1795907-d017-4a5e-9da3-033c4bee4ec1`
+>   should report `Granted`, and `Denied` for any other mailbox
+>
+> Thanks,
+> Mahi
 
 ## Deploy order
 

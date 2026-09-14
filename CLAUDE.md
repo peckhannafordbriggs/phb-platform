@@ -200,12 +200,20 @@ returns an **empty array rather than an error** when you lack permission, which
 reads exactly like "the name is free" and is not. Use `checkNameAvailability`.
 
 **What is NOT done.** The container app still runs the placeholder image and so
-answers nothing; that is expected until CI pushes a real one, not a fault. CI is
-switched off until `AZURE_CLIENT_ID` is set, which needs a third app
-registration federated to `peckhannafordbriggs/phb-platform` with entity type
-**Environment** (`production`) — the deploy job declares an environment, so a
-`ref:refs/heads/main` credential looks right and never matches. The Graph
-federated credential and the production redirect URI are also still with Vitis.
+answers nothing; that is expected until CI pushes a real one, not a fault.
+
+CI is wired except for one value. The six `AZURE_*` repository **variables** are
+set and were verified against live Azure, the `PRODUCTION_DATABASE_URL`
+**secret** is set, and the `production` **environment** exists with no protection
+rules — created explicitly so its name can be checked against the federated
+credential rather than discovered during a deploy. The deploy job's `if:` guard
+still evaluates false, deliberately, because `AZURE_CLIENT_ID` is absent: it
+needs a third app registration federated to `peckhannafordbriggs/phb-platform`
+with entity type **Environment** (`production`), not Branch — the deploy job
+declares an environment, so a `ref:refs/heads/main` credential looks right and
+never matches (`AADSTS70021`). The Graph federated credential and the production
+redirect URI are also still with Vitis; sign-in cannot be tested until the
+redirect URI exists. All three are one email in `runbook.md` → *Request 2*.
 All three are written out verbatim in `runbook.md` under *What to ask IT for*.
 
 A defect Part B surfaced: the deploy workflow's firewall step passed the server
