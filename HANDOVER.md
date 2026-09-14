@@ -12,7 +12,8 @@ Three other documents matter, in this order:
 |---|---|
 | Something is broken right now | `runbook.md` |
 | You are about to change something | `WHY-ITS-BUILT-THIS-WAY.md` |
-| You need to run it locally | `README.md` |
+| You need to run it locally | `DEVELOPER-SETUP.md` |
+| You are about to build a module | `PLATFORM-CONTEXT.md` |
 
 ---
 
@@ -21,7 +22,7 @@ Three other documents matter, in this order:
 An internal web platform for Peck Hannaford + Briggs. Employees sign in with their PH+B
 Microsoft account and see whichever internal systems an admin has granted them.
 
-Two modules exist.
+Two modules are in service and a third is being built.
 
 **Change Orders** — a company-owned interface to the `changeorder@phb1899.com` mailbox. The
 change-order automation (eleven Power Automate flows, SharePoint, and two scheduled AI
@@ -30,6 +31,12 @@ in the platform instead of Outlook.
 
 **BAS** — Building Automation. A collector reads sensor history out of a building
 controller every 15 minutes and stores it in the platform database. Two dashboards read it.
+
+**Cost Intelligence** — module 3, in progress, built by Karthik
+(`krachamolla@phb1899.com`) in this same repository. Not in service yet. It is the first
+module built by someone other than the platform's original author, which is the point:
+the module contract in `PLATFORM-CONTEXT.md` was written to be followed rather than
+explained in person.
 
 ### Why it exists
 
@@ -100,13 +107,12 @@ Building controller ──► Python collector (phb-bas) ──► same PostgreS
 Change-order automation (11 Power Automate flows) ──► same mailbox
 ```
 
-**Not deployed yet, but no longer waiting for a subscription.** That diagram is the shape
-once Phase 7 Part B lands. Today the app runs locally against a local PostgreSQL, the
-container image and the Bicep templates are written and exercised in CI, and nothing is
-hosted. The subscription and resource group exist; what remains is one Azure action
-nobody here can perform. See *Production deployment* below, and `runbook.md` →
-*Deploying to Azure (Phase 7 Part B)* for the live account — that section is kept current
-and this one is a summary.
+**Deployed as of 9 September 2026, in `eastus2`.** That diagram is now the shape of the
+running system rather than a plan. All seven Azure resources are up, the migrations are
+applied, and the production seed has run once. What is *not* yet true: the container app
+still serves a placeholder image, because CI cannot deploy the real one until one app
+registration exists — see *Production deployment* below. `runbook.md` →
+*Deploying to Azure (Phase 7 Part B)* is kept current and this is a summary.
 
 The platform and the change-order automation **never talk to each other.** Both talk to
 Exchange. That independence was verified in Phase 11 — no flow ran during any platform
@@ -207,7 +213,7 @@ message list, reading pane, search, attachments. Draft review, editing and sendi
 verified end to end against the live mailbox. Reply, reply-all, forward, compose, move,
 delete. Conversation grouping.
 
-1,272 automated tests as of 2026-09-10, plus verification records in `docs/` for Phases
+1,274 automated tests as of 2026-09-14, plus verification records in `docs/` for Phases
 1, 8, 9, 11 and 12 Part B.
 
 **The UI redesign shipped too**, across several phases rather than as one. The palette is
@@ -242,32 +248,39 @@ up, this becomes a Niagara engineering job before it's a data job.
   Anthropic API key.
 - **Moving the change-order AI off the laptop** — see below. Parts A and B are done.
 
-### Production deployment (Phase 7 Part B) — in flight, not deliberate
+### Production deployment (Phase 7 Part B) — deployed, one step from live
 
-This was listed under *deliberately not built* for a while, which was wrong: it is
-blocked, not chosen. Part A is done — the Dockerfile, the CI pipeline and the Bicep
-templates exist and are exercised on every push.
-
-The blocker has moved twice, so **do not act on this paragraph without reading
-`runbook.md` → *Deploying to Azure (Phase 7 Part B)***, which is kept current. As of
-2026-09-10:
+Part A built the Dockerfile, the CI pipeline and the Bicep. Part B deployed them on
+9 September 2026. **Do not act on this summary without reading `runbook.md` →
+*Deploying to Azure (Phase 7 Part B)***, which is kept current.
 
 | | |
 |---|---|
-| Resolved | The subscription and resource group exist. The RBAC blocker and the six unregistered resource providers are both cleared |
-| Changed | Moved from `eastus` to `eastus2` — PostgreSQL Flexible Server is **offer-restricted** in `eastus` for this subscription. A restriction, not a quota, so more capacity cannot be requested |
-| Blocking now | A **Key Vault purge**. A soft-deleted vault holds its globally-unique name until purged, and purge is subscription-scoped — `User Access Administrator` on the resource group cannot do it. Ask Vitis |
+| Running | Seven resources in `eastus2`, twelve migrations applied, the production seed run once, four admin rows with `entra_oid` null until each first sign-in |
+| Region | `eastus2`, not `eastus` — PostgreSQL Flexible Server is **offer-restricted** in `eastus` for this subscription. A restriction, not a quota, so more capacity cannot be requested |
+| Remaining | Three Entra changes with Vitis, written out as one email in `runbook.md` → *Request 2*. Until the deploy app registration exists, CI skips itself and the container app serves a placeholder; until the redirect URI exists, nobody can sign in |
 
-One trap worth carrying: a vault deleted from `eastus` is purged **from `eastus`**, even
-though the redeployment targets `eastus2`. The region argument is where it was, not where
-it is going.
+Three permission walls were hit getting here, all from *scope* rather than from the role
+names, and all worth knowing before the next Azure task: resource provider registration
+is subscription-scoped; `roleAssignments/write` is in Contributor's `notActions`; and Key
+Vault **purge** is subscription-scoped, because a soft-deleted vault does not live in a
+resource group.
+
+Two traps worth carrying out of it:
+
+- A vault deleted from `eastus` is purged **from `eastus`**, even when the redeployment
+  targets `eastus2`. The region argument is where it was, not where it is going.
+- `az keyvault list-deleted` returns an **empty array rather than an error** when you
+  lack permission to see deleted vaults. That reads exactly like "the name is free" and
+  is not. Use `checkNameAvailability`, which answers honestly.
 
 ### Moving the AI layer off the laptop
 
 The two scheduled AI tasks that drive the change-order automation still run on one Windows
 machine — **this one**, under `C:\Users\Msheth`, not the previous operator's. The Cowork
-app log settles that, and the crons match what `docs/09_Scheduled_Task_Prompts_VERBATIM.md`
-recorded. Moving them into Azure is Phases 12–14.
+app log settles that, and the crons match what `09 Scheduled Task Prompts VERBATIM`
+recorded — that is a document in the SharePoint `CO Process Handoff` corpus (see § 9),
+not a file in this repository. Moving them into Azure is Phases 12–14.
 
 **Phase 12 Parts A and B are done.** The engine is in version control for the first time
 (`phb-co-engine`), the inventory that every later part depends on is written
@@ -295,11 +308,15 @@ module on. Effective immediately.
 both confirmed data loss and points whose capacity is unknown — **unknown is not safe and
 never renders green.**
 
-**Deploying a change.** Push to `main`. CI runs the tests, builds the container image and
-boots it, and compiles the Bicep. Nothing deploys from a personal machine — and nothing
-deploys at all yet: `deploy.yml` is written and triggers on `main`, but its job is gated on
-the `AZURE_*` repository variables and skips while they are unset. Once the subscription
-exists and those are set, the same push deploys.
+**Deploying a change.** Karthik branches and opens a pull request; the platform owner
+reviews and merges. On merge to `main`, CI runs the tests, builds the container image and
+boots it, and compiles the Bicep. Nothing deploys from a personal machine.
+
+`deploy.yml` triggers on `main` and is gated on the `AZURE_*` repository variables. Six
+of the seven are set; it skips on `AZURE_CLIENT_ID`, which needs the deploy app
+registration Vitis has not created yet. A skip shows as a **grey** check, not a red one —
+that is the gate working, not a broken pipeline. Once that client ID is set, the same
+push deploys.
 
 **Restoring the BAS database.** `Test-BasRestore.ps1` in `phb-bas` restores to a scratch
 database and compares. Run it occasionally — an untested backup isn't a backup.
@@ -345,6 +362,7 @@ Nothing to do with the platform. Worth understanding if you ever work on that fl
 | Mailbox permissions, M365 access | Brenda Bolten |
 | The change-order process itself | Whoever is operating it |
 | BAS / Niagara / the building controller | Building Controls & Solutions (the lab station's licence holder) |
+| The Cost Intelligence module | Karthik (`krachamolla@phb1899.com`) |
 
 The change-order automation has its own nineteen-document handoff set in SharePoint under
 `CO Process Handoff`. Start with `00 START HERE` and `08 WHY ITS BUILT THIS WAY`. That
@@ -363,6 +381,6 @@ corpus is about the automation; this repository's `docs/` is about the platform.
 
 ---
 
-*Everything in this document was true as of 28 August 2026. Where I wasn't sure, I said so
-rather than guessing — that convention runs through the whole `docs/` folder and is worth
-keeping.*
+*First written 28 August 2026; last revised 14 September 2026, when the platform was
+deployed and a second developer joined. Where I wasn't sure, I said so rather than
+guessing — that convention runs through the whole `docs/` folder and is worth keeping.*

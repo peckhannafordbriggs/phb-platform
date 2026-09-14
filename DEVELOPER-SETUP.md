@@ -95,8 +95,8 @@ modules you want to look at.
 npm test
 ```
 
-Around 1,270 of them, against your real test database. If they pass, you're set up
-correctly.
+1,274 of them as of September 2026, against your real test database. If they pass,
+you're set up correctly.
 
 ---
 

@@ -3,73 +3,39 @@
 Internal platform for Peck Hannaford + Briggs. One sign-in, one frontend,
 internal systems as modules, access granted per employee by an admin.
 
-Read `CLAUDE.md` before working on this. Architecture and rules live in `docs/`.
-Current scope is `PHASE-1.md`.
-
-**Phase 1 makes no Microsoft Graph calls and no Claude API calls.** Change Orders
-is a placeholder page.
+Three modules: **Change Orders** (a company-owned interface to the
+`changeorder@phb1899.com` mailbox), **BAS** (building-automation sensor data),
+and **Cost Intelligence**, in progress.
 
 ---
 
-## Requirements
+## New here?
 
-| | |
+**Start with [`DEVELOPER-SETUP.md`](DEVELOPER-SETUP.md).** It is the ordered
+path from a clean machine to a passing test suite — installs, databases,
+`.env.local`, seeds — plus the handful of things that will bite you if nobody
+says them out loud. Do not piece setup together from this file.
+
+Then, depending on what you are about to do:
+
+| You are about to | Read |
 |---|---|
-| Node | 20 LTS or newer |
-| Package manager | npm |
-| Database | PostgreSQL 14+ (developed against 17, installed natively - no Docker) |
+| Build a module | [`PLATFORM-CONTEXT.md`](PLATFORM-CONTEXT.md) — what the platform already provides, and the contract a module satisfies |
+| Change something that exists | [`WHY-ITS-BUILT-THIS-WAY.md`](WHY-ITS-BUILT-THIS-WAY.md) |
+| Work on anything at all | [`CLAUDE.md`](CLAUDE.md) — the rules, short |
+| Fix something broken | [`runbook.md`](runbook.md) — organised by symptom |
+| Inherit this whole thing | [`HANDOVER.md`](HANDOVER.md) |
 
-## Local setup
+Environment variables are listed in `.env.example`, and where each value comes
+from is [`runbook.md` → *Filling in `.env.local` on a new
+machine*](runbook.md#filling-in-envlocal-on-a-new-machine). Only five are
+required to boot, so the app runs and the whole suite passes before any
+Microsoft credential arrives.
 
-```bash
-npm install
-cp .env.example .env.local     # then fill it in - see below
-createdb phb_platform          # or: psql -U postgres -c "CREATE DATABASE phb_platform"
-npx prisma migrate dev
-npm run seed
-npm run db:test:setup          # creates and migrates the test database
-npm run dev
-```
+This file is the reference for the parts that are neither setup nor rules:
+commands, database conventions, testing, and layout.
 
-The app runs at http://localhost:3000.
-
-`npm install` will report that some packages have install scripts awaiting
-approval. The approvals this project needs are already pinned in `package.json`
-under `allowScripts` (Prisma's engines, esbuild, sharp, unrs-resolver), so a
-clean clone does not need to approve anything by hand.
-
-### Environment variables
-
-Every variable is listed in `.env.example` with no real values. Fill in
-`.env.local`, which is gitignored.
-
-**Where each value comes from — what to generate yourself, what to copy, and the
-three things to request from IT — is in
-[`runbook.md`](runbook.md#filling-in-envlocal-on-a-new-machine).**
-That includes what still works while you wait for a request to come back: the app
-boots and the whole test suite passes without any Microsoft credential.
-
-| Variable | What it is |
-|---|---|
-| `DATABASE_URL` | Postgres connection string |
-| `TEST_DATABASE_URL` | A **separate** database, used only by `npm test` |
-| `AUTH_SECRET` | Signs session cookies. Yours alone; it need not match anyone else's |
-| `AUTH_URL` | `http://localhost:3000` locally |
-| `AUTH_MICROSOFT_ENTRA_ID_ID` | Client ID of the **SSO** app registration |
-| `AUTH_MICROSOFT_ENTRA_ID_SECRET` | Client secret - **local development only**, never in Azure |
-| `AUTH_MICROSOFT_ENTRA_ID_TENANT_ID` | Tenant ID; the token's `tid` must match it |
-| `ALLOWED_EMAIL_DOMAINS` | Comma-separated allow-list of verified email domains |
-| `BOOTSTRAP_ADMIN_EMAIL` | Comma-separated. Each address is seeded as a platform admin. |
-| `PHB_ALLOW_SEND` | The send gate. Must stay `false` outside production. |
-| `GRAPH_CLIENT_ID`, `GRAPH_TENANT_ID`, `GRAPH_CLIENT_SECRET` | Change Orders mailbox. Absent is a supported state - the module reports itself unconfigured |
-| `CO_MAILBOX` | The only mailbox the platform may touch |
-
-The SSO app registration is **separate** from the Graph mail app registration -
-different permissions, different credential lifecycles, different consent
-stories.
-
-`TEST_DATABASE_URL` must differ from `DATABASE_URL`. The suite truncates every
-table between test files and refuses to start if the two match.
+---
 
 ## Commands
 
@@ -140,7 +106,7 @@ request is rejected - not that a granted one succeeds.
 ```
 app/
   (platform)/        shell, home, admin
-  (modules)/         module UI - change-orders
+  (modules)/         module UI - change-orders, bas, and each new module
   api/
     me/              the only source the sidebar uses
     onboarding/
@@ -151,10 +117,15 @@ lib/
   authz/             the authorization boundary
   db/                Prisma client
   admin/             admin operations and guardrails
-  modules/           module services
+  modules/           module services - one directory per module key
 prisma/              schema, migrations, seeds
 tests/               Vitest suites
 ```
+
+A new module adds a directory in each of those three places and a row in
+`modules`. Nothing else changes: the sidebar and the admin grant matrix both
+render from that table, so neither has a hardcoded module list.
+`PLATFORM-CONTEXT.md` has the full contract.
 
 `lib/auth`, `lib/authz` and `lib/db` never import from `lib/modules/*`.
 Dependencies point one way.

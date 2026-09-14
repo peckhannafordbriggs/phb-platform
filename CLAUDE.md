@@ -11,7 +11,13 @@ multiple internal systems as modules, admin-controlled access per employee.
 
 **Change Orders** is module #1. It is a company-owned interface to an existing
 Microsoft 365 mailbox and automation pipeline that already works. We are building
-*around* that system, not rebuilding it.
+*around* that system, not rebuilding it. **BAS** (building automation) is module
+#2. **Cost Intelligence** is module #3, in progress, built by Karthik
+(`krachamolla@phb1899.com`) in this repository.
+
+Two people now work in this repo. `DEVELOPER-SETUP.md` is how a new developer
+gets running; `PLATFORM-CONTEXT.md` is the contract a new module satisfies.
+Neither restates the other, and neither restates `runbook.md`.
 
 The platform is an **additional** client for change-order work. Outlook remains a
 fully working path forever. Never build anything the platform is the sole route to.
@@ -213,8 +219,8 @@ with entity type **Environment** (`production`), not Branch — the deploy job
 declares an environment, so a `ref:refs/heads/main` credential looks right and
 never matches (`AADSTS70021`). The Graph federated credential and the production
 redirect URI are also still with Vitis; sign-in cannot be tested until the
-redirect URI exists. All three are one email in `runbook.md` → *Request 2*.
-All three are written out verbatim in `runbook.md` under *What to ask IT for*.
+redirect URI exists. All three are one email, written out verbatim in
+`runbook.md` → *What to ask IT for* → *Request 2*.
 
 A defect Part B surfaced: the deploy workflow's firewall step passed the server
 as `--name` and the rule as `--rule-name`, so it could never have run. `-s` is
@@ -373,7 +379,16 @@ whether the functionality partly exists already.
 **After implementing:** run tests, typecheck, lint, verify the build, and state what you
 changed and what you verified. Distinguish what you observed from what you inferred.
 
-**Commit straight to main.** No branches unless asked.
+**Branching depends on who you are working for, and this is the one rule that
+changed when the repo gained a second developer.**
+
+- **Platform owner (Mahi):** commit straight to `main`. No branches unless asked.
+- **Module work by anyone else:** branch, commit, open a pull request. The
+  platform owner reviews and merges. `DEVELOPER-SETUP.md` states this for the
+  person; this is the same rule for an agent working on their behalf.
+
+If you do not know which applies, ask — it is one question and the answer is not
+inferable from the diff.
 
 **Use judgment without asking** on reversible, conventional, low-risk, internal choices.
 
@@ -382,10 +397,15 @@ sends more than one message per human action, weakens either send guard, adds a 
 holding mailbox data, requires broader Microsoft permissions, adds long-term
 infrastructure, or conflicts with this file.
 
-**Every phase ships operational docs.** For each new failure mode: the symptom, the
-cause, the fix. Written during the phase, in `runbook.md`. The current operator
-leaves in December 2026 and this platform must be operable by someone who has never
-seen it.
+**Every phase ships operational docs, and that includes module work.** For each new
+failure mode: the symptom, the cause, the fix. Written during the phase, in
+`runbook.md` — one runbook for the whole platform, organised by symptom rather than
+by module, because whoever hits a symptom will not know which module owns it.
+
+The reason is a deadline, not a preference: the current operator leaves in December
+2026, and this platform must be operable by someone who has never seen it. A module
+whose failure modes live only in its author's head fails that test no matter how
+well it is written.
 
 ---
 
@@ -393,11 +413,17 @@ seen it.
 
 **At the repo root, because they are what somebody reaches for first:**
 
-| File | Contents |
-|---|---|
-| `HANDOVER.md` | **Start here if you are new.** What this is, what must not break, what will fail and when, what to do first |
-| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 43 decisions, why each was made, and what breaks if you undo it |
-| `runbook.md` | Failure modes, recovery, what expires and when |
+| File | Contents | Who it is for |
+|---|---|---|
+| `DEVELOPER-SETUP.md` | **Start here if you are a new developer.** Installs, databases, `.env.local`, seeds, first test run — and the things that bite before they bite | Someone about to write code |
+| `PLATFORM-CONTEXT.md` | **Read before designing a module.** What the platform already provides, the four-part integration contract, and the seven decisions a module makes for itself | Someone about to design one |
+| `HANDOVER.md` | **Start here if you are inheriting this.** What this is, what must not break, what will fail and when, what to do first | Whoever owns it after December 2026 |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 43 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
+| `runbook.md` | Failure modes, recovery, what expires and when | Anyone with a broken thing |
+
+Setup instructions live in `DEVELOPER-SETUP.md` and the per-variable detail lives
+in `runbook.md` → *Filling in `.env.local` on a new machine*. Do not restate
+either anywhere else — point at them.
 
 **Reference, in `docs/`:**
 
