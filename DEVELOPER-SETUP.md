@@ -141,12 +141,27 @@ platform's deploy. Prefix your tables consistently — Building Automation uses 
 
 ## How we're working in the repo
 
-Branch, commit, open a pull request. Mahi reviews and merges. Nothing goes straight to
-`main` — the platform is running change orders and building automation data now, so changes
-get a second pair of eyes.
+One branch per change. Branch from an up-to-date `main`, commit, push, open a pull
+request, and delete the branch once it merges. Mahi reviews and merges. Nothing goes
+straight to `main` — the platform is running change orders and building automation data
+now, so changes get a second pair of eyes. Nobody keeps a long-lived personal branch,
+Mahi included.
 
-CI runs the full test suite on every push. A failing test in your branch blocks your PR;
-a failing test on `main` blocks everyone's deploy.
+Name the branch for what the change is:
+
+| Prefix | For |
+|---|---|
+| `feat/` | new functionality |
+| `fix/` | bug fixes |
+| `refactor/` | restructuring without changing behaviour |
+| `chore/` | tooling, dependencies, config, documentation |
+| `release/` | release preparation |
+
+Documentation goes under `chore/` — there is no separate `docs/` prefix.
+
+CI runs the full test suite on every push, on every branch, not only on pull requests. A
+failing test in your branch blocks your PR; a failing test on `main` blocks everyone's
+deploy.
 
 ---
 

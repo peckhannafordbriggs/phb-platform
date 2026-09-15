@@ -237,9 +237,12 @@ consistently — BAS uses `bas_`, so a cost module would use something equally o
 and keep each migration to your own tables. A migration that touches a table you do not
 own is a review conversation, not a commit.
 
-**Branch and open a pull request.** Nothing goes straight to `main`: the platform is
-running change orders and building-automation collection now, so changes get a second
-pair of eyes. The platform owner reviews and merges.
+**One branch per change, then a pull request.** Branch from an up-to-date `main`, push,
+open a PR, and delete the branch on merge. The prefix says what the change is — `feat/`,
+`fix/`, `refactor/`, `chore/` or `release/`, with documentation under `chore/`; the full
+list is in `DEVELOPER-SETUP.md`. Nothing goes straight to `main`: the platform is running
+change orders and building-automation collection now, so changes get a second pair of
+eyes. The platform owner reviews and merges.
 
 **CI deploys the whole application.** There is one pipeline and one container. Your
 module ships when the platform ships, and a broken test in your module blocks everyone's
