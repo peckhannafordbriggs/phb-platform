@@ -3321,6 +3321,40 @@ test starts failing after a UI change, the fix is to read the key from the
 `modules` table rather than to relax the test — CLAUDE.md keys authorization on
 the stable `key`, never on a display label.
 
+## The "Can change settings" checkbox is missing for a module
+
+**It is missing on purpose for every module except Building Automation.** The
+checkbox grants `is_module_admin`, which gates a module's settings screen. Change
+Orders has no settings screen — it is configured in Exchange and in the Power
+Automate flows — so the permission would have led to a page that does not exist.
+
+**A module gets the checkbox by declaring a settings route** in
+`lib/module-settings.ts`, one line, in the same pull request that adds the page.
+If you have just added a settings screen and the checkbox has not appeared, that
+line is what is missing. `tests/module-settings-surface.test.ts` fails if a
+declared route has no page behind it, so a typo in the path is caught by the
+build rather than by an admin clicking it.
+
+**If the checkbox IS there and marked "this module has no settings screen",**
+that is a flag set before this rule existed, or a module that lost its settings
+page. It renders precisely so it can be unticked; clearing it always works.
+
+## Granting module admin answered 422
+
+**"That module has no settings screen, so there is nothing to administer."** The
+same rule, hit through the API rather than the screen — `PUT
+/api/admin/employees/<id>/grants/<key>/admin` with `isModuleAdmin: true` for a
+module that declares no settings route.
+
+It is a hard error rather than a silent no-op deliberately, so nothing records a
+grant that did not happen. **Do not work around it by re-adding the module to
+`lib/module-settings.ts`** unless that module genuinely has a settings page: the
+declaration is what the admin screen believes, and a false entry puts the
+misleading checkbox straight back.
+
+422 rather than 403 because no admin can make that state exist — it is not a
+permission the caller is missing. A 403 here would mean the opposite.
+
 ## Testing admin changes
 
 **Use the seeded volume.** `npm run seed:dev` produces 130+ employees, some

@@ -685,6 +685,50 @@ admin to Jake"* no longer describes everyone who can add a building.
 platform admin flag — which puts the employee directory in the hands of whoever adds a
 building — or the check moves into the routes, where forgetting it is possible again.
 
+### 37.1 · Only for a module that has settings, and the declaration lives in code
+
+**What the genericity cost.** The column knows no module keys — "Change Orders gets the
+same capability by ticking a box" — so the admin screen offered *"Can change settings for
+Change Orders"*, a permission whose only effect would have been to reach a page that does
+not exist. Change Orders is configured in Exchange and in the flows; the platform has
+nothing to offer a module admin of it.
+
+**The declaration is `lib/module-settings.ts`, not a column on `modules`.** Whether a
+settings page exists is a fact about the repository, and PLATFORM-CONTEXT's own test —
+*who is the authoritative owner of this information?* — answers "the code". A boolean in
+Postgres is a claim about a file that stays true after someone deletes the file, and it
+would need a migration **and a re-seed** to become true: the production seed has run once,
+by hand, so the column would read `false` in production and nowhere else until somebody
+remembered. A code table ships in the same image as the page it describes.
+
+**An href, not a boolean,** because a boolean cannot be checked against anything.
+`tests/module-settings-surface.test.ts` walks `app/` and asserts every declared route
+resolves to a real page, which is what stops the table going stale — the check the column
+could never have.
+
+**The refusal is in the service, not only the component.** `setModuleAdmin` is the single
+writer of the column; `bulkGrants` never touches it. Hiding the checkbox alone would leave
+the API accepting the request and writing `grant.admin_added` to the audit log for a
+permission that grants nothing — a false record, in the one place an admin looks to find
+out why somebody has something. It is a hard error rather than a silent no-op: an API that
+discards a request it understood makes the checkbox spring back with nothing to explain it.
+
+**422, not 403,** and not 404 like the module surfaces themselves. 403 would say the admin
+lacks the standing, and they do not — no admin can make the state exist. The admin API's
+own existence is not a secret (that is why it answers 403 rather than 404 to a non-admin),
+so there is nothing here to conceal; the combination of values is simply invalid.
+
+**One direction only.** Clearing the flag always succeeds. The local development database
+had a `change-orders` row with `is_module_admin = true` when this was written — reachable
+by clicking the box the fix removes — and hiding a live permission without leaving a way
+to clear it is how it becomes permanent. Where the flag is set on a module with no
+settings surface the checkbox still renders, marked, so it can be turned off.
+
+**What breaks if you undo it.** The admin screen goes back to advertising a permission
+that leads nowhere, and an audit trail records grants of it. If you undo only the service
+half and keep the hidden checkbox, it is worse than before: the permission stays grantable
+by API with no UI that shows it was granted.
+
 ## 38 · Decorative colour and semantic colour are disjoint sets
 
 **The decision.** Teal, orange and maroon mean ok / warn / bad. A card tinted for

@@ -109,6 +109,16 @@ person can't access.
 A grant can carry `is_module_admin`. It gates the module's *administrative*
 surface - for `bas`, the Settings tab, which decides what gets collected.
 
+**Only a module that has one.** `bas` is currently the only module with a
+settings screen; Change Orders is configured in Exchange and in the flows and has
+none. A module declares its settings route in `lib/module-settings.ts`, and
+`setModuleAdmin` **refuses with 422** for a module that declares none - the state
+cannot exist for any admin, so it is an invalid request rather than a forbidden
+one. The admin screen hides the checkbox for the same reason, which is a
+rendering decision; the refusal is what makes the permission unreachable.
+Clearing the flag always succeeds, so one set before the rule existed can still
+be removed.
+
 ```
 Request to a module's admin surface
   → everything above                     → as normal
