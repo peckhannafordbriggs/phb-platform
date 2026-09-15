@@ -315,9 +315,11 @@ module on. Effective immediately.
 both confirmed data loss and points whose capacity is unknown — **unknown is not safe and
 never renders green.**
 
-**Deploying a change.** Karthik branches and opens a pull request; the platform owner
-reviews and merges. On merge to `main`, CI runs the tests, builds the container image and
-boots it, and compiles the Bicep. Nothing deploys from a personal machine.
+**Deploying a change.** Every change reaches `main` through a pull request, including the
+platform owner's own. Each developer works on their own branch — Mahi's is `mahi`,
+Karthik's is his — and someone other than the author reviews and merges. On merge to
+`main`, CI runs the tests, builds the container image and boots it, and compiles the
+Bicep. Nothing deploys from a personal machine.
 
 `deploy.yml` triggers on `main` and is gated on the `AZURE_*` repository variables. Six
 of the seven are set; it skips on `AZURE_CLIENT_ID`, which needs the deploy app
