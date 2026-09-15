@@ -316,10 +316,11 @@ both confirmed data loss and points whose capacity is unknown — **unknown is n
 never renders green.**
 
 **Deploying a change.** Every change reaches `main` through a pull request, including the
-platform owner's own. Each developer works on their own branch — Mahi's is `mahi`,
-Karthik's is his — and someone other than the author reviews and merges. On merge to
-`main`, CI runs the tests, builds the container image and boots it, and compiles the
-Bicep. Nothing deploys from a personal machine.
+platform owner's own. One branch per change, named for what it is — `feat/`, `fix/`,
+`refactor/`, `chore/` (which covers documentation) or `release/` — and deleted once it
+merges; nobody has a standing personal branch. Someone other than the author reviews and
+merges. On merge to `main`, CI runs the tests, builds the container image and boots it,
+and compiles the Bicep. Nothing deploys from a personal machine.
 
 `deploy.yml` triggers on `main` and is gated on the `AZURE_*` repository variables. Six
 of the seven are set; it skips on `AZURE_CLIENT_ID`, which needs the deploy app

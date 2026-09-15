@@ -386,18 +386,26 @@ whether the functionality partly exists already.
 **After implementing:** run tests, typecheck, lint, verify the build, and state what you
 changed and what you verified. Distinguish what you observed from what you inferred.
 
-**Everybody branches. Nothing goes straight to `main`.** Each developer works on
-their own branch and merges through a pull request — the platform owner on
-`mahi`, the second developer on his own. `DEVELOPER-SETUP.md` states this for the
-person; this is the same rule for an agent working on their behalf.
+**One branch per change. Nothing goes straight to `main`.** Branch from an
+up-to-date `main`, commit, push, open a pull request, merge, delete the branch.
+This applies to everyone, the platform owner included — nobody has a standing
+personal branch. `DEVELOPER-SETUP.md` states this for the person; this is the
+same rule for an agent working on their behalf.
 
-- **Working for the platform owner (Mahi):** commit to `mahi`. Do not commit to
-  `main`, and do not open a new branch unless asked.
-- **Module work by anyone else:** commit to that developer's branch. The platform
-  owner reviews and merges.
+Name the branch for what the change is:
 
-If you do not know whose branch you are on, check before committing — `main` is
-not the answer either way.
+| Prefix | For |
+|---|---|
+| `feat/` | new functionality |
+| `fix/` | bug fixes |
+| `refactor/` | restructuring without changing behaviour |
+| `chore/` | tooling, dependencies, config, documentation |
+| `release/` | release preparation |
+
+Documentation is `chore/`. There is no `docs/` prefix.
+
+**An agent stops at the push.** Create the branch, commit, push, and report the
+branch name — the human opens the pull request.
 
 **Use judgment without asking** on reversible, conventional, low-risk, internal choices.
 
