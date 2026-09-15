@@ -386,16 +386,18 @@ whether the functionality partly exists already.
 **After implementing:** run tests, typecheck, lint, verify the build, and state what you
 changed and what you verified. Distinguish what you observed from what you inferred.
 
-**Branching depends on who you are working for, and this is the one rule that
-changed when the repo gained a second developer.**
+**Everybody branches. Nothing goes straight to `main`.** Each developer works on
+their own branch and merges through a pull request — the platform owner on
+`mahi`, the second developer on his own. `DEVELOPER-SETUP.md` states this for the
+person; this is the same rule for an agent working on their behalf.
 
-- **Platform owner (Mahi):** commit straight to `main`. No branches unless asked.
-- **Module work by anyone else:** branch, commit, open a pull request. The
-  platform owner reviews and merges. `DEVELOPER-SETUP.md` states this for the
-  person; this is the same rule for an agent working on their behalf.
+- **Working for the platform owner (Mahi):** commit to `mahi`. Do not commit to
+  `main`, and do not open a new branch unless asked.
+- **Module work by anyone else:** commit to that developer's branch. The platform
+  owner reviews and merges.
 
-If you do not know which applies, ask — it is one question and the answer is not
-inferable from the diff.
+If you do not know whose branch you are on, check before committing — `main` is
+not the answer either way.
 
 **Use judgment without asking** on reversible, conventional, low-risk, internal choices.
 
