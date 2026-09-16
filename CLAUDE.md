@@ -208,18 +208,31 @@ reads exactly like "the name is free" and is not. Use `checkNameAvailability`.
 **What is NOT done.** The container app still runs the placeholder image and so
 answers nothing; that is expected until CI pushes a real one, not a fault.
 
-CI is wired except for one value. The six `AZURE_*` repository **variables** are
-set and were verified against live Azure, the `PRODUCTION_DATABASE_URL`
-**secret** is set, and the `production` **environment** exists with no protection
-rules — created explicitly so its name can be checked against the federated
-credential rather than discovered during a deploy. The deploy job's `if:` guard
-still evaluates false, deliberately, because `AZURE_CLIENT_ID` is absent: it
-needs a third app registration federated to `peckhannafordbriggs/phb-platform`
-with entity type **Environment** (`production`), not Branch — the deploy job
-declares an environment, so a `ref:refs/heads/main` credential looks right and
-never matches (`AADSTS70021`). The Graph federated credential and the production
-redirect URI are also still with Vitis; sign-in cannot be tested until the
-redirect URI exists.
+**CI is fully wired, and the deploy job is no longer inert.** All seven
+`AZURE_*` repository **variables** are set and were verified against live Azure,
+the `PRODUCTION_DATABASE_URL` **secret** is set, and the `production`
+**environment** exists with no protection rules. `AZURE_CLIENT_ID` was filled in
+on 2026-09-16, so the deploy job's `if:` guard now passes and **a merge to
+`main` runs a real production deploy** — image build, database migration,
+revision rollout — against a container app that still holds the placeholder
+image. Whether that is currently gated is the platform owner's decision; check
+the repository variables and the `production` environment before merging rather
+than assuming either state.
+
+**The OIDC credential is proven, not assumed.** A login-only probe job
+authenticated against live Entra on 2026-09-16, and what it found corrected this
+file. The subject GitHub actually sends is
+`repo:peckhannafordbriggs@74662004/phb-platform@1334314549:environment:production`:
+entity type **Environment** rather than Branch, *and* the organisation and
+repository ids embedded, because this repository has GitHub's **immutable
+subject claims** enabled. So the plain `repo:<owner>/<repo>:…` form that the
+Azure portal's *GitHub Actions* credential wizard builds is **not** what this
+repository sends, and neither is `ref:refs/heads/main`. Both fail as
+`AADSTS70021` with no hint as to which half is wrong, and the subject has to be
+typed by hand. `runbook.md` → *What to ask IT for* → Request 3a carries it.
+
+The Graph federated credential and the production redirect URI are still with
+Vitis; sign-in cannot be tested until the redirect URI exists.
 
 **When it can be, test it first.** Production builds the Auth.js Entra provider
 with `clientSecret: undefined`, because the Bicep sets only the client id and

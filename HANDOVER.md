@@ -109,10 +109,12 @@ Change-order automation (11 Power Automate flows) ──► same mailbox
 
 **Deployed as of 9 September 2026, in `eastus2`.** That diagram is now the shape of the
 running system rather than a plan. All seven Azure resources are up, the migrations are
-applied, and the production seed has run once. What is *not* yet true: the container app
-still serves a placeholder image, because CI cannot deploy the real one until one app
-registration exists — see *Production deployment* below. `runbook.md` →
-*Deploying to Azure (Phase 7 Part B)* is kept current and this is a summary.
+applied, and the production seed has run once. What is *not* yet true: nobody can sign
+in, because the production redirect URI does not exist yet. The container app serves
+whatever the last merge to `main` deployed — the placeholder image until the first real
+deploy lands, because CI has only been able to deploy since 16 September 2026. See
+*Production deployment* below. `runbook.md` → *Deploying to Azure (Phase 7 Part B)* is
+kept current and this is a summary.
 
 The platform and the change-order automation **never talk to each other.** Both talk to
 Exchange. That independence was verified in Phase 11 — no flow ran during any platform
@@ -255,7 +257,7 @@ up, this becomes a Niagara engineering job before it's a data job.
   Anthropic API key.
 - **Moving the change-order AI off the laptop** — see below. Parts A and B are done.
 
-### Production deployment (Phase 7 Part B) — deployed, one step from live
+### Production deployment (Phase 7 Part B) — deployed, CI live, sign-in pending
 
 Part A built the Dockerfile, the CI pipeline and the Bicep. Part B deployed them on
 9 September 2026. **Do not act on this summary without reading `runbook.md` →
@@ -265,7 +267,7 @@ Part A built the Dockerfile, the CI pipeline and the Bicep. Part B deployed them
 |---|---|
 | Running | Seven resources in `eastus2`, twelve migrations applied, the production seed run once, four admin rows with `entra_oid` null until each first sign-in |
 | Region | `eastus2`, not `eastus` — PostgreSQL Flexible Server is **offer-restricted** in `eastus` for this subscription. A restriction, not a quota, so more capacity cannot be requested |
-| Remaining | Three Entra changes with Vitis, written out as one email in `runbook.md` → *Request 2*. Until the deploy app registration exists, CI skips itself and the container app serves a placeholder; until the redirect URI exists, nobody can sign in |
+| Remaining | Two Entra changes with Vitis — the Graph federated credential and the production redirect URI — written out in `runbook.md` → *Request 2*. The deploy app registration is done: `AZURE_CLIENT_ID` was set on 16 September 2026, so a merge to `main` runs a real deploy. Until the redirect URI exists, nobody can sign in |
 
 Three permission walls were hit getting here, all from *scope* rather than from the role
 names, and all worth knowing before the next Azure task: resource provider registration
@@ -322,11 +324,12 @@ merges; nobody has a standing personal branch. Someone other than the author rev
 merges. On merge to `main`, CI runs the tests, builds the container image and boots it,
 and compiles the Bicep. Nothing deploys from a personal machine.
 
-`deploy.yml` triggers on `main` and is gated on the `AZURE_*` repository variables. Six
-of the seven are set; it skips on `AZURE_CLIENT_ID`, which needs the deploy app
-registration Vitis has not created yet. A skip shows as a **grey** check, not a red one —
-that is the gate working, not a broken pipeline. Once that client ID is set, the same
-push deploys.
+`deploy.yml` triggers on `main` and is gated on the `AZURE_*` repository variables. All
+seven are set — `AZURE_CLIENT_ID` was the last, on 16 September 2026 — so **a merge to
+`main` deploys to production**: image build, migration, revision rollout. The job skips
+itself, as a **grey** check rather than a red one, only when one of the first three
+variables is empty. Since all are set, a grey check is no longer the gate working; it
+means somebody cleared a variable. `runbook.md` → *A deploy fails*.
 
 **Restoring the BAS database.** `Test-BasRestore.ps1` in `phb-bas` restores to a scratch
 database and compares. Run it occasionally — an untested backup isn't a backup.
