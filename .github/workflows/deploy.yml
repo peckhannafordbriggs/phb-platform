@@ -23,17 +23,20 @@ jobs:
     name: Build image, migrate, deploy
     runs-on: ubuntu-latest
 
-    # INERT UNTIL AZURE EXISTS.
+    # GATED ON THE AZURE VARIABLES.
     #
     # These are repository *variables*, not secrets - a client ID, a tenant ID
     # and a subscription ID are identifiers, not credentials, and the `secrets`
-    # context cannot be read in a job-level `if` anyway. Until all three are set
-    # this job is skipped, which shows as a grey check rather than a red one on
-    # every push between now and provisioning.
+    # context cannot be read in a job-level `if` anyway. If any of the three is
+    # empty this job is skipped, which shows as a grey check rather than a red
+    # one. That was the state on every push until 2026-09-16, when the last of
+    # them was set; a skip now means one has been cleared - see runbook.md,
+    # "A deploy fails".
     #
-    # To enable, set in Settings → Secrets and variables → Actions → Variables:
+    # Set in Settings → Secrets and variables → Actions → Variables:
     #   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
-    #   AZURE_RESOURCE_GROUP, AZURE_CONTAINER_APP, AZURE_REGISTRY
+    #   AZURE_RESOURCE_GROUP, AZURE_CONTAINER_APP, AZURE_REGISTRY,
+    #   AZURE_POSTGRES_SERVER
     if: >-
       vars.AZURE_CLIENT_ID != '' &&
       vars.AZURE_TENANT_ID != '' &&

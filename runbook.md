@@ -1790,6 +1790,13 @@ document, so it works — a login-only probe job authenticated with it, and the
 you are re-sending this request to rebuild a credential, send the corrected
 version.
 
+**The client ID came back the same day and is set** on the repository as
+`AZURE_CLIENT_ID`, so the deploy job is live. Where Request 3 below says the
+pipeline "stays switched off until it is set", that described the state before
+2026-09-16; a merge to `main` now deploys. No merge had reached `main` after the
+variable was set when this was written, so the container app still held the
+placeholder image and the next merge is the first real deploy.
+
 **Substitute two values before sending.** The resource group and subscription id
 are deliberately not written in this repository (`tests/deploy-guards.test.ts`
 fails the build if either appears), so item 3b below carries
@@ -2170,8 +2177,10 @@ anyone. Leave it off until the deployment has settled, then turn it on.
 
 ## GitHub Actions variables
 
-The Deploy workflow is skipped — a grey check, not a red one — until the first three are
-set. Settings → Secrets and variables → Actions → **Variables**:
+The Deploy workflow skips itself — a grey check, not a red one — whenever any of the
+first three is empty. All seven have been set since 2026-09-16, so a merge to `main`
+deploys, and a grey check today means one has been cleared. Settings → Secrets and
+variables → Actions → **Variables**:
 
 | Variable | Where it comes from |
 |---|---|
@@ -2208,10 +2217,12 @@ old build.
 | *Deploy the new image* | The revision was rejected. | `az containerapp revision list -n <app> -g <rg> -o table`, then `az containerapp logs show -n <app> -g <rg>`. |
 | *Verify the deployment responds* | The revision deployed but never returned 200 from `/api/health`. | The container started and died, or never started. See the next section. |
 
-**The deploy job is skipped entirely.** That is the intended state before the
-subscription exists — it is gated on three repository variables being set. A grey
-check, not a red one. Set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and
-`AZURE_SUBSCRIPTION_ID` to enable it.
+**The deploy job is skipped entirely.** It is gated on `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` all being non-empty, and skips as a grey
+check rather than a red one when any is not. That was the intended state until
+2026-09-16, when the last of them was set. It is not the intended state now: a skipped
+deploy means a variable has been cleared or renamed. Check Settings → Secrets and
+variables → Actions → *Variables*; `gh variable list` shows when each last changed.
 
 **Green but serving the old build.** Container Apps kept the previous revision because
 the new one never became healthy. `az containerapp revision list` shows both. The
