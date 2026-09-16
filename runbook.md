@@ -2231,6 +2231,48 @@ old revision while the new one was still failing.
 
 ---
 
+## A static file 404s in production and works locally
+
+**Symptom.** `/phb-logo.png` (or anything else in `public/`) returns 404 from the
+container app - and the 404 body is the app's own not-found page, several
+kilobytes of `text/html`, not the static handler's nine-byte `text/plain`. The
+same URL works under `next dev` and `next start`. Sign-in is where a person sees
+it first, because the sign-in page shows the logo.
+
+**Cause.** `output: "standalone"` traces the import graph, and nothing imports a
+file in `public/` - it is served by path - so the standalone output never
+contains that directory. `next dev` and `next start` read `public/` straight
+from the source tree; only the standalone `server.js` has to be handed it, the
+same way it is handed `.next/static`. The first production image (2026-09-16)
+copied `.next/static` and not `public/`.
+
+**Fix.** In the runtime stage of the `Dockerfile`, next to the `.next/static`
+copy:
+
+```dockerfile
+COPY --from=build --chown=node:node /app/public ./public
+```
+
+`tests/deploy-guards.test.ts` → *the image ships public/* asserts the line is
+present in the runtime stage and that `.dockerignore` does not exclude
+`public`. It cannot prove the image contents - nothing local builds the image -
+so after the next deploy, check the shape of the response rather than trusting
+the build:
+
+```bash
+curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download}
+'   https://<fqdn>/phb-logo.png
+# 200 image/png and a size in the tens of kilobytes. A 404 with text/html and
+# ~7 KB is the app's not-found page again.
+```
+
+**How it was found.** Auth.js's `OAuthCallbackError` and this were reported in
+the same breath. They are unrelated: the middleware matcher excludes `.png`, so
+the logo request never met the login gate - it reached the Next server and the
+server had no such file.
+
+---
+
 ## The container starts and immediately exits
 
 **Symptom.** Revisions cycle. `az containerapp logs show` shows the process starting
