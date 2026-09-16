@@ -35,10 +35,25 @@
  * A module declares itself with one line here, in the same pull request that
  * adds the page — the same extension point as `BAS_TABS` and the accent table.
  * The path is a real route, not a convention: nothing assumes `/<key>/settings`.
+ *
+ * A MAP RATHER THAN AN OBJECT LITERAL, and the reason is a permission check.
+ * `lookup[key]` finds inherited members of `Object.prototype`, so a module keyed
+ * `constructor`, `toString` or `valueOf` would have returned something truthy
+ * and been handed the settings permission — a guard that fails OPEN. No such
+ * key exists today, which is exactly why it was closed now rather than after one
+ * does: `modules.key` is a free-text primary key and nothing rejects those
+ * strings.
+ *
+ * `Map.get` has no prototype chain to fall through, so the failure mode is
+ * structurally absent rather than guarded against. An `Object.hasOwn` check
+ * would work as well at this one call site and would have to be remembered at
+ * the next one; this cannot be forgotten. Pinned by
+ * `tests/module-settings-surface.test.ts` with those key names, including end to
+ * end through `setModuleAdmin`.
  */
-export const MODULE_SETTINGS_SURFACES: Readonly<Record<string, string>> = {
-  bas: "/bas/settings",
-};
+export const MODULE_SETTINGS_SURFACES: ReadonlyMap<string, string> = new Map([
+  ["bas", "/bas/settings"],
+]);
 
 /**
  * Where this module's settings live, or null if it has none.
@@ -48,7 +63,7 @@ export const MODULE_SETTINGS_SURFACES: Readonly<Record<string, string>> = {
  * platform could offer a module admin.
  */
 export function moduleSettingsHref(moduleKey: string): string | null {
-  return MODULE_SETTINGS_SURFACES[moduleKey] ?? null;
+  return MODULE_SETTINGS_SURFACES.get(moduleKey) ?? null;
 }
 
 /**

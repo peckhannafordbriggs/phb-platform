@@ -706,6 +706,17 @@ remembered. A code table ships in the same image as the page it describes.
 resolves to a real page, which is what stops the table going stale — the check the column
 could never have.
 
+**A `Map`, not an object literal, because the lookup carries a permission.**
+`lookup[key]` finds inherited members of `Object.prototype`, so a module keyed
+`constructor`, `toString` or `valueOf` would have come back truthy and been handed the
+settings permission — a guard failing in the one direction it must not. `modules.key` is a
+free-text primary key, so those are writable keys rather than theoretical ones; no such
+module exists, which is the argument for closing it now rather than after one does.
+`Map.get` has no prototype chain to fall through, so the hole is structurally absent
+instead of guarded against — an `Object.hasOwn` check would do as well here and would have
+to be remembered at the next call site. Caught in review by Codex, not by me, and pinned by
+tests that fail against the old lookup.
+
 **The refusal is in the service, not only the component.** `setModuleAdmin` is the single
 writer of the column; `bulkGrants` never touches it. Hiding the checkbox alone would leave
 the API accepting the request and writing `grant.admin_added` to the audit log for a

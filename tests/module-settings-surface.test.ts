@@ -54,7 +54,7 @@ describe("the declaration", () => {
   it("points every module at a settings page that exists", async () => {
     const routes = await appRoutes();
 
-    for (const [moduleKey, href] of Object.entries(MODULE_SETTINGS_SURFACES)) {
+    for (const [moduleKey, href] of MODULE_SETTINGS_SURFACES) {
       expect(
         routes,
         `${moduleKey} declares ${href}, but no page renders that route`,
@@ -82,6 +82,31 @@ describe("the declaration", () => {
     expect(hasSettingsSurface("change-orders")).toBe(false);
     expect(hasSettingsSurface("a-module-that-does-not-exist")).toBe(false);
     expect(moduleSettingsHref("change-orders")).toBeNull();
+  });
+
+  /**
+   * The guard used to fail OPEN for these.
+   *
+   * With an object literal, `lookup["constructor"]` returns a function off
+   * `Object.prototype` rather than undefined, so `?? null` never fired and the
+   * module was treated as having a settings screen - the one direction this
+   * check must never fail in. A Map has no prototype chain to fall through.
+   *
+   * `modules.key` is a free-text primary key, so these are writable keys and not
+   * merely theoretical ones. Named here so the fix cannot be undone by tidying
+   * the Map back into a literal without a test going red.
+   */
+  it.each([
+    "constructor",
+    "toString",
+    "valueOf",
+    "hasOwnProperty",
+    "__proto__",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+  ])("does not inherit a settings surface from Object.prototype: %s", (key) => {
+    expect(moduleSettingsHref(key)).toBeNull();
+    expect(hasSettingsSurface(key)).toBe(false);
   });
 });
 
@@ -191,6 +216,40 @@ describe("setModuleAdmin", () => {
       where: { targetEmployeeId: target.id, action: "grant.admin_removed" },
     });
     expect(removed).toBe(1);
+  });
+
+  /**
+   * The same hole, at the only place that writes the column.
+   *
+   * A module row keyed `constructor` is a legal row - `modules.key` is a
+   * free-text primary key - so this is the whole failure path, not a unit test
+   * of the lookup: real module, real grant, real call. Before the Map it
+   * returned ok and wrote `grant.admin_added`.
+   */
+  it("refuses a module whose key is an Object.prototype member", async () => {
+    await testDb.module.create({
+      data: { key: "constructor", displayName: "Constructor", sortOrder: 900 },
+    });
+
+    const admin = await createEmployee({ isPlatformAdmin: true });
+    const target = await createEmployee();
+    await grantModule(target.id, "constructor");
+
+    const result = await setModuleAdmin(
+      admin.id,
+      target.id,
+      "constructor",
+      true,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("no_settings_surface");
+
+    const events = await testDb.auditEvent.count({
+      where: { targetEmployeeId: target.id },
+    });
+    expect(events).toBe(0);
   });
 
   /**
