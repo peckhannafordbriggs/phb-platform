@@ -115,9 +115,16 @@ USER node
 # second install is what keeps the image small and its contents a consequence of
 # the build.
 COPY --from=build --chown=node:node /app/.next/standalone ./
-# Static assets are not part of the standalone bundle and have to be placed at
-# the path the server expects.
+# Two directories are NOT part of the standalone bundle and have to be placed
+# where server.js expects them: the hashed build assets, and public/. Next's
+# file tracing follows imports, and nothing imports a file in public/ - it is
+# served by path - so the standalone output never contains it. The first
+# production image shipped without this line and every request for
+# /phb-logo.png answered with the app's own 404 page (2026-09-16). It worked
+# locally because `next dev` and `next start` read public/ from the source
+# tree; only the standalone server has to be handed it.
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
 
 EXPOSE 3000
 

@@ -348,3 +348,42 @@ describe("the database collation is set explicitly", () => {
     expect(source).toMatch(/ORDER BY name/);
   });
 });
+
+describe("the image ships public/", () => {
+  /**
+   * `output: "standalone"` traces imports, and nothing imports a file in
+   * public/ - it is served by path - so the standalone output never contains
+   * it. It has to be copied into the runtime stage alongside .next/static, and
+   * the first production image was built without that line: every request for
+   * /phb-logo.png answered with the app's own 404 page while the same file
+   * served fine from `next dev` (2026-09-16). Nothing local can catch a
+   * Dockerfile omission, so this reads the Dockerfile.
+   */
+  it("copies public/ into the runtime stage, next to .next/static", async () => {
+    const fs = await import("node:fs/promises");
+    const dockerfile = await fs.readFile(path.join(projectRoot, "Dockerfile"), "utf8");
+
+    // The runtime stage is everything after the last FROM. The copy has to be
+    // THERE - a copy in the build stage is what `next build` reads and is not
+    // what ships.
+    const runtime = dockerfile.slice(dockerfile.lastIndexOf("FROM "));
+
+    expect(runtime).toContain("COPY --from=build --chown=node:node /app/public ./public");
+    expect(runtime).toContain(
+      "COPY --from=build --chown=node:node /app/.next/static ./.next/static",
+    );
+  });
+
+  it("does not let .dockerignore take public/ back out of the build context", async () => {
+    const fs = await import("node:fs/promises");
+    const ignore = await fs.readFile(path.join(projectRoot, ".dockerignore"), "utf8");
+    const lines = ignore
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("#"));
+
+    expect(lines).not.toContain("public");
+    expect(lines).not.toContain("public/");
+    expect(lines).not.toContain("**/public");
+  });
+});
