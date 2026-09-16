@@ -72,3 +72,51 @@ describe("a module with no assignment", () => {
     expect(moduleAccent("future", 2)).toEqual(moduleAccent("future", 2));
   });
 });
+
+/**
+ * The same prototype hole as lib/module-settings.ts, found in the same review.
+ *
+ * With an object literal, `ASSIGNED["constructor"]` returned a function rather
+ * than undefined, so the assigned branch was taken with a function where an
+ * index belongs; `PALETTE[fn]` is undefined and the `?? PALETTE[0]` fallback
+ * caught it. Safe, but by accident, and wrong: the module silently wore Change
+ * Orders' red — the collision the positional fallback exists to prevent.
+ *
+ * `modules.key` is a free-text primary key, so these are writable keys.
+ */
+describe("keys that are members of Object.prototype", () => {
+  const PROTOTYPE_KEYS = [
+    "constructor",
+    "toString",
+    "valueOf",
+    "hasOwnProperty",
+    "__proto__",
+    "isPrototypeOf",
+  ];
+
+  it("does not hand them a settled module's colour", () => {
+    const settled = new Set(["var(--phb-red)", "var(--phb-cyan)"]);
+
+    for (const key of PROTOTYPE_KEYS) {
+      expect(settled.has(moduleAccent(key, 0).fill), key).toBe(false);
+    }
+  });
+
+  it("gives them a real colour from the palette", () => {
+    for (const key of PROTOTYPE_KEYS) {
+      const accent = moduleAccent(key, 0);
+
+      expect(accent.fill, key).toMatch(/^var\(--phb-/);
+      expect(accent.ink, key).toMatch(/^var\(--phb-/);
+    }
+  });
+
+  it("treats them as unassigned, so the index still separates them", () => {
+    // An assigned module ignores the index; an unassigned one does not. This is
+    // what proves the lookup missed rather than matched.
+    const first = moduleAccent("constructor", 0).fill;
+    const second = moduleAccent("constructor", 1).fill;
+
+    expect(first).not.toBe(second);
+  });
+});

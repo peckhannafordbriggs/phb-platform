@@ -47,11 +47,24 @@ const PALETTE: readonly ModuleAccent[] = [
  *
  * Values are indices into PALETTE rather than colours, so a module cannot be
  * given a colour that is not one of the mark's own.
+ *
+ * A Map rather than an object literal, for the same reason as
+ * lib/module-settings.ts: `lookup[key]` finds inherited members of
+ * `Object.prototype`, so a module keyed `constructor` or `toString` took the
+ * assigned branch below with a function where an index should be, and fell
+ * through to PALETTE[0] — silently wearing Change Orders' red, the one outcome
+ * the positional fallback exists to prevent. `modules.key` is a free-text
+ * primary key, so those keys are writable.
+ *
+ * Nothing here carries authority and a wrong colour is cosmetic, which is why
+ * this was safe by accident rather than broken. Closed anyway: safe by accident
+ * is one refactor away from unsafe, and the fallback that makes it safe is the
+ * very line a tidy-up would remove.
  */
-const ASSIGNED: Readonly<Record<string, number>> = {
-  "change-orders": 0,
-  bas: 1,
-};
+const ASSIGNED: ReadonlyMap<string, number> = new Map([
+  ["change-orders", 0],
+  ["bas", 1],
+]);
 
 /**
  * `index` is the module's position in whatever list is being rendered, used
@@ -59,7 +72,7 @@ const ASSIGNED: Readonly<Record<string, number>> = {
  * assignment and no index gets the first colour, which is wrong but never blank.
  */
 export function moduleAccent(moduleKey: string, index = 0): ModuleAccent {
-  const assigned = ASSIGNED[moduleKey];
+  const assigned = ASSIGNED.get(moduleKey);
 
   if (assigned !== undefined) {
     return PALETTE[assigned] ?? PALETTE[0]!;
@@ -70,7 +83,7 @@ export function moduleAccent(moduleKey: string, index = 0): ModuleAccent {
    * new module cannot collide with a settled one until the palette is exhausted.
    * Reserved slots are skipped rather than overwritten.
    */
-  const reserved = new Set(Object.values(ASSIGNED));
+  const reserved = new Set(ASSIGNED.values());
   const available = PALETTE.filter((_, i) => !reserved.has(i));
   const fallback = available[index % Math.max(available.length, 1)];
 
