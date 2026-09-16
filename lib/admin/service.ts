@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { writeAuditEvent } from "@/lib/audit";
+import { hasSettingsSurface } from "@/lib/module-settings";
 import type { EmployeeListQuery, AuditQuery } from "@/lib/validation/admin";
 
 /**
@@ -17,7 +18,8 @@ export type AdminFailure =
   | "self_admin_demote"
   | "self_disable"
   | "last_active_admin"
-  | "unknown_module";
+  | "unknown_module"
+  | "no_settings_surface";
 
 export type AdminResult<T> =
   | { ok: true; data: T }
@@ -284,6 +286,19 @@ export async function removeGrant(
  * lockout nobody can recover from. Zero BAS administrators is not a lockout -
  * any platform admin can grant it back - so inventing a symmetric rule here
  * would invent a trap that does not exist.
+ *
+ * REFUSES A MODULE WITH NO SETTINGS SURFACE, in one direction only. Setting the
+ * flag on a module that declares no settings screen (lib/module-settings.ts)
+ * fails; clearing it always succeeds, so a flag set before this rule existed can
+ * still be turned off. A refusal rather than a silent no-op because an admin API
+ * that discards a request it understood is worse than one that says no: the
+ * checkbox would spring back with nothing to explain it.
+ *
+ * Enforced here and not only in the component. This is the single writer of
+ * `is_module_admin` - bulkGrants grants and revokes access but never touches it
+ * - so the rule holds for the API as well as the screen. Without it, a PUT could
+ * still write `grant.admin_added` to the audit log for a permission that grants
+ * nothing, which is a false record of an act that did not happen.
  */
 export async function setModuleAdmin(
   actorId: string,
@@ -300,6 +315,16 @@ export async function setModuleAdmin(
     return fail(
       "not_found",
       "That employee does not have access to this module. Grant access first.",
+    );
+  }
+
+  // Ordered after the idempotence check would let a no-op request through on an
+  // unsupported module; ordered before it, the refusal is the same whatever the
+  // current value is. It is the request that is not meaningful, not the change.
+  if (isModuleAdmin && !hasSettingsSurface(moduleKey)) {
+    return fail(
+      "no_settings_surface",
+      "That module has no settings screen, so there is nothing to administer.",
     );
   }
 

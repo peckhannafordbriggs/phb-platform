@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { hasSettingsSurface } from "@/lib/module-settings";
 
 /**
  * Convenience controls. Every guardrail they express - no self-demotion, no
@@ -112,8 +113,21 @@ export function EmployeeControls({
                     you cannot open" is not a state worth being able to reach,
                     and a checkbox that quietly granted access as a side effect
                     would do two things the audit log records as one.
+
+                    AND ONLY FOR A MODULE THAT HAS SETTINGS. Change Orders has
+                    none - it is configured in Exchange and in the flows - so the
+                    box used to offer a permission whose only effect was to reach
+                    a page that does not exist. Hiding it is a rendering
+                    decision; `setModuleAdmin` refuses the same request, which is
+                    what makes the permission unreachable rather than unoffered.
+
+                    The exception is a flag that is already set. A module could
+                    lose its settings screen, or have been ticked before this
+                    rule existed, and hiding a live permission is how it becomes
+                    permanent - the server still allows clearing it precisely so
+                    this checkbox can.
                   */}
-                  {granted && (
+                  {granted && (hasSettingsSurface(module.key) || isAdmin) && (
                     <label className="mt-1 ml-6 flex items-center gap-2 text-xs text-[var(--muted)]">
                       <input
                         type="checkbox"
@@ -121,7 +135,16 @@ export function EmployeeControls({
                         disabled={busy}
                         onChange={() => setAdmin(module.key, !isAdmin)}
                       />
-                      Can change settings for {module.displayName}
+                      {hasSettingsSurface(module.key) ? (
+                        <>Can change settings for {module.displayName}</>
+                      ) : (
+                        <>
+                          Can change settings for {module.displayName} —{" "}
+                          <span className="text-[var(--warning)]">
+                            this module has no settings screen. Clear this.
+                          </span>
+                        </>
+                      )}
                     </label>
                   )}
                 </div>

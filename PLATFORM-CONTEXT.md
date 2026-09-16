@@ -117,6 +117,14 @@ server-side — a page guard, not just a hidden nav item.
 **4. A service layer.** `lib/modules/yourmodule/*`. All module-specific logic and every
 external integration lives here.
 
+**And one line if — and only if — you have a settings screen.** `lib/module-settings.ts`
+maps a module key to the route its settings live at. Declaring it is what makes the admin
+screen offer *"Can change settings for Your Module"* and what lets `setModuleAdmin` write
+`is_module_admin` for your key; without it that permission is refused, because a
+permission whose only effect is to reach a page that does not exist is a lie the admin
+screen used to tell about Change Orders. Declare it in the same pull request that adds the
+page, and a test will check the route resolves.
+
 ### Rules that apply to any module
 
 - **`lib/auth`, `lib/authz` and `lib/db` must not import from `lib/modules/*`.**

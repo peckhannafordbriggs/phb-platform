@@ -32,6 +32,14 @@ export async function withAdmin(
  * Guardrail violations are 403: authenticated, admin, but this particular
  * action is not allowed - which is exactly what docs/07-conventions.md reserves
  * 403 for. A missing employee or module is 404.
+ *
+ * `no_settings_surface` is 422, not 403. A 403 would say the admin lacks the
+ * standing to do it, and they do not lack it - the state they asked for cannot
+ * exist for any admin, because the module has no settings screen. That is the
+ * submitted combination being invalid, which is what 422 is for.
+ *
+ * The switch has no default, so adding a failure code without deciding its
+ * status stops the build rather than falling through to a 500.
  */
 export function adminFailureResponse(
   code: AdminFailure,
@@ -45,6 +53,8 @@ export function adminFailureResponse(
     case "self_disable":
     case "last_active_admin":
       return forbidden(message);
+    case "no_settings_surface":
+      return validationFailed(message);
   }
 }
 
