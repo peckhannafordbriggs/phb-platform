@@ -866,7 +866,38 @@ question, decided at cutover with the live path in view. Until then, do not
 describe this lock as mutual exclusion in any document — including a Part C
 write-up that would find it convenient to.
 
-## 43 · The judgment I'd most want to pass on
+## 43 · A station awaiting its login is amber, and the collector writes nothing for it
+
+**Decision.** A direct station registered in Settings with no login stored, that has
+*never* had a successful collection run, is a distinct state — *awaiting a login* —
+counted separately from failures, rendered amber, and given **no** failed ingest run
+by the collector. A station with no login that *has* collected before is a fault: red,
+and a failed run against its row every pass. The one fact that tells them apart is
+whether it ever worked, read from `bas_ingest_runs`.
+
+**Why.** The precedent is § 28's unclassified-points tile — amber by design, "a
+backlog, not a fault." Registering a station and then going to find its password is
+the normal order of doing things. The first cut (2026-09-16) recorded a failed run for
+that station every fifteen minutes, which means three stations registered on a Friday
+afternoon would have the health check reporting failures all weekend for something
+nobody needed to act on. That is how people learn to ignore red, and this is the one
+system where ignoring red destroys data. The same afternoon had already shown the
+opposite failure — a station with no password stopping *every other station* for 75
+minutes — so the fix had to make the waiting station visible without making it loud.
+
+**The sentence is shared.** "No login stored - this station will not be collected
+until one is set." is the banner on the station's card (`AWAITING_LOGIN` in
+`health-client.ts`) and the line the collector logs when it skips the station
+(`AWAITING_LOGIN` in `phb-bas/collector/targets.py`). The collector's test reads this
+repository's source and fails if the two drift. One state, one sentence, two places.
+
+**What breaks if you undo it.** Make the awaiting station red and the estate learns to
+scroll past red. Make the lost-login station amber and a real outage — a login somebody
+removed from a station that was collecting yesterday — reads as a to-do item. Key the
+distinction on whether a credential row *ever existed* instead of on the run history and
+you need a table nobody has, for a question the run history already answers.
+
+## 44 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
 

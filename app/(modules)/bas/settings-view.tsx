@@ -20,6 +20,7 @@ import {
   deleteProject,
   deleteStation,
   describeActivity,
+  describeLogin,
   describeReach,
   fetchBasSettings,
   formatTimestamp,
@@ -819,6 +820,7 @@ function StationRow({
   const [editing, setEditing] = useState(false);
   const reach = describeReach(station);
   const activity = describeActivity(station.activity);
+  const login = describeLogin(station);
 
   if (editing) {
     return (
@@ -918,6 +920,21 @@ function StationRow({
         {activity.label}
       </p>
 
+      {/*
+        The login banner. Amber for a station nobody has given a password to
+        yet - a backlog, not a fault, and the same sentence the collector logs
+        when it skips the station. Red for a station that was collecting and
+        has lost its login. Nothing at all when the login is set.
+      */}
+      {login !== null && (
+        <p
+          className="mt-1 rounded border px-2 py-1 text-xs"
+          style={{ ...TONE_STYLE[login.tone], color: TONE_INK[login.tone] }}
+        >
+          {login.label}
+        </p>
+      )}
+
       <p className="mt-1 text-xs text-[var(--muted)]">
         {station.activePoints} active{" "}
         {station.activePoints === 1 ? "point" : "points"}
@@ -942,6 +959,10 @@ function StationRow({
         station={station}
         available={tree.credentialStorage.available}
         unavailableMessage={tree.credentialStorage.message}
+        // The banner above already says there is no login, in the words
+        // that matter. Saying it a second time here in different words is
+        // how one state starts to look like two.
+        quiet={login !== null}
         busy={busy}
         run={run}
       />
@@ -1135,12 +1156,15 @@ function CredentialPanel({
   station,
   available,
   unavailableMessage,
+  quiet = false,
   busy,
   run,
 }: {
   station: SettingsStation;
   available: boolean;
   unavailableMessage: string | null;
+  /** True when the row above has already said there is no login. */
+  quiet?: boolean;
   busy: boolean;
   run: Run;
 }) {
@@ -1161,7 +1185,7 @@ function CredentialPanel({
     return (
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
         {station.credential === null ? (
-          <span>No Niagara login stored.</span>
+          quiet ? null : <span>No Niagara login stored.</span>
         ) : (
           <span>
             {station.credential.username} ·{" "}

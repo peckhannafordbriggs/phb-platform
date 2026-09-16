@@ -938,6 +938,49 @@ export const clearStationCredential = (stationId: string) =>
   );
 
 /**
+ * THE SENTENCE a station with no login stored shows on its card.
+ *
+ * The collector prints the identical sentence (phb-bas,
+ * collector/targets.py, AWAITING_LOGIN) when it skips that station on a pass,
+ * and its test reads THIS file and fails if the two drift. A person who reads
+ * it in Settings on Friday and in the collector log on Monday should
+ * recognise one state, not wonder whether two different things are wrong.
+ */
+export const AWAITING_LOGIN =
+  "No login stored - this station will not be collected until one is set.";
+
+/**
+ * What a station's login situation means, if it means anything.
+ *
+ * `null` when there is nothing to say: the login is set, or the station is
+ * reached through its parent and holds no login of its own.
+ *
+ * Two stations with no login stored are NOT the same state, and the tone says
+ * so. One has never had a successful collector run - somebody registered it
+ * and has not entered the password yet, which is the normal order of doing
+ * things. That is amber, the same category as an unclassified point: a
+ * visible backlog rather than a fault. Three stations registered on a Friday
+ * afternoon must not read as three failures all weekend, because that is how
+ * people learn to ignore red, and this is the one system where ignoring red
+ * destroys data. The other WAS collecting and now cannot be. That is red.
+ */
+export function describeLogin(station: {
+  reach: string;
+  credential: unknown | null;
+  activity: { everCollected: boolean };
+}): { label: string; tone: Tone } | null {
+  if (station.reach !== "direct" || station.credential !== null) return null;
+  if (!station.activity.everCollected) {
+    return { label: AWAITING_LOGIN, tone: "warn" };
+  }
+  return {
+    label:
+      "Login removed - this station was collecting and now cannot be. Set one to resume.",
+    tone: "bad",
+  };
+}
+
+/**
  * How a station's collection history reads on screen.
  *
  * This is what stands in for a "test connection" button. It is derived from
