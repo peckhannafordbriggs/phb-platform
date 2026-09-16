@@ -1,24 +1,26 @@
-import {
-  ClientAssertionCredential,
-  ClientSecretCredential,
-  ManagedIdentityCredential,
-} from "@azure/identity";
+import { ClientAssertionCredential, ClientSecretCredential } from "@azure/identity";
 import type { TokenCredential } from "@azure/identity";
+import {
+  ManagedIdentityAssertionError,
+  createManagedIdentityAssertionProvider,
+} from "@/lib/azure/managed-identity-assertion";
 import { isProduction, readGraphEnv, type GraphEnv } from "@/lib/env";
 import { MailError } from "../mail/errors";
 
 /**
- * How the platform proves it is the platform.
+ * How the platform proves it is the platform - to the Graph app registration.
  *
  * CLAUDE.md prohibition 7: nothing that expires may exist in production. So the
  * two environments authenticate differently, and the difference is this one
  * environment check - not a strategy interface, not a plugin.
+ *
+ * The production half - the managed identity's token presented as a client
+ * assertion - is lib/azure/managed-identity-assertion.ts, shared with sign-in
+ * since 2026-09-16. This file adds only what is Graph's: the error type its
+ * callers expect, and the secret path for developer machines.
  */
 
 export const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
-
-/** The audience Entra requires when a managed identity federates to an app. */
-const TOKEN_EXCHANGE_SCOPE = "api://AzureADTokenExchange/.default";
 
 /** Refresh this far before expiry so a request never carries a dying token. */
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
@@ -59,25 +61,22 @@ export function createGraphCredential(
     // identity to Entra, which then issues a token for the Graph app
     // registration that does - the federated identity credential ties them
     // together. Nothing in this path expires.
-    const managedIdentity = new ManagedIdentityCredential(
-      config.managedIdentityClientId !== null
-        ? { clientId: config.managedIdentityClientId }
-        : {},
-    );
+    const getAssertion = createManagedIdentityAssertionProvider({
+      managedIdentityClientId: config.managedIdentityClientId,
+    });
 
     return new ClientAssertionCredential(
       config.tenantId,
       config.clientId,
       async () => {
-        const assertion = await managedIdentity.getToken(TOKEN_EXCHANGE_SCOPE);
-        if (assertion === null) {
-          throw new MailError("auth_failed", {
-            detail:
-              "The managed identity returned no token for the Entra token-exchange " +
-              "audience. Check that a managed identity is assigned to the container app.",
-          });
+        try {
+          return await getAssertion();
+        } catch (error) {
+          if (error instanceof ManagedIdentityAssertionError) {
+            throw new MailError("auth_failed", { detail: error.message, cause: error });
+          }
+          throw error;
         }
-        return assertion.token;
       },
     );
   }

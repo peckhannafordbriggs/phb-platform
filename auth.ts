@@ -1,15 +1,34 @@
 import NextAuth from "next-auth";
 import { authConfig } from "./auth.config";
+import { buildEntraProvider, secretOrNull } from "@/lib/auth/entra-provider";
 import { applyLoginGate } from "@/lib/auth/signin";
 import type { TokenClaims } from "@/lib/auth/gate";
+import { env, isProduction } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
 /**
  * Node-runtime Auth.js instance. Imported by route handlers, server components,
  * and the API surface - never by middleware.
+ *
+ * The provider is rebuilt here rather than taken from auth.config.ts: in
+ * production it carries the managed-identity assertion, which needs
+ * @azure/identity and so cannot live in the edge-safe config the middleware
+ * imports. See lib/auth/entra-provider.ts. Building it at module load is what
+ * makes a secret in production a refusal to boot rather than a surprise later.
  */
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
+  providers: [
+    buildEntraProvider({
+      clientId: env.AUTH_MICROSOFT_ENTRA_ID_ID,
+      tenantId: env.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID,
+      clientSecret: secretOrNull(env.AUTH_MICROSOFT_ENTRA_ID_SECRET),
+      production: isProduction,
+      // The platform's one user-assigned identity. The variable is named for
+      // the module that first needed it; sign-in uses the same identity.
+      managedIdentityClientId: secretOrNull(process.env.GRAPH_MANAGED_IDENTITY_CLIENT_ID),
+    }),
+  ],
   callbacks: {
     /**
      * The four-check login gate. Returning false sends the browser to

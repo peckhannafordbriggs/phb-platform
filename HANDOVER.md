@@ -193,7 +193,7 @@ This is the section to keep. Everything here is a known future failure with a kn
 
 | What | When | Symptom | What to do |
 |---|---|---|---|
-| SSO client secret expires | **13 August 2028** | Local sign-in fails with `AADSTS7000215`. Whether production is affected is an **open question** — see `runbook.md` → *Does production sign-in need the SSO client secret?* | Ask IT for a new secret. `runbook.md` → *What expires, and when* |
+| SSO client secret expires | **13 August 2028** | Local sign-in fails with `AADSTS7000215`. **Production is not affected**: it carries no secret and authenticates the token exchange with the managed identity, matched by a federated identity credential on the SSO app registration — `runbook.md` → *Production sign-in authenticates with the managed identity*. If production ever fails with a secret-shaped error, the fault is that a secret was deployed at all. | Ask IT for a new secret, for developer machines only. `runbook.md` → *What expires, and when* |
 | BAS database stopped | If anyone applies a cost policy that stops it | Silent data destruction at the controller | Restart immediately; check for gaps on the Collection Health screen |
 | Azure spend alert | If misconfigured, or growth | Email at $150/month | Expected spend is $60–100 |
 | Collector host offline | Laptop closed, machine rebooted, network down | Gaps appear on Collection Health | Restart the collector. Anything past ~42 hours is already gone |
