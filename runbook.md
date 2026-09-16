@@ -1780,6 +1780,16 @@ One email, three items, ordered by what they unblock: **1 blocks sign-in, 3
 blocks CI, 2 blocks the mailbox.** The values below are real, from the
 deployment of 2026-09-09.
 
+**Request 3a was fulfilled on 2026-09-16, and the subject this document
+originally gave was wrong.** It asked for
+`repo:peckhannafordbriggs/phb-platform:environment:production`; GitHub sends
+`repo:peckhannafordbriggs@74662004/phb-platform@1334314549:environment:production`.
+Vitis built the credential from what GitHub actually sends rather than from this
+document, so it works — a login-only probe job authenticated with it, and the
+`AADSTS70021` predicted below never occurred. 3a has been corrected to match. If
+you are re-sending this request to rebuild a credential, send the corrected
+version.
+
 **Substitute two values before sending.** The resource group and subscription id
 are deliberately not written in this repository (`tests/deploy-guards.test.ts`
 fails the build if either appears), so item 3b below carries
@@ -1873,29 +1883,42 @@ az deployment group show \
 > only a federated credential and one Azure role.
 >
 > **3a. Federated credential** — under *Certificates & secrets → Federated
-> credentials → Add credential*, scenario **GitHub Actions deploying Azure
-> resources**:
->
->     Organization:  peckhannafordbriggs
->     Repository:    phb-platform
->     Entity type:   Environment
->     Environment:   production
->     Name:          phb-platform-deploy-production
->
-> which produces:
+> credentials → Add credential*, scenario **Other issuer**, typing all four
+> values:
 >
 >     Issuer:    https://token.actions.githubusercontent.com
->     Subject:   repo:peckhannafordbriggs/phb-platform:environment:production
+>     Subject:   repo:peckhannafordbriggs@74662004/phb-platform@1334314549:environment:production
 >     Audience:  api://AzureADTokenExchange
+>     Name:      phb-platform-deploy-production
 >
-> **Entity type must be Environment, not Branch.** Our deploy job declares
-> `environment: production`, and GitHub then issues the token with the
-> `:environment:` subject shown above. A credential built on Branch /
-> `ref:refs/heads/main` is the more common default, looks entirely correct, and
-> will never match — it fails as `AADSTS70021: No matching federated identity
-> record found`, which gives no hint that the subject is the wrong shape. I have
-> created the `production` environment on the repository already, so the name can
-> be confirmed against the credential rather than discovered during a deploy.
+> **Please do not use the *GitHub Actions deploying Azure resources* scenario.**
+> That wizard asks for an organisation and a repository by name, and from them it
+> can only build `repo:peckhannafordbriggs/phb-platform:environment:production`,
+> which this repository never sends. The subject has to be typed by hand. Two
+> separate things make it the shape it is, and each one on its own is enough to
+> break the login.
+>
+> *It ends `:environment:production`, not `:ref:refs/heads/main`.* Our deploy job
+> declares `environment: production`, and a job that declares an environment gets
+> a subject naming the environment instead of the branch. Branch is the portal's
+> more usual default and looks entirely correct. The `production` environment
+> already exists on the repository, so its name can be confirmed against the
+> credential rather than discovered during a deploy.
+>
+> *It carries `@74662004` and `@1334314549`.* This repository has GitHub's
+> **immutable subject claims** enabled, which embeds the organisation id and the
+> repository id in the subject prefix so that renaming either — or deleting a
+> name and re-registering it elsewhere — cannot silently redirect the trust.
+> Neither id is a secret. They are worth re-reading rather than copying from
+> here, because the prefix is a repository setting and can be changed:
+>
+>     gh api repos/peckhannafordbriggs/phb-platform/actions/oidc/customization/sub
+>
+> Getting either half wrong fails identically — `AADSTS70021: No matching
+> federated identity record found`, which gives no hint as to which half. **The
+> authority on what GitHub sends is the deploy log, not this document**: the
+> *Sign in to Azure* step prints `subject claim - …` before it attempts the
+> exchange.
 >
 > **3b. Azure role** — assign the new registration's service principal
 > **Contributor**, scoped to the resource group `<resource-group>` in
@@ -2178,7 +2201,7 @@ old build.
 
 | Step that failed | Cause | Fix |
 |---|---|---|
-| *Sign in to Azure* | The OIDC federated credential is missing, or its subject does not match this repository and branch. | Check the credential on the app registration: subject `repo:<owner>/<repo>:ref:refs/heads/main`. It is not a secret and not expiring — if it looks right, confirm `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` in repository *variables*. |
+| *Sign in to Azure* | The OIDC federated credential is missing, or its subject is not the one GitHub sent. | **Read the subject off the failing run, do not reason about it.** The step prints `subject claim - …` before the exchange; it must equal the credential's subject exactly, prefix included. It is currently `repo:peckhannafordbriggs@74662004/phb-platform@1334314549:environment:production` — this repository has immutable subject claims on, so it is **not** the plain `repo:<owner>/<repo>:…` form the Azure portal's GitHub Actions wizard builds, and **not** `:ref:refs/heads/main`, which is what a Branch credential would give. Both fail as `AADSTS70021` with no hint which half is wrong; see *What to ask IT for* → Request 3a. The credential is not a secret and does not expire — if the subject matches, confirm `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` in repository *variables*. |
 | *Build and push the image* | `az acr build` failed. Usually the Dockerfile, occasionally registry quota on Basic. | Reproduce locally: `docker build -t phb-platform:test .` |
 | *Open the database firewall* | The identity lacks rights on the server, or `AZURE_POSTGRES_SERVER` is wrong. | The deploy identity needs Contributor on the resource group. |
 | *Apply migrations* | See *A migration fails on deploy* below. |  |
