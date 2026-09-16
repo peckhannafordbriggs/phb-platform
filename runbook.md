@@ -5533,10 +5533,35 @@ unrecoverable from here. Re-enter it.
 
 ---
 
+## A station's card says "No login stored - this station will not be collected until one is set"
+
+**Amber, and not a fault.** The station was registered without its Niagara
+login and has never been collected - the normal order of doing things. Nothing
+is recorded against it: the collector (phb-bas) logs the same sentence once
+per pass at WARNING and writes no failed ingest run, so Collection Health and
+`healthcheck.py` do not report it as an outage. It is the same category as an
+unclassified point - a visible backlog. Set the login on the card; the next
+collector pass picks it up.
+
+**The red variant** - "Login removed - this station was collecting and now
+cannot be" - is a fault. The station has at least one successful run in
+`bas_ingest_runs` and no credential row now, so it *was* working. The
+collector records a failed run against it every pass until a login is set.
+The rule is `describeLogin` in `app/(modules)/bas/health-client.ts`, and the
+two sentences are asserted identical to the collector's by
+`phb-bas/bas-collector/test_targets.py`, which reads that file.
+
+---
+
 ## `discover` failing after a station was registered in Settings
 
-**Symptom.** A station added through the Settings tab is not collected, or the
-collector 404s against it.
+**Symptom.** A station added through the Settings tab is not collected, or
+`discover --station <name>` says the history space has no folder of that name.
+
+Since 2026-09-16 `discover` reads its stations from `bas_stations` exactly as
+`sync` does and attaches points to the station row by id. The config file's
+`BAS_SITE_NAME` is no longer consulted, so "Site '...' is not registered" no
+longer exists as a message. What is left to get wrong is the row itself.
 
 **Almost always the Niagara station name.** It is stored **byte for byte** —
 not trimmed, not case-folded — because it appears literally in every oBIX URL

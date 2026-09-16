@@ -8,6 +8,7 @@ import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { resetBasAvailabilityCache } from "@/lib/modules/bas/route-helpers";
 import { getBasSettingsTree } from "@/lib/modules/bas/settings-service";
 import { requireModuleAdmin } from "@/lib/authz";
+import { AWAITING_LOGIN, describeLogin } from "@/app/(modules)/bas/health-client";
 import { GET as settingsTree } from "@/app/api/modules/bas/settings/route";
 import { POST as createStation } from "@/app/api/modules/bas/settings/stations/route";
 import {
@@ -846,6 +847,7 @@ describe("station activity is derived, not tested live", () => {
     expect(row?.activity.lastRunAt).toBe(runAt.toISOString());
     expect(row?.activity.lastRunStatus).toBe("ok");
     expect(row?.activity.newestRecordAt).toBe(recordAt.toISOString());
+    expect(row?.activity.everCollected).toBe(true);
   });
 
   it("reports nulls for a station nothing has collected yet", async () => {
@@ -863,7 +865,25 @@ describe("station activity is derived, not tested live", () => {
       lastRunAt: null,
       lastRunStatus: null,
       newestRecordAt: null,
+      everCollected: false,
     });
+  });
+
+  it("does not count a failed run as ever having collected", async () => {
+    const station = await testDb.basStation.create({
+      data: { siteId, niagaraStationName: "ZZTestOnlyFailed" },
+    });
+    await testDb.basIngestRun.create({
+      data: { stationId: station.stationId, status: "failed" },
+    });
+
+    const tree = await getBasSettingsTree(await adminViewer());
+    const row = tree.projects
+      .flatMap((p) => p.buildings)
+      .flatMap((b) => b.stations)
+      .find((s) => s.niagaraStationName === "ZZTestOnlyFailed");
+
+    expect(row?.activity.everCollected).toBe(false);
   });
 
   /** No route anywhere opens a connection to a station. */
@@ -884,6 +904,113 @@ describe("station activity is derived, not tested live", () => {
     await walk(path.join(process.cwd(), "app/api/modules/bas/settings"));
 
     expect(found).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A station awaiting its login is amber; one that lost it is red
+// ---------------------------------------------------------------------------
+
+describe("a station with no login is two different states, told apart by whether it ever worked", () => {
+  /**
+   * The precedent is the unclassified-points tile: amber by design, "a
+   * backlog, not a fault". A station registered ten minutes ago and awaiting
+   * a password is the same category. Three stations registered on a Friday
+   * afternoon must not read as three failures all weekend - that is how
+   * people learn to ignore red, and this is the one system where ignoring
+   * red destroys data.
+   *
+   * The collector applies the same rule from the other side: it logs the
+   * same sentence and writes NO failed ingest run for a station in this
+   * state. phb-bas/bas-collector/test_targets.py reads this repository's
+   * health-client.ts to prove the two sentences are one.
+   */
+  const direct = (everCollected: boolean, credential: unknown | null) => ({
+    reach: "direct",
+    credential,
+    activity: { everCollected },
+  });
+
+  it("is amber and says the sentence when it has never collected", () => {
+    expect(describeLogin(direct(false, null))).toEqual({
+      label: AWAITING_LOGIN,
+      tone: "warn",
+    });
+  });
+
+  it("is red when it had collected and the login is gone", () => {
+    const login = describeLogin(direct(true, null));
+    expect(login?.tone).toBe("bad");
+    expect(login?.label).not.toBe(AWAITING_LOGIN);
+  });
+
+  it("says nothing when the login is set, whatever the history", () => {
+    expect(describeLogin(direct(false, { username: "svc" }))).toBeNull();
+    expect(describeLogin(direct(true, { username: "svc" }))).toBeNull();
+  });
+
+  it("says nothing for a station reached through its parent - it holds no login", () => {
+    expect(
+      describeLogin({
+        reach: "via_parent",
+        credential: null,
+        activity: { everCollected: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the sentence in the form the collector prints", () => {
+    // The collector's copy is a plain ASCII hyphen too. An em dash here would
+    // make the two "match" to a reader and differ to the byte comparison the
+    // collector's test performs.
+    expect(AWAITING_LOGIN).toBe(
+      "No login stored - this station will not be collected until one is set.",
+    );
+  });
+
+  it("classifies a freshly registered direct station as awaiting, through the service", async () => {
+    await testDb.basStation.create({
+      data: {
+        siteId,
+        niagaraStationName: "ZZTestAwaiting",
+        connectionMode: "direct",
+        baseUrl: "https://198.51.100.9",
+      },
+    });
+
+    const tree = await getBasSettingsTree(await adminViewer());
+    const row = tree.projects
+      .flatMap((p) => p.buildings)
+      .flatMap((b) => b.stations)
+      .find((s) => s.niagaraStationName === "ZZTestAwaiting");
+    if (row === undefined) throw new Error("station not in tree");
+
+    expect(row.activity.everCollected).toBe(false);
+    expect(describeLogin(row)).toEqual({ label: AWAITING_LOGIN, tone: "warn" });
+  });
+
+  it("classifies a station that collected and lost its login as a fault, through the service", async () => {
+    const station = await testDb.basStation.create({
+      data: {
+        siteId,
+        niagaraStationName: "ZZTestLostLogin",
+        connectionMode: "direct",
+        baseUrl: "https://198.51.100.10",
+      },
+    });
+    await testDb.basIngestRun.create({
+      data: { stationId: station.stationId, status: "ok" },
+    });
+
+    const tree = await getBasSettingsTree(await adminViewer());
+    const row = tree.projects
+      .flatMap((p) => p.buildings)
+      .flatMap((b) => b.stations)
+      .find((s) => s.niagaraStationName === "ZZTestLostLogin");
+    if (row === undefined) throw new Error("station not in tree");
+
+    expect(row.activity.everCollected).toBe(true);
+    expect(describeLogin(row)?.tone).toBe("bad");
   });
 });
 

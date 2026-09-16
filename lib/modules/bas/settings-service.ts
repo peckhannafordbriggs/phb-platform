@@ -92,6 +92,7 @@ interface StationRow {
   last_run_at: Date | null;
   last_run_status: string | null;
   newest_record_at: Date | null;
+  ever_collected: boolean;
 }
 
 /**
@@ -138,6 +139,7 @@ function toStation(row: StationRow): SettingsStation {
     activity: {
       lastRunAt: row.last_run_at?.toISOString() ?? null,
       lastRunStatus: row.last_run_status,
+      everCollected: row.ever_collected,
       newestRecordAt: row.newest_record_at?.toISOString() ?? null,
     },
   };
@@ -345,7 +347,16 @@ export async function getBasSettingsTree(
         -- only ever work from a machine on the building network.
         run.started_at                                 AS last_run_at,
         run.status                                     AS last_run_status,
-        max(ck.last_record_ts)                         AS newest_record_at
+        max(ck.last_record_ts)                         AS newest_record_at,
+        -- Has ANY run against this station ever succeeded? This is what tells
+        -- "registered, awaiting its login" (amber) from "was collecting, lost
+        -- its login" (red) - see describeLogin. A correlated subquery on the
+        -- grouped key, so it needs no GROUP BY entry of its own.
+        EXISTS (
+          SELECT 1 FROM bas_ingest_runs r
+           WHERE r.station_id = st.station_id
+             AND r.status IN ('ok', 'partial')
+        )                                              AS ever_collected
       FROM bas_stations st
       -- Joined so the search can match a station by its BUILDING or PROJECT
       -- name. LEFT, so a station whose building is missing is still returned

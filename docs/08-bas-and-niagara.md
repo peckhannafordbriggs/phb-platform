@@ -490,7 +490,13 @@ old *points at risk* count and carries the same rule in a harder place — a
 partly-unknown set never renders as a bare number, because `roll_horizon_unknown`
 means capacity was never filled in from Workbench and **unknown is not the same
 as safe**. See *Headroom is the hero metric* below. *Unclassified points* is
-amber by design: an unclassified point is a backlog item, not an error.
+amber by design: an unclassified point is a backlog item, not an error. The
+same rule, applied in Settings: **a station registered without its login, that
+has never collected, is amber** - "No login stored - this station will not be
+collected until one is set." - and the collector writes no failed run for it,
+so three stations registered on a Friday afternoon do not make the weekend
+look like an outage. A station that *was* collecting and has lost its login is
+red, because the difference is whether it ever worked.
 
 ### Point Explorer
 

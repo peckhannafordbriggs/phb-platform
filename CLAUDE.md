@@ -435,7 +435,7 @@ well it is written.
 | `DEVELOPER-SETUP.md` | **Start here if you are a new developer.** Installs, databases, `.env.local`, seeds, first test run — and the things that bite before they bite | Someone about to write code |
 | `PLATFORM-CONTEXT.md` | **Read before designing a module.** What the platform already provides, the four-part integration contract, and the seven decisions a module makes for itself | Someone about to design one |
 | `HANDOVER.md` | **Start here if you are inheriting this.** What this is, what must not break, what will fail and when, what to do first | Whoever owns it after December 2026 |
-| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 43 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 44 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
 | `runbook.md` | Failure modes, recovery, what expires and when | Anyone with a broken thing |
 
 Setup instructions live in `DEVELOPER-SETUP.md` and the per-variable detail lives

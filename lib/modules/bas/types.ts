@@ -414,6 +414,18 @@ export interface StationActivity {
   lastRunStatus: string | null;
   /** Newest record timestamp across this station's points. The real answer. */
   newestRecordAt: string | null;
+  /**
+   * Whether ANY collector run against this station has ever succeeded.
+   *
+   * The one fact that separates two stations that both have no login stored.
+   * One was registered this afternoon and is waiting for somebody to find the
+   * password - a backlog item, amber, the same category as an unclassified
+   * point. The other was collecting last week and cannot be today - a fault,
+   * red. Whether a credential row ever existed is not recorded anywhere and
+   * does not need to be; the ingest history answers the question that
+   * matters. See `describeLogin` in app/(modules)/bas/health-client.ts.
+   */
+  everCollected: boolean;
 }
 
 export interface SettingsStation {
