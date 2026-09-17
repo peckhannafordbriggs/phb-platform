@@ -932,10 +932,13 @@ records it), and why each collector outage happened.
 
 ## Not built
 
-**B5 — asking questions in plain English.** Eight tools, a guarded SQL escape
-hatch on its own read-only connection, an audit event per question. Designed, not
-started, **not a tab**. Blocked on a company Anthropic API key. It would live in
-`phb-platform`, and it is what supersedes `bas-mcp` *(phb-bas)* when it ships.
+**B5 — asking questions in plain English.** Built as the Analyze tab on
+2026-09-21 (the *B5 — Ask — BUILT as "Analyze"* section above). In Azure the
+Anthropic API key reaches the container app from Key Vault by reference as of
+2026-10-01 (`ANTHROPIC-API-KEY`, name decided in `lib/env.ts`, set in the vault
+by hand - `runbook.md` → *Secrets set by hand in Key Vault*); the tab's second
+variable, `BAS_ASK_DATABASE_URL`, is not wired yet. It supersedes `bas-mcp`
+*(phb-bas)*.
 
 **B8 — point management.** Designed 17 September; B8.1, the schema, and B8.2,
 the read-only Points list, built the same day; B8.3, show/hide with the risk
@@ -973,5 +976,5 @@ between "the status point cycles every 12 seconds" and a verdict on the machine.
 Not one any more. **An always-on host on the building network**, so the five
 outages stop at five. **A backup that stays watched**: the mechanism is fixed and
 monitored as of today, and the first nightly run under it has not yet happened.
-**An API key** for B5. And **B8**, before the next building is classified by
-hand.
+~~An API key for B5~~ - in hand as of 2026-09-17. And **B8**, before the next
+building is classified by hand.

@@ -638,8 +638,9 @@ grouping — a thread genuinely spans folders, and going mailbox-wide needs a
 `conversationId eq` query per thread plus a decision about Deleted Items, which Graph
 returns and Outlook hides.
 
-**BAS** — B5, plain-English questions over the data: designed, not started, blocked on a
-company Anthropic API key. Point classification tooling, deferred because the right shape
+**BAS** — B5, plain-English questions over the data: built as the Analyze tab
+(§ 52); its API key reaches production from Key Vault by reference as of 2026-10-01.
+Point classification tooling, deferred because the right shape
 depends on how a given integrator named things and most fault rules need `equipment_id`,
 which nothing currently sets. Production deployment, blocked on Azure. Multiple buildings —
 the schema and filters already support it; the lab station caps around two or three
@@ -1965,6 +1966,63 @@ tests fail, one at the schema and one at the route. Let a partial bulk
 succeed and the all-or-nothing tests see rows change after a 404. Give the
 single PATCH two fields and one request becomes two audit rows with one
 cause.
+
+---
+
+## 62 · The two hand-set secrets are references the template knows by name, and the BAS key is copied, never generated
+
+**Decision.** `ANTHROPIC_API_KEY` and `BAS_CREDENTIAL_KEY` reach the
+container app from Key Vault by reference (`ANTHROPIC-API-KEY`,
+`BAS-CREDENTIAL-KEY`), each behind a boolean parameter that defaults to
+false. Neither is a template parameter, secure or otherwise, and the
+template never writes either secret. A person sets each value once with
+`az keyvault secret set`. The variable names are decided in `lib/env.ts` and
+imported by the two readers; `BAS_CREDENTIAL_KEY_VERSION` is a plain value.
+Built 2026-09-17 for the Anthropic key, found unmerged on 1 October (the
+second such branch that day), re-landed and extended to the BAS key the same
+way.
+
+**Why by reference and never a parameter.** `DATABASE-URL` and `AUTH-SECRET`
+are generated at deploy time, so passing them on every deploy is natural.
+These two are issued elsewhere - the Anthropic Console; the collector's `.env`
+on the office PC - and a secure parameter would put them on every deploy's
+command line and let a blank redeploy overwrite them. A reference means a
+routine redeploy never touches the value.
+
+**Why the boolean.** Container Apps resolves every Key Vault reference when
+it creates a revision, and a reference to a secret that does not exist fails
+the whole deployment rather than degrading to an unset variable. The
+parameter is the person saying "the secret is there now".
+
+**Why the BAS key is copied, byte for byte.** Every row in
+`bas_station_credentials` was encrypted on the office PC under the
+collector's key, and the collector keeps using it wherever it runs. A key
+generated for Azure would read every stored credential as `decrypt_failed`,
+and re-entering the passwords to make the panel green would re-encrypt them
+under a key the collector does not have - collection stops against a
+41.7-hour roll horizon. One secret, two systems, one value (§ 57 is the
+migration that carries the rows; the runbook's *one secret that lives in two
+places* is the rotation).
+
+**Why the version is a plain value.** It is a small integer stamped on a row
+when a password is saved so a rotation does not need a flag day; decryption
+never reads it. Treating it as a secret would be a second Key Vault entry to
+keep in step for nothing.
+
+**Why no new role assignment.** The managed identity holds **Key Vault
+Secrets User** on the vault itself, which covers every secret in it. The
+deploy-guard test asserts that from the template's grants - one assignment,
+vault-scoped, that role id, the app's identity, both references under it -
+rather than from a sentence saying so.
+
+**What breaks if you undo this.** Make either a `@secure()` parameter and
+the guard fails, and a blank redeploy can wipe the key. Give either a
+`value:` instead of a `secretRef:` and the guard fails. Generate a BAS key
+for Azure and every stored station login is unreadable the moment the
+revision starts. Spell a variable name in a reader instead of importing it
+and the guard fails; rename it in `lib/env.ts` without the bicep and the
+guard fails. Remove either `env:` entry and two guard tests fail by name -
+that mutation was run.
 
 ---
 

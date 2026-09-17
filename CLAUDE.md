@@ -748,9 +748,10 @@ throwaway cluster as a non-superuser administrator, with the live 87,100
 readings, and `tests/bas-migration-scripts.test.ts` drives the real files
 through psql. `scripts/setup-bas-collector-role.sql` is the collector's role for
 Azure, written from the live grants (nothing in either repo created it before).
-**The container app has no `BAS_CREDENTIAL_KEY` and no `ANTHROPIC_API_KEY`** —
-written down, not fixed. `runbook.md` → *Moving the BAS data to the Azure
-database* and the two sections after it; `WHY-ITS-BUILT-THIS-WAY.md` § 57.
+**The container app had no `BAS_CREDENTIAL_KEY` and no `ANTHROPIC_API_KEY`** —
+fixed in the template on 2026-10-01 (two entries down). `runbook.md` → *Moving
+the BAS data to the Azure database* and the two sections after it;
+`WHY-ITS-BUILT-THIS-WAY.md` § 57.
 
 **The BAS screens are quiet when fine and loud when broken (2026-09-30).**
 Display and wording only; no query, figure or predicate changed. The two
@@ -885,6 +886,37 @@ judged points, four index probes per healthy point; revisit at 200 ms.
 `docs/bas-plausibility-verification.md` is the record, both runs, with the
 mutations re-run. `WHY-ITS-BUILT-THIS-WAY.md` § 55; `runbook.md` →
 *Collection Health says a value has stopped changing*.
+
+**Two secrets reach the container app from Key Vault by reference (built
+2026-09-17, LANDED and extended 2026-10-01).** `feat/anthropic-api-key-keyvault`
+was the second branch found built, verified and never merged. Re-applied onto
+main and extended to the BAS credential key the identical way: each is a
+Key Vault secret in the vault's naming style (`ANTHROPIC-API-KEY`,
+`BAS-CREDENTIAL-KEY`), **never a template parameter and never written by the
+template** - a person sets the value once with `az keyvault secret set` -
+referenced from the container app as `ANTHROPIC_API_KEY` and
+`BAS_CREDENTIAL_KEY` behind `anthropicApiKeyInKeyVault` and
+`basCredentialKeyInKeyVault` (default false, because Container Apps resolves
+every reference at revision creation and a missing secret fails the whole
+deployment). `BAS_CREDENTIAL_KEY_VERSION` rides beside the key as a **plain**
+value from `basCredentialKeyVersion` (default `"1"`): it is not a secret,
+decryption never reads it, `currentKeyVersion` stamps it on a row when a
+password is saved. **The names are decided in `lib/env.ts`** -
+`ANTHROPIC_API_KEY_VAR`, `BAS_CREDENTIAL_KEY_VAR`,
+`BAS_CREDENTIAL_KEY_VERSION_VAR` - and imported by the two readers; the
+deploy-guard tests hold the readers, `lib/env.ts` and the bicep to each other,
+assert each variable is a `secretRef` and never a `value:`, and assert from
+the template's own grants that the one **Key Vault Secrets User** assignment
+on the vault covers both, so no new role assignment is needed. **The BAS key is
+copied, not generated**: every stored credential was encrypted on the office
+PC under the collector's key, and a vault value that differs by one byte turns
+them all into unreadable ciphertext. No secret value is anywhere in the
+repository. **Still not wired: `BAS_ASK_DATABASE_URL`**, so the deployed Analyze
+tab stays *not configured* until the `bas_analyze` role exists on the Azure
+server and that URL is delivered the same way. `az bicep build` and `lint`
+pass locally; removing either `env:` entry fails a named guard test.
+`infra/README.md` has the two command sequences and the click to confirm each;
+`runbook.md` → *Secrets set by hand in Key Vault*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
