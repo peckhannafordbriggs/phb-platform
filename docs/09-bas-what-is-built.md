@@ -7,15 +7,17 @@ says *what exists*.
 Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
 B7's plan, as written before it was built, is `docs/B7_settings_and_hierarchy_plan.md`.
+B8's, designed and not started, is `docs/B8_point_management_plan.md`.
 
-**Last updated:** 8 September 2026 — a second pass, which added the
-repository-relative locations below and rewrote *Proven in operation* after a
-third and much worse outage. Its figures were read out of
-`public.bas_data_gaps` and `public.bas_ingest_runs`, not recalled.
-
-The 28 August pass checked every claim a repository can settle against the
-repository rather than against a session report. Corrections from it are noted
-where they matter rather than silently applied.
+**Last updated:** 17 September 2026 — a third pass. Every figure in it was read
+from the repositories, the git logs, the live database or the live stations on
+that day, and it **agrees with `phb-bas/bas-collector/ProjectStatus.md`**, which
+is the pipeline's own record written the same day from the same sources. Where
+the two documents describe the same event they carry the same number; where an
+earlier version of this document had a different number, the correction is
+noted rather than silently applied. The previous pass (8 September) described
+one JACE, synthetic data, three outages and a module with nothing setting
+`equipment_id`. None of that is true now.
 
 ---
 
@@ -27,13 +29,24 @@ under decides where to look and what can hold it to account.
 
 | | Owns | Where |
 |---|---|---|
-| **`phb-platform`** (this repo) | The `bas_*` schema and migrations, the API routes, the Building Automation module and its two screens, the module guard, the BAS tests, the verification tooling — `bas-import`, `bas-checksum`, `bas-verify-import`, `bas-health-oracle`, `bas-tables` — and these docs | `prisma/migrations/`, `app/(modules)/bas/`, `app/api/modules/bas/`, `lib/modules/bas/`, `tests/bas-*.test.ts`, `scripts/bas-*.ts`, `docs/` |
-| **`phb-bas`** | `bas-collector` — the Python collector, `healthcheck.py`, `Backup-BasDatabase.ps1`, `Test-BasRestore.ps1`, `Install-BasTasks.ps1` — plus `bas-db`, `bas-mcp` and `bas-grafana` | those four directories at the repo root, checked out locally at `C:\dev\` |
+| **`phb-platform`** (this repo) | The `bas_*` schema and migrations, the API routes, the Building Automation module and its three screens, the module guard, the BAS tests, the verification tooling — `bas-import`, `bas-checksum`, `bas-verify-import`, `bas-health-oracle`, `bas-tables` — and these docs | `prisma/migrations/`, `app/(modules)/bas/`, `app/api/modules/bas/`, `lib/modules/bas/`, `tests/bas-*.test.ts`, `scripts/bas-*.ts`, `docs/` |
+| **`phb-bas`** | `bas-collector` — the Python collector, `healthcheck.py`, `Backup-BasDatabase.ps1`, `Test-BasRestore.ps1`, `setup_backup_role.sql`, `Install-BasTasks.ps1`, its tests — plus `bas-db` (retired), `bas-mcp` and `bas-grafana` | those directories at the repo root, checked out locally with `C:\dev` **as** the repository root |
+
+**This is the module's view. The pipeline's view is
+`phb-bas/bas-collector/ProjectStatus.md`.** Each points at the other rather than
+restating it: what the collector does on a pass, what the office building's
+points are and what was found in them, and the operational record of the
+collector host are there; the schema, the screens, the API and the platform's
+tests are here. The outage and backup records appear in both because both
+repositories are implicated in them, and the figures are identical by
+construction.
 
 **The database is the seam, and it is the only one.** The collector knows Niagara
 and nothing about the platform. The platform knows the schema and nothing about
 Niagara. Neither can break the other except through the database — which is the
-property that makes them separately deployable.
+property that makes them separately deployable, and, as the backup incident
+below shows, also the place where a shared setting couples them without anyone
+noticing.
 
 **Neither repository's tests can exercise the other.** `npm test` here covers the
 schema, the module and the tooling, and reaches none of the collector, the
@@ -50,12 +63,15 @@ hunting through `phb-platform` for a file that was never in it.
 
 ## In one paragraph
 
-A building controller keeps roughly 42 hours of sensor history and then
-overwrites it silently. A small Python collector reads that history out over
-oBIX every 15 minutes and writes it into the platform's PostgreSQL database,
-where it is kept permanently. Two dashboards inside the platform read that data.
-Nothing is installed on the controller, and the account used to read it cannot
-write anything back.
+Two Niagara stations — a lab JACE and **PH+B's own office building at Steel
+Place** — are read over oBIX every fifteen minutes by a small Python collector
+and written into the platform's PostgreSQL database, where they are kept
+permanently. The office has 26 real points and history back to February 2024;
+the lab has four synthetic ones. The platform's Building Automation module reads
+that data in three tabs; Grafana and Claude Desktop read the same tables. Nothing
+is installed on either controller, the account used to read them cannot write
+back, and the collector reads its station list and logins from the platform
+database, entered through the module's own Settings tab.
 
 ---
 
@@ -63,20 +79,23 @@ write anything back.
 
 | Piece | Repo | Where it lives | What it does |
 |---|---|---|---|
-| **JACE** | — | the building, `196.1.1.213` | Runs the equipment. Logs each point every 5 min, keeps ~42 h |
-| **`bas_collector` Niagara account** | — | on the station | Read-only. The only thing added to the JACE |
-| **Collector** | `phb-bas` | `bas-collector/` | Python. Reads oBIX every 15 min, writes to Postgres |
-| **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 12 tables, 6 views. Permanent |
+| **PHBoffice** | — | PHB Steel Place, `10.228.100.210`, Niagara **4.10.0.154** | PH+B's own office. One rooftop unit, ten VAVs. 26 active points, history to 21 Feb 2024 |
+| **SpringGroveLabComputer** | — | the lab, `196.1.1.213`, Niagara 4.15.4.24 | Four synthetic points logged every 5 min, 41.6 h buffer. Not PH+B's asset |
+| **`bas_collector` Niagara account** | — | on each station | Read-only, `HTTPBasicScheme`. The only thing added to a JACE |
+| **Collector** | `phb-bas` | `bas-collector/` | Python. Reads oBIX every 15 min, writes to Postgres. Stations and logins from the database |
+| **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 14 tables, 6 views, 17 CHECK constraints, 3 triggers. Permanent |
 | **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Three tabs behind the platform's own login and grants |
 | **Grafana dashboards** | `phb-bas` | `bas-grafana/`, served at `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
-| **`bas-mcp`** | `phb-bas` | `bas-mcp/` | Lets Claude Desktop query the data. Superseded by B5 when that ships |
-| **Nightly backup** | `phb-bas` | `bas-collector/Backup-BasDatabase.ps1`, running at 02:15 to OneDrive | Load-bearing — see *Irreplaceability* |
+| **`bas-mcp`** | `phb-bas` | `bas-mcp/` | Lets Claude Desktop query the data, read-only. Superseded by B5 when that ships |
+| **Nightly backup** | `phb-bas` | `bas-collector/Backup-BasDatabase.ps1`, 02:15 to OneDrive, as `bas_backup` | Load-bearing — see *The backup incident* |
 
-Paths are relative to the repository named beside them; `phb-bas` is checked out
-locally at `C:\dev\`. A dash means the piece is in neither repository, because it
-is a fact about the building rather than a file.
-
-Two deployables, one per repository — see *Two repositories, one system* above.
+Paths are relative to the repository named beside them. A dash means the piece
+is in neither repository, because it is a fact about a building rather than a
+file. A third station row, `Side`, exists as a `via_parent` placeholder under
+PHBoffice in a project called Liberty; it was created through the Settings tab
+on 17 September at 10:02 by the module's administrator, has no points and no
+login, and is skipped by the collector. Whether it is staging for a real
+building is not recorded.
 
 ---
 
@@ -90,84 +109,75 @@ Two deployables, one per repository — see *Two repositories, one system* above
 | **Three fixes** | Vocabularies into the seed, SQL comments restored, `postinstall` forcing `prisma generate` | `6aa6521` (2026-08-21) |
 | **Content verification** | `scripts/bas-checksum.ts`, `npm run bas:verify` — comparison by content, not row counts | `278b723` (2026-08-24, with B3) |
 | **B3** | Collection Health screen, time range and building filter | `278b723` (2026-08-24) |
-| **Cutover** | Collector retargeted at the platform database, Grafana and MCP repointed | `abcacf3`, `78776fd` **(phb-bas)** |
+| **Cutover (B6)** | Collector retargeted at the platform database, Grafana and MCP repointed | `abcacf3`, `78776fd` **(phb-bas)**, 2026-08-24 |
 | **B4** | Point Explorer, tabbed layout | `e76eba4` (2026-08-24) |
-| **B7.1** | A project level above buildings, and a place for station credentials | `61336b6` |
-| **B7.2–B7.4** | The Settings tab, behind a module-admin permission that is **not** platform admin | `1669e63` |
-| **B7.5–B7.6** | Credential audit gains a username; the BAS filters grow up | `a409366` |
-| **Redesign** | Module accent scope, chart accent and chrome — tile colours untouched | `5235b76` |
-
-Four later BAS commits the earlier version of this table omitted, all 2026-08-24:
-
-| What | Commit |
-|---|---|
-| B6 blocked: the collector cannot write to the platform schema | `367388c` |
-| Runbook: the BAS read-only role on the platform database | `c72bd00` |
-| The Azure uptime constraint — never stop the database | `a59f1fd` |
-| Correct what `bas_readings.status` means | `694fe10` |
-
-### Corrections to the commit column
-
-- **`367388c` was attributed to content verification. It is not that commit.**
-  `367388c` is *"B6 is blocked: the collector cannot write to the platform
-  schema"*. All three verification scripts — `bas-checksum.ts`,
-  `bas-verify-import.ts`, `bas-health-oracle.ts` — were added by `278b723`,
-  the B3 commit.
-- **`abcacf3` and `78776fd` are `phb-bas` hashes**, and the earlier version of
-  this table cited them bare, as though they were in `phb-platform`. They do not
-  resolve here and never will — the cutover retargeted the collector, the Grafana
-  dashboards and the MCP server, all of which live in `phb-bas`. They are now
-  labelled, which is the fix: a hash without its repository sends a reader
-  looking through the wrong history and finding nothing.
+| **Redesign** | Module accent scope, chart accent and chrome, headroom as the hero, the trend zooms | `5235b76` … `752b8af` (2026-08-28) |
+| **B7.1** | A project level above buildings, and a place for station credentials | `61336b6` (2026-09-08) |
+| **B7.2–B7.4** | The Settings tab, behind a module-admin permission that is **not** platform admin | `1669e63` (2026-09-08) |
+| **B7.5–B7.6** | Credential audit gains a username; the BAS filters grow up to the project level | `a409366` (2026-09-09) |
+| **B7.5 (collector)** | The collector reads its stations and decrypts its logins from the database; TLS pinned per station | `12bd590` **(phb-bas)**, 2026-09-09 |
+| **One station never stops another** | A station with no login is `AWAITING`, amber, no run row; `discover` reads the database too | `09ee0ae` **(phb-bas)**, `37fd2fb` (2026-09-16) |
+| **The office JACE** | PHBoffice registered, discovered, first synced, then classified in SQL | 2026-09-16 → 17; the classification has no commit — see *Not built* |
+| **Completeness** | A first sync takes everything the station holds; every pass compares the station's count with ours; `add_bas_completeness` | `e15f4bb` **(phb-bas)**, `6e21be2` (2026-09-17) |
+| **Measured horizon, visibility, the clock** | The roll horizon measured from a full buffer's span; the verdict read by the view, the screen and the health check; the station's clock offset recorded; `add_bas_measured_horizon_and_visibility` | `2b88ba3` **(phb-bas)**, `09e0041` (2026-09-17) |
+| **The backup gets its own role** | `bas_backup`, `BAS_BACKUP_URL`, `.verified` markers, the health check watches freshness | `d77a0cb` **(phb-bas)**, on `fix/backup-role-and-monitoring`, **not yet merged** on 2026-09-17 |
 
 ### Test count
 
-**1,272 tests, measured 2026-09-10** on the current `main`, of which roughly 280
-are BAS tests. The previously recorded figure was 911, measured 2026-08-28; the
-growth since is Phases 10-12 and the redesign, not BAS.
-
-**The previously recorded "710, from a 416 baseline" is unverified**, not
-disproved. Establishing it would mean checking out `e76eba4`, rebuilding the test
-database against that commit's migration set, and running the suite — which
-would leave the shared test database on an older schema. A `grep` proxy over
-`tests/` gives 605 test declarations at `e76eba4` against 750 at HEAD, but the
-proxy undercounts (750 against a true 911) because tests generated in loops are
-invisible to it, so it cannot settle the question either way.
-
-The number that matters for a *what is built* document is the current one, and
-that is measured.
+**1,343 tests, measured 2026-09-17** on `main` after `09e0041`, of which
+515 are in `tests/bas-*.test.ts`. The 10 September figure was
+1,272; the growth is completeness and the measured horizon. Every collector suite
+*(phb-bas)* is listed under *Tooling*; they are not in this number and cannot be.
 
 ---
 
 ## The database
 
 **Fourteen** tables under `public` with a `bas_` prefix, managed by Prisma.
-Counted from `@@map("bas_*")` in `prisma/schema.prisma`; this said twelve until
-2026-09-10, which predated B7.
+Counted from `@@map("bas_*")` in `prisma/schema.prisma`.
 
 ```
 bas_orgs
  └── bas_projects                  a job — added by B7.1
       └── bas_sites                a building
-           └── bas_stations        a JACE (or a Supervisor)
-                └── bas_points     one trended value
-                     └── bas_readings   the numbers
-           └── bas_equipment       AHU-3, VAV-204
+           └── bas_stations        a JACE (or a Supervisor). Now three rows
+                └── bas_points     one trended value. 39 rows, 30 active
+                     └── bas_readings   the numbers. 42,652 on 17 Sep
+           └── bas_equipment       RV, VAV-1 … VAV-10 at the office
 ```
 
 **`bas_projects` sits above buildings**, which is the order the business works
-in: a job comes first and the buildings belong to it. A site with no project is
-still valid — the level was added above an existing hierarchy without making
-every existing row wrong.
+in: a job comes first and the buildings belong to it.
 
 Plus `bas_point_roles` and `bas_equipment_types` (controlled vocabularies, 91 and
-25 rows, seeded), `bas_point_links`, `bas_station_credentials` (B7.1 — see
-*Security*), and three operational tables — `bas_sync_checkpoints`,
-`bas_ingest_runs`, `bas_data_gaps`.
+25 rows, seeded), `bas_point_links` (empty — see *Classification*),
+`bas_station_credentials` (see *Security*), and three operational tables —
+`bas_sync_checkpoints`, `bas_ingest_runs`, `bas_data_gaps`.
 
 Six views, all prefixed `bas_v_`. That prefix is **load-bearing**:
 `bas_v_data_dictionary` selects objects matching `bas\_%`, so an unprefixed view
 would be invisible to it and therefore invisible to the AI.
+
+### What the 17 September migrations added
+
+Two migrations, both on the collector's account of a pass, because the
+completeness check found things the schema had no column for:
+
+| Column | Table | What it holds |
+|---|---|---|
+| `completeness`, `completeness_note`, `completeness_checked_at` | `bas_sync_checkpoints` | `unknown` / `complete` / `backfilling` / `incomplete` (a CHECK), and the comparison as a sentence |
+| `station_count`, `station_start`, `station_end`, `held_count` | `bas_sync_checkpoints` | What the station reported and what we hold inside its span, at the last pass |
+| `observed_span_s` | `bas_sync_checkpoints` | The station's `end − start`, re-measured every pass. A horizon only when the buffer is full |
+| `points_incomplete`, `points_backfilling` | `bas_ingest_runs` | A run with any incomplete point is `partial`, never `ok` |
+| `clock_offset_s`, `clock_measured_at` | `bas_stations` | Station clock minus host clock, from `/obix/about`. PHBoffice: **+1336 s** |
+
+`bas_v_collection_health` was replaced to carry all of these plus
+`measured_horizon_s`, `horizon_s` (measured else configured) and
+`horizon_source`, and its `roll_risk` is computed from `horizon_s`. That is what
+let a change-of-value point stop reading `roll_horizon_unknown`: it needs only
+`capacity` filled in, and once the station reports `count >= capacity` the span
+is the horizon. See `WHY-ITS-BUILT-THIS-WAY` § 44 and `runbook.md` → *A BAS run
+says `ok` and a point holds nothing*.
 
 ### Four invariants
 
@@ -175,7 +185,8 @@ would be invisible to it and therefore invisible to the AI.
 becomes a new row rather than silently reinterpreting years of history.
 
 **Every timestamp is UTC.** Local time is display only. There is no way to unwind
-a DST bug afterwards.
+a DST bug afterwards. (A station whose *own* clock is wrong is a different
+matter, and is recorded rather than corrected — see *Proven in operation*.)
 
 **`bas_readings` carries no names, units or equipment.** Denormalising those
 multiplies storage roughly 5× and turns a rename into a billion-row rewrite.
@@ -190,9 +201,11 @@ express and proposes an `ALTER … DROP DEFAULT` that PostgreSQL rejects on a
 generated column — which permanently blocks every later migration. Prisma ignores
 triggers, so a trigger keeps the value correct and the schema diff empty.
 
-**`schema.prisma` is not the whole schema.** The trigger, 13 CHECK constraints
-and the six views live in the migration SQL. Prisma models columns and indexes;
-it ignores constraints and triggers.
+**`schema.prisma` is not the whole schema.** Three triggers, **17** CHECK
+constraints (13 in `add_bas_tables`, one each in `add_bas_projects` and
+`add_station_tls_and_display_name`, two in `add_bas_completeness`) and the six
+views live in the migration SQL. Prisma models columns and indexes; it ignores
+constraints and triggers.
 
 ---
 
@@ -200,35 +213,36 @@ it ignores constraints and triggers.
 
 One module, **three** tabs — real routes, not client-side state, so each is
 bookmarkable and each guards itself independently. Listed in
-`app/(modules)/bas/tabs.ts`, which is the one place that knows they exist.
+`app/(modules)/bas/tabs.ts`, which is the one place that knows they exist. A
+fourth, **B5 "Ask"**, is designed and is not a tab yet — see *Not built*.
 
 ### Collection Health — `/bas`
 
-**Rebuilt in the redesign.** It is no longer five equal tiles. The shape now, in
-render order:
+In render order:
 
 | | What |
 |---|---|
-| **Hero tile** | Headroom — *how long until data starts being lost* — with the per-point breakdown behind it |
+| **Hero tile** | Headroom — *how long until data starts being lost* — with the per-point risk breakdown behind it |
 | **Run chart** | Records written per collector run, full width |
 | **Four tiles** | Active points (with a live *n of m reporting* badge), total readings, unclassified points, time since the newest reading |
-| **Tables** | Per-point status, recent collector runs, recorded data gaps |
+| **Station count against ours** | The completeness check, surfaced (17 Sep). Red from one `incomplete` point, amber for `backfilling` or `unknown`, green only when every active point was checked and agrees. Lists each such point by name with both numbers |
+| **Tables** | Per-point status — now with a *Completeness* column and a *measured* mark on the roll horizon — recent collector runs, recorded data gaps |
 
-The tile the old five had and this does not is *points at risk*. It was not
-dropped — it was **promoted and made quantitative**. A count of at-risk points
-answers "is something wrong"; headroom answers "how long have I got", which is
-the question an operator actually has. See `08` → *Headroom is the hero metric*
-for why, and for the honesty rule that governs it.
+**Why the completeness card is always rendered, even when green.** The check it
+reports spent a day writing verdicts to a column nothing read — which is the
+28 August failure again, gaps recorded correctly and unread. A card that only
+appeared when something was wrong could not be told apart from a check that had
+stopped running.
 
 **Two things here have semantics that must not drift.** Headroom over a partly
 unknown set never renders as a bare number — the rule and its reasoning are in
 `08`. And *unclassified points* is amber by design: a point with no role is
 invisible to role-based questions, which is a backlog item rather than a fault.
+`backfilling` is amber for the same reason: a large first sync still paging
+resolves itself. `incomplete` is red like `data_lost`, because the only thing
+between it and lost is the station's buffer rolling.
 
-Semantic tone lives in one place, `app/(modules)/bas/tone.ts`. Both screens
-render tones and both used to carry their own copy; two copies free to drift
-about what amber means is the wrong kind of duplication when the tones encode
-data loss.
+Semantic tone lives in one place, `app/(modules)/bas/tone.ts`.
 
 ### Point Explorer — `/bas/points`
 
@@ -238,39 +252,25 @@ null records, and distinct values.
 **Distinct values, not standard deviation**, for judging whether a sensor is
 alive. A standard-deviation threshold is unit-dependent and untunable across
 buildings — it missed a sensor frozen at 64.5 with σ = 0.08. Distinct-value count
-is unit-independent.
+is unit-independent, and it is what found the dead sensor at the office (below).
 
-**The chart breaks across gaps rather than interpolating.** A line drawn straight
-through a hole asserts readings that never existed and in fact were destroyed.
-Three mechanisms, because a break alone reads as a rendering artifact: an
-inserted null with `connectNulls={false}`, a shaded band, and a written list of
-gaps beneath the chart. All three are load-bearing — see `WHY-ITS-BUILT-THIS-WAY`
-§ 30. The comment above `TrendPanel` said "two mechanisms" for a while and
-undercounted its own code; it now lists three.
+**The chart breaks across gaps rather than interpolating.** Three mechanisms,
+because a break alone reads as a rendering artifact: an inserted null with
+`connectNulls={false}`, a shaded band, and a written list of gaps beneath the
+chart. See `WHY-ITS-BUILT-THIS-WAY` § 30.
 
-**Drag across the plot to zoom; Reset returns.** The zoom is a **domain change,
-never a filter on the data** — `allowDataOverflow` with an explicit x domain,
-and the y domain recomputed from the points inside the window so zooming into a
-flat stretch actually resolves it. The distinction is the point: the nulls that
-break the line are still in the series at every zoom level, so no zoom can
-smooth over a gap. A zoom implemented by filtering the array would drop the null
-that marks the hole and quietly reconnect the line.
-
-**The curve is `monotone`.** Curved because a smooth line reads as a physical
-quantity rather than measurements joined with a ruler; `monotone` specifically
-because it will not overshoot between samples, so the curve never draws a peak
-the sensor did not record.
-
-**One point at a time**, matching Grafana. That avoids overlaying °F and °C on
-one axis. Where a point has no unit recorded the axis says so rather than going
-bare — bare reads as "none needed," and the truth is "unknown."
+**Drag across the plot to zoom; Reset returns.** The zoom is a domain change,
+never a filter on the data, so no zoom can smooth over a gap. **The curve is
+`monotone`**, so it never draws a peak the sensor did not record. **One point at
+a time**, so two units never share an axis.
 
 ### Settings — `/bas/settings`
 
-**B7.2–B7.4.** What gets collected: projects, buildings, stations and their
-credentials. Behind `requireModuleAdmin('bas')`, which is **not** the platform
-admin flag — `module_grants.is_module_admin` carries administrative rights over
-exactly one module, and denies with 404 rather than 403.
+**B7.2–B7.6, shipped.** What gets collected: projects, buildings, stations and
+their credentials, created and edited through the UI. Behind
+`requireModuleAdmin('bas')`, which is **not** the platform admin flag —
+`module_grants.is_module_admin` carries administrative rights over exactly one
+module, and denies with 404 rather than 403. One employee holds it.
 
 Why the separate permission: viewing building data and changing what gets
 collected are different privileges. A misconfigured station stops collection
@@ -278,62 +278,105 @@ silently, and silent is the failure mode this module is built against. Putting
 it behind the platform admin flag would have handed the employee directory to
 whoever adds a building. See `WHY-ITS-BUILT-THIS-WAY` § 37.
 
-Station credentials live in `bas_station_credentials`, encrypted at rest with
-`BAS_CREDENTIAL_KEY`. B7.5 added a username to the credential audit, because
-knowing a credential changed without knowing which account it was for is not an
-audit trail.
+**Credentials are write-only.** A station's Niagara login is encrypted with
+AES-256-GCM under `BAS_CREDENTIAL_KEY` into `bas_station_credentials`, written
+through `PUT /stations/{id}/credential`, and **never returned by any route**: the
+settings query selects the username and `updated_at` and not the ciphertext,
+with a comment saying a column never selected cannot be leaked by a later change
+to the serialiser. The collector *(phb-bas)* decrypts with the same key; the
+cross-language round trip is asserted by its `test_targets.py` against this
+repository's `credentials.ts`. The `bas_v_data_dictionary` view — which feeds an
+LLM prompt — excludes the credentials table by name.
+
+**Every settings write records an audit event**, `bas.project_created`,
+`bas.building_created`, `bas.station_created`, `bas.credential_set` and their
+updates and deletes, with the actor. That is how the `Side` station row above
+was explained in two queries.
 
 ### Filters
 
-Time range (24 h / 7 d / 30 d) and a building dropdown with "All". Both live in
-the URL, so they survive a refresh, a bookmark, and a tab switch. B7.6 widened
-them to the project level, so the hierarchy the settings tab manages is the
-hierarchy the dashboards filter by.
+Time range (24 h / 7 d / 30 d) and a project → building → station cascade with
+"All" at every level. Both live in the URL. Filtering happens in the `WHERE`
+clause, and entitlement and selection are kept apart and intersected; a site
+outside the entitlement returns 404, matching the module guard.
 
-Filtering happens in the `WHERE` clause, not by fetching everything and hiding
-rows. With one building those look identical; at ten they do not.
+---
 
-Entitlement and selection are kept apart: which sites an employee *may* see is
-separate from which they *asked for*, the two are intersected, and every query is
-built from the intersection. A site outside the entitlement returns 404, matching
-the module guard — "exists but not yours" must not be distinguishable from
-"doesn't exist."
+## Classification — the office building, in SQL
+
+**This is the section the 8 September version said could not exist yet** —
+"most fault rules need `equipment_id`, which nothing currently sets." On 17
+September the office building was classified by hand, in SQL, in about thirty
+minutes:
+
+| | |
+|---|---|
+| Equipment | one `rtu`, `RV`, and ten `vav` children of it, `VAV-1` … `VAV-10`, with room numbers |
+| Points attached | **all 26** active points have an `equipment_id` |
+| Roles | **20 of 26** points carry one, across **11** distinct roles |
+| Setpoint pairs | **two** resolve automatically through `bas_point_roles.setpoint_for` — duct static pressure, and supply air temperature |
+| Command/status pairs | none — the command and status roles are not assigned |
+| `bas_point_links` | empty. "Attached" means attached to equipment; nothing is linked point-to-point |
+
+**Six points are deliberately unclassified**, by the same rule as `Temp1`–`Temp3`
+on the lab station: `OperatingState`, `OperatingStateOR`, `OpState`,
+`System_Enable`, `Unit Status` and `Unit_Status_Mode` are the station's own state
+and mode enumerations, their codes are not decoded, and inventing a role would
+make the AI answer confidently about something untrue. They read `unclassified`,
+amber, on the Collection Health screen, and that is correct.
+
+Four Niagara system logs and the dead halves of two reconfigured `_cfg0` pairs
+are inactive. The point inventory itself — what each history is, what its
+horizon measures, what was found in it — is `ProjectStatus.md` *(phb-bas)*, not
+here.
+
+**Thirty minutes for 26 points is the case for B8.** There is still no point
+management in the UI: no way to set a role, create equipment, rename a point or
+mark one inactive. Every one of those was SQL. `docs/B8_point_management_plan.md`
+is the plan; its central decision — *collect everything, filter what you see*,
+because `is_active` is permanent and a hidden point is not — was written from
+doing this by hand.
 
 ---
 
 ## Security
 
-**Three separate accounts, each scoped to what it needs.**
+**Five Postgres roles and two Niagara accounts, each scoped to what it needs.**
 
 | Account | Where | Can |
 |---|---|---|
-| `bas_collector` (Niagara) | on the JACE | Read histories. Cannot write to the station at all |
-| `bas_collector` (Postgres) | platform database | Read/write `bas_*` only. Refused on `employees`, `audit_events` |
-| `bas_readonly_platform` | platform database | SELECT on `bas_*` only. Used by Grafana and the MCP server |
+| `bas_collector` (Niagara) | on each JACE | Read histories, `HTTPBasicScheme`. Cannot write to the station at all |
+| `bas_collector` (Postgres) | platform database | Read/write `bas_*` only. Refused on `employees`, `audit_events`, `_prisma_migrations` — which is the refusal that broke the backup, below |
+| `bas_readonly_platform` | platform database | SELECT on an **explicit allowlist** of `bas_*` objects, excluding the credentials table. Grafana and the MCP server |
+| `bas_backup` | platform database | `pg_read_all_data` — reads every table, writes none — plus `CREATEDB` for the restore test's scratch database. **Added 17 September**, `setup_backup_role.sql` *(phb-bas)*, which proves its own grants before finishing |
+| `postgres` | platform database | Superuser. Migrations and the developer's `.env.local`. **In no script and no scheduled task** |
+| `bas`, `bas_readonly` | the retired standalone database | Rollback path only |
 
 Every refusal was tested, not assumed. A grant that lets the right thing through
 proves nothing on its own.
 
-The Postgres grants are **table-by-table**, deliberately not
-`ALTER DEFAULT PRIVILEGES` — that cannot be filtered by name and would grant
-access to whatever table Prisma creates next. The cost is that a new `bas_*`
-table is invisible until granted, which fails loudly rather than silently.
+The read-only grants are an **explicit allowlist**, and the script that applies
+them **refuses to run** when it meets a `bas_*` object it has not been told
+about. The reason is `bas_station_credentials`: it matches `bas\_%`, and a
+pattern-based grant would have handed Grafana the encrypted logins as a reward
+for following the runbook. See `runbook.md` → *The read-only grant script will
+hand out the credentials table*.
 
 **Module access** uses the platform's own guard. `requireModuleAccess('bas')`,
-404 rather than 403 for a missing grant, grants read from the database on every
-request. A test walks `app/api/modules/bas/**` and fails any handler that skips
-the wrapper.
+404 rather than 403 for a missing grant. A test walks `app/api/modules/bas/**`
+and fails any handler that skips the wrapper. **No Next.js layout wraps the
+tabs**, so an ungranted employee does not get the module heading around a 404.
 
-**No Next.js layout wraps the tabs.** A layout renders around a page that calls
-`notFound()`, so an ungranted employee would get the module heading and tab bar
-wrapped around a 404 — confirming the module exists to exactly the person it is
-hidden from.
+**Certificate pinning.** Each station's TLS fingerprint is recorded on its row
+and the collector *(phb-bas)* verifies by fingerprint rather than by chain — a
+JACE presents a self-signed certificate, so a chain check cannot succeed and
+pinning is stricter than one would be. Both direct stations are pinned.
 
 ---
 
 ## Tooling
 
-**In `phb-platform`** — these exist and were checked:
+**In `phb-platform`:**
 
 | Command | What |
 |---|---|
@@ -345,39 +388,20 @@ hidden from.
 | `npx tsx scripts/bas-tables.ts` | Table inspection |
 
 **In `phb-bas`** — version controlled there, alongside the collector. Nothing in
-`phb-platform` can exercise them, but they are owned, committed and reviewable:
+`phb-platform` can exercise them:
 
 | Command | What |
 |---|---|
-| `python -m collector check` | Connectivity and configuration |
-| `python -m collector status` | Points, readings, risk, recent runs |
-| `bas-collector/Backup-BasDatabase.ps1` | Nightly dump, verified and rotated. Added by `11557b8` (2026-08-21) |
-| `bas-collector/Test-BasRestore.ps1` | Restores to a scratch database and compares. Added by `11557b8` (2026-08-21) |
-
-### Corrections to the tooling table
-
-- **There is no `bas:checksum` npm script.** The earlier version listed one.
-  `package.json` defines exactly two BAS scripts, `bas:verify` and `bas:oracle`.
-  `scripts/bas-checksum.ts` does exist and is real — it simply has no alias, and
-  is run with `npx tsx`.
-- **`Backup-BasDatabase.ps1` and `Test-BasRestore.ps1` live in `phb-bas`**, version
-  controlled alongside the collector at `bas-collector/`, added by `11557b8` on
-  21 August 2026 — re-checked against `git log` in that repository. The earlier
-  version of this table listed them beside the `phb-platform` commands without
-  distinction, which read as though `npm test` covers them — it does not, and it
-  cannot. They are now under the `phb-bas` heading.
-
-  An intermediate revision of this document went further and called them
-  unowned, on the strength of their absence from `phb-platform`. That was wrong,
-  and wrong in the way this whole section is about: absence from one repository
-  is not absence from version control. Since backups are a correctness
-  requirement under *Irreplaceability*, the difference between "in `phb-bas`" and
-  "nobody owns this" is not a detail.
+| `python -m collector check / discover / sync / status` | Connectivity; register a station's histories; one pass; health |
+| `python healthcheck.py` | Collection, outages already recovered, completeness, cadence, station clocks, **backup freshness**, and its own schema |
+| `Backup-BasDatabase.ps1` | Nightly dump as `bas_backup`, verified, marked, rotated |
+| `Test-BasRestore.ps1` | Restores the newest verified dump to a scratch database and compares ten tables |
+| `setup_backup_role.sql` | Creates `bas_backup` and proves what it can and cannot do |
+| `test_completeness.py`, `test_targets.py`, `test_discover.py`, `test_healthcheck_outage.py`, `test_backup.py`, `verify_chain.py` | 124 / 83 / 71 / 145 / 41 / 40 on 17 September. Each but the last builds its own throwaway PostgreSQL cluster and never opens the live database |
 
 **Verification is by content, not row counts.** The import once reported
 "12/12 tables reconciled, 3,481 rows" and was wrong: every timestamp had lost its
-microseconds and a JSON array had become an object. Counts confirm a row exists,
-not that it is the same row.
+microseconds and a JSON array had become an object.
 
 ---
 
@@ -386,208 +410,250 @@ not that it is the same row.
 ### `bas_readings.status` is always NULL
 
 Niagara does not send status with history records over oBIX. The response's
-`#RecordDef` declares exactly two fields, timestamp and value. The collector is
-not dropping anything.
+`#RecordDef` declares exactly two fields, timestamp and value. **NULL means "not
+supplied", never "no fault."** Fault detection here is value-based only, which
+is portable: a rule saying −40 °F is not a room temperature works on Johnson
+Controls and Siemens too.
 
-**NULL means "not supplied", never "no fault."** Fault detection here is
-value-based only — we cannot ask what the station believes about a reading.
-
-That is workable and arguably better: a rule saying a room temperature of −40 °F
-is not a temperature works on Johnson Controls and Siemens too.
-
-### The data is synthetic
+### The lab data is synthetic; the office data is real
 
 Four active points on the lab station. `Temp1`–`Temp3` are History Emulator
 output and nobody knows what they represent, so they are deliberately left
-unclassified — inventing a role would make the AI answer confidently about
-something untrue. `points_RoomT` is a real sensor.
+unclassified. `points_RoomT` is a real sensor. That station is **not PH+B's
+asset**: its licence belongs to Building Controls & Solutions.
 
-That station is also **not PH+B's asset**. Its licence belongs to Building
-Controls & Solutions under a Columbus Temperature Controls project.
+PHBoffice is real, PH+B's own, and holds history back to 21 February 2024 for
+its change-of-value points. Its clock is 22 minutes ahead of the collector host
+(below), so **every timestamp stored for it is stamped in its own time**, and
+that is not corrected in the data because a corrected value is one nobody
+measured.
 
 ### Irreplaceability
 
 Past the roll horizon, the platform database is **the only copy of that data in
-existence**. No re-import, no vendor archive, no station-side backup.
+existence**. No re-import, no vendor archive, no station-side backup. For the
+office that horizon is about five days for most points and about **two hours**
+for its cycling status points; for the lab, 41.6 hours.
 
 Three consequences, none optional: backups are a correctness requirement rather
-than hygiene; anything reading BAS data for analysis connects as a role with no
-write permission; and `--truncate-target` or any manual `DELETE` needs a verified
-backup first.
+than hygiene — and *The backup incident* below is what it looks like when that
+requirement is met on paper and not in fact; anything reading BAS data for
+analysis connects as a role with no write permission; and `--truncate-target`
+or any manual `DELETE` needs a **verified** backup first.
 
 ### Azure
 
 The container app may be scaled to zero freely. **The PostgreSQL server must not
 be stopped.** A stopped database means the collector cannot write, and anything
-past ~42 hours is destroyed at the station while nothing is reading. Overnight is
-survivable.
-
-**A weekend is not, and that is measured rather than estimated.** Three real
-stretches of silence are recorded in `bas_ingest_runs` — **64.3 h**, **64.5 h**
-and **113.4 h** — and every one of them is past the 41.7-hour roll horizon. In
-those three it was the collector host that stopped rather than the database, but
-the arithmetic does not care which end of the seam fails: whatever is longer than
-the roll horizon is destroyed at the station either way. See *Proven in
-operation*.
+past the roll horizon is destroyed at the station while nothing is reading.
+Overnight is survivable. **A weekend is not, and that is measured**: five
+stretches of collector silence are recorded in `bas_ingest_runs` — 64.3 h,
+64.5 h, 137.8 h, 64.3 h, and one more of 16 h that cost nothing — and every one
+past 41.6 hours destroyed data. In all of them it was the collector host that
+stopped rather than the database, but the arithmetic does not care which end of
+the seam fails. See *Proven in operation*.
 
 ---
 
 ## Proven in operation
 
-**A real sensor fault, caught from the data.** `points_RoomT` stepped from ~73 °F
-to exactly −40 at 09:05 on 24 August and held there. −40 is identical in Celsius
-and Fahrenheit and is a common open-circuit signature. Confirmed independently in
-Workbench, whose chart shows the same vertical step at 13:00 UTC — which also
-cross-checks our timestamps, since 13:05 UTC is 09:05 EDT.
+**A real sensor fault, caught from the data — the lab, 24 August.** `points_RoomT`
+stepped from ~73 °F to exactly −40 at 09:05 and held there. −40 is identical in
+Celsius and Fahrenheit and is a common open-circuit signature. Confirmed in
+Workbench, whose chart shows the same step at 13:00 UTC — which also
+cross-checks our timestamps. Nothing told us; the station sends no status. It was
+found because −40 is not a temperature.
 
-Nothing told us. The station sends no status. It was found because −40 is not a
-temperature.
+**A dead sensor in a real building, found by the first question asked — the
+office, 17 September.** VAV-8 (rooms 104–105) has read **exactly 70.5 °F for
+every one of its 580 readings** — one distinct value across the whole span the
+station holds. Every other zone moves, by 1.1 to 7.4 °F. No fault rule was
+needed: the Point Explorer's distinct-values tile is the test. Whether the
+rooftop unit's status point, which steps between three states every ~12 seconds
+and so gives its 500-record buffer a two-to-five-hour horizon, means the machine
+is short-cycling or the point is chattering **is not established**, and neither
+document says otherwise. Both findings are written up with the numbers in
+`ProjectStatus.md` *(phb-bas)*.
 
-**Zero records, reported ok — found on 2026-09-16, the first sync of PHBoffice.**
-The run said *28/28 points ok, 9,784 records*. Read live from the station a day
-later: `Occupied` held 419 records back to 2024-02-21 and the platform held none;
-`System_Enable` 317 and none; `OccupancyCommand` 71 and none; `OperatingState`
-320 and two. The collector's first-sync window was 30 days and those
-change-of-value histories had last changed 35 days earlier. Nothing was
-destroyed — the station still held all of it — but nothing in the pipeline could
+**Zero records, reported ok — the office's first sync, 16 September.** The run
+said *28/28 points ok, 9,784 records*. Read live the next day: three points held
+**nothing** (`Occupied`, 419 on the station; `System_Enable`, 317;
+`OccupancyCommand`, 71) and three held two records of about 300 — **about 1,700
+records across six points**. The collector's first-sync window was 30 days and
+those change-of-value histories had last changed 35 days earlier; every request
+came back empty, and an empty pass was a successful pass. Against the lab's
+42-hour buffers the same window had always looked like "took everything". Nothing
+was destroyed — the station still held it all — but nothing in the pipeline could
 have said so, and a customer Supervisor would have imported a week of years. The
-collector now starts at the station's own oldest record, and compares the
-station's reported count with what the platform holds on every pass. The state
-is on `bas_sync_checkpoints.completeness` *(this repo, `add_bas_completeness`)*;
-the check is in `collector/sync.py` *(phb-bas)*. `runbook.md` → *A BAS run says
-`ok` and a point holds nothing*.
+collector now starts at the station's own oldest record, and **every pass
+compares the station's reported count with what the platform holds**. The verdict
+is on `bas_sync_checkpoints.completeness` *(this repo)*, computed in
+`collector/sync.py` *(phb-bas)*, and read by the screen, the view and the health
+check. `runbook.md` → *A BAS run says `ok` and a point holds nothing*.
 
-**The JACE's clock is 22 minutes ahead — measured the same day.** `/obix/about`
-on PHBoffice reported 11:00:38 against a host at 10:38:21; Spring Grove agreed
-with the host to 0.2 s. Every record PHBoffice writes is stamped in its own
-time, and until the collector stopped bounding its queries by the host clock
-that made the newest 22 minutes of a chattering point invisible. Recorded on
-`bas_stations.clock_offset_s` every pass now; fixing the clock is a station
-change and is open. `runbook.md` → *A BAS station's clock is wrong*.
+**The check's first live result was a false positive, and the cause was the
+JACE's clock — the same day.** Two chattering points read `incomplete` by 70
+records and a re-fetch could not close it. `/obix/about` on PHBoffice reported
+11:00:38 against a host at 10:38:21; the lab station agreed with the host to
+0.2 s. The collector's query was bounded at the host's `now`, so every record
+the station had written in the last 22 minutes sat in the host's future. The
+query has no upper bound now; the offset is measured every pass and recorded on
+`bas_stations.clock_offset_s`; the health check reports it at WARNING; fixing the
+clock is a station change and is **open**. `runbook.md` → *A BAS station's clock
+is wrong*.
 
-**Real data loss, recorded honestly — three times.** Every figure here was read
-out of `public.bas_data_gaps` and `public.bas_ingest_runs` on 8 September 2026,
-and each outage is four `roll_overwrite` gaps, one per active point.
+### Real data loss, recorded honestly — five outages
 
-| Collection silent | For | Destroyed per point | Detected |
-|---|---|---|---|
-| Fri 21 Aug 16:05 → Mon 24 Aug 08:20 | 64.3 h | **22.6 h** | 24 Aug |
-| Fri 28 Aug 15:50 → Mon 31 Aug 08:20 | 64.5 h | **22.8 h** | 31 Aug |
-| Thu 3 Sep 16:20 → Tue 8 Sep 09:44 | 113.4 h | **71.7 h** | 8 Sep |
+Read from `bas_ingest_runs` and `bas_data_gaps` on 17 September, and identical to
+the table in `ProjectStatus.md` *(phb-bas)*. A silence longer than the lab
+station's 41.6-hour buffer destroys data; the ~16-hour silence every weeknight
+does not, and there are nineteen of those.
 
-The arithmetic is the roll horizon: silence minus the 41.7-hour buffer is what
-the station overwrote before we read it. That is also why the sixteen-hour
-weeknight gaps that run all through `bas_ingest_runs` cost nothing, and why the
-second weekend cost almost exactly what the first did.
+| Collection silent | For | Failed runs inside | Destroyed per point | Recorded |
+|---|---|---|---|---|
+| Thu 20 Aug 16:06 → Fri 21 Aug 08:06 | 16.0 h | 0 | nothing | — |
+| Fri 21 Aug 16:05 → Mon 24 Aug 08:20 | 64.3 h | 0 | **22.6 h** | 24 Aug |
+| Fri 28 Aug 15:50 → Mon 31 Aug 08:20 | 64.5 h | 0 | **22.8 h** | 31 Aug — and unread for eight days |
+| Thu 3 Sep 16:20 → Wed 9 Sep 10:11 | **137.8 h** | 10 | **96.2 h** | 8 Sep as 71.7 h, then 9 Sep as 96.2 h |
+| Fri 11 Sep 16:05 → Mon 14 Sep 08:20 | 64.3 h | 0 | **22.6 h** | 14 Sep |
 
-**The 3–8 September outage is the worst so far, and collection has not resumed.**
-The newest reading for all four points is `2026-09-03 16:20` and every row in
-`bas_sync_checkpoints` reads `error`. All four points report:
+**Five outages, four destroying data, about 164 hours per point.** Two
+corrections to the 8 September version of this document, which said three
+outages and 117 hours:
 
-```
-DATA LOST — station overwrote records between
-2026-09-03T16:20-04:00 and 2026-09-06T20:04Z
-```
+- **The 11–14 September weekend was missing.** Same shape as the two August
+  weekends, same loss, detected on the Monday, and in no document until now.
+- **The September outage was longer and cost more than recorded.** Collection was
+  silent 137.8 hours to the first *successful* run, not 113.4 to the first
+  attempt; the ten failed runs inside it are the host firing from the wrong
+  network. The gap was recorded twice — 71.7 h on 8 September, 96.2 h on 9
+  September as the station's window moved on — and there is **no lab reading
+  between 6 Sep 16:04 and 7 Sep 16:31**, so the loss is the larger figure. The
+  duplicate rows are a wart of the old inferred gap detector; it now uses the
+  station's own oldest record and cannot record one loss twice.
+
+The arithmetic is the roll horizon: silence minus the buffer is what the station
+overwrote before we read it. Collection resumed on 9 September and again on 14
+September; the newest lab reading is current.
 
 ### Two causes, not one
 
-The second has never been written down anywhere before, and it is the more
-important finding.
-
 1. **The laptop sleeps** — no collection. The scheduled task never fires because
-   the machine is not awake. This is the whole of the August pattern.
+   the machine is not awake. The whole of the weekend pattern.
 2. **Mahi works from home** — no collection *even with the laptop awake*, because
-   the JACE at `196.1.1.213` is on the building network and there is no VPN. The
-   scheduled task fires perfectly and collects nothing.
-
-Both appear in the September event, in that order. There is no run at all between
-3 and 8 September, so the machine was away or asleep for the long weekend. Then
-the task fired on 8 September at 09:44 and run `344` recorded
-`points_attempted 4`, `points_succeeded 0`, `records_written 0`, with the same
-error against every point:
-
-```
-Timed out connecting to https://196.1.1.213/obix/histories/…/~historyQuery/
-```
+   the JACEs are on the building network and there is no VPN. The scheduled task
+   fires perfectly, writes a failed run every fifteen minutes, and collects
+   nothing. The ten failed runs inside the September outage are this.
 
 **So the availability requirement is not "a machine that stays on". It is a
 machine that stays on and never leaves the building network.** A host awake in
-the wrong place looks healthy, runs on cadence, writes a run row every fifteen
-minutes and collects nothing — and cause 2 is invisible in a way cause 1 is not,
-because there is a run history to read rather than a silence.
-
-The system did not pretend otherwise. That is the behaviour that matters — a gap
-recorded is a gap analysis can account for.
+the wrong place looks healthy in every tile.
 
 ### Recording a failure is not the same as noticing it
 
-**The 28–31 August outage sat in `bas_data_gaps` for eleven days without
-appearing in a single document.** The mechanism worked perfectly: four
-`roll_overwrite` rows, 22.8 hours per point, `detected_at` 31 August 08:20,
-captured exactly as designed. Nobody read them. Eleven days passed between the
-loss and its first appearance in any document — eight from the moment it was
-recorded — and in that time five commits edited `runbook.md` and `CLAUDE.md`,
-two on 31 August and three on 8 September, without one of them mentioning it.
+**The 28–31 August outage sat in `bas_data_gaps` for eight days without appearing
+in a single document**, while five commits edited `runbook.md` and `CLAUDE.md`.
+The gap-recording machinery worked perfectly. Reading it was the weak link, and
+the tiles go green the moment collection resumes. That is why `healthcheck.py`
+*(phb-bas)* check 1b reports outages that have **already recovered**, since those
+are precisely the ones nothing else will mention again.
 
-So the gap-recording machinery was never the weak link. Reading it was. **A gap
-recorded and unread is indistinguishable from no gap at all**, to everyone except
-the database — and the tiles go green again the moment collection resumes, so
-nothing on the screen brings it back up.
+It happened twice more in September, in smaller ways, and the pattern is the
+lesson: the completeness check wrote `incomplete` to a column for a day before
+anything read it, and — the large one — the backup failed for three weeks while
+the health check watched collection and nothing else.
 
-That is the reason `healthcheck.py` *(phb-bas)* check **1b** exists as of
-8 September: it reports outages that have **already recovered**, because those are
-precisely the ones no other check will ever mention again. A failure that reports
-itself only while it is happening will be missed by anyone who was away for it —
-which, for both of the causes above, is exactly who was away.
+### The backup incident
+
+**The nightly backup never once succeeded against the platform database, from
+the B6 cutover on 28 August until 17 September.** Every attempt died before
+writing a byte:
+
+```
+pg_dump: error: query failed: ERROR:  permission denied for table _prisma_migrations
+FAILED: pg_dump exited 1
+```
+
+The last good dump on disk was of the standalone database retired on 24 August.
+Three 0-byte `.dump` files sat in OneDrive looking like backups in a directory
+listing. The scheduled task showed `LastTaskResult 1` and stopped firing on 14
+September. For those three weeks the 42,000 readings in the platform database —
+including the office's history to February 2024, which the JACE no longer
+holds — existed in exactly one place.
+
+**Cause: one environment variable serving two jobs with opposite privilege
+needs.** `Backup-BasDatabase.ps1` read the collector's `DATABASE_URL` from the
+same `.env`. B7.5 made that the least-privilege `bas_collector` role — correctly;
+the collector must not be able to read `employees`. `pg_dump` of a whole database
+as that role fails on the first table it cannot lock. Tightening one job broke the
+other, silently, at a distance, weeks later. **Nobody noticed for three weeks
+because nothing watched it.** The health check watched collection; the one thing
+protecting the data once collected had no monitoring at all.
+
+This is the clearest example in the project of a shared setting coupling two
+things with opposite needs, and it is the reason *The database is the seam*
+above now says the seam is also where a shared setting couples them without
+anyone noticing.
+
+**What changed, 17 September** *(phb-bas, `fix/backup-role-and-monitoring`)*:
+
+- A `bas_backup` role: `pg_read_all_data`, the documented way to let a
+  non-superuser take a complete dump, plus `CREATEDB` for the restore test's
+  scratch database. Reads everything, writes nothing. Its own connection string,
+  `BAS_BACKUP_URL`. Both scripts refuse to run without it and refuse
+  `bas_collector` by name, rather than falling back.
+- A verified dump gets a `.verified` marker beside it; a failed attempt's partial
+  file is deleted; rotation removes empties.
+- **`healthcheck.py` reads the dump directory** — the files and their markers, not
+  the task's exit code. No verified dump in 48 hours is CRITICAL, the same
+  severity as records being overwritten at the station, because it is the same
+  class of loss. It runs even when the database is unreachable.
+- The health check also guards its own schema: on 17 September it ran between two
+  platform migrations and died with a traceback on a missing column, reporting
+  nothing. A schema that is behind is now a CRITICAL finding; the other checks
+  still report.
+- Proven the failure first, then the fix: `test_backup.py` *(phb-bas)* runs the
+  real scripts against a throwaway cluster carrying this repository's migrations;
+  the wrong role fails loudly and the health check goes CRITICAL; `bas_backup`
+  dumps, the restore test says `RESTORE VERIFIED`, and ageing the marker past
+  48 hours turns the check CRITICAL.
+
+Live at 12:21 on 17 September: a 0.49 MB dump verified with 254 archive entries,
+the restore test matched all ten tables (42,652 readings), the health check read
+`[OK] Newest verified backup is 0.0 h old`. Rotation also removed the three
+August dumps of the retired standalone database, which were past the 14-day
+retention. `runbook.md` → *Repointing the collector also repoints the nightly
+backup*; `RUNBOOK.md` *(phb-bas)* → *Health check says NO VERIFIED BACKUP
+EXISTS*.
 
 ---
 
 ## What was checked, and where
 
-Everything in the first table was verified on 2026-08-28 against the files in
-`phb-platform`, not against a session report.
-
-**Confirmed exactly as described:**
+**Confirmed on 2026-09-17** against the files, the live database and the live
+stations:
 
 | Claim | Checked |
 |---|---|
-| 12 `bas_*` tables | `CREATE TABLE` in `prisma/migrations/` — 12, names as listed |
-| 6 views, all `bas_v_` prefixed | 6: `collection_health`, `command_status_pair`, `data_dictionary`, `point`, `reading`, `setpoint_pair` |
-| `bas_v_data_dictionary` matches `bas\_%` | present in the migration SQL |
-| 13 CHECK constraints in migration SQL | 13 |
-| `roll_horizon_s` kept by a trigger, not a generated column | present, with the Prisma reasoning in the SQL comments |
-| 91 point roles, 25 equipment types | `tests/bas-vocabularies.test.ts` asserts both |
-| Two tabs at `/bas` and `/bas/points` | both routes exist |
-| No Next.js layout wraps the tabs | there is no `app/(modules)/bas/layout.tsx` |
-| A test walks `app/api/modules/bas/**` for the guard | `tests/bas-module.test.ts` — it fails any handler containing `requireModuleAccess(` or missing `withBas` |
-| `withBas` exists | `lib/modules/bas/route-helpers.ts` |
-| Chart breaks across gaps with `connectNulls={false}` | `app/(modules)/bas/point-explorer.tsx` |
-| `postinstall` forces `prisma generate` | `package.json` |
+| 14 `bas_*` tables | `@@map("bas_*")` in `prisma/schema.prisma` — 14 |
+| 6 views, all `bas_v_` prefixed | `information_schema.views` — 6 |
+| 17 CHECK constraints, 3 triggers | `pg_constraint`, `pg_trigger` on the live database |
+| 14 migrations applied | `_prisma_migrations`; the last two dated 17 September |
+| Three tabs, and B5 not among them | `app/(modules)/bas/tabs.ts` lists three; its comment says where B5's line would go |
+| Credentials never returned | the settings query selects `cred.username` and `cred.updated_at` and says why the ciphertext is not there |
+| Every settings write audited | `audit_events`: `bas.project_created`, `bas.building_created`, `bas.station_created`, `bas.credential_set`, and their updates and deletes, each with an actor |
+| Two direct stations, one via-parent placeholder | `bas_stations`, with addresses, versions, pins and clock offsets |
+| 26 of 32 office histories active, 20 classified, 11 roles, 11 equipment, 2 setpoint pairs, `bas_point_links` empty | `bas_points`, `bas_equipment`, `bas_v_setpoint_pair`, `bas_point_links` |
+| 42,652 readings; five silences; the gap rows | `bas_readings`, `bas_ingest_runs`, `bas_data_gaps` |
+| The backup's three weeks of failure | `logs\backup.log` *(phb-bas)* and the 0-byte files, before they were rotated |
+| The clock offset | `/obix/about` on both stations against the host, at the request midpoint |
 
-**Checkable in `phb-bas`, not here** — real, version controlled, and reviewable,
-just not by anything in this repository: the collector, the Grafana dashboards,
-the `bas-mcp` server, and `Backup-BasDatabase.ps1` / `Test-BasRestore.ps1`.
-Verifying a claim about any of them means opening that repository.
-
-**Checkable in neither**, and therefore taken on trust: the JACE and its address,
-the Niagara `bas_collector` account, the Postgres roles and their grants, the
-synthetic-data claims, the sensor fault of 24 August, and *why* each collector
-outage happened — a sleeping laptop, or a laptop away from the building network.
-Those are facts about a building, a network and a set of events, and no
-repository holds them.
-
-**Checkable in the database, which is neither repository's files:** the extent of
-each outage. `bas_data_gaps`, `bas_ingest_runs` and `bas_sync_checkpoints` hold
-the three outages, their durations, and the failed run's per-point errors — which
-is how the figures under *Proven in operation* were measured rather than
-remembered. A reader can re-derive every one of them with `psql`, and nothing in
-`npm test` will.
-
-That three-way split is the useful part, and it is why *Two repositories, one
-system* is at the top rather than only here. Roughly half of this document
-describes things `npm test` in `phb-platform` will never catch drifting — which
-is not a defect, but it is worth a reader knowing before they treat a green suite
-as covering the page.
+**Checkable in `phb-bas`, not here:** the collector's behaviour on a pass, the
+health check's findings, the backup and restore scripts, the six test suites.
+**Checkable in neither** and taken from the people who did them: how oBIX was
+enabled on the office JACE (reported as needing only an `ObixNetwork` component
+and a read-only user, with no firmware upgrade — nothing in either repository
+records it), and why each collector outage happened.
 
 ---
 
@@ -595,33 +661,39 @@ as covering the page.
 
 **B5 — asking questions in plain English.** Eight tools, a guarded SQL escape
 hatch on its own read-only connection, an audit event per question. Designed, not
-started. Blocked on a company Anthropic API key. It would live in `phb-platform`,
-and it is what supersedes `bas-mcp` *(phb-bas)* when it ships.
+started, **not a tab**. Blocked on a company Anthropic API key. It would live in
+`phb-platform`, and it is what supersedes `bas-mcp` *(phb-bas)* when it ships.
 
-**Point classification tooling.** Bulk role assignment, equipment creation and
-linking. Deliberately deferred — the right shape depends on how a given
-building's integrator named things, and most fault rules need `equipment_id`,
-which nothing currently sets.
+**B8 — point management.** Designed 17 September, not started:
+`docs/B8_point_management_plan.md`. There is no way in the UI to set a role,
+create equipment, attach a point, rename one or mark one inactive; the office
+was classified in SQL and the six state points wait for someone to decode them
+the same way. Thirty minutes for 26 points; a project with ten JACEs would take
+a week and nobody would do it.
 
 **Production deployment.** Firewall rule for the site's egress IP, a scoped role
 on the Azure database, and an always-on host **that stays on the building
-network** — see *Proven in operation*, where a host that fired on cadence from
-the wrong network collected nothing at all. Blocked on the Azure subscription.
-Both repositories are affected: the platform needs the host, and the collector
-*(phb-bas)* needs the firewall rule and the database role.
+network**. Five outages say the laptop is not that host. Blocked on the Azure
+subscription and the host.
 
-**Multiple buildings.** The schema supports it throughout and the filters are
-already built for it. The plan is one central station importing other JACEs'
-histories over the NiagaraNetwork, so no production JACE needs a firmware
-upgrade. The lab station caps at 1,250 points and 26 devices — realistically two
-or three buildings — beyond which a Niagara Supervisor is a purchase decision
-nobody has owned yet.
+**Multiple buildings, the way they were planned.** The 20 August plan was one
+central station importing other JACEs' histories over the NiagaraNetwork, so
+that no production JACE needed a firmware upgrade. **The office was connected
+directly instead** — on 4.10 it needed no upgrade — and `via_parent` stations
+have never been exercised; whether imported histories keep their source
+station's name under `/obix/histories/` is still unobserved. The schema and the
+filters support both routes.
+
+**Fixing the office JACE's clock, and decoding its six state codes.** Both are
+station-side or engineering work, both open, and the second is what stands
+between "the status point cycles every 12 seconds" and a verdict on the machine.
 
 ---
 
-## The open dependency
+## The open dependencies
 
-**Access to a production JACE.** Everything above runs against four synthetic
-points. The question that matters is not the IP address — it is whether history
-extensions are configured on that station at all. If nobody ever set them up,
-this becomes a Niagara engineering job before it is a data job.
+Not one any more. **An always-on host on the building network**, so the five
+outages stop at five. **A backup that stays watched**: the mechanism is fixed and
+monitored as of today, and the first nightly run under it has not yet happened.
+**An API key** for B5. And **B8**, before the next building is classified by
+hand.
