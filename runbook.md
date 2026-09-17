@@ -3759,7 +3759,7 @@ So three things are defined in the migration SQL rather than in
 | What | Where | Does Prisma notice it? |
 |---|---|---|
 | `bas_points_roll_horizon` trigger, keeping `roll_horizon_s` correct | migration SQL | No |
-| 17 CHECK constraints (13 in `add_bas_tables`, then one each in `add_bas_projects` and `add_station_tls_and_display_name`, two in `add_bas_completeness`) | migration SQL | No. Invisible to it in both directions |
+| 18 CHECK constraints (13 in `add_bas_tables`, then one each in `add_bas_projects`, `add_station_tls_and_display_name` and `add_bas_point_label_and_visibility`, two in `add_bas_completeness`) | migration SQL | No. Invisible to it in both directions |
 | 6 views, `bas_v_*` | migration SQL | No |
 
 The BRIN index on `bas_readings(ts)` **is** in `schema.prisma`, as
@@ -5965,6 +5965,55 @@ not collected by then is gone.
 
 `tests/bas-stations.test.ts` asserts no route under
 `app/api/modules/bas/settings/**` is named for testing, probing or connecting.
+
+---
+
+## A point's label or hidden state disappeared — or a hidden point stopped collecting
+
+**Symptom.** A point somebody named or hid in `bas_points` has gone back to
+its Niagara name or reappeared on a screen. Or the opposite worry: a point was
+hidden and somebody asks whether it is still being collected.
+
+**Cause, first case.** Nothing in the platform or the collector does this
+today, and `test_point_management.py` *(phb-bas)* fails if anything starts to.
+`discover` re-reads every history on every run and upserts every point, and
+its upsert names the columns it writes — `display_name`, `unit`, `data_type`,
+`source_timezone`, `last_seen_at`, `is_active` — so `label` and `is_visible`
+survive it. If a label really did vanish, the candidates are a hand-run SQL
+`UPDATE`, a restore from a dump taken before the label was set, or a change to
+that upsert. Check `git log -p collector/db.py` in phb-bas and the backup
+`.verified` markers before anything else.
+
+**Cause, second case.** Not a fault. `is_visible` is read by nothing in the
+collector; `sync` selects on `is_active` alone. A hidden point is collected
+exactly like a visible one, and the same test proves it.
+
+**The distinction, stated once more because it is the one that costs data.**
+
+| Column | Controls | Turning it off costs |
+|---|---|---|
+| `is_active` | whether the collector **fetches** the point | **Permanent.** The station overwrites its own history — the office JACE holds about five days, one status point about two hours. A point not collected on Tuesday cannot be recovered on Friday |
+| `is_visible` | whether the point **appears** on the browsing screens | Nothing. Reversible at any moment |
+
+To shorten a list, hide. Never deactivate for a cosmetic reason. The four
+Niagara system logs and the dead half of a reconfigured `_cfg0` pair are the
+genuine exclusions; `is_active = false` is for those.
+
+**Fix, until B8.2 onward ship a screen.** SQL, as the office JACE was done:
+
+```sql
+UPDATE bas_points SET label = 'Zone Temp 104-105', is_visible = false
+ WHERE point_id = 42;
+UPDATE bas_points SET label = NULL WHERE point_id = 42;   -- back to the Niagara name
+```
+
+A blank label is refused (`bas_points_label_not_blank`): "no label" is spelled
+`NULL`. And **the two `display_name` columns mean opposite things**:
+`bas_stations.display_name` is a person's name for the station;
+`bas_points.display_name` is Niagara's name for the point, refreshed by every
+`discover`, and a person's is `bas_points.label`. Both column comments say so,
+and the Prisma field on `BasPoint` is `niagaraDisplayName` for the same reason.
+`WHY-ITS-BUILT-THIS-WAY.md` § 45.
 
 ---
 
