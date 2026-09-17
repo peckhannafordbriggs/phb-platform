@@ -234,13 +234,19 @@ typed by hand. `runbook.md` → *What to ask IT for* → Request 3a carries it.
 The Graph federated credential and the production redirect URI are still with
 Vitis; sign-in cannot be tested until the redirect URI exists.
 
-**When it can be, test it first.** Production builds the Auth.js Entra provider
-with `clientSecret: undefined`, because the Bicep sets only the client id and
-tenant id. Whether a user sign-in completes without a secret or a client
-assertion is unproven — see `runbook.md` → *Does production sign-in need the SSO
-client secret?*. If it fails, **do not fix it by adding a secret to Azure**:
-that is prohibition 7, and the decision is the platform owner's. All three are one email, written out verbatim in
-`runbook.md` → *What to ask IT for* → *Request 2*.
+**Production sign-in was tested on 2026-09-16 and failed as predicted** —
+`invalid_client` at the token exchange, because production carries no SSO
+secret and the SSO app registration is a confidential client. The decision
+went the way prohibition 7 points: **not** a secret in Azure, but the managed
+identity's token presented as a `client_assertion`, matched by a federated
+identity credential on the SSO app registration — the same mechanism the Graph
+module already uses, now one shared implementation in
+`lib/azure/managed-identity-assertion.ts`. Built on
+`feat/sso-managed-identity-assertion`; **not merged**, because it cannot work
+until Vitis adds that credential (`runbook.md` → *What to ask IT for* →
+*Request 3*, one email, verbatim). Production refuses to boot if
+`AUTH_MICROSOFT_ENTRA_ID_SECRET` is set. The logo (`public/`) fix shipped
+separately.
 
 A defect Part B surfaced: the deploy workflow's firewall step passed the server
 as `--name` and the rule as `--rule-name`, so it could never have run. `-s` is

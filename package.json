@@ -22,6 +22,7 @@
     "db:verify:prod": "tsx scripts/verify-prod-database.ts"
   },
   "dependencies": {
+    "@auth/core": "0.41.3",
     "@azure/identity": "^4.13.1",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@prisma/adapter-pg": "^7.9.1",

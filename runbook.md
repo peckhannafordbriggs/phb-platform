@@ -1384,7 +1384,7 @@ broken auth callback. **Do not remove the `-p`.**
 
 | Credential | Where | Expires | Breaks what |
 |---|---|---|---|
-| SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local sign-in. Production: **unresolved** — see *Does production sign-in need the SSO client secret?* |
+| SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local sign-in only. Production authenticates with the managed identity — see *Production sign-in authenticates with the managed identity*. **Cannot affect production**, which refuses to boot with it set |
 | Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only. **Cannot affect production** |
 
 > **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
@@ -1466,58 +1466,82 @@ tenant `48f37f84-1c36-4b3e-986c-b8b7196ad49d`. Neither is a secret; both appear
 in every authorization URL the app generates. They are recorded here so the next
 operator can find the right registration without guessing.
 
-### Does production sign-in need the SSO client secret?
+### Production sign-in authenticates with the managed identity
 
-**Open question, and it needs answering the first time anyone signs in to
-production.** This section previously asserted that production authenticates with
-a managed identity plus a federated identity credential, the same as Graph. That
-is true of the *Graph* path and there is reason to doubt it for *sign-in*.
+**Answered on 2026-09-16, by the first production sign-in failing.** This
+section used to ask whether production sign-in needs the SSO client secret. It
+needs *a* client credential, and it gets one without a secret.
 
-**Observed, in this repository:**
+**What happened.** Auth.js logged `OAuthCallbackError: OAuth Provider returned
+an error: invalid_client` and dropped Entra's `error_description`. The container
+had no `AUTH_MICROSOFT_ENTRA_ID_SECRET`; the SSO app registration is a
+confidential client (`isFallbackPublicClient` unset, one secret, zero federated
+credentials); and a direct probe of the same app with no credential returned
+`AADSTS7000216` - the `client_credentials` sibling of the predicted
+`AADSTS7000218`. The exact digits were never in the logs; the class was, and it
+had one cause: the token exchange carried neither `client_secret` nor
+`client_assertion`.
 
-- `auth.config.ts` passes `clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET`
-  to the Auth.js Entra provider, with a comment reading *"Production uses a
-  managed identity."*
-- `infra/main.bicep` sets `AUTH_MICROSOFT_ENTRA_ID_ID` and
-  `AUTH_MICROSOFT_ENTRA_ID_TENANT_ID` on the container app, and **not** the secret.
-- `lib/env.ts` marks `AUTH_MICROSOFT_ENTRA_ID_SECRET` optional, so production
-  boots without it.
-- `auth.ts` contains no client-assertion or custom token-request handling.
+**The design.** The one the Graph module already uses, applied to the SSO app
+registration:
 
-So in production that provider is constructed with `clientSecret: undefined`.
+1. The managed identity (`phbplat-prod-identity`) gets a token for
+   `api://AzureADTokenExchange/.default`. Nothing about it expires.
+2. Auth.js is built with `token_endpoint_auth_method: "none"`, so it sends no
+   credential of its own, and with a `customFetch` that adds that token to the
+   one request that needs it - a POST to `/oauth2/v2.0/token` on
+   `login.microsoftonline.com` - as `client_assertion` plus
+   `client_assertion_type`. Every other request passes through untouched, with
+   the same arguments. `lib/auth/entra-assertion-fetch.ts`;
+   `tests/entra-assertion.test.ts` proves both halves.
+3. Entra matches the token's issuer and subject against a **federated identity
+   credential on the SSO app registration** - Request 3 below - and treats the
+   exchange as authenticated by that app.
 
-**Inferred, not observed:** a managed identity issues tokens for the application
-itself — the client-credentials, app-only path, which is exactly what the Graph
-module uses. Signing a *user* in is an authorization-code exchange, and Entra
-requires the token request to carry either `client_secret` or `client_assertion`.
-A managed identity does not supply either for someone else's authorization code,
-and nothing here builds an assertion. If that reading is right, the first
-production sign-in fails at the token exchange with
-**`AADSTS7000218: The request body must contain the following parameter:
-'client_assertion' or 'client_secret'`** — which names neither expiry nor the
-managed identity, and so looks nothing like its cause.
+`lib/azure/managed-identity-assertion.ts` is the one implementation of step 1,
+shared with `graph/credential.ts`; a test fails if the Graph credential grows
+its own copy again. The provider is composed in `auth.ts` (Node), not
+`auth.config.ts` - middleware imports the latter on the edge, where
+`@azure/identity` cannot load, and middleware never exchanges a code.
 
-**Why this is still open.** Sign-in has never run in production: it needs the
-redirect URI on the SSO app registration, which is item 1 of *Request 2* and was
-still with Vitis at the time of writing. The prediction is from reading the code
-and the protocol, not from a failure anyone has seen. **Do not treat it as
-established, and do not "fix" it by deploying a secret** until it has actually
-been observed — a secret in Azure violates `CLAUDE.md` prohibition 7, and if the
-flow turns out to work, deploying one would introduce the very expiry this
-architecture avoids.
+**Production refuses to boot with the secret set.** `buildEntraProvider` throws
+`SsoConfigurationError` if `AUTH_MICROSOFT_ENTRA_ID_SECRET` is present with
+`NODE_ENV=production` - the same guard `createGraphCredential` has for
+`GRAPH_CLIENT_SECRET`. The secret in `.env.local` is for developer machines and
+expires in 2028; production cannot be affected by it.
 
-**How to settle it:** sign in to production once the redirect URI exists. If it
-works, delete this section and correct the comment in `auth.config.ts`. If it
-fails with `AADSTS7000218`, the options are a federated credential on the SSO app
-registration with a matching client assertion in the provider config, or an
-accepted, documented, calendar-tracked client secret — which is a decision about
-prohibition 7 and belongs to whoever owns the platform, not to whoever hits the
-error.
+**Status.** Built on `feat/sso-managed-identity-assertion`. It cannot work
+until Request 3 is done, and it is not merged until then: merging first would
+only change the failure from `invalid_client` to "no matching federated
+identity record".
 
-**Meanwhile, on expiry:** when the secret expires on 13 August 2028, local
-development stops being able to sign in. Regenerate it and put the new value in
-`.env.local`. Whether production also needs that rotation depends on the answer
-above.
+### Production sign-in bounces to `/signin?error=OAuthCallbackError`
+
+Microsoft returned the authorization code and the token exchange failed. Pull
+the reason from Log Analytics. `az containerapp logs show` trips on the Next.js
+banner's non-ASCII character under the Windows code page unless `PYTHONUTF8=1`
+is set, and under Git Bash every `/subscriptions/...` id is rewritten as a
+filesystem path unless `MSYS_NO_PATHCONV=1` is set:
+
+```bash
+WS=$(az containerapp env show -n phbplat-prod-env -g <resource-group> \
+      --query properties.appLogsConfiguration.logAnalyticsConfiguration.customerId -o tsv)
+az monitor log-analytics query -w "$WS" --analytics-query "
+  ContainerAppConsoleLogs_CL
+  | where ContainerAppName_s == 'phbplat-prod-app'
+  | where Log_s has_any ('[auth]', 'AADSTS')
+  | project TimeGenerated, Log_s | order by TimeGenerated desc | take 50"
+```
+
+| Auth.js says | Entra meant | Fix |
+|---|---|---|
+| `invalid_client` | No client credential on the exchange - the state before the assertion shipped, or a secret was deployed and rejected | Production must carry the assertion, never a secret. Check the provider in `auth.ts` and that `AUTH_MICROSOFT_ENTRA_ID_SECRET` is absent |
+| `invalid_client`, and the log shows `AADSTS70021` or `AADSTS700213` | No federated identity credential on the SSO app matches the token's issuer and subject | Request 3: the credential is missing, or its subject is not the identity's **object** id |
+| `invalid_request`, `AADSTS50011` | Redirect URI mismatch | The URI on the app registration must equal `AUTH_URL` + `/api/auth/callback/microsoft-entra-id` exactly |
+
+Auth.js logs only Entra's `error` field. If the code matters and the table does
+not settle it, one sign-in attempt with `debug: true` in the Auth.js config
+prints the `error_description` - then turn it off again.
 
 ### Symptom when it expires
 
@@ -1953,6 +1977,52 @@ az deployment group show \
 >
 > Thanks,
 > Mahi
+
+### Request 3 — the SSO federated credential: item 2 again, on the other app
+
+Send this once `feat/sso-managed-identity-assertion` is ready to merge. It is
+one credential, identical in shape to the one already created on the Graph app
+registration, and it is the whole ask. Nothing in it expires.
+
+> Subject: One more federated credential — same as last time, different app
+>
+> Hi Zac,
+>
+> Thanks for the three Entra changes — the redirect URI, the Graph credential
+> and the deploy registration are all in and working. One more, and it is a
+> copy of one you have already done.
+>
+> Last time you added a federated identity credential to the Change Order
+> Graph app registration (`d1795907-d017-4a5e-9da3-033c4bee4ec1`) using the
+> **Managed identity** scenario and selecting `phbplat-prod-identity`. Please
+> add the identical credential to the **PHB Platform** SSO app registration:
+>
+>     App registration:  220921c1-f23e-4d01-b354-736884ba3d00
+>     Scenario:          Managed identity  ->  phbplat-prod-identity
+>     Name:              phb-platform-prod-signin
+>
+> If the scenario is not offered, the typed values are the same as before:
+>
+>     Issuer:    https://login.microsoftonline.com/48f37f84-1c36-4b3e-986c-b8b7196ad49d/v2.0
+>     Subject:   282bcb43-60e4-4d90-aa62-cea74fd719ae
+>     Audience:  api://AzureADTokenExchange
+>
+> The subject is the managed identity's object (principal) ID, as before.
+>
+> Why: the first production sign-in reached the token exchange and Entra
+> answered `invalid_client` — the app is a confidential client and the request
+> carried no secret, because we do not deploy any. With this credential the
+> deployed app authenticates to the SSO registration exactly the way it
+> already does to the Graph one. No new permissions, no consent prompt,
+> nothing that expires. Please leave the existing client secret in place;
+> local development still uses it.
+>
+> Thanks,
+> Mahi
+
+**After it is in:** merge the branch, let the deploy finish, sign in once. If it
+fails, see *Production sign-in bounces to `/signin?error=OAuthCallbackError`* -
+the failure will now name the credential rather than the absence of one.
 
 ## Deploy order
 
