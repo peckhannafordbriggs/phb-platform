@@ -5361,6 +5361,22 @@ what *The dev platform database gets staler every day* describes.
 
 ## Repointing the collector also repoints the nightly backup — and breaks it
 
+**Superseded on 17 September 2026.** The fix below was never applied, and a
+second, worse break arrived before it could be: B7.5 changed the collector's
+`DATABASE_URL` to the least-privilege `bas_collector` role, and `pg_dump` of the
+whole database as that role fails before it writes a byte —
+`permission denied for table _prisma_migrations`. Every nightly attempt from
+28 August to 17 September failed, left a 0-byte file in OneDrive, and was
+reported by nothing; the last good dump was of the standalone database retired
+on 24 August. **The backup now has its own connection string and its own
+role** — `BAS_BACKUP_URL`, `bas_backup`, a `pg_read_all_data` member with
+`CREATEDB` for the restore test, created by `setup_backup_role.sql` *(phb-bas)*
+— and refuses to fall back to `DATABASE_URL`. `healthcheck.py` *(phb-bas)* reads
+the dump directory's `.verified` markers and is CRITICAL when no verified dump
+is younger than 48 hours. `phb-bas/bas-collector/RUNBOOK.md` → *Health check
+says NO VERIFIED BACKUP EXISTS* is the current procedure. What follows is the
+24 August finding, kept for the record.
+
 **Checked by running it, 24 August 2026. Both halves of this are true and the
 second one is the dangerous one.**
 
