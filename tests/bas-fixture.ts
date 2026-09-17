@@ -220,7 +220,7 @@ export async function createBasFixture(tx: Tx): Promise<BasFixture> {
           // $2d is a Niagara hex escape for a dash, stored verbatim. Decoding it
           // is not round-trippable and produces 404s - see docs/08.
           niagaraHistoryName: historyName,
-          displayName: historyName.replace(/\$2d/g, "-"),
+          niagaraDisplayName: historyName.replace(/\$2d/g, "-"),
           pointRole: role,
           unit,
           dataType,
@@ -465,7 +465,7 @@ export async function createHealthFixture(): Promise<HealthFixture> {
         data: {
           stationId: stationB.stationId,
           niagaraHistoryName: historyName,
-          displayName: historyName,
+          niagaraDisplayName: historyName,
           pointRole: role,
           unit: role === null ? null : "fahrenheit",
           dataType: "real",

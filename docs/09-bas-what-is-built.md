@@ -7,7 +7,8 @@ says *what exists*.
 Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
 B7's plan, as written before it was built, is `docs/B7_settings_and_hierarchy_plan.md`.
-B8's, designed and not started, is `docs/B8_point_management_plan.md`.
+B8's is `docs/B8_point_management_plan.md`; B8.1, the schema, is built and the
+rest is not started.
 
 **Last updated:** 17 September 2026 — a third pass. Every figure in it was read
 from the repositories, the git logs, the live database or the live stations on
@@ -83,7 +84,7 @@ database, entered through the module's own Settings tab.
 | **SpringGroveLabComputer** | — | the lab, `196.1.1.213`, Niagara 4.15.4.24 | Four synthetic points logged every 5 min, 41.6 h buffer. Not PH+B's asset |
 | **`bas_collector` Niagara account** | — | on each station | Read-only, `HTTPBasicScheme`. The only thing added to a JACE |
 | **Collector** | `phb-bas` | `bas-collector/` | Python. Reads oBIX every 15 min, writes to Postgres. Stations and logins from the database |
-| **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 14 tables, 6 views, 17 CHECK constraints, 3 triggers. Permanent |
+| **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 14 tables, 6 views, 18 CHECK constraints, 3 triggers. Permanent |
 | **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Three tabs behind the platform's own login and grants |
 | **Grafana dashboards** | `phb-bas` | `bas-grafana/`, served at `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
 | **`bas-mcp`** | `phb-bas` | `bas-mcp/` | Lets Claude Desktop query the data, read-only. Superseded by B5 when that ships |
@@ -201,10 +202,10 @@ express and proposes an `ALTER … DROP DEFAULT` that PostgreSQL rejects on a
 generated column — which permanently blocks every later migration. Prisma ignores
 triggers, so a trigger keeps the value correct and the schema diff empty.
 
-**`schema.prisma` is not the whole schema.** Three triggers, **17** CHECK
-constraints (13 in `add_bas_tables`, one each in `add_bas_projects` and
-`add_station_tls_and_display_name`, two in `add_bas_completeness`) and the six
-views live in the migration SQL. Prisma models columns and indexes; it ignores
+**`schema.prisma` is not the whole schema.** Three triggers, **18** CHECK
+constraints (13 in `add_bas_tables`, one each in `add_bas_projects`,
+`add_station_tls_and_display_name` and `add_bas_point_label_and_visibility`,
+two in `add_bas_completeness`) and the six views live in the migration SQL. Prisma models columns and indexes; it ignores
 constraints and triggers.
 
 ---
@@ -335,7 +336,10 @@ management in the UI: no way to set a role, create equipment, rename a point or
 mark one inactive. Every one of those was SQL. `docs/B8_point_management_plan.md`
 is the plan; its central decision — *collect everything, filter what you see*,
 because `is_active` is permanent and a hidden point is not — was written from
-doing this by hand.
+doing this by hand. B8.1, the schema, is built: `bas_points.label` and
+`bas_points.is_visible`, both defaulting to how every row behaves today, with
+`test_point_management.py` *(phb-bas)* proving `discover` writes neither.
+Nothing reads them yet.
 
 ---
 
@@ -650,8 +654,8 @@ stations:
 |---|---|
 | 14 `bas_*` tables | `@@map("bas_*")` in `prisma/schema.prisma` — 14 |
 | 6 views, all `bas_v_` prefixed | `information_schema.views` — 6 |
-| 17 CHECK constraints, 3 triggers | `pg_constraint`, `pg_trigger` on the live database |
-| 14 migrations applied | `_prisma_migrations`; the last two dated 17 September |
+| 18 CHECK constraints, 3 triggers | `pg_constraint`, `pg_trigger` on the live database |
+| 15 migrations applied | `_prisma_migrations`; the last three dated 17 September |
 | Three tabs, and B5 not among them | `app/(modules)/bas/tabs.ts` lists three; its comment says where B5's line would go |
 | Credentials never returned | the settings query selects `cred.username` and `cred.updated_at` and says why the ciphertext is not there |
 | Every settings write audited | `audit_events`: `bas.project_created`, `bas.building_created`, `bas.station_created`, `bas.credential_set`, and their updates and deletes, each with an actor |
@@ -677,7 +681,8 @@ hatch on its own read-only connection, an audit event per question. Designed, no
 started, **not a tab**. Blocked on a company Anthropic API key. It would live in
 `phb-platform`, and it is what supersedes `bas-mcp` *(phb-bas)* when it ships.
 
-**B8 — point management.** Designed 17 September, not started:
+**B8 — point management.** Designed 17 September; B8.1, the schema, built the
+same day; B8.2 onward not started:
 `docs/B8_point_management_plan.md`. There is no way in the UI to set a role,
 create equipment, attach a point, rename one or mark one inactive; the office
 was classified in SQL and the six state points wait for someone to decode them

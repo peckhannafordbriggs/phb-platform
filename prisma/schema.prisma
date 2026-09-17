@@ -451,16 +451,22 @@ model BasStation {
   siteId BigInt  @map("site_id")
   site   BasSite @relation(fields: [siteId], references: [siteId], onDelete: Restrict)
 
-  /// The station name EXACTLY as Niagara spells it, including capitalisation.
-  /// This appears literally in every oBIX URL. Get the case wrong and every
-  /// request 404s.
   /// What a person calls it. Free text, and deliberately NOT the identifier.
   ///
   /// niagaraStationName below is what Niagara answers to; this is what reads
   /// on a screen. Null means nobody has given it one, and the UI falls back to
   /// the Niagara name rather than inventing a prettier version of it.
+  ///
+  /// READ THIS BEFORE TOUCHING A POINT. bas_points.display_name means the
+  /// opposite: on a point, display_name is what NIAGARA reports and `label` is
+  /// what a person typed. Same column name, opposite meaning, one table apart.
+  /// That is why the Prisma field on BasPoint is niagaraDisplayName, and why
+  /// both columns carry a COMMENT saying so.
   displayName String? @map("display_name")
 
+  /// The station name EXACTLY as Niagara spells it, including capitalisation.
+  /// This appears literally in every oBIX URL. Get the case wrong and every
+  /// request 404s.
   niagaraStationName String @map("niagara_station_name")
 
   /// How this station's history is reached. 'direct' means we open an oBIX
@@ -652,7 +658,38 @@ model BasPoint {
   niagaraHistoryName String  @map("niagara_history_name")
   niagaraHistoryOrd  String? @map("niagara_history_ord")
 
-  displayName String? @map("display_name")
+  /// What NIAGARA calls this history: the oBIX <ref> displayName attribute,
+  /// written by the collector on every `discover`, falling back to a local
+  /// decode of the $-hex escapes when the station sends none. NOT a person's
+  /// label - that is `label`, below.
+  ///
+  /// The Prisma field is named for what it holds because bas_stations.
+  /// display_name means the OPPOSITE: on a station, display_name is what a
+  /// person typed and niagara_station_name is Niagara's. The column keeps its
+  /// SQL name because the collector in phb-bas reads and writes it by that
+  /// name - renaming it is a two-repository change that has to land in one
+  /// breath, and until the second half lands every collector pass fails
+  /// against a station whose shortest history holds two hours.
+  niagaraDisplayName String? @map("display_name")
+
+  /// What a PERSON calls this point. NULL means nobody has named it, and a
+  /// screen falls back to niagaraDisplayName. Written only by the platform,
+  /// never by the collector: `discover` neither inserts nor updates this
+  /// column, so a label survives every rediscovery (test_point_management.py
+  /// in phb-bas proves it against the real collector). A blank string is
+  /// refused by bas_points_label_not_blank in the migration SQL, so "no label"
+  /// has exactly one spelling.
+  label String?
+
+  /// Whether this point APPEARS on the browsing screens. Cosmetic and
+  /// reversible: a hidden point is still collected, still checked for
+  /// completeness, and must still be counted in every risk figure. Compare
+  /// isActive, which decides whether the point is FETCHED at all and whose
+  /// cost is permanent. Global rather than per-user, because that is how it
+  /// was asked for ("a shorter list") and a per-user join table is a thing
+  /// nobody wanted; the trade-off is that one person's hide is everyone's.
+  /// Like label, never written by the collector.
+  isVisible Boolean @default(true) @map("is_visible")
 
   /// A point with no role is invisible to every cross-equipment comparison and
   /// every generic fault rule, so unclassified points are an explicit, visible
@@ -699,6 +736,14 @@ model BasPoint {
   tags  Json    @default("{}")
   notes String?
 
+  /// Whether the collector FETCHES this point. Turning it off is permanent in
+  /// effect: the station overwrites its own history - the office JACE holds
+  /// about five days, and one status point about two hours - so a point not
+  /// collected on Tuesday cannot be recovered on Friday. To take a point off a
+  /// screen use isVisible instead; it costs nothing. `discover` sets this true
+  /// for every history it finds and false for one the station no longer
+  /// reports, except the four Niagara system logs, whose value it leaves as a
+  /// human set it.
   isActive    Boolean   @default(true) @map("is_active")
   firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
   lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz()

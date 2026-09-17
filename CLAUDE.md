@@ -418,6 +418,23 @@ station skips it rather than recording a fake failed run. Fixing the JACE's
 clock is a station change and is open. `runbook.md` → *A BAS station's clock is
 wrong*.
 
+**B8.1 complete — the point-management schema, and nothing else (2026-09-17).**
+`bas_points` gained `label` (what a person calls a point) and `is_visible`
+(whether it appears on the browsing screens), both defaulting to how every row
+behaves today. The distinction that must not blur: **`is_active` is whether the
+collector fetches a point, and turning it off loses data permanently;
+`is_visible` is whether a screen shows it, and costs nothing.** Collect
+everything, filter what you see. The column comments say so and a test asserts
+the wording. The `display_name` trap — a person's name on stations, Niagara's
+on points — was resolved with a new column rather than a rename, because the
+collector writes the point column by name and a rename would fail every
+collector pass until phb-bas caught up; the Prisma field is
+`niagaraDisplayName` so TypeScript reads correctly. **`discover` never writes
+either new column**, proven by `test_point_management.py` *(phb-bas)* against
+the real migration on a throwaway cluster. No screen, no API; B8.2 onward not
+started. `WHY-ITS-BUILT-THIS-WAY.md` § 45; `runbook.md` → *A point's label or
+hidden state disappeared*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -479,7 +496,7 @@ well it is written.
 | `DEVELOPER-SETUP.md` | **Start here if you are a new developer.** Installs, databases, `.env.local`, seeds, first test run — and the things that bite before they bite | Someone about to write code |
 | `PLATFORM-CONTEXT.md` | **Read before designing a module.** What the platform already provides, the four-part integration contract, and the seven decisions a module makes for itself | Someone about to design one |
 | `HANDOVER.md` | **Start here if you are inheriting this.** What this is, what must not break, what will fail and when, what to do first | Whoever owns it after December 2026 |
-| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 45 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 46 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
 | `runbook.md` | Failure modes, recovery, what expires and when | Anyone with a broken thing |
 
 Setup instructions live in `DEVELOPER-SETUP.md` and the per-variable detail lives

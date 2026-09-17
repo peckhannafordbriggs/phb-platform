@@ -246,9 +246,37 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
       "bas_point_roles.setpoint_for",
       "bas_point_roles.status_of",
       "bas_data_gaps.cause",
+      // add_bas_point_label_and_visibility: the five columns whose NAME is
+      // what misleads. Two display_name columns with opposite meanings, and
+      // two booleans of which one costs data forever and one costs nothing.
+      "bas_points.label",
+      "bas_points.is_visible",
+      "bas_points.is_active",
+      "bas_points.display_name",
+      "bas_stations.display_name",
     ]) {
       expect(annotated, `${column} must be documented`).toContain(column);
     }
+
+    // Showing is not collecting. The comments are the main defence against the
+    // next person confusing the two, so the wording is asserted, not just its
+    // presence.
+    const described = (object: string, column: string) =>
+      rows.find((r) => r.object_name === object && r.column_name === column)
+        ?.column_description ?? "";
+    expect(described("bas_points", "is_active")).toContain("PERMANENT");
+    expect(described("bas_points", "is_active")).toContain("is_visible");
+    expect(described("bas_points", "is_visible")).toContain("COSMETIC");
+    expect(described("bas_points", "is_visible")).toContain("is_active");
+    expect(described("bas_points", "is_visible")).toContain("risk");
+    // Each display_name names the other table and says it means the opposite.
+    expect(described("bas_points", "display_name")).toContain("NIAGARA");
+    expect(described("bas_points", "display_name")).toContain("bas_stations.display_name");
+    expect(described("bas_points", "display_name")).toContain("OPPOSITE");
+    expect(described("bas_stations", "display_name")).toContain("PERSON");
+    expect(described("bas_stations", "display_name")).toContain("bas_points.display_name");
+    expect(described("bas_stations", "display_name")).toContain("OPPOSITE");
+    expect(described("bas_points", "label")).toContain("discover");
 
     // Spot-check the prose itself, not just its presence: an empty string is a
     // non-null description and would satisfy every assertion above.
@@ -652,6 +680,16 @@ describe("the controlled vocabularies are enforced by the database", () => {
            INSERT INTO bas_sync_checkpoints (point_id, completeness)
            SELECT point_id, 'mostly' FROM p`,
       },
+      {
+        // add_bas_point_label_and_visibility (2026-09-17). "No label" has one
+        // spelling, NULL. A screen that falls back to the Niagara name on NULL
+        // would render an empty row for '' or '   '.
+        what: "a blank label",
+        constraint: "bas_points_label_not_blank",
+        sql: (station) =>
+          `INSERT INTO bas_points (station_id, niagara_history_name, label)
+           VALUES (${station}, 'ZZTEST_BlankLabel', '   ')`,
+      },
     ];
 
   for (const testCase of CASES) {
@@ -705,6 +743,90 @@ describe("the controlled vocabularies are enforced by the database", () => {
         ),
       ).toBe(1);
     });
+  });
+});
+
+describe("showing is not collecting (B8.1)", () => {
+  /**
+   * `label` and `is_visible` were added by add_bas_point_label_and_visibility.
+   * Nothing reads them yet - B8.1 is schema only - so what is asserted here is
+   * that their existence changes nothing for a row that has not been touched,
+   * and that touching them changes nothing about collection.
+   */
+  it("a point nobody has touched is visible and unlabelled, exactly as before", async () => {
+    await inRollback(async (tx) => {
+      const f = await createBasFixture(tx);
+
+      const points = await tx.basPoint.findMany({
+        where: { stationId: f.stationId },
+        select: { label: true, isVisible: true, isActive: true },
+      });
+      expect(points.length).toBeGreaterThan(0);
+      for (const p of points) {
+        expect(p.label).toBeNull();
+        expect(p.isVisible).toBe(true);
+        expect(p.isActive).toBe(true);
+      }
+    });
+  });
+
+  it("hiding and labelling a point leaves is_active alone", async () => {
+    await inRollback(async (tx) => {
+      const f = await createBasFixture(tx);
+
+      const after = await tx.basPoint.update({
+        where: { pointId: f.sat },
+        data: { label: "Zone Temp 104-105", isVisible: false },
+        select: { label: true, isVisible: true, isActive: true, niagaraDisplayName: true },
+      });
+
+      expect(after.label).toBe("Zone Temp 104-105");
+      expect(after.isVisible).toBe(false);
+      // The whole point of the distinction. A hide must never stop collection.
+      expect(after.isActive).toBe(true);
+      // And the Niagara name is untouched: label is a third field, not an edit.
+      expect(after.niagaraDisplayName).toBe("AHU-1_SupplyAirTemp");
+    });
+  });
+
+  it("a hidden point is still in bas_v_collection_health - hidden must not hide risk", async () => {
+    await inRollback(async (tx) => {
+      const f = await createBasFixture(tx);
+
+      await tx.basPoint.update({
+        where: { pointId: f.sat },
+        data: { isVisible: false },
+      });
+
+      // The view has no is_visible filter and must never gain one: a hidden
+      // point that starts losing history and says nothing is the 28 August
+      // failure again. Screens that honour is_visible do so in the table they
+      // render, never in the figures (docs/B8_point_management_plan.md).
+      const rows = await tx.$queryRaw<Array<{ point_id: bigint; is_active: boolean }>>`
+        SELECT point_id, is_active FROM bas_v_collection_health
+         WHERE point_id = ${f.sat}`;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.is_active).toBe(true);
+    });
+  });
+
+  it("accepts a label with content and rejects one without", async () => {
+    await inRollback(async (tx) => {
+      const f = await createBasFixture(tx);
+
+      await tx.$executeRaw`
+        UPDATE bas_points SET label = 'Supply Air Temp' WHERE point_id = ${f.sat}`;
+      await tx.$executeRaw`
+        UPDATE bas_points SET label = NULL WHERE point_id = ${f.sat}`;
+    });
+
+    const error = await expectRejection(async (tx) => {
+      const f = await createBasFixture(tx);
+      await tx.$executeRaw`
+        UPDATE bas_points SET label = '' WHERE point_id = ${f.sat}`;
+    });
+    expect(error.message).toContain("23514");
+    expect(error.message).toContain("bas_points_label_not_blank");
   });
 });
 
@@ -768,7 +890,7 @@ describe("point identity survives a rename", () => {
 
       const point = await tx.basPoint.findUniqueOrThrow({
         where: { pointId: f.sat },
-        select: { niagaraHistoryName: true, displayName: true },
+        select: { niagaraHistoryName: true, niagaraDisplayName: true },
       });
 
       // $2d is a dash. This string goes into the oBIX URL as-is; decoding and
@@ -776,8 +898,9 @@ describe("point identity survives a rename", () => {
       // exactly like a missing point.
       expect(point.niagaraHistoryName).toBe("AHU$2d1_SupplyAirTemp");
       expect(point.niagaraHistoryName).toContain("$2d");
-      // The pretty form is a separate column, not a replacement.
-      expect(point.displayName).toBe("AHU-1_SupplyAirTemp");
+      // The pretty form is a separate column, not a replacement - and it is
+      // NIAGARA's pretty form, hence the field name. A person's is `label`.
+      expect(point.niagaraDisplayName).toBe("AHU-1_SupplyAirTemp");
     });
   });
 });

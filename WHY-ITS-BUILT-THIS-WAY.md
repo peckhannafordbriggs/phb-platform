@@ -987,7 +987,61 @@ chattering point refuses or alarms the whole station. Refuse on a measured
 horizon and one chatty point stops a building. Stop reading the verdict and the
 check is silent again.
 
-## 45 · The judgment I'd most want to pass on
+## 45 · Showing a point is not collecting it, and the schema keeps them apart
+
+**Decision.** `bas_points` carries two independent booleans. `is_active` says
+whether the collector *fetches* the point. `is_visible`, added by B8.1 on
+2026-09-17, says whether a browsing screen *shows* it. Both default to on. A
+user label lives in a third column, `label`, beside Niagara's own
+`display_name`, and `discover` writes neither `label` nor `is_visible` — ever.
+The six `bas_v_*` views were left alone: none filters on `is_visible`, and none
+may.
+
+**Why.** Users asked to "choose which points to pull". What they want is a
+shorter list on screen. The two requests look alike and cost differently: a
+hidden point is still collected and can be un-hidden at any moment for free,
+while a point that is not collected is being overwritten on the station — the
+office JACE holds about five days and one status point about two hours — so a
+point not collected on Tuesday cannot be recovered on Friday. If the platform
+offered one switch, it would be the destructive one, flipped for a cosmetic
+reason, and the loss would surface months later as a question with no answer.
+
+The label is a new column rather than a rename because the existing names are
+a trap that could not be safely disarmed: `bas_stations.display_name` is what a
+person calls the station, and `bas_points.display_name` is what *Niagara* calls
+the point. Renaming the point column to make the tables agree was evaluated.
+The collector reads and writes it by name in its upsert, its active-points
+reader and its sync path, so the rename is a two-repository change that has to
+land in one breath, and between the halves every collector pass fails against
+a station whose shortest history holds two hours. The SQL name stays; the
+Prisma field became `niagaraDisplayName`; both columns carry a `COMMENT` naming
+the other and saying it means the opposite; and `tests/bas-schema.test.ts`
+asserts that wording.
+
+`discover` re-reads every history on every run and upserts every point. If it
+wrote either new column, an afternoon of naming would vanish the next time a
+history was added, and nobody would know until they looked. The upsert names
+the columns it writes, and `test_point_management.py` *(phb-bas)* proves the
+rest by running it: the real migration applied with `prisma migrate deploy` to
+a throwaway cluster, a point labelled and hidden, the station's displayName
+renamed underneath, and the label and the hide come out unchanged while the
+Niagara name beside them updated. Two mutations of the upsert each failed
+seven of its checks.
+
+Global rather than per-user, because that is how it was asked for and a join
+table is a thing nobody wanted. The trade-off — one person's hide is
+everyone's — is on the column comment, where the next person will read it.
+
+**What breaks if you undo this.** Merge the two booleans, or make a screen's
+"hide" write `is_active`, and a cosmetic choice destroys data with no error
+and no gap marker. Filter a `bas_v_*` view on `is_visible` and Collection
+Health can look healthier than the system is — the 28 August failure again,
+recorded and read by nobody. Add `label` or `is_visible` to the collector's
+upsert and every rediscovery erases the hand-typed names; the phb-bas test
+fails, which is what it is for. Rename `bas_points.display_name` in one
+repository without the other and the collector stops on its next pass.
+
+## 46 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
 
