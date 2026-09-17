@@ -29,6 +29,7 @@ import { prisma } from "@/lib/db";
 import type { StationPointsList } from "@/lib/modules/bas/types";
 import { requireModuleAdmin } from "@/lib/authz";
 import {
+  INACTIVE_REASON_WORDS,
   REASON_NOT_RECORDED,
   describeCollected,
   describePointCompleteness,
@@ -418,6 +419,7 @@ describe("the screen says so when the list falls short", () => {
     equipmentName: null,
     unit: null,
     collected: true,
+    inactiveReason: null,
     completeness: "complete",
     lastRecordAt: null,
     visible: true,
@@ -492,6 +494,9 @@ describe("every point is shown with its real state", () => {
     expect(inactive).toBeDefined();
     expect(inactive?.collected).toBe(false);
 
+    // The fixture's inactive point carries no reason, which is the state a
+    // point deactivated by hand without one is in.
+    expect(inactive?.inactiveReason).toBeNull();
     const said = describeCollected(inactive!);
     expect(said.label).toBe("Not collected");
     expect(said.detail).toBe(REASON_NOT_RECORDED);
@@ -499,6 +504,36 @@ describe("every point is shown with its real state", () => {
     // No wording anywhere on the row claims to know WHY. The collector's
     // system-log list and the _cfg0 rule are not re-implemented here.
     expect(JSON.stringify(inactive)).not.toMatch(/system log|cfg0|reconfigured/i);
+  });
+
+  it("words a recorded reason plainly, never as the enum value", async () => {
+    const { stationA } = await seed();
+    await testDb.basPoint.updateMany({
+      where: { stationId: stationA, niagaraHistoryName: NAMES.inactive },
+      data: { inactiveReason: "niagara_system_log" },
+    });
+    const list = await getStationPoints(await adminViewer(), stationA.toString());
+    const inactive = list.points.find((p) => p.niagaraHistoryName === NAMES.inactive);
+
+    expect(inactive?.inactiveReason).toBe("niagara_system_log");
+    const said = describeCollected(inactive!);
+    expect(said.detail).toBe("Niagara system log, not building data");
+    expect(said.detail).not.toContain("niagara_system_log");
+
+    // Every value has words, and none of them is the value itself.
+    for (const [value, words] of Object.entries(INACTIVE_REASON_WORDS)) {
+      expect(words).not.toContain(value);
+      expect(words.length).toBeGreaterThan(10);
+    }
+    // Global_Alarm is building data waiting for a table, and says so.
+    expect(INACTIVE_REASON_WORDS.alarm_history).toContain("building data");
+    expect(INACTIVE_REASON_WORDS.alarm_history).not.toMatch(/system log/i);
+
+    const html = renderToStaticMarkup(
+      createElement(PointsTable, { list, expectedTotal: list.pointsAccountedFor.inDatabase }),
+    );
+    expect(html).toContain("Niagara system log, not building data");
+    expect(html).not.toContain("niagara_system_log");
   });
 
   it("carries the B8.1 columns and does not filter on is_visible", async () => {

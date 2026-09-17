@@ -84,7 +84,7 @@ database, entered through the module's own Settings tab.
 | **SpringGroveLabComputer** | — | the lab, `196.1.1.213`, Niagara 4.15.4.24 | Four synthetic points logged every 5 min, 41.6 h buffer. Not PH+B's asset |
 | **`bas_collector` Niagara account** | — | on each station | Read-only, `HTTPBasicScheme`. The only thing added to a JACE |
 | **Collector** | `phb-bas` | `bas-collector/` | Python. Reads oBIX every 15 min, writes to Postgres. Stations and logins from the database |
-| **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 14 tables, 6 views, 18 CHECK constraints, 3 triggers. Permanent |
+| **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 14 tables, 6 views, 20 CHECK constraints, 3 triggers. Permanent |
 | **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Three tabs behind the platform's own login and grants |
 | **Grafana dashboards** | `phb-bas` | `bas-grafana/`, served at `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
 | **`bas-mcp`** | `phb-bas` | `bas-mcp/` | Lets Claude Desktop query the data, read-only. Superseded by B5 when that ships |
@@ -202,10 +202,11 @@ express and proposes an `ALTER … DROP DEFAULT` that PostgreSQL rejects on a
 generated column — which permanently blocks every later migration. Prisma ignores
 triggers, so a trigger keeps the value correct and the schema diff empty.
 
-**`schema.prisma` is not the whole schema.** Three triggers, **18** CHECK
+**`schema.prisma` is not the whole schema.** Three triggers, **20** CHECK
 constraints (13 in `add_bas_tables`, one each in `add_bas_projects`,
 `add_station_tls_and_display_name` and `add_bas_point_label_and_visibility`,
-two in `add_bas_completeness`) and the six views live in the migration SQL. Prisma models columns and indexes; it ignores
+two each in `add_bas_completeness` and `add_bas_inactive_reason`) and the six
+views live in the migration SQL. Prisma models columns and indexes; it ignores
 constraints and triggers.
 
 ---
@@ -299,9 +300,12 @@ Niagara name (the oBIX key, in full), the station's own name for the history,
 role, equipment, collected, completeness and visible. Loaded on expansion from
 `GET /settings/stations/{id}/points`, not with the tree; the count on the
 station row is a correlated `count(*)` on `bas_points` alone, so it is right
-whether or not anyone expands. **Points that are not collected are listed**, and
-say "Not collected · reason not recorded" — the reason is stored nowhere, and
-the platform does not re-implement the collector's name rules to invent one.
+whether or not anyone expands. **Points that are not collected are listed**,
+with why beside them in plain words from `bas_points.inactive_reason` — five
+values, closed by a CHECK, and a second CHECK that forces it NULL on any point
+that is on. `Global_Alarm` reads as *alarm history* and never as a system log:
+it is building data waiting for a table of its own. A NULL reads "reason not
+recorded"; the platform never derives one from the name.
 The list has the same kind of guard the tree has: `rendered` from the joined
 query against `inDatabase` from a count with no joins, and a red banner when
 they disagree. Nothing filters on `is_visible` (B8.3) and nothing edits (B8.4
@@ -669,8 +673,8 @@ stations:
 |---|---|
 | 14 `bas_*` tables | `@@map("bas_*")` in `prisma/schema.prisma` — 14 |
 | 6 views, all `bas_v_` prefixed | `information_schema.views` — 6 |
-| 18 CHECK constraints, 3 triggers | `pg_constraint`, `pg_trigger` on the live database |
-| 15 migrations applied | `_prisma_migrations`; the last three dated 17 September |
+| 20 CHECK constraints, 3 triggers | `pg_constraint`, `pg_trigger` on the live database |
+| 17 migrations applied | `_prisma_migrations`; the last five dated 17 September. `add_bas_comments` appears twice there — a rolled-back attempt and the successful re-application a minute later — and that is correct |
 | Three tabs, and B5 not among them | `app/(modules)/bas/tabs.ts` lists three; its comment says where B5's line would go |
 | Credentials never returned | the settings query selects `cred.username` and `cred.updated_at` and says why the ciphertext is not there |
 | Every settings write audited | `audit_events`: `bas.project_created`, `bas.building_created`, `bas.station_created`, `bas.credential_set`, and their updates and deletes, each with an actor |

@@ -59,6 +59,31 @@ export const AT_RISK_ROLL_RISKS: readonly RollRisk[] = [
  */
 export type Completeness = "unknown" | "complete" | "backfilling" | "incomplete";
 
+/**
+ * Why a point is not collected (2026-09-17). ONE closed set in two places:
+ * this list and the CHECK bas_points_inactive_reason_check in the
+ * add_bas_inactive_reason migration. tests/bas-schema.test.ts reads the
+ * constraint back out of pg_constraint and asserts the two are identical, and
+ * the collector (phb-bas, collector/reasons.py) does the same for its copy.
+ *
+ * alarm_history is deliberately NOT niagara_system_log: Global_Alarm is real
+ * building data that needs a table of its own, excluded later rather than
+ * never. no_longer_reported is what discover writes for a history the station
+ * stopped reporting.
+ */
+export const INACTIVE_REASONS = [
+  "niagara_system_log",
+  "alarm_history",
+  "reconfigured_cfg0",
+  "manual",
+  "no_longer_reported",
+] as const;
+export type InactiveReason = (typeof INACTIVE_REASONS)[number];
+
+export function isInactiveReason(value: string | null): value is InactiveReason {
+  return value !== null && (INACTIVE_REASONS as readonly string[]).includes(value);
+}
+
 /** Every completeness except `complete`, worst first. */
 export const NOT_COMPLETE: readonly Completeness[] = [
   "incomplete",
@@ -739,11 +764,15 @@ export interface SettingsPoint {
   unit: string | null;
   /**
    * is_active: whether the collector FETCHES this point. Off is permanent in
-   * effect. The reason it is off is NOT stored anywhere the platform can read -
-   * the collector writes is_active without a reason and so does a hand-run
-   * UPDATE - so the screen says "not recorded" rather than inventing one.
+   * effect. Why it is off is `inactiveReason`, when somebody recorded one.
    */
   collected: boolean;
+  /**
+   * Why, when `collected` is false. Null means not recorded, and the screen
+   * says exactly that rather than guessing. Always null when collected is
+   * true - the database refuses otherwise.
+   */
+  inactiveReason: InactiveReason | null;
   /** From bas_sync_checkpoints. Null when the collector has never passed this point. */
   completeness: Completeness | null;
   lastRecordAt: string | null;

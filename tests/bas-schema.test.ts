@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { INACTIVE_REASONS } from "@/lib/modules/bas/types";
 import { disconnectDb, testDb } from "./db";
 import {
   countRows,
@@ -251,6 +252,7 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
       // two booleans of which one costs data forever and one costs nothing.
       "bas_points.label",
       "bas_points.is_visible",
+      "bas_points.inactive_reason",
       "bas_points.is_active",
       "bas_points.display_name",
       "bas_stations.display_name",
@@ -690,6 +692,24 @@ describe("the controlled vocabularies are enforced by the database", () => {
           `INSERT INTO bas_points (station_id, niagara_history_name, label)
            VALUES (${station}, 'ZZTEST_BlankLabel', '   ')`,
       },
+      {
+        // add_bas_inactive_reason (2026-09-17). The set is closed so the
+        // collector's copy and this schema cannot drift apart unnoticed.
+        what: "an inactive_reason outside the set",
+        constraint: "bas_points_inactive_reason_check",
+        sql: (station) =>
+          `INSERT INTO bas_points (station_id, niagara_history_name, is_active, inactive_reason)
+           VALUES (${station}, 'ZZTEST_BadReason', false, 'because')`,
+      },
+      {
+        // The important one: a row must not claim a reason for being off
+        // while it is on.
+        what: "an inactive_reason on a point that is still collected",
+        constraint: "bas_points_inactive_reason_only_when_inactive",
+        sql: (station) =>
+          `INSERT INTO bas_points (station_id, niagara_history_name, is_active, inactive_reason)
+           VALUES (${station}, 'ZZTEST_ReasonWhileActive', true, 'manual')`,
+      },
     ];
 
   for (const testCase of CASES) {
@@ -743,6 +763,78 @@ describe("the controlled vocabularies are enforced by the database", () => {
         ),
       ).toBe(1);
     });
+  });
+});
+
+describe("inactive_reason is one closed set in two places", () => {
+  /**
+   * The list in lib/modules/bas/types.ts and the CHECK in the migration are
+   * two copies of one set. This reads the constraint back out of the catalog
+   * and compares, so a value added to one without the other fails here rather
+   * than rendering as nothing on a screen. The collector's copy (phb-bas,
+   * collector/reasons.py) is held to the same constraint by its own test.
+   */
+  it("matches the CHECK constraint, value for value", async () => {
+    const rows = await testDb.$queryRaw<Array<{ def: string }>>`
+      SELECT pg_get_constraintdef(oid) AS def
+        FROM pg_constraint
+       WHERE conname = 'bas_points_inactive_reason_check'`;
+    const def = rows[0]?.def ?? "";
+    expect(def).toContain("inactive_reason");
+
+    const inDatabase = [...def.matchAll(/'([a-z0-9_]+)'/g)]
+      .map((m) => m[1])
+      .filter((v): v is string => v !== undefined && v !== "text")
+      .sort();
+    expect(inDatabase).toEqual([...INACTIVE_REASONS].sort());
+  });
+
+  it("accepts every value on an inactive point, and refuses reactivation that keeps one", async () => {
+    await inRollback(async (tx) => {
+      const f = await createBasFixture(tx);
+      for (const reason of INACTIVE_REASONS) {
+        await tx.$executeRaw`
+          UPDATE bas_points SET is_active = false, inactive_reason = ${reason}
+           WHERE point_id = ${f.sat}`;
+      }
+      // Clearing in the same statement is the rule every writer follows.
+      await tx.$executeRaw`
+        UPDATE bas_points SET is_active = true, inactive_reason = NULL
+         WHERE point_id = ${f.sat}`;
+    });
+
+    const error = await expectRejection(async (tx) => {
+      const f = await createBasFixture(tx);
+      await tx.$executeRaw`
+        UPDATE bas_points SET is_active = false, inactive_reason = 'manual'
+         WHERE point_id = ${f.sat}`;
+      // The hand-run reactivation that forgets the reason. Refused.
+      await tx.$executeRaw`
+        UPDATE bas_points SET is_active = true WHERE point_id = ${f.sat}`;
+    });
+    expect(error.message).toContain("23514");
+    expect(error.message).toContain("bas_points_inactive_reason_only_when_inactive");
+  });
+
+  it("filed Global_Alarm as alarm history, never as a system log, in the backfill SQL", async () => {
+    // The backfill has already run on the test database against zero rows, so
+    // its effect cannot be observed here; phb-bas/test_inactive_reason.py
+    // applies the migration over nine seeded rows and checks each. What can be
+    // checked here is that the statement filing Global_Alarm names the right
+    // value - the one mistake this migration exists to prevent.
+    const { readFile } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const sql = await readFile(
+      path.join(
+        process.cwd(),
+        "prisma/migrations/20260917234000_add_bas_inactive_reason/migration.sql",
+      ),
+      "utf8",
+    );
+    const alarm = sql.slice(sql.indexOf("SET inactive_reason = 'alarm_history'"));
+    expect(alarm.slice(0, 300)).toContain("niagara_history_name = 'Global_Alarm'");
+    const systemLogs = sql.slice(sql.indexOf("SET inactive_reason = 'niagara_system_log'"));
+    expect(systemLogs.slice(0, 300)).not.toContain("Global_Alarm");
   });
 });
 

@@ -6,9 +6,60 @@ not coverage: it proves the code is written the way the claim needs, not that th
 claim holds. Each entry says what the claim is, why it cannot be provoked, what is
 actually asserted, and what would turn it into a real test.
 
-This file mirrors `claude/testing-blind-spots.md` in the Claude Project, which
-held two entries before this one. Those two belong here too; they have not been
-copied because the agent that wrote this entry could not reach the Project.
+This file is canonical. It began in the Claude Project; the repository copy
+supersedes it.
+
+---
+
+## The station counting guard cannot be made to fire
+
+**Recorded:** 17 September 2026, from B7.6. **Test:**
+`tests/bas-settings-filters.test.ts` → *raises the alarm when rendered
+disagrees with matched*.
+
+**The claim.** When the Settings tree renders fewer stations than the
+independent count says match the filter, the screen goes red and names the
+shortfall.
+
+**Why it cannot be provoked.** At the current schema the tree cannot lose a
+station: `bas_stations.site_id` and `bas_sites.project_id` are both NOT NULL
+with foreign keys, and a station whose building is missing from the hierarchy
+still lands in `unassignedStations`, which `rendered` counts. There is no row
+that Prisma will let a test insert which the tree then drops.
+
+**What is asserted instead.** The rule lives in `settingsCountState`, a pure
+function, and is tested with hand-built counts. That proves the rule; it does not
+prove the tree ever produces mismatched counts, because it cannot. B8.2's points
+guard has the same shape and the same gap, and closed half of it by stubbing the
+count query so the service is seen to report the database's number.
+
+**What would make it real.** Relaxing either NOT NULL, or adding a join to the
+tree that is not one-to-one — which is exactly the change the guard exists to
+catch. Until then the mutation record in the test files is the evidence: each
+join made inner fails the tests, and that is what a guard is for.
+
+---
+
+## Org scoping of Collection Health, Point Explorer and the Settings tree
+
+**Recorded:** 17 September 2026, from B7. **Test:** `tests/bas-cascade.test.ts`
+(the `siteFilter(entitled` source-text assertion) and the same reasoning in
+every BAS screen test.
+
+**The claim.** An employee sees only the sites they are entitled to; a site
+outside the entitlement is 404, indistinguishable from a site that does not
+exist.
+
+**Why it cannot be provoked.** `basSiteScope` returns `entitled: null` — every
+employee holding the module sees every site — and the estate is one
+organisation. No viewer outside an org can be constructed.
+
+**What is asserted instead.** The queries compose `siteFilter(entitled, …)`,
+read from `basSiteScope`, rather than inventing a predicate. Source text.
+
+**What would make it real.** `bas_site_grant`, or any per-employee entitlement.
+The day `basSiteScope` returns a list, seed two orgs and assert the 404 on every
+screen, and delete this entry and the next.
 
 ---
 
@@ -43,3 +94,27 @@ viewer one of them, and assert the other org's station returns
 names nothing. The same day, the equivalent assertions for the tree
 (`getBasSettingsTree`), Collection Health and Point Explorer stop being blind
 spots too, and this entry should be deleted rather than kept as history.
+
+---
+
+## For B8.4: the label fallback must be tested with the label actually NULL
+
+**Recorded:** 17 September 2026. **Not yet a test** — a note for the phase that
+will need one.
+
+**The state of the data.** `bas_stations.display_name` is NULL on both
+stations. The Settings UI falls back to `niagara_station_name`, which is why
+nobody has noticed that no station has ever been given a display name. Every
+row the fallback has ever rendered took the fallback path.
+
+**Why it matters for points.** B8.4 adds the same label-with-fallback pattern to
+points: `label` wins when present, `display_name` (Niagara's) otherwise. Every
+real point today has `label` NULL. A test that seeds a label and asserts it
+shows proves the branch nobody is on. The test that matters seeds a point with
+`label` NULL and a Niagara `display_name` set, and asserts the Niagara name
+renders — and a second with both NULL, asserting the history name renders and
+never an empty cell. `bas_points_label_not_blank` guarantees NULL is the only
+spelling of "no label", so those two cases are the whole space.
+
+**Also worth asserting then:** that search matches both the label and the
+Niagara name for a point whose label is NULL, since that is every point.

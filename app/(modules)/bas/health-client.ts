@@ -2,6 +2,7 @@ import type {
   BasSettingsTree,
   CollectionHealth,
   Completeness,
+  InactiveReason,
   PointExplorer,
   PointHealthRow,
   RollRisk,
@@ -877,31 +878,56 @@ export async function fetchStationPoints(
 }
 
 /**
- * What the Points list says about a point that is not collected (B8.2).
+ * What the Points list says about a point that is not collected (B8.2, and
+ * the reason column added the same day).
  *
- * The plan asked the row to say WHY. It cannot, honestly: the reason is not
- * stored anywhere the platform can read. The collector sets is_active false for
- * a Niagara system log at discovery and for a history the station stopped
- * reporting, and a person sets it false by hand for the dead half of a
- * reconfigured _cfg0 pair - and none of those writes a reason, a note or a
- * code. Re-deriving one here by matching names would be a second copy of the
- * collector's rules, free to drift from the first, so the screen says the
- * reason is not recorded rather than guessing. Storing it is the fix, and it
- * belongs to the collector and a later phase.
+ * The reason comes from bas_points.inactive_reason, written by the collector at
+ * both places it deactivates a point and by a person otherwise. In plain words,
+ * never the enum value: the person reading the row has no other way to look.
+ * NULL still reads "reason not recorded", and nothing here derives a reason
+ * from the point's name - that would be a second copy of the collector's rules.
  */
 export const REASON_NOT_RECORDED = "reason not recorded";
 
-export function describeCollected(point: { collected: boolean }): {
+/**
+ * A total record, so adding a value to INACTIVE_REASONS without wording here
+ * stops the build rather than rendering the enum.
+ *
+ * alarm_history is worded as what it is - building data waiting for a table -
+ * and not as a system log, because filing it under the logs is how it would
+ * never be revisited.
+ */
+export const INACTIVE_REASON_WORDS: Record<InactiveReason, string> = {
+  niagara_system_log: "Niagara system log, not building data",
+  alarm_history:
+    "alarm history: real building data, excluded until it has a table of its own",
+  reconfigured_cfg0: "retired half of a reconfigured _cfg0 pair",
+  manual: "turned off by a person",
+  no_longer_reported: "no longer reported by the station",
+};
+
+export function describeCollected(point: {
+  collected: boolean;
+  inactiveReason: InactiveReason | null;
+}): {
   label: string;
   detail: string | null;
   tone: Tone;
 } {
   if (point.collected) return { label: "Collected", detail: null, tone: "neutral" };
   // Neutral, not amber. Nine of the estate's 39 points are deliberately not
-  // collected - the Niagara system logs and the retired _cfg0 halves - and a
-  // list that turned amber on every station would be one more alarm to learn
-  // to ignore. The completeness column beside it is where a fault shows.
-  return { label: "Not collected", detail: REASON_NOT_RECORDED, tone: "neutral" };
+  // collected, and a list that turned amber on every station would be one
+  // more alarm to learn to ignore. The completeness column is where a fault
+  // shows. A point that is off with NO reason recorded is the one worth a
+  // second look, and it is the one that reads differently.
+  return {
+    label: "Not collected",
+    detail:
+      point.inactiveReason === null
+        ? REASON_NOT_RECORDED
+        : INACTIVE_REASON_WORDS[point.inactiveReason],
+    tone: "neutral",
+  };
 }
 
 /**
