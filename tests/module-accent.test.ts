@@ -19,6 +19,14 @@ describe("the settled assignments", () => {
     expect(moduleAccent("bas").fill).toBe("var(--phb-cyan)");
   });
 
+  it("gives the Knowledge Base pink, which is in neither semantic set", () => {
+    // Assigned rather than left to the positional fallback: the sidebar passes a
+    // list index and the module header passes none, so an unassigned key would
+    // get two different colours in the two places that have to agree.
+    expect(moduleAccent("knowledge-base").fill).toBe("var(--phb-pink)");
+    expect(moduleAccent("knowledge-base", 2).fill).toBe("var(--phb-pink)");
+  });
+
   it("pairs every fill with an ink that clears AA as text", () => {
     // The fill fills shapes; the ink carries glyphs. app/globals.css explains
     // why they cannot be the same value for anything but purple and maroon.
@@ -54,12 +62,23 @@ describe("a module with no assignment", () => {
   });
 
   it("does not collide with a settled module until the palette runs out", () => {
-    // Three unassigned modules, three colours, none of them the two that are spoken for.
-    const taken = new Set(["var(--phb-red)", "var(--phb-cyan)"]);
+    // Three of the five slots are spoken for now - red, cyan, and the pink the
+    // Knowledge Base took - so two are left for anything unassigned.
+    //
+    // The property under test is the one that holds at any size: an unassigned
+    // module never gets a settled module's colour. The distinctness below is
+    // bounded by what is actually free, and it is now 2. When it reaches 1 the
+    // palette is exhausted and a fifth module has to be assigned deliberately
+    // rather than falling back.
+    const taken = new Set([
+      "var(--phb-red)",
+      "var(--phb-cyan)",
+      "var(--phb-pink)",
+    ]);
     const given = [0, 1, 2].map((i) => moduleAccent(`future-${i}`, i).fill);
 
     for (const fill of given) expect(taken.has(fill)).toBe(false);
-    expect(new Set(given).size).toBe(3);
+    expect(new Set(given).size).toBe(2);
   });
 
   it("wraps rather than returning undefined when the palette is exhausted", () => {
