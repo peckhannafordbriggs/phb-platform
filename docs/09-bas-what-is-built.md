@@ -565,28 +565,38 @@ the health check watched collection and nothing else.
 
 ### The backup incident
 
-**The nightly backup never once succeeded against the platform database, from
-the B6 cutover on 28 August until 17 September.** Every attempt died before
-writing a byte:
+**The nightly backup never once succeeded against the platform database.** The
+first attempt after the 24 August cutover was on 28 August; it and every attempt
+until 17 September died before writing a byte:
 
 ```
 pg_dump: error: query failed: ERROR:  permission denied for table _prisma_migrations
 FAILED: pg_dump exited 1
 ```
 
-The last good dump on disk was of the standalone database retired on 24 August.
-Three 0-byte `.dump` files sat in OneDrive looking like backups in a directory
-listing. The scheduled task showed `LastTaskResult 1` and stopped firing on 14
-September. For those three weeks the 42,000 readings in the platform database —
-including the office's history to February 2024, which the JACE no longer
-holds — existed in exactly one place.
+The last verified dump was `bas_2026-08-24_1126.dump`, of the standalone
+database retired that day — and no platform dump was ever written before 17
+September: no attempt at all was made on 25, 26 or 27 August (the task did not
+fire; why is unestablished, Task Scheduler's history begins on 9 September), and
+the directory listing taken on 17 September before rotation held nothing dated
+between the 24th and the 28th. Three 0-byte `.dump` files sat in OneDrive looking
+like backups in a directory listing. The scheduled task showed `LastTaskResult 1`
+and stopped firing on 14 September. For those three weeks the 42,000 readings in
+the platform database — including the office's history to February 2024, which
+the JACE no longer holds — existed in exactly one place.
 
 **Cause: one environment variable serving two jobs with opposite privilege
 needs.** `Backup-BasDatabase.ps1` read the collector's `DATABASE_URL` from the
-same `.env`. B7.5 made that the least-privilege `bas_collector` role — correctly;
-the collector must not be able to read `employees`. `pg_dump` of a whole database
-as that role fails on the first table it cannot lock. Tightening one job broke the
-other, silently, at a distance, weeks later. **Nobody noticed for three weeks
+same `.env`. The B6 cutover (`abcacf3` *(phb-bas)*, 24 August) pointed that at
+the platform database as the `postgres` superuser, which a dump can use; then,
+between 24 August 11:26 and 28 August 08:29, the connection was moved to the
+least-privilege `bas_collector` role — correctly, the collector must not be able
+to read `employees`, and the role existed by 12:44 on the 24th — but the exact
+moment is in no tracked file, because `.env` is not in git. `pg_dump` of a whole
+database as that role fails on the first table it cannot lock. Tightening one job
+broke the other, silently, at a distance, days later. (An earlier version of this
+section blamed B7.5, which shipped on 9 September, sixteen days after the first
+failure, and did not touch `DATABASE_URL`.) **Nobody noticed for three weeks
 because nothing watched it.** The health check watched collection; the one thing
 protecting the data once collected had no monitoring at all.
 
@@ -622,9 +632,12 @@ Live at 12:21 on 17 September: a 0.49 MB dump verified with 254 archive entries,
 the restore test matched all ten tables (42,652 readings), the health check read
 `[OK] Newest verified backup is 0.0 h old`. Rotation also removed the three
 August dumps of the retired standalone database, which were past the 14-day
-retention. `runbook.md` → *Repointing the collector also repoints the nightly
-backup*; `RUNBOOK.md` *(phb-bas)* → *Health check says NO VERIFIED BACKUP
-EXISTS*.
+retention, so the last verified dump from before that day **no longer exists on
+disk**; the standalone database itself is still on the server with 5,615
+readings to 24 August 10:35, every one of which the platform also holds. The
+recovery table in `runbook.md` → *Repointing the collector also repoints the
+nightly backup* says where to look and where not to bother; `RUNBOOK.md`
+*(phb-bas)* → *Health check says NO VERIFIED BACKUP EXISTS* is the procedure.
 
 ---
 
