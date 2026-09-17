@@ -3759,7 +3759,7 @@ So three things are defined in the migration SQL rather than in
 | What | Where | Does Prisma notice it? |
 |---|---|---|
 | `bas_points_roll_horizon` trigger, keeping `roll_horizon_s` correct | migration SQL | No |
-| 18 CHECK constraints (13 in `add_bas_tables`, then one each in `add_bas_projects`, `add_station_tls_and_display_name` and `add_bas_point_label_and_visibility`, two in `add_bas_completeness`) | migration SQL | No. Invisible to it in both directions |
+| 20 CHECK constraints (13 in `add_bas_tables`, then one each in `add_bas_projects`, `add_station_tls_and_display_name` and `add_bas_point_label_and_visibility`, two each in `add_bas_completeness` and `add_bas_inactive_reason`) | migration SQL | No. Invisible to it in both directions |
 | 6 views, `bas_v_*` | migration SQL | No |
 
 The BRIN index on `bas_readings(ts)` **is** in `schema.prisma`, as
@@ -4618,6 +4618,48 @@ exists. Prisma wraps each migration in a transaction, so for these files
 This is safe for a comments-only migration: `COMMENT ON` touches no data, so a
 failed attempt destroys nothing. It would not be safe to assume for a migration
 that writes rows.
+---
+
+## A migration marked `rolled_back` on live, and why an applied migration is never edited
+
+**Symptom.** `_prisma_migrations` on the live database shows
+`20260821151125_add_bas_comments` twice: one row with `rolled_back_at` set and
+`applied_steps_count = 0`, one finished a minute later. Someone reads the first
+row and concludes the file never ran on live, so edits to it would be safe.
+
+**What actually happened.** The first application on 2026-08-21 at 15:13 failed
+on the `||` described in the section above. It was marked rolled back with
+`prisma migrate resolve --rolled-back`, the file was fixed, and the next
+`migrate deploy` at 15:14 **re-applied it** — Prisma retries a migration marked
+rolled back. The comments are on live: compared column by column through
+`bas_v_data_dictionary` on 2026-09-17, live and a fresh database both carry 45
+described columns and 19 described objects, with no difference in either
+direction.
+
+**What is still true, and is the trap.** An applied migration never runs again
+where it has been applied. Anything edited into `add_bas_comments` after
+21 August reaches every *fresh* database — the test suites build one, and pass —
+and never reaches live. The same is true of every applied migration; this one
+has simply already been mistaken for one that would re-run.
+
+**The rule.** Never edit a migration that has been applied anywhere, not even
+to add a comment. Write a new one. `20260917235000_restate_bas_comments`
+re-states the whole intended comment set (with the `bas_readings.status`
+wording from the 24 August correction, not the 21 August one) and is the
+convergence point: `COMMENT ON` is idempotent, so it changes nothing on live and
+produces the same state on a fresh database.
+
+**Why "not even a comment".** Prisma checksums `migration.sql` when it applies
+it. Adding a comment to the applied file was tried on 2026-09-17: `migrate
+status` and `migrate deploy` said *Database schema is up to date* — neither
+checks the checksum — but `prisma migrate dev` said *"was modified after it was
+applied. We need to reset the database. All data will be lost."* Against the
+development database, which is the one the BAS collector writes to, accepting
+that prompt destroys `bas_readings`. So the do-not-edit note for
+`add_bas_comments` is a `README.md` **beside** the file, which Prisma does not
+checksum, and the file's own bytes are unchanged. See also *Editing a
+migration that has already been applied*, above, for the local recovery.
+
 ---
 
 ## The vocabularies are empty, and nothing errors
@@ -6056,34 +6098,68 @@ clears it.
 
 ---
 
-## A point reads "Not collected · reason not recorded"
+## A point reads "Not collected", and what the words beside it mean
 
-**Symptom.** In the Points list a row's Collected column says *Not collected ·
-reason not recorded*. Today that is nine rows across the estate: the four
-Niagara system logs on each station, and the two retired `_cfg0` halves on
-PHBoffice.
+**Symptom.** In the Points list a row's Collected column says *Not collected*
+followed by a reason in plain words — or by *reason not recorded*.
 
-**Cause.** Not a fault. `bas_points.is_active` is false and **the reason is
-stored nowhere**. The collector's `discover` sets it false for a Niagara system
-log at registration and for a history the station no longer reports; a person
-set it false by hand for the dead half of each reconfigured `_cfg0` pair. None
-of those writes a reason, a code or a note (`bas_points.notes` is NULL on all
-nine). The platform does not re-derive one from the history name — the
-collector's `SYSTEM_LOG_HISTORIES` list and its `_cfg` regex are the collector's,
-and a second copy here would drift from the first.
+**The reason is `bas_points.inactive_reason`**, a closed set of five values,
+written by the collector at both places it deactivates a point and by a person
+otherwise. What each reads as on screen, and what it means:
 
-**To find out why, today.** The collector's log at discovery says which:
-*"Niagara system log, not building data — registered INACTIVE"* or *"no longer
-reported by the station — marked inactive"*. A `_cfg0` suffix on the name means
-the reconfigured-pair case, which the collector warns about and never decides.
-And `bas_points.notes`, if somebody wrote one.
+| Value | On screen | Written by |
+|---|---|---|
+| `niagara_system_log` | Niagara system log, not building data | `discover`, for `AuditHistory`, `LogHistory`, `SecurityHistory` |
+| `alarm_history` | alarm history: real building data, excluded until it has a table of its own | `discover`, for `Global_Alarm` |
+| `reconfigured_cfg0` | retired half of a reconfigured `_cfg0` pair | a person, after checking Workbench |
+| `manual` | turned off by a person | a person |
+| `no_longer_reported` | no longer reported by the station | `discover`, when a history vanishes from the station |
+| NULL | reason not recorded | nobody — the row was deactivated without one |
 
-**To store it properly.** A `bas_points.inactive_reason` column over a closed
-set — `system_log`, `not_reported`, `retired_cfg`, `manual` — with a CHECK that
-it is NULL when `is_active` is true; written by `discover` in the two places it
-sets `is_active = false` *(phb-bas)*, and by the platform when a later B8 part
-adds the Collected toggle. Schema in this repository first, collector second,
-in that order and in that breath, as B8.1 did. Not built; not in any plan yet.
+`Global_Alarm` is deliberately **not** a system log. It is building data — what
+tripped, when, at what priority, whether anyone acknowledged it — that needs a
+table of its own because an alarm is an event with a state, not a number at a
+timestamp. `alarm_history` keeps that "later, deliberately" visible; filed
+under the logs it would never be revisited.
+
+**Two CHECKs, and the one that bites.** `bas_points_inactive_reason_check`
+keeps the set closed. `bas_points_inactive_reason_only_when_inactive` forces
+the reason NULL whenever `is_active` is true. So **anything that turns a point
+back on must clear the reason in the same statement**, or PostgreSQL refuses it:
+
+```sql
+-- refused: 23514 bas_points_inactive_reason_only_when_inactive
+UPDATE bas_points SET is_active = true WHERE point_id = 42;
+-- accepted
+UPDATE bas_points SET is_active = true, inactive_reason = NULL WHERE point_id = 42;
+-- turning one off, by hand
+UPDATE bas_points SET is_active = false, inactive_reason = 'manual' WHERE point_id = 42;
+```
+
+**What `discover` does to each on the next run** *(phb-bas, since the reason
+column)*:
+
+- A system log or `Global_Alarm` a person turned **on** stays on. One whose
+  reason was blanked but is still off gets the reason filled back in.
+- A point marked `manual` or `reconfigured_cfg0` **stays off**, even though the
+  station still reports it. Before the column existed the collector could not
+  tell a person's decision from its own, and re-activated every history the
+  station reported — which would have undone the two `_cfg0` retirements on
+  the next `discover`. That is a deliberate behaviour change.
+- A point marked `no_longer_reported` whose history comes back is re-activated
+  and its reason cleared — the collector's own decision, reversed by the
+  station.
+
+**Deploy order.** The platform migration `add_bas_inactive_reason` must be live
+**before** the collector that writes the column; the collector's upsert names
+the column and fails on a schema without it. Schema first, collector second —
+the same order as B8.1. `test_inactive_reason.py` *(phb-bas)* proves all of the
+above against the real migrations on a throwaway cluster, and asserts the
+collector's constants equal the values the CHECK accepts.
+
+**Still reads "reason not recorded"?** Then the row was deactivated by a hand
+`UPDATE` that set only `is_active`. Look at the collector log or the name, decide,
+and write the reason with the statement above. Do not guess it into the screen.
 
 ---
 

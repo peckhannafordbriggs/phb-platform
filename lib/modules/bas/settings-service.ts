@@ -23,6 +23,7 @@ import type {
 import {
   COLLECTING_WITHIN_HOURS,
   NO_SETTINGS_FILTERS,
+  isInactiveReason,
   settingsFiltersActive,
 } from "./types";
 import type {
@@ -529,6 +530,7 @@ interface PointListRow {
   equipment_name: string | null;
   unit: string | null;
   is_active: boolean;
+  inactive_reason: string | null;
   is_visible: boolean;
   completeness: string | null;
   last_record_ts: Date | null;
@@ -552,6 +554,8 @@ function toPoint(row: PointListRow): SettingsPoint {
     equipmentName: row.equipment_name,
     unit: row.unit,
     collected: row.is_active,
+    // Closed by bas_points_inactive_reason_check; the guard is for the type.
+    inactiveReason: isInactiveReason(row.inactive_reason) ? row.inactive_reason : null,
     // The CHECK on bas_sync_checkpoints.completeness makes this a closed set;
     // the guard is for the type, not the data.
     completeness:
@@ -615,6 +619,7 @@ export async function getStationPoints(
         e.name          AS equipment_name,
         p.unit,
         p.is_active,
+        p.inactive_reason,
         p.is_visible,
         c.completeness,
         c.last_record_ts

@@ -440,17 +440,45 @@ in Settings lists its points: label, Niagara name, the station's own name for
 it, role, equipment, collected, completeness, visible. Loaded on expansion from
 `GET /api/modules/bas/settings/stations/{id}/points`; the count on the station
 row is a joinless count inside the tree query, so it is right without anyone
-expanding. **Uncollected points are shown**, and the row reads "Not collected ·
-reason not recorded", because the reason is stored nowhere: the collector and
-hand-run SQL both set `is_active` without one, and re-deriving it from the name
-would be a second copy of the collector's rules that drifts from the first.
-**The list carries its own counting guard** — `rendered` from the joined query
+expanding. **Uncollected points are shown**, with the reason beside them in
+plain words (next entry). **The list carries its own counting guard** — `rendered` from the joined query
 against `inDatabase` from `count(*)` with no joins, red on screen when they
 disagree — and six mutations of the query each fail the test. No filtering on
 `is_visible`, no editing, no search; the six views, Point Explorer and
 Collection Health are untouched. Org scoping is a source-text assertion only,
 recorded in `docs/testing-blind-spots.md`. `runbook.md` → *The Points list says
 it could not place N points*.
+
+**Why a point is not collected is now recorded (2026-09-17).**
+`bas_points.inactive_reason`, five values closed by a CHECK —
+`niagara_system_log`, `alarm_history`, `reconfigured_cfg0`, `manual`,
+`no_longer_reported` — and a second CHECK forcing it NULL whenever `is_active`
+is true, so a row cannot claim a reason for being off while it is on; anything
+that reactivates a point clears the reason in the same statement.
+**`Global_Alarm` is `alarm_history`, never a system log**: it is building data
+that needs its own table, excluded later and deliberately. The migration
+backfilled the nine inactive points on live by exact name and `_cfgN` suffix
+and reports what it left. The collector *(phb-bas)* writes the reason at both
+places it deactivates a point, defines the values once in
+`collector/reasons.py`, and its `test_inactive_reason.py` reads the CHECK back
+out of the catalog to prove the two sets match — as does
+`tests/bas-schema.test.ts` for the TypeScript copy. One behaviour change rode
+in with it: a point marked `manual` or `reconfigured_cfg0` **stays off across
+a rediscovery**, where before the collector re-activated every history the
+station reported. **Deploy the platform migration before the collector.**
+`runbook.md` → *A point reads "Not collected", and what the words beside it
+mean*.
+
+**`add_bas_comments` was not the trap it looked like.** Live's
+`_prisma_migrations` has it twice: rolled back at 15:13 on 21 August, re-applied
+at 15:14 — Prisma retries a rolled-back migration on the next deploy. Live and
+a fresh database carry the identical 45 column comments. What is true of it is
+true of every applied migration: edits never reach a database that has applied
+it. `20260917235000_restate_bas_comments` re-states the whole set as the
+convergence point, and a `README.md` beside the old file says do not edit it —
+beside, not inside, because `prisma migrate dev` treats a changed checksum on an
+applied migration as grounds to reset the database. `runbook.md` → *A
+migration marked `rolled_back` on live*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

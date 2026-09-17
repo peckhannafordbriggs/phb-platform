@@ -745,6 +745,19 @@ model BasPoint {
   /// reports, except the four Niagara system logs, whose value it leaves as a
   /// human set it.
   isActive    Boolean   @default(true) @map("is_active")
+
+  /// WHY the collector does not fetch this point, when isActive is false.
+  /// Closed set, enforced by bas_points_inactive_reason_check in the
+  /// migration SQL: niagara_system_log, alarm_history, reconfigured_cfg0,
+  /// manual, no_longer_reported. A second CHECK,
+  /// bas_points_inactive_reason_only_when_inactive, forces it NULL whenever
+  /// isActive is true - so a row cannot claim a reason for being off while
+  /// it is on. Anything that sets isActive true must clear this in the same
+  /// statement. Written by discover in phb-bas at both places it deactivates
+  /// a point, and by a person for reconfigured_cfg0 and manual. NULL on an
+  /// inactive point means "not recorded", and the Points list says so.
+  inactiveReason String? @map("inactive_reason")
+
   firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
   lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz()
 
