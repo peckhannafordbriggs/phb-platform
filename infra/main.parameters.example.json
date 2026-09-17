@@ -80,6 +80,9 @@
     "coMailbox": {
       "value": ""
     },
+    "anthropicApiKeyInKeyVault": {
+      "value": false
+    },
 
     "enableBudget": {
       "value": false

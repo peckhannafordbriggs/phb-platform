@@ -197,6 +197,54 @@ describe("production refuses a Graph client secret", () => {
   });
 });
 
+describe("the Anthropic API key reaches the container only by Key Vault reference", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+  it("is an environment variable backed by a secretRef, never a plain value", async () => {
+    const bicep = await readBicep();
+
+    expect(bicep).toMatch(
+      /name:\s*'ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'anthropic-api-key'/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'ANTHROPIC_API_KEY'[\s\S]{0,80}value:/);
+  });
+
+  it("is never a template parameter - the value is set in the vault by hand", async () => {
+    const bicep = await readBicep();
+
+    // A secure string parameter would put the key on every deploy's command
+    // line and let a blank redeploy overwrite it. The only parameter about it
+    // is the boolean saying the secret already exists.
+    expect(bicep).toMatch(/param anthropicApiKeyInKeyVault bool = false/);
+    expect(bicep).not.toMatch(/param \w*[aA]nthropic\w* string/);
+    // And the template never writes the secret itself.
+    expect(bicep).not.toMatch(
+      /vaults\/secrets@[\d-]+'\s*=\s*\{[\s\S]{0,120}name:\s*'ANTHROPIC-API-KEY'/,
+    );
+  });
+
+  it("is read lazily by the app, so a missing key cannot stop the boot", async () => {
+    const { readAnthropicApiKey } = await import("@/lib/env");
+    const before = process.env.ANTHROPIC_API_KEY;
+    try {
+      delete process.env.ANTHROPIC_API_KEY;
+      expect(readAnthropicApiKey()).toBeNull();
+      // .env.example ships it as "", and an Azure setting left blank arrives the
+      // same way. Blank is absent, not malformed.
+      process.env.ANTHROPIC_API_KEY = "   ";
+      expect(readAnthropicApiKey()).toBeNull();
+      process.env.ANTHROPIC_API_KEY = " not-a-real-key ";
+      expect(readAnthropicApiKey()).toBe("not-a-real-key");
+    } finally {
+      if (before === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = before;
+    }
+  });
+});
+
 describe("no deployment file hardcodes an organisation", () => {
   const files = [
     "infra/main.bicep",

@@ -181,3 +181,28 @@ export function readMailboxAddress(): string | null {
   const result = graphSchema.shape.CO_MAILBOX.safeParse(process.env.CO_MAILBOX);
   return result.success ? (result.data as string) : null;
 }
+
+/**
+ * The Anthropic API key, read lazily - the same shape as the Graph
+ * configuration above and for the same reason. It is one feature's credential
+ * (BAS Ask, B5; and the Phase 12 Part D engine calls), and a missing key
+ * disables that feature and nothing else. The platform must boot without it.
+ *
+ * The variable name is the Anthropic SDK's own default: `new Anthropic()` in
+ * this repository and `anthropic.Anthropic()` in the engine (phb-co-engine,
+ * Python) both read `ANTHROPIC_API_KEY` unprompted, so one name serves both
+ * repositories and there is no second name to keep in step. Neither the B5 nor
+ * the Phase 12 spec names the variable; this function is where the name is
+ * decided, and anything that calls the API should take the key from here rather
+ * than reading process.env itself.
+ *
+ * In Azure it arrives from Key Vault `ANTHROPIC-API-KEY` by secret reference
+ * (infra/main.bicep, `anthropicApiKeyInKeyVault`); locally from `.env.local`.
+ * The value is never logged, never persisted, and never returned to a client.
+ */
+const anthropicApiKeySchema = blankAsAbsent(z.string().trim().min(1).optional());
+
+export function readAnthropicApiKey(): string | null {
+  const result = anthropicApiKeySchema.safeParse(process.env.ANTHROPIC_API_KEY);
+  return result.success && result.data ? result.data : null;
+}

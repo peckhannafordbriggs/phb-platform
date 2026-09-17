@@ -140,6 +140,9 @@ param graphTenantId string = ''
 @description('Mailbox the Change Orders module may touch.')
 param coMailbox string = ''
 
+@description('Set to true once the Anthropic API key exists in Key Vault as ANTHROPIC-API-KEY - placed there by hand with `az keyvault secret set`, never as a template parameter. The container app then reads it by reference. Leave false until the secret exists: Container Apps resolves every Key Vault reference when it creates the revision, and a reference to a secret that is not there fails the whole deployment.')
+param anthropicApiKeyInKeyVault bool = false
+
 // ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
@@ -387,6 +390,15 @@ resource authSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   }
 }
 
+// The Anthropic API key is deliberately NOT a resource here and not a
+// parameter. The two secrets above are generated at deploy time and are
+// passed on every deploy; this one is issued once by the Anthropic Console and
+// pasted into the vault once, by the person holding it, so a routine redeploy
+// never needs it on the command line and can never overwrite it with a blank.
+// The template only knows the name it is stored under. infra/README.md has the
+// command; runbook.md has what goes wrong.
+var anthropicApiKeySecretName = 'ANTHROPIC-API-KEY'
+
 // ---------------------------------------------------------------------------
 // Container Apps
 // ---------------------------------------------------------------------------
@@ -450,6 +462,17 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${authSecretSecret.name}'
           identity: identity.id
         }
+        // Conditional, because a reference to a secret that is not in the
+        // vault fails the revision - see the anthropicApiKeyInKeyVault param.
+        ...(anthropicApiKeyInKeyVault
+          ? [
+              {
+                name: 'anthropic-api-key'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${anthropicApiKeySecretName}'
+                identity: identity.id
+              }
+            ]
+          : [])
       ]
     }
     template: {
@@ -523,6 +546,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'CO_MAILBOX'
               value: coMailbox
             }
+            // Read lazily by readAnthropicApiKey in lib/env.ts. Absent
+            // disables BAS Ask (B5) and the Phase 12 Part D engine calls and
+            // nothing else; the platform boots without it. By reference like
+            // the two secrets at the top of this list - never a plain value.
+            ...(anthropicApiKeyInKeyVault
+              ? [
+                  {
+                    name: 'ANTHROPIC_API_KEY'
+                    secretRef: 'anthropic-api-key'
+                  }
+                ]
+              : [])
           ]
           probes: [
             {

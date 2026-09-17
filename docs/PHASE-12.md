@@ -158,7 +158,9 @@ it, because the flows are the thing that must not break.
 
 ## Part D — Move the judgment to the Claude API
 
-**Needs: a company Anthropic API key.** BAS phase B5 is blocked on the same thing.
+**Needs: a company Anthropic API key.** In hand as of 2026-09-17 — `ANTHROPIC_API_KEY`,
+the SDK's default name, so the Python engine reads it with no configuration; Key Vault
+`ANTHROPIC-API-KEY` in Azure. BAS phase B5 waited on the same key.
 
 Replace the Cowork judgment steps one at a time, lowest consequence first. From the
 inventory, that ordering is likely: language review, then classification, then any draft

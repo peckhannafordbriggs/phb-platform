@@ -67,6 +67,14 @@ Only these. Everything else above you can do without talking to anyone.
 
 `GRAPH_MANAGED_IDENTITY_CLIENT_ID` is **Azure only**. Leave it empty locally.
 
+`ANTHROPIC_API_KEY` is neither generated nor IT's: it comes from the company
+Anthropic Console, and the platform owner holds it. It is **optional** - blank
+disables BAS Ask (B5) and the Phase 12 Part D engine calls and nothing else, and
+as of 2026-09-17 neither is built, so nothing reads it yet. The name is the
+Anthropic SDK's default and is decided in one place, `readAnthropicApiKey` in
+`lib/env.ts`; do not introduce a second one. In Azure it is a Key Vault
+reference - see *The Anthropic API key in Azure* below.
+
 **Wording that gets a useful answer**, because "send me the client secret" gets
 the Secret ID about half the time:
 
@@ -1386,6 +1394,7 @@ broken auth callback. **Do not remove the `-p`.**
 |---|---|---|---|
 | SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local sign-in only. Production authenticates with the managed identity — see *Production sign-in authenticates with the managed identity*. **Cannot affect production**, which refuses to boot with it set |
 | Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only. **Cannot affect production** |
+| Anthropic API key | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** Revocable in the Anthropic Console, and a revoked key fails as `401 authentication_error` on the next call | Nothing today. BAS Ask (B5) and the Phase 12 Part D engine calls once built - the platform boots and everything else runs without it |
 
 > **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
 > carries a note reading `Expiry Date of Entra : 8/13/2028`, but the same note
@@ -2340,6 +2349,55 @@ curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download}
 the same breath. They are unrelated: the middleware matcher excludes `.png`, so
 the logo request never met the login gate - it reached the Next server and the
 server had no such file.
+
+---
+
+## The Anthropic API key in Azure
+
+The key is the one secret the template does not write. `DATABASE-URL` and
+`AUTH-SECRET` are generated at deploy time and passed on every deploy;
+the Anthropic key is issued once by the Anthropic Console and pasted into
+Key Vault once, by hand, so that a routine redeploy never needs it on the
+command line and can never overwrite it with a blank. The template knows only
+the secret's **name**, `ANTHROPIC-API-KEY`, and wires it to the container app
+as `ANTHROPIC_API_KEY` by reference when the `anthropicApiKeyInKeyVault`
+parameter is true. The command sequence is in `infra/README.md`.
+
+**Symptom: the deployment fails creating the revision, naming the secret.**
+Something like `Unable to get value using Managed identity … for secret
+anthropic-api-key`, or the vault reporting `SecretNotFound`. The parameter was
+set to true before the secret existed. Container Apps resolves every Key Vault
+reference at revision creation, and one that does not resolve fails the whole
+deployment - it does not degrade to an unset variable. Set the secret first,
+then redeploy. If the secret exists and the error is `Forbidden`, the managed
+identity's `Key Vault Secrets User` role assignment is missing - the same
+check as the `AUTH_SECRET` row under *The container starts and immediately
+exits*.
+
+**Symptom: `az keyvault secret set` says `ForbiddenByRbac`.** The vault uses
+RBAC. `Contributor` and `Owner` on the resource group are management-plane
+roles and grant nothing on the vault's data plane; setting a secret needs **Key
+Vault Secrets Officer** on the vault itself. This is the same scope-not-role
+shape as the three walls under *Deploying to Azure*, and it is what to ask for
+if you hit it. *(Expected from how RBAC vaults work; not yet observed on this
+subscription.)*
+
+**Confirm the secret without printing it.** `az keyvault secret show` with
+`--query value` puts the key in your terminal and your history. Use
+`--query "{enabled:attributes.enabled, updated:attributes.updated}"` instead;
+that the secret exists and when it was last set is all a check needs.
+
+**Rotating.** Run the same `secret set` with the new key - it becomes a new
+version of the same secret, and the reference in the template carries no
+version, so it points at the latest. Then create a new revision
+(`az containerapp revision restart`, or any `az containerapp update`) so the
+app re-reads it rather than waiting for Container Apps' periodic refresh.
+Revoke the old key in the Anthropic Console **after** the new revision is
+serving, not before.
+
+**Nothing reads it yet.** As of 2026-09-17 neither BAS Ask (B5) nor the Phase
+12 Part D engine calls exist. A container app carrying `ANTHROPIC_API_KEY`
+with nothing consuming it is expected, not a fault.
 
 ---
 

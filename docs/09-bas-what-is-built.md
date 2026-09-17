@@ -678,7 +678,10 @@ records it), and why each collector outage happened.
 
 **B5 — asking questions in plain English.** Eight tools, a guarded SQL escape
 hatch on its own read-only connection, an audit event per question. Designed, not
-started, **not a tab**. Blocked on a company Anthropic API key. It would live in
+started, **not a tab**. No longer blocked: the company Anthropic API key exists
+as of 2026-09-17, read by `readAnthropicApiKey` in `lib/env.ts` and delivered
+from Key Vault by reference in Azure (`runbook.md` → *The Anthropic API key in
+Azure*). It would live in
 `phb-platform`, and it is what supersedes `bas-mcp` *(phb-bas)* when it ships.
 
 **B8 — point management.** Designed 17 September; B8.1, the schema, built the
@@ -713,5 +716,5 @@ between "the status point cycles every 12 seconds" and a verdict on the machine.
 Not one any more. **An always-on host on the building network**, so the five
 outages stop at five. **A backup that stays watched**: the mechanism is fixed and
 monitored as of today, and the first nightly run under it has not yet happened.
-**An API key** for B5. And **B8**, before the next building is classified by
-hand.
+~~An API key for B5~~ - in hand as of 2026-09-17. And **B8**, before the next
+building is classified by hand.

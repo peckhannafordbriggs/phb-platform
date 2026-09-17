@@ -638,8 +638,9 @@ grouping — a thread genuinely spans folders, and going mailbox-wide needs a
 `conversationId eq` query per thread plus a decision about Deleted Items, which Graph
 returns and Outlook hides.
 
-**BAS** — B5, plain-English questions over the data: designed, not started, blocked on a
-company Anthropic API key. Point classification tooling, deferred because the right shape
+**BAS** — B5, plain-English questions over the data: designed, not started; the company
+Anthropic API key it waited on is in Key Vault as of 2026-09-17, so the block is gone.
+Point classification tooling, deferred because the right shape
 depends on how a given integrator named things and most fault rules need `equipment_id`,
 which nothing currently sets. Production deployment, blocked on Azure. Multiple buildings —
 the schema and filters already support it; the lab station caps around two or three

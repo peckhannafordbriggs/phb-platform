@@ -253,8 +253,9 @@ up, this becomes a Niagara engineering job before it's a data job.
   becomes dependent on the platform.
 - **Graph webhooks** — evaluated, measured, declined. Polling every 20 seconds uses 0.3% of
   the API budget and Exchange responds in 250 ms.
-- **BAS plain-English querying (B5)** — designed, not started. Blocked on a company
-  Anthropic API key.
+- **BAS plain-English querying (B5)** — designed, not started. The company Anthropic
+  API key it was waiting on exists as of 2026-09-17: Key Vault `ANTHROPIC-API-KEY`,
+  read as `ANTHROPIC_API_KEY` — `runbook.md` → *What expires, and when*.
 - **Moving the change-order AI off the laptop** — see below. Parts A and B are done.
 
 ### Production deployment (Phase 7 Part B) — deployed, CI live, sign-in pending

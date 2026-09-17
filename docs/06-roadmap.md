@@ -20,7 +20,7 @@ more than its checklist.
 | 13 | Not started, planned | `docs/PHASE-13.md` |
 | 14 | Not started | `docs/PHASE-12.md` for the sequencing it depends on |
 | B1–B4, B6, B7 | See below | `docs/09-bas-what-is-built.md` |
-| B5 | Blocked on an Anthropic API key | `docs/08-bas-and-niagara.md` |
+| B5 | Unblocked 2026-09-17 - the API key exists and is wired (`ANTHROPIC_API_KEY`, Key Vault by reference). Not started | `docs/08-bas-and-niagara.md` |
 
 The **UI redesign** is not a numbered phase and shipped across several of them.
 Its record is `docs/DESIGN-BRIEF.md` (the brief, plus what the build actually
