@@ -29,6 +29,17 @@ const MODULES = [
     icon: "gauge",
     sortOrder: 200,
   },
+  // The row is what makes the sidebar item and the admin grant toggle exist.
+  // It grants nobody anything: an employee still needs a grant, and somebody
+  // without one cannot tell from the outside that the module is there.
+  {
+    key: "knowledge-base",
+    displayName: "Knowledge Base",
+    description:
+      "Ask questions about past bids and projects, and get answers with the documents they came from.",
+    icon: "search",
+    sortOrder: 300,
+  },
 ];
 
 // From docs/05-database-and-sources.md, so early users are not all choosing
