@@ -7,8 +7,8 @@ says *what exists*.
 Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
 B7's plan, as written before it was built, is `docs/B7_settings_and_hierarchy_plan.md`.
-B8's is `docs/B8_point_management_plan.md`; B8.1, the schema, is built and the
-rest is not started.
+B8's is `docs/B8_point_management_plan.md`; B8.1 (the schema) and B8.2 (the
+read-only Points list) are built and the rest is not started.
 
 **Last updated:** 17 September 2026 — a third pass. Every figure in it was read
 from the repositories, the git logs, the live database or the live stations on
@@ -294,6 +294,19 @@ LLM prompt — excludes the credentials table by name.
 updates and deletes, with the actor. That is how the `Side` station row above
 was explained in two queries.
 
+**Points (B8.2).** Expanding a station lists its points, read-only: label,
+Niagara name (the oBIX key, in full), the station's own name for the history,
+role, equipment, collected, completeness and visible. Loaded on expansion from
+`GET /settings/stations/{id}/points`, not with the tree; the count on the
+station row is a correlated `count(*)` on `bas_points` alone, so it is right
+whether or not anyone expands. **Points that are not collected are listed**, and
+say "Not collected · reason not recorded" — the reason is stored nowhere, and
+the platform does not re-implement the collector's name rules to invent one.
+The list has the same kind of guard the tree has: `rendered` from the joined
+query against `inDatabase` from a count with no joins, and a red banner when
+they disagree. Nothing filters on `is_visible` (B8.3) and nothing edits (B8.4
+onward).
+
 ### Filters
 
 Time range (24 h / 7 d / 30 d) and a project → building → station cascade with
@@ -339,7 +352,9 @@ because `is_active` is permanent and a hidden point is not — was written from
 doing this by hand. B8.1, the schema, is built: `bas_points.label` and
 `bas_points.is_visible`, both defaulting to how every row behaves today, with
 `test_point_management.py` *(phb-bas)* proving `discover` writes neither.
-Nothing reads them yet.
+B8.2 reads them: the Points level of the Settings tree shows every point on a
+station, read-only, uncollected ones included, with a counting guard of its
+own. Editing is B8.3 onward.
 
 ---
 
@@ -681,8 +696,8 @@ hatch on its own read-only connection, an audit event per question. Designed, no
 started, **not a tab**. Blocked on a company Anthropic API key. It would live in
 `phb-platform`, and it is what supersedes `bas-mcp` *(phb-bas)* when it ships.
 
-**B8 — point management.** Designed 17 September; B8.1, the schema, built the
-same day; B8.2 onward not started:
+**B8 — point management.** Designed 17 September; B8.1, the schema, and B8.2,
+the read-only Points list, built the same day; B8.3 onward not started:
 `docs/B8_point_management_plan.md`. There is no way in the UI to set a role,
 create equipment, attach a point, rename one or mark one inactive; the office
 was classified in SQL and the six state points wait for someone to decode them

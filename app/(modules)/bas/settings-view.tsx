@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { settingsCountState } from "@/lib/modules/bas/types";
+import { pointsCountState, settingsCountState } from "@/lib/modules/bas/types";
 import type {
   BasSettingsTree,
   SettingsBuilding,
+  SettingsPoint,
   SettingsProject,
   SettingsStation,
+  StationPointsList,
 } from "@/lib/modules/bas/types";
 import {
   ApiError,
@@ -20,9 +22,12 @@ import {
   deleteProject,
   deleteStation,
   describeActivity,
+  describeCollected,
   describeLogin,
+  describePointCompleteness,
   describeReach,
   fetchBasSettings,
+  fetchStationPoints,
   formatTimestamp,
   setStationCredential,
   updateBuilding,
@@ -818,6 +823,7 @@ function StationRow({
   run: Run;
 }) {
   const [editing, setEditing] = useState(false);
+  const [showPoints, setShowPoints] = useState(false);
   const reach = describeReach(station);
   const activity = describeActivity(station.activity);
   const login = describeLogin(station);
@@ -888,6 +894,21 @@ function StationRow({
           )}
         </div>
         <div className="flex gap-2">
+          {/*
+            The Points level (B8.2). Loaded on demand - the count in the label
+            is the tree's own direct count, so it is right before anything is
+            fetched and a station that is never expanded costs nothing.
+          */}
+          <button
+            type="button"
+            className={BUTTON}
+            aria-expanded={showPoints}
+            onClick={() => setShowPoints((open) => !open)}
+          >
+            {showPoints
+              ? "Hide points"
+              : `Points (${station.totalPoints})`}
+          </button>
           <button
             type="button"
             className={BUTTON}
@@ -966,7 +987,202 @@ function StationRow({
         busy={busy}
         run={run}
       />
+
+      {showPoints && (
+        <StationPoints
+          stationId={station.stationId}
+          expectedTotal={station.totalPoints}
+        />
+      )}
     </div>
+  );
+}
+
+// -------------------------------------------------------------- points
+
+/**
+ * The Points level, fetched when its station is expanded (B8.2).
+ *
+ * A row is mounted per station and unmounted when the station collapses, so
+ * the fetch runs once per expansion and the abort on unmount is what stops a
+ * slow response landing on a row that is no longer open.
+ */
+function StationPoints({
+  stationId,
+  expectedTotal,
+}: {
+  stationId: string;
+  expectedTotal: number;
+}) {
+  const [list, setList] = useState<StationPointsList | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchStationPoints(stationId, controller.signal).then(
+      (loaded) => setList(loaded),
+      (cause: unknown) => {
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
+        setError(
+          cause instanceof ApiError
+            ? cause
+            : new ApiError("unexpected", "Something went wrong."),
+        );
+      },
+    );
+    return () => controller.abort();
+  }, [stationId]);
+
+  if (error !== null) {
+    return (
+      <p
+        className="mt-3 rounded-md border p-3 text-xs"
+        style={TONE_STYLE.bad}
+        role="alert"
+      >
+        {error.message}
+      </p>
+    );
+  }
+  if (list === null) {
+    return <p className="mt-3 text-xs text-[var(--muted)]">Loading points…</p>;
+  }
+  return <PointsTable list={list} expectedTotal={expectedTotal} />;
+}
+
+const EMPTY = <span className="text-[var(--muted)]">—</span>;
+
+/**
+ * The list itself. Pure - no fetch, no hooks - so tests/bas-settings-points
+ * can render it with a payload whose counts disagree and read the alarm off
+ * the HTML, which is the only way to prove the screen SAYS it when the list
+ * falls short. Exported for that reason and used by nothing else.
+ *
+ * EVERYTHING the service returned is drawn. Nothing here filters on
+ * `collected` or on `visible`: an uncollected point is the row somebody most
+ * needs to see, and hiding on is_visible is B8.3, which carries the
+ * hidden-risk rule with it.
+ */
+export function PointsTable({
+  list,
+  expectedTotal,
+}: {
+  list: StationPointsList;
+  /** The tree's own count for the row above, so a stale tree is named as such. */
+  expectedTotal: number;
+}) {
+  const { rendered, inDatabase } = list.pointsAccountedFor;
+  const { alarm } = pointsCountState(list.pointsAccountedFor);
+  const missing = inDatabase - rendered;
+  const noun = (n: number) => (n === 1 ? "point" : "points");
+
+  return (
+    <div className="mt-3 space-y-2">
+      {/*
+        The accounting check, said out loud only when it fails. `inDatabase` is
+        counted by a query with no joins; `rendered` is what the joined list
+        query returned. A list that quietly dropped a point would teach people
+        to trust it, which is worse than having no list.
+      */}
+      {alarm && (
+        <p
+          className="rounded-md border p-3 text-xs"
+          style={TONE_STYLE.bad}
+          role="alert"
+        >
+          This list shows {rendered} of the {inDatabase} {noun(inDatabase)} the
+          database holds for this station, so {missing} could not be placed and{" "}
+          {missing === 1 ? "is" : "are"} not on this screen. Report this - a
+          point missing from Settings may still be collecting, or may have
+          stopped.
+        </p>
+      )}
+
+      {/*
+        Not red: the tree's count and the list's count are two queries taken at
+        two moments, and a discover run between them is not a fault. The tree is
+        what is stale, and the fix is a reload.
+      */}
+      {!alarm && inDatabase !== expectedTotal && (
+        <p className="text-xs text-[var(--muted)]">
+          The tree counted {expectedTotal} {noun(expectedTotal)} for this
+          station when it loaded; the database now holds {inDatabase}. Reload
+          to refresh the station row.
+        </p>
+      )}
+
+      {list.points.length === 0 ? (
+        <p className="text-xs text-[var(--muted)]">
+          No points registered. Run discover against this station to register
+          its histories.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[var(--muted)]">
+                <th className="py-1 pr-3 font-medium">Label</th>
+                <th className="py-1 pr-3 font-medium">Niagara name</th>
+                <th
+                  className="py-1 pr-3 font-medium"
+                  title="What the station reports for this history. Not the person's label - that is the Label column."
+                >
+                  Station name
+                </th>
+                <th className="py-1 pr-3 font-medium">Role</th>
+                <th className="py-1 pr-3 font-medium">Equipment</th>
+                <th className="py-1 pr-3 font-medium">Collected</th>
+                <th className="py-1 pr-3 font-medium">Completeness</th>
+                <th className="py-1 font-medium">Visible</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.points.map((point) => (
+                <PointRow key={point.pointId} point={point} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <p className="text-xs text-[var(--muted)]">
+        {inDatabase} {noun(inDatabase)} in the database for this station,{" "}
+        {rendered} shown. Read-only: labels, visibility and roles are edited in
+        a later phase.
+      </p>
+    </div>
+  );
+}
+
+function PointRow({ point }: { point: SettingsPoint }) {
+  const collected = describeCollected(point);
+  const completeness = describePointCompleteness(point);
+
+  return (
+    <tr className="border-t border-[var(--border)] align-top">
+      <td className="py-1 pr-3">{point.label ?? EMPTY}</td>
+      {/*
+        The oBIX key, verbatim and monospace, escapes and all - it is what you
+        match against Workbench when something breaks, and shown in full for
+        that reason.
+      */}
+      <td className="py-1 pr-3 font-mono">{point.niagaraHistoryName}</td>
+      <td className="py-1 pr-3">{point.niagaraDisplayName ?? EMPTY}</td>
+      <td className="py-1 pr-3" title={point.pointRole ?? undefined}>
+        {point.roleName ?? point.pointRole ?? EMPTY}
+      </td>
+      <td className="py-1 pr-3">{point.equipmentName ?? EMPTY}</td>
+      <td className="py-1 pr-3">
+        <span style={{ color: TONE_INK[collected.tone] }}>{collected.label}</span>
+        {collected.detail !== null && (
+          <span className="text-[var(--muted)]"> · {collected.detail}</span>
+        )}
+      </td>
+      <td className="py-1 pr-3" style={{ color: TONE_INK[completeness.tone] }}>
+        {completeness.label}
+      </td>
+      <td className="py-1">{point.visible ? "Shown" : "Hidden"}</td>
+    </tr>
   );
 }
 

@@ -19,6 +19,7 @@ import { setBasStationCredential } from "@/lib/modules/bas/settings-service";
 import { requireModuleAdmin } from "@/lib/authz";
 import { GET as settingsTree } from "@/app/api/modules/bas/settings/route";
 import { POST as createStation } from "@/app/api/modules/bas/settings/stations/route";
+import { GET as stationPoints } from "@/app/api/modules/bas/settings/stations/[stationId]/points/route";
 import {
   DELETE as deleteStation,
   PATCH as patchStation,
@@ -310,9 +311,10 @@ describe("no settings route ever returns the password or the ciphertext", () => 
   }
 
   it("exercises every route file that exists", async () => {
-    // 8: settings, projects, projects/[id], buildings, buildings/[id],
-    // stations, stations/[id], stations/[id]/credential.
-    expect((await routeFiles()).length).toBe(8);
+    // 9: settings, projects, projects/[id], buildings, buildings/[id],
+    // stations, stations/[id], stations/[id]/credential, and
+    // stations/[id]/points (B8.2).
+    expect((await routeFiles()).length).toBe(9);
   });
 
   it("returns neither the plaintext nor the ciphertext from ANY of them", async () => {
@@ -374,6 +376,21 @@ describe("no settings route ever returns the password or the ciphertext", () => 
       ).text(),
       await (
         await patchStation(json({ displayName: "Lab" }, "PATCH"), stationParams(id))
+      ).text(),
+      // The Points list (B8.2) for this station, and its 404 for one that does
+      // not exist - the read-only route joins nothing that could carry a
+      // credential, and this is what keeps that true.
+      await (
+        await stationPoints(
+          new Request("http://localhost/api/modules/bas/settings"),
+          stationParams(id),
+        )
+      ).text(),
+      await (
+        await stationPoints(
+          new Request("http://localhost/api/modules/bas/settings"),
+          stationParams("999999"),
+        )
       ).text(),
       // A rejected credential write.
       await (

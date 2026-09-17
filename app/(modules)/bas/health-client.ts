@@ -6,6 +6,7 @@ import type {
   PointHealthRow,
   RollRisk,
   RunGap,
+  StationPointsList,
 } from "@/lib/modules/bas/types";
 
 /**
@@ -822,6 +823,117 @@ export async function fetchBasSettings(
   }
 
   return payload.data;
+}
+
+/**
+ * One station's points, loaded when the station is expanded (B8.2).
+ *
+ * Not part of the tree fetch on purpose: 26 points today, 600 per project
+ * later, and the tree is fetched on every keystroke of the search box. The
+ * count on the station row does not depend on this call - the tree carries a
+ * direct count - so the row is right whether or not anyone expands it.
+ */
+export async function fetchStationPoints(
+  stationId: string,
+  signal?: AbortSignal,
+): Promise<StationPointsList> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${BASE}/settings/stations/${encodeURIComponent(stationId)}/points`,
+      { signal, cache: "no-store" },
+    );
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  if (response.status === 404) {
+    // The station is gone, is not this employee's, or the grant is gone. One
+    // answer for all three, by design - see station_not_found.
+    throw new ApiError(
+      "no_access",
+      "That station is not available. It may have been removed, or you may no " +
+        "longer have access to Building Automation settings.",
+    );
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: StationPointsList; error?: { code?: string; message?: string } }
+    | null;
+
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+
+  if (payload?.data === undefined) {
+    throw new ApiError("unexpected", "The server returned nothing.");
+  }
+
+  return payload.data;
+}
+
+/**
+ * What the Points list says about a point that is not collected (B8.2).
+ *
+ * The plan asked the row to say WHY. It cannot, honestly: the reason is not
+ * stored anywhere the platform can read. The collector sets is_active false for
+ * a Niagara system log at discovery and for a history the station stopped
+ * reporting, and a person sets it false by hand for the dead half of a
+ * reconfigured _cfg0 pair - and none of those writes a reason, a note or a
+ * code. Re-deriving one here by matching names would be a second copy of the
+ * collector's rules, free to drift from the first, so the screen says the
+ * reason is not recorded rather than guessing. Storing it is the fix, and it
+ * belongs to the collector and a later phase.
+ */
+export const REASON_NOT_RECORDED = "reason not recorded";
+
+export function describeCollected(point: { collected: boolean }): {
+  label: string;
+  detail: string | null;
+  tone: Tone;
+} {
+  if (point.collected) return { label: "Collected", detail: null, tone: "neutral" };
+  // Neutral, not amber. Nine of the estate's 39 points are deliberately not
+  // collected - the Niagara system logs and the retired _cfg0 halves - and a
+  // list that turned amber on every station would be one more alarm to learn
+  // to ignore. The completeness column beside it is where a fault shows.
+  return { label: "Not collected", detail: REASON_NOT_RECORDED, tone: "neutral" };
+}
+
+/**
+ * A point's completeness as one word (B8.2), in the tones the Collection
+ * Health card uses for the same states - see completenessTileTone.
+ *
+ * A point with no checkpoint row has never been passed by the collector at
+ * all. For a collected point that is worth amber; for one that is not
+ * collected it is the expected state and reads as nothing.
+ */
+export function describePointCompleteness(point: {
+  collected: boolean;
+  completeness: Completeness | null;
+}): { label: string; tone: Tone } {
+  if (point.completeness === null) {
+    return point.collected
+      ? { label: "Never collected", tone: "warn" }
+      : { label: "\u2014", tone: "neutral" };
+  }
+  switch (point.completeness) {
+    case "complete":
+      return { label: "Complete", tone: "ok" };
+    case "backfilling":
+      return { label: "Backfilling", tone: "warn" };
+    case "incomplete":
+      return { label: "Incomplete", tone: "bad" };
+    case "unknown":
+      // Unknown is not green for a collected point. For one that is not
+      // collected it is the only value it can hold, and colouring it would
+      // say something about the point that is not true.
+      return { label: "Not checked", tone: point.collected ? "warn" : "neutral" };
+  }
 }
 
 /**

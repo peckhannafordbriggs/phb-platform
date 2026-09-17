@@ -435,6 +435,23 @@ the real migration on a throwaway cluster. No screen, no API; B8.2 onward not
 started. `WHY-ITS-BUILT-THIS-WAY.md` § 45; `runbook.md` → *A point's label or
 hidden state disappeared*.
 
+**B8.2 complete — the read-only Points list (2026-09-17).** Expanding a station
+in Settings lists its points: label, Niagara name, the station's own name for
+it, role, equipment, collected, completeness, visible. Loaded on expansion from
+`GET /api/modules/bas/settings/stations/{id}/points`; the count on the station
+row is a joinless count inside the tree query, so it is right without anyone
+expanding. **Uncollected points are shown**, and the row reads "Not collected ·
+reason not recorded", because the reason is stored nowhere: the collector and
+hand-run SQL both set `is_active` without one, and re-deriving it from the name
+would be a second copy of the collector's rules that drifts from the first.
+**The list carries its own counting guard** — `rendered` from the joined query
+against `inDatabase` from `count(*)` with no joins, red on screen when they
+disagree — and six mutations of the query each fail the test. No filtering on
+`is_visible`, no editing, no search; the six views, Point Explorer and
+Collection Health are untouched. Org scoping is a source-text assertion only,
+recorded in `docs/testing-blind-spots.md`. `runbook.md` → *The Points list says
+it could not place N points*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

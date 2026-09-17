@@ -710,6 +710,75 @@ export function settingsCountState(counts: StationCounts): {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Points (B8.2) - the level below Station in the Settings tree. Read-only.
+// ---------------------------------------------------------------------------
+
+/**
+ * One point as the Settings Points list shows it.
+ *
+ * THE TRAP, named here because this is where a reader meets both columns:
+ * `niagaraDisplayName` is bas_points.display_name, which is what NIAGARA calls
+ * the history. bas_stations.display_name means the opposite - a person's name
+ * for the station - and SettingsStation.displayName is that one. A person's
+ * name for a POINT is `label`. Read the column comments the B8.1 migration
+ * added before touching either.
+ */
+export interface SettingsPoint {
+  pointId: string;
+  /** What a person typed. Null for most rows today. Nothing edits it until B8.4. */
+  label: string | null;
+  /** The oBIX key, verbatim, $-hex escapes and all. Never editable, by anyone. */
+  niagaraHistoryName: string;
+  /** What the STATION calls it - bas_points.display_name. Refreshed by every discover. */
+  niagaraDisplayName: string | null;
+  pointRole: string | null;
+  /** The vocabulary's wording for the role, when the point has one. */
+  roleName: string | null;
+  equipmentName: string | null;
+  unit: string | null;
+  /**
+   * is_active: whether the collector FETCHES this point. Off is permanent in
+   * effect. The reason it is off is NOT stored anywhere the platform can read -
+   * the collector writes is_active without a reason and so does a hand-run
+   * UPDATE - so the screen says "not recorded" rather than inventing one.
+   */
+  collected: boolean;
+  /** From bas_sync_checkpoints. Null when the collector has never passed this point. */
+  completeness: Completeness | null;
+  lastRecordAt: string | null;
+  /** is_visible. Shown and not editable until B8.3, and NEVER filtered on here. */
+  visible: boolean;
+}
+
+/**
+ * Point accounting, two numbers.
+ *
+ *   rendered    - rows the list query returned
+ *   inDatabase  - bas_points WHERE station_id = ?, counted with no joins at all
+ *
+ * The list walks LEFT JOINs to equipment, role and checkpoint. If one of them
+ * is ever made inner, or a future join drops a row, the two disagree and the
+ * screen says so. Two numbers rather than the stations' three because nothing
+ * filters this list yet; when B8.3 hides points it must add `matched` the way
+ * B7.6 did, or the alarm will fire on every hide.
+ */
+export interface PointCounts {
+  rendered: number;
+  inDatabase: number;
+}
+
+export interface StationPointsList {
+  stationId: string;
+  points: SettingsPoint[];
+  pointsAccountedFor: PointCounts;
+}
+
+/** RED is the list holding fewer points than the database says the station has. */
+export function pointsCountState(counts: PointCounts): { alarm: boolean } {
+  return { alarm: counts.rendered !== counts.inDatabase };
+}
+
 
 /**
  * What the screen must say when a filter is hiding a problem (B7.6).

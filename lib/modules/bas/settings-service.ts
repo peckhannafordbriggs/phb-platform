@@ -28,9 +28,12 @@ import {
 import type {
   BasSettingsFilters,
   BasSettingsTree,
+  Completeness,
   SettingsBuilding,
+  SettingsPoint,
   SettingsProject,
   SettingsStation,
+  StationPointsList,
   StationReach,
 } from "./types";
 
@@ -236,6 +239,17 @@ function narrowsStations(f: BasSettingsFilters): boolean {
   return f.mode !== null || f.state !== null || f.credential !== null;
 }
 
+/**
+ * The entitlement as SQL. `null` is everyone today; an employee entitled to no
+ * sites gets FALSE rather than an empty fragment that would show them all.
+ * Shared by the tree and the points list so the two cannot scope differently.
+ */
+function entitlementSql(entitled: bigint[] | null, column: Prisma.Sql): Prisma.Sql {
+  if (entitled === null) return Prisma.sql`TRUE`;
+  if (entitled.length === 0) return Prisma.sql`FALSE`;
+  return Prisma.sql`${column} IN (${Prisma.join(entitled)})`;
+}
+
 export async function getBasSettingsTree(
   viewer: Viewer,
   filters: BasSettingsFilters = NO_SETTINGS_FILTERS,
@@ -247,13 +261,9 @@ export async function getBasSettingsTree(
   const q = filters.q.trim();
   const like = `%${q.replace(/([%_\\])/g, "\\$1")}%`;
 
-  // The entitlement, applied to both queries. `null` is everyone today.
+  // The entitlement, applied to both queries.
   const siteScope = (column: Prisma.Sql): Prisma.Sql =>
-    entitled === null
-      ? Prisma.sql`TRUE`
-      : entitled.length === 0
-        ? Prisma.sql`FALSE`
-        : Prisma.sql`${column} IN (${Prisma.join(entitled)})`;
+    entitlementSql(entitled, column);
 
   const [orgs, hierarchy, stations, stationTotal, stationMatched] =
     await Promise.all([
@@ -334,8 +344,15 @@ export async function getBasSettingsTree(
         parent.niagara_station_name AS parent_station_name,
         st.is_active,
         st.last_seen_at,
-        count(pt.point_id) FILTER (WHERE pt.is_active) AS active_points,
-        count(pt.point_id)                             AS total_points,
+        -- Counted by correlated subqueries on bas_points ALONE, not through the
+        -- LEFT JOIN below (B8.2). The Points list under this row compares what
+        -- it rendered against a joinless count, and the number on the row has
+        -- to be that same kind of number - right whether or not anyone expands
+        -- the station, and not inflatable by a join that stops being 1:1.
+        (SELECT count(*) FROM bas_points x
+          WHERE x.station_id = st.station_id AND x.is_active) AS active_points,
+        (SELECT count(*) FROM bas_points x
+          WHERE x.station_id = st.station_id)                 AS total_points,
         -- The username and when it moved. password_ciphertext and key_version
         -- are NOT in this list and must never be: a column that is never
         -- selected cannot be leaked by a later change to the serialiser.
@@ -493,6 +510,139 @@ export async function getBasSettingsTree(
       matched: Number(stationMatched[0]?.n ?? 0),
       inDatabase: Number(stationTotal[0]?.n ?? 0),
       filtered: active,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Points (B8.2) - one station's points, read-only.
+// ---------------------------------------------------------------------------
+
+interface PointListRow {
+  point_id: bigint;
+  label: string | null;
+  niagara_history_name: string;
+  /** bas_points.display_name: NIAGARA's name. See SettingsPoint. */
+  display_name: string | null;
+  point_role: string | null;
+  role_name: string | null;
+  equipment_name: string | null;
+  unit: string | null;
+  is_active: boolean;
+  is_visible: boolean;
+  completeness: string | null;
+  last_record_ts: Date | null;
+}
+
+const COMPLETENESS_VALUES: readonly Completeness[] = [
+  "unknown",
+  "complete",
+  "backfilling",
+  "incomplete",
+];
+
+function toPoint(row: PointListRow): SettingsPoint {
+  return {
+    pointId: row.point_id.toString(),
+    label: row.label,
+    niagaraHistoryName: row.niagara_history_name,
+    niagaraDisplayName: row.display_name,
+    pointRole: row.point_role,
+    roleName: row.role_name,
+    equipmentName: row.equipment_name,
+    unit: row.unit,
+    collected: row.is_active,
+    // The CHECK on bas_sync_checkpoints.completeness makes this a closed set;
+    // the guard is for the type, not the data.
+    completeness:
+      row.completeness !== null &&
+      (COMPLETENESS_VALUES as readonly string[]).includes(row.completeness)
+        ? (row.completeness as Completeness)
+        : null,
+    lastRecordAt: row.last_record_ts?.toISOString() ?? null,
+    visible: row.is_visible,
+  };
+}
+
+/**
+ * Every point on one station, with the guard that proves it is every point.
+ *
+ * EVERYTHING IS SHOWN. A point that is not collected is not filtered out - it
+ * is exactly the row somebody needs to see, and hiding inactive points is how
+ * the _cfg0 question went unnoticed for weeks. Nothing filters on is_visible
+ * either: that is B8.3, and it carries the hidden-risk rule with it.
+ *
+ * Every join is LEFT. A point with no equipment, no role or no checkpoint row
+ * is a point, and a query that lost it would be lying about the station. The
+ * count beside the rows is taken from bas_points alone, with no joins, so the
+ * two cannot agree by construction - if a join ever drops a row, `rendered`
+ * falls short of `inDatabase` and the screen says so.
+ *
+ * Scoped the way the tree is: the station must be in the viewer's entitlement
+ * (or attached to no building, like the tree's unassigned bucket), and one that
+ * is not reads as not found. Same conflation as every other 404 in this module.
+ */
+export async function getStationPoints(
+  viewer: Viewer,
+  stationIdText: string,
+): Promise<StationPointsList> {
+  // A malformed id is not a station. BigInt() would throw on it and turn a bad
+  // URL into a 500.
+  if (!/^\d{1,18}$/.test(stationIdText)) {
+    throw new BasError("station_not_found", "That station does not exist.");
+  }
+  const stationId = BigInt(stationIdText);
+  const { entitled } = await basSiteScope(viewer);
+
+  const station = await prisma.$queryRaw<Array<{ station_id: bigint }>>`
+    SELECT st.station_id
+      FROM bas_stations st
+     WHERE st.station_id = ${stationId}
+       AND (${entitlementSql(entitled, Prisma.sql`st.site_id`)} OR st.site_id IS NULL)`;
+  if (station.length === 0) {
+    throw new BasError("station_not_found", "That station does not exist.");
+  }
+
+  const [rows, total] = await Promise.all([
+    prisma.$queryRaw<PointListRow[]>`
+      SELECT
+        p.point_id,
+        p.label,
+        p.niagara_history_name,
+        p.display_name,
+        p.point_role,
+        pr.display_name AS role_name,
+        e.name          AS equipment_name,
+        p.unit,
+        p.is_active,
+        p.is_visible,
+        c.completeness,
+        c.last_record_ts
+      FROM bas_points p
+      -- LEFT, all three. An unclassified point has no role row, an unassigned
+      -- one has no equipment row, and one the collector has never passed has
+      -- no checkpoint row. Each of those is a point this list exists to show.
+      LEFT JOIN bas_point_roles      pr ON pr.point_role   = p.point_role
+      LEFT JOIN bas_equipment        e  ON e.equipment_id  = p.equipment_id
+      LEFT JOIN bas_sync_checkpoints c  ON c.point_id      = p.point_id
+      WHERE p.station_id = ${stationId}
+      -- By the key, which is stable and unique per station. Labels are mostly
+      -- NULL today and a sort that switched columns as they filled in would
+      -- reorder the list under the person naming it.
+      ORDER BY p.niagara_history_name`,
+
+    // Counted with NO joins, deliberately, so it cannot agree with the rows by
+    // construction. See PointCounts.
+    prisma.$queryRaw<Array<{ n: bigint }>>`
+      SELECT count(*) AS n FROM bas_points WHERE station_id = ${stationId}`,
+  ]);
+
+  return {
+    stationId: stationId.toString(),
+    points: rows.map(toPoint),
+    pointsAccountedFor: {
+      rendered: rows.length,
+      inDatabase: Number(total[0]?.n ?? 0),
     },
   };
 }

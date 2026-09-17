@@ -6017,6 +6017,76 @@ and the Prisma field on `BasPoint` is `niagaraDisplayName` for the same reason.
 
 ---
 
+## The Points list says it could not place N points
+
+**Symptom.** Under a station in BAS Settings, the Points list carries a red
+banner: *"This list shows 3 of the 4 points the database holds for this station,
+so 1 could not be placed and is not on this screen."*
+
+**Cause.** The list query lost a row. `rendered` is what the joined query in
+`getStationPoints` returned — LEFT JOINs to `bas_point_roles`, `bas_equipment`
+and `bas_sync_checkpoints` — and `inDatabase` is `SELECT count(*) FROM
+bas_points WHERE station_id = ?` with no joins at all. They disagree only when a
+join drops a point: a LEFT JOIN made inner, or a new join that is not outer or
+not one-to-one. At the current code it cannot happen. `tests/bas-settings-points.test.ts`
+deletes a point's checkpoint row and asserts the point still renders, and six
+mutations of the query — each of the three joins made inner, the count taken
+from the rows, the count left unscoped, the station row's total counted through
+the checkpoint join — each fail it.
+
+**Fix.** Find which point is missing, then fix the query, never the data:
+
+```sql
+SELECT p.point_id, p.niagara_history_name, p.point_role, p.equipment_id,
+       (c.point_id IS NOT NULL) AS has_checkpoint
+  FROM bas_points p
+  LEFT JOIN bas_sync_checkpoints c USING (point_id)
+ WHERE p.station_id = 42
+ ORDER BY p.niagara_history_name;
+```
+
+Compare with the screen. The one that is absent will have a NULL in the column
+whose join stopped being LEFT. Deleting a point to make the numbers agree
+destroys the only copy of its readings.
+
+**What it is not.** Grey text reading *"The tree counted 4 points for this
+station when it loaded; the database now holds 5"* is not this banner. That is a
+`discover` run between loading the tree and expanding the station, and a reload
+clears it.
+
+---
+
+## A point reads "Not collected · reason not recorded"
+
+**Symptom.** In the Points list a row's Collected column says *Not collected ·
+reason not recorded*. Today that is nine rows across the estate: the four
+Niagara system logs on each station, and the two retired `_cfg0` halves on
+PHBoffice.
+
+**Cause.** Not a fault. `bas_points.is_active` is false and **the reason is
+stored nowhere**. The collector's `discover` sets it false for a Niagara system
+log at registration and for a history the station no longer reports; a person
+set it false by hand for the dead half of each reconfigured `_cfg0` pair. None
+of those writes a reason, a code or a note (`bas_points.notes` is NULL on all
+nine). The platform does not re-derive one from the history name — the
+collector's `SYSTEM_LOG_HISTORIES` list and its `_cfg` regex are the collector's,
+and a second copy here would drift from the first.
+
+**To find out why, today.** The collector's log at discovery says which:
+*"Niagara system log, not building data — registered INACTIVE"* or *"no longer
+reported by the station — marked inactive"*. A `_cfg0` suffix on the name means
+the reconfigured-pair case, which the collector warns about and never decides.
+And `bas_points.notes`, if somebody wrote one.
+
+**To store it properly.** A `bas_points.inactive_reason` column over a closed
+set — `system_log`, `not_reported`, `retired_cfg`, `manual` — with a CHECK that
+it is NULL when `is_active` is true; written by `discover` in the two places it
+sets `is_active = false` *(phb-bas)*, and by the platform when a later B8 part
+adds the Collected toggle. Schema in this repository first, collector second,
+in that order and in that breath, as B8.1 did. Not built; not in any plan yet.
+
+---
+
 ## A BAS fixture leaves an org behind and the next test file blames a previous run
 
 **Cost about fifteen minutes on 8 September 2026, and the error message points
