@@ -10,8 +10,6 @@ const EXAMPLES: readonly string[] = [
 
 export function SearchPanel() {
   const [question, setQuestion] = useState("");
-  const [asked, setAsked] = useState<string | null>(null);
-
   const canAsk = question.trim().length > 0;
 
   return (
@@ -26,11 +24,7 @@ export function SearchPanel() {
 
       <form
         className="mt-8"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!canAsk) return;
-          setAsked(question.trim());
-        }}
+        onSubmit={(event) => event.preventDefault()}
       >
         <label htmlFor="kb-question" className="sr-only">
           Ask the knowledge base a question
@@ -48,9 +42,6 @@ export function SearchPanel() {
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             placeholder="What should I worry about with a 300 ton air-cooled chiller?"
-            // The browser's own clear button is hidden for the same reason the
-            // mail search hides it: it sits on the wrong side of the field and
-            // draws a second, differently styled control into the bar.
             className="min-w-0 flex-1 bg-transparent px-2 py-2.5 text-sm placeholder:text-[var(--neutral-400)] focus:outline-none [&::-webkit-search-cancel-button]:hidden"
           />
           <button
