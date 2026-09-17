@@ -5,7 +5,9 @@ import { logger } from "@/lib/logger";
 import { BasError } from "./errors";
 import type {
   CollectionHealth,
+  Completeness,
   DataGapRow,
+  HorizonSource,
   IngestRunRow,
   PointExplorer,
   PointHealthRow,
@@ -395,6 +397,28 @@ function toRollRisk(value: string): RollRisk {
     : "roll_horizon_unknown";
 }
 
+const COMPLETENESS_VALUES: readonly Completeness[] = [
+  "unknown",
+  "complete",
+  "backfilling",
+  "incomplete",
+];
+
+/**
+ * Same rule as toRollRisk, same direction: a value this build does not know,
+ * and a NULL from a point with no checkpoint row, both fall to `unknown` and
+ * never to `complete`. "Never checked" must not render as "checked and fine".
+ */
+function toCompleteness(value: string | null): Completeness {
+  return value !== null && (COMPLETENESS_VALUES as readonly string[]).includes(value)
+    ? (value as Completeness)
+    : "unknown";
+}
+
+function toHorizonSource(value: string | null): HorizonSource {
+  return value === "measured" || value === "configured" ? value : null;
+}
+
 const RUN_STATUSES = ["running", "ok", "partial", "failed"] as const;
 
 /** Same rule, same direction: an unknown status is not a successful one. */
@@ -433,6 +457,10 @@ interface TotalsRow {
   risk_data_lost: number;
   risk_roll_horizon_unknown: number;
   risk_never_collected: number;
+  comp_complete: number;
+  comp_backfilling: number;
+  comp_incomplete: number;
+  comp_unknown: number;
   min_roll_horizon_s: number | null;
 }
 
@@ -451,6 +479,10 @@ interface PointRow {
   last_record_ts: Date | null;
   minutes_ago: number | null;
   roll_horizon_hours: number | null;
+  horizon_source: string | null;
+  completeness: string | null;
+  station_count: number | null;
+  held_count: number | null;
 }
 
 interface RunRow {
@@ -558,9 +590,23 @@ export async function getCollectionHealth(
             AS risk_roll_horizon_unknown,
           count(*) FILTER (WHERE is_active AND roll_risk = 'never_collected')::int
             AS risk_never_collected,
+          -- The completeness check (phb-bas), by state. A point with no
+          -- checkpoint row has a NULL here and is counted as unknown: never
+          -- checked is not the same as checked and fine.
+          count(*) FILTER (WHERE is_active AND completeness = 'complete')::int
+            AS comp_complete,
+          count(*) FILTER (WHERE is_active AND completeness = 'backfilling')::int
+            AS comp_backfilling,
+          count(*) FILTER (WHERE is_active AND completeness = 'incomplete')::int
+            AS comp_incomplete,
+          count(*) FILTER (WHERE is_active
+                             AND COALESCE(completeness, 'unknown') = 'unknown')::int
+            AS comp_unknown,
           -- The shortest horizon among the active points we can compute one for.
           -- A silence longer than this destroyed records on the station.
-          min(roll_horizon_s) FILTER (WHERE is_active)::int AS min_roll_horizon_s
+          -- horizon_s is the measured span of a full buffer where the station
+          -- reports one, else capacity x interval - see the view.
+          min(horizon_s) FILTER (WHERE is_active)::int AS min_roll_horizon_s
         FROM bas_v_collection_health
         WHERE ${healthSites}
       `,
@@ -594,7 +640,11 @@ export async function getCollectionHealth(
         roll_risk,
         last_record_ts,
         round(seconds_since_last_record / 60.0)::int AS minutes_ago,
-        (roll_horizon_s / 3600.0)::float8 AS roll_horizon_hours
+        (horizon_s / 3600.0)::float8 AS roll_horizon_hours,
+        horizon_source,
+        completeness,
+        station_count,
+        held_count
       FROM bas_v_collection_health
       WHERE is_active AND ${healthSites}
       -- Grafana's ordering, and it is the right one: NULLS FIRST puts a point
@@ -772,6 +822,13 @@ export async function getCollectionHealth(
     riskCounts.roll_horizon_unknown +
     riskCounts.never_collected;
 
+  const completenessCounts: Record<Completeness, number> = {
+    complete: result.totals.comp_complete,
+    backfilling: result.totals.comp_backfilling,
+    incomplete: result.totals.comp_incomplete,
+    unknown: result.totals.comp_unknown,
+  };
+
   const rollHorizonHours =
     result.totals.min_roll_horizon_s === null
       ? null
@@ -837,6 +894,8 @@ export async function getCollectionHealth(
       unclassifiedPoints: result.totals.unclassified_points,
       pointsAtRisk,
       riskCounts,
+      pointsIncomplete: completenessCounts.incomplete,
+      completenessCounts,
       minutesSinceNewestReading: result.readingTotals.minutes_since,
     },
     points: result.points.map(toPointHealthRow),
@@ -889,6 +948,10 @@ function toPointHealthRow(row: PointRow): PointHealthRow {
     lastReadingAt: iso(row.last_record_ts),
     minutesAgo: row.minutes_ago,
     rollHorizonHours: row.roll_horizon_hours,
+    horizonSource: toHorizonSource(row.horizon_source),
+    completeness: toCompleteness(row.completeness),
+    stationCount: row.station_count,
+    heldCount: row.held_count,
   };
 }
 

@@ -359,6 +359,32 @@ export async function createHealthFixture(): Promise<HealthFixture> {
   await checkpoint(base.satSp, ago(100 * HOUR)); // at_risk: past half of 125 h
   await checkpoint(base.fanCmd, ago(200 * HOUR)); // data_lost: past 125 h
   await checkpoint(base.unknown, ago(5 * MINUTE)); // roll_horizon_unknown
+
+  // The completeness check's verdicts (add_bas_completeness), one point per
+  // state that has a checkpoint: sat agrees with its station, satSp is the
+  // 2026-09-17 shape - the station holds 500 inside its span and we hold 430 -
+  // and fanCmd is a first sync still paging. `unknown` keeps the column
+  // default, and fanStatus has no checkpoint row at all, so both read unknown
+  // through the service - one from the value, one from the NULL.
+  const verdict = (
+    pointId: bigint,
+    completeness: string,
+    stationCount: number,
+    heldCount: number,
+  ) =>
+    testDb.basSyncCheckpoint.update({
+      where: { pointId },
+      data: {
+        completeness,
+        stationCount,
+        heldCount,
+        completenessCheckedAt: now,
+        completenessNote: `ZZTEST ${completeness}`,
+      },
+    });
+  await verdict(base.sat, "complete", 500, 500);
+  await verdict(base.satSp, "incomplete", 500, 430);
+  await verdict(base.fanCmd, "backfilling", 2500, 1000);
   // base.fanStatus gets no checkpoint at all -> never_collected.
 
   await testDb.basReading.createMany({

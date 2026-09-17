@@ -1,15 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   AT_RISK_ROLL_RISKS,
+  type Completeness,
   type RollRisk,
   type RunGap,
 } from "@/lib/modules/bas/types";
 import {
+  COMPLETENESS_EXPLANATION,
+  COMPLETENESS_LABEL,
   DEFAULT_WINDOW_DAYS,
   RISK_LABEL,
   WINDOW_PRESETS,
   atRiskTone,
   atRiskShape,
+  completenessBreakdown,
+  completenessTileTone,
+  completenessTone,
+  describeCompleteness,
+  describeShortfall,
   describeAtRisk,
   basRiskTone,
   describeEmptyRuns,
@@ -82,6 +90,98 @@ const atRisk = (partial: Partial<Record<RollRisk, number>>): Record<RollRisk, nu
   roll_horizon_unknown: 0,
   never_collected: 0,
   ...partial,
+});
+
+/**
+ * The completeness check, surfaced (2026-09-17). It spent a day writing
+ * verdicts nothing read. These are the rules that decide how a verdict looks,
+ * and the one that must be proved rather than eyeballed is that an incomplete
+ * point is red and an unchecked one is never green.
+ */
+describe("completeness is surfaced, and unknown is never safe", () => {
+  const EVERY: Completeness[] = ["complete", "incomplete", "backfilling", "unknown"];
+
+  it("makes incomplete red: the station holds records we do not", () => {
+    expect(completenessTone("incomplete")).toBe("bad");
+  });
+
+  it("makes backfilling amber: a backlog that resolves itself, like § 43", () => {
+    expect(completenessTone("backfilling")).toBe("warn");
+  });
+
+  it("makes unknown amber, never green", () => {
+    expect(completenessTone("unknown")).toBe("warn");
+  });
+
+  it("gives the ok tone to exactly one state", () => {
+    expect(EVERY.filter((c) => completenessTone(c) === "ok")).toEqual(["complete"]);
+  });
+
+  it("labels and explains every state, so none renders as a raw column value", () => {
+    for (const c of EVERY) {
+      expect(COMPLETENESS_LABEL[c].length).toBeGreaterThan(0);
+      expect(COMPLETENESS_EXPLANATION[c].length).toBeGreaterThan(20);
+    }
+    // The unknown label must not read as a verdict.
+    expect(COMPLETENESS_LABEL.unknown.toLowerCase()).not.toContain("complete");
+  });
+
+  const counts = (over: Partial<Record<Completeness, number>>): Record<Completeness, number> => ({
+    complete: 0, incomplete: 0, backfilling: 0, unknown: 0, ...over,
+  });
+
+  it("colours the card red from one incomplete point, whatever else is there", () => {
+    expect(completenessTileTone(counts({ complete: 25, incomplete: 1 }))).toBe("bad");
+    expect(completenessTileTone(counts({ incomplete: 1, backfilling: 3 }))).toBe("bad");
+  });
+
+  it("colours the card amber when the only shortfalls resolve themselves or are unknowable", () => {
+    expect(completenessTileTone(counts({ complete: 25, backfilling: 1 }))).toBe("warn");
+    expect(completenessTileTone(counts({ complete: 25, unknown: 1 }))).toBe("warn");
+  });
+
+  it("is green only when every point was checked and agrees", () => {
+    expect(completenessTileTone(counts({ complete: 26 }))).toBe("ok");
+    expect(completenessTileTone(counts({}))).toBe("ok");
+  });
+
+  it("says which problem, with the count, worst first", () => {
+    expect(describeCompleteness(counts({ incomplete: 2, backfilling: 1 }))).toBe(
+      "2 points short of what the station holds",
+    );
+    expect(describeCompleteness(counts({ incomplete: 1 }))).toBe(
+      "1 point short of what the station holds",
+    );
+    expect(describeCompleteness(counts({ backfilling: 3 }))).toBe("3 points still backfilling");
+    expect(describeCompleteness(counts({ unknown: 2 }))).toBe(
+      "2 points not yet checked against the station",
+    );
+    expect(describeCompleteness(counts({ complete: 26 }))).toBe(
+      "Every point matches the station's own count",
+    );
+  });
+
+  it("breaks the count down worst first and never lists complete", () => {
+    expect(
+      completenessBreakdown(counts({ complete: 20, unknown: 2, incomplete: 1, backfilling: 3 })),
+    ).toEqual([
+      { completeness: "incomplete", count: 1 },
+      { completeness: "backfilling", count: 3 },
+      { completeness: "unknown", count: 2 },
+    ]);
+  });
+
+  it("states a shortfall as the two numbers it is made of", () => {
+    expect(describeShortfall({ stationCount: 500, heldCount: 430 })).toBe(
+      "500 on the station, 430 here",
+    );
+    expect(describeShortfall({ stationCount: 2500, heldCount: 1000 })).toBe(
+      "2,500 on the station, 1,000 here",
+    );
+    expect(describeShortfall({ stationCount: null, heldCount: null })).toBe(
+      "station count unknown",
+    );
+  });
 });
 
 describe("the tile thresholds mirror the Grafana panels", () => {

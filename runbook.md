@@ -5058,10 +5058,26 @@ sync; five is that with headroom. A percentage would hide more the bigger the
 archive, and a customer Supervisor holding years is exactly where a hole
 matters most: 1 % of a five-year one-minute history is eighteen days.
 
-**What this does not do yet.** `bas_v_collection_health` and the Collection
-Health screen do not show `completeness`; the columns are queryable and the run
-status carries it. `healthcheck.py` *(phb-bas)* does not read it either. Both
-are the natural next additions, and neither was in scope on 2026-09-17.
+**Where it is read.** Later the same day, because a detector that writes a
+column nobody reads is the 28 August failure again. `bas_v_collection_health`
+carries `completeness`, `completeness_note`, `station_count`, `held_count` and
+`completeness_checked_at` (`add_bas_measured_horizon_and_visibility`). The
+Collection Health screen shows a *Station count against ours* card — red from
+one `incomplete` point, amber for `backfilling` or `unknown`, green only when
+every active point was checked and agrees — listing each such point by name
+with both numbers, plus a *Completeness* column in the per-point table.
+`healthcheck.py` *(phb-bas)* check 2b reports `incomplete` as CRITICAL,
+`backfilling` as informational, `unknown` as WARNING. A point with no
+checkpoint row at all reads `unknown` everywhere: never checked is not the
+same as checked and fine, and `tests/bas-collection-health.test.ts` asserts
+that a NULL never renders as `complete`.
+
+**The first live result was a false positive, and the cause was the station's
+clock.** Two chattering points on PHBoffice read `incomplete` by 70 records
+and `--from-scratch` fetched nothing. The JACE's clock is 22 minutes ahead of
+the collector host; the collector's query was bounded at the host's `now`; the
+station's newest 22 minutes were in the host's future. The query carries no
+upper bound now, and the offset is measured every pass — see the next section.
 
 **The roll-overwrite gap detector changed with it.** It used to infer what the
 station still held from `capacity × collection_interval_s`. The station reports
@@ -5069,6 +5085,54 @@ its own oldest record, so the gap's end is now that observation, and the
 inference is the fallback for a station that reports no `start`. A
 change-of-value history — `Occupied`, 419 records over 2.5 years — has no
 interval, and the inference was never right for it.
+
+**And the roll horizon itself is measured.** When the station reports
+`count >= capacity` the buffer is full and rolling, and `end - start` is how
+long it retains. The collector records that span every pass
+(`bas_sync_checkpoints.observed_span_s`); the view derives `measured_horizon_s`
+from it only when the buffer is full, exposes `horizon_s` as measured-else-
+configured and `horizon_source` to say which, and computes `roll_risk` from
+`horizon_s`. A change-of-value point needs only `capacity` filled in to stop
+reading `roll_horizon_unknown`. `Unit_Status_Mode`: 500 records over about two
+hours, sixty times shorter than every interval point on the same JACE, and
+until this it was the most at-risk point on the station and said "unknown".
+The screen's *Roll horizon* column marks a measured value. A measured horizon
+shorter than four polls is CRITICAL in `healthcheck.py` (check 2c) and is
+**collected, not refused** by the collector — refusing the station for one
+chatty point would stop the other 25; a *configured* unsafe horizon is still
+refused, as before. Both migrations must be applied before the collector is
+updated; it refuses to run on a schema missing either.
+
+---
+
+## A BAS station's clock is wrong
+
+**Found on 2026-09-17, as the cause of the completeness check's first false
+positive.** Measured, not inferred: `/obix/about` on both live stations,
+compared against the host clock at the midpoint of the request.
+
+| Station | Offset | Niagara |
+|---|---|---|
+| SpringGroveLabComputer | +0.2 s | 4.15 |
+| PHBoffice | **+1336 s** (22 min 16 s ahead) | 4.10 |
+
+| | |
+|---|---|
+| **Symptom** | `healthcheck.py` reports `[WARNING] Station clock is 22 min 16 s ahead of the collector host: PHBoffice (...)`; the collector prints `STATION CLOCK is 22m16s ahead of this host` every pass; `bas_stations.clock_offset_s` is more than 60 either way. Older symptom of the same cause: *minutes ago* on the Collection Health screen is impossibly small or negative for that station's points, and on a collector from before 2026-09-17 its chattering points read `incomplete` and would not close. |
+| **Cause** | The JACE's clock. No NTP source reachable from the building network, and a 4.10 station that has drifted. It is the station, not the host: the other station agrees with the host to a fifth of a second. |
+| **Fix** | On the station. Workbench → the station's *PlatformServices*, set the time and give it an NTP server it can reach, or have whoever commissions the JACE do so. Then watch `clock_offset_s` on the next pass. |
+
+**What the platform does and does not do about it.** The collector measures
+the offset every pass and records it on the station row with
+`clock_measured_at`; it warns past a minute; it no longer bounds its queries by
+the host clock, so collection is complete regardless. It does **not** correct
+the timestamps it stores — a corrected value would be one nobody measured, and
+the offset is not constant. So until the clock is fixed: every reading from
+that building is stamped 22 minutes ahead of every other station's, any
+cross-building comparison is off by that much, and `seconds_since_last_record`
+in `bas_v_collection_health` is 22 minutes optimistic for its points, which
+makes `at_risk` late by the same amount. The view does not subtract the offset
+either, for the same reason.
 
 ---
 

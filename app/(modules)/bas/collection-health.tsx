@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import type {
   CollectionHealth as CollectionHealthData,
+  Completeness,
   DataGapRow,
   IngestRunRow,
   PointHealthRow,
@@ -20,8 +21,15 @@ import type {
 } from "@/lib/modules/bas/types";
 import {
   ApiError,
+  COMPLETENESS_EXPLANATION,
+  COMPLETENESS_LABEL,
   RISK_EXPLANATION,
   RISK_LABEL,
+  completenessBreakdown,
+  completenessTileTone,
+  completenessTone,
+  describeCompleteness,
+  describeShortfall,
   WINDOW_PRESETS,
   activePointsTone,
   atRiskTone,
@@ -497,6 +505,10 @@ export function CollectionHealth() {
         />
       </section>
 
+      {/* ------------------------------------------------------ completeness */}
+
+      <CompletenessCard health={health} suffix={suffix} />
+
       {/* -------------------------------------------------- collector silence */}
 
       {gapSentence !== null && (
@@ -711,6 +723,100 @@ function reportingPoints(points: { risk: RollRisk }[]): number {
   return points.filter((point) => point.risk === "ok").length;
 }
 
+/**
+ * Does the platform hold what the station says it holds?
+ *
+ * Always rendered, including when the answer is yes: this card exists because
+ * the check it reports spent a day writing verdicts nobody read, and a card
+ * that only appears when something is wrong cannot be told apart from a check
+ * that stopped running. The names are listed because "2 points short" sends
+ * somebody to a query and "Unit_Status_Mode: 500 on the station, 430 here"
+ * sends them to Workbench.
+ */
+function CompletenessCard({
+  health,
+  suffix,
+}: {
+  health: CollectionHealthData;
+  suffix: string;
+}) {
+  const counts = health.totals.completenessCounts;
+  const tone = completenessTileTone(counts);
+  const listed = health.points
+    .filter((point) => point.completeness !== "complete")
+    .sort(
+      (a, b) =>
+        COMPLETENESS_SEVERITY_ORDER_INDEX[a.completeness] -
+          COMPLETENESS_SEVERITY_ORDER_INDEX[b.completeness] ||
+        a.pointName.localeCompare(b.pointName),
+    );
+
+  return (
+    <section
+      aria-label="Completeness against the station"
+      className="card p-5 text-sm"
+      style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
+    >
+      <p className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+        Station count against ours{suffix}
+      </p>
+      <p className="mt-1 font-medium">{describeCompleteness(counts)}</p>
+      {completenessBreakdown(counts).length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs">
+          {completenessBreakdown(counts).map(({ completeness, count }) => (
+            <li
+              key={completeness}
+              title={COMPLETENESS_EXPLANATION[completeness]}
+              className="tabular-nums"
+            >
+              <span className="font-semibold">{formatCount(count)}</span>{" "}
+              <span className="opacity-75">
+                {COMPLETENESS_LABEL[completeness].toLowerCase()}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {listed.length > 0 && (
+        <ul className="mt-3 space-y-1 text-xs">
+          {listed.slice(0, 12).map((point) => (
+            <li key={point.pointId} className="flex flex-wrap items-baseline gap-x-2">
+              <CompletenessBadge completeness={point.completeness} />
+              <span className="font-medium">{point.pointName}</span>
+              <span className="opacity-75">{describeShortfall(point)}</span>
+            </li>
+          ))}
+          {listed.length > 12 && (
+            <li className="opacity-75">and {formatCount(listed.length - 12)} more in the table below</li>
+          )}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+const COMPLETENESS_SEVERITY_ORDER_INDEX: Record<Completeness, number> = {
+  incomplete: 0,
+  backfilling: 1,
+  unknown: 2,
+  complete: 3,
+};
+
+function CompletenessBadge({ completeness }: { completeness: Completeness }) {
+  return (
+    <span
+      title={COMPLETENESS_EXPLANATION[completeness]}
+      className="inline-block rounded-[2px] border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+      style={{
+        ...TONE_STYLE[completenessTone(completeness)],
+        color: TONE_INK[completenessTone(completeness)],
+      }}
+    >
+      {COMPLETENESS_LABEL[completeness]}
+    </span>
+  );
+}
+
 function RiskBadge({ risk }: { risk: RollRisk }) {
   return (
     <span
@@ -803,6 +909,7 @@ function PointTable({
                 <Th>Role</Th>
                 <Th>Unit</Th>
                 <Th>Risk</Th>
+                <Th>Completeness</Th>
                 <Th>Last reading</Th>
                 <Th align="right">Minutes ago</Th>
                 <Th align="right">Roll horizon</Th>
@@ -831,6 +938,15 @@ function PointTable({
                   <td className="px-3 py-2">
                     <RiskBadge risk={point.risk} />
                   </td>
+                  <td className="px-3 py-2">
+                    <CompletenessBadge completeness={point.completeness} />
+                    {point.completeness !== "complete" &&
+                      point.completeness !== "unknown" && (
+                        <span className="ml-2 text-xs text-[var(--muted)] tabular-nums">
+                          {describeShortfall(point)}
+                        </span>
+                      )}
+                  </td>
                   <td className="px-3 py-2 text-[var(--muted)]">
                     {formatTimestamp(point.lastReadingAt)}
                   </td>
@@ -848,7 +964,18 @@ function PointTable({
                         unknown
                       </span>
                     ) : (
-                      formatHours(point.rollHorizonHours)
+                      <span
+                        title={
+                          point.horizonSource === "measured"
+                            ? "Measured: the span of the station's full buffer, as it reported it on the last pass."
+                            : "Configured: capacity x collection interval, from Workbench."
+                        }
+                      >
+                        {formatHours(point.rollHorizonHours)}
+                        {point.horizonSource === "measured" && (
+                          <span className="ml-1 text-xs opacity-60">measured</span>
+                        )}
+                      </span>
                     )}
                   </td>
                 </tr>

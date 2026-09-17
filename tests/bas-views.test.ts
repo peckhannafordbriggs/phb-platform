@@ -141,6 +141,17 @@ describe("every view runs and returns rows with the expected columns", () => {
       "consecutive_failures",
       "seconds_since_last_record",
       "roll_risk",
+      // add_bas_measured_horizon_and_visibility (2026-09-17). The screen and
+      // healthcheck.py read these; the collector writes what they read.
+      "completeness",
+      "completeness_note",
+      "station_count",
+      "held_count",
+      "completeness_checked_at",
+      "observed_span_s",
+      "measured_horizon_s",
+      "horizon_s",
+      "horizon_source",
     ],
     bas_v_data_dictionary: [
       "object_name",
@@ -475,6 +486,185 @@ describe("bas_v_collection_health classifies roll risk", () => {
         const risk = await riskAfter(tx, f.unknown, interval);
         expect(risk, `staleness ${interval}`).toBe("roll_horizon_unknown");
       }
+    });
+  });
+
+  /**
+   * The measured horizon (2026-09-17). A change-of-value history has no
+   * collection interval, so capacity x interval is NULL and the view used to
+   * say roll_horizon_unknown for it forever. The station reports count, start
+   * and end for every history, and when the buffer is FULL - count >= capacity
+   * - the span from start to end is how long it retains. Unit_Status_Mode on
+   * PHBoffice: 500 records over two hours, sixty times shorter than every
+   * interval point beside it, and the most at-risk point on the station read
+   * "unknown".
+   */
+  async function measured(
+    tx: Tx,
+    pointId: bigint,
+    opts: { capacity: number | null; count: number; spanS: number; ago: string },
+  ) {
+    await tx.$executeRawUnsafe(
+      `UPDATE bas_points SET capacity = $1 WHERE point_id = $2`,
+      opts.capacity,
+      pointId,
+    );
+    await tx.$executeRawUnsafe(
+      `INSERT INTO bas_sync_checkpoints
+         (point_id, last_record_ts, last_status, station_count, observed_span_s)
+       VALUES ($1, now() - interval '${opts.ago}', 'ok', $2, $3)
+       ON CONFLICT (point_id) DO UPDATE
+         SET last_record_ts = EXCLUDED.last_record_ts,
+             station_count = EXCLUDED.station_count,
+             observed_span_s = EXCLUDED.observed_span_s`,
+      pointId,
+      opts.count,
+      opts.spanS,
+    );
+    const rows = await tx.$queryRaw<
+      Array<{
+        roll_risk: string;
+        horizon_s: number | null;
+        measured_horizon_s: number | null;
+        horizon_source: string | null;
+      }>
+    >`SELECT roll_risk, horizon_s, measured_horizon_s, horizon_source
+        FROM bas_v_collection_health WHERE point_id = ${pointId}`;
+    return rows[0];
+  }
+
+  it("uses the station's own span as the horizon when its buffer is full", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // A COV point: capacity filled in, no interval, so roll_horizon_s is NULL.
+      // The station says 500 records over 7200 s. Collected ten minutes ago.
+      const row = await measured(tx, f.unknown, {
+        capacity: 500, count: 500, spanS: 7200, ago: "10 minutes",
+      });
+
+      expect(row?.horizon_source).toBe("measured");
+      expect(row?.measured_horizon_s).toBe(7200);
+      expect(row?.horizon_s).toBe(7200);
+      expect(row?.roll_risk).toBe("ok");
+    });
+  });
+
+  it("judges at_risk and data_lost against the measured two hours, not against unknown", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // 90 minutes against a 2-hour horizon: past half, short of all.
+      expect(
+        (await measured(tx, f.unknown, { capacity: 500, count: 500, spanS: 7200, ago: "90 minutes" }))
+          ?.roll_risk,
+      ).toBe("at_risk");
+      // 3 hours: the station has rolled records we never collected.
+      expect(
+        (await measured(tx, f.unknown, { capacity: 500, count: 500, spanS: 7200, ago: "3 hours" }))
+          ?.roll_risk,
+      ).toBe("data_lost");
+    });
+  });
+
+  it("does not call a half-full buffer's span a horizon", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // 419 of 500: Occupied's shape. Its span is how much it holds so far,
+      // not how long it retains, and nothing here is at risk of rolling.
+      const row = await measured(tx, f.unknown, {
+        capacity: 500, count: 419, spanS: 78_000_000, ago: "10 minutes",
+      });
+
+      expect(row?.measured_horizon_s).toBeNull();
+      expect(row?.horizon_source).toBeNull();
+      expect(row?.roll_risk).toBe("roll_horizon_unknown");
+    });
+  });
+
+  it("cannot know a buffer is full when nobody has filled in its capacity", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // count 500 looks like Niagara's default capacity, and the view does not
+      // guess: a 1000-record buffer at 500 is half full.
+      const row = await measured(tx, f.unknown, {
+        capacity: null, count: 500, spanS: 7200, ago: "10 minutes",
+      });
+
+      expect(row?.horizon_source).toBeNull();
+      expect(row?.roll_risk).toBe("roll_horizon_unknown");
+    });
+  });
+
+  it("prefers the measured horizon to the configured one when both exist", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // sat is configured at 500 x 900 = 450000 s. The station says its full
+      // buffer spans 7200 s - the interval in Workbench is wrong, or the point
+      // was reconfigured. The measurement wins, and says so.
+      const row = await measured(tx, f.sat, {
+        capacity: 500, count: 500, spanS: 7200, ago: "3 hours",
+      });
+
+      expect(row?.horizon_source).toBe("measured");
+      expect(row?.horizon_s).toBe(7200);
+      expect(row?.roll_risk).toBe("data_lost");
+    });
+  });
+
+  it("falls back to the configured horizon when the station reports no span", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      const rows = await tx.$queryRaw<Array<{ horizon_s: number | null; horizon_source: string | null }>>`
+        SELECT horizon_s, horizon_source FROM bas_v_collection_health WHERE point_id = ${f.sat}`;
+
+      expect(rows[0]?.horizon_source).toBe("configured");
+      expect(rows[0]?.horizon_s).toBe(450_000);
+    });
+  });
+
+  /**
+   * The completeness verdict, passed through (2026-09-17). For a day the
+   * collector wrote it and nothing read it. This is the first reader.
+   */
+  it("carries the completeness verdict and its numbers", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      await tx.$executeRaw`
+        UPDATE bas_sync_checkpoints
+           SET completeness = 'incomplete', station_count = 500, held_count = 430,
+               completeness_note = 'ZZTEST station holds 70 we do not',
+               completeness_checked_at = now()
+         WHERE point_id = ${f.sat}`;
+
+      const rows = await tx.$queryRaw<
+        Array<{ completeness: string; station_count: number; held_count: number; completeness_note: string }>
+      >`SELECT completeness, station_count, held_count, completeness_note
+          FROM bas_v_collection_health WHERE point_id = ${f.sat}`;
+
+      expect(rows[0]?.completeness).toBe("incomplete");
+      expect(rows[0]?.station_count).toBe(500);
+      expect(rows[0]?.held_count).toBe(430);
+      expect(rows[0]?.completeness_note).toContain("70");
+    });
+  });
+
+  it("reads NULL completeness for a point with no checkpoint, never 'complete'", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // fanCmd has no checkpoint row. A LEFT JOIN gives NULL, and the service
+      // turns NULL into unknown. What it must never be is a value that reads
+      // as checked.
+      const rows = await tx.$queryRaw<Array<{ completeness: string | null }>>`
+        SELECT completeness FROM bas_v_collection_health WHERE point_id = ${f.fanCmd}`;
+
+      expect(rows[0]?.completeness).toBeNull();
     });
   });
 

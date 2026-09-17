@@ -161,6 +161,34 @@ describe("the five tiles", () => {
     expect(result.totals.minutesSinceNewestReading ?? 0).toBeGreaterThan(4);
     expect(result.totals.minutesSinceNewestReading ?? 0).toBeLessThan(7);
   });
+
+  /**
+   * The completeness check, read (2026-09-17). Five active points in site A:
+   * sat complete, satSp incomplete, fanCmd backfilling, `unknown` at the
+   * column default, and fanStatus with no checkpoint row at all.
+   */
+  it("counts every completeness state, and counts an unchecked point as unknown", async () => {
+    const result = await health();
+
+    expect(result.totals.completenessCounts).toEqual({
+      complete: 1,
+      incomplete: 1,
+      backfilling: 1,
+      unknown: 2,
+    });
+    expect(result.totals.pointsIncomplete).toBe(1);
+  });
+
+  it("never lets a point with no checkpoint row read as complete", async () => {
+    const result = await health();
+
+    // fanStatus: never collected, no checkpoint, NULL through the LEFT JOIN.
+    // "Never checked" rendering as "checked and fine" is the failure the whole
+    // check exists to prevent, one level up.
+    const never = result.points.find((point) => point.risk === "never_collected");
+    expect(never?.completeness).toBe("unknown");
+    expect(result.points.filter((p) => p.completeness === "complete")).toHaveLength(1);
+  });
 });
 
 describe("the per-point table", () => {
@@ -195,7 +223,24 @@ describe("the per-point table", () => {
     const result = await health();
 
     expect(byName(result, "SupplyAirTemp")?.rollHorizonHours).toBeCloseTo(125, 5);
+    expect(byName(result, "SupplyAirTemp")?.horizonSource).toBe("configured");
     expect(byName(result, "Unknown")?.rollHorizonHours).toBeNull();
+    expect(byName(result, "Unknown")?.horizonSource).toBeNull();
+  });
+
+  it("carries the completeness verdict and both counts per point", async () => {
+    const result = await health();
+
+    const short = byName(result, "SupplyAirTempSp");
+    expect(short?.completeness).toBe("incomplete");
+    expect(short?.stationCount).toBe(500);
+    expect(short?.heldCount).toBe(430);
+
+    expect(byName(result, "SupplyAirTemp")?.completeness).toBe("complete");
+    expect(byName(result, "FanCmd")?.completeness).toBe("backfilling");
+    expect(byName(result, "Unknown")?.completeness).toBe("unknown");
+    expect(byName(result, "FanStatus")?.completeness).toBe("unknown");
+    expect(byName(result, "FanStatus")?.stationCount).toBeNull();
   });
 
   it("carries the site, the role and the unit through", async () => {

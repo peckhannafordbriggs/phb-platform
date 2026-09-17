@@ -30,6 +30,10 @@ function point(over: Partial<PointHealthRow> = {}): PointHealthRow {
     lastReadingAt: "2026-08-28T12:00:00.000Z",
     minutesAgo: 60,
     rollHorizonHours: 41.7,
+    horizonSource: "configured",
+    completeness: "complete",
+    stationCount: null,
+    heldCount: null,
     ...over,
   };
 }

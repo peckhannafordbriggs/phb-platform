@@ -509,6 +509,13 @@ model BasStation {
   model          String?
   niagaraVersion String? @map("niagara_version")
 
+  /// Station clock minus collector host clock, seconds, from /obix/about on the
+  /// collector's last pass. Positive = station ahead. PHBoffice: +1336 s on
+  /// 2026-09-17, which hid every record it wrote from a query bounded at the
+  /// host's now, and makes seconds_since_last_record 22 minutes optimistic.
+  clockOffsetS    Int?      @map("clock_offset_s")
+  clockMeasuredAt DateTime? @map("clock_measured_at") @db.Timestamptz()
+
   /// The Supervisor this station reports to, if any. NULL for a standalone
   /// JACE. This single nullable self-reference is how a Supervisor stays
   /// optional forever - introducing one later needs no schema change at all.
@@ -846,6 +853,13 @@ model BasSyncCheckpoint {
   /// span so that records the station has since rolled off - which we keep -
   /// are never counted against it.
   heldCount    Int?      @map("held_count")
+
+  /// The station's reported end minus start, in seconds, re-measured every
+  /// pass. A HORIZON only when the buffer is full (station_count >= capacity),
+  /// which is the condition bas_v_collection_health applies. Distinct from
+  /// bas_points.roll_horizon_s on purpose: that one is configured, this one is
+  /// measured, and they answer different questions.
+  observedSpanS Int? @map("observed_span_s")
 
   @@map("bas_sync_checkpoints")
 }

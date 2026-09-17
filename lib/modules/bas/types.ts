@@ -40,6 +40,38 @@ export const AT_RISK_ROLL_RISKS: readonly RollRisk[] = [
   "never_collected",
 ];
 
+/**
+ * `completeness` from `bas_v_collection_health`: the collector's per-pass
+ * comparison of the station's own record count against what we hold inside
+ * the station's span (phb-bas, `completeness_verdict`).
+ *
+ *   incomplete   the station holds records we do not, after asking for
+ *                everything. Not lost yet; not arriving on its own. Red.
+ *   backfilling  short, but the pass hit its request cap and the next one
+ *                continues. Resolves itself. Amber - a backlog, like § 43.
+ *   unknown      the station reported no count, or no pass has checked yet.
+ *                Never green.
+ *   complete     within tolerance of the station's own count.
+ *
+ * A point with no checkpoint row at all reads `unknown` - the service
+ * COALESCEs it - because "never checked" must not render as "checked and
+ * fine".
+ */
+export type Completeness = "unknown" | "complete" | "backfilling" | "incomplete";
+
+/** Every completeness except `complete`, worst first. */
+export const NOT_COMPLETE: readonly Completeness[] = [
+  "incomplete",
+  "backfilling",
+  "unknown",
+];
+
+/**
+ * Which horizon `rollHorizonHours` is: the span of a full buffer as the
+ * station reported it (measured), capacity x interval (configured), or none.
+ */
+export type HorizonSource = "measured" | "configured" | null;
+
 export interface CollectionHealthTotals {
   /** Active points. Inactive ones are excluded everywhere on this screen. */
   activePoints: number;
@@ -51,6 +83,10 @@ export interface CollectionHealthTotals {
   pointsAtRisk: number;
   /** The composition of `pointsAtRisk`, so a total of 3 is never ambiguous. */
   riskCounts: Record<RollRisk, number>;
+  /** Active points whose last check said the station holds records we do not. */
+  pointsIncomplete: number;
+  /** Every completeness state's count, so the tile can say which. */
+  completenessCounts: Record<Completeness, number>;
   /**
    * Minutes since the newest reading in the whole database.
    *
@@ -72,8 +108,18 @@ export interface PointHealthRow {
   /** ISO 8601 UTC, or `null` when the point has never been collected. */
   lastReadingAt: string | null;
   minutesAgo: number | null;
-  /** Hours, or `null` when capacity or interval is unknown - i.e. the risk state. */
+  /**
+   * Hours, or `null` when no horizon is known - i.e. the risk state. Measured
+   * from the station's own span when its buffer is full, else configured from
+   * capacity x interval; `horizonSource` says which.
+   */
   rollHorizonHours: number | null;
+  horizonSource: HorizonSource;
+  completeness: Completeness;
+  /** The station's reported record count at the last check, or `null`. */
+  stationCount: number | null;
+  /** Rows we hold inside the station's span at the last check, or `null`. */
+  heldCount: number | null;
 }
 
 export interface IngestRunRow {

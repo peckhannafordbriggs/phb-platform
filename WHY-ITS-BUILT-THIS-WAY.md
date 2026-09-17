@@ -942,6 +942,51 @@ status is back to lying in the one case it was changed to catch. The Python that
 enforces all of this is in `phb-bas`; the columns it writes, and the CHECK that
 holds the vocabulary closed, are in `add_bas_completeness` here.
 
+**The same afternoon, four amendments — each from watching the first live result.**
+
+*The query has no upper bound.* The check's first live finding was a false
+positive: two chattering points 70 short, and a `--from-scratch` that fetched
+nothing. The JACE's clock is 22 minutes ahead of the collector host, the query
+was bounded at the host's `now`, and every record the station had written in the
+last 22 minutes sat in the host's future. Two clocks, one comparison. The station
+stamps the records, so the station's clock bounds the range and `limit` bounds
+the response. The offset itself is measured from `/obix/about` every pass and
+recorded on the station, because a wrong station clock also misaligns that
+building against every other and hides staleness in the health view; it is
+fixed on the station and never corrected in the data, since a corrected value is
+one nobody measured.
+
+*The roll horizon is measured where it can be.* A full buffer — `count >=
+capacity` — spans exactly what it retains, and the station reports both ends.
+That span is recorded every pass, the view derives a horizon from it only when
+the buffer is full, and the guard, the screen and the health check prefer it to
+`capacity × interval`. A change-of-value point needs only its capacity filled in.
+The two numbers stay distinct: one is what the station was configured to do,
+the other is what it is doing, and when they disagree the station is right.
+A *measured* horizon shorter than four polls is not refused — refusing the
+station because one point got chatty stops the other 25 and loses more than it
+protects — it is collected, said at ERROR, made `partial`, and CRITICAL in the
+health check. A *configured* one is still refused: a person wrote it.
+
+*The verdict is read, in three places.* View, screen, health check. A detector
+that wrote a column nobody read for a day was the 28 August failure in a new
+coat. `incomplete` is red like `data_lost`; `backfilling` is amber like § 43's
+awaiting station, because it resolves itself; `unknown` is amber because
+unknown is never green; a point with no checkpoint row reads `unknown`, because
+never checked is not checked and fine.
+
+*A filter that matches nothing skips the station and writes no run.* `sync
+--only OperatingState` recorded a `failed` run against the lab, which has no
+such point, and check 1b reads `bas_ingest_runs` for outages. A few manual
+filtered syncs were writing fake outages into the record.
+
+**What breaks if you undo these.** Put `end = host now` back and any station
+whose clock runs ahead loses its newest records to every query and reads
+`incomplete` forever. Call a half-full buffer's span a horizon and a young
+chattering point refuses or alarms the whole station. Refuse on a measured
+horizon and one chatty point stops a building. Stop reading the verdict and the
+check is silent again.
+
 ## 45 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

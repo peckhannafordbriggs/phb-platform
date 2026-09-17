@@ -1,8 +1,9 @@
 import type {
   BasSettingsTree,
-  PointHealthRow,
   CollectionHealth,
+  Completeness,
   PointExplorer,
+  PointHealthRow,
   RollRisk,
   RunGap,
 } from "@/lib/modules/bas/types";
@@ -327,6 +328,107 @@ export function riskBreakdown(
     risk,
     count: counts[risk],
   }));
+}
+
+// ---------------------------------------------------------- completeness
+
+/**
+ * The completeness check, surfaced.
+ *
+ * The collector (phb-bas) compares the station's own record count against
+ * what the platform holds inside the station's span, every pass, and writes
+ * the verdict to bas_sync_checkpoints. For a day it wrote it and nothing read
+ * it - a detector for silent loss that was itself silent, which is the 28
+ * August failure in a new coat. This is where the screen reads it.
+ *
+ * Severity follows the precedent this screen already sets. `incomplete` is
+ * the station holding records we do not, after we asked for everything: not
+ * lost yet, but the only thing between it and lost is the station's buffer
+ * rolling, so it is red like data_lost. `backfilling` resolves itself - a
+ * large first sync still paging - and is amber like an unclassified point or
+ * a station awaiting its login (§ 43): visible, not alarming. `unknown` is
+ * amber for the reason everything unknown on this screen is: it is not safe.
+ */
+export function completenessTone(completeness: Completeness): Tone {
+  switch (completeness) {
+    case "complete":
+      return "ok";
+    case "incomplete":
+      return "bad";
+    case "backfilling":
+    case "unknown":
+      return "warn";
+  }
+}
+
+export const COMPLETENESS_LABEL: Record<Completeness, string> = {
+  complete: "Complete",
+  backfilling: "Backfilling",
+  incomplete: "Incomplete",
+  unknown: "Unchecked",
+};
+
+export const COMPLETENESS_EXPLANATION: Record<Completeness, string> = {
+  complete:
+    "The platform holds what the station reports holding for this point, within a few records.",
+  backfilling:
+    "The platform holds less than the station reports, and the last pass stopped at its request cap with pages still to fetch. The next pass continues. Expected during a large first sync.",
+  incomplete:
+    "The station reports records the platform does not have, after the collector asked for everything it holds. Nothing further arrives on its own. Not lost yet - the station still has them - but the only thing between this and lost is its buffer rolling.",
+  unknown:
+    "The station reported no record count for this history, or no collector pass has checked it yet. We cannot tell, and unknown is not safe.",
+};
+
+/** Worst first, `complete` excluded - what the completeness card lists. */
+export const COMPLETENESS_SEVERITY_ORDER: readonly Completeness[] = [
+  "incomplete",
+  "backfilling",
+  "unknown",
+];
+
+/**
+ * The card's tone. Red from one incomplete point; amber when the only
+ * shortfalls are self-resolving or unknowable; green only when every active
+ * point has been checked and agrees with its station.
+ */
+export function completenessTileTone(counts: Record<Completeness, number>): Tone {
+  if (counts.incomplete > 0) return "bad";
+  if (counts.backfilling > 0 || counts.unknown > 0) return "warn";
+  return "ok";
+}
+
+/** The card's headline: which problem, not just how many. */
+export function describeCompleteness(counts: Record<Completeness, number>): string {
+  const plural = (n: number) => `${formatCount(n)} point${n === 1 ? "" : "s"}`;
+  if (counts.incomplete > 0) {
+    return `${plural(counts.incomplete)} short of what the station holds`;
+  }
+  if (counts.backfilling > 0) {
+    return `${plural(counts.backfilling)} still backfilling`;
+  }
+  if (counts.unknown > 0) {
+    return `${plural(counts.unknown)} not yet checked against the station`;
+  }
+  return "Every point matches the station's own count";
+}
+
+export function completenessBreakdown(
+  counts: Record<Completeness, number>,
+): Array<{ completeness: Completeness; count: number }> {
+  return COMPLETENESS_SEVERITY_ORDER.filter((c) => counts[c] > 0).map((c) => ({
+    completeness: c,
+    count: counts[c],
+  }));
+}
+
+/** "500 on the station, 430 here" - the two numbers a shortfall is made of. */
+export function describeShortfall(point: {
+  stationCount: number | null;
+  heldCount: number | null;
+}): string {
+  if (point.stationCount === null) return "station count unknown";
+  if (point.heldCount === null) return `${formatCount(point.stationCount)} on the station`;
+  return `${formatCount(point.stationCount)} on the station, ${formatCount(point.heldCount)} here`;
 }
 
 // ------------------------------------------------------------- formatting

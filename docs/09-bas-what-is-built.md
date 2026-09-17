@@ -457,6 +457,14 @@ is on `bas_sync_checkpoints.completeness` *(this repo, `add_bas_completeness`)*;
 the check is in `collector/sync.py` *(phb-bas)*. `runbook.md` → *A BAS run says
 `ok` and a point holds nothing*.
 
+**The JACE's clock is 22 minutes ahead — measured the same day.** `/obix/about`
+on PHBoffice reported 11:00:38 against a host at 10:38:21; Spring Grove agreed
+with the host to 0.2 s. Every record PHBoffice writes is stamped in its own
+time, and until the collector stopped bounding its queries by the host clock
+that made the newest 22 minutes of a chattering point invisible. Recorded on
+`bas_stations.clock_offset_s` every pass now; fixing the clock is a station
+change and is open. `runbook.md` → *A BAS station's clock is wrong*.
+
 **Real data loss, recorded honestly — three times.** Every figure here was read
 out of `public.bas_data_gaps` and `public.bas_ingest_runs` on 8 September 2026,
 and each outage is four `roll_overwrite` gaps, one per active point.

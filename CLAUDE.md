@@ -402,10 +402,21 @@ and every pass compares the station's reported count with what the platform
 holds, recording `complete` / `backfilling` / `incomplete` / `unknown` on
 `bas_sync_checkpoints` and making a run with an incomplete point `partial`. The
 columns are this repository's (`add_bas_completeness`); the logic is the
-collector's (`phb-bas`). **Apply the migration before updating the collector**
-— it refuses to run on the old schema. `WHY-ITS-BUILT-THIS-WAY.md` § 44;
-`runbook.md` → *A BAS run says `ok` and a point holds nothing*. The health
-screen does not show the state yet.
+collector's (`phb-bas`). **Apply both migrations before updating the
+collector** (`add_bas_completeness`, `add_bas_measured_horizon_and_visibility`)
+— it refuses to run on a schema missing either. `WHY-ITS-BUILT-THIS-WAY.md`
+§ 44; `runbook.md` → *A BAS run says `ok` and a point holds nothing*.
+
+Same day, four amendments from the first live result: the query has **no upper
+bound**, because the PHBoffice JACE's clock is 22 minutes ahead of the host and
+a host-bounded query hid its newest records (the offset is now measured every
+pass and recorded on `bas_stations`); the roll horizon is **measured** from a
+full buffer's span and preferred to capacity × interval, so a change-of-value
+point needs only `capacity`; the verdict is **read** by the view, the health
+screen and `healthcheck.py`; and a `--only` filter that matches nothing on a
+station skips it rather than recording a fake failed run. Fixing the JACE's
+clock is a station change and is open. `runbook.md` → *A BAS station's clock is
+wrong*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
