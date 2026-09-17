@@ -5361,6 +5361,64 @@ what *The dev platform database gets staler every day* describes.
 
 ## Repointing the collector also repoints the nightly backup — and breaks it
 
+**Superseded on 17 September 2026.** The fix below was never applied, and a
+second, worse break arrived before it could be. Every backup attempt from 28
+August to 17 September failed before writing a byte —
+`permission denied for table _prisma_migrations` — left a 0-byte file in
+OneDrive, and was reported by nothing.
+
+**What caused it, dated from the evidence rather than from memory.** The B6
+cutover (`abcacf3` *(phb-bas)*, 24 August 11:05) pointed the collector's
+`DATABASE_URL` at the platform database **as the `postgres` superuser** — that
+commit's own `.env.example` and runbook say so, and a dump taken as the
+superuser would have succeeded (the test below, the same day, produced one). The
+break came from a second, separate change: the connection was moved to the
+least-privilege `bas_collector` role, which can read and write the `bas_*`
+tables and nothing else, so `pg_dump` of the whole database dies on the first
+table it cannot lock. That role existed by 12:44 on 24 August (`c72bd00`, "the
+same shape used for `bas_collector`"). When `.env` was switched to use it is
+**not recorded anywhere** — `.env` is not in git — and lies between the last
+standalone dump at 11:26 on 24 August and the first failure at 08:29 on 28
+August. An earlier version of this paragraph blamed B7.5 (`12bd590` *(phb-bas)*,
+9 September). It cannot have been: it is sixteen days after the first failure,
+and it did not touch `DATABASE_URL`.
+
+**24 to 28 August, established from the logs and the disk.** No backup attempt
+was made on 25, 26 or 27 August: `logs\backup.log` *(phb-bas)* has no line for
+those days, although `healthcheck.log` shows the machine awake for about eight
+hours each day (16 half-hourly entries) and the collector ran 31 times a day.
+The scheduled task did not fire on those mornings; **why is unestablished** —
+Task Scheduler's history on this machine begins on 9 September, and the task's
+registration date is not recorded. On 28 August it fired at 08:29:30, eleven
+seconds before that day's first collector run, which is `StartWhenAvailable`
+catching up at wake. **No dump dated 25, 26 or 27 August ever existed.** The
+directory listing taken on the morning of 17 September, before that day's
+rotation, held dumps dated 20, 21 and 24 August — all of the standalone
+database, per the log — and 0-byte files dated 28 August, 9 and 14 September,
+and nothing else; rotation then removed exactly six files, which is those six.
+The reviewer's premise that platform dumps were written between the cutover and
+the 28th and then not rotated does not hold: rotation runs only after a
+successful dump, no dump succeeded between 24 August 11:26 and 17 September
+12:21, and nothing was there to rotate.
+
+**So, for anyone recovering:**
+
+| | |
+|---|---|
+| **Last verified dump before 17 September** | `bas_2026-08-24_1126.dump`, 0.11 MB, of the **standalone** database, whose newest reading is 24 Aug 10:35. **Rotated out on 17 September**, being past 14 days. It no longer exists on disk |
+| **Last usable platform dump before 17 September** | **None.** No platform dump was ever written before 17 September |
+| **The standalone `bas` database** | Still on the server: 5,615 readings to 24 Aug 10:35, all of which the platform database also holds. A recovery candidate for nothing the platform does not have |
+| **Since 17 September** | `bas_2026-09-17_1221.dump` and later, each verified with a `.verified` marker; and `phb_platform_manual_20260917.dump` from 11:57, a superuser dump that `pg_restore --list` reads (22 tables) but that carries no marker and is not counted by the health check |
+
+**The backup now has its own connection string and its own role** —
+`BAS_BACKUP_URL`, `bas_backup`, a `pg_read_all_data` member with `CREATEDB` for
+the restore test, created by `setup_backup_role.sql` *(phb-bas)* — and refuses
+to fall back to `DATABASE_URL`. `healthcheck.py` *(phb-bas)* reads the dump
+directory's `.verified` markers and is CRITICAL when no verified dump is younger
+than 48 hours. `phb-bas/bas-collector/RUNBOOK.md` → *Health check says NO
+VERIFIED BACKUP EXISTS* is the current procedure. What follows is the 24 August
+finding, kept for the record.
+
 **Checked by running it, 24 August 2026. Both halves of this are true and the
 second one is the dangerous one.**
 
