@@ -639,6 +639,19 @@ describe("the controlled vocabularies are enforced by the database", () => {
           `INSERT INTO bas_points (station_id, niagara_history_name, capacity)
            VALUES (${station}, 'ZZTEST_ZeroCapacity', 0)`,
       },
+      {
+        // add_bas_completeness (2026-09-17). The collector writes this column
+        // and the platform reads it; a fifth spelling would render as nothing
+        // in particular on a screen whose whole job is to be noticed.
+        what: "an undeclared completeness state",
+        constraint: "bas_sync_checkpoints_completeness_check",
+        sql: (station) =>
+          `WITH p AS (
+             INSERT INTO bas_points (station_id, niagara_history_name)
+             VALUES (${station}, 'ZZTEST_BadCompleteness') RETURNING point_id)
+           INSERT INTO bas_sync_checkpoints (point_id, completeness)
+           SELECT point_id, 'mostly' FROM p`,
+      },
     ];
 
   for (const testCase of CASES) {

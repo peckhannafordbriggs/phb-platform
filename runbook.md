@@ -3759,7 +3759,7 @@ So three things are defined in the migration SQL rather than in
 | What | Where | Does Prisma notice it? |
 |---|---|---|
 | `bas_points_roll_horizon` trigger, keeping `roll_horizon_s` correct | migration SQL | No |
-| 13 CHECK constraints | migration SQL | No. Invisible to it in both directions |
+| 17 CHECK constraints (13 in `add_bas_tables`, then one each in `add_bas_projects` and `add_station_tls_and_display_name`, two in `add_bas_completeness`) | migration SQL | No. Invisible to it in both directions |
 | 6 views, `bas_v_*` | migration SQL | No |
 
 The BRIN index on `bas_readings(ts)` **is** in `schema.prisma`, as
@@ -5006,6 +5006,69 @@ causes went unreported as soon as collection came back.
 
 What each real outage destroyed is in `docs/09-bas-what-is-built.md` under
 *Proven in operation*.
+
+---
+
+## A BAS run says `ok` and a point holds nothing — or a point reads `incomplete`
+
+**Found on 2026-09-16, on the first sync of the PHBoffice JACE.** Recorded
+because the run status could not have told you, and because the fix spans both
+repositories.
+
+| | |
+|---|---|
+| **Symptom** | The first sync reported *28/28 points ok, 9,784 records, status ok*. Four points had collected **zero** records and three had collected two. Read live from the station: `Occupied` held 419 records back to 2024-02-21, `System_Enable` 317, `OccupancyCommand` 71, `OperatingState` 320. Nothing in `bas_ingest_runs` or `bas_sync_checkpoints` said anything was wrong — `last_status` was `ok` for all of them. |
+| **Cause** | The collector's first-sync window was `INITIAL_BACKFILL_DAYS = 30`. Those are change-of-value histories and had last changed on 2026-08-12, five days before the window began, so every request came back empty, and an empty pass is a successful pass. Against a 500-record rolling buffer holding six days the same window looks exactly like *took everything*, which is why the interval points read 495–498 and nobody noticed. |
+| **Fix** | Two, both in the collector *(phb-bas, 2026-09-17)* and both proven in `test_completeness.py` there. A point with no checkpoint now starts at **the station's own oldest record** and pages forward 1,000 at a time, capped per pass and resumed next pass. And every pass **compares the station's reported `count` against what we hold** inside its reported span, recording the verdict on the point. |
+
+**What the platform holds, as of `add_bas_completeness`.** On
+`bas_sync_checkpoints`: `completeness` (`unknown` / `complete` / `backfilling` /
+`incomplete`, a CHECK), `station_count`, `station_start`, `station_end`,
+`held_count`, `completeness_checked_at`, and `completeness_note` — the
+comparison as a sentence. On `bas_ingest_runs`: `points_incomplete` and
+`points_backfilling`. **A run with an incomplete point is `partial`, never
+`ok`.**
+
+```sql
+SELECT p.display_name, c.completeness, c.station_count, c.held_count, c.completeness_note
+  FROM bas_sync_checkpoints c JOIN bas_points p USING (point_id)
+ WHERE c.completeness <> 'complete';
+```
+
+| State | Meaning | Do |
+|---|---|---|
+| `incomplete` | The station holds more than 5 records we do not, **after asking for everything**. Nothing further arrives on its own | `phb-bas` RUNBOOK → *A point reads INCOMPLETE*. Start with `sync --from-scratch --only <point>` |
+| `backfilling` | Short, and this pass hit the per-point request cap. Expected on a large first sync; `held_count` grows every pass | Nothing, while it grows |
+| `unknown` | The station reported no count for this history. **Not green** — see § 28 | Look at the history object on the station |
+| `complete` | Within 5 records of the station's own count | — |
+
+**Deploy order matters.** The migration is the platform's; the logic is the
+collector's. Apply `add_bas_completeness` **before** updating the collector
+checkout at `C:\dev\bas-collector`: the collector refuses to run against a
+schema without these columns and records a `failed` run saying so, rather than
+failing every point on a bare database error after the run row was opened.
+
+**Where the line is, and why it is not a percentage.** Five records, fixed. The
+collector reads the history object *before* its query and fixes the query's
+upper bound *after*, so a record the station writes mid-pass lands in our
+window rather than in its count — that drift is closed by ordering. What is
+left is two records in one millisecond (one row under the `(point_id, ts)`
+key) and a rolling buffer dropping a record between the two requests on a first
+sync; five is that with headroom. A percentage would hide more the bigger the
+archive, and a customer Supervisor holding years is exactly where a hole
+matters most: 1 % of a five-year one-minute history is eighteen days.
+
+**What this does not do yet.** `bas_v_collection_health` and the Collection
+Health screen do not show `completeness`; the columns are queryable and the run
+status carries it. `healthcheck.py` *(phb-bas)* does not read it either. Both
+are the natural next additions, and neither was in scope on 2026-09-17.
+
+**The roll-overwrite gap detector changed with it.** It used to infer what the
+station still held from `capacity × collection_interval_s`. The station reports
+its own oldest record, so the gap's end is now that observation, and the
+inference is the fallback for a station that reports no `start`. A
+change-of-value history — `Occupied`, 419 records over 2.5 years — has no
+interval, and the inference was never right for it.
 
 ---
 

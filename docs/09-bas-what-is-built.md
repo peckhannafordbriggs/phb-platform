@@ -443,6 +443,20 @@ cross-checks our timestamps, since 13:05 UTC is 09:05 EDT.
 Nothing told us. The station sends no status. It was found because −40 is not a
 temperature.
 
+**Zero records, reported ok — found on 2026-09-16, the first sync of PHBoffice.**
+The run said *28/28 points ok, 9,784 records*. Read live from the station a day
+later: `Occupied` held 419 records back to 2024-02-21 and the platform held none;
+`System_Enable` 317 and none; `OccupancyCommand` 71 and none; `OperatingState`
+320 and two. The collector's first-sync window was 30 days and those
+change-of-value histories had last changed 35 days earlier. Nothing was
+destroyed — the station still held all of it — but nothing in the pipeline could
+have said so, and a customer Supervisor would have imported a week of years. The
+collector now starts at the station's own oldest record, and compares the
+station's reported count with what the platform holds on every pass. The state
+is on `bas_sync_checkpoints.completeness` *(this repo, `add_bas_completeness`)*;
+the check is in `collector/sync.py` *(phb-bas)*. `runbook.md` → *A BAS run says
+`ok` and a point holds nothing*.
+
 **Real data loss, recorded honestly — three times.** Every figure here was read
 out of `public.bas_data_gaps` and `public.bas_ingest_runs` on 8 September 2026,
 and each outage is four `roll_overwrite` gaps, one per active point.

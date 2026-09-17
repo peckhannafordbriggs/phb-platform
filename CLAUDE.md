@@ -393,6 +393,20 @@ Part B extracted one file-access interface with two implementations.
 `GraphFileStore` is written and **has never run** — Part C is what selects it,
 against a copy, and its open questions are marked `GRAPH-TODO` in place.
 
+**The BAS collector's first sync takes everything, and every pass checks that
+it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
+four points at zero records: the collector's first-sync window was 30 days and
+those change-of-value histories had gone quiet 35 days earlier. Now a point with
+no checkpoint starts at the station's own oldest record and pages by `limit`,
+and every pass compares the station's reported count with what the platform
+holds, recording `complete` / `backfilling` / `incomplete` / `unknown` on
+`bas_sync_checkpoints` and making a run with an incomplete point `partial`. The
+columns are this repository's (`add_bas_completeness`); the logic is the
+collector's (`phb-bas`). **Apply the migration before updating the collector**
+— it refuses to run on the old schema. `WHY-ITS-BUILT-THIS-WAY.md` § 44;
+`runbook.md` → *A BAS run says `ok` and a point holds nothing*. The health
+screen does not show the state yet.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -454,7 +468,7 @@ well it is written.
 | `DEVELOPER-SETUP.md` | **Start here if you are a new developer.** Installs, databases, `.env.local`, seeds, first test run — and the things that bite before they bite | Someone about to write code |
 | `PLATFORM-CONTEXT.md` | **Read before designing a module.** What the platform already provides, the four-part integration contract, and the seven decisions a module makes for itself | Someone about to design one |
 | `HANDOVER.md` | **Start here if you are inheriting this.** What this is, what must not break, what will fail and when, what to do first | Whoever owns it after December 2026 |
-| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 44 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 45 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
 | `runbook.md` | Failure modes, recovery, what expires and when | Anyone with a broken thing |
 
 Setup instructions live in `DEVELOPER-SETUP.md` and the per-variable detail lives

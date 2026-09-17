@@ -897,7 +897,52 @@ removed from a station that was collecting yesterday — reads as a to-do item. 
 distinction on whether a credential row *ever existed* instead of on the run history and
 you need a table nobody has, for a question the run history already answers.
 
-## 44 · The judgment I'd most want to pass on
+## 44 · A first sync takes everything the station holds, and every pass checks that it did
+
+**Decision.** A point with no checkpoint starts collecting at the station's *own*
+oldest record — read from the oBIX history object — and pages forward by `limit`,
+capped per pass and resumed on the next. There is no bounded first-sync window and
+no per-request time window. And on every pass the collector compares the count the
+station reports against the rows the platform holds inside the station's own span,
+and records the verdict on the point: `complete`, `backfilling`, `incomplete` or
+`unknown`. A run with an `incomplete` point is `partial`, never `ok`.
+
+**Why.** The first sync of PHBoffice on 2026-09-16 reported *28/28 points ok,
+9,784 records, status ok*, and four of those points had collected nothing. The
+window was 30 days; the change-of-value histories had gone quiet 35 days earlier;
+every request was empty; and an empty pass was a successful pass. Against the
+500-record rolling buffers the same window looked identical to *took everything*,
+which is why it was never questioned. The plan is to point this collector at
+customers' Supervisors holding years of history. A week of a multi-year archive,
+reported as success, is the failure this whole system exists to prevent — and the
+station had been saying `count=419` on every pass.
+
+The tolerance is five records, fixed, not a percentage, because a percentage
+scales the blind spot with the archive and the archive is where a hole matters.
+Drift from the station writing during the pass is closed by ordering — meta first,
+upper bound fixed after — not by tolerance, so what the five covers is two records
+in one millisecond and a rolling buffer dropping one between two requests.
+
+The window went for the same reason `INITIAL_BACKFILL_DAYS` did: it bounded
+nothing that `limit` does not — Niagara iterates a lazy cursor and stops at
+`limit`, which is why its own `unboundedQuery` preset is range-unbounded — and it
+cost a sparse history one empty request per idle day, every pass. `Occupied` was
+paying 36 a pass on the day this was found; a year on, it would have hit the cap
+and read `backfilling` forever.
+
+**What breaks if you undo it.** Bring back a bounded first sync and the next
+Supervisor imports a window and reports success. Drop the completeness check and
+the collector goes back to grading its own homework — a run's status says whether
+requests succeeded, and nothing else in the pipeline can say whether the data
+arrived. Make the tolerance a percentage and the check goes quiet on precisely the
+histories large enough to hide a real hole. Make `backfilling` downgrade the run
+and a large first sync is red for a day for something nobody needs to act on,
+which is § 43's lesson again. Make `incomplete` *not* downgrade it and the run
+status is back to lying in the one case it was changed to catch. The Python that
+enforces all of this is in `phb-bas`; the columns it writes, and the CHECK that
+holds the vocabulary closed, are in `add_bas_completeness` here.
+
+## 45 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
 

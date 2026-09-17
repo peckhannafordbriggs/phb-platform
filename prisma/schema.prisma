@@ -813,6 +813,40 @@ model BasSyncCheckpoint {
   consecutiveFailures Int     @default(0) @map("consecutive_failures")
   lastError           String? @map("last_error")
 
+  /// Does the platform hold what the station says it holds? Every oBIX history
+  /// object reports count, start and end; after each pass the collector counts
+  /// what we hold inside that span and compares. Written by the collector
+  /// (phb-bas) on every pass, so it is a statement about the LAST pass.
+  ///
+  /// CHECK completeness IN ('unknown','complete','incomplete','backfilling') -
+  /// migration SQL.
+  ///
+  ///   unknown      the station reported no count, or the point has never been
+  ///                checked. Never render it green - see WHY § 28.
+  ///   complete     within tolerance of the station's own count.
+  ///   backfilling  short, but this pass hit its per-point request cap and the
+  ///                next pass continues. Expected during a large first sync.
+  ///   incomplete   short after asking for everything. The station holds
+  ///                records the platform does not, and nothing further is
+  ///                coming on its own. This is the state that found the
+  ///                2026-09-16 defect: a 30-day first-sync window against a
+  ///                2.5-year change-of-value history collected nothing and
+  ///                reported ok.
+  completeness          String    @default("unknown")
+  completenessCheckedAt DateTime? @map("completeness_checked_at") @db.Timestamptz()
+  /// The comparison as a sentence, for a person reading the row.
+  completenessNote      String?   @map("completeness_note")
+
+  /// count / start / end as the station reported them at the last check.
+  stationCount Int?      @map("station_count")
+  stationStart DateTime? @map("station_start") @db.Timestamptz()
+  stationEnd   DateTime? @map("station_end") @db.Timestamptz()
+  /// Rows in bas_readings for this point with ts inside [station_start,
+  /// station_end] at the last check. The count is scoped to the station's own
+  /// span so that records the station has since rolled off - which we keep -
+  /// are never counted against it.
+  heldCount    Int?      @map("held_count")
+
   @@map("bas_sync_checkpoints")
 }
 
@@ -837,6 +871,15 @@ model BasIngestRun {
   pointsAttempted Int @default(0) @map("points_attempted")
   pointsSucceeded Int @default(0) @map("points_succeeded")
   recordsWritten  Int @default(0) @map("records_written")
+
+  /// Points whose completeness check ended `incomplete` this run: the station
+  /// holds records we do not, after asking for everything. A run with any of
+  /// these is `partial`, never `ok`. Which points: bas_sync_checkpoints.
+  pointsIncomplete  Int @default(0) @map("points_incomplete")
+  /// Points that hit the per-point request cap this run and continue next
+  /// run. Expected during a large first sync; does not by itself change the
+  /// run status.
+  pointsBackfilling Int @default(0) @map("points_backfilling")
 
   errors Json @default("[]")
 
