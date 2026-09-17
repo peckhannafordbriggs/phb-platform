@@ -1,11 +1,7 @@
 /**
- * The stable authorization key for the Knowledge Base module. Authorization
- * always keys on this, never on a display label - the same rule as
- * lib/modules/change-orders/constants.ts.
- *
- * It matches the `knowledge-base` row seeded by prisma/seed.ts and the URL
- * segment of app/(modules)/knowledge-base. Changing it means changing all
- * three, plus every grant already issued.
+ * The stable authorization key for the Knowledge Base module. Matches the
+ * seeded row and the URL segment; changing it means changing all three, plus
+ * every grant already issued.
  */
 export const KNOWLEDGE_BASE_MODULE_KEY = "knowledge-base";
 

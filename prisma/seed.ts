@@ -29,9 +29,6 @@ const MODULES = [
     icon: "gauge",
     sortOrder: 200,
   },
-  // The row is what makes the sidebar item and the admin grant toggle exist.
-  // It grants nobody anything: an employee still needs a grant, and somebody
-  // without one cannot tell from the outside that the module is there.
   {
     key: "knowledge-base",
     displayName: "Knowledge Base",

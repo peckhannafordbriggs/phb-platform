@@ -19,10 +19,7 @@ describe("the settled assignments", () => {
     expect(moduleAccent("bas").fill).toBe("var(--phb-cyan)");
   });
 
-  it("gives the Knowledge Base pink, which is in neither semantic set", () => {
-    // Assigned rather than left to the positional fallback: the sidebar passes a
-    // list index and the module header passes none, so an unassigned key would
-    // get two different colours in the two places that have to agree.
+  it("gives the Knowledge Base pink, the same colour at any index", () => {
     expect(moduleAccent("knowledge-base").fill).toBe("var(--phb-pink)");
     expect(moduleAccent("knowledge-base", 2).fill).toBe("var(--phb-pink)");
   });
@@ -62,14 +59,8 @@ describe("a module with no assignment", () => {
   });
 
   it("does not collide with a settled module until the palette runs out", () => {
-    // Three of the five slots are spoken for now - red, cyan, and the pink the
-    // Knowledge Base took - so two are left for anything unassigned.
-    //
-    // The property under test is the one that holds at any size: an unassigned
-    // module never gets a settled module's colour. The distinctness below is
-    // bounded by what is actually free, and it is now 2. When it reaches 1 the
-    // palette is exhausted and a fifth module has to be assigned deliberately
-    // rather than falling back.
+    // Three of five slots are assigned, so two are free. At one free slot the
+    // palette is exhausted and the next module has to be assigned by hand.
     const taken = new Set([
       "var(--phb-red)",
       "var(--phb-cyan)",

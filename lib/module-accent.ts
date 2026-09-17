@@ -64,16 +64,6 @@ const PALETTE: readonly ModuleAccent[] = [
 const ASSIGNED: ReadonlyMap<string, number> = new Map([
   ["change-orders", 0],
   ["bas", 1],
-  // Knowledge Base takes pink, and being assigned at all matters more than
-  // which colour it is: the fallback below is keyed on a module's position in
-  // whatever list is being rendered, so an unassigned module gets one colour in
-  // the sidebar (its index in the granted list) and a different one in its own
-  // header, which calls moduleAccent with no index. Those two marks disagreeing
-  // is exactly what this file exists to prevent.
-  //
-  // Pink rather than orange or teal because this palette says warn in orange and
-  // ok in teal. Identity and state are disjoint sets - see .card--tinted in
-  // app/globals.css - and pink is in neither.
   ["knowledge-base", 4],
 ]);
 
