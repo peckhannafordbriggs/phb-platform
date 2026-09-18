@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  describeHiddenFromTable,
+  describeVanished,
+  splitHiddenPoints,
+  vanishedTone,
+} from "@/app/(modules)/bas/health-client";
+import { describeHiddenRisk } from "@/lib/modules/bas/types";
+import {
   AT_RISK_ROLL_RISKS,
   type Completeness,
   type RollRisk,
@@ -529,5 +536,101 @@ describe("an empty run list explains which kind of empty it is", () => {
     expect(describeEmptyRuns(null, 1, null)).not.toBe(
       describeEmptyRuns("2026-08-21T20:05:45.000Z", 1, null),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B8.3 - hidden points, and points the station stopped reporting
+// ---------------------------------------------------------------------------
+
+describe("hiding a point narrows the table and nothing else", () => {
+  const row = (name: string, visible: boolean) => ({ pointName: name, visible });
+
+  it("splits by visibility without losing a row", () => {
+    const { listed, hidden } = splitHiddenPoints([row("a", true), row("b", false), row("c", true)]);
+    expect(listed.map((r) => r.pointName)).toEqual(["a", "c"]);
+    expect(hidden.map((r) => r.pointName)).toEqual(["b"]);
+    expect(listed.length + hidden.length).toBe(3);
+  });
+
+  it("says under the table how many rows it is not drawing, and that they still count", () => {
+    expect(describeHiddenFromTable(0)).toBeNull();
+    expect(describeHiddenFromTable(1)).toBe(
+      "1 hidden point is not listed. Hidden points are still collected and still counted " +
+        "in every figure above; show it again under Settings → Points.",
+    );
+    expect(describeHiddenFromTable(3)).toContain("3 hidden points are not listed");
+  });
+
+  /**
+   * THE RULE. Hide the only at-risk point: the tile still says 1, the table has
+   * no at-risk row, and the sentence between them says why. Same shape as the
+   * B7.6 filter sentence, and the two compose.
+   */
+  it("spells out the zero case when the only at-risk point is hidden", () => {
+    const warning = describeHiddenRisk({
+      totals: { pointsAtRisk: 1, hiddenPointsAtRisk: 1 },
+      unfiltered: null,
+      scope: { filtered: false, label: null },
+    });
+    expect(warning).toBe(
+      "No points at risk are listed in the table below, but 1 hidden point is at risk. " +
+        "Hidden points are still collected and still counted above; show it again under " +
+        "Settings → Points.",
+    );
+  });
+
+  it("phrases a partial hide as more, like the filter sentence", () => {
+    expect(
+      describeHiddenRisk({
+        totals: { pointsAtRisk: 4, hiddenPointsAtRisk: 2 },
+        unfiltered: null,
+        scope: { filtered: false, label: null },
+      }),
+    ).toBe("2 more points are at risk but hidden from the table below.");
+  });
+
+  it("says both when a filter and a hide each remove a problem", () => {
+    const warning = describeHiddenRisk({
+      totals: { pointsAtRisk: 1, hiddenPointsAtRisk: 1 },
+      unfiltered: { activePoints: 9, pointsAtRisk: 2, pointsNoLongerReported: 0 },
+      scope: { filtered: true, label: "Liberty Center" },
+    });
+    expect(warning).toContain("1 more point is at risk outside Liberty Center.");
+    expect(warning).toContain("1 hidden point is at risk");
+  });
+
+  it("is silent when nothing at risk is hidden", () => {
+    expect(
+      describeHiddenRisk({
+        totals: { pointsAtRisk: 2, hiddenPointsAtRisk: 0 },
+        unfiltered: null,
+        scope: { filtered: false, label: null },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("a point the station stopped reporting is never rendered as nothing", () => {
+  it("is amber from one and never ok above zero", () => {
+    expect(vanishedTone(0)).toBe("ok");
+    expect(vanishedTone(1)).toBe("warn");
+    expect(vanishedTone(12)).toBe("warn");
+  });
+
+  it("states the zero as a claim, so an empty card is distinguishable from a dead check", () => {
+    expect(describeVanished(0, "")).toContain("No point has vanished from its station.");
+    expect(describeVanished(0, " in Liberty Center")).toContain(
+      "No point has vanished from its station in Liberty Center.",
+    );
+  });
+
+  it("names the shapes a vanished point can be, and sends the reader to Workbench", () => {
+    const one = describeVanished(1, "");
+    expect(one).toContain("1 point is no longer reported by its station.");
+    expect(one).toContain("deleted trend");
+    expect(one).toContain("renamed history");
+    expect(one).toContain("Workbench");
+    expect(describeVanished(2, "")).toContain("2 points are no longer reported by their stations.");
   });
 });

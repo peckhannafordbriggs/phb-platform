@@ -16,9 +16,13 @@ import {
   MAX_WINDOW_DAYS,
   clampWindowDays,
   getCollectionHealth,
+  getPointExplorer,
   parseSiteId,
 } from "@/lib/modules/bas/service";
 import type { CollectionHealth } from "@/lib/modules/bas/types";
+import { describeHiddenRisk } from "@/lib/modules/bas/types";
+import { atRiskTone, splitHiddenPoints } from "@/app/(modules)/bas/health-client";
+import { testDb } from "./db";
 import { GET as collectionHealthRoute } from "@/app/api/modules/bas/collection-health/route";
 import {
   ROLES,
@@ -797,3 +801,210 @@ describe("the per-point table has a stable order", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// B8.3 - a hidden point leaves the table, never a total
+// ---------------------------------------------------------------------------
+
+/**
+ * Site B holds exactly two active points, one of them at risk
+ * (roll_horizon_unknown). That is why it is the scope here: "hide the ONLY
+ * at-risk point" has to be literal, and in site A there are four.
+ */
+describe("hiding a point leaves the table and never a total (B8.3)", () => {
+  const siteB = () => getCollectionHealth(viewer, { siteId: fixture.siteBId });
+  const hide = (pointId: bigint) =>
+    testDb.basPoint.update({ where: { pointId }, data: { isVisible: false } });
+
+  it("starts with one at-risk point, nothing hidden, and no sentence to say", async () => {
+    const before = await siteB();
+    expect(before.totals.pointsAtRisk).toBe(1);
+    expect(before.totals.hiddenPoints).toBe(0);
+    expect(before.totals.hiddenPointsAtRisk).toBe(0);
+    expect(before.points.every((p) => p.visible)).toBe(true);
+    // Site B is itself a filter, so the B7.6 sentence about site A's four is
+    // present; the point is that nothing about HIDDEN points is.
+    expect(describeHiddenRisk(before)).not.toContain("hidden");
+  });
+
+  /**
+   * THE ASSERTION THE PHASE EXISTS FOR. Hide the only at-risk point. The tile
+   * must still say 1, the hero must not turn green, the table must not draw
+   * the row, and the screen must have the sentence that joins those facts.
+   */
+  it("does NOT read as all clear when the only at-risk point is hidden", async () => {
+    await hide(fixture.bUnknown);
+    const result = await siteB();
+
+    // Not one total moved.
+    expect(result.totals.pointsAtRisk).toBe(1);
+    expect(result.totals.activePoints).toBe(2);
+    expect(result.totals.riskCounts.roll_horizon_unknown).toBe(1);
+    expect(result.totals.unclassifiedPoints).toBe(1);
+    expect(result.totals.completenessCounts.unknown).toBe(2);
+    // And the hero keeps its warning tone.
+    expect(atRiskTone(result.totals.riskCounts)).not.toBe("ok");
+
+    // What did change: the payload knows how many rows the table will not draw.
+    expect(result.totals.hiddenPoints).toBe(1);
+    expect(result.totals.hiddenPointsAtRisk).toBe(1);
+
+    // The table draws the visible point only, and no at-risk row is left in it.
+    const { listed, hidden } = splitHiddenPoints(result.points);
+    expect(listed.map((p) => p.pointName)).toEqual(["B_SupplyAirTemp"]);
+    expect(hidden.map((p) => p.pointName)).toEqual(["B_Unknown"]);
+    expect(listed.some((p) => p.risk !== "ok")).toBe(false);
+
+    // Which is exactly the state the sentence exists for.
+    const warning = describeHiddenRisk(result);
+    expect(warning).toContain("No points at risk are listed in the table below");
+    expect(warning).toContain("1 hidden point is at risk");
+    expect(warning).toContain("still collected and still counted");
+  });
+
+  it("keeps a hidden point inside the completeness figures", async () => {
+    // satSp is the fixture's one `incomplete` point.
+    await hide(fixture.satSp);
+    const result = await health();
+    expect(result.totals.completenessCounts.incomplete).toBe(1);
+    expect(result.totals.pointsIncomplete).toBe(1);
+    // The card lists names from `points`, so the hidden row has to still be there.
+    expect(result.points.some((p) => !p.visible && p.completeness === "incomplete")).toBe(true);
+  });
+
+  it("phrases a partial hide as more, like the filter sentence", async () => {
+    await hide(fixture.fanCmd); // data_lost, one of four at risk in site A
+    const result = await health();
+    expect(result.totals.pointsAtRisk).toBe(4);
+    expect(result.totals.hiddenPointsAtRisk).toBe(1);
+    // Composed with the filter sentence, because health() is scoped to site A.
+    expect(describeHiddenRisk(result)).toContain(
+      "1 more point is at risk but hidden from the table below.",
+    );
+  });
+
+  it("does not change the unfiltered comparison either", async () => {
+    await hide(fixture.bUnknown);
+    const scoped = await health(); // site A, so the comparison is computed
+    expect(scoped.unfiltered?.pointsAtRisk).toBe(5);
+    expect(scoped.unfiltered?.activePoints).toBe(7);
+  });
+
+  it("leaves Point Explorer's picker, and says hidden rather than gone when asked for by id", async () => {
+    await hide(fixture.bOk);
+    const explorer = await getPointExplorer(viewer, { siteId: fixture.siteBId });
+    expect(explorer.points.map((p) => p.pointName)).toEqual(["B_Unknown"]);
+
+    await expect(
+      getPointExplorer(viewer, { siteId: fixture.siteBId, pointId: fixture.bOk }),
+    ).rejects.toMatchObject({
+      code: "point_not_found",
+      message: expect.stringContaining("hidden from Point Explorer"),
+    });
+
+    // A point that really is not there keeps the plain message.
+    await expect(
+      getPointExplorer(viewer, { siteId: fixture.siteBId, pointId: BigInt(1) }),
+    ).rejects.toMatchObject({ code: "point_not_found", message: "That point is not available." });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A point the station stopped reporting is not allowed to vanish (18 Sep 2026)
+// ---------------------------------------------------------------------------
+
+/**
+ * Before this, every figure on the screen was FILTER (WHERE is_active), and
+ * the collector sets is_active = false when a station stops reporting a
+ * history. So a deleted trend made the at-risk count go DOWN. Verified on the
+ * live database inside a rolled-back transaction: 6 roll_horizon_unknown
+ * became 5 the moment `Occupied` was marked no_longer_reported.
+ */
+describe("a point the station stopped reporting is surfaced, never dropped", () => {
+  const deactivate = (pointId: bigint, reason: string) =>
+    testDb.basPoint.update({
+      where: { pointId },
+      data: { isActive: false, inactiveReason: reason },
+    });
+
+  it("claims zero out loud when nothing has vanished", async () => {
+    const result = await health();
+    expect(result.totals.pointsNoLongerReported).toBe(0);
+    expect(result.vanished).toEqual([]);
+  });
+
+  it("names the point, its station and when a record last arrived", async () => {
+    // fanCmd: data_lost, last record 200 h ago. The collector stops reporting it.
+    await deactivate(fixture.fanCmd, "no_longer_reported");
+    const result = await health();
+
+    // Deliberately NOT in the at-risk figure - it is not lagging a horizon,
+    // it is gone - so that figure drops from 4 to 3...
+    expect(result.totals.pointsAtRisk).toBe(3);
+    expect(result.totals.riskCounts.data_lost).toBe(0);
+    // ...and the drop is accounted for here, by name.
+    expect(result.totals.pointsNoLongerReported).toBe(1);
+    expect(result.vanished).toHaveLength(1);
+    const gone = result.vanished[0]!;
+    expect(gone.pointId).toBe(fixture.fanCmd.toString());
+    expect(gone.siteName).toBe(SITE_NAME);
+    expect(gone.stationName.length).toBeGreaterThan(0);
+    expect(gone.lastReadingAt).not.toBeNull();
+    const hoursAgo = (Date.now() - Date.parse(gone.lastReadingAt!)) / 3_600_000;
+    expect(hoursAgo).toBeGreaterThan(199);
+    expect(hoursAgo).toBeLessThan(201);
+  });
+
+  it.each([["niagara_system_log"], ["alarm_history"], ["reconfigured_cfg0"], ["manual"]])(
+    "does not count a point turned off for the deliberate reason %s",
+    async (reason) => {
+      await deactivate(fixture.fanCmd, reason);
+      const result = await health();
+      expect(result.totals.pointsNoLongerReported).toBe(0);
+      expect(result.vanished).toEqual([]);
+      // Still out of the at-risk figure: we chose this, it cannot surprise us.
+      expect(result.totals.pointsAtRisk).toBe(3);
+    },
+  );
+
+  it("carries a vanished point outside the filter in the unfiltered comparison", async () => {
+    await deactivate(fixture.bUnknown, "no_longer_reported");
+    const scoped = await health(); // site A
+    expect(scoped.totals.pointsNoLongerReported).toBe(0);
+    expect(scoped.vanished).toEqual([]);
+    expect(scoped.unfiltered?.pointsNoLongerReported).toBe(1);
+
+    const all = await allSites();
+    expect(all.totals.pointsNoLongerReported).toBe(1);
+    expect(all.vanished.map((p) => p.pointName)).toEqual(["B_Unknown"]);
+  });
+
+  it("orders several by most recent record first", async () => {
+    await deactivate(fixture.fanCmd, "no_longer_reported"); // 200 h ago
+    await deactivate(fixture.satSp, "no_longer_reported"); // 100 h ago
+    await deactivate(fixture.fanStatus, "no_longer_reported"); // never collected
+    const result = await health();
+    expect(result.totals.pointsNoLongerReported).toBe(3);
+    expect(result.vanished.map((p) => p.pointId)).toEqual([
+      fixture.satSp.toString(),
+      fixture.fanCmd.toString(),
+      fixture.fanStatus.toString(),
+    ]);
+    expect(result.vanished[2]!.lastReadingAt).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MUTATIONS (B8.3, 2026-09-18), recorded from real runs against this file.
+//
+//   A. service.ts getCollectionHealth: one risk FILTER gains `AND p.is_visible`
+//      (hidden points leave the at-risk count)
+//      -> FAIL  does NOT read as all clear when the only at-risk point is hidden
+//         (68 passed, 1 failed)
+//
+//   B. service.ts: `p.inactive_reason = 'no_longer_reported'` -> `IS NOT NULL`
+//      (every deliberate exclusion counts as vanished)
+//      -> FAIL  does not count a point turned off for the deliberate reason
+//               niagara_system_log / alarm_history / reconfigured_cfg0 / manual
+//         (65 passed, 4 failed)
+// ---------------------------------------------------------------------------

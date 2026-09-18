@@ -108,6 +108,25 @@ export interface CollectionHealthTotals {
   pointsAtRisk: number;
   /** The composition of `pointsAtRisk`, so a total of 3 is never ambiguous. */
   riskCounts: Record<RollRisk, number>;
+  /**
+   * Active points hidden from the browsing screens (B8.3). They are INSIDE
+   * `activePoints`, inside `pointsAtRisk` and inside every completeness
+   * count: hiding is a screen preference and changes nothing about
+   * collection. This is how many rows the per-point table is not drawing.
+   */
+  hiddenPoints: number;
+  /** How many of `pointsAtRisk` are hidden. Non-zero is what the screen must say out loud. */
+  hiddenPointsAtRisk: number;
+  /**
+   * Points the collector turned off because the station stopped reporting
+   * them (`inactive_reason = 'no_longer_reported'`). NOT in `pointsAtRisk`:
+   * nothing is lagging a horizon, the history is gone from the station. And
+   * not silent either - `CollectionHealth.vanished` names each one. Before
+   * this existed a point vanishing REMOVED it from every figure on the
+   * screen, so a deleted trend made the dashboard look better. The four
+   * deliberate reasons are not counted anywhere here; we chose those.
+   */
+  pointsNoLongerReported: number;
   /** Active points whose last check said the station holds records we do not. */
   pointsIncomplete: number;
   /** Every completeness state's count, so the tile can say which. */
@@ -145,6 +164,28 @@ export interface PointHealthRow {
   stationCount: number | null;
   /** Rows we hold inside the station's span at the last check, or `null`. */
   heldCount: number | null;
+  /**
+   * bas_points.is_visible (B8.3). The service returns every active point and
+   * the SCREEN leaves hidden ones out of its table, so that the tiles, the
+   * completeness card and the headroom badge - all computed over this list
+   * or over the same rows - cannot lose a point a person hid.
+   */
+  visible: boolean;
+}
+
+/**
+ * A point the collector turned off because the station stopped reporting its
+ * history. Listed by name with when a record last arrived, because "1 point
+ * vanished" sends somebody to a query and "Occupied, last record 12 Aug"
+ * sends them to Workbench.
+ */
+export interface VanishedPoint {
+  pointId: string;
+  pointName: string;
+  siteName: string;
+  stationName: string;
+  /** ISO 8601 UTC, or `null` when no record was ever collected from it. */
+  lastReadingAt: string | null;
 }
 
 export interface IngestRunRow {
@@ -255,6 +296,8 @@ export interface BasScope {
 export interface UnfilteredTotals {
   activePoints: number;
   pointsAtRisk: number;
+  /** Same rule as `pointsAtRisk`: a vanished point outside the filter is still said. */
+  pointsNoLongerReported: number;
 }
 
 export interface CollectionHealth {
@@ -297,6 +340,11 @@ export interface CollectionHealth {
   observedAt: string;
   totals: CollectionHealthTotals;
   points: PointHealthRow[];
+  /**
+   * Every point in scope the station no longer reports. Always present, and
+   * an empty list is a claim the screen makes out loud - see VanishedCard.
+   */
+  vanished: VanishedPoint[];
   runs: IngestRunRow[];
 
   /**
@@ -789,8 +837,10 @@ export interface SettingsPoint {
  * The list walks LEFT JOINs to equipment, role and checkpoint. If one of them
  * is ever made inner, or a future join drops a row, the two disagree and the
  * screen says so. Two numbers rather than the stations' three because nothing
- * filters this list yet; when B8.3 hides points it must add `matched` the way
- * B7.6 did, or the alarm will fire on every hide.
+ * filters this list - B8.3 made `visible` editable here and deliberately kept
+ * hidden points ON this list, so there is no `matched` to carry. The day
+ * something does filter it, add `matched` the way B7.6 did, or the alarm
+ * fires on every hide.
  */
 export interface PointCounts {
   rendered: number;
@@ -828,6 +878,20 @@ export function pointsCountState(counts: PointCounts): { alarm: boolean } {
  * number is zero, which is the case that reads as all-clear.
  */
 export function describeHiddenRisk(health: {
+  totals: { pointsAtRisk: number; hiddenPointsAtRisk: number };
+  unfiltered: UnfilteredTotals | null;
+  scope: BasScope;
+}): string | null {
+  // Two ways a problem leaves the screen, one sentence each, same shape. A
+  // filter (B7.6) removes it from the tiles AND the table; hiding (B8.3)
+  // removes it from the table only. Both can be true at once.
+  const sentences = [describeFilteredRisk(health), describeHiddenPointRisk(health)].filter(
+    (sentence): sentence is string => sentence !== null,
+  );
+  return sentences.length === 0 ? null : sentences.join(" ");
+}
+
+function describeFilteredRisk(health: {
   totals: { pointsAtRisk: number };
   unfiltered: UnfilteredTotals | null;
   scope: BasScope;
@@ -849,6 +913,32 @@ export function describeHiddenRisk(health: {
     : `${hidden} more ${
         hidden === 1 ? "point is" : "points are"
       } at risk outside ${where}.`;
+}
+
+/**
+ * The same rule for a point somebody HID (B8.3). The tiles still count it -
+ * hiding changes nothing about collection - but the table under them does not
+ * draw it, so "1 at risk" over a table with no at-risk row reads as a screen
+ * that has lost count, and "0 at risk listed" would read as all-clear. The
+ * zero case is spelled out for the same reason it is in the filter sentence.
+ */
+function describeHiddenPointRisk(health: {
+  totals: { pointsAtRisk: number; hiddenPointsAtRisk: number };
+}): string | null {
+  const hidden = health.totals.hiddenPointsAtRisk;
+  if (hidden <= 0) return null;
+
+  const listed = health.totals.pointsAtRisk - hidden;
+
+  return listed === 0
+    ? `No points at risk are listed in the table below, but ${hidden} hidden ${
+        hidden === 1 ? "point is" : "points are"
+      } at risk. Hidden points are still collected and still counted above; show ${
+        hidden === 1 ? "it" : "them"
+      } again under Settings → Points.`
+    : `${hidden} more ${
+        hidden === 1 ? "point is" : "points are"
+      } at risk but hidden from the table below.`;
 }
 
 /**

@@ -15,6 +15,7 @@ type SettingsErrorCode = Extract<
   | "station_not_found"
   | "station_cycle"
   | "station_has_points"
+  | "point_not_found"
 >;
 
 /**
@@ -47,6 +48,9 @@ const STATUS: Record<SettingsErrorCode, number> = {
   // A well-formed request that the world refuses, like the other two 409s.
   station_cycle: 409,
   station_has_points: 409,
+  // B8.3. Same conflation as every other not-found: a point on a station the
+  // viewer may not see reads exactly like one that does not exist.
+  point_not_found: 404,
 };
 
 function isSettingsError(code: BasErrorCode): code is SettingsErrorCode {

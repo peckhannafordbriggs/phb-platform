@@ -67,6 +67,13 @@ export type AuditAction =
   | "bas.station_deleted"
   | "bas.credential_set"
   | "bas.credential_cleared"
+  /**
+   * A point shown or hidden on the browsing screens (B8.3). Carries `visible`
+   * and `collected` - the latter so the row can never be read as "stopped
+   * collecting it". Hiding costs nothing; deactivating loses data. The two are
+   * different columns and this action only ever touches the first.
+   */
+  | "bas.point_visibility_changed"
   | "position.created"
   | "position.updated"
   | "department.created"

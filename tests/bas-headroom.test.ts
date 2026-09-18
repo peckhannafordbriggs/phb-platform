@@ -34,6 +34,7 @@ function point(over: Partial<PointHealthRow> = {}): PointHealthRow {
     completeness: "complete",
     stationCount: null,
     heldCount: null,
+    visible: true,
     ...over,
   };
 }

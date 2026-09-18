@@ -498,6 +498,32 @@ the variable. The collector side was checked too: `bas_collector` is DML-only
 on `bas_*` and has no grants on the dev database. `WHY-ITS-BUILT-THIS-WAY.md`
 § 46; `runbook.md` → *Which command touches which database*.
 
+**B8.3 complete — show/hide, and the risk rule (2026-09-18).** The *Shown*
+checkbox on the Points list is editable: `PATCH /settings/points/{id}` with
+`{ visible }`, one field, no `isActive`, audited as
+`bas.point_visibility_changed` with `collected` recorded beside it. A hidden
+point leaves the Point Explorer picker and the Collection Health table and
+**nothing else** - it stays in every risk figure and completeness count, the
+totals never see `is_visible`, and `describeHiddenRisk` was extended rather
+than duplicated: *"No points at risk are listed in the table below, but 1
+hidden point is at risk."* Tested by hiding the only at-risk point in a
+building. `is_visible` is in none of the six views, on purpose.
+
+**A hole predating B8.3, found and closed the same day:** every Collection
+Health figure was `FILTER (WHERE is_active)`, so the collector marking a
+vanished history `no_longer_reported` **removed it from the at-risk count** -
+a deleted trend made the dashboard look better. Verified on live inside a
+rolled-back transaction (6 → 5). Such points are now counted on their own
+line and listed by name with their last record in an always-rendered card,
+not folded into the at-risk hero; the four deliberate reasons stay out of
+every figure. Both rules were mutation-checked. In phb-bas the same day: the
+reconfigured-pair message now reads both halves' state from the database
+(both active / resolved / exactly what was found) instead of asserting
+"BOTH are registered and active" blind, and the skipped-folder line says
+that `RV` may be a separate controller needing its own station row.
+`runbook.md` → *Collection Health counts a point its table does not list*,
+*Collection Health says a point is no longer reported by the station*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

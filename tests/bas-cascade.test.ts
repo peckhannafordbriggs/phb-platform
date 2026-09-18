@@ -321,8 +321,8 @@ describe("a filter can hide a problem, and the screen has to say so", () => {
 
   it("phrases it differently when the filtered view is not itself clean", () => {
     const warning = describeHiddenRisk({
-      totals: { pointsAtRisk: 2 },
-      unfiltered: { activePoints: 40, pointsAtRisk: 5 },
+      totals: { pointsAtRisk: 2, hiddenPointsAtRisk: 0 },
+      unfiltered: { activePoints: 40, pointsAtRisk: 5, pointsNoLongerReported: 0 },
       scope: { filtered: true, label: "Kenwood Mall" },
     });
     expect(warning).toBe("3 more points are at risk outside Kenwood Mall.");
@@ -331,8 +331,8 @@ describe("a filter can hide a problem, and the screen has to say so", () => {
   it("is silent when the unfiltered estate is no worse", () => {
     expect(
       describeHiddenRisk({
-        totals: { pointsAtRisk: 3 },
-        unfiltered: { activePoints: 40, pointsAtRisk: 3 },
+        totals: { pointsAtRisk: 3, hiddenPointsAtRisk: 0 },
+        unfiltered: { activePoints: 40, pointsAtRisk: 3, pointsNoLongerReported: 0 },
         scope: { filtered: true, label: "Kenwood Mall" },
       }),
     ).toBeNull();

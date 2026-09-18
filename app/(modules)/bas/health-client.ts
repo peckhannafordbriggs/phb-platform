@@ -1155,6 +1155,16 @@ export const deleteStation = (stationId: string) =>
   );
 
 /**
+ * Show or hide a point on the browsing screens (B8.3). Never touches
+ * collection: the payload has one field and it is not `isActive`.
+ */
+export const updatePointVisibility = (pointId: string, visible: boolean) =>
+  settingsWrite<{ changed: boolean }>(
+    `/points/${encodeURIComponent(pointId)}`,
+    { method: "PATCH", body: JSON.stringify({ visible }) },
+  );
+
+/**
  * Replace the stored Niagara login.
  *
  * The password leaves the browser once and is never sent back. There is no
@@ -1270,4 +1280,62 @@ export function describeActivity(activity: {
     label: `Collecting - newest record ${formatTimestamp(activity.newestRecordAt)}`,
     tone: "ok",
   };
+}
+
+// ---------------------------------------------------------------------------
+// B8.3 - hidden points, and points the station stopped reporting
+// ---------------------------------------------------------------------------
+
+/**
+ * The per-point table draws visible points only. A function rather than an
+ * inline filter so the rule - hidden leaves the TABLE and never a total - can
+ * be asserted without a DOM: the tiles read `health.totals`, which the service
+ * computed over every active point, and this is the only place the list narrows.
+ */
+export function splitHiddenPoints<T extends { visible: boolean }>(
+  points: readonly T[],
+): { listed: T[]; hidden: T[] } {
+  return {
+    listed: points.filter((point) => point.visible),
+    hidden: points.filter((point) => !point.visible),
+  };
+}
+
+/** The line under the table when it is not drawing everything. Null when it is. */
+export function describeHiddenFromTable(hidden: number): string | null {
+  if (hidden <= 0) return null;
+  return (
+    `${formatCount(hidden)} hidden ${hidden === 1 ? "point is" : "points are"} not listed. ` +
+    `Hidden points are still collected and still counted in every figure above; show ` +
+    `${hidden === 1 ? "it" : "them"} again under Settings → Points.`
+  );
+}
+
+/**
+ * Points the collector turned off because the station stopped reporting them.
+ *
+ * Not "at risk": nothing is lagging a horizon, the history is gone from the
+ * station, and no collector action fixes it. Not nothing either - amber from
+ * one, because a deleted trend, a dropped device and a renamed history all look
+ * exactly like this and only a person in Workbench can say which. Never the ok
+ * tone above zero.
+ */
+export function vanishedTone(count: number): Tone {
+  return count > 0 ? "warn" : "ok";
+}
+
+export function describeVanished(count: number, suffix: string): string {
+  if (count === 0) {
+    return (
+      `No point has vanished from its station${suffix}. ` +
+      `Every point that is not collected was turned off deliberately.`
+    );
+  }
+  const one = count === 1;
+  return (
+    `${formatCount(count)} ${one ? "point is" : "points are"} no longer reported by ` +
+    `${one ? "its station" : "their stations"}${suffix}. The collector turned ${one ? "it" : "them"} ` +
+    `off and cannot tell why: a deleted trend, a dropped device or a renamed history all ` +
+    `look like this. Check in Workbench.`
+  );
 }

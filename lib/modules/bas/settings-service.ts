@@ -19,6 +19,7 @@ import type {
   UpdateBuildingInput,
   UpdateProjectInput,
   UpdateStationInput,
+  UpdatePointInput,
 } from "@/lib/validation/bas-settings";
 import {
   COLLECTING_WITHIN_HOURS,
@@ -650,6 +651,78 @@ export async function getStationPoints(
       inDatabase: Number(total[0]?.n ?? 0),
     },
   };
+}
+
+/**
+ * Show or hide one point on the browsing screens (B8.3).
+ *
+ * THE ONE THING THIS MUST NOT DO is touch `is_active`. Hiding is cosmetic and
+ * reversible; deactivating stops collection and the station overwrites what
+ * was not collected. The schema this accepts has no `isActive` field, the
+ * update below names `isVisible` alone, and the audit row records that the
+ * point was still collected at the time, so a later reader cannot mistake
+ * "hid it" for "stopped collecting it".
+ *
+ * Scoped like getStationPoints: the point's station must be in the viewer's
+ * entitlement or attached to no building, and one that is not reads as not
+ * found. `changed: false` when the row already had that value, with no audit
+ * row - a checkbox clicked twice is not two changes.
+ */
+export async function setBasPointVisibility(
+  viewer: Viewer,
+  pointIdText: string,
+  input: UpdatePointInput,
+): Promise<{ changed: boolean }> {
+  if (!/^\d{1,18}$/.test(pointIdText)) {
+    throw new BasError("point_not_found", "That point does not exist.");
+  }
+  const pointId = BigInt(pointIdText);
+  const { entitled } = await basSiteScope(viewer);
+
+  const rows = await prisma.$queryRaw<
+    Array<{
+      station_id: bigint;
+      niagara_history_name: string;
+      label: string | null;
+      is_visible: boolean;
+      is_active: boolean;
+    }>
+  >`
+    SELECT p.station_id, p.niagara_history_name, p.label, p.is_visible, p.is_active
+      FROM bas_points p
+      JOIN bas_stations st ON st.station_id = p.station_id
+     WHERE p.point_id = ${pointId}
+       AND (${entitlementSql(entitled, Prisma.sql`st.site_id`)} OR st.site_id IS NULL)`;
+  const point = rows[0];
+  if (point === undefined) {
+    throw new BasError("point_not_found", "That point does not exist.");
+  }
+
+  if (point.is_visible === input.visible) return { changed: false };
+
+  await prisma.$transaction(async (tx) => {
+    await tx.basPoint.update({
+      where: { pointId },
+      data: { isVisible: input.visible },
+    });
+
+    await writeAuditEvent(tx, {
+      action: "bas.point_visibility_changed",
+      actorEmployeeId: viewer.id,
+      moduleKey: BAS_MODULE_KEY,
+      metadata: {
+        pointId: pointIdText,
+        stationId: point.station_id.toString(),
+        niagaraHistoryName: point.niagara_history_name,
+        label: point.label,
+        visible: input.visible,
+        // So the row can never be read as "and stopped collecting it".
+        collected: point.is_active,
+      },
+    });
+  });
+
+  return { changed: true };
 }
 
 // ---------------------------------------------------------------------------

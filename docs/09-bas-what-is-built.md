@@ -308,8 +308,34 @@ it is building data waiting for a table of its own. A NULL reads "reason not
 recorded"; the platform never derives one from the name.
 The list has the same kind of guard the tree has: `rendered` from the joined
 query against `inDatabase` from a count with no joins, and a red banner when
-they disagree. Nothing filters on `is_visible` (B8.3) and nothing edits (B8.4
-onward).
+they disagree. Nothing filters this list on `is_visible`, deliberately: a
+hidden point has to be somewhere it can be shown again.
+
+**Show/hide (B8.3, 18 September).** The *Shown* checkbox on that list is the
+one editable thing on a point. It PATCHes `/settings/points/{id}` with
+`{ visible }` - a schema with one field and no `isActive`, ever - writes
+`is_visible` alone, and records `bas.point_visibility_changed` with
+`collected: true` beside it. A hidden point leaves the Point Explorer picker
+(a bookmark to one is told it is hidden, not gone) and the Collection Health
+table, and **nothing else**: it stays in every risk figure, every
+completeness count and the unfiltered comparison, and the screen says so with
+the B7.6 sentence extended - *"No points at risk are listed in the table
+below, but 1 hidden point is at risk."* Tested by hiding the only at-risk
+point in a building and asserting the screen does not read as all clear;
+adding `is_visible` to a risk `FILTER` fails it. `is_visible` is in none of
+the six views; the service joins `bas_points` for it.
+
+**A point the station stopped reporting is surfaced (18 September).** Found
+while building B8.3: every figure on Collection Health was
+`FILTER (WHERE is_active)`, so the collector marking a vanished history
+`no_longer_reported` removed it from the at-risk count - a deleted trend made
+the dashboard look better. Verified on live in a rolled-back transaction.
+Now `pointsNoLongerReported` and `vanished` (name, station, last record) are
+in the payload, rendered as an always-present card, amber from one, and
+carried into the unfiltered comparison. Not in the at-risk hero: that tile is
+about lagging a horizon, and this is about a history that is gone. The four
+deliberate reasons stay out. `runbook.md` → *Collection Health says a point
+is no longer reported by the station*.
 
 ### Filters
 
@@ -701,7 +727,8 @@ started, **not a tab**. Blocked on a company Anthropic API key. It would live in
 `phb-platform`, and it is what supersedes `bas-mcp` *(phb-bas)* when it ships.
 
 **B8 — point management.** Designed 17 September; B8.1, the schema, and B8.2,
-the read-only Points list, built the same day; B8.3 onward not started:
+the read-only Points list, built the same day; B8.3, show/hide with the risk
+rule, on 18 September; B8.4 onward not started:
 `docs/B8_point_management_plan.md`. There is no way in the UI to set a role,
 create equipment, attach a point, rename one or mark one inactive; the office
 was classified in SQL and the six state points wait for someone to decode them
