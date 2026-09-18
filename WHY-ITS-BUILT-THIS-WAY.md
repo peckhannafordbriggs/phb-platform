@@ -1146,6 +1146,45 @@ in. The one thing the shortest span cannot know is that the buffer got
 reason to reset the column to NULL, and `runbook.md` → *The roll horizon column
 shows two numbers* says how.
 
+## 49 · "At risk" is decided in one place, and a test fails if a second place appears
+
+**Decision.** Whether a point is at risk of data loss is answered by one list,
+`AT_RISK_ROLL_RISKS`, through `isAtRisk` and `atRiskCount`. The tile, its
+breakdown, the hidden-point sentence, the filter sentence, the headroom badge,
+the reporting ratio and the Home card all ask it. The one SQL predicate left is
+generated from the list. `tests/bas-at-risk-predicate.test.ts` drives every
+surface from one fixture with a point in every horizon state and fails if the
+list literal is defined anywhere else or any source decides from `ok`.
+
+**Why.** Hours after § 48 shipped, the live screen read *"4 more points are at
+risk but hidden from the table below"* directly above *"Points at risk of data
+loss — 0 — Nothing at risk"*. The four were not-full office points somebody
+had hidden. The tile counted from the list, which § 48 had updated; the
+sentence counted `roll_risk <> 'ok'` in SQL, which nobody knew to update
+because nothing said it was the same question. Looking for others turned up
+two more: the headroom badge sorted numberless points into "unknown" by
+horizon state on its own, and the *"N of M reporting"* badge counted
+`risk === "ok"` - so the office read *"2 of 8 reporting"* under a tile that
+said nothing was at risk. Four implementations of one predicate, agreeing by
+coincidence and diverging in the harmless direction. The hidden-point sentence
+exists so that hiding a point cannot make the screen look healthier than the
+system is (§ 45's risk rule); a private definition that drifts the other way -
+silent about a genuinely at-risk hidden point - is exactly the failure it was
+built to prevent, and it would look like a working screen.
+
+So the fix was not to patch the sentence to match the tile. Every surface now
+calls one thing, the hidden count is taken from the same per-point rows as the
+tile rather than from its own SQL, and the sentence says *"the at-risk figures
+disagree - report it"* rather than rendering prose over a negative number if
+the two ever part again.
+
+**What breaks if you undo it.** Add `buffer_not_full` to the list, or remove
+`roll_horizon_unknown`, and the predicate test fails on the tile, the
+breakdown, the sentence, the badge and the ratio at once - that is how you know
+they share it; if only one fails, they have stopped. Write `roll_risk <> 'ok'`
+or `.risk !== "ok"` anywhere under `lib/` or `app/` and the source-text guard
+fails. Both mutations were run and are recorded in the test file.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

@@ -553,6 +553,20 @@ migration (`add_bas_shortest_full_span`) before the collector.**
 `WHY-ITS-BUILT-THIS-WAY.md` § 48; `runbook.md` → *The roll horizon column
 shows two numbers*, *A point reads "Not full yet"*.
 
+**One at-risk predicate (2026-09-18, same day).** The live screen read *"4
+more points are at risk but hidden"* over *"0 — Nothing at risk"*: the tile
+counted from `AT_RISK_ROLL_RISKS` and the hidden-point sentence counted
+`roll_risk <> 'ok'` in SQL, and the roll-horizon change had moved only the
+first. Two more private definitions were found (the headroom badge's unknown
+share, the "N of M reporting" ratio). All of them now call `isAtRisk` /
+`atRiskCount` over the one list in `lib/modules/bas/types.ts`; the only SQL
+predicate left is generated from it. `tests/bas-at-risk-predicate.test.ts`
+drives every surface from one fixture holding every horizon state and fails
+if the list literal appears anywhere else or any source decides from `ok`.
+Do not write `roll_risk <> 'ok'` or `risk === "ok"` to mean "at risk" - ever.
+`runbook.md` → *Collection Health says N points are at risk but hidden, over a
+tile that says none are*; `WHY-ITS-BUILT-THIS-WAY.md` § 49.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -614,7 +628,7 @@ well it is written.
 | `DEVELOPER-SETUP.md` | **Start here if you are a new developer.** Installs, databases, `.env.local`, seeds, first test run — and the things that bite before they bite | Someone about to write code |
 | `PLATFORM-CONTEXT.md` | **Read before designing a module.** What the platform already provides, the four-part integration contract, and the seven decisions a module makes for itself | Someone about to design one |
 | `HANDOVER.md` | **Start here if you are inheriting this.** What this is, what must not break, what will fail and when, what to do first | Whoever owns it after December 2026 |
-| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 48 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 49 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
 | `runbook.md` | Failure modes, recovery, what expires and when | Anyone with a broken thing |
 
 Setup instructions live in `DEVELOPER-SETUP.md` and the per-variable detail lives
