@@ -249,8 +249,19 @@ export const setCredentialSchema = z.object({
   password: z.string().min(1, "Enter the password.").max(1000),
 });
 
+/**
+ * Show or hide a point (B8.3). The one editable thing on a point today, and
+ * deliberately only that. There is no `isActive` here and there must not be:
+ * turning collection off is permanent in effect, and it does not belong on
+ * the same payload as a cosmetic checkbox.
+ */
+export const updatePointSchema = z.object({
+  visible: z.boolean(),
+});
+
 export type CreateStationInput = z.infer<typeof createStationSchema>;
 export type UpdateStationInput = z.infer<typeof updateStationSchema>;
+export type UpdatePointInput = z.infer<typeof updatePointSchema>;
 export type SetCredentialInput = z.infer<typeof setCredentialSchema>;
 
 // ---------------------------------------------------------------------------

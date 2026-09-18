@@ -20,6 +20,7 @@ import { requireModuleAdmin } from "@/lib/authz";
 import { GET as settingsTree } from "@/app/api/modules/bas/settings/route";
 import { POST as createStation } from "@/app/api/modules/bas/settings/stations/route";
 import { GET as stationPoints } from "@/app/api/modules/bas/settings/stations/[stationId]/points/route";
+import { PATCH as patchPoint } from "@/app/api/modules/bas/settings/points/[pointId]/route";
 import {
   DELETE as deleteStation,
   PATCH as patchStation,
@@ -76,6 +77,7 @@ function treeRequest(query = ""): Request {
 const stationParams = (stationId: string) => ({
   params: Promise.resolve({ stationId }),
 });
+const pointParams = (pointId: string) => ({ params: Promise.resolve({ pointId }) });
 
 let siteId: bigint;
 
@@ -311,10 +313,10 @@ describe("no settings route ever returns the password or the ciphertext", () => 
   }
 
   it("exercises every route file that exists", async () => {
-    // 9: settings, projects, projects/[id], buildings, buildings/[id],
-    // stations, stations/[id], stations/[id]/credential, and
-    // stations/[id]/points (B8.2).
-    expect((await routeFiles()).length).toBe(9);
+    // 10: settings, projects, projects/[id], buildings, buildings/[id],
+    // stations, stations/[id], stations/[id]/credential,
+    // stations/[id]/points (B8.2) and points/[id] (B8.3).
+    expect((await routeFiles()).length).toBe(10);
   });
 
   it("returns neither the plaintext nor the ciphertext from ANY of them", async () => {
@@ -329,6 +331,15 @@ describe("no settings route ever returns the password or the ciphertext", () => 
       },
     });
     const id = station.stationId.toString();
+    const pointId = (
+      await testDb.basPoint.create({
+        data: {
+          stationId: station.stationId,
+          niagaraHistoryName: "ZZTestLeakPoint",
+          dataType: "real",
+        },
+      })
+    ).pointId.toString();
 
     // Set a real credential through the real route.
     const setResponse = await setCredential(
@@ -391,6 +402,21 @@ describe("no settings route ever returns the password or the ciphertext", () => 
           new Request("http://localhost/api/modules/bas/settings"),
           stationParams("999999"),
         )
+      ).text(),
+      // Show/hide on a point of this station (B8.3): the change, the no-op, a
+      // 404 and a rejected body. The route reads bas_points and bas_stations
+      // and joins nothing that could carry a credential; this keeps that true.
+      await (
+        await patchPoint(json({ visible: false }, "PATCH"), pointParams(pointId))
+      ).text(),
+      await (
+        await patchPoint(json({ visible: false }, "PATCH"), pointParams(pointId))
+      ).text(),
+      await (
+        await patchPoint(json({ visible: true }, "PATCH"), pointParams("999999"))
+      ).text(),
+      await (
+        await patchPoint(json({ visible: "yes" }, "PATCH"), pointParams(pointId))
       ).text(),
       // A rejected credential write.
       await (

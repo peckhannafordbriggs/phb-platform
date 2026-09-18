@@ -18,6 +18,7 @@ import type {
   SiteOption,
   TrendGap,
   TrendPoint,
+  VanishedPoint,
 } from "./types";
 
 /**
@@ -462,6 +463,9 @@ interface TotalsRow {
   comp_incomplete: number;
   comp_unknown: number;
   min_roll_horizon_s: number | null;
+  hidden_points: number;
+  hidden_points_at_risk: number;
+  points_no_longer_reported: number;
 }
 
 interface ReadingTotalsRow {
@@ -483,6 +487,15 @@ interface PointRow {
   completeness: string | null;
   station_count: number | null;
   held_count: number | null;
+  visible: boolean;
+}
+
+interface VanishedRow {
+  point_id: bigint;
+  point_name: string;
+  site_name: string;
+  station_name: string;
+  last_record_ts: Date | null;
 }
 
 interface RunRow {
@@ -566,6 +579,11 @@ export async function getCollectionHealth(
     // as Grafana does.
     const healthSites = Prisma.sql`${siteFilter(siteIds, Prisma.sql`site_id`)}
       AND ${stationFilter(stationId, Prisma.sql`station_id`)}`;
+    // The same filter with the view aliased `h`, for the statements that join
+    // bas_points (B8.3) - both sides carry a station_id, so the bare column
+    // name would be ambiguous.
+    const healthSitesH = Prisma.sql`${siteFilter(siteIds, Prisma.sql`h.site_id`)}
+      AND ${stationFilter(stationId, Prisma.sql`h.station_id`)}`;
     const stationSites = Prisma.sql`${siteFilter(siteIds, Prisma.sql`st.site_id`)}
       AND ${stationFilter(stationId, Prisma.sql`st.station_id`)}`;
 
@@ -577,38 +595,66 @@ export async function getCollectionHealth(
     const totals = firstRow(
       await tx.$queryRaw<TotalsRow[]>`
         SELECT
-          count(*) FILTER (WHERE is_active)::int AS active_points,
-          count(*) FILTER (WHERE is_active AND point_role IS NULL)::int
+          count(*) FILTER (WHERE h.is_active)::int AS active_points,
+          count(*) FILTER (WHERE h.is_active AND h.point_role IS NULL)::int
             AS unclassified_points,
-          count(*) FILTER (WHERE is_active AND roll_risk = 'ok')::int
+          -- THE RISK RULE (B8.3): every FILTER below is on is_active alone.
+          -- is_visible does not appear in any of them, on purpose. A hidden
+          -- point is still collected, so it can still fall behind its horizon
+          -- or lose data, and it counts here exactly like a shown one. Only
+          -- the per-point table leaves it out, and the screen says so.
+          count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'ok')::int
             AS risk_ok,
-          count(*) FILTER (WHERE is_active AND roll_risk = 'at_risk')::int
+          count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'at_risk')::int
             AS risk_at_risk,
-          count(*) FILTER (WHERE is_active AND roll_risk = 'data_lost')::int
+          count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'data_lost')::int
             AS risk_data_lost,
-          count(*) FILTER (WHERE is_active AND roll_risk = 'roll_horizon_unknown')::int
+          count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'roll_horizon_unknown')::int
             AS risk_roll_horizon_unknown,
-          count(*) FILTER (WHERE is_active AND roll_risk = 'never_collected')::int
+          count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'never_collected')::int
             AS risk_never_collected,
           -- The completeness check (phb-bas), by state. A point with no
           -- checkpoint row has a NULL here and is counted as unknown: never
           -- checked is not the same as checked and fine.
-          count(*) FILTER (WHERE is_active AND completeness = 'complete')::int
+          count(*) FILTER (WHERE h.is_active AND h.completeness = 'complete')::int
             AS comp_complete,
-          count(*) FILTER (WHERE is_active AND completeness = 'backfilling')::int
+          count(*) FILTER (WHERE h.is_active AND h.completeness = 'backfilling')::int
             AS comp_backfilling,
-          count(*) FILTER (WHERE is_active AND completeness = 'incomplete')::int
+          count(*) FILTER (WHERE h.is_active AND h.completeness = 'incomplete')::int
             AS comp_incomplete,
-          count(*) FILTER (WHERE is_active
-                             AND COALESCE(completeness, 'unknown') = 'unknown')::int
+          count(*) FILTER (WHERE h.is_active
+                             AND COALESCE(h.completeness, 'unknown') = 'unknown')::int
             AS comp_unknown,
           -- The shortest horizon among the active points we can compute one for.
           -- A silence longer than this destroyed records on the station.
           -- horizon_s is the measured span of a full buffer where the station
           -- reports one, else capacity x interval - see the view.
-          min(horizon_s) FILTER (WHERE is_active)::int AS min_roll_horizon_s
-        FROM bas_v_collection_health
-        WHERE ${healthSites}
+          min(h.horizon_s) FILTER (WHERE h.is_active)::int AS min_roll_horizon_s,
+          -- How many of the active points above are hidden, and how many of
+          -- the at-risk ones. The table is not drawing these rows, and a
+          -- screen that counts 1 at risk over a table with no at-risk row has
+          -- to be able to say why - see describeHiddenRisk.
+          count(*) FILTER (WHERE h.is_active AND NOT p.is_visible)::int
+            AS hidden_points,
+          count(*) FILTER (WHERE h.is_active AND NOT p.is_visible
+                             AND h.roll_risk <> 'ok')::int
+            AS hidden_points_at_risk,
+          -- Points the collector turned off because the station stopped
+          -- reporting them. Inactive, so outside every count above - and that
+          -- was the hole: a deleted trend, a dropped device or a renamed
+          -- history made the at-risk figure go DOWN (verified 2026-09-18 on
+          -- the live database, inside a rolled-back transaction). Counted on
+          -- their own and listed by name in vanished. The other four reasons
+          -- are deliberate exclusions and stay out of every figure.
+          count(*) FILTER (WHERE NOT h.is_active
+                             AND p.inactive_reason = 'no_longer_reported')::int
+            AS points_no_longer_reported
+        FROM bas_v_collection_health h
+        -- For is_visible and inactive_reason, which the view does not carry
+        -- and should not: the six views are what Grafana and the AI read, and
+        -- hiding is a preference of these screens alone.
+        JOIN bas_points p USING (point_id)
+        WHERE ${healthSitesH}
       `,
       "collection health totals",
     );
@@ -630,23 +676,30 @@ export async function getCollectionHealth(
 
     // --- per-point table ----------------------------------------------------
 
+    // Every ACTIVE point, hidden ones included, each carrying `visible`. The
+    // screen leaves hidden rows out of its table; the payload does not, so the
+    // completeness card and the headroom badge - computed from this list -
+    // still see every collected point. Dropping a row here would be dropping
+    // it from a total, which is the one thing hiding must never do.
     const points = await tx.$queryRaw<PointRow[]>`
       SELECT
-        point_id,
-        point_name,
-        site_name,
-        point_role,
-        unit,
-        roll_risk,
-        last_record_ts,
-        round(seconds_since_last_record / 60.0)::int AS minutes_ago,
-        (horizon_s / 3600.0)::float8 AS roll_horizon_hours,
-        horizon_source,
-        completeness,
-        station_count,
-        held_count
-      FROM bas_v_collection_health
-      WHERE is_active AND ${healthSites}
+        h.point_id,
+        h.point_name,
+        h.site_name,
+        h.point_role,
+        h.unit,
+        h.roll_risk,
+        h.last_record_ts,
+        round(h.seconds_since_last_record / 60.0)::int AS minutes_ago,
+        (h.horizon_s / 3600.0)::float8 AS roll_horizon_hours,
+        h.horizon_source,
+        h.completeness,
+        h.station_count,
+        h.held_count,
+        p.is_visible AS visible
+      FROM bas_v_collection_health h
+      JOIN bas_points p USING (point_id)
+      WHERE h.is_active AND ${healthSitesH}
       -- Grafana's ordering, and it is the right one: NULLS FIRST puts a point
       -- that has never been collected above one that is merely stale.
       --
@@ -658,7 +711,28 @@ export async function getCollectionHealth(
       -- twice, so the table reshuffled itself on every one-minute refresh.
       -- Caught by scripts/bas-health-oracle.ts, which compared two runs of the
       -- same query and got two orders.
-      ORDER BY seconds_since_last_record DESC NULLS FIRST, point_name, point_id
+      ORDER BY h.seconds_since_last_record DESC NULLS FIRST, h.point_name, h.point_id
+    `;
+
+    // --- points the station stopped reporting (B8.3) ------------------------
+
+    // By name, with when a record last arrived. Always fetched: an empty list
+    // is a claim the card makes out loud, and a card that appears only when
+    // something is wrong cannot be told from a check that stopped running.
+    const vanished = await tx.$queryRaw<VanishedRow[]>`
+      SELECT
+        h.point_id,
+        h.point_name,
+        h.site_name,
+        COALESCE(st.display_name, st.niagara_station_name) AS station_name,
+        h.last_record_ts
+      FROM bas_v_collection_health h
+      JOIN bas_points p USING (point_id)
+      JOIN bas_stations st ON st.station_id = h.station_id
+      WHERE NOT h.is_active
+        AND p.inactive_reason = 'no_longer_reported'
+        AND ${healthSitesH}
+      ORDER BY h.last_record_ts DESC NULLS LAST, h.point_name, h.point_id
     `;
 
     // --- collector runs -----------------------------------------------------
@@ -781,13 +855,23 @@ export async function getCollectionHealth(
      */
     const unfiltered = selection.filtered
       ? firstRow(
-          await tx.$queryRaw<Array<{ active_points: number; points_at_risk: number }>>`
+          await tx.$queryRaw<
+            Array<{
+              active_points: number;
+              points_at_risk: number;
+              points_no_longer_reported: number;
+            }>
+          >`
             SELECT
-              count(*) FILTER (WHERE is_active)::int AS active_points,
-              count(*) FILTER (WHERE is_active AND roll_risk <> 'ok')::int
-                AS points_at_risk
-            FROM bas_v_collection_health
-            WHERE ${siteFilter(entitled, Prisma.sql`site_id`)}
+              count(*) FILTER (WHERE h.is_active)::int AS active_points,
+              count(*) FILTER (WHERE h.is_active AND h.roll_risk <> 'ok')::int
+                AS points_at_risk,
+              count(*) FILTER (WHERE NOT h.is_active
+                                 AND p.inactive_reason = 'no_longer_reported')::int
+                AS points_no_longer_reported
+            FROM bas_v_collection_health h
+            JOIN bas_points p USING (point_id)
+            WHERE ${siteFilter(entitled, Prisma.sql`h.site_id`)}
           `,
           "unfiltered totals",
         )
@@ -800,6 +884,7 @@ export async function getCollectionHealth(
       totals,
       readingTotals,
       points,
+      vanished,
       runs,
       newestRun,
       runRecords,
@@ -885,6 +970,7 @@ export async function getCollectionHealth(
         : {
             activePoints: result.unfiltered.active_points,
             pointsAtRisk: result.unfiltered.points_at_risk,
+            pointsNoLongerReported: result.unfiltered.points_no_longer_reported,
           },
 
     observedAt: result.observedAt.toISOString(),
@@ -894,11 +980,15 @@ export async function getCollectionHealth(
       unclassifiedPoints: result.totals.unclassified_points,
       pointsAtRisk,
       riskCounts,
+      hiddenPoints: result.totals.hidden_points,
+      hiddenPointsAtRisk: result.totals.hidden_points_at_risk,
+      pointsNoLongerReported: result.totals.points_no_longer_reported,
       pointsIncomplete: completenessCounts.incomplete,
       completenessCounts,
       minutesSinceNewestReading: result.readingTotals.minutes_since,
     },
     points: result.points.map(toPointHealthRow),
+    vanished: result.vanished.map(toVanishedPoint),
     runs: result.runs.map(toIngestRunRow),
     newestRunAt: iso(result.newestRun),
     runRecords: result.runRecords.map(toRunRecordPoint),
@@ -952,6 +1042,17 @@ function toPointHealthRow(row: PointRow): PointHealthRow {
     completeness: toCompleteness(row.completeness),
     stationCount: row.station_count,
     heldCount: row.held_count,
+    visible: row.visible,
+  };
+}
+
+function toVanishedPoint(row: VanishedRow): VanishedPoint {
+  return {
+    pointId: row.point_id.toString(),
+    pointName: row.point_name,
+    siteName: row.site_name,
+    stationName: row.station_name,
+    lastReadingAt: iso(row.last_record_ts),
   };
 }
 
@@ -1106,12 +1207,10 @@ export async function getPointExplorer(
     ).now;
 
     // The same three-level cascade as Collection Health, and it narrows WHICH
-    // POINTS ARE SELECTABLE - the picker below is built from healthSites, so a
+    // POINTS ARE SELECTABLE - the picker below is built from healthSitesV, so a
     // JACE filter reduces the list rather than merely greying out the chart.
     const selection = await resolveSelection(tx, entitled, options);
     const { siteIds, stationId } = selection;
-    const healthSites = Prisma.sql`${siteFilter(siteIds, Prisma.sql`site_id`)}
-      AND ${stationFilter(stationId, Prisma.sql`station_id`)}`;
 
     // Grafana's $point variable query, plus the two columns the screen needs
     // that a dropdown does not: the unit, and the interval the break threshold
@@ -1121,12 +1220,20 @@ export async function getPointExplorer(
     // share a display name - display_name is not unique, only
     // (station_id, niagara_history_name) is - and without it the picker would
     // reorder between refreshes.
+    // Aliased, because bas_points is joined below and both carry station_id.
+    const healthSitesV = Prisma.sql`${siteFilter(siteIds, Prisma.sql`v.site_id`)}
+      AND ${stationFilter(stationId, Prisma.sql`v.station_id`)}`;
     const pointRows = await tx.$queryRaw<PointOptionRow[]>`
-      SELECT point_id, point_name, point_role, unit, site_name,
-             collection_interval_s
-      FROM bas_v_point
-      WHERE is_active AND ${healthSites}
-      ORDER BY site_name, point_name, point_id
+      SELECT v.point_id, v.point_name, v.point_role, v.unit, v.site_name,
+             v.collection_interval_s
+      FROM bas_v_point v
+      -- B8.3: a hidden point leaves this picker, and only this. It is still
+      -- collected, still in every Collection Health figure, and still in the
+      -- views the AI reads - is_visible is a preference of the browsing
+      -- screens, which is why it lives on bas_points and not in bas_v_point.
+      JOIN bas_points p USING (point_id)
+      WHERE v.is_active AND p.is_visible AND ${healthSitesV}
+      ORDER BY v.site_name, v.point_name, v.point_id
     `;
 
     const selectedPoint =
@@ -1138,7 +1245,23 @@ export async function getPointExplorer(
     // for the first one. Silently swapping would show one point's data under
     // another point's name in the URL, which is the worst of both.
     if (requestedPointId !== null && selectedPoint === null) {
-      throw new BasError("point_not_found", "That point is not available.");
+      // Hidden rather than gone? Say which. A bookmark to a point somebody hid
+      // yesterday must not read as the point having ceased to exist - and the
+      // fix is a checkbox, not a query. Scoped exactly as the picker is, so
+      // this can only ever describe a point the viewer could see if shown.
+      const hidden = await tx.$queryRaw<Array<{ point_id: bigint }>>`
+        SELECT v.point_id
+        FROM bas_v_point v
+        JOIN bas_points p USING (point_id)
+        WHERE v.point_id = ${requestedPointId}
+          AND v.is_active AND NOT p.is_visible AND ${healthSitesV}
+      `;
+      throw new BasError(
+        "point_not_found",
+        hidden.length > 0
+          ? "That point is hidden from Point Explorer. Show it again under Settings → Points."
+          : "That point is not available.",
+      );
     }
 
     if (selectedPoint === null) {

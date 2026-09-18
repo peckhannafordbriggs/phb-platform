@@ -217,6 +217,18 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "bas.station_deleted": ({ actor, meta }) =>
     `${actor} deleted the station ${stringField(meta, "niagaraStationName") ?? "(unnamed)"}`,
 
+  // Says "on the browsing screens" every time, because "hid the point" alone
+  // reads as "stopped collecting it", and those are different columns with
+  // very different costs. The label is preferred over the oBIX key when a
+  // person has typed one.
+  "bas.point_visibility_changed": ({ actor, meta }) => {
+    const name =
+      stringField(meta, "label") ?? stringField(meta, "niagaraHistoryName") ?? "a point";
+    return meta.visible === true
+      ? `${actor} showed the point ${name} on the browsing screens again`
+      : `${actor} hid the point ${name} from the browsing screens (still collected)`;
+  },
+
   // Names the account. "The login changed" cannot show an escalation from
   // bas_collector to admin; "changed it to admin" can. The password is not here
   // and never will be - see the note on the action in lib/audit.ts.
@@ -460,6 +472,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.station_deleted": "BAS station deleted",
   "bas.credential_set": "BAS station login set",
   "bas.credential_cleared": "BAS station login removed",
+  "bas.point_visibility_changed": "BAS point shown or hidden",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

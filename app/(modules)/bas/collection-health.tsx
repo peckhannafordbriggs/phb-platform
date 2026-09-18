@@ -52,6 +52,10 @@ import {
   describeAtRisk,
   computeHeadroom,
   describeHeadroom,
+  describeHiddenFromTable,
+  describeVanished,
+  splitHiddenPoints,
+  vanishedTone,
   type Tone,
 } from "./health-client";
 import {
@@ -509,6 +513,10 @@ export function CollectionHealth() {
 
       <CompletenessCard health={health} suffix={suffix} />
 
+      {/* ------------------------------------ no longer reported by the station */}
+
+      <VanishedCard health={health} suffix={suffix} />
+
       {/* -------------------------------------------------- collector silence */}
 
       {gapSentence !== null && (
@@ -712,6 +720,73 @@ function HeroTile({
 }
 
 /**
+ * Points the station stopped reporting (B8.3, and the hole found on
+ * 18 September 2026).
+ *
+ * ALWAYS rendered, at zero too, for the CompletenessCard's reason: a card that
+ * appears only when something is wrong cannot be told apart from a check that
+ * stopped running. Not folded into the at-risk hero - see `vanishedTone` for
+ * why - and never silent, which is what this closes: the collector
+ * deactivating a point used to remove it from every figure on this screen, so
+ * a point VANISHING made the dashboard look better. The four deliberate
+ * reasons (system log, alarm history, retired _cfg0 half, manual) are not
+ * here; we chose those, and they cannot surprise us.
+ */
+function VanishedCard({
+  health,
+  suffix,
+}: {
+  health: CollectionHealthData;
+  suffix: string;
+}) {
+  const count = health.totals.pointsNoLongerReported;
+  const tone = vanishedTone(count);
+  // The B7.6 rule, applied to this figure too: a vanished point outside the
+  // filter is still said, so a filtered zero cannot read as an estate zero.
+  const elsewhere =
+    health.unfiltered !== null && health.scope.filtered
+      ? health.unfiltered.pointsNoLongerReported - count
+      : 0;
+
+  return (
+    <section
+      aria-label="Points no longer reported by the station"
+      className="card p-5 text-sm"
+      style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
+    >
+      <p className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+        No longer reported by the station{suffix}
+      </p>
+      <p className="mt-1 font-medium">{describeVanished(count, suffix)}</p>
+      {health.vanished.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {health.vanished.map((point) => (
+            <li key={point.pointId} className="flex flex-wrap gap-x-3 tabular-nums">
+              <span className="font-medium">{point.pointName}</span>
+              <span className="opacity-75">
+                {point.stationName} · {point.siteName}
+              </span>
+              <span className="opacity-75">
+                last record{" "}
+                {point.lastReadingAt === null
+                  ? "never received"
+                  : formatTimestamp(point.lastReadingAt)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {elsewhere > 0 && (
+        <p className="mt-2 text-xs opacity-80">
+          {elsewhere} more outside {health.scope.label ?? "this filter"}. Clear the
+          filter to see {elsewhere === 1 ? "it" : "them"}.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
  * Active points that are actually reporting.
  *
  * Anything in the `ok` risk state: collected inside half its roll horizon. A
@@ -883,21 +958,30 @@ function Th({
 }
 
 function PointTable({
-  points,
+  points: allPoints,
   siteName,
 }: {
   points: PointHealthRow[];
   siteName: string | null;
 }) {
+  // Hidden points leave THE TABLE and nothing else (B8.3). Every tile above
+  // was computed by the service over all active points, hidden included, and
+  // the panel says how many rows it is not drawing. See splitHiddenPoints.
+  const { listed: points, hidden } = splitHiddenPoints(allPoints);
+  const hiddenLine = describeHiddenFromTable(hidden.length);
+
   return (
     <Panel
       title="Per-point collection status"
+      description={hiddenLine ?? undefined}
     >
       {points.length === 0 ? (
         <Empty>
-          {siteName === null
-            ? "No active points. Nothing has been discovered on the station yet, or every point has been marked inactive."
-            : `No active points at ${siteName}. Another building may still have some — switch the filter to All.`}
+          {hidden.length > 0
+            ? `Every active point${siteName === null ? "" : ` at ${siteName}`} is hidden from this table. The figures above still count ${hidden.length === 1 ? "it" : "them"}.`
+            : siteName === null
+              ? "No active points. Nothing has been discovered on the station yet, or every point has been marked inactive."
+              : `No active points at ${siteName}. Another building may still have some — switch the filter to All.`}
         </Empty>
       ) : (
         <div className="overflow-x-auto">

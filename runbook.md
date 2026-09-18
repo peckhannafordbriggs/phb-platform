@@ -5143,6 +5143,7 @@ each answers a different question and they routinely disagree.
 | Is data being lost **right now** | *Points at risk of data loss* tile |
 | Did the collector **stop for longer than the station remembers** | *Longest collector silence* banner |
 | Has data **already been destroyed** | *Recorded data gaps* table, `roll_overwrite` rows |
+| Has the station **stopped offering a history** | *No longer reported by the station* card, each point by name with its last record |
 
 The development database on 24 August 2026 is the worked example, and it is
 worth understanding because it is the case a naive screen gets wrong:
@@ -6200,11 +6201,14 @@ To shorten a list, hide. Never deactivate for a cosmetic reason. The four
 Niagara system logs and the dead half of a reconfigured `_cfg0` pair are the
 genuine exclusions; `is_active = false` is for those.
 
-**Fix, until B8.2 onward ship a screen.** SQL, as the office JACE was done:
+**Fix.** Hiding and showing is the *Shown* checkbox on the Points list under
+each station in Settings (B8.3). It writes `is_visible` and nothing else -
+`tests/bas-point-visibility.test.ts` reads `is_active` before and after to
+prove it - and every change is an audit row, `bas.point_visibility_changed`,
+whose sentence says *still collected*. Labels are still SQL until B8.4:
 
 ```sql
-UPDATE bas_points SET label = 'Zone Temp 104-105', is_visible = false
- WHERE point_id = 42;
+UPDATE bas_points SET label = 'Zone Temp 104-105' WHERE point_id = 42;
 UPDATE bas_points SET label = NULL WHERE point_id = 42;   -- back to the Niagara name
 ```
 
@@ -6215,6 +6219,104 @@ A blank label is refused (`bas_points_label_not_blank`): "no label" is spelled
 `discover`, and a person's is `bas_points.label`. Both column comments say so,
 and the Prisma field on `BasPoint` is `niagaraDisplayName` for the same reason.
 `WHY-ITS-BUILT-THIS-WAY.md` § 45.
+
+---
+
+## Collection Health counts a point its table does not list
+
+**Symptom.** *Points at risk of data loss* says 1 (or more) and the per-point
+table has no row in that state. An amber sentence sits between them: *"No
+points at risk are listed in the table below, but 1 hidden point is at risk.
+Hidden points are still collected and still counted above; show it again under
+Settings → Points."* Or, under the table: *"1 hidden point is not listed."*
+
+**Cause.** Somebody unticked *Shown* on that point in the Points list (B8.3).
+That is working as designed, and the design is the one rule this phase turns
+on: **a hidden point is still collected, so it can still fall behind its roll
+horizon or lose data, and it keeps counting in every risk figure and every
+completeness count.** Hiding removes it from the Point Explorer picker and
+from the Collection Health table, and from nothing else. The service returns
+every active point with a `visible` flag; the screen leaves hidden rows out of
+the table and says how many. The tiles never see the flag.
+
+**Fix.** If you want to see the row, tick *Shown* again in Settings → the
+station → Points. If you hid it to shorten the list and it is now at risk, the
+sentence is doing its job: the row you did not want to look at is the one
+losing data. The wording and the pattern are `describeHiddenRisk` in
+`lib/modules/bas/types.ts` - the same function B7.6 uses for a building
+filter, extended rather than duplicated, and the two sentences compose when
+both apply.
+
+**What is enforced, and how.** `tests/bas-collection-health.test.ts` hides the
+only at-risk point in a building and asserts the tile still reads 1, the hero
+tone is not `ok`, the table has no at-risk row and the sentence is present.
+Mutation A - adding `AND p.is_visible` to one risk `FILTER` in
+`getCollectionHealth` - fails that test (1 of 69). The same file asserts a
+hidden point stays inside the completeness counts and inside the unfiltered
+comparison.
+
+`is_visible` is **not** in any of the six `bas_v_*` views, and must not be:
+the views are what Grafana and the AI read, and hiding is a preference of the
+platform's browsing screens alone. The service joins `bas_points` for it.
+
+---
+
+## Collection Health says a point is no longer reported by the station
+
+**Symptom.** The card *No longer reported by the station* is amber and lists
+one or more points with their station and *last record …*.
+
+**Cause.** On its last `discover`, the collector *(phb-bas)* found that the
+station no longer offers that history and set `is_active = false` with
+`inactive_reason = 'no_longer_reported'`. The collector cannot tell why. A
+deleted trend, a dropped device and a renamed history all look exactly like
+this from oBIX.
+
+**Why this card exists - the hole found on 18 September 2026.** Every figure
+on this screen was `FILTER (WHERE is_active)`, so deactivating a point removed
+it from the at-risk count and from the table. Verified on the live database,
+inside a rolled-back transaction: marking `Occupied` `no_longer_reported` took
+*roll_horizon_unknown* from 6 to 5 and the table lost the row. **A point
+vanishing made the dashboard look better** - the 28 August shape again. Now
+the collector's own deactivation is counted on its own line and listed by
+name. The four deliberate reasons (`niagara_system_log`, `alarm_history`,
+`reconfigured_cfg0`, `manual`) stay out of every figure: we chose those, they
+cannot surprise us. Mutation B - counting any `inactive_reason` here - fails
+four tests.
+
+It is **not** folded into *Points at risk of data loss*. That tile is about
+collection lagging a roll horizon, and no collector action fixes a history the
+station no longer offers. Mixing them would mislabel the shape. The card is
+always rendered, at zero too, so an empty card can be told apart from a check
+that stopped running; a filter that leaves a vanished point outside the
+selection is said, *"1 more outside Liberty Center"*, the same way the risk
+sentence says it.
+
+**Fix - Workbench, then one of three things.**
+
+| What you find | Do |
+|---|---|
+| The history was **renamed** | The new name was registered as a new point on the same `discover`. The old row keeps every reading it collected and stays inactive. Give the new point the old one's role and equipment (SQL until B8.5). Then retire the old row: `UPDATE bas_points SET inactive_reason = 'manual' WHERE point_id = …;` - it leaves this card and stays out of the figures |
+| The trend was **deleted** on purpose | Same `UPDATE`. Its readings stay; nothing is lost that was collected |
+| A **device dropped** or a history stopped by accident | Fix it on the station. The next `discover` sees the history again and **re-activates the point itself**, clearing the reason - the collector's own decision, reversed by the station. The card empties on the next refresh |
+
+Do not delete the row. Its readings exist nowhere else.
+
+---
+
+## Point Explorer says "That point is hidden from Point Explorer"
+
+**Symptom.** A bookmark or a shared link to a point answers *"That point is
+hidden from Point Explorer. Show it again under Settings → Points."* and the
+picker does not list it.
+
+**Cause.** Somebody unticked *Shown* on that point. The picker is built with
+`p.is_visible` in its `WHERE`; a point outside the list is refused rather than
+silently swapped for the first one, and a hidden point is told apart from one
+that does not exist so the fix is a checkbox rather than a query. It is still
+collected and still in every Collection Health figure.
+
+**Fix.** Settings → the station → Points → tick *Shown*.
 
 ---
 

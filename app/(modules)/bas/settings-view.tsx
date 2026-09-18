@@ -29,6 +29,7 @@ import {
   fetchBasSettings,
   fetchStationPoints,
   formatTimestamp,
+  updatePointVisibility,
   setStationCredential,
   updateBuilding,
   updateProject,
@@ -1016,6 +1017,32 @@ function StationPoints({
 }) {
   const [list, setList] = useState<StationPointsList | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  /**
+   * The Shown checkbox (B8.3). Optimistic: flip the row, call the API, flip
+   * it back if that fails. Hiding is cosmetic and reversible, so there is
+   * nothing here worth a confirmation - the point is collected either way.
+   */
+  const toggleVisible = useCallback((point: SettingsPoint, visible: boolean) => {
+    const flip = (to: boolean) =>
+      setList((current) =>
+        current === null
+          ? current
+          : {
+              ...current,
+              points: current.points.map((row) =>
+                row.pointId === point.pointId ? { ...row, visible: to } : row,
+              ),
+            },
+      );
+    setSaveError(null);
+    flip(visible);
+    void updatePointVisibility(point.pointId, visible).catch((cause: unknown) => {
+      flip(!visible);
+      setSaveError(cause instanceof ApiError ? cause.message : "Something went wrong.");
+    });
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1047,7 +1074,25 @@ function StationPoints({
   if (list === null) {
     return <p className="mt-3 text-xs text-[var(--muted)]">Loading points…</p>;
   }
-  return <PointsTable list={list} expectedTotal={expectedTotal} />;
+  return (
+    <>
+      {saveError !== null && (
+        <p
+          className="mt-3 rounded-md border p-3 text-xs"
+          style={TONE_STYLE.bad}
+          role="alert"
+        >
+          Could not save that change: {saveError} The checkbox shows what the
+          database still holds.
+        </p>
+      )}
+      <PointsTable
+        list={list}
+        expectedTotal={expectedTotal}
+        onToggleVisible={toggleVisible}
+      />
+    </>
+  );
 }
 
 const EMPTY = <span className="text-[var(--muted)]">—</span>;
@@ -1060,16 +1105,21 @@ const EMPTY = <span className="text-[var(--muted)]">—</span>;
  *
  * EVERYTHING the service returned is drawn. Nothing here filters on
  * `collected` or on `visible`: an uncollected point is the row somebody most
- * needs to see, and hiding on is_visible is B8.3, which carries the
- * hidden-risk rule with it.
+ * needs to see, and a HIDDEN point must stay on this list too - this is
+ * where it gets shown again (B8.3). Hiding removes a point from Point
+ * Explorer and the Collection Health table, never from here and never from
+ * a total.
  */
 export function PointsTable({
   list,
   expectedTotal,
+  onToggleVisible,
 }: {
   list: StationPointsList;
   /** The tree's own count for the row above, so a stale tree is named as such. */
   expectedTotal: number;
+  /** Absent in a static render; the checkbox is then read-only. */
+  onToggleVisible?: (point: SettingsPoint, visible: boolean) => void;
 }) {
   const { rendered, inDatabase } = list.pointsAccountedFor;
   const { alarm } = pointsCountState(list.pointsAccountedFor);
@@ -1133,12 +1183,21 @@ export function PointsTable({
                 <th className="py-1 pr-3 font-medium">Equipment</th>
                 <th className="py-1 pr-3 font-medium">Collected</th>
                 <th className="py-1 pr-3 font-medium">Completeness</th>
-                <th className="py-1 font-medium">Visible</th>
+                <th
+                  className="py-1 font-medium"
+                  title="Whether the point appears in Point Explorer and the Collection Health table. It is collected either way, and it counts in every risk figure either way."
+                >
+                  Shown
+                </th>
               </tr>
             </thead>
             <tbody>
               {list.points.map((point) => (
-                <PointRow key={point.pointId} point={point} />
+                <PointRow
+                  key={point.pointId}
+                  point={point}
+                  onToggleVisible={onToggleVisible}
+                />
               ))}
             </tbody>
           </table>
@@ -1147,14 +1206,22 @@ export function PointsTable({
 
       <p className="text-xs text-[var(--muted)]">
         {inDatabase} {noun(inDatabase)} in the database for this station,{" "}
-        {rendered} shown. Read-only: labels, visibility and roles are edited in
-        a later phase.
+        {rendered} listed. Unticking Shown hides a point from Point Explorer
+        and the Collection Health table only - it is still collected and still
+        counts in every risk figure. Labels and roles are edited in a later
+        phase.
       </p>
     </div>
   );
 }
 
-function PointRow({ point }: { point: SettingsPoint }) {
+function PointRow({
+  point,
+  onToggleVisible,
+}: {
+  point: SettingsPoint;
+  onToggleVisible?: (point: SettingsPoint, visible: boolean) => void;
+}) {
   const collected = describeCollected(point);
   const completeness = describePointCompleteness(point);
 
@@ -1181,7 +1248,18 @@ function PointRow({ point }: { point: SettingsPoint }) {
       <td className="py-1 pr-3" style={{ color: TONE_INK[completeness.tone] }}>
         {completeness.label}
       </td>
-      <td className="py-1">{point.visible ? "Shown" : "Hidden"}</td>
+      <td className="py-1">
+        <label className="inline-flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={point.visible}
+            readOnly={onToggleVisible === undefined}
+            onChange={(event) => onToggleVisible?.(point, event.target.checked)}
+            aria-label={`Show ${point.label ?? point.niagaraHistoryName} on the browsing screens`}
+          />
+          {point.visible ? "Shown" : "Hidden"}
+        </label>
+      </td>
     </tr>
   );
 }
