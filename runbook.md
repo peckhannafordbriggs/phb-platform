@@ -7020,3 +7020,153 @@ worth having and they answer different questions on different timescales.
 this, and no `point_role`-driven range check exists yet — that is B5 territory.
 This entry exists so the observation is not lost, and so the first rule written
 has a real case to be tested against.
+
+---
+
+## The roll horizon column shows two numbers, and the smaller one is old
+
+**Symptom.** On Collection Health or the Settings Points list a measured
+horizon reads something like **`2.0 h  shortest seen · now 10.1 h`**. `sync`
+says `MEASURED HORIZON TOO SHORT FOR THIS POLL INTERVAL` and names a span the
+station is not reporting today. `healthcheck.py` check 2c says *Shortest is
+7200s* while `bas_sync_checkpoints.observed_span_s` for the point reads 36,470.
+
+**Not a fault. The guard is doing the one thing it is for.** Since 2026-09-18
+the measured horizon is the **shortest** span the station's full buffer has
+ever been seen to hold, kept on `bas_sync_checkpoints.shortest_full_span_s` —
+not the span it reports today, which is `observed_span_s`. Both are shown; the
+guard, `roll_risk`, the headroom badge, the shortest-horizon figure and check
+2c all use the shortest.
+
+**Why the value can only get shorter, and why that is correct.** A
+change-of-value history writes a record when the value changes, so how long
+500 records span is how hard the equipment is cycling. `Unit_Status_Mode` on
+the office RTU measured about **two hours** on 2026-09-17 and **36,470 s — ten
+hours** — on 2026-09-18: a fivefold swing on a unit suspected of
+short-cycling. A guard that read the latest span would have let one quiet
+afternoon erase the evidence that the buffer can collapse to two hours, and
+the next bad afternoon would overwrite records against a ten-hour horizon
+nobody had reason to doubt. The horizon the poll interval has to beat is the
+worst the buffer has been seen to do, so the collector writes
+`LEAST(existing, this pass's full span)` every pass and a longer observation
+changes nothing. **A point whose horizon has ever been two hours is a two-hour
+point.** The view adds one more `LEAST` with the current full span, so a
+shorter span governs even before it is written back.
+
+**What each column is.**
+
+| Column | Where | Meaning |
+|---|---|---|
+| `observed_span_s` | `bas_sync_checkpoints` | The station's `end − start` on the last pass. The current span. Display only |
+| `shortest_full_span_s` | `bas_sync_checkpoints` | The shortest `observed_span_s` ever recorded while `station_count >= capacity`. **The guard** |
+| `current_full_span_s` | `bas_v_collection_health` | `observed_span_s` when the buffer is full today, else NULL |
+| `measured_horizon_s` | `bas_v_collection_health` | `LEAST(shortest_full_span_s, current_full_span_s)` |
+| `horizon_s` | `bas_v_collection_health` | `measured_horizon_s`, else `capacity × collection_interval_s`. What `roll_risk` is judged against |
+| `horizon_state` | `bas_v_collection_health` | `measured` / `configured` / `not_full` / `unknown` — the word both screens show |
+
+**Never raise it by hand.** A hand-run `UPDATE` that "corrects" a two-hour
+value to today's ten hours is exactly the loss of evidence the column exists
+to prevent, and the column comment says so. Lowering it by hand from a
+recorded observation is fine: the ~2 h reading of `Unit_Status_Mode` on
+2026-09-17 predates the column, the 2026-09-18 backfill could only take the
+36,470 s the last pass had recorded, and a person who wants the guard to hold
+the earlier observation may write it:
+
+```sql
+UPDATE bas_sync_checkpoints c SET shortest_full_span_s = 7200
+  FROM bas_points p WHERE p.point_id = c.point_id
+   AND p.niagara_history_name = 'Unit_Status_Mode'
+   AND (c.shortest_full_span_s IS NULL OR c.shortest_full_span_s > 7200);
+```
+
+**The one legitimate reset.** If the history's **capacity is raised on the
+station** in Workbench, every stored observation describes a smaller buffer
+that no longer exists, and the shortest keeps governing until somebody says
+otherwise — `test_completeness.py` *(phb-bas)* proves that it does. Set it to
+NULL in the same breath as the capacity change and say why in
+`bas_points.notes`; the next full pass measures the new buffer and starts the
+record again:
+
+```sql
+UPDATE bas_sync_checkpoints c SET shortest_full_span_s = NULL
+  FROM bas_points p WHERE p.point_id = c.point_id AND p.niagara_history_name = '<exact name>';
+```
+
+**Deploy order.** `add_bas_shortest_full_span` is the platform's; the LEAST is
+the collector's. Apply the migration first — the collector refuses to run on a
+schema without the column and records a `failed` run saying which migration to
+apply.
+
+---
+
+## A point reads "Not full yet", and why that is not amber
+
+**Symptom.** The risk badge on Collection Health reads **Not full yet**, the
+horizon cell reads **Not full yet · 320 of 500**, the headroom badge says
+*"… across 2 of 8 points, 6 not full yet"* — or *"No buffer full yet (6 of
+6)"*. `sync` prints `not full yet  Occupied: 419 of 500 records - nothing
+overwritten, no horizon to measure until it fills`, at INFO. `healthcheck.py`
+lists `[OK] N point(s) have a history buffer below capacity`.
+
+**What it means, and why it is neither a risk nor unknown.** The station
+reports fewer records than the history's capacity, so the buffer has **never
+been full** and has **overwritten nothing**. There is no horizon to measure
+yet, and there is nothing to fill in. Until 2026-09-18 this state was folded
+into `roll_horizon_unknown`: six office points — `OccupancyCommand` at 71 of
+500 over 207 days, `Occupied` at 419 over 2.5 years, `OperatingState`,
+`OperatingStateOR`, `OpState` and `System_Enable` at 300-odd — were counted
+in the at-risk figure and sat beside an instruction to fill in capacity and
+interval from Workbench. *"We have not measured the horizon"* and *"we may be
+losing data"* are different statements, and six provably safe points were
+being reported as the second. An instruction that cannot be followed teaches
+people to ignore the warning, which is how a real one gets missed.
+
+So it is its own state, everywhere a horizon is shown:
+
+| State | `roll_risk` / `horizon_state` | What it means | What to do |
+|---|---|---|---|
+| Configured | `ok` … / `configured` | `capacity × collection_interval_s`, an interval trend | Nothing |
+| Measured | `ok` … / `measured` | The buffer has been seen full; the horizon is the **shortest** span it has held (previous entry) | Nothing, unless `sync` or check 2c says the poll is too slow |
+| **Not full yet** | `buffer_not_full` / `not_full` | Count below capacity. Nothing overwritten, no horizon yet | **Nothing.** It measures itself when the buffer fills |
+| Unknown | `roll_horizon_unknown` / `unknown` | Capacity not recorded, or the station reports no count | Fill in `capacity` from Workbench (History Ext Manager). Add `collection_interval_s` **only for an interval trend** |
+
+Not-full points are outside `pointsAtRisk`, outside the at-risk breakdown,
+outside check 2c, and counted on their own line by the headroom badge. The
+badge tone is neutral — not amber, because there is nothing to act on, and not
+green, because green here means *collected inside half a known horizon* and
+this point has no horizon to be inside of.
+
+**Never fill in `collection_interval_s` for one of these.** All eight of the
+office points in this state or the measured one are change-of-value trends.
+They have no interval, and Workbench shows none because there is none. And
+never derive one from the spacing of their records: the spacing is the
+equipment's behaviour, not a configured setting, and writing it into
+`collection_interval_s` would make a derived guess look like a fact read from
+Workbench — the trigger would then mint a `roll_horizon_s` from it and every
+risk figure would be judged against a number nobody measured. The collector's
+`implied_interval_s()` was removed for exactly this reason, and
+`test_completeness.py` asserts it is gone.
+
+**What the "unknown" warning now says, and why it differs per point.** With
+`capacity` NULL the collector looks at the spacing of the readings it already
+holds — a classifier for *wording only*, nothing it derives is written or
+shown — and ends the warning accordingly: regularly spaced → *"looks like an
+interval trend: read collection_interval_s from the same place"*; unevenly
+spaced → *"it is a change-of-value trend: it has no collection interval, leave
+collection_interval_s NULL"* — and stops; too few readings to tell → *"fill in
+collection_interval_s only if Workbench shows one"*. With `capacity` set but
+no count reported by the station, the warning says there is nothing to fill in
+and to look at the history object in Workbench.
+
+**The count is as of the last collector pass.** `completeness_checked_at` says
+when. A collector that has been down for a week leaves a not-full count that
+may since have filled — but a collector down for a week is check 1a/1b's
+CRITICAL, and the fix is the same either way: get it running. `OccupancyCommand`
+at 71 records in 207 days is in no danger of filling this month; a point that
+does fill flips to `measured` on the pass that sees `count >= capacity`.
+
+**In the record.** `WHY-ITS-BUILT-THIS-WAY.md` § 48; `docs/09-bas-what-is-built.md`
+→ *Measured horizon*; `tests/bas-views.test.ts`, `tests/bas-health-ui.test.ts`,
+`tests/bas-collection-health.test.ts` and `test_completeness.py` *(phb-bas)*
+carry the assertions, including that no wording for a not-full or measured
+point names an interval.

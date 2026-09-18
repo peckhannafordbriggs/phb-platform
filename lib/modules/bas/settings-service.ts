@@ -38,6 +38,7 @@ import type {
   StationPointsList,
   StationReach,
 } from "./types";
+import { toHorizonState } from "./types";
 
 /**
  * The Settings tab's data: organisation -> project -> building -> station.
@@ -535,6 +536,12 @@ interface PointListRow {
   is_visible: boolean;
   completeness: string | null;
   last_record_ts: Date | null;
+  /** From bas_v_collection_health. NULL when the station has no view row. */
+  horizon_state: string | null;
+  horizon_hours: number | null;
+  current_horizon_hours: number | null;
+  station_count: number | null;
+  capacity: number | null;
 }
 
 const COMPLETENESS_VALUES: readonly Completeness[] = [
@@ -564,6 +571,16 @@ function toPoint(row: PointListRow): SettingsPoint {
       (COMPLETENESS_VALUES as readonly string[]).includes(row.completeness)
         ? (row.completeness as Completeness)
         : null,
+    // The view's three states, never re-derived here. A NULL state is a point
+    // with no view row - its station is attached to no building - and reads
+    // unknown, which is the honest word for a horizon nobody has computed.
+    horizon: {
+      state: toHorizonState(row.horizon_state),
+      hours: row.horizon_hours,
+      currentHours: row.current_horizon_hours,
+      stationCount: row.station_count,
+      capacity: row.capacity,
+    },
     lastRecordAt: row.last_record_ts?.toISOString() ?? null,
     visible: row.is_visible,
   };
@@ -623,14 +640,23 @@ export async function getStationPoints(
         p.inactive_reason,
         p.is_visible,
         c.completeness,
-        c.last_record_ts
+        c.last_record_ts,
+        h.horizon_state,
+        (h.horizon_s / 3600.0)::float8          AS horizon_hours,
+        (h.current_full_span_s / 3600.0)::float8 AS current_horizon_hours,
+        c.station_count,
+        p.capacity
       FROM bas_points p
-      -- LEFT, all three. An unclassified point has no role row, an unassigned
-      -- one has no equipment row, and one the collector has never passed has
-      -- no checkpoint row. Each of those is a point this list exists to show.
+      -- LEFT, all four. An unclassified point has no role row, an unassigned
+      -- one has no equipment row, one the collector has never passed has no
+      -- checkpoint row, and one on a station attached to no building has no
+      -- view row. Each of those is a point this list exists to show.
       LEFT JOIN bas_point_roles      pr ON pr.point_role   = p.point_role
       LEFT JOIN bas_equipment        e  ON e.equipment_id  = p.equipment_id
       LEFT JOIN bas_sync_checkpoints c  ON c.point_id      = p.point_id
+      -- The horizon in its three states, from the one place that decides them.
+      -- Cheap: the view reads checkpoints, never bas_readings.
+      LEFT JOIN bas_v_collection_health h ON h.point_id    = p.point_id
       WHERE p.station_id = ${stationId}
       -- By the key, which is stable and unique per station. Labels are mostly
       -- NULL today and a sort that switched columns as they filled in would

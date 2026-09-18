@@ -47,7 +47,7 @@ constantly and none of them are guessable.
 | **JACE** | The embedded controller that runs a station. Java Application Control Engine |
 | **Supervisor** | A server-class Niagara station aggregating several JACEs. We do not have one |
 | **oBIX** | Open Building Information Exchange. An OASIS XML standard. How we read the data |
-| **Roll horizon** | `capacity × collection_interval` — how far back a history reaches before the station overwrites it |
+| **Roll horizon** | How far back a history reaches before the station overwrites it. `capacity × collection_interval` for an interval trend; for a change-of-value trend, which has no interval, the **shortest** span its full buffer has ever been seen to hold — measured, and only ever revised downward. A buffer that has never filled has no horizon yet, and has overwritten nothing |
 
 **The distinction that drives most analysis** is *command* vs *status* vs
 *setpoint* vs *measurement*. "The fan is commanded on" and "the fan is actually

@@ -145,7 +145,9 @@ interface Seeded {
  * Two stations in one building. Station A holds four points that between them
  * exercise every join and every state the list shows:
  *
- *   full      collected, role, equipment, checkpoint complete, station name
+ *   full      collected, role, equipment, checkpoint complete, station name;
+ *             capacity 500 with the station reporting 320 - OperatingState's
+ *             shape, a buffer that has never filled (2026-09-18)
  *   bare      collected, NO role, NO equipment, and its checkpoint row DELETED
  *             after being created - the row a wrong join drops
  *   inactive  not collected, checkpoint unknown - the row that must not be
@@ -205,8 +207,14 @@ async function seed(): Promise<Seeded> {
       equipmentId: equipment.equipmentId,
       unit: "fahrenheit",
       dataType: "real",
+      capacity: 500,
       checkpoint: {
-        create: { completeness: "complete", lastRecordTs: new Date("2026-09-17T12:00:00Z") },
+        create: {
+          completeness: "complete",
+          lastRecordTs: new Date("2026-09-17T12:00:00Z"),
+          stationCount: 320,
+          observedSpanS: 78_000_000,
+        },
       },
     },
   });
@@ -418,6 +426,7 @@ describe("the screen says so when the list falls short", () => {
     roleName: null,
     equipmentName: null,
     unit: null,
+    horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
     collected: true,
     inactiveReason: null,
     completeness: "complete",
@@ -579,6 +588,40 @@ describe("every point is shown with its real state", () => {
     expect(html).toContain("Hidden");
     expect(html).toContain(NAMES.full.replace(/\$/g, "$"));
     expect(html).toContain("VAV-1 130_ZoneTemperature");
+  });
+
+  it("carries the roll horizon in the view's three states, and never re-derives it", async () => {
+    const { stationA } = await seed();
+    const list = await getStationPoints(await adminViewer(), stationA.toString());
+    const byName = (name: string) =>
+      list.points.find((point) => point.niagaraHistoryName === name);
+
+    // 320 of 500: not full, nothing overwritten, nothing to fill in.
+    expect(byName(NAMES.full)?.horizon).toEqual({
+      state: "not_full",
+      hours: null,
+      currentHours: null,
+      stationCount: 320,
+      capacity: 500,
+    });
+    // No capacity, no checkpoint: unknown, and it says so.
+    expect(byName(NAMES.bare)?.horizon.state).toBe("unknown");
+    expect(byName(NAMES.bare)?.horizon.capacity).toBeNull();
+    // An uncollected point still carries the station's answer about its
+    // buffer - the list filters nothing.
+    expect(byName(NAMES.inactive)?.horizon.state).toBe("unknown");
+  });
+
+  it("renders the not-full state into the HTML, with how full", async () => {
+    const { stationA } = await seed();
+    const list = await getStationPoints(await adminViewer(), stationA.toString());
+    const html = renderToStaticMarkup(
+      createElement(PointsTable, { list, expectedTotal: list.pointsAccountedFor.inDatabase }),
+    );
+
+    expect(html).toContain("Not full yet");
+    expect(html).toContain("320 of 500");
+    expect(html).toContain("Roll horizon");
   });
 
   it("words completeness in the Collection Health tones", () => {

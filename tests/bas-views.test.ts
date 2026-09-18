@@ -152,6 +152,12 @@ describe("every view runs and returns rows with the expected columns", () => {
       "measured_horizon_s",
       "horizon_s",
       "horizon_source",
+      // add_bas_shortest_full_span (2026-09-18). The guard reads the SHORTEST
+      // full-buffer span, the screen shows the current one beside it, and
+      // horizon_state is the four-way word both screens use.
+      "shortest_full_span_s",
+      "current_full_span_s",
+      "horizon_state",
     ],
     bas_v_data_dictionary: [
       "object_name",
@@ -502,7 +508,18 @@ describe("bas_v_collection_health classifies roll risk", () => {
   async function measured(
     tx: Tx,
     pointId: bigint,
-    opts: { capacity: number | null; count: number; spanS: number; ago: string },
+    opts: {
+      capacity: number | null;
+      count: number;
+      spanS: number;
+      ago: string;
+      /**
+       * The stored shortest full span (add_bas_shortest_full_span). Omitted
+       * means "whatever the row holds", which for a fresh row is NULL - the
+       * shape of a point the collector has not yet passed with the new column.
+       */
+      shortestS?: number | null;
+    },
   ) {
     await tx.$executeRawUnsafe(
       `UPDATE bas_points SET capacity = $1 WHERE point_id = $2`,
@@ -521,14 +538,25 @@ describe("bas_v_collection_health classifies roll risk", () => {
       opts.count,
       opts.spanS,
     );
+    if (opts.shortestS !== undefined) {
+      await tx.$executeRawUnsafe(
+        `UPDATE bas_sync_checkpoints SET shortest_full_span_s = $1 WHERE point_id = $2`,
+        opts.shortestS,
+        pointId,
+      );
+    }
     const rows = await tx.$queryRaw<
       Array<{
         roll_risk: string;
         horizon_s: number | null;
         measured_horizon_s: number | null;
         horizon_source: string | null;
+        horizon_state: string;
+        current_full_span_s: number | null;
+        shortest_full_span_s: number | null;
       }>
-    >`SELECT roll_risk, horizon_s, measured_horizon_s, horizon_source
+    >`SELECT roll_risk, horizon_s, measured_horizon_s, horizon_source,
+             horizon_state, current_full_span_s, shortest_full_span_s
         FROM bas_v_collection_health WHERE point_id = ${pointId}`;
     return rows[0];
   }
@@ -567,19 +595,183 @@ describe("bas_v_collection_health classifies roll risk", () => {
     });
   });
 
-  it("does not call a half-full buffer's span a horizon", async () => {
+  it("does not call a half-full buffer's span a horizon, and does not call it unknown either", async () => {
     await inRollback(async (tx) => {
       const f = await withData(tx);
 
       // 419 of 500: Occupied's shape. Its span is how much it holds so far,
-      // not how long it retains, and nothing here is at risk of rolling.
+      // not how long it retains - and a buffer below capacity has overwritten
+      // NOTHING. Until 2026-09-18 this read roll_horizon_unknown and was
+      // counted at risk beside six provably safe office points. It is its own
+      // state now: not_full, informational, not a risk.
       const row = await measured(tx, f.unknown, {
         capacity: 500, count: 419, spanS: 78_000_000, ago: "10 minutes",
       });
 
       expect(row?.measured_horizon_s).toBeNull();
+      expect(row?.horizon_s).toBeNull();
       expect(row?.horizon_source).toBeNull();
-      expect(row?.roll_risk).toBe("roll_horizon_unknown");
+      expect(row?.horizon_state).toBe("not_full");
+      expect(row?.roll_risk).toBe("buffer_not_full");
+      expect(row?.roll_risk).not.toBe("roll_horizon_unknown");
+    });
+  });
+
+  it("keeps a not-full buffer out of every horizon-judged state at any staleness", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // OperatingState: 320 of 500 over 2.5 years, newest record long ago. No
+      // amount of staleness turns "nothing overwritten" into at_risk or
+      // data_lost, and none turns it into ok either - there is no horizon to
+      // be inside of.
+      for (const ago of ["10 minutes", "100 hours", "400 days"]) {
+        const row = await measured(tx, f.unknown, {
+          capacity: 500, count: 320, spanS: 78_000_000, ago,
+        });
+        expect(row?.roll_risk, `staleness ${ago}`).toBe("buffer_not_full");
+      }
+    });
+  });
+
+  /**
+   * The shortest span, not the latest (2026-09-18). Unit_Status_Mode measured
+   * about two hours on 2026-09-17 and ten hours the next day - a fivefold
+   * swing, because a change-of-value point's horizon is how hard the
+   * equipment is cycling. The guard has to hold the worst the buffer has been
+   * seen to do, or a quiet afternoon erases the evidence.
+   *
+   * MUTATIONS, each applied to the TEST database's view by hand and restored
+   * (38 passed clean afterwards), 2026-09-18:
+   *   V1  measured_horizon_s := the CURRENT full span (the latest, the old
+   *       behaviour)            -> "guards on the SHORTEST..." and "holds the
+   *       shortest when the buffer is currently below capacity" fail (2)
+   *   V2  measured_horizon_s := the STORED shortest only
+   *                              -> 4 fail, including "lets a shorter CURRENT
+   *       span govern" and "uses the station's own span as the horizon when
+   *       its buffer is full" (a fresh row has no stored shortest yet)
+   *   V3  the buffer_not_full branch removed from roll_risk
+   *                              -> both not-full tests fail (2)
+   * And in TypeScript, each restored: T1 computeHeadroom files a not-full
+   * point as unknown -> 6 headroom tests; T2 pointsAtRisk counts
+   * buffer_not_full -> 2 service tests; T3 the not-full cell borrows the
+   * unknown explanation -> 1 UI test (the one that forbids "interval");
+   * T4 basRiskTone("buffer_not_full") = "ok" -> 2 UI tests.
+   */
+  it("guards on the SHORTEST full-buffer span, and reports the current one beside it", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // Stored shortest 2 h, station reporting 10 h today. Collected 3 h ago:
+      // inside 10 h, past 2 h. The 2 h governs, so this is data_lost.
+      const row = await measured(tx, f.unknown, {
+        capacity: 500, count: 500, spanS: 36_470, ago: "3 hours", shortestS: 7200,
+      });
+
+      expect(row?.shortest_full_span_s).toBe(7200);
+      expect(row?.current_full_span_s).toBe(36_470);
+      expect(row?.measured_horizon_s).toBe(7200);
+      expect(row?.horizon_s).toBe(7200);
+      expect(row?.horizon_source).toBe("measured");
+      expect(row?.horizon_state).toBe("measured");
+      expect(row?.roll_risk).toBe("data_lost");
+    });
+  });
+
+  it("lets a shorter CURRENT span govern even when the stored shortest is longer", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // The collector maintains the shortest, so this shape should not occur -
+      // but if some writer ever records a span without lowering the shortest,
+      // the LEAST in the view still guards on the smaller number.
+      const row = await measured(tx, f.unknown, {
+        capacity: 500, count: 500, spanS: 3600, ago: "50 minutes", shortestS: 36_470,
+      });
+
+      expect(row?.measured_horizon_s).toBe(3600);
+      expect(row?.horizon_s).toBe(3600);
+      expect(row?.roll_risk).toBe("at_risk");
+    });
+  });
+
+  it("holds the shortest when the buffer is currently below capacity", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // Seen full at 2 h once; the station now reports 480 of 500 (a cleared
+      // or trimmed history). The point has proven it can roll in two hours,
+      // and the proof is what the guard keeps.
+      const row = await measured(tx, f.unknown, {
+        capacity: 500, count: 480, spanS: 5000, ago: "10 minutes", shortestS: 7200,
+      });
+
+      expect(row?.current_full_span_s).toBeNull();
+      expect(row?.measured_horizon_s).toBe(7200);
+      expect(row?.horizon_state).toBe("measured");
+      expect(row?.roll_risk).toBe("ok");
+    });
+  });
+
+  /**
+   * The migration's backfill, run as the file states it. The migration itself
+   * ran once against the test database and cannot be re-run to prove it, so
+   * the statement is cut out between its markers and run against fixture rows
+   * inside a rollback.
+   */
+  async function backfillStatement(): Promise<string> {
+    const { readFile } = await import("node:fs/promises");
+    const sql = await readFile(
+      "prisma/migrations/20260918120000_add_bas_shortest_full_span/migration.sql",
+      "utf8",
+    );
+    const statement = sql.split("-- BACKFILL BEGIN")[1]?.split("-- BACKFILL END")[0];
+    expect(statement, "the backfill statement is delimited in the migration").toBeTruthy();
+    return statement ?? "";
+  }
+
+  it("backfills the shortest from a FULL buffer's span and leaves a not-full one NULL", async () => {
+    const backfill = await backfillStatement();
+
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+
+      // Two rows the way live had them on 2026-09-18: one full at 36,470 s,
+      // one at 320 of 500. Both start with the column NULL.
+      await measured(tx, f.sat, {
+        capacity: 500, count: 500, spanS: 36_470, ago: "10 minutes", shortestS: null,
+      });
+      await measured(tx, f.unknown, {
+        capacity: 500, count: 320, spanS: 78_000_000, ago: "10 minutes", shortestS: null,
+      });
+
+      await tx.$executeRawUnsafe(backfill);
+
+      const rows = await tx.$queryRaw<
+        Array<{ point_id: bigint; shortest_full_span_s: number | null }>
+      >`SELECT point_id, shortest_full_span_s FROM bas_sync_checkpoints
+         WHERE point_id IN (${f.sat}, ${f.unknown})`;
+      const byId = new Map(rows.map((r) => [r.point_id.toString(), r.shortest_full_span_s]));
+
+      expect(byId.get(f.sat.toString())).toBe(36_470);
+      expect(byId.get(f.unknown.toString())).toBeNull();
+    });
+  });
+
+  it("does not let the backfill RAISE a shortest that is already recorded", async () => {
+    const backfill = await backfillStatement();
+
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+      await measured(tx, f.sat, {
+        capacity: 500, count: 500, spanS: 36_470, ago: "10 minutes", shortestS: 7200,
+      });
+
+      await tx.$executeRawUnsafe(backfill);
+
+      const rows = await tx.$queryRaw<Array<{ shortest_full_span_s: number | null }>>`
+        SELECT shortest_full_span_s FROM bas_sync_checkpoints WHERE point_id = ${f.sat}`;
+      expect(rows[0]?.shortest_full_span_s).toBe(7200);
     });
   });
 

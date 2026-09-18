@@ -17,6 +17,7 @@ import type {
   DataGapRow,
   IngestRunRow,
   PointHealthRow,
+  PointHorizon,
   RollRisk,
 } from "@/lib/modules/bas/types";
 import {
@@ -29,6 +30,7 @@ import {
   completenessTileTone,
   completenessTone,
   describeCompleteness,
+  describeHorizon,
   describeShortfall,
   WINDOW_PRESETS,
   activePointsTone,
@@ -40,7 +42,6 @@ import {
   fetchCollectionHealth,
   formatChartTick,
   formatCount,
-  formatHours,
   formatMinutes,
   formatTimestamp,
   riskBreakdown,
@@ -892,6 +893,23 @@ function CompletenessBadge({ completeness }: { completeness: Completeness }) {
   );
 }
 
+/**
+ * The roll-horizon cell, in the three distinct states (2026-09-18). One
+ * component for this table and the Settings Points list, so the two screens
+ * cannot drift into naming the same state two ways.
+ */
+export function HorizonCell({ horizon }: { horizon: PointHorizon }) {
+  const words = describeHorizon(horizon);
+  return (
+    <span title={words.title} style={{ color: TONE_INK[words.tone] }}>
+      {words.label}
+      {words.detail !== null && (
+        <span className="ml-1 text-xs opacity-70">{words.detail}</span>
+      )}
+    </span>
+  );
+}
+
 function RiskBadge({ risk }: { risk: RollRisk }) {
   return (
     <span
@@ -1040,27 +1058,7 @@ function PointTable({
                       : formatCount(point.minutesAgo)}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
-                    {point.rollHorizonHours === null ? (
-                      <span
-                        className="text-amber-800"
-                        title={RISK_EXPLANATION.roll_horizon_unknown}
-                      >
-                        unknown
-                      </span>
-                    ) : (
-                      <span
-                        title={
-                          point.horizonSource === "measured"
-                            ? "Measured: the span of the station's full buffer, as it reported it on the last pass."
-                            : "Configured: capacity x collection interval, from Workbench."
-                        }
-                      >
-                        {formatHours(point.rollHorizonHours)}
-                        {point.horizonSource === "measured" && (
-                          <span className="ml-1 text-xs opacity-60">measured</span>
-                        )}
-                      </span>
-                    )}
+                    <HorizonCell horizon={point.horizon} />
                   </td>
                 </tr>
               ))}

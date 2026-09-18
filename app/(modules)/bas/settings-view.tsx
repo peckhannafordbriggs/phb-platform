@@ -45,6 +45,7 @@ import {
   withFilter,
 } from "./filters";
 import { TONE_INK, TONE_STYLE } from "./tone";
+import { HorizonCell } from "./collection-health";
 
 /**
  * Settings - what this platform collects from, and the forms that change it.
@@ -1184,6 +1185,12 @@ export function PointsTable({
                 <th className="py-1 pr-3 font-medium">Collected</th>
                 <th className="py-1 pr-3 font-medium">Completeness</th>
                 <th
+                  className="py-1 pr-3 font-medium"
+                  title="How long the station keeps this history before overwriting it. Measured from the shortest span its full buffer has been seen to hold, or configured from capacity x interval. A buffer that has never filled has overwritten nothing and reads Not full yet."
+                >
+                  Roll horizon
+                </th>
+                <th
                   className="py-1 font-medium"
                   title="Whether the point appears in Point Explorer and the Collection Health table. It is collected either way, and it counts in every risk figure either way."
                 >
@@ -1247,6 +1254,9 @@ function PointRow({
       </td>
       <td className="py-1 pr-3" style={{ color: TONE_INK[completeness.tone] }}>
         {completeness.label}
+      </td>
+      <td className="py-1 pr-3 tabular-nums">
+        <HorizonCell horizon={point.horizon} />
       </td>
       <td className="py-1">
         <label className="inline-flex items-center gap-1.5">

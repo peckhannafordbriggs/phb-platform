@@ -256,9 +256,26 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
       "bas_points.is_active",
       "bas_points.display_name",
       "bas_stations.display_name",
+      // add_bas_shortest_full_span: the column whose direction of travel is
+      // the whole point. A reader who sees it as "the span" will raise it.
+      "bas_sync_checkpoints.shortest_full_span_s",
+      "bas_sync_checkpoints.observed_span_s",
     ]) {
       expect(annotated, `${column} must be documented`).toContain(column);
     }
+
+    // The shortest full span only ever gets shorter, and the comment has to
+    // say so and say why - it is the main defence against a hand-run UPDATE
+    // that "corrects" a two-hour value to today's ten.
+    const shortest = rows.find((r) => r.column_name === "shortest_full_span_s");
+    expect(shortest?.column_description).toContain("only ever gets shorter");
+    expect(shortest?.column_description).toContain("Never raise it by hand");
+    // And the current span's comment must not present itself as the guard.
+    const current = rows.find(
+      (r) => r.object_name === "bas_sync_checkpoints" && r.column_name === "observed_span_s",
+    );
+    expect(current?.column_description).toContain("shortest_full_span_s");
+    expect(current?.column_description).toContain("overwritten nothing");
 
     // Showing is not collecting. The comments are the main defence against the
     // next person confusing the two, so the wording is asserted, not just its

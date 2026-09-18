@@ -367,6 +367,7 @@ describe("the Points list renders the checkbox", () => {
     roleName: null,
     equipmentName: null,
     unit: null,
+    horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
     collected: true,
     inactiveReason: null,
     completeness: "complete",
