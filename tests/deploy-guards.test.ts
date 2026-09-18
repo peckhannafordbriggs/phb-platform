@@ -5,7 +5,7 @@ import {
   assertLocalDatabase,
   databaseHost,
   isLocalDatabase,
-} from "@/scripts/local-only";
+} from "@/prisma/local-only";
 
 /**
  * Guards that only matter once there is a production to run against.

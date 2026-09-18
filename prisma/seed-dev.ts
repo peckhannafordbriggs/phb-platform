@@ -1,5 +1,5 @@
 import { createDbClient } from "../scripts/db";
-import { assertLocalDatabase } from "../scripts/local-only";
+import { assertLocalDatabase } from "./local-only";
 
 /**
  * Development seed - fake employees only.

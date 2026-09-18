@@ -122,6 +122,14 @@ Each of those arrives with the phase that needs it, or not at all.
 All schema changes go through Prisma Migrate. Version controlled, reproducible,
 clearly named, small. Never alter a production schema by hand.
 
+**A migration is authored against one database and applied to the others.**
+`prisma migrate dev` runs only against `MIGRATE_DEV_DATABASE_URL`, an empty
+database kept for that purpose; `prisma migrate deploy` applies the result to
+`DATABASE_URL` — the local database the collector writes, and production in
+Azure alike. `prisma.config.ts` enforces the split and refuses `migrate dev`,
+`migrate reset` or `db push` against any database holding `bas_readings`.
+`runbook.md` → *Which command touches which database*.
+
 **Reference-data changes go through a migration too**, not a manual edit. There is no
 application path that deletes a `Position` or a `Department` — hiding must not break
 employees already assigned to a value, and both foreign keys are `ON DELETE RESTRICT`.

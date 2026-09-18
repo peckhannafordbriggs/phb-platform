@@ -1041,7 +1041,53 @@ upsert and every rediscovery erases the hand-typed names; the phb-bas test
 fails, which is what it is for. Rename `bas_points.display_name` in one
 repository without the other and the collector stops on its next pass.
 
-## 46 · The judgment I'd most want to pass on
+## 46 · `migrate dev` has a database of its own, and the CLI is what enforces it
+
+On a development machine the database `DATABASE_URL` names is not a development
+database. It is where the collector writes `bas_readings` — 44,750 rows on 17
+September 2026, back to February 2024, most of them long since rolled off the
+JACE. It is also where `prisma migrate dev` pointed, and while an edit to an
+applied migration was being tested, Prisma offered to reset it.
+
+Prisma does ask first. But a prompt is a convention: it is answered by a person
+who has typed `y` to it a hundred times on databases that did not matter. The
+rule that came out of this is the same one the send gate and the ZZTEST fence
+already follow — **a convention someone has to remember is not a guard.**
+
+**Where the guard lives, and why there.** Not in an npm script, because
+`npx prisma migrate dev` typed directly skips a script. In `prisma.config.ts`,
+because the CLI cannot open a connection without loading it. The config reads
+the command from the CLI's own arguments and routes `migrate dev`,
+`migrate reset` and `db push` — the three that can drop tables or reset a
+database as part of doing their job — to `MIGRATE_DEV_DATABASE_URL`. There is
+no fallback to `DATABASE_URL`; a fallback is the accident being prevented.
+Everything else, `migrate deploy` included, still goes to `DATABASE_URL`, so
+CI, the deploy workflow and the Dockerfile did not change.
+
+**Why it also looks at the data.** Name checks catch the configuration accidents
+— unset, remote, same-as-`DATABASE_URL`. They do not catch a variable pointed
+at a copy of the live database, or a dump restored into the development one.
+So the last check connects and counts `bas_readings`, and refuses if there are
+any. Only that table: employees come back on sign-in and reference data comes
+from the seed, but readings exist nowhere else. A database that does not exist
+yet passes — `migrate dev` creates it.
+
+**The seed follows the command.** `migrate reset` runs the seed afterwards, and
+the seed reads `DATABASE_URL`. The config redirects that variable in-process for
+a dev-only command, so a reset of the development database seeds the
+development database. Without that line the two databases would be cross-wired
+in the other direction.
+
+**What breaks if you undo it.** Remove the routing and `migrate dev` is one
+`y` away from the only copy of two and a half years of building history. Add a
+fallback to `DATABASE_URL` "for convenience" and you have rebuilt the original
+hazard with an extra variable. Move the check into an npm script and it protects
+the people who use the script. Drop the row count and a restored dump under the
+wrong name is a development database until the moment it isn't. The verification
+that this works is in `runbook.md` → *Which command touches which database*,
+and the test runs the real CLI against a database holding one reading.
+
+## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
 

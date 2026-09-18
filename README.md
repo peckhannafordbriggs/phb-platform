@@ -57,8 +57,8 @@ Run `npm run seed` before `npm run seed:dev`.
 All schema changes go through Prisma Migrate - never by hand.
 
 ```bash
-npx prisma migrate dev --name what_changed    # create and apply
-npx prisma migrate deploy                     # apply in a deployed environment
+npx prisma migrate dev --name what_changed    # author: writes it, applies it to MIGRATE_DEV_DATABASE_URL
+npx prisma migrate deploy                     # apply: DATABASE_URL, locally and in Azure alike
 npx prisma generate                           # regenerate the client
 ```
 
@@ -67,6 +67,13 @@ Prisma 7 takes the connection URL from `prisma.config.ts` (which loads
 `@prisma/adapter-pg` driver adapter. The generated client lands in
 `lib/generated/prisma` and is gitignored - run `npx prisma generate` after a
 clean clone if your editor cannot resolve it.
+
+`prisma.config.ts` also decides *which* URL. `migrate dev`, `migrate reset` and
+`db push` go to `MIGRATE_DEV_DATABASE_URL`, and are refused if it is unset, not
+local, the same database as `DATABASE_URL`, or holds any `bas_readings` rows;
+everything else goes to `DATABASE_URL`. Locally that database holds the BAS
+collector's readings, which is the reason. `runbook.md` → *Which command touches
+which database*.
 
 Prisma fields are camelCase; database tables and columns are snake_case via
 `@@map` / `@map`. That keeps the raw SQL in `runbook.md` free of quoted

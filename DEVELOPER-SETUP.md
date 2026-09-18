@@ -32,10 +32,12 @@ npm install
 
 ## 3 · Create your databases
 
-Two of them — one for development, one that the test suite wipes between runs.
+Three of them: one your app runs against, one that `prisma migrate dev` may reset as
+often as it likes, and one the test suite wipes between runs.
 
 ```bash
 createdb phb_platform
+createdb phb_platform_dev
 ```
 
 The test database is created for you in step 5.
@@ -52,6 +54,7 @@ comes from. Short version:
 |---|---|
 | `DATABASE_URL` | `postgresql://postgres:YOURPASSWORD@localhost:5432/phb_platform` |
 | `TEST_DATABASE_URL` | Same but ending `/phb_platform_test` |
+| `MIGRATE_DEV_DATABASE_URL` | Same but ending `/phb_platform_dev` |
 | `AUTH_SECRET` | Run `npx auth secret` — yours alone, doesn't need to match anyone's |
 | `AUTH_URL` | `http://localhost:3000` |
 | `BOOTSTRAP_ADMIN_EMAIL` | `krachamolla@phb1899.com` — this makes you admin on your own machine |
@@ -77,6 +80,11 @@ npm run db:test:setup          # creates and migrates the test database
 npm run seed                   # departments, positions, modules, your admin row
 npm run seed:dev               # 130 fake employees so lists and filters have volume
 ```
+
+`npx prisma migrate dev` is not in that list on purpose. It goes to `phb_platform_dev` and
+nowhere else — the CLI refuses to run it against anything holding BAS readings, or against
+the database `DATABASE_URL` names. Author a migration there, then `migrate deploy` it to
+`phb_platform`. `runbook.md` → *Which command touches which database* has the loop.
 
 ## 6 · Run it
 
@@ -136,6 +144,13 @@ more than one message per click.
 **The database schema is shared.** Your tables live in the same `prisma/schema.prisma` and
 the same migration history as everything else, so a broken migration blocks the whole
 platform's deploy. Prefix your tables consistently — Building Automation uses `bas_`.
+
+**`migrate dev` has its own database, and the CLI enforces it.** On the machine that runs
+the BAS collector, `phb_platform` holds two and a half years of building readings that
+exist nowhere else, and `migrate dev` once offered to reset it. So `migrate dev`,
+`migrate reset` and `db push` only ever reach `MIGRATE_DEV_DATABASE_URL`, and refuse to run
+if that is unset or points at anything holding `bas_readings`. Don't work around the
+refusal; read what it says.
 
 ---
 
