@@ -1087,6 +1087,65 @@ wrong name is a development database until the moment it isn't. The verification
 that this works is in `runbook.md` → *Which command touches which database*,
 and the test runs the real CLI against a database holding one reading.
 
+## 48 · A horizon is the shortest span the buffer has ever held, and a buffer that has never filled is not a risk
+
+**Decision.** The measured roll horizon of a point is the **shortest**
+full-buffer span the station has ever reported for it, kept on
+`bas_sync_checkpoints.shortest_full_span_s` and only ever lowered; the span the
+station reports today is recorded and shown beside it and governs nothing. A
+buffer the station reports below capacity is its own state — `buffer_not_full`,
+*Not full yet · 320 of 500* — outside every risk figure, and no message about
+it, or about a measured point, names a collection interval.
+
+**Why.** Three things were wrong at once on the live database on 2026-09-18,
+and each of them was a screen saying something true-looking that was false.
+
+*The horizon was the latest observation.* `Unit_Status_Mode` measured about two
+hours on 17 September and ten hours on the 18th. It is a change-of-value trend
+on an RTU suspected of short-cycling: how long 500 records span is how hard the
+unit is working, and a quiet afternoon stretches it fivefold. A guard that
+reads the latest span forgets the two hours the moment the unit calms down —
+and the next bad afternoon overwrites records against a ten-hour horizon nobody
+had reason to doubt. The value the poll interval has to beat is the worst the
+buffer has been seen to do. So the collector writes `LEAST(existing, new)`
+every pass, the view LEASTs once more with the current span, and the column
+comment says in as many words that it only ever gets shorter and must never be
+raised by hand. A point whose horizon has ever been two hours is a two-hour
+point.
+
+*A buffer below capacity was "unknown".* Six office points at 71 to 419 of 500
+records — over 207 days to 2.5 years — had never filled and had overwritten
+nothing, and were counted at risk. "We have not measured the horizon" and "we
+may be losing data" are different statements; the view treated them as one.
+Now the view says `buffer_not_full`, the tile does not count it, the headroom
+badge names it on its own line, and the tone is neutral: not amber, because
+there is nothing to act on, and not green, because green means *inside half a
+known horizon* and this point has none.
+
+*The instruction beside "unknown" could not be followed.* It said to fill in
+capacity and interval from Workbench. Every one of the eight points is
+change-of-value; Workbench shows no interval because there is none. A warning
+whose instruction is impossible trains people to scroll past it, which is how
+a real one is missed. The collector now words the unknown warning from the
+spacing of the readings it already holds — regular spacing may ask for an
+interval, uneven spacing says *change-of-value, leave it NULL* and stops — and
+that classifier writes nothing anywhere. `HistoryMeta.implied_interval_s()`,
+an unused average-spacing guess, was removed rather than left as a temptation:
+written into `collection_interval_s`, a derived guess becomes a fact the
+trigger mints a `roll_horizon_s` from, and every risk figure is then judged
+against a number nobody measured.
+
+**What breaks if you undo it.** Read the latest span and the guard is only as
+strict as the last quiet afternoon; `test_completeness.py` *(phb-bas)* and
+`tests/bas-views.test.ts` both fail on exactly that mutation, and both were run
+with it. Fold not-full back into unknown and six safe points go amber, the
+at-risk tile lies by six, and the only instruction offered cannot be carried
+out. Suggest an interval for a change-of-value point and someone will type one
+in. The one thing the shortest span cannot know is that the buffer got
+**bigger**: raising a history's capacity on the station is the one legitimate
+reason to reset the column to NULL, and `runbook.md` → *The roll horizon column
+shows two numbers* says how.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

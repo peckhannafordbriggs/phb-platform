@@ -31,6 +31,13 @@ function point(over: Partial<PointHealthRow> = {}): PointHealthRow {
     minutesAgo: 60,
     rollHorizonHours: 41.7,
     horizonSource: "configured",
+    horizon: {
+      state: "configured",
+      hours: 41.7,
+      currentHours: null,
+      stationCount: null,
+      capacity: 500,
+    },
     completeness: "complete",
     stationCount: null,
     heldCount: null,
@@ -121,10 +128,51 @@ describe("what does NOT contribute", () => {
       hours: null,
       known: 0,
       unknown: 0,
+      notFull: 0,
       total: 0,
     });
   });
+
+  /**
+   * A buffer below capacity (2026-09-18). Six office points sat at 300-odd of
+   * 500 with nothing overwritten and were filed under "unknown" here, which
+   * made the badge read "1 unknown" x 6 for a set that was entirely known.
+   */
+  it("counts a not-full buffer on its own line, never as unknown", () => {
+    const result = computeHeadroom([
+      point({ pointId: "known", minutesAgo: 60 }),
+      notFull("nf"),
+    ]);
+
+    expect(result.known).toBe(1);
+    expect(result.unknown).toBe(0);
+    expect(result.notFull).toBe(1);
+    // The number covers the known point only, and is not dragged to null.
+    expect(result.hours).toBeCloseTo(40.7, 5);
+  });
+
+  it("does not let a not-full buffer contribute a number", () => {
+    // Even with a stale checkpoint - nothing has rolled, so there is nothing
+    // to count down towards.
+    const result = computeHeadroom([notFull("a", { minutesAgo: 400 * 24 * 60 })]);
+
+    expect(result.hours).toBeNull();
+    expect(result.notFull).toBe(1);
+    expect(result.unknown).toBe(0);
+  });
 });
+
+/** OperatingState's shape: 320 of 500 over years, and no horizon at all. */
+function notFull(id: string, over: Partial<PointHealthRow> = {}): PointHealthRow {
+  return point({
+    pointId: id,
+    risk: "buffer_not_full",
+    rollHorizonHours: null,
+    horizonSource: null,
+    horizon: { state: "not_full", hours: null, currentHours: null, stationCount: 320, capacity: 500 },
+    ...over,
+  });
+}
 
 describe("the badge never hides an unknown behind a clean number", () => {
   it("says the number plainly when every point is known", () => {
@@ -191,5 +239,39 @@ describe("the badge never hides an unknown behind a clean number", () => {
 
   it("has an honest answer for an empty site", () => {
     expect(describeHeadroom(computeHeadroom([]))).toBe("No active points");
+  });
+
+  it("names a not-full buffer as what it is, not as unknown", () => {
+    const text = describeHeadroom(computeHeadroom([point({ minutesAgo: 60 }), notFull("b")]));
+
+    expect(text).toBe("40.7 h headroom across 1 of 2 points, 1 not full yet");
+    expect(text).not.toContain("unknown");
+  });
+
+  it("names both shares when a set has an unknown and a not-full point", () => {
+    const points = [
+      point({ pointId: "a", minutesAgo: 60 }),
+      point({ pointId: "b", rollHorizonHours: null, risk: "roll_horizon_unknown" }),
+      notFull("c"),
+    ];
+
+    expect(describeHeadroom(computeHeadroom(points))).toBe(
+      "40.7 h headroom across 1 of 3 points, 1 unknown, 1 not full yet",
+    );
+  });
+
+  it("does not say 'unknown' about a set where every buffer is simply not full", () => {
+    const text = describeHeadroom(computeHeadroom([notFull("a"), notFull("b")]));
+
+    expect(text).toBe("No buffer full yet (2 of 2)");
+    expect(text).not.toContain("unknown");
+  });
+
+  it("keeps the unknown word when a set is part unknown, part not full, and no number is computable", () => {
+    const points = [point({ pointId: "a", rollHorizonHours: null }), notFull("b")];
+
+    expect(describeHeadroom(computeHeadroom(points))).toBe(
+      "Headroom unknown, 1 not full yet",
+    );
   });
 });

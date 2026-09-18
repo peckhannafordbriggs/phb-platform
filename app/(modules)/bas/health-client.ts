@@ -2,6 +2,7 @@ import type {
   BasSettingsTree,
   CollectionHealth,
   Completeness,
+  PointHorizon,
   InactiveReason,
   PointExplorer,
   PointHealthRow,
@@ -180,6 +181,11 @@ export function basRiskTone(risk: RollRisk): Tone {
     case "roll_horizon_unknown":
     case "never_collected":
       return "warn";
+    case "buffer_not_full":
+      // Informational. Not amber - there is nothing to act on - and not
+      // green either, because green here means "collected inside half a
+      // known horizon" and this point has no horizon to be inside of.
+      return "neutral";
   }
 }
 
@@ -187,6 +193,7 @@ export const RISK_LABEL: Record<RollRisk, string> = {
   ok: "OK",
   at_risk: "At risk",
   data_lost: "Data lost",
+  buffer_not_full: "Not full yet",
   roll_horizon_unknown: "Horizon unknown",
   never_collected: "Never collected",
 };
@@ -197,10 +204,86 @@ export const RISK_EXPLANATION: Record<RollRisk, string> = {
     "More than half the roll horizon has passed since the last record we collected. Nothing is lost yet.",
   data_lost:
     "More time has passed than the station retains, so it has overwritten records we never collected. They are gone permanently.",
+  buffer_not_full:
+    "The station holds fewer records than the history's capacity, so nothing has been overwritten. There is no horizon to measure until the buffer fills, and nothing to fill in.",
   roll_horizon_unknown:
-    "Capacity or collection interval has not been filled in from Workbench, so the roll horizon cannot be computed and we cannot tell whether records are being lost.",
+    "No horizon is known: the history's capacity is not recorded, or the station reports no record count, so we cannot tell whether records are being lost. Fill in capacity from Workbench (History Ext Manager). Add the collection interval only for an interval trend - a change-of-value trend has none, and its horizon is measured once the buffer fills.",
   never_collected: "No record has ever been collected for this point.",
 };
+
+// ---------------------------------------------------------------- horizon
+
+/**
+ * One point's roll horizon, in words, for both screens that show one.
+ *
+ * Three distinct states, named distinctly (2026-09-18). The failure this
+ * replaces was one word - "unknown" - covering a buffer nobody had measured,
+ * a buffer that had never filled, and a buffer whose span had been measured
+ * and then overwritten by a quieter afternoon's measurement.
+ *
+ *   measured     the guard horizon is the SHORTEST full-buffer span ever
+ *                observed; the current span is said beside it when it differs.
+ *   configured   capacity x interval, from Workbench.
+ *   not_full     "Not full yet · 320 of 500". Nothing overwritten. Neutral.
+ *                This text names no interval and sends nobody to Workbench,
+ *                and tests/bas-health-ui.test.ts asserts that it never will.
+ *   unknown      amber. Says what is missing, and tells the reader to fill
+ *                in an interval ONLY for an interval trend.
+ */
+export function describeHorizon(horizon: PointHorizon): {
+  label: string;
+  detail: string | null;
+  tone: Tone;
+  title: string;
+} {
+  switch (horizon.state) {
+    case "measured": {
+      const current =
+        horizon.currentHours === null
+          ? "not full now"
+          : formatHours(horizon.currentHours) === formatHours(horizon.hours)
+            ? null
+            : `now ${formatHours(horizon.currentHours)}`;
+      return {
+        label: formatHours(horizon.hours),
+        detail: current === null ? "shortest seen" : `shortest seen · ${current}`,
+        tone: "neutral",
+        title:
+          "Measured: the shortest span the station's full buffer has ever been seen to hold. " +
+          "The guard and every risk figure use this, not today's span, because a change-of-value " +
+          "point's span moves with how hard the equipment cycles - a point whose buffer has ever " +
+          "spanned two hours is a two-hour point. The span the station reports today is shown beside it.",
+      };
+    }
+    case "configured":
+      return {
+        label: formatHours(horizon.hours),
+        detail: null,
+        tone: "neutral",
+        title: "Configured: capacity x collection interval, from Workbench.",
+      };
+    case "not_full":
+      return {
+        label: "Not full yet",
+        detail:
+          horizon.stationCount !== null && horizon.capacity !== null
+            ? `${formatCount(horizon.stationCount)} of ${formatCount(horizon.capacity)}`
+            : null,
+        tone: "neutral",
+        title: RISK_EXPLANATION.buffer_not_full,
+      };
+    case "unknown":
+      return {
+        label: "Unknown",
+        detail: null,
+        tone: "warn",
+        title:
+          horizon.capacity === null
+            ? RISK_EXPLANATION.roll_horizon_unknown
+            : "The station reports no record count for this history, so the buffer cannot be known to be full or not, and no horizon can be measured. Unknown is not safe.",
+      };
+  }
+}
 
 /**
  * The tile thresholds, each one mirroring the corresponding Grafana panel.
@@ -569,6 +652,11 @@ export function describeRunGap(gap: RunGap | null): string | null {
  *
  * So a partly-known set says so out loud - "38 h across 3 of 4 points, 1
  * unknown" - rather than "38 h".
+ *
+ * A point whose buffer has never filled (2026-09-18) also contributes nothing,
+ * and is counted on its own line rather than as unknown: it has no horizon to
+ * run out of, has overwritten nothing, and calling it unknown would put six
+ * provably safe office points back in the amber it was just taken out of.
  */
 export interface Headroom {
   /**
@@ -580,6 +668,8 @@ export interface Headroom {
   known: number;
   /** Points with no computable horizon, which contributed nothing. */
   unknown: number;
+  /** Points whose buffer has never been seen full. Nothing to run out of. */
+  notFull: number;
   /** Active points considered. */
   total: number;
 }
@@ -588,8 +678,15 @@ export function computeHeadroom(points: PointHealthRow[]): Headroom {
   let hours: number | null = null;
   let known = 0;
   let unknown = 0;
+  let notFull = 0;
 
   for (const point of points) {
+    // Its own count, before the null check below would file it as unknown.
+    if (point.horizon.state === "not_full") {
+      notFull += 1;
+      continue;
+    }
+
     /**
      * Both halves are required. A null horizon is the unknown state; a null
      * `minutesAgo` is a point never collected at all, which has no "time since"
@@ -606,27 +703,41 @@ export function computeHeadroom(points: PointHealthRow[]): Headroom {
     if (hours === null || remaining < hours) hours = remaining;
   }
 
-  return { hours, known, unknown, total: points.length };
+  return { hours, known, unknown, notFull, total: points.length };
 }
 
 /**
  * The badge text. Never a bare number when part of the set is unknown.
  */
 export function describeHeadroom(headroom: Headroom): string {
-  const { hours, known, unknown, total } = headroom;
+  const { hours, known, unknown, notFull, total } = headroom;
 
   if (total === 0) return "No active points";
-  if (known === 0) return "Headroom unknown";
+  if (known === 0 && unknown === 0) {
+    // Every point is below capacity. There is no horizon anywhere to run out
+    // of, and "unknown" would be the wrong word for a set that is fully known.
+    return `No buffer full yet (${formatCount(notFull)} of ${formatCount(total)})`;
+  }
+  if (known === 0) {
+    return notFull === 0
+      ? "Headroom unknown"
+      : `Headroom unknown, ${formatCount(notFull)} not full yet`;
+  }
 
   const measure =
     hours !== null && hours <= 0 ? "No headroom left" : `${formatHours(hours ?? 0)} headroom`;
 
   // Fully known: the number stands on its own.
-  if (unknown === 0) return measure;
+  if (unknown === 0 && notFull === 0) return measure;
 
   // Partly known: the number is true of the points it covers and of no others,
-  // and the sentence has to carry that or it is a false clean answer.
-  return `${measure} across ${known} of ${total} points, ${unknown} unknown`;
+  // and the sentence has to carry that or it is a false clean answer. A
+  // not-full point is named as what it is, never folded into "unknown".
+  const rest = [
+    unknown > 0 ? `${unknown} unknown` : null,
+    notFull > 0 ? `${notFull} not full yet` : null,
+  ].filter((part) => part !== null);
+  return `${measure} across ${known} of ${total} points, ${rest.join(", ")}`;
 }
 
 // ------------------------------------------------------- B4: Point Explorer

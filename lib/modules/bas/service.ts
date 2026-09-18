@@ -11,6 +11,7 @@ import type {
   IngestRunRow,
   PointExplorer,
   PointHealthRow,
+  PointHorizon,
   PointOption,
   RollRisk,
   RunGap,
@@ -20,6 +21,7 @@ import type {
   TrendPoint,
   VanishedPoint,
 } from "./types";
+import { toHorizonState } from "./types";
 
 /**
  * The only thing in the platform that reads the `bas_*` tables.
@@ -381,6 +383,7 @@ const RISK_VALUES: readonly RollRisk[] = [
   "ok",
   "at_risk",
   "data_lost",
+  "buffer_not_full",
   "roll_horizon_unknown",
   "never_collected",
 ];
@@ -456,6 +459,7 @@ interface TotalsRow {
   risk_ok: number;
   risk_at_risk: number;
   risk_data_lost: number;
+  risk_buffer_not_full: number;
   risk_roll_horizon_unknown: number;
   risk_never_collected: number;
   comp_complete: number;
@@ -484,6 +488,9 @@ interface PointRow {
   minutes_ago: number | null;
   roll_horizon_hours: number | null;
   horizon_source: string | null;
+  horizon_state: string | null;
+  current_horizon_hours: number | null;
+  capacity: number | null;
   completeness: string | null;
   station_count: number | null;
   held_count: number | null;
@@ -609,6 +616,10 @@ export async function getCollectionHealth(
             AS risk_at_risk,
           count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'data_lost')::int
             AS risk_data_lost,
+          -- Counted so the screen can name it; NOT added to pointsAtRisk below.
+          -- A buffer below capacity has overwritten nothing.
+          count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'buffer_not_full')::int
+            AS risk_buffer_not_full,
           count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'roll_horizon_unknown')::int
             AS risk_roll_horizon_unknown,
           count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'never_collected')::int
@@ -627,8 +638,8 @@ export async function getCollectionHealth(
             AS comp_unknown,
           -- The shortest horizon among the active points we can compute one for.
           -- A silence longer than this destroyed records on the station.
-          -- horizon_s is the measured span of a full buffer where the station
-          -- reports one, else capacity x interval - see the view.
+          -- horizon_s is the SHORTEST full-buffer span ever observed where the
+          -- station has reported one, else capacity x interval - see the view.
           min(h.horizon_s) FILTER (WHERE h.is_active)::int AS min_roll_horizon_s,
           -- How many of the active points above are hidden, and how many of
           -- the at-risk ones. The table is not drawing these rows, and a
@@ -693,6 +704,9 @@ export async function getCollectionHealth(
         round(h.seconds_since_last_record / 60.0)::int AS minutes_ago,
         (h.horizon_s / 3600.0)::float8 AS roll_horizon_hours,
         h.horizon_source,
+        h.horizon_state,
+        (h.current_full_span_s / 3600.0)::float8 AS current_horizon_hours,
+        h.capacity,
         h.completeness,
         h.station_count,
         h.held_count,
@@ -897,10 +911,14 @@ export async function getCollectionHealth(
     ok: result.totals.risk_ok,
     at_risk: result.totals.risk_at_risk,
     data_lost: result.totals.risk_data_lost,
+    buffer_not_full: result.totals.risk_buffer_not_full,
     roll_horizon_unknown: result.totals.risk_roll_horizon_unknown,
     never_collected: result.totals.risk_never_collected,
   };
 
+  // buffer_not_full is deliberately not a term here. A buffer below capacity
+  // has overwritten nothing; "we have not measured the horizon" and "we may be
+  // losing data" are different statements (2026-09-18).
   const pointsAtRisk =
     riskCounts.data_lost +
     riskCounts.at_risk +
@@ -1028,6 +1046,13 @@ function toSiteOption(row: SiteRow): SiteOption {
 }
 
 function toPointHealthRow(row: PointRow): PointHealthRow {
+  const horizon: PointHorizon = {
+    state: toHorizonState(row.horizon_state),
+    hours: row.roll_horizon_hours,
+    currentHours: row.current_horizon_hours,
+    stationCount: row.station_count,
+    capacity: row.capacity,
+  };
   return {
     pointId: row.point_id.toString(),
     pointName: row.point_name,
@@ -1039,6 +1064,7 @@ function toPointHealthRow(row: PointRow): PointHealthRow {
     minutesAgo: row.minutes_ago,
     rollHorizonHours: row.roll_horizon_hours,
     horizonSource: toHorizonSource(row.horizon_source),
+    horizon,
     completeness: toCompleteness(row.completeness),
     stationCount: row.station_count,
     heldCount: row.held_count,

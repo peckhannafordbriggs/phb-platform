@@ -19,20 +19,34 @@
  * `roll_risk` from `bas_v_collection_health`, unchanged. The view is the only
  * thing that decides which one a point is in; nothing here re-derives it.
  *
- * `roll_horizon_unknown` means capacity or collection_interval_s has not been
- * filled in from Workbench, so the horizon cannot be computed and we do not know
- * whether records are being destroyed. **It is not `ok`.** See
- * `basRiskTone` in app/(modules)/bas/health-client.ts for where that is enforced
- * for display, and tests/bas-health-ui.test.ts for the assertion that it holds.
+ * `roll_horizon_unknown` means no horizon is known - the history's capacity is
+ * not recorded, or the station reports no record count - so we do not know
+ * whether records are being destroyed. **It is not `ok`.** See `basRiskTone`
+ * in app/(modules)/bas/health-client.ts for where that is enforced for
+ * display, and tests/bas-health-ui.test.ts for the assertion that it holds.
+ *
+ * `buffer_not_full` (2026-09-18) is the state that used to be folded into
+ * unknown and is not unknown at all: the station reports fewer records than
+ * the history's capacity, so the buffer has never been seen full and NOTHING
+ * has been overwritten. Six office points sat in this state and were counted
+ * at risk. It is informational - not a warning, not a risk, and there is
+ * nothing to fill in. A change-of-value trend has no interval; its horizon is
+ * measured once the buffer fills.
  */
 export type RollRisk =
   | "ok"
   | "at_risk"
   | "data_lost"
+  | "buffer_not_full"
   | "roll_horizon_unknown"
   | "never_collected";
 
-/** Every risk except `ok`. What the "points at risk of data loss" tile counts. */
+/**
+ * Every risk except `ok` and `buffer_not_full`. What the "points at risk of
+ * data loss" tile counts. `buffer_not_full` is absent on purpose: a buffer
+ * below capacity has overwritten nothing, and counting it would be the
+ * 2026-09-18 defect again.
+ */
 export const AT_RISK_ROLL_RISKS: readonly RollRisk[] = [
   "data_lost",
   "at_risk",
@@ -92,10 +106,62 @@ export const NOT_COMPLETE: readonly Completeness[] = [
 ];
 
 /**
- * Which horizon `rollHorizonHours` is: the span of a full buffer as the
- * station reported it (measured), capacity x interval (configured), or none.
+ * Which horizon `rollHorizonHours` is: the shortest span the station's full
+ * buffer has been seen to hold (measured), capacity x interval (configured),
+ * or none.
  */
 export type HorizonSource = "measured" | "configured" | null;
+
+/**
+ * `horizon_state` from `bas_v_collection_health`: the four-way word every
+ * screen that shows a horizon uses (2026-09-18).
+ *
+ *   measured     the buffer has been seen full. The horizon is the SHORTEST
+ *                full-buffer span ever observed, never the latest - a
+ *                change-of-value point's span moves with how hard the
+ *                equipment cycles, and Unit_Status_Mode went from two hours
+ *                to ten in a day. A point whose buffer has ever spanned two
+ *                hours is a two-hour point. The current span is carried
+ *                beside it for display.
+ *   configured   capacity x collection_interval_s: an interval trend with
+ *                both filled in from Workbench, and no full buffer measured.
+ *   not_full     the station reports fewer records than capacity. Nothing
+ *                overwritten, no horizon to measure yet, nothing to fill in.
+ *   unknown      capacity not recorded, or the station reports no count.
+ *                Amber, never green.
+ */
+export type HorizonState = "measured" | "configured" | "not_full" | "unknown";
+
+/** The view constrains this; a row is data. An unrecognised word is unknown, never measured. */
+export function toHorizonState(value: string | null): HorizonState {
+  return value === "measured" || value === "configured" || value === "not_full"
+    ? value
+    : "unknown";
+}
+
+/**
+ * One point's horizon, as both screens render it. Built by the service from
+ * the view and never re-derived on the client: the view is the only thing
+ * that decides which state a point is in.
+ */
+export interface PointHorizon {
+  state: HorizonState;
+  /**
+   * The horizon the guard and every risk figure use, in hours: the shortest
+   * full-buffer span for `measured`, capacity x interval for `configured`,
+   * null otherwise.
+   */
+  hours: number | null;
+  /**
+   * The span the station reports today, in hours, when its buffer is full
+   * now. Null when it is not. Display only - the guard never reads it.
+   */
+  currentHours: number | null;
+  /** The station's reported record count at the last check, or null. */
+  stationCount: number | null;
+  /** bas_points.capacity, or null when nobody has recorded it. */
+  capacity: number | null;
+}
 
 export interface CollectionHealthTotals {
   /** Active points. Inactive ones are excluded everywhere on this screen. */
@@ -159,6 +225,12 @@ export interface PointHealthRow {
    */
   rollHorizonHours: number | null;
   horizonSource: HorizonSource;
+  /**
+   * The same horizon with its state and the numbers the screen shows beside
+   * it. `horizon.hours` equals `rollHorizonHours`; the two older fields stay
+   * because the headroom badge and the oracle script read them.
+   */
+  horizon: PointHorizon;
   completeness: Completeness;
   /** The station's reported record count at the last check, or `null`. */
   stationCount: number | null;
@@ -823,6 +895,12 @@ export interface SettingsPoint {
   inactiveReason: InactiveReason | null;
   /** From bas_sync_checkpoints. Null when the collector has never passed this point. */
   completeness: Completeness | null;
+  /**
+   * The roll horizon as bas_v_collection_health states it, in the same three
+   * distinct states Collection Health shows. A point on a station attached to
+   * no building has no view row and reads unknown.
+   */
+  horizon: PointHorizon;
   lastRecordAt: string | null;
   /** is_visible. Shown and not editable until B8.3, and NEVER filtered on here. */
   visible: boolean;

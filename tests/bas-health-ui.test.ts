@@ -9,6 +9,7 @@ import { describeHiddenRisk } from "@/lib/modules/bas/types";
 import {
   AT_RISK_ROLL_RISKS,
   type Completeness,
+  type PointHorizon,
   type RollRisk,
   type RunGap,
 } from "@/lib/modules/bas/types";
@@ -16,7 +17,9 @@ import {
   COMPLETENESS_EXPLANATION,
   COMPLETENESS_LABEL,
   DEFAULT_WINDOW_DAYS,
+  RISK_EXPLANATION,
   RISK_LABEL,
+  describeHorizon,
   WINDOW_PRESETS,
   atRiskTone,
   atRiskShape,
@@ -55,6 +58,7 @@ const EVERY_RISK: RollRisk[] = [
   "ok",
   "at_risk",
   "data_lost",
+  "buffer_not_full",
   "roll_horizon_unknown",
   "never_collected",
 ];
@@ -94,9 +98,145 @@ const atRisk = (partial: Partial<Record<RollRisk, number>>): Record<RollRisk, nu
   ok: 0,
   at_risk: 0,
   data_lost: 0,
+  buffer_not_full: 0,
   roll_horizon_unknown: 0,
   never_collected: 0,
   ...partial,
+});
+
+/**
+ * A buffer below capacity is not a risk (2026-09-18).
+ *
+ * The live database held six office points at 300-odd of 500 records - a
+ * change-of-value buffer that had never filled and had overwritten nothing -
+ * and every one of them was counted at risk and told to fill in a collection
+ * interval that does not exist. "We have not measured the horizon" and "we may
+ * be losing data" are different statements, and this block is where the
+ * screen is held to the difference.
+ */
+describe("a buffer below capacity is not a risk", () => {
+  it("is neither the ok tone nor the warning tone", () => {
+    // Not green: green means "collected inside half a known horizon" and this
+    // point has no horizon. Not amber: there is nothing to act on.
+    expect(basRiskTone("buffer_not_full")).toBe("neutral");
+    expect(basRiskTone("buffer_not_full")).not.toBe("ok");
+    expect(basRiskTone("buffer_not_full")).not.toBe("warn");
+    expect(basRiskTone("buffer_not_full")).not.toBe("bad");
+  });
+
+  it("is labelled as its own state, distinct from unknown", () => {
+    expect(RISK_LABEL.buffer_not_full).toBe("Not full yet");
+    expect(RISK_LABEL.buffer_not_full).not.toBe(RISK_LABEL.roll_horizon_unknown);
+  });
+
+  it("is not in the at-risk set, so six such points read as none at risk", () => {
+    expect(AT_RISK_ROLL_RISKS).not.toContain("buffer_not_full");
+    const counts = atRisk({ ok: 2, buffer_not_full: 6 });
+    expect(atRiskShape(counts)).toBe("none");
+    expect(atRiskTone(counts)).toBe("ok");
+    expect(describeAtRisk(counts)).toBe("None at risk");
+    expect(riskBreakdown(counts)).toEqual([]);
+  });
+
+  it("does not dilute a real risk when it sits beside one", () => {
+    const counts = atRisk({ data_lost: 1, buffer_not_full: 6 });
+    expect(atRiskShape(counts)).toBe("losing");
+    expect(describeAtRisk(counts)).toBe("1 point losing data");
+  });
+
+  it("never sends the reader to Workbench or to an interval field", () => {
+    // There is nothing to fill in. An instruction that cannot be followed
+    // teaches people to ignore the warning, which is how a real one is missed.
+    expect(RISK_EXPLANATION.buffer_not_full).not.toMatch(/interval/i);
+    expect(RISK_EXPLANATION.buffer_not_full).not.toMatch(/Workbench/i);
+    expect(RISK_EXPLANATION.buffer_not_full).toMatch(/nothing has been overwritten/i);
+  });
+});
+
+/**
+ * The three distinct states of the roll-horizon cell, in words. Shared by the
+ * Collection Health table and the Settings Points list.
+ */
+describe("describeHorizon names three distinct states", () => {
+  const horizon = (over: Partial<PointHorizon>): PointHorizon => ({
+    state: "configured",
+    hours: 125,
+    currentHours: null,
+    stationCount: 500,
+    capacity: 500,
+    ...over,
+  });
+  const allWords = (h: PointHorizon) => {
+    const w = describeHorizon(h);
+    return `${w.label} ${w.detail ?? ""} ${w.title}`;
+  };
+
+  it("says how full a not-full buffer is, and nothing about filling anything in", () => {
+    const words = describeHorizon(
+      horizon({ state: "not_full", hours: null, stationCount: 320, capacity: 500 }),
+    );
+
+    expect(words.label).toBe("Not full yet");
+    expect(words.detail).toBe("320 of 500");
+    expect(words.tone).toBe("neutral");
+    // THE ASSERTION THIS FILE ADDS: no code path suggests an interval for a
+    // point whose buffer has never filled. The eight office points in this
+    // state are change-of-value trends, and a change-of-value trend has none.
+    const text = allWords(horizon({ state: "not_full", hours: null, stationCount: 320, capacity: 500 }));
+    expect(text).not.toMatch(/interval/i);
+    expect(text).not.toMatch(/Workbench/i);
+    expect(text).not.toMatch(/unknown/i);
+  });
+
+  it("guards a measured point on the SHORTEST span and shows today's beside it", () => {
+    // Unit_Status_Mode: two hours on 2026-09-17, ten hours on the 18th.
+    const words = describeHorizon(
+      horizon({ state: "measured", hours: 2, currentHours: 36_470 / 3600 }),
+    );
+
+    expect(words.label).toBe("2.0 h");
+    expect(words.detail).toBe("shortest seen · now 10.1 h");
+    expect(words.title).toMatch(/shortest/i);
+    expect(words.title).toMatch(/two-hour point/);
+    expect(allWords(horizon({ state: "measured", hours: 2, currentHours: 10.13 }))).not.toMatch(
+      /Workbench/i,
+    );
+  });
+
+  it("does not repeat the number when today's span is the shortest", () => {
+    const words = describeHorizon(horizon({ state: "measured", hours: 2, currentHours: 2 }));
+    expect(words.label).toBe("2.0 h");
+    expect(words.detail).toBe("shortest seen");
+  });
+
+  it("holds the shortest when the buffer is not full today", () => {
+    const words = describeHorizon(horizon({ state: "measured", hours: 2, currentHours: null, stationCount: 480 }));
+    expect(words.label).toBe("2.0 h");
+    expect(words.detail).toBe("shortest seen · not full now");
+  });
+
+  it("renders a configured horizon as the number, and says where it came from", () => {
+    const words = describeHorizon(horizon({ state: "configured", hours: 125 }));
+    expect(words.label).toBe("5.2 days");
+    expect(words.detail).toBeNull();
+    expect(words.title).toMatch(/Workbench/);
+  });
+
+  it("is amber for unknown, and asks for an interval ONLY for an interval trend", () => {
+    const missingCapacity = describeHorizon(horizon({ state: "unknown", hours: null, capacity: null, stationCount: 500 }));
+    expect(missingCapacity.label).toBe("Unknown");
+    expect(missingCapacity.tone).toBe("warn");
+    expect(missingCapacity.title).toMatch(/capacity/);
+    expect(missingCapacity.title).toMatch(/only for an interval trend/);
+    expect(missingCapacity.title).toMatch(/change-of-value trend has none/);
+
+    // Capacity known, but the station reports no count: nothing to fill in
+    // either - the buffer simply cannot be known to be full or not.
+    const noCount = describeHorizon(horizon({ state: "unknown", hours: null, capacity: 500, stationCount: null }));
+    expect(noCount.tone).toBe("warn");
+    expect(noCount.title).toMatch(/no record count/);
+    expect(noCount.title).not.toMatch(/interval/i);
+  });
 });
 
 /**
@@ -318,6 +458,7 @@ describe("the risk breakdown says which states make up the total", () => {
     ok: 0,
     at_risk: 0,
     data_lost: 0,
+    buffer_not_full: 0,
     roll_horizon_unknown: 0,
     never_collected: 0,
     ...partial,

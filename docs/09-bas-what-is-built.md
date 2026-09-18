@@ -168,7 +168,8 @@ completeness check found things the schema had no column for:
 |---|---|---|
 | `completeness`, `completeness_note`, `completeness_checked_at` | `bas_sync_checkpoints` | `unknown` / `complete` / `backfilling` / `incomplete` (a CHECK), and the comparison as a sentence |
 | `station_count`, `station_start`, `station_end`, `held_count` | `bas_sync_checkpoints` | What the station reported and what we hold inside its span, at the last pass |
-| `observed_span_s` | `bas_sync_checkpoints` | The station's `end − start`, re-measured every pass. A horizon only when the buffer is full |
+| `observed_span_s` | `bas_sync_checkpoints` | The station's `end − start`, re-measured every pass. The **current** span, for display |
+| `shortest_full_span_s` | `bas_sync_checkpoints` | The **shortest** `observed_span_s` ever recorded while the buffer was full. The guard. Written as `LEAST(existing, new)`, so it only gets shorter (`add_bas_shortest_full_span`, 2026-09-18) |
 | `points_incomplete`, `points_backfilling` | `bas_ingest_runs` | A run with any incomplete point is `partial`, never `ok` |
 | `clock_offset_s`, `clock_measured_at` | `bas_stations` | Station clock minus host clock, from `/obix/about`. PHBoffice: **+1336 s** |
 
@@ -179,6 +180,19 @@ let a change-of-value point stop reading `roll_horizon_unknown`: it needs only
 `capacity` filled in, and once the station reports `count >= capacity` the span
 is the horizon. See `WHY-ITS-BUILT-THIS-WAY` § 44 and `runbook.md` → *A BAS run
 says `ok` and a point holds nothing*.
+
+Replaced again on 2026-09-18 (`add_bas_shortest_full_span`), and the horizon a
+point is judged against changed meaning: `measured_horizon_s` is now the
+**shortest** full-buffer span ever observed — `LEAST(shortest_full_span_s,
+current span)` — not the latest, and three columns were appended:
+`shortest_full_span_s`, `current_full_span_s` and `horizon_state`
+(`measured` / `configured` / `not_full` / `unknown`). `roll_risk` gained
+`buffer_not_full`: the station reports fewer records than capacity, so nothing
+has been overwritten and the point is in no risk figure. The Collection Health
+table and the Settings Points list both render the horizon through one
+`describeHorizon`, so the three states are named identically on both. See
+`WHY-ITS-BUILT-THIS-WAY` § 48 and `runbook.md` → *The roll horizon column shows
+two numbers*, *A point reads "Not full yet"*.
 
 ### Four invariants
 

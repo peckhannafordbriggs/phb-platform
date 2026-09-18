@@ -524,6 +524,35 @@ that `RV` may be a separate controller needing its own station row.
 `runbook.md` → *Collection Health counts a point its table does not list*,
 *Collection Health says a point is no longer reported by the station*.
 
+**Roll-horizon reporting: three distinct states, and the shortest span
+(2026-09-18).** Read against live: eight office points with capacity 500 and
+no interval, all change-of-value trends. Six had never filled their buffer
+(`OperatingState` 320/500 over 2.5 years) and read `roll_horizon_unknown`
+beside an instruction to fill in an interval that does not exist; two were
+full and rolling, and the same `Unit_Status_Mode` that measured about two
+hours on the 17th measured ten on the 18th, because a COV point's span is how
+hard the equipment cycles - storing the latest reading let a quiet afternoon
+erase the evidence. Now: **configured** (capacity x interval), **measured**
+(the buffer has been seen full; the horizon is the **SHORTEST** full-buffer
+span ever observed, `bas_sync_checkpoints.shortest_full_span_s`, written as
+`LEAST(existing, new)` by the collector every pass and LEAST-ed again with
+the current span by the view; the current span is shown beside it), **not
+full yet** (`roll_risk = 'buffer_not_full'`, count below capacity, nothing
+overwritten, informational, in no risk figure, says how full - 320 of 500),
+and **unknown** (capacity not recorded or no count from the station; still
+amber). Backfilled from the one observation held; the value can only get
+shorter and a person may lower it, never raise it; the one reset is a capacity
+change on the station. **No code path suggests filling in an interval for a
+change-of-value point**: the collector words the unknown warning from the
+spacing of the readings it holds and stops when that spacing is uneven, and
+its `implied_interval_s()` guess is gone. Wherever a horizon is shown - sync
+output, `healthcheck.py`, Collection Health, the Points list - the three
+states are named distinctly. Every rule was mutation-checked, including the
+shortest-span logic replaced by the latest value. **Deploy the platform
+migration (`add_bas_shortest_full_span`) before the collector.**
+`WHY-ITS-BUILT-THIS-WAY.md` § 48; `runbook.md` → *The roll horizon column
+shows two numbers*, *A point reads "Not full yet"*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -585,7 +614,7 @@ well it is written.
 | `DEVELOPER-SETUP.md` | **Start here if you are a new developer.** Installs, databases, `.env.local`, seeds, first test run — and the things that bite before they bite | Someone about to write code |
 | `PLATFORM-CONTEXT.md` | **Read before designing a module.** What the platform already provides, the four-part integration contract, and the seven decisions a module makes for itself | Someone about to design one |
 | `HANDOVER.md` | **Start here if you are inheriting this.** What this is, what must not break, what will fail and when, what to do first | Whoever owns it after December 2026 |
-| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 47 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 48 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
 | `runbook.md` | Failure modes, recovery, what expires and when | Anyone with a broken thing |
 
 Setup instructions live in `DEVELOPER-SETUP.md` and the per-variable detail lives

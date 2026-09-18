@@ -913,11 +913,22 @@ model BasSyncCheckpoint {
   heldCount    Int?      @map("held_count")
 
   /// The station's reported end minus start, in seconds, re-measured every
-  /// pass. A HORIZON only when the buffer is full (station_count >= capacity),
-  /// which is the condition bas_v_collection_health applies. Distinct from
-  /// bas_points.roll_horizon_s on purpose: that one is configured, this one is
-  /// measured, and they answer different questions.
+  /// pass. The CURRENT span, for display. A horizon only when the buffer is
+  /// full (station_count >= capacity), and even then the guard reads
+  /// shortestFullSpanS, not this. Distinct from bas_points.roll_horizon_s on
+  /// purpose: that one is configured, this one is measured, and they answer
+  /// different questions.
   observedSpanS Int? @map("observed_span_s")
+
+  /// The SHORTEST full-buffer span ever observed, in seconds. The collector
+  /// writes LEAST(existing, this pass's full span) every pass, so it only
+  /// gets shorter - which is correct: a change-of-value point's span is how
+  /// hard the equipment cycles, and a point whose buffer has ever spanned two
+  /// hours is a two-hour point. bas_v_collection_health guards on this. NULL
+  /// means the buffer has never been seen full, which is not a risk. Never
+  /// raise it by hand; runbook.md -> *The roll horizon column shows two
+  /// numbers*.
+  shortestFullSpanS Int? @map("shortest_full_span_s")
 
   @@map("bas_sync_checkpoints")
 }

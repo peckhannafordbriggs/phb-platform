@@ -138,6 +138,7 @@ describe("the five tiles", () => {
       ok: 1,
       at_risk: 1,
       data_lost: 1,
+      buffer_not_full: 0,
       roll_horizon_unknown: 1,
       never_collected: 1,
     });
@@ -228,8 +229,90 @@ describe("the per-point table", () => {
 
     expect(byName(result, "SupplyAirTemp")?.rollHorizonHours).toBeCloseTo(125, 5);
     expect(byName(result, "SupplyAirTemp")?.horizonSource).toBe("configured");
+    expect(byName(result, "SupplyAirTemp")?.horizon).toEqual({
+      state: "configured",
+      hours: 125,
+      currentHours: null,
+      stationCount: 500,
+      capacity: 500,
+    });
     expect(byName(result, "Unknown")?.rollHorizonHours).toBeNull();
     expect(byName(result, "Unknown")?.horizonSource).toBeNull();
+    expect(byName(result, "Unknown")?.horizon.state).toBe("unknown");
+    expect(byName(result, "Unknown")?.horizon.capacity).toBeNull();
+  });
+
+  /**
+   * The three states, through the service (2026-09-18). The view's arithmetic
+   * is proved in tests/bas-views.test.ts; this proves the service carries each
+   * state to the screen and that the tile arithmetic treats them differently.
+   */
+  describe("a buffer below capacity, and the shortest measured span", () => {
+    /** Make the fixture's horizon-less point into OperatingState: 320 of 500. */
+    const notFull = async (pointId: bigint) => {
+      await testDb.basPoint.update({ where: { pointId }, data: { capacity: 500 } });
+      await testDb.basSyncCheckpoint.update({
+        where: { pointId },
+        data: { stationCount: 320, observedSpanS: 78_000_000 },
+      });
+    };
+
+    it("is its own state, with how full it is, and is not at risk", async () => {
+      await notFull(fixture.unknown);
+      const result = await health();
+
+      const point = byName(result, "Unknown");
+      expect(point?.risk).toBe("buffer_not_full");
+      expect(point?.horizon).toEqual({
+        state: "not_full",
+        hours: null,
+        currentHours: null,
+        stationCount: 320,
+        capacity: 500,
+      });
+      expect(result.totals.riskCounts.buffer_not_full).toBe(1);
+      expect(result.totals.riskCounts.roll_horizon_unknown).toBe(0);
+      // Was 4 with this point counted as unknown.
+      expect(result.totals.pointsAtRisk).toBe(3);
+    });
+
+    it("lets a building whose only non-ok point is not full read as none at risk", async () => {
+      // Site B: one ok point and one that read roll_horizon_unknown. The
+      // office's shape is six of these beside two rolling points; here it is
+      // one, and it is enough to prove the hero goes green for the right
+      // reason - nothing is at risk - rather than staying amber for the wrong
+      // one.
+      await notFull(fixture.bUnknown);
+      const b = await getCollectionHealth(viewer, { siteId: fixture.siteBId });
+
+      expect(b.totals.riskCounts.buffer_not_full).toBe(1);
+      expect(b.totals.pointsAtRisk).toBe(0);
+      expect(atRiskTone(b.totals.riskCounts)).toBe("ok");
+    });
+
+    it("guards on the shortest full span and carries today's span beside it", async () => {
+      // Unit_Status_Mode: seen at 2 h once, reporting 10.1 h today, last
+      // record 3 h ago. Inside today's span, past the shortest: data_lost.
+      await testDb.basPoint.update({ where: { pointId: fixture.unknown }, data: { capacity: 500 } });
+      await testDb.basSyncCheckpoint.update({
+        where: { pointId: fixture.unknown },
+        data: {
+          stationCount: 500,
+          observedSpanS: 36_470,
+          shortestFullSpanS: 7200,
+          lastRecordTs: new Date(fixture.now.getTime() - 3 * 3_600_000),
+        },
+      });
+      const result = await health();
+
+      const point = byName(result, "Unknown");
+      expect(point?.risk).toBe("data_lost");
+      expect(point?.horizon.state).toBe("measured");
+      expect(point?.horizon.hours).toBe(2);
+      expect(point?.rollHorizonHours).toBe(2);
+      expect(point?.horizon.currentHours ?? 0).toBeCloseTo(36_470 / 3600, 5);
+      expect(point?.horizon.stationCount).toBe(500);
+    });
   });
 
   it("carries the completeness verdict and both counts per point", async () => {
@@ -612,6 +695,7 @@ describe("the building filter", () => {
       ok: 1,
       at_risk: 0,
       data_lost: 0,
+      buffer_not_full: 0,
       roll_horizon_unknown: 1,
       never_collected: 0,
     });
