@@ -44,6 +44,7 @@ import {
   withFilter,
 } from "./filters";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
+import { formatAxisTick, formatTooltipValue, valueAxis } from "./value-axis";
 
 /**
  * Point Explorer - what one point has been doing.
@@ -491,39 +492,14 @@ function TrendPanel({
    *
    * Mouse only, and deliberately not the only way to narrow the view - the time
    * range control above does the same job for anyone not using a pointer.
+   *
+   * The state lives here and the chart is `TrendChart`, below, which takes the
+   * zoom as a prop. That split is what lets a test render the chart at a zoom
+   * narrow enough to reproduce the raw-float axis without a mouse.
    */
-  const [zoom, setZoom] = useState<{ from: number; to: number } | null>(null);
+  const [zoom, setZoom] = useState<TrendZoom | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragTo, setDragTo] = useState<number | null>(null);
-
-  const domain: [number, number] | undefined =
-    zoom === null ? undefined : [zoom.from, zoom.to];
-
-  /**
-   * The y range of what is actually on screen.
-   *
-   * Recharts would otherwise keep scaling y to the whole window, so zooming into
-   * a quiet stretch would show a flat line across the middle of a tall axis and
-   * hide the very detail the zoom was for. Nulls are skipped, not treated as
-   * zero - a null is an absent reading, and folding it into the range would drag
-   * the axis to zero and flatten everything real.
-   */
-  const yDomain = ((): [number | "auto", number | "auto"] => {
-    if (zoom === null) return ["auto", "auto"];
-
-    const visible = data.trend
-      .filter((point) => point.tsMs >= zoom.from && point.tsMs <= zoom.to)
-      .map((point) => point.value)
-      .filter((value): value is number => value !== null);
-
-    if (visible.length === 0) return ["auto", "auto"];
-
-    const min = Math.min(...visible);
-    const max = Math.max(...visible);
-    // A flat stretch would otherwise collapse to a zero-height band.
-    const pad = max === min ? Math.max(Math.abs(max) * 0.05, 0.5) : (max - min) * 0.08;
-    return [min - pad, max + pad];
-  })();
 
   function commitZoom(): void {
     if (dragFrom === null || dragTo === null || dragFrom === dragTo) {
@@ -536,6 +512,11 @@ function TrendPanel({
     setDragFrom(null);
     setDragTo(null);
   }
+
+  const selection: TrendZoom | null =
+    dragFrom === null || dragTo === null
+      ? null
+      : { from: Math.min(dragFrom, dragTo), to: Math.max(dragFrom, dragTo) };
 
   return (
     <Panel title="Trend" description={gapSummary}>
@@ -578,146 +559,24 @@ function TrendPanel({
           )}
 
           <div className="h-[22rem] select-none px-3 pb-3 pt-1">
+            {/*
+              ResponsiveContainer hands its measured size to the chart through
+              context, so the chart component in between needs no width or
+              height of its own here. A test gives it both directly.
+            */}
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart
-                data={data.trend}
-                margin={{ top: 8, right: 12, bottom: 4, left: 4 }}
-                onMouseDown={(e: { activeLabel?: string | number }) => {
-                  const at = Number(e?.activeLabel);
-                  if (Number.isFinite(at)) setDragFrom(at);
+              <TrendChart
+                trend={data.trend}
+                gaps={data.trendGaps}
+                unit={unit}
+                zoom={zoom}
+                selection={selection}
+                onDragStart={setDragFrom}
+                onDragMove={(at) => {
+                  if (dragFrom !== null) setDragTo(at);
                 }}
-                onMouseMove={(e: { activeLabel?: string | number }) => {
-                  if (dragFrom === null) return;
-                  const at = Number(e?.activeLabel);
-                  if (Number.isFinite(at)) setDragTo(at);
-                }}
-                onMouseUp={commitZoom}
-                onMouseLeave={commitZoom}
-              >
-                <defs>
-                  {/*
-                    The wash under the line, in the module's cyan. It fades to
-                    nothing well before the axis so it reads as depth rather than
-                    as a filled region with a value of its own.
-                  */}
-                  <linearGradient id="basTrendFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop
-                      offset="0%"
-                      stopColor="var(--module-accent, var(--phb-cyan))"
-                      stopOpacity={0.28}
-                    />
-                    <stop
-                      offset="85%"
-                      stopColor="var(--module-accent, var(--phb-cyan))"
-                      stopOpacity={0}
-                    />
-                  </linearGradient>
-                </defs>
-                {/* Neutral grid, horizontal only. It is a reference, not a feature. */}
-                <CartesianGrid
-                  stroke="var(--neutral-200)"
-                  strokeDasharray="2 4"
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="tsMs"
-                  type="number"
-                  scale="time"
-                  // allowDataOverflow is what makes the domain a zoom rather
-                  // than a suggestion.
-                  allowDataOverflow
-                  domain={domain ?? ["dataMin", "dataMax"]}
-                  tickFormatter={(ms: number) => formatChartTick(ms)}
-                  stroke="var(--muted)"
-                  tick={{ fontSize: 11 }}
-                  minTickGap={48}
-                />
-                <YAxis
-                  stroke="var(--muted)"
-                  tick={{ fontSize: 11 }}
-                  width={56}
-                  domain={yDomain}
-                  label={{
-                    value: axisLabel(unit),
-                    angle: -90,
-                    position: "insideLeft",
-                    style: { fontSize: 11, fill: "var(--muted)" },
-                  }}
-                />
-                <Tooltip
-                  labelFormatter={(ms) =>
-                    typeof ms === "number"
-                      ? formatTimestamp(new Date(ms).toISOString())
-                      : ""
-                  }
-                  formatter={(value) => [
-                    typeof value === "number" ? formatValue(value, unit) : "—",
-                    "reading",
-                  ]}
-                  contentStyle={{
-                    fontSize: "0.75rem",
-                    border: "1px solid var(--border)",
-                    borderRadius: "0.625rem",
-                  }}
-                />
-                {/*
-                  Drawn before the Line so the shading sits underneath it. Each
-                  band covers a stretch with no readings at all.
-                */}
-                {data.trendGaps.map((gap) => (
-                  <ReferenceArea
-                    key={gap.fromMs}
-                    x1={gap.fromMs}
-                    x2={gap.toMs}
-                    // Maroon, from the palette, and deliberately NOT the module
-                    // accent: a gap is not sensor data and must not read as part
-                    // of the series.
-                    fill="var(--phb-maroon)"
-                    fillOpacity={0.09}
-                    stroke="var(--phb-maroon)"
-                    strokeOpacity={0.4}
-                    strokeDasharray="3 3"
-                    // Clipped, not dropped: a gap half in view shows its half.
-                    ifOverflow="hidden"
-                  />
-                ))}
-                {/* The in-progress drag selection. */}
-                {dragFrom !== null && dragTo !== null && (
-                  <ReferenceArea
-                    x1={Math.min(dragFrom, dragTo)}
-                    x2={Math.max(dragFrom, dragTo)}
-                    fill="var(--module-accent, var(--phb-cyan))"
-                    fillOpacity={0.12}
-                    ifOverflow="hidden"
-                  />
-                )}
-                <Area
-                  /*
-                    Curved, because a smooth line reads as a physical quantity
-                    rather than a set of measurements joined with a ruler.
-                    `monotone` specifically: it will not overshoot between
-                    samples, so the curve never draws a peak the sensor did not
-                    record.
-                  */
-                  type="monotone"
-                  dataKey="value"
-                  // One accent, and it is the module's. Sensor data is the content.
-                  stroke="var(--module-accent, var(--phb-cyan))"
-                  strokeWidth={1.75}
-                  fill="url(#basTrendFill)"
-                  dot={false}
-                  activeDot={{ r: 3 }}
-                  /*
-                    The whole point, and it survives the curve and every zoom
-                    level. Recharts defaults this to false, but it is stated
-                    because a future edit that flipped it would silently draw a
-                    line across 22.7 hours of destroyed data. The curve joins
-                    samples; it does not invent them across a null.
-                  */
-                  connectNulls={false}
-                  isAnimationActive={false}
-                />
-              </AreaChart>
+                onDragEnd={commitZoom}
+              />
             </ResponsiveContainer>
           </div>
 
@@ -735,6 +594,239 @@ function TrendPanel({
         </>
       )}
     </Panel>
+  );
+}
+
+/** A time range on the trend, in epoch milliseconds. */
+export interface TrendZoom {
+  from: number;
+  to: number;
+}
+
+/** The axis and tooltip type size. One constant, because the gutter is sized from it. */
+const CHART_FONT_SIZE = 11;
+
+/**
+ * The trend chart itself - everything inside the ResponsiveContainer.
+ *
+ * Exported so a test can render it at a chosen zoom with a fixed size. It has
+ * no state: the zoom, the in-progress drag selection and the three drag
+ * handlers all belong to `TrendPanel`.
+ */
+export function TrendChart({
+  trend,
+  gaps,
+  unit,
+  zoom,
+  selection,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+  width,
+  height,
+  tooltipIndex,
+}: {
+  trend: PointExplorerData["trend"];
+  gaps: PointExplorerData["trendGaps"];
+  unit: string | null;
+  zoom: TrendZoom | null;
+  /** The drag in progress, or null when the pointer is up. */
+  selection: TrendZoom | null;
+  onDragStart: (atMs: number) => void;
+  onDragMove: (atMs: number) => void;
+  onDragEnd: () => void;
+  /** Only a test sets these. In the page the ResponsiveContainer supplies both. */
+  width?: number;
+  height?: number;
+  /**
+   * Opens the tooltip on one sample without a pointer. Only a test sets it:
+   * jsdom lays nothing out, so no synthetic mouse event can land on the plot,
+   * and this is how the tooltip's wording gets asserted as rendered.
+   */
+  tooltipIndex?: number;
+}) {
+  const domain: [number, number] | ["dataMin", "dataMax"] =
+    zoom === null ? ["dataMin", "dataMax"] : [zoom.from, zoom.to];
+
+  /**
+   * The y-axis is decided here, at EVERY zoom level, and handed to Recharts as
+   * a list of ticks rather than a range.
+   *
+   * Recharts picks round ticks for a domain it derives itself, but given an
+   * explicit domain - which a zoom is - it appends the raw endpoints as ticks
+   * and stops rounding once the range is narrow. Zoomed to under a degree the
+   * axis read "72.02734375", which is a genuine float32 reading and a useless
+   * label, and the 56px gutter clipped it. So `valueAxis` chooses the ticks
+   * from the values on screen, at a step no finer than the label's decimals,
+   * formats every label with the decimals the point's unit calls for, and
+   * sizes the gutter to the widest one. The domain IS the tick range, so the
+   * two cannot disagree.
+   *
+   * The values on screen: the whole series at default zoom, the samples inside
+   * the window otherwise. Nulls are skipped, not treated as zero - a null is an
+   * absent reading, and folding it into the range would drag the axis to zero
+   * and flatten everything real. Nothing about the data changes: `trend` is
+   * plotted as delivered, float32 values and all.
+   */
+  const visibleValues = trend
+    .filter(
+      (point) =>
+        zoom === null || (point.tsMs >= zoom.from && point.tsMs <= zoom.to),
+    )
+    .map((point) => point.value)
+    .filter((value): value is number => value !== null);
+  const axis = valueAxis(visibleValues, unit, { fontSize: CHART_FONT_SIZE });
+
+  return (
+    <AreaChart
+      data={trend}
+      width={width}
+      height={height}
+      margin={{ top: 8, right: 12, bottom: 4, left: 4 }}
+      onMouseDown={(e: { activeLabel?: string | number }) => {
+        const at = Number(e?.activeLabel);
+        if (Number.isFinite(at)) onDragStart(at);
+      }}
+      onMouseMove={(e: { activeLabel?: string | number }) => {
+        const at = Number(e?.activeLabel);
+        if (Number.isFinite(at)) onDragMove(at);
+      }}
+      onMouseUp={onDragEnd}
+      onMouseLeave={onDragEnd}
+    >
+      <defs>
+        {/*
+          The wash under the line, in the module's cyan. It fades to
+          nothing well before the axis so it reads as depth rather than
+          as a filled region with a value of its own.
+        */}
+        <linearGradient id="basTrendFill" x1="0" y1="0" x2="0" y2="1">
+          <stop
+            offset="0%"
+            stopColor="var(--module-accent, var(--phb-cyan))"
+            stopOpacity={0.28}
+          />
+          <stop
+            offset="85%"
+            stopColor="var(--module-accent, var(--phb-cyan))"
+            stopOpacity={0}
+          />
+        </linearGradient>
+      </defs>
+      {/* Neutral grid, horizontal only. It is a reference, not a feature. */}
+      <CartesianGrid
+        stroke="var(--neutral-200)"
+        strokeDasharray="2 4"
+        vertical={false}
+      />
+      <XAxis
+        dataKey="tsMs"
+        type="number"
+        scale="time"
+        // allowDataOverflow is what makes the domain a zoom rather
+        // than a suggestion.
+        allowDataOverflow
+        domain={domain}
+        tickFormatter={(ms: number) => formatChartTick(ms)}
+        stroke="var(--muted)"
+        tick={{ fontSize: CHART_FONT_SIZE }}
+        minTickGap={48}
+      />
+      <YAxis
+        stroke="var(--muted)"
+        tick={{ fontSize: CHART_FONT_SIZE }}
+        // Sized from the widest label, not a constant. See valueAxis.
+        width={axis.width}
+        domain={axis.domain}
+        ticks={axis.ticks}
+        // Every tick we chose is drawn. Recharts would otherwise thin the
+        // list by its own measurement, and the list is already sized to fit.
+        interval={0}
+        tickFormatter={(value: number) => formatAxisTick(value, axis.decimals)}
+        label={{
+          value: axisLabel(unit),
+          angle: -90,
+          position: "insideLeft",
+          style: { fontSize: CHART_FONT_SIZE, fill: "var(--muted)" },
+        }}
+      />
+      <Tooltip
+        defaultIndex={tooltipIndex}
+        labelFormatter={(ms) =>
+          typeof ms === "number"
+            ? formatTimestamp(new Date(ms).toISOString())
+            : ""
+        }
+        // One more decimal than the axis, with the unit. Still a display
+        // choice: the value in the payload is the float32 reading itself.
+        formatter={(value) => [
+          typeof value === "number" ? formatTooltipValue(value, unit) : "—",
+          "reading",
+        ]}
+        contentStyle={{
+          fontSize: "0.75rem",
+          border: "1px solid var(--border)",
+          borderRadius: "0.625rem",
+        }}
+      />
+      {/*
+        Drawn before the Line so the shading sits underneath it. Each
+        band covers a stretch with no readings at all.
+      */}
+      {gaps.map((gap) => (
+        <ReferenceArea
+          key={gap.fromMs}
+          x1={gap.fromMs}
+          x2={gap.toMs}
+          // Maroon, from the palette, and deliberately NOT the module
+          // accent: a gap is not sensor data and must not read as part
+          // of the series.
+          fill="var(--phb-maroon)"
+          fillOpacity={0.09}
+          stroke="var(--phb-maroon)"
+          strokeOpacity={0.4}
+          strokeDasharray="3 3"
+          // Clipped, not dropped: a gap half in view shows its half.
+          ifOverflow="hidden"
+        />
+      ))}
+      {/* The in-progress drag selection. */}
+      {selection !== null && (
+        <ReferenceArea
+          x1={selection.from}
+          x2={selection.to}
+          fill="var(--module-accent, var(--phb-cyan))"
+          fillOpacity={0.12}
+          ifOverflow="hidden"
+        />
+      )}
+      <Area
+        /*
+          Curved, because a smooth line reads as a physical quantity
+          rather than a set of measurements joined with a ruler.
+          `monotone` specifically: it will not overshoot between
+          samples, so the curve never draws a peak the sensor did not
+          record.
+        */
+        type="monotone"
+        dataKey="value"
+        // One accent, and it is the module's. Sensor data is the content.
+        stroke="var(--module-accent, var(--phb-cyan))"
+        strokeWidth={1.75}
+        fill="url(#basTrendFill)"
+        dot={false}
+        activeDot={{ r: 3 }}
+        /*
+          The whole point, and it survives the curve and every zoom
+          level. Recharts defaults this to false, but it is stated
+          because a future edit that flipped it would silently draw a
+          line across 22.7 hours of destroyed data. The curve joins
+          samples; it does not invent them across a null.
+        */
+        connectNulls={false}
+        isAnimationActive={false}
+      />
+    </AreaChart>
   );
 }
 

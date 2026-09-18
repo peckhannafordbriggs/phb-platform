@@ -4983,6 +4983,22 @@ checksum:
 
 ---
 
+## `npm run build` fails with `PageNotFoundError: Cannot find module for page: /_document`
+
+**Symptom.** The build compiles, then dies at *Collecting page data* with that
+error. Nothing in the repository is wrong, and the same build passes a minute
+later.
+
+**Cause.** The test suite was running at the same time.
+`tests/deploy-guards.test.ts` and `tests/migrate-target.test.ts` spawn Next
+processes that write into the same `.next` directory the build is filling.
+Seen 2026-09-18 with the full suite in the background.
+
+**Fix.** Let `npm test` finish, then run the build on its own. Run them one
+after the other, never together.
+
+---
+
 ## The suite refuses to start when the test database is behind
 
 The guard the earlier entry asks for now exists: `tests/global-setup.ts`, wired
@@ -6806,6 +6822,51 @@ It needs, and this is not optional:
 - an explicit refusal — not a silent overlay — when a point has no unit, because
   an unknown unit cannot be shown to match any other;
 - the unit on every series in the legend and the tooltip.
+
+---
+
+## The trend chart's y-axis prints long decimals, or its labels are clipped
+
+**Symptom.** Zoomed into a narrow stretch of the Point Explorer trend, the
+y-axis reads `72.02734375` or `71.91999816894531`, cut off at the left edge
+of the chart. At the default zoom it reads `72.0`, `74.0`, `76.0` and looks
+fine.
+
+**The number is right; the axis was wrong.** Niagara stores readings as
+32-bit floats. 72.02734375 is exactly 72 + 7/256, and 71.91999816894531 is
+how a float32 writes 71.92. `bas_readings.value_num` holds exactly what the
+station sent, the API carries it through unchanged, and it must stay that
+way — the distinct-values tile, the averages and anything that exports the
+rows depend on the stored value being the sensor's. **Do not round in SQL, in
+the service or in the route.**
+
+**Cause.** Recharts picks round ticks when it derives the domain itself. A
+zoom hands it an explicit domain, and on that path it appends the raw domain
+endpoints as ticks and stops choosing round steps once the range is small. A
+fixed 56px gutter then clipped the result.
+
+**Fixed 2026-09-18.** The chart chooses its own ticks at every zoom level
+(`valueAxis` in `app/(modules)/bas/value-axis.ts`) and gives Recharts the
+list, the domain and a gutter width sized from the widest label. Labels carry
+a fixed number of decimals by unit kind: temperature 1, percent 0, pressure 2,
+anything else or no unit 2. The tooltip shows one more. The step is never
+finer than the label's precision, so two ticks can never print the same
+label. `tests/bas-chart-axis.test.tsx` renders the real chart in a DOM at a
+0.09 °F zoom on real office readings and reads the labels back.
+
+**If it comes back.** The `<YAxis>` in `point-explorer.tsx` must take
+`ticks`, `domain` and `width` from `valueAxis`, with `interval={0}`. A range
+in `domain` without `ticks` is the defect. Run the test file; it fails on the
+labels.
+
+**A new unit shows two decimals when it should not.** `unitKind` matches a
+unit by its whole normalised name against the lists in `value-axis.ts`. Add
+the name Niagara uses to the right list. Nothing else changes.
+
+**The other charts.** Collection Health's run chart plots whole records per
+run, not readings, with `allowDecimals={false}` and a domain Recharts derives
+itself; it has never shown the defect and was left alone. Grafana reads the
+same rows and formats its own axis; it is unaffected either way.
 
 ---
 

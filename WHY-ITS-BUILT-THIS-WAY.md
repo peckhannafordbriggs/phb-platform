@@ -1185,6 +1185,48 @@ they share it; if only one fails, they have stopped. Write `roll_risk <> 'ok'`
 or `.risk !== "ok"` anywhere under `lib/` or `app/` and the source-text guard
 fails. Both mutations were run and are recorded in the test file.
 
+## 50 · The chart chooses its own axis, and a reading is never rounded to make one readable
+
+**Decision.** The Point Explorer's y-axis is decided by the platform, not by
+Recharts: `valueAxis` (`app/(modules)/bas/value-axis.ts`) chooses round tick
+values from whatever is on screen, at every zoom level, and the chart hands
+Recharts the list, with the domain equal to the tick range. Every label
+carries a fixed number of decimals chosen by the kind of unit - a tenth of a
+degree for a temperature, whole percent, hundredths for a pressure, two for
+anything else or for no unit - and the tick step is never finer than that
+precision. The tooltip shows one more decimal than the axis. The gutter is
+sized from the widest label. The stored value, the API response and the
+chart's data array are untouched.
+
+**Why.** Zoomed to under a degree, the axis read `72.02734375`, clipped at
+the gutter. The number is real. Niagara sends 32-bit floats, 7/256 is exactly
+representable, and 71.91999816894531 is how a float32 says 71.92 - it is what
+the office's VAV-1 zone sensor reported on 17 September 2026. The database
+holds those values exactly and must go on doing so: a rounded reading is a
+wrong reading, and the distinct-values tile that found a dead sensor at the
+office counts exact values. The defect was in the display. Recharts rounds
+ticks for a domain it derives itself, but a zoom is an explicit domain, and
+on that path it appends the raw endpoints as ticks and stops rounding once
+the range is narrow. Two obvious fixes were both wrong: rounding the data
+would have made the tiles lie, and a label formatter alone would have printed
+71.9 four times over four different ticks. So the step is bounded below by
+the label's own precision, and when the zoom is narrower than one step the
+ticks bracket the data rather than subdividing it.
+
+Recharts also renders no axis at all on the server - `renderToStaticMarkup`
+gives back an empty wrapper - so the proof had to render the real chart in a
+DOM. jsdom was added as a dev dependency for that one file.
+
+**What breaks if you undo it.** Give the `YAxis` a range instead of the tick
+list and `tests/bas-chart-axis.test.tsx` fails on the labels it reads back
+from the SVG at a sub-degree zoom on real office readings. Round in the
+service or the route and *carries a float32 value exactly as stored* fails
+in `tests/bas-point-explorer.test.ts`. Put the gutter back to a constant and
+the width assertion fails. Swap the tooltip back to the two-decimal tile
+formatter and the rendered tooltip test fails. The axis test throws, rather
+than passing, when it finds no ticks - a server-rendered chart would
+otherwise have passed it by having nothing to assert against.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

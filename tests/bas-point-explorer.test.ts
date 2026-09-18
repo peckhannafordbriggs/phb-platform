@@ -32,6 +32,7 @@ import {
   resetDb,
   seedBasModule,
   seedChangeOrdersModule,
+  testDb,
 } from "./db";
 
 const authMock = vi.mocked(auth);
@@ -458,6 +459,48 @@ describe("the route is behind the module grant", () => {
 
   it("rejects a window it does not serve", async () => {
     expect((await pointExplorerRoute(request("?days=400"))).status).toBe(422);
+  });
+});
+
+describe("a reading keeps its full precision through the API", () => {
+  /**
+   * Niagara sends 32-bit floats. 72.02734375 is exactly 72 + 7/256 and
+   * 71.91999816894531 is how a float32 says 71.92 - the office VAV-1 zone
+   * sensor reported the second on 2026-09-17. The chart's axis rounds its
+   * LABELS to a tenth of a degree (tests/bas-chart-axis.test.tsx); nothing
+   * between the table and the browser may round the value, or the tiles,
+   * the distinct-values count and the export would all be reading a number
+   * the sensor never sent.
+   */
+  const FLOAT32_READINGS = [72.02734375, 71.91999816894531];
+
+  it("carries a float32 value exactly as stored, in the object and in the JSON", async () => {
+    await testDb.basReading.createMany({
+      data: FLOAT32_READINGS.map((value, index) => ({
+        pointId: fixture.sat,
+        ts: new Date(fixture.now.getTime() - (index + 1) * 60_000),
+        valueNum: value,
+      })),
+    });
+
+    const result = await explore();
+    const values = result.trend.map((point) => point.value);
+    for (const value of FLOAT32_READINGS) {
+      expect(values).toContain(value);
+    }
+    // "Latest" is the raw column too - the newest row is the first reading above.
+    expect(result.stats.latest).toBe(FLOAT32_READINGS[0]);
+
+    const response = await pointExplorerRoute(
+      request(`?point=${fixture.sat}&days=7`),
+    );
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(text).toContain("72.02734375");
+    expect(text).toContain("71.91999816894531");
+    // And not a rounded twin beside it.
+    expect(text).not.toMatch(/"value":71\.92[,}]/);
+    expect(text).not.toMatch(/"value":72\.03[,}]/);
   });
 });
 
