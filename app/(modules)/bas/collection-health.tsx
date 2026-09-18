@@ -55,6 +55,7 @@ import {
   describeHeadroom,
   describeHiddenFromTable,
   describeVanished,
+  reportingPoints,
   splitHiddenPoints,
   vanishedTone,
   type Tone,
@@ -785,18 +786,6 @@ function VanishedCard({
       )}
     </section>
   );
-}
-
-/**
- * Active points that are actually reporting.
- *
- * Anything in the `ok` risk state: collected inside half its roll horizon. A
- * point that has never been collected, or whose horizon nobody filled in, is not
- * reporting for this purpose - the ratio would otherwise call a silent sensor
- * healthy.
- */
-function reportingPoints(points: { risk: RollRisk }[]): number {
-  return points.filter((point) => point.risk === "ok").length;
 }
 
 /**

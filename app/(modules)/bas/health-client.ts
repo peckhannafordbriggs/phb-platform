@@ -1,3 +1,4 @@
+import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk } from "@/lib/modules/bas/types";
 import type {
   BasSettingsTree,
   CollectionHealth,
@@ -319,7 +320,7 @@ export function unclassifiedTone(count: number): Tone {
 export type AtRiskShape = "none" | "losing" | "unknown";
 
 export function atRiskShape(counts: Record<RollRisk, number>): AtRiskShape {
-  const total = RISK_SEVERITY_ORDER.reduce((sum, risk) => sum + counts[risk], 0);
+  const total = atRiskCount(counts);
   if (total === 0) return "none";
   return counts.data_lost > 0 ? "losing" : "unknown";
 }
@@ -356,7 +357,7 @@ export function atRiskTone(counts: Record<RollRisk, number>): Tone {
  * of either.
  */
 export function describeAtRisk(counts: Record<RollRisk, number>): string {
-  const total = RISK_SEVERITY_ORDER.reduce((sum, risk) => sum + counts[risk], 0);
+  const total = atRiskCount(counts);
   const points = `${formatCount(total)} point${total === 1 ? "" : "s"}`;
 
   switch (atRiskShape(counts)) {
@@ -397,22 +398,31 @@ export function runGapTone(gap: RunGap | null): Tone {
  *
  * The tile's total answers "is anything wrong"; this answers "what kind", which
  * is the difference between "go fill in capacity in Workbench" and "data is
- * being destroyed right now".
+ * being destroyed right now". Walks AT_RISK_ROLL_RISKS - the one list, which
+ * is already in severity order - so the breakdown cannot name a state the
+ * total does not count, or miss one it does. There used to be a second list
+ * here; it agreed with the first by coincidence.
  */
-export const RISK_SEVERITY_ORDER: readonly RollRisk[] = [
-  "data_lost",
-  "at_risk",
-  "roll_horizon_unknown",
-  "never_collected",
-];
-
 export function riskBreakdown(
   counts: Record<RollRisk, number>,
 ): Array<{ risk: RollRisk; count: number }> {
-  return RISK_SEVERITY_ORDER.filter((risk) => counts[risk] > 0).map((risk) => ({
+  return AT_RISK_ROLL_RISKS.filter((risk) => counts[risk] > 0).map((risk) => ({
     risk,
     count: counts[risk],
   }));
+}
+
+/**
+ * Active points that are actually reporting: the ones NOT at risk, by the one
+ * predicate. Drives the "N of M reporting" badge on the Active points tile.
+ *
+ * Not "risk === ok". That was a third definition of the same question, and it
+ * disagreed with the tile: a buffer that has never filled is not at risk, so
+ * the tile said none at risk while this badge said two of eight reporting.
+ * The badge and the tile must be the same claim, inverted.
+ */
+export function reportingPoints(points: readonly { risk: RollRisk }[]): number {
+  return points.filter((point) => !isAtRisk(point.risk)).length;
 }
 
 // ---------------------------------------------------------- completeness
@@ -681,20 +691,22 @@ export function computeHeadroom(points: PointHealthRow[]): Headroom {
   let notFull = 0;
 
   for (const point of points) {
-    // Its own count, before the null check below would file it as unknown.
-    if (point.horizon.state === "not_full") {
-      notFull += 1;
-      continue;
-    }
-
     /**
-     * Both halves are required. A null horizon is the unknown state; a null
-     * `minutesAgo` is a point never collected at all, which has no "time since"
-     * to subtract and so has no headroom either. Treating either as zero would
-     * invent a number.
+     * Both halves are required for a number. A null horizon is a point with
+     * nothing to count down; a null `minutesAgo` is a point never collected
+     * at all, which has no "time since" to subtract. Treating either as zero
+     * would invent a number.
+     *
+     * Which SHARE such a point joins is the at-risk question, and it is asked
+     * of the one predicate: at risk -> "unknown" (a warning the badge must
+     * carry); not at risk -> "not full yet" (nothing to run out of). This
+     * badge used to decide that on its own from the horizon state, which is a
+     * second definition of at-risk one refactor away from disagreeing with
+     * the tile above it.
      */
     if (point.rollHorizonHours === null || point.minutesAgo === null) {
-      unknown += 1;
+      if (isAtRisk(point.risk)) unknown += 1;
+      else notFull += 1;
       continue;
     }
 

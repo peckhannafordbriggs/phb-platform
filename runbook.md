@@ -7170,3 +7170,61 @@ does fill flips to `measured` on the pass that sees `count >= capacity`.
 `tests/bas-collection-health.test.ts` and `test_completeness.py` *(phb-bas)*
 carry the assertions, including that no wording for a not-full or measured
 point names an interval.
+
+---
+
+## Collection Health says N points are at risk but hidden, over a tile that says none are
+
+**Symptom.** In one block, on one set of rows: *"4 more points are at risk
+but hidden from the table below."* and *"Points at risk of data loss — 0 —
+Nothing at risk"*. Or the newer, deliberate sentence: *"The at-risk figures
+disagree: N hidden points are counted at risk but the total is M. This is a
+defect in the screen, not in collection - report it."*
+
+**What it was, on 2026-09-18.** Two implementations of one question. The
+tile counted the at-risk states from a list (`AT_RISK_ROLL_RISKS`); the
+hidden-point sentence counted `roll_risk <> 'ok'` in SQL. When the
+roll-horizon change added `buffer_not_full` and took it out of the list, the
+SQL did not know, and the four hidden not-full office points -
+`OccupancyCommand`, `Occupied`, `OperatingState`, `OperatingStateOR` - were
+"at risk" to the sentence and safe to the tile. Reproduced against the live
+database inside a rolled-back transaction with the service's own SQL: tile 0,
+sentence 4. Two more definitions were found on the way: the headroom badge
+decided its "unknown" share from the horizon state on its own, and the
+*"N of M reporting"* ratio counted `risk === "ok"` - so the office read *"2 of
+8 reporting"* under a tile saying nothing was at risk. Harmless directions,
+all of them, by luck. The sentence exists so that hiding a point cannot make
+the screen look healthier than the system is; a second definition failing the
+other way is the failure that matters.
+
+**What holds now.** One list, `AT_RISK_ROLL_RISKS` in
+`lib/modules/bas/types.ts`, and two functions over it, `isAtRisk` and
+`atRiskCount`. Every surface asks them:
+
+| Surface | How it asks |
+|---|---|
+| The tile's total (`pointsAtRisk`) | `atRiskCount(riskCounts)` |
+| Its breakdown | walks `AT_RISK_ROLL_RISKS` |
+| The hidden-point sentence (`hiddenPointsAtRisk`) | `isAtRisk` over the same per-point rows the tile is built from - no longer a separate SQL count |
+| The filter sentence (points at risk *outside* the filter) | SQL generated from the list (`atRiskSql`), the only SQL predicate left |
+| The headroom badge's "unknown" share | a numberless point joins "unknown" if `isAtRisk`, else "not full yet" |
+| *"N of M reporting"* | `reportingPoints` = not `isAtRisk` |
+| The Home card | reads `pointsAtRisk` |
+
+`describeHiddenRisk` says nothing when no hidden point is at risk, and if the
+hidden count ever exceeds the total it says the figures disagree rather than
+rendering *"-4 more points"*.
+
+**The guard.** `tests/bas-at-risk-predicate.test.ts` seeds one point in every
+state the view can produce - configured ok / at risk / lost, measured, two
+not-full, unknown, never collected - hides three of them, and holds the tile,
+the breakdown, the hidden sentence, the headroom badge and the reporting ratio
+to the list's answer per state, plus the exact live shape (only not-full
+points hidden: tile 0, no sentence). It also reads the source and fails if the
+list literal appears anywhere but `types.ts`, or if any source decides
+at-risk-ness from `ok`. Mutating the list, or reintroducing either second
+definition, fails every surface's test in that file together - recorded at
+the bottom of the file.
+
+**If you see the disagreement sentence.** Something has grown a second
+definition again. Run that test file; it names the surface.

@@ -21,7 +21,19 @@ import type {
   TrendPoint,
   VanishedPoint,
 } from "./types";
-import { toHorizonState } from "./types";
+import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk, toHorizonState } from "./types";
+
+/**
+ * "This row is at risk", for SQL, generated from the one TypeScript list so
+ * the two languages cannot hold two definitions. The only SQL in the platform
+ * that decides at-risk-ness; every in-scope figure is derived in TypeScript
+ * from the same list (`atRiskCount`, `isAtRisk`). Never write
+ * a not-equal-ok test on roll_risk - that is what said four hidden not-full points were at
+ * risk over a tile that said none were (2026-09-18).
+ */
+function atRiskSql(rollRisk: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`${rollRisk} IN (${Prisma.join([...AT_RISK_ROLL_RISKS])})`;
+}
 
 /**
  * The only thing in the platform that reads the `bas_*` tables.
@@ -468,7 +480,6 @@ interface TotalsRow {
   comp_unknown: number;
   min_roll_horizon_s: number | null;
   hidden_points: number;
-  hidden_points_at_risk: number;
   points_no_longer_reported: number;
 }
 
@@ -641,15 +652,16 @@ export async function getCollectionHealth(
           -- horizon_s is the SHORTEST full-buffer span ever observed where the
           -- station has reported one, else capacity x interval - see the view.
           min(h.horizon_s) FILTER (WHERE h.is_active)::int AS min_roll_horizon_s,
-          -- How many of the active points above are hidden, and how many of
-          -- the at-risk ones. The table is not drawing these rows, and a
-          -- screen that counts 1 at risk over a table with no at-risk row has
-          -- to be able to say why - see describeHiddenRisk.
+          -- How many of the active points above are hidden. The table is not
+          -- drawing these rows, and a screen that counts 1 at risk over a table
+          -- with no at-risk row has to be able to say why - see
+          -- describeHiddenRisk. How many of THOSE are at risk is not counted
+          -- here: it is derived below from the per-point list with isAtRisk,
+          -- the same predicate as the tile. A second SQL definition
+          -- (a not-equal-ok test on roll_risk) lived here and disagreed with the tile by
+          -- four on the live screen on 2026-09-18.
           count(*) FILTER (WHERE h.is_active AND NOT p.is_visible)::int
             AS hidden_points,
-          count(*) FILTER (WHERE h.is_active AND NOT p.is_visible
-                             AND h.roll_risk <> 'ok')::int
-            AS hidden_points_at_risk,
           -- Points the collector turned off because the station stopped
           -- reporting them. Inactive, so outside every count above - and that
           -- was the hole: a deleted trend, a dropped device or a renamed
@@ -878,7 +890,7 @@ export async function getCollectionHealth(
           >`
             SELECT
               count(*) FILTER (WHERE h.is_active)::int AS active_points,
-              count(*) FILTER (WHERE h.is_active AND h.roll_risk <> 'ok')::int
+              count(*) FILTER (WHERE h.is_active AND ${atRiskSql(Prisma.sql`h.roll_risk`)})::int
                 AS points_at_risk,
               count(*) FILTER (WHERE NOT h.is_active
                                  AND p.inactive_reason = 'no_longer_reported')::int
@@ -916,14 +928,18 @@ export async function getCollectionHealth(
     never_collected: result.totals.risk_never_collected,
   };
 
-  // buffer_not_full is deliberately not a term here. A buffer below capacity
-  // has overwritten nothing; "we have not measured the horizon" and "we may be
+  // By the one list. buffer_not_full is not in it: a buffer below capacity has
+  // overwritten nothing; "we have not measured the horizon" and "we may be
   // losing data" are different statements (2026-09-18).
-  const pointsAtRisk =
-    riskCounts.data_lost +
-    riskCounts.at_risk +
-    riskCounts.roll_horizon_unknown +
-    riskCounts.never_collected;
+  const pointsAtRisk = atRiskCount(riskCounts);
+
+  // Every active point in scope, hidden ones included, in screen shape. The
+  // hidden-at-risk count is taken from THIS list with the same predicate the
+  // tile uses, so the sentence under the tile cannot contradict it.
+  const points = result.points.map(toPointHealthRow);
+  const hiddenPointsAtRisk = points.filter(
+    (point) => !point.visible && isAtRisk(point.risk),
+  ).length;
 
   const completenessCounts: Record<Completeness, number> = {
     complete: result.totals.comp_complete,
@@ -999,13 +1015,13 @@ export async function getCollectionHealth(
       pointsAtRisk,
       riskCounts,
       hiddenPoints: result.totals.hidden_points,
-      hiddenPointsAtRisk: result.totals.hidden_points_at_risk,
+      hiddenPointsAtRisk,
       pointsNoLongerReported: result.totals.points_no_longer_reported,
       pointsIncomplete: completenessCounts.incomplete,
       completenessCounts,
       minutesSinceNewestReading: result.readingTotals.minutes_since,
     },
-    points: result.points.map(toPointHealthRow),
+    points,
     vanished: result.vanished.map(toVanishedPoint),
     runs: result.runs.map(toIngestRunRow),
     newestRunAt: iso(result.newestRun),

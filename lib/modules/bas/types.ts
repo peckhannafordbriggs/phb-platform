@@ -42,10 +42,26 @@ export type RollRisk =
   | "never_collected";
 
 /**
- * Every risk except `ok` and `buffer_not_full`. What the "points at risk of
- * data loss" tile counts. `buffer_not_full` is absent on purpose: a buffer
- * below capacity has overwritten nothing, and counting it would be the
- * 2026-09-18 defect again.
+ * THE ONE DEFINITION OF "AT RISK". Worst first.
+ *
+ * Every risk except `ok` and `buffer_not_full`. `buffer_not_full` is absent on
+ * purpose: a buffer below capacity has overwritten nothing, and counting it
+ * would be the 2026-09-18 defect again.
+ *
+ * Everything that answers "is this point at risk" answers it from here, and
+ * from nowhere else: the tile's total (`atRiskCount`), its breakdown
+ * (`riskBreakdown`), the hidden-point sentence (`hiddenPointsAtRisk`), the
+ * filter sentence (the service's `atRiskSql`), the headroom badge's unknown
+ * share (`computeHeadroom`), the "N of M reporting" ratio (`reportingPoints`)
+ * and the home card. On 2026-09-18 the live screen read "4 more points are at
+ * risk but hidden" over a tile saying "0 - Nothing at risk", because the
+ * sentence had its own definition - a not-equal-ok test on roll_risk in SQL - which the
+ * roll-horizon change did not know to update. Two definitions disagreeing in
+ * the harmless direction is luck; the sentence exists so that hiding a point
+ * cannot make the screen look healthier than the system is, and a second
+ * definition failing the other way is the failure that matters.
+ * tests/bas-at-risk-predicate.test.ts drives every surface from one fixture
+ * and fails if any of them stops agreeing with this list.
  */
 export const AT_RISK_ROLL_RISKS: readonly RollRisk[] = [
   "data_lost",
@@ -53,6 +69,16 @@ export const AT_RISK_ROLL_RISKS: readonly RollRisk[] = [
   "roll_horizon_unknown",
   "never_collected",
 ];
+
+/** Is this point at risk of data loss? The one predicate; see AT_RISK_ROLL_RISKS. */
+export function isAtRisk(risk: RollRisk): boolean {
+  return AT_RISK_ROLL_RISKS.includes(risk);
+}
+
+/** The tile's total, from per-state counts, by the same list. */
+export function atRiskCount(counts: Record<RollRisk, number>): number {
+  return AT_RISK_ROLL_RISKS.reduce((sum, risk) => sum + counts[risk], 0);
+}
 
 /**
  * `completeness` from `bas_v_collection_health`: the collector's per-pass
@@ -181,7 +207,11 @@ export interface CollectionHealthTotals {
    * collection. This is how many rows the per-point table is not drawing.
    */
   hiddenPoints: number;
-  /** How many of `pointsAtRisk` are hidden. Non-zero is what the screen must say out loud. */
+  /**
+   * How many of `pointsAtRisk` are hidden. Non-zero is what the screen must
+   * say out loud. Counted over the same `points` list with the same
+   * `isAtRisk`, so it can never disagree with `pointsAtRisk` - it did once.
+   */
   hiddenPointsAtRisk: number;
   /**
    * Points the collector turned off because the station stopped reporting
@@ -1004,7 +1034,21 @@ function describeHiddenPointRisk(health: {
   totals: { pointsAtRisk: number; hiddenPointsAtRisk: number };
 }): string | null {
   const hidden = health.totals.hiddenPointsAtRisk;
+  // Nothing at all when the hidden points are not at risk - not "0 hidden
+  // points are at risk". Hidden points that are fine are not a warning.
   if (hidden <= 0) return null;
+
+  // The service counts both from one list with one predicate, so the hidden
+  // share can never exceed the total. If it ever does, the two have grown a
+  // second definition again, and a sentence built on a negative "listed"
+  // would read as prose over a broken number - say so instead.
+  if (hidden > health.totals.pointsAtRisk) {
+    return (
+      `The at-risk figures disagree: ${hidden} hidden ${hidden === 1 ? "point is" : "points are"} ` +
+      `counted at risk but the total is ${health.totals.pointsAtRisk}. This is a defect in the ` +
+      `screen, not in collection - report it.`
+    );
+  }
 
   const listed = health.totals.pointsAtRisk - hidden;
 

@@ -113,9 +113,13 @@ describe("what does NOT contribute", () => {
   });
 
   it("reports no number at all when nothing is computable", () => {
+    // A null horizon on a point the view calls at risk. (A null horizon on a
+    // point that is NOT at risk is a buffer that has never filled, and is
+    // counted as such - the badge asks the one at-risk predicate, not the
+    // horizon, which share a numberless point joins.)
     const result = computeHeadroom([
-      point({ pointId: "a", rollHorizonHours: null }),
-      point({ pointId: "b", rollHorizonHours: null }),
+      point({ pointId: "a", rollHorizonHours: null, risk: "roll_horizon_unknown" }),
+      point({ pointId: "b", rollHorizonHours: null, risk: "roll_horizon_unknown" }),
     ]);
 
     expect(result.hours).toBeNull();
@@ -197,8 +201,8 @@ describe("the badge never hides an unknown behind a clean number", () => {
 
   it("refuses a number entirely when no horizon is known", () => {
     const points = [
-      point({ pointId: "a", rollHorizonHours: null }),
-      point({ pointId: "b", rollHorizonHours: null }),
+      point({ pointId: "a", rollHorizonHours: null, risk: "roll_horizon_unknown" }),
+      point({ pointId: "b", rollHorizonHours: null, risk: "roll_horizon_unknown" }),
     ];
 
     expect(describeHeadroom(computeHeadroom(points))).toBe("Headroom unknown");
@@ -229,7 +233,7 @@ describe("the badge never hides an unknown behind a clean number", () => {
   it("still names the unknown share when there is no headroom left", () => {
     const points = [
       point({ pointId: "a", minutesAgo: 50 * 60 }),
-      point({ pointId: "b", rollHorizonHours: null }),
+      point({ pointId: "b", rollHorizonHours: null, risk: "roll_horizon_unknown" }),
     ];
 
     expect(describeHeadroom(computeHeadroom(points))).toBe(
@@ -268,7 +272,10 @@ describe("the badge never hides an unknown behind a clean number", () => {
   });
 
   it("keeps the unknown word when a set is part unknown, part not full, and no number is computable", () => {
-    const points = [point({ pointId: "a", rollHorizonHours: null }), notFull("b")];
+    const points = [
+      point({ pointId: "a", rollHorizonHours: null, risk: "roll_horizon_unknown" }),
+      notFull("b"),
+    ];
 
     expect(describeHeadroom(computeHeadroom(points))).toBe(
       "Headroom unknown, 1 not full yet",
