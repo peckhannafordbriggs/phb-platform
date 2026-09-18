@@ -110,7 +110,7 @@ ChatGPT, pixel-copying Outlook.
 **This shipped and is no longer undecided.** Home was held as a deliberate placeholder
 for most of the build — "do not invent a dashboard" was the rule, and it was the right
 one while nobody knew what belonged there. It was designed once there were real
-requirements, and it is now a personal launcher: what changed since you last signed in,
+requirements, and it is now a personal launcher: what changed since you were last here,
 and the modules you actually hold grants for.
 
 The original instinct still applies to anything you are tempted to add to it. Home

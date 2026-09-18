@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { applyLoginGate } from "@/lib/auth/signin";
 import { moduleAccent } from "@/lib/module-accent";
-import { classifyLastVisit } from "@/lib/home/last-visit";
 import {
   createEmployee,
   resetDb,
@@ -18,10 +17,16 @@ import { TEST_ALLOWED_DOMAIN, TEST_TENANT_ID } from "./constants";
  *
  * Neither shows up in a typecheck, a lint run or a screenshot:
  *
- *   1. The previous sign-in. If `previousLoginAt` were written after
- *      `lastLoginAt` rather than from the value before it, every "since you
- *      last signed in" window would be zero seconds wide. The page would render
- *      perfectly and simply never have anything in it.
+ *   1. The AUTHENTICATION record. `previousLoginAt` must be written from the
+ *      value `lastLoginAt` held before the sign-in, not from the one being
+ *      written - and the two columns must go on behaving exactly as they did
+ *      before Home stopped reading them. They are the audit record of when a
+ *      session was issued, and nothing about the activity anchor touches them.
+ *
+ *      Home no longer dates anything from these: a session lasts days, so
+ *      "Last signed in on Monday" was still on screen on Friday. The greeting
+ *      and the digest are dated from `previousActiveAt` instead, which is
+ *      tested in tests/activity.test.ts.
  *
  *   2. The filled cards' contrast. White on the sampled brights fails AA, and
  *      the failure is legible-looking text that measures 3.47:1. A person
@@ -76,7 +81,7 @@ describe("the previous sign-in", () => {
     expect(second?.lastLoginAt?.getTime()).toBeGreaterThan(firstLogin!.getTime());
   });
 
-  it("opens a window that is not empty - the whole point of the column", async () => {
+  it("keeps the earlier sign-in strictly earlier, which is what makes it audit-able", async () => {
     await applyLoginGate(claims);
     await new Promise((resolve) => setTimeout(resolve, 25));
     await applyLoginGate(claims);
@@ -86,13 +91,13 @@ describe("the previous sign-in", () => {
     });
 
     /**
-     * The regression this guards. Using lastLoginAt would make `since` the
-     * current sign-in, so the window would be negative or zero and every
-     * "since you last signed in" list would be empty forever.
+     * The regression this guards. Writing `now` into both columns would leave
+     * the log unable to say when the previous session was issued, and nothing
+     * would fail loudly.
      */
-    const since = employee!.previousLoginAt!;
-    expect(Date.now() - since.getTime()).toBeGreaterThan(0);
-    expect(since.getTime()).toBeLessThan(employee!.lastLoginAt!.getTime());
+    const previous = employee!.previousLoginAt!;
+    expect(Date.now() - previous.getTime()).toBeGreaterThan(0);
+    expect(previous.getTime()).toBeLessThan(employee!.lastLoginAt!.getTime());
   });
 
   it("moves forward on each sign-in, never backwards", async () => {
@@ -148,72 +153,27 @@ describe("the previous sign-in", () => {
   });
 });
 
-describe("what Home may claim about a previous visit", () => {
-  const firstSeenAt = new Date("2026-08-01T09:00:00Z");
+describe("signing in does not touch the activity columns", () => {
+  it("leaves both null, because signing in is not being here", async () => {
+    await applyLoginGate(claims);
 
-  it("dates the visit when the column holds one", () => {
-    const at = new Date("2026-08-30T17:12:00Z");
-    expect(
-      classifyLastVisit({
-        previousLoginAt: at,
-        lastLoginAt: new Date("2026-08-31T08:00:00Z"),
-        firstSeenAt,
-      }),
-    ).toEqual({ state: "known", at });
-  });
-
-  it("calls it a first visit only when the sign-in wrote both columns at once", () => {
-    // Sign-in sets firstSeenAt and lastLoginAt to the SAME instant the first time.
-    expect(
-      classifyLastVisit({
-        previousLoginAt: null,
-        lastLoginAt: firstSeenAt,
-        firstSeenAt,
-      }),
-    ).toEqual({ state: "first" });
-  });
-
-  it("refuses to call a returning employee new when the column predates them", () => {
-    /**
-     * The regression this exists for. On the day previous_login_at shipped
-     * every employee had NULL, including people who had used the platform for
-     * weeks - one of them in the real development database. Reading NULL as
-     * "first visit" tells them something false about their own history.
-     *
-     * lastLoginAt > firstSeenAt proves a second visit happened even though
-     * nothing recorded when.
-     */
-    expect(
-      classifyLastVisit({
-        previousLoginAt: null,
-        lastLoginAt: new Date("2026-08-31T08:00:00Z"),
-        firstSeenAt,
-      }),
-    ).toEqual({ state: "unknown" });
-  });
-
-  it("treats a row that has never signed in as first, not unknown", () => {
-    // A bootstrap row seeded ahead of its owner.
-    expect(
-      classifyLastVisit({ previousLoginAt: null, lastLoginAt: null, firstSeenAt }),
-    ).toEqual({ state: "first" });
-  });
-
-  it("says nothing at all in the unknown state", async () => {
-    const page = await readFile(
-      path.join(process.cwd(), "app/(platform)/page.tsx"),
-      "utf8",
-    );
+    const employee = await testDb.employee.findUnique({
+      where: { entraOid: "oid-home" },
+    });
 
     /**
-     * There is no honest timestamp to offer, so the line is absent rather than
-     * filled with copy. Guarded because the tempting fix - some cheerful
-     * fallback string - is the thing that would reintroduce a false claim.
+     * The separation this whole change rests on. A sign-in issues a session;
+     * it is the page loads afterwards that say somebody was here, and those
+     * are recorded by lib/authz/guard.ts. A sign-in that stamped the activity
+     * columns would put them back to meaning "authentication" and the
+     * greeting would go stale again the moment a session outlived a day.
      */
-    expect(page).toContain('lastVisit.state !== "unknown"');
+    expect(employee?.lastActiveAt).toBeNull();
+    expect(employee?.previousActiveAt).toBeNull();
+    expect(employee?.lastLoginAt).toBeInstanceOf(Date);
   });
 
-  it("carries a real sign-in through to a dateable visit", async () => {
+  it("does not write them on a second sign-in either", async () => {
     await applyLoginGate(claims);
     await new Promise((resolve) => setTimeout(resolve, 25));
     await applyLoginGate(claims);
@@ -222,17 +182,26 @@ describe("what Home may claim about a previous visit", () => {
       where: { entraOid: "oid-home" },
     });
 
-    const visit = classifyLastVisit(employee!);
-    expect(visit.state).toBe("known");
+    expect(employee?.lastActiveAt).toBeNull();
+    expect(employee?.previousActiveAt).toBeNull();
+    // And the login columns did move, so this is not passing by doing nothing.
+    expect(employee?.previousLoginAt).toBeInstanceOf(Date);
   });
 
-  it("reads a once-only sign-in as first, end to end", async () => {
-    await applyLoginGate(claims);
-    const employee = await testDb.employee.findUnique({
-      where: { entraOid: "oid-home" },
-    });
+  it("does not read the login columns when building Home", async () => {
+    const service = await readFile(
+      path.join(process.cwd(), "lib/home/service.ts"),
+      "utf8",
+    );
+    const code = service.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*/g, "");
 
-    expect(classifyLastVisit(employee!)).toEqual({ state: "first" });
+    /**
+     * Not a style rule. `previousLoginAt` is the sign-in before the current
+     * one, and a session lasts days: dating the greeting from it is how "Last
+     * signed in on Monday, September 14" stayed on screen all week.
+     */
+    expect(code).not.toContain("previousLoginAt");
+    expect(code).not.toContain("lastLoginAt");
   });
 });
 

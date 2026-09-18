@@ -46,7 +46,10 @@ Employee
   isPlatformAdmin       boolean default false
   sessionsValidAfter    timestamptz nullable   -- reject sessions issued before this
   firstSeenAt           timestamptz
-  lastLoginAt           timestamptz nullable
+  lastLoginAt           timestamptz nullable   -- authentication: current session issued
+  previousLoginAt       timestamptz nullable   -- authentication: the sign-in before it
+  lastActiveAt          timestamptz nullable   -- activity: last deliberate page load; live
+  previousActiveAt      timestamptz nullable   -- activity: the anchor Home reads; frozen per day
   createdAt / updatedAt timestamptz
 
 Module

@@ -84,6 +84,36 @@ model Employee {
   /// omits the section instead of showing an empty one.
   previousLoginAt DateTime? @map("previous_login_at") @db.Timestamptz(3)
 
+  /// ACTIVITY, as distinct from AUTHENTICATION. The two columns above are the
+  /// authentication record - when this person's session was issued - and a
+  /// session lasts days. Somebody who uses the platform every day without
+  /// re-authenticating has a `previousLoginAt` from last week, so the
+  /// greeting said "Last signed in on Monday" all week and the "since" digest
+  /// silently covered four days while reading like it meant yesterday.
+  ///
+  /// `lastActiveAt` is the most recent DELIBERATE page load or navigation -
+  /// never a background poll, an auto-refresh or a prefetch, which is the whole
+  /// reason it is a separate column. Written by lib/authz/guard.ts on the way
+  /// through the authorization boundary, and only when the stored value is
+  /// more than five minutes old (lib/activity/rollover.ts), so a day's use is
+  /// a handful of writes. Nothing on screen reads this column directly.
+  lastActiveAt DateTime? @map("last_active_at") @db.Timestamptz(3)
+
+  /// The anchor Home reads, and the ONLY value the greeting and the digest may
+  /// read. Frozen for a whole calendar day (America/New_York): the first
+  /// deliberate action on a new day copies `lastActiveAt` here before
+  /// `lastActiveAt` moves, and nothing else touches it.
+  ///
+  /// THE TRAP: if the greeting read `lastActiveAt` - the live value - the
+  /// window would be zero seconds wide, the digest permanently empty, and the
+  /// page would look completely normal while telling you nothing. A CHECK in
+  /// the migration refuses a row where this equals `lastActiveAt`, so that
+  /// bug is a constraint violation rather than a silent empty list.
+  ///
+  /// Null until the second calendar day this person is active. Home says
+  /// nothing about a previous visit in that case - no blank, no epoch date.
+  previousActiveAt DateTime? @map("previous_active_at") @db.Timestamptz(3)
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 

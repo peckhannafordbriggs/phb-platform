@@ -2,11 +2,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireAuthenticated } from "@/lib/authz";
 import { moduleAccent } from "@/lib/module-accent";
+import { greetingFor } from "@/lib/activity/rollover";
 import {
   getHomeData,
   type Figure,
   type HomeModuleCard,
-  type LastVisit,
+  type LastHere,
 } from "@/lib/home/service";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +42,13 @@ export default async function HomePage() {
   // a second closed door, not a new policy.
   if (!access.ok) redirect("/signin");
 
-  const { greeting, modules, since } = await getHomeData(access.viewer);
+  /**
+   * One instant for the whole render. "today", "yesterday" and "Good evening"
+   * are all decided from it, so a page that renders across midnight cannot
+   * word two of them from different days.
+   */
+  const now = new Date();
+  const { greeting, modules, since } = await getHomeData(access.viewer, now);
 
   /*
    * Exactly the margins BAS uses, including relying on .dashboard-ground's own
@@ -51,7 +58,7 @@ export default async function HomePage() {
   return (
     <div className="dashboard-ground home-ground -mx-8 -my-8 px-8 py-8">
       <div className="mx-auto max-w-5xl">
-        <Greeting {...greeting} />
+        <Greeting {...greeting} now={now} />
 
         {modules.length === 0 ? (
           <NoAccess />
@@ -62,7 +69,7 @@ export default async function HomePage() {
                 <ModuleCard key={module.key} card={module} index={index} />
               ))}
             </div>
-            <Since items={since} />
+            <Since items={since} lastHere={greeting.lastHere} />
           </>
         )}
       </div>
@@ -74,12 +81,14 @@ function Greeting({
   firstName,
   positionName,
   departmentName,
-  lastVisit,
+  lastHere,
+  now,
 }: {
   firstName: string;
   positionName: string | null;
   departmentName: string | null;
-  lastVisit: LastVisit;
+  lastHere: LastHere | null;
+  now: Date;
 }) {
   /**
    * Position and department are joined only when both exist, so somebody who
@@ -91,7 +100,7 @@ function Greeting({
   return (
     <header className="pt-10 text-center sm:pt-16">
       <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">
-        {greetingFor(new Date())}, {firstName}
+        {greetingFor(now)}, {firstName}
       </h1>
 
       {role.length > 0 && (
@@ -99,20 +108,22 @@ function Greeting({
       )}
 
       {/*
-        Three states, and the third renders NOTHING on purpose.
+        A previous active day, or NOTHING.
 
-        "unknown" is somebody who has been here before while their
-        previous_login_at predates the column - true of every existing employee
-        the day it shipped. Telling them "this is your first time here" would be
-        a false claim about their own history, and there is no honest timestamp
-        to offer instead, so the line is simply absent. It fills itself in on
-        their next sign-in.
+        Null is the common case at first: every row from before the activity
+        columns existed, and everyone on their first day. There is no honest
+        timestamp to offer for either, and "this is your first time here"
+        would be a false claim about the first group - which was the bug the
+        old three-state classifier existed to avoid, and is avoided here by
+        having nothing to say instead. The line fills itself in on each
+        person's second active day.
+
+        The phrase is the one computed in getHomeData, shared with the digest
+        heading below, so the two can never name different windows.
       */}
-      {lastVisit.state !== "unknown" && (
+      {lastHere !== null && (
         <p className="mt-1.5 text-sm text-[var(--muted)]">
-          {lastVisit.state === "first"
-            ? "This is your first time here"
-            : `Last signed in ${formatSignIn(lastVisit.at)}`}
+          You were last here {lastHere.phrase}
         </p>
       )}
     </header>
@@ -191,14 +202,27 @@ function FigureBlock({ figure }: { figure: Figure }) {
   );
 }
 
-function Since({ items }: { items: SinceItemList }) {
-  // Null means there is no previous sign-in to measure from. An empty list means
-  // there was one and nothing happened. Neither is worth a heading over nothing.
-  if (items === null || items.length === 0) return null;
+function Since({
+  items,
+  lastHere,
+}: {
+  items: SinceItemList;
+  lastHere: LastHere | null;
+}) {
+  /*
+   * Null means there is no previous active day to measure from. An empty list
+   * means there was one and nothing happened. Neither is worth a heading over
+   * nothing. `lastHere` is null exactly when `items` is - both come from the
+   * same anchor - so the third check is type narrowing, not a fourth state.
+   */
+  if (items === null || items.length === 0 || lastHere === null) return null;
 
   return (
     <section className="mt-12">
-      <h2 className="eyebrow text-[var(--muted)]">Since you last signed in</h2>
+      {/* Names the same window the greeting does, in the same words. */}
+      <h2 className="eyebrow text-[var(--muted)]">
+        Since you were last here, {lastHere.phrase}
+      </h2>
 
       <ul className="card mt-3 divide-y divide-[var(--border)] overflow-hidden">
         {items.map((item) => (
@@ -236,40 +260,4 @@ function NoAccess() {
       grants access; signing in does not.
     </p>
   );
-}
-
-/** Local to the reader's machine, which is the only clock they can check it against. */
-function greetingFor(now: Date): string {
-  const hour = now.getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
-}
-
-/**
- * A previous sign-in, in the reader's own timezone.
- *
- * Relative for the last day because "yesterday at 4:58 pm" is what someone
- * actually remembers; absolute beyond that, because "17 days ago" is a number
- * you have to do arithmetic on to place.
- */
-function formatSignIn(at: Date): string {
-  const time = at.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const startOfYesterday = new Date(startOfToday);
-  startOfYesterday.setDate(startOfYesterday.getDate() - 1);
-
-  if (at >= startOfToday) return `today at ${time}`;
-  if (at >= startOfYesterday) return `yesterday at ${time}`;
-
-  return `on ${at.toLocaleDateString(undefined, {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  })} at ${time}`;
 }

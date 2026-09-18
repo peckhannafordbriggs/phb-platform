@@ -1227,6 +1227,84 @@ formatter and the rendered tooltip test fails. The axis test throws, rather
 than passing, when it finds no ticks - a server-rendered chart would
 otherwise have passed it by having nothing to assert against.
 
+## 51 · "Last here" is activity, not authentication, and the anchor is a second column
+
+**Decision.** Home's greeting and its "since" digest are dated from
+`employees.previous_active_at`, an anchor frozen for a whole calendar day in
+America/New_York. `last_active_at` is the live value: the most recent
+deliberate page load or navigation, written by the authorization guard when
+the stored value is more than five minutes old. The first deliberate action on
+a new day copies the live value into the anchor and nothing else ever touches
+it. The greeting reads "You were last here yesterday at 4:52 PM" and the
+digest is headed with the same phrase, computed once. A NULL anchor renders
+nothing. Background polls, prefetches and hot refreshes are not activity. The
+login columns are untouched and still the authentication record.
+
+**Why.** The greeting read "Last signed in on Monday, September 14" all week,
+and "since you last signed in — 2 new data gaps" quietly covered four days
+while reading like it meant yesterday. The columns it read were correct:
+`previous_login_at` is the sign-in before the current one, and both login
+columns update on a real sign-in. A session simply lasts days, so somebody who
+is here every day never re-authenticates, and a fact about authentication was
+being shown as a fact about presence. New fact, new columns.
+
+Two columns rather than one because the obvious single column is a trap. If
+the greeting reads a value the current request has just moved, the window is
+zero seconds wide, the digest is permanently empty, and the screen looks
+completely normal while telling you nothing — the same shape as the backup
+that never ran. So the anchor is a separate column that the request cannot
+move, `lib/home/service.ts` never selects the live value, a test asserts the
+word `lastActiveAt` appears nowhere in that file or the page, and the database
+refuses a row where the anchor equals the live value
+(`employees_previous_active_before_last`). The rollover was mutated to hand
+the anchor the new value: eight tests failed and the constraint fired on every
+rolled write. The bug is a `23514` in the log on the first morning, not an
+empty digest for months.
+
+The day boundary is one application zone, not UTC and not the browser's.
+Midnight UTC is 8 PM in Cincinnati; a UTC day would roll while people are
+still working. The same constant formats the time on screen, because Home is
+a server component and the container runs in UTC — the old `formatSignIn`
+called `toLocaleTimeString()` with no zone, so production would have said
+"8:52 PM" for a 4:52 PM visit.
+
+What counts as activity is the hardest edge, and the first answer was
+wrong. Collection Health polls its API every minute while its tab is open; if
+a poll counted, a tab left open overnight would anchor the next morning at
+11:59 PM and the digest would cover nothing — the empty page again, from the
+other direction. The first version told a navigation from a poll by Next's
+own router headers, `rsc: 1` and `next-router-prefetch`, and every unit test
+with a mocked `headers()` agreed. Then an end-to-end test minted a real
+session cookie and drove the real middleware and a real render over a socket,
+and neither header was there: Next's middleware adapter strips them before
+the middleware runs and its request store strips them again before a page's
+`headers()`, and `sec-fetch-mode` is `cors` for a soft navigation and a poll
+alike. So the rule is the **path**, which the middleware can see and a page
+cannot: it stamps `x-phb-page-request` from the pathname, the guard reads
+only the stamp, and polls are excluded because they go to `/api/*`.
+Prefetches are excluded by structure instead: a prefetch renders nothing
+unless a `loading.tsx` sits below it, and where one does the render stops at
+that boundary — the shell runs, the page does not — so the shell is the one
+caller that passes `recordActivity: false`, and every page's own guard call
+records. That page-level call is also why a shell hook alone would never
+have worked: a shared layout is not re-rendered on a navigation between two
+pages beneath it. A side effect in an authorization function is not a
+pattern to copy, and the comment there says so.
+
+**What breaks if you undo it.** Read `lastActiveAt` in `lib/home/service.ts`
+and the source-text guard in `tests/activity.test.ts` fails; write it into
+the anchor and eight tests fail before the database refuses the row. Count a
+poll as activity and *an idle tab polling across midnight* fails. Decide from
+a header again and *does not decide from headers* fails on the function's
+own source, and the socket tests in `tests/middleware-http.test.ts` fail the
+way they did the first time. Let the shell record and *does not count a
+prefetch of a page WITH a loading boundary* fails. Move the boundary to UTC
+and *is drawn in the application timezone, not UTC* fails on a 7:30 PM /
+8:30 PM pair. Format without a zone and *formats in the application timezone,
+not the server's* fails. Stamp the activity columns from sign-in and
+`tests/home.test.ts` fails, because signing in is not being here.
+`runbook.md` → *Home*.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

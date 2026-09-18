@@ -1,5 +1,7 @@
 import NextAuth from "next-auth";
+import { NextResponse } from "next/server";
 import { unauthenticated } from "@/lib/api/response";
+import { stampPageRequest } from "@/lib/activity/rollover";
 import { authConfig } from "./auth.config";
 
 /**
@@ -14,6 +16,14 @@ import { authConfig } from "./auth.config";
  * The module and admin guards live in lib/authz.
  *
  * This is a convenience redirect, not a security boundary.
+ *
+ * ONE more thing happens here, and it is here only because nowhere else can
+ * see what it needs: every request that goes through is forwarded with
+ * `x-phb-page-request` set or removed, saying whether this is a request for a
+ * page rather than an API route. The guard reads that to record "when was
+ * this person last here" (lib/activity/rollover.ts) - a page's `headers()`
+ * cannot see the pathname, and API routes are where every background poll
+ * goes. `lib/activity/rollover.ts` has no imports and is edge-safe.
  */
 const { auth: middlewareAuth } = NextAuth(authConfig);
 
@@ -41,7 +51,11 @@ export default middlewareAuth((req) => {
     return Response.redirect(signInUrl);
   }
 
-  return undefined;
+  // Forward the request with the page stamp written in. Always written, so a
+  // client cannot supply its own answer.
+  return NextResponse.next({
+    request: { headers: stampPageRequest(pathname, req.headers) },
+  });
 });
 
 export const config = {
