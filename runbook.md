@@ -35,6 +35,7 @@ requested, and two of those are already written down below.
 |---|---|
 | `DATABASE_URL` | Your own local Postgres. `createdb phb_platform`, then `postgresql://USER:PASSWORD@localhost:5432/phb_platform?schema=public` with your own local credentials. Nobody else needs to know this password. |
 | `TEST_DATABASE_URL` | Same server, **different database**. `npm run db:test:setup` creates it. The suite truncates every table and refuses to start if this matches `DATABASE_URL`. |
+| `MIGRATE_DEV_DATABASE_URL` | Same server, a **third** database, empty: `createdb phb_platform_dev`, then `postgresql://USER:PASSWORD@localhost:5432/phb_platform_dev`. The only database `prisma migrate dev`, `migrate reset` and `db push` can reach; the CLI refuses all three if it is unset. See *Which command touches which database*. |
 | `AUTH_SECRET` | `npx auth secret`. Yours alone — it only signs session cookies on your machine, so it does not need to match anyone else's. Do not ask IT for this. |
 | `AUTH_URL` | `http://localhost:3000`. |
 | `BOOTSTRAP_ADMIN_EMAIL` | Your own work address is enough locally. It seeds an admin row in *your* database and has no effect anywhere else. |
@@ -1649,7 +1650,7 @@ npx prisma migrate status
 |---|---|---|
 | The database user lacks privileges | `permission denied for schema public` | Grant ownership of the database to the application user. |
 | A unique index cannot be created | `could not create unique index … duplicate key` | Existing rows violate the new constraint. Find and fix the duplicates, then re-run. |
-| Drift between schema and database | `Drift detected` | Someone changed the schema by hand. In development, `npx prisma migrate reset` (destroys data). In production, write a corrective migration — never reset. |
+| Drift between schema and database | `Drift detected` | Someone changed the schema by hand. In development, `npx prisma migrate reset` — since 17 September 2026 it reaches only `phb_platform_dev`. Anywhere holding readings, write a corrective migration; never reset, and the CLI refuses to. |
 | The migration was interrupted | A row in `_prisma_migrations` with `finished_at` null | See below. |
 
 **Resolving a stuck migration.**
@@ -3033,14 +3034,22 @@ employee list is nearly empty — the sample users are gone. It reads as data lo
 
 Running only the first leaves a correct platform with almost nobody in it.
 
-**Fix — the full sequence after any `migrate reset` on a development machine:**
+**Since 17 September 2026 this cannot happen from a reset.** `migrate reset`
+reaches only `phb_platform_dev`, which the app never reads, so a reset no longer
+empties the list you see at `/admin` — see *Which command touches which
+database*. The sequence below is for a **fresh** `phb_platform` on a new
+machine, and it starts with `deploy`, not `reset`:
 
 ```bash
-npx prisma migrate reset
+npx prisma migrate deploy
 npm run seed
 npm run seed:dev
-npx tsx scripts/bas-import.ts --apply    # if the bas_* tables are in use
 ```
+
+`scripts/bas-import.ts --apply` used to follow, copying readings in from the
+standalone `bas` database. The collector writes `phb_platform` directly now, so
+the `bas_*` tables fill on their own on the machine that runs it and stay empty
+on one that does not — which the BAS screens report as exactly that.
 
 `seed:dev` refuses to run against production twice over — once on `NODE_ENV`,
 and again if `DATABASE_URL` does not point at localhost. See *Zero admins after
@@ -3874,15 +3883,18 @@ matches the file on disk.
 applied migrations precisely to catch this — the file and the database now
 disagree about what was run.
 
-**Fix, locally:** `npx prisma migrate reset`, then `npm run seed` (see above),
-then re-run `scripts/bas-import.ts`. Safe on a development machine because BAS
-data re-imports from the standalone `bas` database and everything else comes
-from the seed.
+**Fix, locally:** `npx prisma migrate reset --force`. Since 17 September 2026 that
+command reaches only `phb_platform_dev` — schema, reference data and the
+bootstrap admins, nothing irreplaceable — so the reset costs nothing. See *Which
+command touches which database*. The paragraph this replaced said to reset,
+re-seed and re-import from the standalone `bas` database; the collector has
+written `phb_platform` directly since the cutover, so that path no longer
+exists, and the guard now refuses the reset it depended on.
 
-**Not safe once the platform is deployed.** After Azure exists, a change of this
-kind is a **new forward migration**, never an edit. Resetting a deployed
-database destroys `bas_readings`, and beyond the JACE's ~42-hour roll horizon
-those rows cannot be re-fetched from anywhere.
+**Not safe on any database holding readings, and the CLI will not do it.**
+`phb_platform` locally and Azure alike take a **new forward migration**, never
+an edit. Resetting a database with `bas_readings` destroys rows that, beyond
+the JACE's ~42-hour roll horizon, cannot be re-fetched from anywhere.
 
 This happened once, on 21 August, fixing the `roll_horizon_s` generated column
 inside `20260821150733_add_bas_tables` after it was already live in the dev
@@ -4184,6 +4196,11 @@ Both roll back and exit 1.
 need a verified backup first. Beyond the JACE's ~42-hour roll horizon those rows
 exist nowhere else.
 
+Since 17 September 2026 the third of those cannot happen: the CLI refuses
+`migrate reset` against any database holding `bas_readings` rows (see *Which
+command touches which database*). The first two still can, and still need the
+backup.
+
 **Take it:**
 
 ```powershell
@@ -4275,6 +4292,142 @@ psql $u -c '\dt bas_*'
 
 `Did not find any relation named "bas_*"` is the whole answer. The `?schema=`
 suffix has to be stripped for the same reason as in the backup section above.
+
+---
+
+## Which command touches which database, and what to do when they disagree
+
+A development machine has three databases, and since 17 September 2026 the
+Prisma CLI decides which one a command reaches — not the shell it is typed in,
+and not a flag.
+
+| Database | Variable | Holds | Reached by |
+|---|---|---|---|
+| `phb_platform` | `DATABASE_URL` | **The collector's readings** — 44,750 `bas_readings` rows on 17 September 2026, the oldest from February 2024, most no longer on the JACE. Also the platform's own tables | `npm run dev`, `migrate deploy`, `migrate status`, `migrate resolve`, `migrate diff`, `npm run seed`, the collector (as `bas_collector`), the nightly backup (as `bas_backup`) |
+| `phb_platform_dev` | `MIGRATE_DEV_DATABASE_URL` | Schema, reference data, the bootstrap admin rows. **No readings, ever** | `migrate dev`, `migrate reset`, `db push` — and nothing else |
+| `phb_platform_test` | `TEST_DATABASE_URL` | Whatever the suite is asserting on; truncated between files | `npm test`, `npm run db:test:setup` |
+
+Production in Azure is a fourth, reached by `migrate deploy` from the deploy
+workflow and by nothing on a laptop.
+
+**How it is enforced.** `prisma.config.ts` reads the command from the CLI's own
+arguments and picks the URL. `migrate dev`, `migrate reset` and `db push` — the
+three that can drop tables or reset a database as part of doing their job — get
+`MIGRATE_DEV_DATABASE_URL`, and are refused outright if it is unset (there is
+no fallback), not loopback, the same server-and-database as `DATABASE_URL` or
+`TEST_DATABASE_URL`, or a database holding any `bas_readings` rows. The last
+check connects and counts; the first three need no connection. Everything else
+gets `DATABASE_URL`. The logic is `prisma/migrate-target.ts`;
+`tests/migrate-target.test.ts` runs the real CLI against a database holding one
+`bas_readings` row and proves it is refused before Prisma connects.
+
+Why the guard is in the config and not in an npm script: a script is a
+convention — `npx prisma migrate dev` typed directly walks around it. The CLI
+cannot open a connection without loading `prisma.config.ts`, so that is the one
+place a check cannot be skipped.
+
+**Why this exists.** On 17 September 2026 `migrate dev` pointed at
+`phb_platform`, and while an edit to an applied migration was being tested
+Prisma offered to reset it. Prisma asks first, but a prompt is a convention,
+and a convention someone has to remember is not a guard. Verified the same day
+with the guard in place: `migrate dev` and `migrate reset --force` aimed at
+`phb_platform` were both refused with *holds 44,750 bas_readings rows*;
+`migrate dev` against the empty `phb_platform_dev` applied all 17 migrations;
+`migrate reset --force` was routed to `phb_platform_dev` and then halted by
+Prisma's own agent check (below) before it ran; and after all of it
+`phb_platform` still held 134 employees, 64 audit rows and 44,750 readings.
+
+**Every invocation says where it went.** Any `prisma migrate …` or `prisma db …`
+run prints, before anything else:
+
+```
+[prisma.config] migrate deploy -> localhost:5432/phb_platform  (DATABASE_URL)
+```
+
+If the question is "which database did that just run against", the answer is
+in the terminal, not in anyone's memory.
+
+### The refusals, and what each one means
+
+| Message | Meaning | Fix |
+|---|---|---|
+| `MIGRATE_DEV_DATABASE_URL is not set` | Missing from `.env.local`, or blank in the shell | `createdb phb_platform_dev`, then add the line — see *Filling in `.env.local`* above |
+| `points at "…", not at localhost` | It names a remote server | Point it at this machine. A deployed database receives `migrate deploy` only |
+| `MIGRATE_DEV_DATABASE_URL and DATABASE_URL both name …` | Same server and database, however the two strings are spelled | Give the development database its own name |
+| `… holds N bas_readings rows` | The target has collected data in it: the variable names the wrong database, or someone restored a dump into the development one | Point it at an empty database. Never "fix" this by deleting the rows |
+| `Could not connect to … to check` | Postgres is down or the URL is wrong. Refused rather than assumed empty | Start Postgres; check the URL |
+
+**A different refusal, from Prisma itself.** *Prisma Migrate detected that it
+was invoked by Claude Code … you are forbidden from performing this action
+without an explicit consent* — Prisma 7 halts `migrate reset` when the CLI is
+running under an AI coding agent, whichever database it is aimed at, and asks
+for a `PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION` variable. It fires *after*
+this repository's routing, so the `[prisma.config]` line above it already names
+the database. The right response is for a person to run the command, not for
+the agent to supply the variable.
+
+### The working loop
+
+1. Edit `prisma/schema.prisma`.
+2. `npx prisma migrate dev --name what_changed` — writes the migration and
+   applies it to `phb_platform_dev`. Reset that database as often as you like;
+   nothing in it is irreplaceable.
+3. `npx prisma migrate deploy` — applies the finished migration to
+   `phb_platform`. Forward only. It is the same command CI runs against Azure.
+4. `npm run db:test:setup` — and to the test database.
+
+Three databases, three commands, and step 2 is the only one that can go
+backwards.
+
+### When they disagree
+
+`npx prisma migrate status` reads `DATABASE_URL`. To ask the same question of the
+development database, override the variable for one command — `status` is not
+gated, so the override is honoured:
+
+```bash
+DATABASE_URL="$MIGRATE_DEV_DATABASE_URL" npx prisma migrate status        # bash
+$env:DATABASE_URL = $env:MIGRATE_DEV_DATABASE_URL; npx prisma migrate status   # PowerShell, then unset it
+```
+
+| Situation | How it shows | Do |
+|---|---|---|
+| Dev is ahead of live | You ran `migrate dev` and stopped | `npx prisma migrate deploy`, then `npm run db:test:setup` |
+| Live is ahead of dev | A branch you pulled carries someone else's migration; `migrate dev` reports drift or wants to reset | `npx prisma migrate reset --force`. It reaches `phb_platform_dev` and nothing else |
+| Dev holds a migration the repository no longer has | Branch switched with an uncommitted migration applied | Reset dev. This is what the database is for |
+| An applied migration's checksum changed | Someone edited a migration after it ran | Dev: reset it. Live and Azure: never edit — write a forward migration. See *A migration marked `rolled_back` on live* |
+| `migrate dev` wants to reset and you are not sure which database it means | The `[prisma.config]` line names it | It can only mean `phb_platform_dev`. If that line names anything else, stop: the guard is broken, not the database |
+| `phb_platform` itself needs rebuilding | | There is no reset path, by design. Restore from the nightly dump — `C:\dev\bas-collector\Test-BasRestore.ps1` proves the dump restores; `pg_restore` puts it back |
+
+**The seed follows the command.** `migrate reset` runs `prisma/seed.ts`
+afterwards, and the seed connects to `DATABASE_URL`, not to Prisma's datasource.
+`prisma.config.ts` redirects that variable in-process when a dev-only command is
+running, so a reset of the development database seeds the development database.
+Without that line, a reset of one database would seed the other. This is why
+`phb_platform_dev` holds the bootstrap admin rows after a reset, and why the
+guard counts readings rather than employees — readings are the rows that cannot
+be re-fetched. **Not yet observed:** `tests/migrate-target.test.ts` asserts the
+redirect on the source, but no reset has run under it — the one attempt was
+stopped by Prisma's agent check. The first person to run
+`npx prisma migrate reset --force` should confirm that `phb_platform_dev` gained
+the bootstrap admin rows and that `phb_platform`'s `employees` count did not
+move, then delete this sentence.
+
+**The collector side.** `C:\dev\bas-collector\.env` names `phb_platform` too,
+by design: that is where readings go. It connects as `bas_collector`, which
+holds `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the `bas_*` tables only,
+cannot `CREATE` in the schema or the database, and owns nothing — checked on
+17 September 2026 against `information_schema.role_table_grants` and
+`has_schema_privilege`. So no collector command can drop or alter a table. Its
+five commands (`check`, `discover`, `sync`, `run`, `status`) contain no
+`DELETE`, `TRUNCATE` or `DROP` statement, and `sync --from-scratch` re-reads
+from the station's oldest record rather than deleting anything. The role has no
+table grants on `phb_platform_dev`, so a collector pointed there by mistake
+fails on its first insert with `permission denied` instead of filling the
+development database with readings. The hazard on that side was never the
+collector's connection; it is that the platform's `DATABASE_URL` is the
+`postgres` superuser, which is what let `migrate dev` reset anything. That is
+unchanged, and this guard is what now stands in front of it.
 
 ---
 
@@ -5297,6 +5450,12 @@ does.
 ---
 
 ## The dev platform database gets staler every day, and that is correct
+
+*Partly superseded.* The collector has written `phb_platform` directly since the
+cutover, so on the machine that runs it the platform's readings are current and
+this symptom does not appear. What follows still describes any machine
+**without** a running collector — a second developer's, or one where the
+scheduled task is stopped — and the diagnosis is unchanged.
 
 **Symptom.** On a development machine, *Since newest reading* climbs past 30
 minutes, then past 60, and eventually every point moves to `at_risk` and then to

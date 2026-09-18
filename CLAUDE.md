@@ -480,6 +480,24 @@ beside, not inside, because `prisma migrate dev` treats a changed checksum on an
 applied migration as grounds to reset the database. `runbook.md` → *A
 migration marked `rolled_back` on live*.
 
+**`migrate dev` has a database of its own, enforced by the CLI (2026-09-17).**
+Locally `DATABASE_URL` is the database the collector writes — 44,750
+`bas_readings` rows, back to February 2024, most gone from the JACE — and
+`prisma migrate dev` pointed at it until Prisma offered to reset it.
+`prisma.config.ts` now routes `migrate dev`, `migrate reset` and `db push` to
+`MIGRATE_DEV_DATABASE_URL` and refuses them if it is unset, remote, the same
+database as `DATABASE_URL` or `TEST_DATABASE_URL`, or holds any `bas_readings`
+row; everything else, `migrate deploy` included, still reads `DATABASE_URL`,
+so CI and deploy are untouched. Verified against the live database: both
+commands refused with the row count, and `migrate dev` against the empty
+`phb_platform_dev` applied all 17 migrations. **The guard is in the config,
+not an npm script, because the CLI cannot connect without loading it.**
+Prisma 7 separately halts `migrate reset` when run by an AI agent and asks
+for a consent variable; a person runs that command, the agent does not supply
+the variable. The collector side was checked too: `bas_collector` is DML-only
+on `bas_*` and has no grants on the dev database. `WHY-ITS-BUILT-THIS-WAY.md`
+§ 46; `runbook.md` → *Which command touches which database*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -541,7 +559,7 @@ well it is written.
 | `DEVELOPER-SETUP.md` | **Start here if you are a new developer.** Installs, databases, `.env.local`, seeds, first test run — and the things that bite before they bite | Someone about to write code |
 | `PLATFORM-CONTEXT.md` | **Read before designing a module.** What the platform already provides, the four-part integration contract, and the seven decisions a module makes for itself | Someone about to design one |
 | `HANDOVER.md` | **Start here if you are inheriting this.** What this is, what must not break, what will fail and when, what to do first | Whoever owns it after December 2026 |
-| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 46 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 47 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
 | `runbook.md` | Failure modes, recovery, what expires and when | Anyone with a broken thing |
 
 Setup instructions live in `DEVELOPER-SETUP.md` and the per-variable detail lives
