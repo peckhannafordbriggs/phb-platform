@@ -122,6 +122,7 @@ building is not recorded.
 | **Completeness** | A first sync takes everything the station holds; every pass compares the station's count with ours; `add_bas_completeness` | `e15f4bb` **(phb-bas)**, `6e21be2` (2026-09-17) |
 | **Measured horizon, visibility, the clock** | The roll horizon measured from a full buffer's span; the verdict read by the view, the screen and the health check; the station's clock offset recorded; `add_bas_measured_horizon_and_visibility` | `2b88ba3` **(phb-bas)**, `09e0041` (2026-09-17) |
 | **The backup gets its own role** | `bas_backup`, `BAS_BACKUP_URL`, `.verified` markers, the health check watches freshness | `d77a0cb` **(phb-bas)**, on `fix/backup-role-and-monitoring`, **not yet merged** on 2026-09-17 |
+| **Axis precision** | The trend's y-axis chooses round ticks at every zoom, decimals by unit; the stored reading is untouched | `fix/bas-chart-axis-precision` (2026-09-18) |
 
 ### Test count
 
@@ -279,6 +280,13 @@ chart. See `WHY-ITS-BUILT-THIS-WAY` § 30.
 never a filter on the data, so no zoom can smooth over a gap. **The curve is
 `monotone`**, so it never draws a peak the sensor did not record. **One point at
 a time**, so two units never share an axis.
+
+**The y-axis is chosen by the chart, not by Recharts.** Round ticks at every
+zoom, a fixed number of decimals by the kind of unit (temperature 1, percent 0,
+pressure 2, otherwise 2), one more in the tooltip, and a gutter sized to the
+widest label. The readings themselves are float32 as Niagara sent them and are
+rounded nowhere but the label. `runbook.md` → *The trend chart's y-axis prints
+long decimals*; `WHY-ITS-BUILT-THIS-WAY` § 50.
 
 ### Settings — `/bas/settings`
 
