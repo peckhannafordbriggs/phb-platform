@@ -567,6 +567,29 @@ Do not write `roll_risk <> 'ok'` or `risk === "ok"` to mean "at risk" - ever.
 `runbook.md` → *Collection Health says N points are at risk but hidden, over a
 tile that says none are*; `WHY-ITS-BUILT-THIS-WAY.md` § 49.
 
+**Home dates itself from activity, not authentication (2026-09-18).** The
+greeting read "Last signed in on Monday" all week because a session lasts
+days and `previous_login_at` is the sign-in before the current one. Two new
+columns on `employees`: `last_active_at`, the live value, written by
+`requireAuthenticated` on deliberate page loads and navigations only,
+throttled to one write per five minutes; and `previous_active_at`, the
+**anchor**, frozen for a calendar day (**America/New_York**, never UTC) and
+the ONLY value the greeting and digest read. **Do not read `lastActiveAt` on
+Home** - the window collapses to zero and the digest empties silently; a
+source-text test and a CHECK (`employees_previous_active_before_last`) both
+refuse it, and the mutation was run: eight tests fail. Background polls are
+not activity because they go to `/api/*`: the middleware stamps
+`x-phb-page-request` from the **pathname** and the guard reads only that.
+**Not from headers** - Next hides `rsc` and `next-router-prefetch` from both
+the middleware and a render, which an end-to-end test over a socket found
+after the unit tests had passed. Prefetches are excluded by structure: a
+prefetch never renders past a `loading.tsx`, so `AppShell` is the one caller
+passing `recordActivity: false` and every page's own guard call records. A
+NULL anchor renders nothing - no "first time here". Wording: "You were last here yesterday at 4:52
+PM", and the digest heading carries the same phrase. The login columns are
+unchanged and remain the audit record. `lib/activity/`;
+`WHY-ITS-BUILT-THIS-WAY.md` § 51; `runbook.md` → *Home*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

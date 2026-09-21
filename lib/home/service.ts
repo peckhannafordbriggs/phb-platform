@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { Viewer } from "@/lib/authz";
 import { buildMe, type MeModule } from "@/lib/me";
-import { classifyLastVisit, type LastVisit } from "./last-visit";
+import { describeLastHere } from "@/lib/activity/rollover";
 import { CHANGE_ORDERS_MODULE_KEY } from "@/lib/modules/change-orders/constants";
 import {
   mailService,
@@ -31,8 +31,6 @@ import {
  * the way in, because the way in is the point of the card.
  */
 
-export { classifyLastVisit, type LastVisit };
-
 /** A live figure, or an honest account of why there isn't one. */
 export type Figure =
   | { state: "ok"; value: string; status: string }
@@ -50,20 +48,42 @@ export interface HomeModuleCard {
   figure: Figure;
 }
 
+/**
+ * The previous active day, and the words for it.
+ *
+ * ONE phrase, computed once and rendered twice - under the greeting and as the
+ * digest heading - so the two cannot name different windows.
+ */
+export interface LastHere {
+  at: Date;
+  /** "yesterday at 4:52 PM" / "on Monday 14 September at 12:58 PM". */
+  phrase: string;
+}
+
 export interface HomeGreeting {
   firstName: string;
   positionName: string | null;
   departmentName: string | null;
   /**
-   * Deliberately NOT `lastLoginAt`: that column is overwritten with now() during
-   * the sign-in that is currently rendering this page, so it would always read
-   * as a few seconds ago. See the comment on Employee.previousLoginAt.
+   * From `previousActiveAt` - the frozen anchor - and NEVER from
+   * `lastActiveAt`, the live value, which the request rendering this page has
+   * just moved. Reading the live value would date the digest from a few
+   * seconds ago, and the page would look completely normal while telling you
+   * nothing.
+   *
+   * Not from the login columns either. A session lasts days, so
+   * `previousLoginAt` says "Monday" all week for somebody who is here every
+   * day. See lib/activity/rollover.ts.
+   *
+   * Null when no previous active day is recorded - a first visit, or a row
+   * from before the columns existed. Home then says nothing about a previous
+   * visit: no blank, no epoch date.
    */
-  lastVisit: LastVisit;
+  lastHere: LastHere | null;
 }
 
 
-/** One line in "since you last signed in". Never a count with no subject. */
+/** One line in "since you were last here". Never a count with no subject. */
 export interface SinceItem {
   key: string;
   text: string;
@@ -74,14 +94,17 @@ export interface HomeData {
   greeting: HomeGreeting;
   modules: HomeModuleCard[];
   /**
-   * Null when there is no previous sign-in to measure from - a first visit.
-   * That is different from an empty list, which means "you have been here
-   * before and nothing happened", and the two must not render the same.
+   * Null when there is no previous active day to measure from. That is
+   * different from an empty list, which means "you were here before and
+   * nothing happened", and the two must not render the same.
    */
   since: SinceItem[] | null;
 }
 
-export async function getHomeData(viewer: Viewer): Promise<HomeData> {
+export async function getHomeData(
+  viewer: Viewer,
+  now: Date = new Date(),
+): Promise<HomeData> {
   const [me, employee] = await Promise.all([
     buildMe(viewer),
     prisma.employee.findUnique({
@@ -89,17 +112,16 @@ export async function getHomeData(viewer: Viewer): Promise<HomeData> {
       select: {
         firstName: true,
         positionOther: true,
-        previousLoginAt: true,
-        // Both needed to tell a genuine first visit from a pre-column row.
-        lastLoginAt: true,
-        firstSeenAt: true,
+        // The frozen anchor. `lastActiveAt` is deliberately NOT selected, so
+        // nothing in this file can date a window from the live value.
+        previousActiveAt: true,
         position: { select: { name: true } },
         department: { select: { name: true } },
       },
     }),
   ]);
 
-  const previousLoginAt = employee?.previousLoginAt ?? null;
+  const anchor = employee?.previousActiveAt ?? null;
 
   const greeting: HomeGreeting = {
     firstName: employee?.firstName ?? viewer.firstName,
@@ -110,10 +132,10 @@ export async function getHomeData(viewer: Viewer): Promise<HomeData> {
      */
     positionName: employee?.position?.name ?? employee?.positionOther ?? null,
     departmentName: employee?.department?.name ?? null,
-    lastVisit:
-      employee === null
-        ? { state: "first" }
-        : classifyLastVisit(employee),
+    lastHere:
+      anchor === null
+        ? null
+        : { at: anchor, phrase: describeLastHere(anchor, now) },
   };
 
   const granted = new Set(me.grantedModuleKeys);
@@ -132,9 +154,7 @@ export async function getHomeData(viewer: Viewer): Promise<HomeData> {
     granted.has(BAS_MODULE_KEY)
       ? basCardFor(viewer, me.modules)
       : Promise.resolve(null),
-    previousLoginAt === null
-      ? Promise.resolve(null)
-      : collectSince(viewer, granted, previousLoginAt),
+    anchor === null ? Promise.resolve(null) : collectSince(viewer, granted, anchor),
   ]);
 
   const byKey = new Map<string, HomeModuleCard>();
@@ -329,7 +349,7 @@ async function basCardFor(
   }
 }
 
-// --------------------------------------------------- since you last signed in
+// -------------------------------------------------- since you were last here
 
 /**
  * Audit actions that are a change to what this person may do.

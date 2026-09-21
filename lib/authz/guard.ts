@@ -1,5 +1,8 @@
+import { headers } from "next/headers";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { recordActivity } from "@/lib/activity/record";
+import { isStampedPageRequest } from "@/lib/activity/rollover";
 
 /**
  * The authorization boundary. Every module route and every module page goes
@@ -35,6 +38,16 @@ export type AccessResult =
   | { ok: true; viewer: Viewer }
   | { ok: false; denial: Denial };
 
+export interface AuthenticatedOptions {
+  /**
+   * Whether a successful check may count as "this person was here".
+   * Defaults to true. ONE caller passes false: the shared shell. See the
+   * activity note inside requireAuthenticated for why it is that caller and
+   * no other.
+   */
+  recordActivity?: boolean;
+}
+
 /**
  * Checks 1 through 3: authenticated, session not revoked, employee active.
  *
@@ -42,7 +55,9 @@ export type AccessResult =
  * submission must both work for someone who has not completed their profile -
  * that is the whole point of onboarding.
  */
-export async function requireAuthenticated(): Promise<AccessResult> {
+export async function requireAuthenticated(
+  options: AuthenticatedOptions = {},
+): Promise<AccessResult> {
   const session = await auth();
 
   if (session === null || session.entraOid === null) {
@@ -60,6 +75,10 @@ export async function requireAuthenticated(): Promise<AccessResult> {
       profileCompleted: true,
       isPlatformAdmin: true,
       sessionsValidAfter: true,
+      // Read here because this lookup happens anyway. See the activity note
+      // below the checks.
+      lastActiveAt: true,
+      previousActiveAt: true,
     },
   });
 
@@ -82,6 +101,46 @@ export async function requireAuthenticated(): Promise<AccessResult> {
     return { ok: false, denial: "employee_inactive" };
   }
 
+  /**
+   * ACTIVITY, recorded here and nowhere else.
+   *
+   * "When was this person last here" is what Home's greeting and digest are
+   * dated from (lib/activity/rollover.ts), and it has to mean deliberate page
+   * loads and navigations - not the minute-by-minute polling three screens do
+   * while their tab is open, and not a `<Link>` prefetch. Two conditions,
+   * and each excludes one of those:
+   *
+   *   1. The middleware stamped this request as a request for a PAGE. Polls
+   *      go to API routes; the stamp is the pathname, which a render cannot
+   *      see and the middleware can. Nothing else about the request is
+   *      usable - Next hides its own router headers from both the middleware
+   *      and the render, so "is this a prefetch" cannot be read anywhere.
+   *
+   *   2. The caller did not opt out. A prefetch renders nothing unless a
+   *      `loading.tsx` sits below it, and where one does the render stops AT
+   *      that boundary - layouts above run, the page does not. So the only
+   *      component a prefetch reaches is the shared shell, and the shell
+   *      passes `recordActivity: false`. Every page calls a guard of its own,
+   *      because that is the authorization contract, and those calls record.
+   *      A shell hook alone would ALSO have missed navigations - a shared
+   *      layout is not re-rendered between two pages beneath it - so the
+   *      page-level call is the right one twice over.
+   *
+   * After the checks, deliberately: a rejected request is not a visit.
+   *
+   * A side effect in an authorization function is not a pattern to copy. It
+   * is here because the alternative is a fact that silently goes stale, and
+   * it is bounded: one conditional UPDATE, a few times a day, that can fail
+   * without failing the request.
+   */
+  if (options.recordActivity !== false && (await isPageRequestStamped())) {
+    await recordActivity({
+      id: employee.id,
+      lastActiveAt: employee.lastActiveAt,
+      previousActiveAt: employee.previousActiveAt,
+    });
+  }
+
   const viewer: Viewer = {
     id: employee.id,
     email: employee.email,
@@ -92,6 +151,26 @@ export async function requireAuthenticated(): Promise<AccessResult> {
   };
 
   return { ok: true, viewer };
+}
+
+/**
+ * Whether the middleware stamped this request as one for a page.
+ *
+ * Read from the stamp middleware.ts writes (PAGE_REQUEST_HEADER in
+ * lib/activity/rollover.ts). A render's `headers()` cannot see the pathname
+ * and never sees Next's router headers, so the middleware's answer is the
+ * only one available here.
+ *
+ * `headers()` throws outside a request scope - a test calling a route handler
+ * directly, a script - and that is "no", not an error: nothing was navigated
+ * to.
+ */
+async function isPageRequestStamped(): Promise<boolean> {
+  try {
+    return isStampedPageRequest(await headers());
+  } catch {
+    return false;
+  }
 }
 
 /**

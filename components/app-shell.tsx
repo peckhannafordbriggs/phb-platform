@@ -16,7 +16,17 @@ export async function AppShell({
 }: {
   children: React.ReactNode;
 }) {
-  const access = await requireAuthenticated();
+  /**
+   * `recordActivity: false`, and this is the ONLY caller that passes it.
+   *
+   * The shell is the one component a `<Link>` prefetch can reach: a prefetch
+   * of a dynamic route renders nothing unless a `loading.tsx` sits below it,
+   * and `/admin` and `/admin/audit` have one, so hovering the Admin link
+   * renders this shell and stops before the page. Hovering is not being here.
+   * The page beneath calls its own guard, and that call records - see the
+   * activity note in lib/authz/guard.ts.
+   */
+  const access = await requireAuthenticated({ recordActivity: false });
 
   if (!access.ok) {
     if (access.denial === "employee_inactive") redirect("/unauthorized");

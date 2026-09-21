@@ -78,6 +78,9 @@ export interface EmployeeFixture {
   firstName?: string;
   lastName?: string;
   lastLoginAt?: Date | null;
+  /** Activity, not authentication. See lib/activity/rollover.ts. */
+  lastActiveAt?: Date | null;
+  previousActiveAt?: Date | null;
   positionId?: string | null;
   positionOther?: string | null;
   departmentId?: string | null;
@@ -101,6 +104,8 @@ export async function createEmployee(fixture: EmployeeFixture = {}) {
       isPlatformAdmin: fixture.isPlatformAdmin ?? false,
       sessionsValidAfter: fixture.sessionsValidAfter ?? null,
       lastLoginAt: fixture.lastLoginAt ?? null,
+      lastActiveAt: fixture.lastActiveAt ?? null,
+      previousActiveAt: fixture.previousActiveAt ?? null,
       positionId: fixture.positionId ?? null,
       positionOther: fixture.positionOther ?? null,
       departmentId: fixture.departmentId ?? null,

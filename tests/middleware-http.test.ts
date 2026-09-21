@@ -1,5 +1,8 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { encode } from "@auth/core/jwt";
+import { PAGE_REQUEST_HEADER } from "@/lib/activity/rollover";
+import { createEmployee, disconnectDb, resetDb, testDb } from "./db";
 
 /**
  * Real HTTP, through the real middleware.
@@ -57,6 +60,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await closeApp?.();
+  await disconnectDb();
 }, 30_000);
 
 /** `redirect: "manual"` so a 302 is observed rather than silently followed. */
@@ -189,4 +193,150 @@ describe("the auth routes stay reachable", () => {
     expect(response.status).not.toBe(401);
     expect(response.status).not.toBe(302);
   });
+});
+
+describe("activity: stamped by the middleware, recorded by the guard", () => {
+  /**
+   * The path no unit test can take. Whether a request counts as "being here"
+   * depends on what the middleware can see of a real request, on its stamp
+   * surviving Next's own header handling into the render, and on what a real
+   * prefetch does and does not render. All of it runs for real here: a
+   * genuine cookie, the real middleware, the real guard, the test database.
+   *
+   * This test is what corrected the design. The first version decided from
+   * `rsc` and `next-router-prefetch`, which unit tests with a mocked
+   * `headers()` were happy with; over a socket, neither header reached the
+   * middleware or the render, and the anchor never moved.
+   *
+   * The cookie is minted with the same encoder Auth.js decodes with, using
+   * the suite's fixed AUTH_SECRET and the session cookie's own name as the
+   * salt - which is how Auth.js derives the key. No provider is involved: the
+   * sign-in gate is not what is under test, and tests/gate.test.ts covers it.
+   *
+   * Node's fetch() refuses to send `sec-fetch-*` headers (they are forbidden
+   * by the Fetch spec and it sets its own), so nothing here pretends to be a
+   * browser's document load. It does not need to: the rule is the path.
+   */
+  const ENTRA_OID = "oid-http-activity";
+  let cookie: string;
+
+  beforeAll(async () => {
+    await resetDb();
+    // A platform admin, so /admin - the route with a loading.tsx - renders.
+    await createEmployee({
+      entraOid: ENTRA_OID,
+      email: "http-activity@phb1899.com",
+      isPlatformAdmin: true,
+    });
+
+    const token = await encode({
+      token: { entraOid: ENTRA_OID },
+      secret: process.env.AUTH_SECRET!,
+      salt: "authjs.session-token",
+    });
+    cookie = `authjs.session-token=${token}`;
+  });
+
+  async function clearActivity(): Promise<void> {
+    await testDb.employee.update({
+      where: { entraOid: ENTRA_OID },
+      data: { lastActiveAt: null, previousActiveAt: null },
+    });
+  }
+
+  async function lastActiveAt(): Promise<Date | null> {
+    const row = await testDb.employee.findUniqueOrThrow({
+      where: { entraOid: ENTRA_OID },
+      select: { lastActiveAt: true },
+    });
+    return row.lastActiveAt;
+  }
+
+  /**
+   * The body is consumed before returning. A page streams: the status and
+   * headers arrive while components are still rendering, and the guard's
+   * write happens inside a component. Checking the database on the status
+   * alone read it too early, and the previous request's write then landed
+   * on the next test's assertion. The end of the body is the end of the
+   * render.
+   */
+  async function get(path: string, headers: Record<string, string> = {}): Promise<Response> {
+    const response = await fetch(`${origin}${path}`, {
+      redirect: "manual",
+      headers: { cookie, ...headers },
+    });
+    await response.text();
+    return response;
+  }
+
+  it("counts a page load", async () => {
+    await clearActivity();
+
+    const response = await get("/");
+
+    expect(response.status).toBe(200);
+    expect(await lastActiveAt()).toBeInstanceOf(Date);
+  }, 60_000);
+
+  it("counts a soft navigation", async () => {
+    await clearActivity();
+
+    // What the client router sends when a sidebar link is clicked.
+    const response = await get("/", { rsc: "1" });
+
+    expect(response.status).toBe(200);
+    expect(await lastActiveAt()).toBeInstanceOf(Date);
+  }, 60_000);
+
+  it("counts a page that sits below a loading boundary, when actually navigated to", async () => {
+    await clearActivity();
+
+    const response = await get("/admin", { rsc: "1" });
+
+    expect(response.status).toBe(200);
+    expect(await lastActiveAt()).toBeInstanceOf(Date);
+  }, 60_000);
+
+  it("does not count a prefetch of a page with no loading boundary - nothing renders", async () => {
+    await clearActivity();
+
+    const response = await get("/", { rsc: "1", "next-router-prefetch": "1" });
+
+    expect(response.status).toBe(200);
+    expect(await lastActiveAt()).toBeNull();
+  }, 60_000);
+
+  it("does not count a prefetch of a page WITH a loading boundary - only the shell renders", async () => {
+    await clearActivity();
+
+    /**
+     * The case the shell's opt-out exists for. Hovering the Admin link
+     * prefetches /admin; Next renders the shell and the loading skeleton and
+     * stops before the page. The shell passes recordActivity: false, so
+     * hovering is not being here.
+     */
+    const response = await get("/admin", { rsc: "1", "next-router-prefetch": "1" });
+
+    expect(response.status).toBe(200);
+    expect(await lastActiveAt()).toBeNull();
+  }, 60_000);
+
+  it("does not count an API call, which is what a polling tab makes", async () => {
+    await clearActivity();
+
+    const response = await get("/api/me");
+
+    expect(response.status).toBe(200);
+    expect(await lastActiveAt()).toBeNull();
+  }, 60_000);
+
+  it("does not let a client stamp itself", async () => {
+    await clearActivity();
+
+    const response = await get("/api/me", { [PAGE_REQUEST_HEADER]: "1" });
+
+    expect(response.status).toBe(200);
+    // The middleware overwrote it. Only the middleware's answer reaches the guard.
+    expect(await lastActiveAt()).toBeNull();
+  }, 60_000);
 });

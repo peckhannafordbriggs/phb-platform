@@ -41,6 +41,12 @@ SSO success → gate checks pass
 **Key on `entra_oid`, not email.** People get renamed; the object ID does not. The
 `entra_oid` is captured on first sign-in and is immutable thereafter.
 
+`last_login_at` (and `previous_login_at`, the sign-in before it) record
+**authentication** - when a session was issued. They are not "when was this
+person last here": a session lasts days. That is `last_active_at` /
+`previous_active_at`, written by `requireAuthenticated` on deliberate page
+loads, never by sign-in. See `WHY-ITS-BUILT-THIS-WAY.md` § 51.
+
 Anyone in the tenant can create a row by signing in. That is intended. A row with no
 grants sees a shell with an empty sidebar and can reach nothing.
 

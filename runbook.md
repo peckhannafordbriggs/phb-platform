@@ -2721,105 +2721,178 @@ inferred from documentation.
 
 # Home
 
-## "Since you last signed in" is always empty
+## "You were last here …" is missing from the greeting
 
-**Symptom.** The section never appears, or appears once and never again, for
-everyone.
+**This is normal for a while, and for most people.** The greeting is dated
+from `employees.previous_active_at`, which is NULL for every row that existed
+before `20260918160000_add_employee_activity_anchor`, and for everyone on their
+first active day. Home says **nothing** about a previous visit in that case —
+no blank line, no epoch date, and no "this is your first time here", which
+would be a false claim about everybody whose row predates the columns.
 
-**Cause.** Almost certainly `previousLoginAt`. `lastLoginAt` cannot date this
-section: `lib/auth/signin.ts` sets it to `now()` as part of authenticating,
-*before* any page renders, so by the time Home runs it is a few milliseconds
-old and the window it would open is zero seconds wide. A successful sign-in
-writes no audit row either — the only login action is `login.denied` — so
-before the `previous_login_at` column the previous sign-in was stored nowhere
-at all.
+It fills itself in on each person's **second active day**: the first
+deliberate page load on a new calendar day copies `last_active_at` into
+`previous_active_at`, and from then on the greeting reads "You were last here
+yesterday at 4:52 PM" and the digest is headed with the same words.
 
-The mechanism is one line and its **ordering is the whole thing**:
+To see who is in which state:
 
-```ts
-// lib/auth/signin.ts - `existing` was SELECTed before this update ran
-previousLoginAt: existing.lastLoginAt,   // the value from the last visit
-lastLoginAt: now,                        // overwritten here
+```sql
+SELECT email,
+       last_active_at     AT TIME ZONE 'America/New_York' AS last_active_et,
+       previous_active_at AT TIME ZONE 'America/New_York' AS anchor_et,
+       last_login_at      AT TIME ZONE 'America/New_York' AS last_login_et
+FROM employees
+ORDER BY last_active_at DESC NULLS LAST;
 ```
 
-Write `now` into both and the page still renders perfectly, the tests are the
-only thing that notices, and the section is empty forever. That is why
-`tests/home.test.ts` has four assertions on it rather than one.
+- `last_active_at` **NULL for everyone** who has used the platform today — the
+  migration is not applied to this database, or the guard is not recording.
+  See *The greeting never changes* below. (A missing column fails every page
+  load with `column employees.last_active_at does not exist`; that is louder
+  than this symptom and points at the same fix.)
+- `last_active_at` set, `previous_active_at` **NULL** — first active day.
+  Correct. Tomorrow's first page load fills it in.
+- Both set — the greeting is showing. If it is not, read
+  `app/(platform)/page.tsx` for `lastHere !== null`.
 
-**Fix.** Check the column is populated:
-
-```bash
-psql "$DATABASE_URL" -c \
-  "SELECT email, previous_login_at, last_login_at FROM employees ORDER BY last_login_at DESC NULLS LAST LIMIT 5;"
-```
-
-- `previous_login_at` **NULL for everyone** — the migration
-  `20260831120000_add_previous_login_at` has not been applied, or nobody has
-  signed in twice since it was. **A migration is applied per database.**
-  `npm run db:test:setup` reaches only the test database; the development one
-  needs `npx prisma migrate deploy` as well, and missing that is what produces
-  `column employees.previous_login_at does not exist` at runtime while the test
-  suite is green. Check with `npx prisma migrate status`.
-- `previous_login_at` **equal to `last_login_at`** — the ordering above has been
-  reversed. This is the real bug; the tests catch it.
-- **NULL for one person** — correct and not a fault. See the three states
-  below; Home works out which one it is.
-
-Every row that existed before the migration is NULL until its owner signs in
-twice more. There is no backfill and there should not be: inventing a value
-would date a "what changed" list from a moment nobody visited.
+Note the last column. `last_login_at` is **authentication**: when the current
+session was issued. It is not read by Home any more, and it should not be
+used to answer "when were they last here" — a session lasts days.
 
 ---
 
-## Home tells a long-standing employee "This is your first time here"
+## Home says "You were last here …" for a moment nobody was here
 
-**This was a real bug and it is fixed. If it comes back, the three states below
-have been collapsed into two.**
+Three different causes, told apart by *what* time it names.
 
-A NULL `previous_login_at` does **not** mean "first visit". It also means "this
-row predates the column", which was true of *every* employee the day the column
-shipped — including people who had used the platform for weeks. On the
-development database at the time, that was one real returning user and zero
-genuine first-timers, so reading NULL as "first visit" was wrong for literally
-everyone it applied to.
+**It names a few seconds ago, and the digest is empty for everyone.** The
+anchor is being read from the live value. `lib/home/service.ts` must select
+`previousActiveAt` and never `lastActiveAt`; `tests/activity.test.ts` asserts
+the word `lastActiveAt` appears nowhere in that file or in the page. This is
+the silent-empty-digest bug the whole two-column design exists to prevent —
+the window collapses to zero and the page looks completely normal — and the
+database also refuses the write that produces it: `previous_active_at` must be
+strictly earlier than `last_active_at`
+(`employees_previous_active_before_last`). If `activity.record_failed` with
+code `23514` appears in the logs, the rollover in `lib/activity/rollover.ts`
+is handing the anchor the new value. It was mutated to do exactly that on
+2026-09-18; eight tests failed and the constraint fired on every rolled write.
 
-`first_seen_at` separates them exactly rather than by heuristic. Sign-in writes
-`first_seen_at` and `last_login_at` at the same instant the first time, and
-moves only `last_login_at` afterwards:
+**It names 11:59 PM, or the small hours, when the person went home at five.**
+A background request is being counted as activity. Collection Health, the
+Point Explorer and the mailbox workspace each poll their API route every
+minute while the tab is visible, and `<Link>` prefetches pages on hover; none
+of those may count. Two rules keep them out, and each has a test:
 
-| `previous_login_at` | vs `first_seen_at` | State | Greeting says |
-|---|---|---|---|
-| set | — | `known` | "Last signed in …" |
-| NULL | `last_login_at` = `first_seen_at` | `first` | "This is your first time here" |
-| NULL | `last_login_at` > `first_seen_at` | `unknown` | **nothing** |
+- **Polls go to `/api/*`, and only a request for a page counts.** The
+  middleware stamps `x-phb-page-request` from the pathname
+  (`stampPageRequest` in `lib/activity/rollover.ts`) and the guard reads
+  only that stamp. The rule is the path and nothing else: Next.js hides its
+  own router headers (`rsc`, `next-router-prefetch`) from **both** the
+  middleware and a page's `headers()`, and `sec-fetch-mode` is `cors` for a
+  soft navigation and a poll alike — measured over a socket in
+  `tests/middleware-http.test.ts`, which is what found the first version out.
+  If a new screen polls something that is *not* under `/api/`, that is the
+  bug; move the poll, do not widen the rule.
+- **Prefetches never reach a page, and the shell does not record.** A
+  prefetch of a dynamic route renders nothing unless a `loading.tsx` sits
+  below it, and where one does (`/admin`, `/admin/audit`) the render stops at
+  that boundary — the shell runs, the page does not. `AppShell` is the one
+  caller passing `recordActivity: false`; every page's own guard call
+  records. Adding a `loading.tsx` is fine; adding one so that a *page*
+  renders during a prefetch is not, and the end-to-end prefetch tests are
+  where that would show.
 
-The `unknown` line renders **nothing at all**, and that is deliberate. There is
-no honest timestamp to offer and no true sentence to replace it with, so the
-line is absent and fills itself in on that person's next sign-in. The tempting
-fix — some cheerful fallback string — is exactly what would reintroduce a false
-claim, which is why a test asserts the page still contains
-`lastVisit.state !== "unknown"`.
+*An idle tab polling across midnight* in `tests/activity.test.ts` is the
+symptom as a test.
 
-The rule lives in `lib/home/last-visit.ts`, deliberately a plain module with no
-imports so a node test can load it — `lib/home/service.ts` reaches Prisma and
-next-auth and cannot be imported by the suite. Same reason
-`app/(modules)/bas/health-client.ts` is split that way.
+**It names a time four hours off.** Something is formatting in the server's
+zone. Every time on Home is rendered in `APP_TIME_ZONE` explicitly, because
+Home is a server component and the container runs in UTC — "yesterday at 4:52
+PM" would otherwise read "8:52 PM" in production. Do not call
+`toLocaleTimeString()` without a `timeZone` anywhere on this page.
 
-To see the distribution on any database:
+---
 
-```sql
-SELECT count(*)                                                   AS employees,
-       count(previous_login_at)                                   AS known,
-       count(*) FILTER (WHERE previous_login_at IS NULL
-                          AND last_login_at > first_seen_at)      AS unknown,
-       count(*) FILTER (WHERE previous_login_at IS NULL
-                          AND last_login_at = first_seen_at)      AS first_visit,
-       count(*) FILTER (WHERE last_login_at IS NULL)              AS never_signed_in
-FROM employees;
-```
+## The greeting never changes, or says the same day for weeks
 
-`unknown` should fall to zero on its own as people sign in. If it is *rising*,
-the carry-across in `lib/auth/signin.ts` has broken.
+**Symptom.** "You were last here on Monday 14 September" is still on screen
+on Friday, for somebody who has used the platform every day.
+
+**If it says "Last signed in"** — that is the old wording, and the build is
+from before this change. The old greeting was dated from `previous_login_at`,
+the sign-in before the current one, and a session lasts days: somebody who
+never re-authenticated saw the same date all week. That is precisely why the
+activity columns exist.
+
+**If it says "You were last here"** and still does not move:
+
+1. `npx prisma migrate status` — `20260918160000_add_employee_activity_anchor`
+   must be applied to **this** database. A migration is applied per database:
+   `npm run db:test:setup` reaches only the test database, and the development
+   one needs `npx prisma migrate deploy` as well.
+2. Look for `activity.record_failed` in the logs. The write is swallowed on
+   purpose — a broken activity write must never cost a page — so a failing one
+   is a log line, not an error page. The `reason` field says why.
+3. Confirm the middleware is running and forwarding its stamp. The guard
+   records only when `x-phb-page-request: 1` is on the request, and only the
+   middleware writes it. `tests/middleware-http.test.ts` → *activity* proves
+   the whole path over a socket; if it passes and production does not, look
+   at what sits between the browser and the container app.
+
+The write is throttled: `last_active_at` is updated only when the stored value
+is more than five minutes old, so a burst of page loads shows as one write.
+That is by design and is not this symptom — the anchor still rolls on the
+first load of the next day, because that load is always more than five
+minutes after the last one of the day before. (A value written at 11:58 PM
+followed by a load at 12:01 AM waits until 12:03 AM, and then anchors at
+11:58 PM, which is right.)
+
+---
+
+## Which timezone Home uses, and why it is not UTC
+
+**America/New_York**, for both the day boundary and the words on screen. One
+constant, `APP_TIME_ZONE` in `lib/activity/rollover.ts`.
+
+The day boundary decides when the anchor rolls. Midnight UTC is 8 PM in
+Cincinnati for half the year and 7 PM for the other half, so a UTC day would
+roll while people are still working: somebody active at 7:30 PM and again at
+8:30 PM would have their anchor moved mid-evening, and the next morning's
+greeting would date from 7:30 PM the night before. The company works in one
+zone and the greeting is read in it, so the boundary is drawn in it.
+
+It is not the browser's zone either. The anchor is a stored fact about a
+calendar day, and a stored fact cannot depend on which laptop reads it.
+
+The same constant formats the time, so the boundary and the display cannot
+disagree, and `greetingFor` — "Good morning" — reads the same clock. Change
+the constant and all three move together; `tests/activity.test.ts` pins the
+value and the 25-hour fall-back day.
+
+`bas_sites.timezone` is a different thing: it is per building, for rendering
+readings, and is not involved here.
+
+---
+
+## The login columns still exist, and what they are now for
+
+`last_login_at` and `previous_login_at` are the **authentication** record:
+when this person's current session was issued, and the one before it. They
+are written by `lib/auth/signin.ts` exactly as they always were —
+`previous_login_at` from the *old* `last_login_at`, before `last_login_at` is
+overwritten with `now()` — and `tests/home.test.ts` still asserts that
+ordering, because reversing it would leave the log unable to say when the
+previous session was issued.
+
+They are no longer read by Home. The admin employee page still shows
+`last_login_at` as "Last sign-in", which is what it is.
+
+The activity columns are written by the authorization guard, never by
+sign-in: signing in issues a session, and it is the page loads afterwards that
+say somebody was here. `tests/home.test.ts` asserts a sign-in leaves both
+activity columns NULL.
 
 ---
 
@@ -3005,7 +3078,8 @@ alongside `changeOrdersCard` and `basCardFor`. Two rules it must follow:
 Worth knowing before somebody reports one of these as wrong:
 
 - **"N new messages in the change-order mailbox"** is Inbox traffic since the
-  previous sign-in — vendor and automation mail included. It is *not* mail
+  previous active day (`previous_active_at`, the anchor above) — vendor and
+  automation mail included. It is *not* mail
   addressed to the person reading it, and the wording says "in the change-order
   mailbox" for exactly that reason. Capped at 50 and rendered as "50+" when it
   reaches the cap; a capped count shown as exact would be a quiet false claim.
