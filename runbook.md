@@ -7466,8 +7466,42 @@ per point - 1,162 hours instead of 866 over 30 days. Analyze now merges
 overlapping intervals per point before summing and says how many rows it
 merged; the total is right whatever the table holds. Collection Health and
 Point Explorer list rows and sum nothing, so they show both rows and inflate
-nothing. The duplicate rows themselves are the collector's to stop writing
-*(phb-bas, `record_gap`)* and a person's to clean up.
+nothing.
+
+**The collector no longer writes them** *(phb-bas, `record_gap`, branch
+`fix/collector-gap-record-replace`, 2026-09-21)*: an existing row for the
+same point, start and cause is extended rather than duplicated, the end never
+shrinks, and pre-existing duplicates are all extended and none is added to -
+so it deploys safely before the cleanup. `test_gap_record.py` proves it on a
+throwaway cluster.
+
+**FOLLOW-UP, in this order, and not before the first step:**
+
+1. **Clean the four duplicate rows** on the live database. For each Spring
+   Grove point (41-44), two `roll_overwrite` rows share `gap_start`
+   2026-09-03T20:20Z: keep the one ending 2026-09-07T20:31Z, delete the one
+   ending 2026-09-06T20:04Z (gap_ids 17-20 on 2026-09-21). Touches data -
+   back up first (*Back up before any destructive BAS operation*), and
+   re-check with the overlapping-pairs query below, which must return zero
+   rows afterwards.
+2. **Then add the unique index**, as a platform migration:
+   `CREATE UNIQUE INDEX ON bas_data_gaps (point_id, gap_start, cause)`. It
+   cannot apply while step 1 is undone - the migration would fail on the
+   duplicates and `migrate deploy` would stop there. Once it exists,
+   `record_gap`'s select-then-update can become one `INSERT … ON CONFLICT`,
+   and a duplicate becomes impossible rather than merely unwritten.
+
+```sql
+-- Overlapping gap records for one point. Must be empty after step 1.
+SELECT a.point_id, a.gap_id, b.gap_id, a.gap_start, a.gap_end, b.gap_end
+  FROM bas_data_gaps a
+  JOIN bas_data_gaps b ON a.point_id = b.point_id AND a.gap_id < b.gap_id
+                       AND a.gap_start < b.gap_end AND b.gap_start < a.gap_end
+ ORDER BY 1, 4;
+```
+
+Until both steps are done, Analyze's merged total is right and its "N
+overlapping records merged" sentence is the reminder.
 
 **If the figure says "across every point".** The plan named no point ids (or
 named one that does not exist) and either reads `bas_readings` or states a
