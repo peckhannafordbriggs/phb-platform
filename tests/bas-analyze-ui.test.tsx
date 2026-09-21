@@ -293,8 +293,9 @@ describe("the other sentences", () => {
     expect(render(clarify)).toContain("Nothing was queried");
     expect(render(cannot)).toContain("Could not answer");
     expect(render(cannot)).toContain("permission denied");
-    // Each attempt shows its reason, not its SQL.
-    expect(render(cannot)).not.toContain("SELECT 1");
+    // A FAILED answer shows each SQL that was tried beside its reason - the
+    // one place the SQL is rendered. Decision of 2026-09-21, both halves.
+    expect(render(cannot)).toContain("SELECT 1");
     expect(render(cannot)).toContain("a second was requested");
     expect(render(notConfigured)).toContain("ANTHROPIC_API_KEY");
     expect(render(notConfigured)).toContain("rest of Building Automation is unaffected");
