@@ -67,9 +67,11 @@ hunting through `phb-platform` for a file that was never in it.
 Two Niagara stations — a lab JACE and **PH+B's own office building at Steel
 Place** — are read over oBIX every fifteen minutes by a small Python collector
 and written into the platform's PostgreSQL database, where they are kept
-permanently. The office has 26 real points and history back to February 2024;
-the lab has four synthetic ones. The platform's Building Automation module reads
-that data in three tabs; Grafana and Claude Desktop read the same tables. Nothing
+permanently. Thirty-nine histories in all, thirty collected: the office has 26
+real points and history back to February 2024, attached to one rooftop unit and
+ten VAVs (11 equipment rows, `bas_point_links` still empty); the lab has four
+synthetic ones. The platform's Building Automation module reads that data in
+four tabs; Grafana and Claude Desktop read the same tables. Nothing
 is installed on either controller, the account used to read them cannot write
 back, and the collector reads its station list and logins from the platform
 database, entered through the module's own Settings tab.
@@ -421,7 +423,7 @@ minutes:
 | Roles | **20 of 26** points carry one, across **11** distinct roles |
 | Setpoint pairs | **two** resolve automatically through `bas_point_roles.setpoint_for` — duct static pressure, and supply air temperature |
 | Command/status pairs | none — the command and status roles are not assigned |
-| `bas_point_links` | empty. "Attached" means attached to equipment; nothing is linked point-to-point |
+| `bas_point_links` | **still empty on 21 September 2026.** "Attached" means attached to equipment; nothing is linked point-to-point. "Which unit serves this sensor" is answered from `parent_equipment_id` alone, and the Analyze tab's answer says so — live: *"This comes solely from the parent-equipment link in bas_equipment, since no point-link records exist to corroborate it."* |
 
 **Six points are deliberately unclassified**, by the same rule as `Temp1`–`Temp3`
 on the lab station: `OperatingState`, `OperatingStateOR`, `OpState`,
@@ -528,10 +530,13 @@ Controls and Siemens too.
 
 ### The lab data is synthetic; the office data is real
 
-Four active points on the lab station. `Temp1`–`Temp3` are History Emulator
-output and nobody knows what they represent, so they are deliberately left
-unclassified. `points_RoomT` is a real sensor. That station is **not PH+B's
-asset**: its licence belongs to Building Controls & Solutions.
+Seven histories on the lab station, four collected (the other three are
+Niagara's own system logs). `Temp1`–`Temp3` are History Emulator output and
+nobody knows what they represent, so they are deliberately left unclassified.
+`points_RoomT` is a real sensor and the station's one `zone_temp`. That station
+is **not PH+B's asset**: its licence belongs to Building Controls & Solutions.
+The full inventory of both stations, as read on 21 September 2026, is in
+`docs/08`, *The state of the data*.
 
 PHBoffice is real, PH+B's own, and holds history back to 21 February 2024 for
 its change-of-value points. Its clock is 22 minutes ahead of the collector host
