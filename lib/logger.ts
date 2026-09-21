@@ -21,6 +21,15 @@ export interface LogFields {
   reason?: string;
   moduleKey?: string;
   count?: number;
+  /**
+   * The Analyze tab (BAS B5). The question a person typed and the SQL that ran
+   * for it - docs/BAS-B5.md requires every query logged with both, because the
+   * log is how anyone learns what people actually ask and how a wrong answer
+   * is audited afterwards. Neither is on the docs/07 forbidden list: a question
+   * about sensor data is not a message body, and the SQL is ours to see.
+   */
+  question?: string;
+  sql?: string;
 }
 
 function emit(level: LogLevel, event: string, fields: LogFields = {}): void {

@@ -243,6 +243,29 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "bas.credential_cleared": ({ actor, meta }) =>
     `${actor} removed the stored Niagara login for station ${stringField(meta, "stationId") ?? "(unknown)"}`,
 
+  // The question, in the person's own words, trimmed so a long one does not
+  // swallow the audit table. The outcome kind is named because "asked" alone
+  // does not say whether an answer came back - and "no data" and "could not
+  // answer" are outcomes the log exists to make visible.
+  "bas.question_asked": ({ actor, meta }) => {
+    const raw = stringField(meta, "question") ?? "(question not recorded)";
+    const question = raw.length > 140 ? `${raw.slice(0, 137)}...` : raw;
+    const outcome = stringField(meta, "outcome");
+    const suffix =
+      outcome === "answered"
+        ? ""
+        : outcome === "no_data"
+          ? " - no data matched"
+          : outcome === "cannot_answer"
+            ? " - could not be answered"
+            : outcome === "clarify"
+              ? " - asked for clarification"
+              : outcome === "not_configured"
+                ? " - Analyze is not configured"
+                : "";
+    return `${actor} asked Building Automation "${question}"${suffix}`;
+  },
+
   "grant.admin_removed": ({ actor, target, module }) =>
     `${actor} removed ${target ?? "an employee"}'s administrator access for ${module}`,
 
@@ -473,6 +496,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.credential_set": "BAS station login set",
   "bas.credential_cleared": "BAS station login removed",
   "bas.point_visibility_changed": "BAS point shown or hidden",
+  "bas.question_asked": "BAS question asked",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

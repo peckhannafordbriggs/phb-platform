@@ -288,6 +288,45 @@ widest label. The readings themselves are float32 as Niagara sent them and are
 rounded nowhere but the label. `runbook.md` → *The trend chart's y-axis prints
 long decimals*; `WHY-ITS-BUILT-THIS-WAY` § 50.
 
+### Analyze — `/bas/analyze` (B5, 2026-09-21)
+
+A question in plain English; one `SELECT` written by the model; the answer
+beside **what was actually queried**. The BAS grant is enough — the tab reads
+what the other tabs read and nothing more.
+
+What is on screen for every result that ran, and cannot be collapsed: the
+hours of recorded gaps inside the resolved time range (clipped to it, from
+`bas_data_gaps`), the points in scope whose roll horizon is unknown, the time
+range as resolved, the points and sites by name, what the database holds for
+them, the row count, and the SQL. All of it computed by the platform after the
+query ran — the model's only contribution to that panel is the time range and
+point ids it declared, and both are checked against the database and labelled
+where they could not be.
+
+Five kinds of result, rendered from the kind and never from an answer string:
+`answered`, `no_data` (zero rows, or one row that is all NULL — the summariser
+is never invoked), `clarify`, `cannot_answer` (with every SQL that was tried),
+and `not_configured`. One retry at most, said on screen.
+
+`lib/modules/bas/analyze/`: `sql-guard.ts` (tokenizer, one SELECT only),
+`role.ts` (the allowlist, shared by the setup script and the refusal tests),
+`pool.ts` (READ ONLY transaction, cursor, extended protocol, timeout, row
+cap), `provenance.ts`, `schema-context.ts` (built from
+`bas_v_data_dictionary` plus live counts), `planner.ts` (the Anthropic calls),
+`service.ts` (the order of operations), `rate-limit.ts`. Tests:
+`tests/bas-analyze-*.test.ts`, 74 of them, against the real test database
+through a throwaway copy of the role.
+
+Verified live on 2026-09-21 with the real model over the PHBoffice and Spring
+Grove data — `docs/bas-b5-verification.md` has every result verbatim. The
+live runs found three faults the scripted tests could not (a widening rule
+keyed on the wrong thing, an undeclared period beside `now() - interval`, a
+30-day average from ten days of readings), and each became a platform rule:
+`periodUndeclared` and `coverageShortfall` on every result, both amber.
+
+**Not yet:** production wiring of the two variables into Key Vault, and the
+role on the Azure database.
+
 ### Settings — `/bas/settings`
 
 **B7.2–B7.6, shipped.** What gets collected: projects, buildings, stations and
@@ -420,6 +459,7 @@ own. Editing is B8.3 onward.
 | `bas_collector` (Postgres) | platform database | Read/write `bas_*` only. Refused on `employees`, `audit_events`, `_prisma_migrations` — which is the refusal that broke the backup, below |
 | `bas_readonly_platform` | platform database | SELECT on an **explicit allowlist** of `bas_*` objects, excluding the credentials table. Grafana and the MCP server |
 | `bas_backup` | platform database | `pg_read_all_data` — reads every table, writes none — plus `CREATEDB` for the restore test's scratch database. **Added 17 September**, `setup_backup_role.sql` *(phb-bas)*, which proves its own grants before finishing |
+| `bas_analyze` | platform database | SELECT on the **same explicit allowlist** as `bas_readonly_platform`, credentials table withheld. The Analyze tab's SQL and nothing else. **Added 21 September**, `npm run bas:analyze:role` *(this repo)*, which gates on unclassified `bas_*` objects and proves the refusals with read-only OFF before printing the URL. `TEMP` is deliberately not revoked — it is a `PUBLIC` grant and revoking it would change every role; the READ ONLY transaction refuses it instead |
 | `postgres` | platform database | Superuser. Migrations and the developer's `.env.local`. **In no script and no scheduled task** |
 | `bas`, `bas_readonly` | the retired standalone database | Rollback path only |
 

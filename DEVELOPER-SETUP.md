@@ -60,6 +60,7 @@ comes from. Short version:
 | `BOOTSTRAP_ADMIN_EMAIL` | `krachamolla@phb1899.com` — this makes you admin on your own machine |
 | `ALLOWED_EMAIL_DOMAINS` | `phb1899.com` |
 | `PHB_ALLOW_SEND` | `false` — leave it false, see the warning below |
+| `BAS_ASK_DATABASE_URL` | **Optional.** Only for the BAS Analyze tab. Run `npm run bas:analyze:role` and paste what it prints; leave it out and the tab says it is not configured while everything else works. Needs `ANTHROPIC_API_KEY` beside it. `runbook.md` → *Analyze says it is not configured* |
 | `CO_MAILBOX` | `changeorder@phb1899.com` |
 
 **Ask Mahi for these** — they're the same for everyone, they're just not in the repo:

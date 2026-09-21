@@ -517,6 +517,11 @@ handful.
 
 ### Ask
 
+*This section is the original design. What was built (2026-09-21) is the
+**Analyze** tab, to `docs/BAS-B5.md`, which kept the three protections and the
+"database computes, model explains" rule below and dropped the tool
+orchestration and the fault rules. See B5 under "How to build it".*
+
 An employee types a question. The platform decides which tools to call, the
 **database** computes the answer, and the model explains it.
 
@@ -756,17 +761,26 @@ resets is worse than none: a filtered zero and a real zero look identical.
    units can never share an axis. The axis says "no unit recorded" rather than
    going bare, because bare reads as *none needed* and the truth is *unknown*.
 
-### B5 — Ask
+### B5 — Ask — BUILT as "Analyze", 2026-09-21, to a narrower spec
 
-Eight tools: point inventory, roles, schema, readings, per-point summary, fault
-rules, collection health, and the guarded SQL escape hatch. An audit event per
-question — `bas.question_asked`, following the dotted-string convention.
+The eight-tool design above was not what shipped. `docs/BAS-B5.md` replaced
+it with one mechanism: **the model writes one `SELECT`**, it runs on a
+dedicated read-only role, and every answer shows what was actually queried.
+The tools it lists — inventory, roles, schema, health — are all one `SELECT`
+away, and eight tools were eight more surfaces to keep honest. The fault
+rules and the anomaly detection in the *Ask* section above remain unbuilt and
+are not part of B5.
 
-**The API key is read lazily**, exactly like `GRAPH_*`. A missing key disables
-this one feature; it must never stop the platform booting.
+What survived from this section: the audit event per question,
+`bas.question_asked`; the key read lazily; and the done-when — a write
+attempted with the validator bypassed **does** fail at the database level,
+proved in `tests/bas-analyze-role.test.ts` against the real role.
 
-**Done when** the platform answers a question correctly, and a write attempted
-through the SQL tool fails **at the database level** with the validator bypassed.
+What the spec added that this section did not have, and that turned out to be
+the feature: gap overlap and unknown-horizon computed by the platform after
+the query, a `no_data` kind distinct from an answer of zero, and "I can't
+tell you that, because…" as a first-class result. See `docs/09`, *Analyze*,
+and `WHY-ITS-BUILT-THIS-WAY.md` § 52.
 
 ### B6 — point the collector at this database — BLOCKED
 

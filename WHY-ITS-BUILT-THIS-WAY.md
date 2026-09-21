@@ -1305,6 +1305,94 @@ not the server's* fails. Stamp the activity columns from sign-in and
 `tests/home.test.ts` fails, because signing in is not being here.
 `runbook.md` → *Home*.
 
+## 52 · A wrong answer must look different from a right one, and the model is not what makes it so
+
+**Decision.** The Analyze tab (B5) lets a person ask a question of the sensor
+data in plain English. The model writes one `SELECT`. Everything that makes
+the answer trustworthy — what was queried, how many rows came back, how many
+hours of the period nobody was watching, which points have an unknown roll
+horizon, whether the period is even covered by data — is computed by the
+platform after the query runs and rendered on every result. The model is not
+asked about any of it and cannot suppress it.
+
+**Why.** Every other part of BAS is built against one failure mode: silence.
+Gaps are drawn three ways; unknown never renders green. A question box is the
+easiest place to undo all of that — "the average was 68°F last week" in a
+confident sentence, while 22 hours of that week were never recorded, and
+nothing about the sentence says so. So the bar was never "does it answer". It
+was: does a wrong or partial answer look different from a right one.
+
+Four consequences, each of which would have gone the other way if the model
+had been the authority:
+
+- **Zero rows is not zero.** A query that matches nothing, or an aggregate
+  over nothing (one row, every cell NULL), is its own result kind. The
+  summariser is never called for it, because a model asked to summarise
+  nothing writes a plausible sentence about zero. The explanation beneath it is
+  written from coverage: readings for these points start on the 15th; this
+  point has never had a reading; the range is only partly covered.
+- **Gap overlap is ours.** From `bas_data_gaps`, clipped to the range the plan
+  resolved, for the points the plan declared. When the plan declares no
+  points but the SQL reads readings, the scope is widened to every point — the
+  figure over-reports rather than under-reports. When the plan declares no
+  time range, the figure is `null` and renders amber as "could not be
+  computed", never as "no gaps".
+- **No confidence score.** The model has no calibrated sense of whether its
+  SQL was right, so a number would look authoritative and mean nothing. The
+  SQL itself is shown instead, one click away, on every result.
+- **"I can't tell you that, because…" is a success.** Clarify and
+  cannot-answer are first-class kinds. One retry at most, and the screen says
+  a retry happened.
+
+**Safety is in the code, not the prompt.** The prompt is the only lever on the
+model's behaviour and prompts get ignored. So three barriers, each tested
+alone with the other two bypassed: a dedicated PostgreSQL role
+(`bas_analyze`) with SELECT on an explicit allowlist — same shape as
+`bas_readonly_platform`, credentials table withheld, gate that refuses an
+unclassified `bas_*` object; a `READ ONLY` transaction with the model's SQL as
+the body of a cursor, fetched to a row cap under a statement timeout; and a
+tokenizer that accepts one `SELECT` and refuses everything else with a reason.
+The live run found the fourth thing: node-postgres uses the simple protocol
+when the bind array is empty, and the simple protocol ran a smuggled second
+statement. `queryMode: "extended"` is one word and it is load-bearing.
+
+**What breaks if you undo it.** Render every result through one answer
+string, and a filtered zero, a real zero and a network failure read alike —
+the failure the tiles on Collection Health exist to prevent, reintroduced in a
+sentence. Let the model report the gap figure, and the figure vanishes the day
+the prompt drifts. Reuse the Prisma client for the model's SQL, and the second
+and third barriers are gone: Prisma connects as the owner. Revoke `TEMP` from
+`PUBLIC` to make one proof pass, and the collector's next pass may fail.
+
+**What the live runs taught, the same day.** Three faults a scripted planner
+could not have found, each of which was the model doing something
+reasonable that the platform's rules had not anticipated:
+
+- The widening rule keyed on "reads `bas_readings`". A gap question reads
+  `bas_data_gaps`, declared a range and no points, and got *Scope: none,
+  Gaps: NOT COMPUTED* beside a resolved range. A declared period is a claim
+  about that period whatever table the SQL reads, so the period alone now
+  widens.
+- The model wrote `now() - interval '30 days'` and declared `time_range:
+  null`, because the prompt required a range only when readings were read.
+  Prompts get ignored, so the rule moved into code: a time expression with no
+  declared range is sent back once, and if still missing the result carries
+  *Period not stated* in amber. Never "does not apply".
+- A 30-day average came back as 72.73 °F from ten days of readings, because
+  each point holds about 500 records. No recorded gap: `bas_data_gaps`
+  describes outages inside collection, not collection never having reached
+  that far back. The model happened to mention it; happening to is not a
+  guarantee. `coverageShortfall` compares the declared range with `min(ts)`
+  / `max(ts)` over the points in scope and renders on every answered result:
+  *"Any figure above describes 10 days of the 30 days asked about."*
+
+The verification script now asks a building-specific 30-day average on
+purpose — a numeric answer over a month with outages is where the silence is
+dangerous rather than odd — and fails the run on either fault.
+`docs/bas-b5-verification.md` carries the results verbatim, including the two
+questions the model answered with a clarifying question where the spec
+expected a number, and why that was the right answer over two buildings.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

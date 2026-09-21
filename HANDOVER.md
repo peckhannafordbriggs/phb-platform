@@ -234,9 +234,20 @@ is `docs/DESIGN-BRIEF.md` and the token comments in `app/globals.css`.
 
 ### BAS — working, on synthetic data
 
-Fourteen tables, six views, the collector running, three tabs — Collection Health, Point
-Explorer and a Settings tab behind a module-admin permission — three scoped database
-accounts, nightly backups with a tested restore.
+Fourteen tables, six views, the collector running, four tabs — Collection Health, Point
+Explorer, Analyze, and a Settings tab behind a module-admin permission — four scoped
+database accounts, nightly backups with a tested restore.
+
+**Analyze (B5, 2026-09-21)** is a question box: the model writes one read-only `SELECT`,
+it runs as the `bas_analyze` role, and every answer shows the SQL, the rows, the hours of
+the period nobody was watching, and whether the readings held actually span the period
+asked about. Verified live on 21 September against the office data. It needs two things
+production does not yet have: the Anthropic API key in Key Vault (`ANTHROPIC_API_KEY`)
+and the role on the Azure database (`npm run bas:analyze:role`, then
+`BAS_ASK_DATABASE_URL`). Without
+them the tab says it is not configured and nothing else is affected. A key can be revoked
+or run out of credit, and when it does this tab — only this tab — stops; `runbook.md` →
+*Analyze says the model service rejected the API key*.
 
 B7 added a project level above buildings and encrypted station credentials. The record is
 `docs/09-bas-what-is-built.md`; the reasoning is `docs/08-bas-and-niagara.md`.
@@ -253,8 +264,9 @@ up, this becomes a Niagara engineering job before it's a data job.
   becomes dependent on the platform.
 - **Graph webhooks** — evaluated, measured, declined. Polling every 20 seconds uses 0.3% of
   the API budget and Exchange responds in 250 ms.
-- **BAS plain-English querying (B5)** — designed, not started. Blocked on a company
-  Anthropic API key.
+- **BAS fault rules and anomaly detection** — the second half of the original *Ask*
+  design in `docs/08`. B5 shipped as the Analyze tab (one `SELECT` per question, see
+  the BAS section) and stopped there.
 - **Moving the change-order AI off the laptop** — see below. Parts A and B are done.
 
 ### Production deployment (Phase 7 Part B) — deployed, CI live, sign-in pending
