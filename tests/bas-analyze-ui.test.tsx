@@ -34,6 +34,7 @@ const provenance: Provenance = {
   points: [{ id: "1", name: "Zone Temp", site: "PHBoffice", station: "JACE", collected: true }],
   gaps: {
     totalHours: 64,
+    mergedRows: 0,
     items: [
       {
         pointId: "1",
@@ -169,7 +170,7 @@ describe("provenance is on screen for every result that ran", () => {
 
 describe("the gap sentence has three states, not two", () => {
   it("zero overlapping gaps is a sentence, and green", () => {
-    const none: Provenance = { ...provenance, gaps: { totalHours: 0, items: [] } };
+    const none: Provenance = { ...provenance, gaps: { totalHours: 0, items: [], mergedRows: 0 } };
     expect(describeGaps(none)).toContain("No recorded gap overlaps");
     expect(gapsTone(none)).toBe("ok");
   });
@@ -177,7 +178,16 @@ describe("the gap sentence has three states, not two", () => {
   it("gaps present is a sentence with the hours, and amber", () => {
     expect(describeGaps(provenance)).toContain("64 hours of this period");
     expect(describeGaps(provenance)).toContain("The platform was not watching");
+    expect(describeGaps(provenance)).not.toContain("merged");
     expect(gapsTone(provenance)).toBe("warn");
+  });
+
+  it("says when overlapping records were merged, so a duplicate row is visible rather than counted", () => {
+    const merged: Provenance = {
+      ...provenance,
+      gaps: { ...provenance.gaps!, mergedRows: 1 },
+    };
+    expect(describeGaps(merged)).toContain("1 overlapping record for the same outage was merged");
   });
 
   it("not computed is its own sentence, and amber - never 'no gaps'", () => {

@@ -7455,6 +7455,20 @@ cannot suppress the figure.
 **A gap means the platform was not watching.** It never means the equipment
 was off. Collection Health's gap list is the same table.
 
+**"N overlapping records for the same outage were merged before counting."**
+`bas_data_gaps` holds two rows for one outage on the same point. Found on
+2026-09-21: the 3-8 September outage was recorded twice for each Spring Grove
+point, same start, ends a day apart, because the collector's pass on the 8th
+recorded the gap (its own committed transaction) and then timed out against
+the station before advancing the checkpoint, so the pass on the 9th recorded
+the same outage again with a later end. Summing rows counted 71.7 hours twice
+per point - 1,162 hours instead of 866 over 30 days. Analyze now merges
+overlapping intervals per point before summing and says how many rows it
+merged; the total is right whatever the table holds. Collection Health and
+Point Explorer list rows and sum nothing, so they show both rows and inflate
+nothing. The duplicate rows themselves are the collector's to stop writing
+*(phb-bas, `record_gap`)* and a person's to clean up.
+
 **If the figure says "across every point".** The plan named no point ids (or
 named one that does not exist) and either reads `bas_readings` or states a
 time range, so the platform widened the scope to every point rather than

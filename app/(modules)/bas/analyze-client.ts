@@ -153,7 +153,7 @@ export function describeGaps(provenance: Provenance): string {
     }
     return "Gap overlap does not apply: the query has no period and reads no readings.";
   }
-  const { totalHours, items } = provenance.gaps;
+  const { totalHours, items, mergedRows } = provenance.gaps;
   if (items.length === 0) {
     return provenance.scope === "all_points"
       ? "No recorded gap overlaps this period for any point."
@@ -163,7 +163,11 @@ export function describeGaps(provenance: Provenance): string {
     provenance.scope === "all_points"
       ? "across every point, because the query did not say which points it reads"
       : `across ${provenance.points.length} point${provenance.points.length === 1 ? "" : "s"}`;
-  return `${formatHours(totalHours)} of this period ${items.length === 1 ? "has" : "have"} no readings - ${items.length} recorded gap${items.length === 1 ? "" : "s"}, ${scope}. The platform was not watching; that says nothing about the equipment.`;
+  const merged =
+    mergedRows > 0
+      ? ` ${mergedRows} overlapping record${mergedRows === 1 ? "" : "s"} for the same outage ${mergedRows === 1 ? "was" : "were"} merged before counting, so the hours are not inflated by them.`
+      : "";
+  return `${formatHours(totalHours)} of this period ${items.length === 1 ? "has" : "have"} no readings - ${items.length} gap${items.length === 1 ? "" : "s"}, ${scope}. The platform was not watching; that says nothing about the equipment.${merged}`;
 }
 
 export function gapsTone(provenance: Provenance): Tone {

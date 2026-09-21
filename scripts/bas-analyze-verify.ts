@@ -209,7 +209,7 @@ function print(result: AnalyzeResult, wallMs: number): void {
       console.log(`- Time range: ${p.timeRange ? `${p.timeRange.start} to ${p.timeRange.end}` : "none"}`);
       console.log(`- Scope: ${p.scope}; points: ${p.points.map((x) => `${x.name}${x.collected ? "" : " (not collected)"}`).join(", ") || "none"}`);
       console.log(
-        `- Gaps: ${p.gaps === null ? "NOT COMPUTED" : `${p.gaps.totalHours} h in ${p.gaps.items.length} gap(s)`}` +
+        `- Gaps: ${p.gaps === null ? "NOT COMPUTED" : `${p.gaps.totalHours} h in ${p.gaps.items.length} gap(s)${p.gaps.mergedRows > 0 ? `, ${p.gaps.mergedRows} overlapping record(s) merged` : ""}`}` +
           (p.gaps && p.gaps.items.length > 0
             ? " - " + p.gaps.items.map((g) => `${g.pointName} ${g.start}..${g.end} (${g.hours} h, ${g.cause})`).join("; ")
             : ""),

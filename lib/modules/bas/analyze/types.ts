@@ -78,8 +78,19 @@ export interface Provenance {
    * the screen says so in amber rather than showing nothing.
    */
   gaps: {
+    /** Hours of the range with no readings, after overlapping records are merged. */
     totalHours: number;
+    /** One entry per distinct interval per point, after merging. */
     items: GapOverlap[];
+    /**
+     * Recorded rows that overlapped another row for the same point and were
+     * merged into it. Non-zero means bas_data_gaps holds duplicates - on
+     * 2026-09-21 the collector had recorded one outage twice, a day apart,
+     * because a pass recorded the gap and then failed before advancing the
+     * checkpoint. The total above is right regardless; this says why the
+     * row count on Collection Health is higher.
+     */
+    mergedRows: number;
   } | null;
   /** Points in scope whose roll horizon is unknown (`horizon_state = 'unknown'`). */
   unknownHorizon: { count: number; names: string[] };
