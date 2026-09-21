@@ -370,14 +370,24 @@ function ProvenancePanel({
           )}
         </Row>
 
+        {provenance.coverageShortfall !== null && (
+          <Row label="Coverage" tone="warn">
+            {provenance.coverageShortfall}
+          </Row>
+        )}
+
         {horizon.length > 0 && (
           <Row label="Roll horizon" tone="warn">
             {horizon}
           </Row>
         )}
 
-        <Row label="Time range">
-          {describeTimeRange(provenance.timeRange, (iso) => formatTimestamp(iso))}
+        <Row label="Time range" tone={provenance.periodUndeclared ? "warn" : "neutral"}>
+          {describeTimeRange(
+            provenance.timeRange,
+            (iso) => formatTimestamp(iso),
+            provenance.periodUndeclared,
+          )}
         </Row>
 
         <Row label="Points and sites">

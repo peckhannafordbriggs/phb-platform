@@ -31,6 +31,15 @@ import type { AnalyzeResult } from "../lib/modules/bas/analyze/types";
 
 const SPEC_QUESTIONS = [
   "What was the average room temperature last week?",
+  // Added 2026-09-21 after the gap question exposed a scope fault. A numeric
+  // answer over a month that spans recorded outages is where a missing gap
+  // warning is DANGEROUS rather than odd: the number looks complete and is
+  // not. Named to one building and one kind of point, because the unqualified
+  // version was (correctly) answered with a clarifying question and so never
+  // reached the number. PHB Steel Place's points carry recorded gaps inside
+  // any recent 30-day window. Fails the run if the result has a period with
+  // no gap figure, or a time expression with no declared period - see main().
+  "What was the average zone temperature at PHB Steel Place over the last 30 days?",
   "What was the average value of the point called Humidity Setpoint Foo last week?",
   "What was the average room temperature in March 2023?",
   "Which air handling unit serves the room temperature sensor?",
@@ -124,10 +133,40 @@ async function main(): Promise<void> {
       continue;
     }
     print(result, Date.now() - started);
+
+    // The invariant the gap question broke on 2026-09-21: a declared period
+    // with no gap figure is the exact silence this feature exists to prevent.
+    if (result.kind === "answered" || result.kind === "no_data") {
+      const p = result.provenance;
+      if (p.timeRange !== null && (p.gaps === null || p.scope === "none")) {
+        faults += 1;
+        console.log(
+          "**FAULT:** a time range was declared but gap overlap was not computed " +
+            `(scope ${p.scope}, gaps ${p.gaps === null ? "null" : "present"}). This run fails.`,
+        );
+        console.log("");
+      }
+      // The second shape of the same silence, found on the next run: the SQL
+      // says `now() - interval '30 days'` and the plan says no period.
+      if (p.periodUndeclared) {
+        faults += 1;
+        console.log(
+          "**FAULT:** the SQL filters by time but the plan declared no period, even after " +
+            "being asked again. The gap figure could not be computed. This run fails.",
+        );
+        console.log("");
+      }
+    }
   }
 
   await pool.end();
+
+  if (faults > 0) {
+    throw new Error(`${faults} result(s) declared a period without a gap figure.`);
+  }
 }
+
+let faults = 0;
 
 function print(result: AnalyzeResult, wallMs: number): void {
   console.log(`**Kind:** \`${result.kind}\` · ${(wallMs / 1000).toFixed(1)} s`);
@@ -179,6 +218,15 @@ function print(result: AnalyzeResult, wallMs: number): void {
       console.log(
         `- Coverage: ${p.coverage === null ? "n/a" : `${p.coverage.readings} readings, ${p.coverage.earliest ?? "-"} to ${p.coverage.latest ?? "-"}; never collected: ${p.coverage.neverCollected.join(", ") || "none"}`}`,
       );
+      console.log(
+        `- Coverage shortfall: ${
+          p.coverageShortfall ??
+          (p.coverage === null || p.timeRange === null
+            ? "n/a - no readings or no period to compare"
+            : "none - the readings held span the period asked about")
+        }`,
+      );
+      console.log(`- Period undeclared: ${p.periodUndeclared}`);
       console.log(`- Unclassified points excluded: ${p.unclassifiedExcluded}`);
       console.log("");
       console.log(`**Rows:** ${result.table.rowCount}${result.table.truncated ? ` (capped at ${result.table.rowCap})` : ""}`);

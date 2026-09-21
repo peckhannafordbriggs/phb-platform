@@ -50,6 +50,8 @@ const provenance: Provenance = {
     neverCollected: [],
   },
   unclassifiedExcluded: 0,
+  periodUndeclared: false,
+  coverageShortfall: null,
 };
 
 const table = (rows: (string | number | boolean | null)[][]) => ({
@@ -138,6 +140,21 @@ describe("provenance is on screen for every result that ran", () => {
     expect(render(zero)).toContain("the model&#x27;s reading of the rows below");
   });
 
+  it("renders a coverage shortfall as its own amber row on an answered result", () => {
+    // 72.73 °F "over the last 30 days" from ten days of readings, live on
+    // 2026-09-21. The number is right about ten days and wrong about thirty,
+    // and only the platform can be relied on to say which.
+    const short: Provenance = {
+      ...provenance,
+      coverageShortfall:
+        "The period asked about is only partly covered: readings for these points run from A to B, so the first 20 days of the period has no readings at all.",
+    };
+    const html = render({ ...zero, provenance: short });
+    expect(html).toContain(">Coverage<");
+    expect(html).toContain("only partly covered");
+    expect(render(zero)).not.toContain(">Coverage<");
+  });
+
   it("says when a retry happened", () => {
     expect(render({ ...zero, retried: true })).toContain("a second was requested");
     expect(render(zero)).not.toContain("a second was requested");
@@ -162,6 +179,26 @@ describe("the gap sentence has three states, not two", () => {
     expect(describeGaps(uncomputed)).toContain("could not be computed");
     expect(describeGaps(uncomputed)).not.toContain("No recorded gap");
     expect(gapsTone(uncomputed)).toBe("warn");
+  });
+
+  it("says 'period not stated' in amber when the SQL filters by time and the plan declared none", () => {
+    // The second live finding of 2026-09-21: `now() - interval '30 days'` in
+    // the SQL, no range in the plan. This must never read as "does not apply".
+    const undeclared: Provenance = {
+      ...provenance,
+      gaps: null,
+      timeRange: null,
+      scope: "none",
+      points: [],
+      periodUndeclared: true,
+    };
+    expect(describeGaps(undeclared)).toContain("did not state the period");
+    expect(describeGaps(undeclared)).not.toContain("does not apply");
+    expect(gapsTone(undeclared)).toBe("warn");
+
+    const html = render({ ...zero, provenance: undeclared });
+    expect(html).toContain("Not stated. The SQL filters by time");
+    expect(html).toContain("did not state the period");
   });
 
   it("does not apply to a query that reads no readings, and is neutral", () => {

@@ -336,6 +336,31 @@ describe("gap overlap is computed here, not by the model", () => {
     expect(result.provenance.points.map((p) => p.name)).toEqual(["Zone Temp B5"]);
     // The point has capacity but no interval and no measured horizon.
     expect(result.provenance.unknownHorizon).toEqual({ count: 1, names: ["Zone Temp B5"] });
+
+    // The dangerous case, on an ANSWERED result: the range is seven days, the
+    // readings held span the 15th to the 17th. The number is real and it
+    // describes three days of seven, and the platform says so - live on
+    // 2026-09-21 a 30-day average over ten days of readings went out with
+    // only the model mentioning it.
+    expect(result.provenance.coverageShortfall).toContain("only partly covered");
+    expect(result.provenance.coverageShortfall).toContain("the first 24 hours and the last 4 days");
+    // 15th 00:00 to 17th 00:00 is 48 hours: two days, not three.
+    expect(result.provenance.coverageShortfall).toContain("2 days of the 7 days asked about");
+  });
+
+  it("reports no coverage shortfall when the readings span the whole range", async () => {
+    await testDb.basReading.createMany({
+      data: [
+        { pointId: seeded.temp, ts: new Date("2026-09-14T00:00:00Z"), valueNum: 70 },
+        { pointId: seeded.temp, ts: new Date("2026-09-20T23:30:00Z"), valueNum: 70 },
+      ],
+    });
+    const result = await ask(scriptedPlanner([query(AVG_SQL())]));
+
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") return;
+    // Half an hour short at the end is the collector's cadence, not a shortfall.
+    expect(result.provenance.coverageShortfall).toBeNull();
   });
 
   it("widens to every point when the SQL reads readings and the plan names none", async () => {
@@ -376,7 +401,85 @@ describe("gap overlap is computed here, not by the model", () => {
     expect(result.provenance.timeRange).toBeNull();
   });
 
-  it("does not compute gaps for a query that reads no readings", async () => {
+  it("widens to every point on a declared time range alone, even when the SQL reads no readings", async () => {
+    // Found live on 2026-09-21: "gap hours in the last 30 days, by point"
+    // reads bas_data_gaps, not bas_readings. The plan declared the range and
+    // no point ids, and the provenance said "Scope: none, Gaps: NOT
+    // COMPUTED" beside a resolved range. A period is a claim about that
+    // period, whatever table the SQL happens to read.
+    const planner = scriptedPlanner([
+      query(
+        `SELECT g.point_id, count(*) AS gaps FROM bas_data_gaps g WHERE g.gap_start < '${RANGE.end}' AND g.gap_end > '${RANGE.start}' GROUP BY 1`,
+        { pointIds: [] },
+      ),
+    ]);
+
+    const result = await ask(planner, "gap hours by point?");
+
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") return;
+    expect(result.provenance.scope).toBe("all_points");
+    expect(result.provenance.points.length).toBeGreaterThanOrEqual(2);
+    expect(result.provenance.gaps).not.toBeNull();
+    expect(result.provenance.gaps?.totalHours).toBe(68);
+    // Coverage is about readings and stays off for a query that reads none.
+    expect(result.provenance.coverage).toBeNull();
+  });
+
+  it("sends a plan back ONCE when its SQL filters by time and declares no range, then computes gaps from the declared one", async () => {
+    // Found live on 2026-09-21: `now() - interval '30 days'` in the SQL and
+    // `time_range: null` beside it, so nothing widened and nothing was
+    // computed. The retry is what asks for the range.
+    const relative = `SELECT count(*) AS gaps FROM bas_data_gaps WHERE gap_end > now() - interval '30 days'`;
+    const planner = scriptedPlanner((previous) =>
+      previous === null
+        ? query(relative, { timeRange: null, pointIds: [] })
+        : query(relative, { timeRange: RANGE, pointIds: [] }),
+    );
+
+    const result = await ask(planner, "gap hours in the last 30 days?");
+
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") return;
+    expect(result.retried).toBe(true);
+    expect(planner.planCalls).toHaveLength(2);
+    expect(planner.planCalls[1]!.error).toContain("time_range was null");
+    expect(result.provenance.periodUndeclared).toBe(false);
+    expect(result.provenance.timeRange).toEqual(RANGE);
+    expect(result.provenance.scope).toBe("all_points");
+    expect(result.provenance.gaps?.totalHours).toBe(68);
+  });
+
+  it("runs anyway when the second plan still omits the range, and flags the period as undeclared", async () => {
+    const relative = `SELECT count(*) AS gaps FROM bas_data_gaps WHERE gap_end > now() - interval '30 days'`;
+    const planner = scriptedPlanner([query(relative, { timeRange: null, pointIds: [] })]);
+
+    const result = await ask(planner, "gap hours in the last 30 days?");
+
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") return;
+    expect(result.retried).toBe(true);
+    expect(result.provenance.periodUndeclared).toBe(true);
+    expect(result.provenance.gaps).toBeNull();
+    // The flag is what turns "does not apply" into "period not stated" on
+    // screen; the sentence is asserted in tests/bas-analyze-ui.test.tsx.
+  });
+
+  it("does not ask for a range when the SQL has no time expression at all", async () => {
+    const planner = scriptedPlanner([
+      query(`SELECT count(*) AS stations FROM bas_stations`, { timeRange: null, pointIds: [] }),
+    ]);
+
+    const result = await ask(planner, "how many stations?");
+
+    expect(result.kind).toBe("answered");
+    if (result.kind !== "answered") return;
+    expect(result.retried).toBe(false);
+    expect(planner.planCalls).toHaveLength(1);
+    expect(result.provenance.periodUndeclared).toBe(false);
+  });
+
+  it("does not compute gaps for a query that reads no readings AND states no period", async () => {
     const planner = scriptedPlanner([
       query(`SELECT count(*) AS stations FROM bas_stations`, { timeRange: null, pointIds: [] }),
     ]);
@@ -439,6 +542,9 @@ describe("saying I don't know", () => {
         neverCollected: [],
       },
       unclassifiedExcluded: 2,
+      periodUndeclared: false,
+      // explainNoData repeats the shared sentence rather than recomputing it.
+      coverageShortfall: "The period asked about is only partly covered: (fixture).",
     });
     expect(explanation).toContain("only partly covered");
     expect(explanation).toContain("2 points have no role");

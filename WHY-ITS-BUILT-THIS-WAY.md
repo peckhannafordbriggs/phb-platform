@@ -1364,13 +1364,34 @@ the prompt drifts. Reuse the Prisma client for the model's SQL, and the second
 and third barriers are gone: Prisma connects as the owner. Revoke `TEMP` from
 `PUBLIC` to make one proof pass, and the collector's next pass may fail.
 
-**One thing that is not yet true.** The model's behaviour over the real data
-is unverified: the key supplied on 2026-09-21 is refused by Anthropic with
-401. The honesty paths were exercised by the failure — every question
-rendered as "could not answer", nothing was queried, one audit row per
-question — and the automated criteria are all met against the real test
-database. `docs/bas-b5-verification.md` says exactly what has and has not
-been seen.
+**What the live runs taught, the same day.** Three faults a scripted planner
+could not have found, each of which was the model doing something
+reasonable that the platform's rules had not anticipated:
+
+- The widening rule keyed on "reads `bas_readings`". A gap question reads
+  `bas_data_gaps`, declared a range and no points, and got *Scope: none,
+  Gaps: NOT COMPUTED* beside a resolved range. A declared period is a claim
+  about that period whatever table the SQL reads, so the period alone now
+  widens.
+- The model wrote `now() - interval '30 days'` and declared `time_range:
+  null`, because the prompt required a range only when readings were read.
+  Prompts get ignored, so the rule moved into code: a time expression with no
+  declared range is sent back once, and if still missing the result carries
+  *Period not stated* in amber. Never "does not apply".
+- A 30-day average came back as 72.73 °F from ten days of readings, because
+  each point holds about 500 records. No recorded gap: `bas_data_gaps`
+  describes outages inside collection, not collection never having reached
+  that far back. The model happened to mention it; happening to is not a
+  guarantee. `coverageShortfall` compares the declared range with `min(ts)`
+  / `max(ts)` over the points in scope and renders on every answered result:
+  *"Any figure above describes 10 days of the 30 days asked about."*
+
+The verification script now asks a building-specific 30-day average on
+purpose — a numeric answer over a month with outages is where the silence is
+dangerous rather than odd — and fails the run on either fault.
+`docs/bas-b5-verification.md` carries the results verbatim, including the two
+questions the model answered with a clarifying question where the spec
+expected a number, and why that was the right answer over two buildings.
 
 ## 47 · The judgment I'd most want to pass on
 

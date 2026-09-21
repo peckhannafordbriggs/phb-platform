@@ -111,10 +111,13 @@ export function resultTone(result: AnalyzeResult): Tone {
  */
 export function describeGaps(provenance: Provenance): string {
   if (provenance.gaps === null) {
+    if (provenance.periodUndeclared) {
+      return "Gap overlap could not be computed: the SQL filters by time (now(), an interval, a timestamp column) but the plan did not state the period, even when asked again. Treat any figure above as unverified - the hours nobody was watching are unknown for it.";
+    }
     if (provenance.timeRange === null && provenance.scope !== "none") {
       return "Gap overlap could not be computed: the query reads readings but no time range was stated. Treat any figure above as unverified.";
     }
-    return "Gap overlap does not apply: the query reads no readings.";
+    return "Gap overlap does not apply: the query has no period and reads no readings.";
   }
   const { totalHours, items } = provenance.gaps;
   if (items.length === 0) {
@@ -131,6 +134,7 @@ export function describeGaps(provenance: Provenance): string {
 
 export function gapsTone(provenance: Provenance): Tone {
   if (provenance.gaps === null) {
+    if (provenance.periodUndeclared) return "warn";
     return provenance.timeRange === null && provenance.scope !== "none" ? "warn" : "neutral";
   }
   return provenance.gaps.items.length === 0 ? "ok" : "warn";
@@ -169,8 +173,13 @@ export function describeRowCount(table: ResultTable): string {
 export function describeTimeRange(
   range: Provenance["timeRange"],
   format: (iso: string) => string = (iso) => iso,
+  periodUndeclared = false,
 ): string {
-  if (range === null) return "No time range - the query does not filter by time.";
+  if (range === null) {
+    return periodUndeclared
+      ? "Not stated. The SQL filters by time, but the plan did not say which period it covers."
+      : "No time range - the query does not filter by time.";
+  }
   return `${format(range.start)} to ${format(range.end)} (UTC as resolved by the plan)`;
 }
 

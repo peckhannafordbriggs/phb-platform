@@ -99,6 +99,25 @@ export interface Provenance {
    * silently outside the answer, and the screen says so.
    */
   unclassifiedExcluded: number;
+  /**
+   * The SQL filters by time (now(), interval, a timestamp column) but the
+   * plan declared no time range, even after being asked once more. `gaps`
+   * is then null for a reason the screen has to give: not "does not apply"
+   * but "the period was not stated, so the overlap could not be checked".
+   * Found live on 2026-09-21 with `now() - interval '30 days'` and a null
+   * range beside it.
+   */
+  periodUndeclared: boolean;
+  /**
+   * The declared range is not covered by the readings held: it begins before
+   * the first reading, ends after the last, or both. A sentence, computed
+   * here, or null when the range is covered or nothing can be compared.
+   * Found live on 2026-09-21: "72.73 °F over the last 30 days" over readings
+   * spanning ten of them, and only the model happened to mention it. An
+   * average labelled with a period it does not cover is the most dangerous
+   * sentence this tab can produce, so the platform says it every time.
+   */
+  coverageShortfall: string | null;
 }
 
 export interface Attempt {

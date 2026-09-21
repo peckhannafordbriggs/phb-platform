@@ -7456,10 +7456,19 @@ cannot suppress the figure.
 was off. Collection Health's gap list is the same table.
 
 **If the figure says "across every point".** The plan named no point ids (or
-named one that does not exist), and the SQL reads `bas_readings`, so the
-platform widened the scope to every point rather than report nothing. The
-figure over-reports rather than under-reports. The SQL is one click away;
-read which points it actually touches.
+named one that does not exist) and either reads `bas_readings` or states a
+time range, so the platform widened the scope to every point rather than
+report nothing. The figure over-reports rather than under-reports. The SQL is
+one click away; read which points it actually touches.
+
+**A declared period is always enough.** On 2026-09-21 the live run of "gap
+hours in the last 30 days, by point" showed *Scope: none, Gaps: NOT COMPUTED*
+beside a resolved range, because the SQL read `bas_data_gaps` rather than
+`bas_readings` and the widening rule keyed on the table. It now keys on the
+period as well; `npm run bas:analyze:verify` fails outright if any result
+declares a period without a gap figure, and asks "average temperature over
+the last 30 days" specifically because a numeric answer over a month with
+outages is where that silence is dangerous rather than odd.
 
 **If it says "could not be computed".** The SQL reads readings but the plan
 stated no time range, so there is nothing to intersect with. The row is amber
@@ -7523,6 +7532,40 @@ its own with the others bypassed (`tests/bas-analyze-role.test.ts`):
 the database; `REVOKE TEMP … FROM bas_analyze` has no effect (measured), and
 `… FROM PUBLIC` would change what the collector may do. A temp table holds no
 BAS data, and layer 2 refuses `CREATE` anyway.
+
+---
+
+## An Analyze answer carries an amber "Coverage" row, or says "Period not stated"
+
+Two states added on 2026-09-21 from the first live runs with a working key.
+Both are the platform's, not the model's, and both exist because a numeric
+answer over a period it does not actually cover is the most dangerous
+sentence this tab can produce.
+
+**Coverage.** *The period asked about is only partly covered: readings for
+these points run from … to …, so the first 20 days of the period has no
+readings at all. Any figure above describes 10 days of the 30 days asked
+about.* The declared range was compared with `min(ts)` / `max(ts)` over the
+points in scope, and the readings fall short at one or both ends by an hour or
+more. The number is right about the covered span and wrong about the period
+in the question. The live case: "average zone temperature at PHB Steel Place
+over the last 30 days" → 72.73 °F from ten days of readings, because each
+point holds about 500 records. No recorded gap: `bas_data_gaps` describes
+outages inside collection, and this is collection not having reached back
+that far. Under an hour at either edge is the collector's cadence and is not
+reported.
+
+**Period not stated.** The SQL filters by time — `now()`, an `interval`, a
+timestamp column — but the plan declared no range, so the gap figure could
+not be computed. The service sends such a plan back ONCE with the reason; this
+row appears only when the second plan still omits it. Then the query runs,
+the *Gaps* row says "could not be computed … did not state the period" in
+amber, and the *Time range* row says "Not stated". It is never rendered as
+"does not apply". Seen live once, before the retry existed: `now() - interval
+'30 days'` beside `time_range: null`.
+
+`npm run bas:analyze:verify` fails outright on either a declared period with
+no gap figure or a time expression with no declared period.
 
 ---
 

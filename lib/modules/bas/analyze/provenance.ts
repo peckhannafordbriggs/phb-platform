@@ -35,6 +35,8 @@ export interface ProvenanceInput {
   timeRange: TimeRange | null;
   readsReadings: boolean;
   filtersByRole: boolean;
+  /** The SQL filters by time and `timeRange` is still null after a retry. */
+  periodUndeclared: boolean;
 }
 
 const POINT_NAME_SQL =
@@ -49,6 +51,16 @@ export async function computeProvenance(
   let scope: ScopeSource;
   let points: ProvenancePoint[];
 
+  // A declared TIME RANGE is reason enough to widen, not only a read of
+  // bas_readings. Found live on 2026-09-21: "gap hours in the last 30 days,
+  // by point" reads bas_data_gaps, the plan declared the range and no ids,
+  // and the old rule - widen only when the SQL reads readings - produced
+  // "Scope: none, Gaps: NOT COMPUTED" beside a resolved range. Anything
+  // with a period is a claim about that period, and the overlap figure is
+  // what checks it; the cost of computing it for a query that turns out not
+  // to need it is one indexed query.
+  const hasPeriod = input.timeRange !== null;
+
   if (declared.length > 0) {
     points = await lookupPoints(pool, declared);
     // Every declared id resolved: the declaration is at least about real
@@ -56,7 +68,7 @@ export async function computeProvenance(
     // honest thing is to fall back to every point rather than trust the rest.
     scope = points.length === declared.length ? "declared" : "all_points";
     if (scope === "all_points") points = await lookupPoints(pool, null);
-  } else if (input.readsReadings) {
+  } else if (input.readsReadings || hasPeriod) {
     scope = "all_points";
     points = await lookupPoints(pool, null);
   } else {
@@ -68,7 +80,7 @@ export async function computeProvenance(
   const range = input.timeRange;
 
   const [gaps, unknownHorizon, coverage, unclassified] = await Promise.all([
-    range !== null && (input.readsReadings || ids.length > 0)
+    range !== null && ids.length > 0
       ? gapOverlap(pool, ids, range)
       : Promise.resolve(null),
     ids.length > 0 ? unknownHorizonPoints(pool, ids) : Promise.resolve({ count: 0, names: [] }),
@@ -86,7 +98,65 @@ export async function computeProvenance(
     unknownHorizon,
     coverage,
     unclassifiedExcluded: unclassified,
+    periodUndeclared: input.periodUndeclared,
+    coverageShortfall: describeCoverageShortfall(range, coverage),
   };
+}
+
+/**
+ * Does the data held cover the period asked about? One sentence, or null.
+ *
+ * Used for every result, not only no-data: an answer of "72.73 °F over the
+ * last 30 days" computed from ten days of readings is exactly as wrong as a
+ * silent gap, and only the platform can say so reliably - the model happened
+ * to mention it once, on 2026-09-21, and happening to is not a guarantee.
+ * A recorded gap inside the covered span is the gap figure's job; this is
+ * the span itself falling short of the question.
+ */
+export function describeCoverageShortfall(
+  range: TimeRange | null,
+  coverage: Provenance["coverage"],
+): string | null {
+  if (range === null || coverage === null) return null;
+  if (coverage.readings === 0 || coverage.earliest === null || coverage.latest === null) {
+    return null; // "never collected" is its own sentence, in explainNoData.
+  }
+
+  const askedStart = Date.parse(range.start);
+  const askedEnd = Date.parse(range.end);
+  const haveStart = Date.parse(coverage.earliest);
+  const haveEnd = Date.parse(coverage.latest);
+
+  if (askedEnd <= haveStart) {
+    return `The period asked about ends before collection began. Readings for these points start ${coverage.earliest}.`;
+  }
+  if (askedStart >= haveEnd) {
+    return `The period asked about begins after the last reading held, ${coverage.latest}.`;
+  }
+
+  const missingStartH = Math.max(0, (haveStart - askedStart) / 3_600_000);
+  const missingEndH = Math.max(0, (askedEnd - haveEnd) / 3_600_000);
+  // Under an hour at either edge is the collector's cadence, not a shortfall.
+  if (missingStartH < 1 && missingEndH < 1) return null;
+
+  const askedH = (askedEnd - askedStart) / 3_600_000;
+  const coveredH = Math.max(0, askedH - missingStartH - missingEndH);
+  const parts: string[] = [];
+  if (missingStartH >= 1) parts.push(`the first ${formatSpan(missingStartH)}`);
+  if (missingEndH >= 1) parts.push(`the last ${formatSpan(missingEndH)}`);
+
+  return (
+    `The period asked about is only partly covered: readings for these points run from ` +
+    `${coverage.earliest} to ${coverage.latest}, so ${parts.join(" and ")} of the period ` +
+    `${parts.length === 1 ? "has" : "have"} no readings at all. Any figure above describes ` +
+    `${formatSpan(coveredH)} of the ${formatSpan(askedH)} asked about.`
+  );
+}
+
+function formatSpan(hours: number): string {
+  if (hours >= 48) return `${Math.round(hours / 24)} days`;
+  if (hours >= 1) return `${Math.round(hours)} hours`;
+  return `${Math.round(hours * 60)} minutes`;
 }
 
 /** Only well-formed integers reach the database. Anything else is dropped. */
@@ -210,6 +280,11 @@ async function unknownHorizonPoints(
        JOIN bas_points p ON p.point_id = h.point_id
       WHERE h.point_id = ANY ($1::bigint[])
         AND h.horizon_state = 'unknown'
+        -- Collected points only. An uncollected system log has no horizon to
+        -- know, and Collection Health keeps the deliberate inactive reasons
+        -- out of every figure; listing AuditHistory twice here (live,
+        -- 2026-09-21) said nothing about the answer.
+        AND p.is_active
       ORDER BY 1`,
     [ids],
   );

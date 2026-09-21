@@ -137,10 +137,13 @@ suite therefore cannot see:
 - whether the summary paragraph states only numbers that are in the rows.
 
 The procedure for those is `npm run bas:analyze:verify`, and the record is
-`docs/bas-b5-verification.md`. **As of 2026-09-21 it has not been run to
-completion**: the Anthropic key in `.env.local` is refused with 401, so the
-model's behaviour over the real data is unobserved. Every automated
-acceptance criterion in `docs/BAS-B5.md` is met; every manual one is open.
+`docs/bas-b5-verification.md`. It was run to completion on 2026-09-21 once a
+working key arrived, and it found three faults the scripted planner could
+not — which is the point of this section: the fake planner always declared
+its range and its points, and the real one did not. Each fault became a
+platform rule with its own scripted test, so the suite now covers the
+*shapes* that were seen; it still cannot see the next shape the model
+produces. Re-run the script after any change to `planner.ts`.
 
 One more, structural: `basSiteScope` returns `null` (every site) for everyone
 today, and free-form SQL cannot be confined to a subset of sites. The service

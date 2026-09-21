@@ -609,11 +609,24 @@ explanation is written from coverage. Every question is one audit row
 (`bas.question_asked`) and one log line, both carrying the question and the
 SQL. Two variables, both lazy: `ANTHROPIC_API_KEY` and `BAS_ASK_DATABASE_URL`;
 missing either renders a not-configured state. Neither is in
-`infra/main.bicep` yet. **The live manual checks are blocked:** the key in
-`.env.local` is refused by Anthropic with 401 `API key is invalid`, so what
-the model actually says over real data is unverified — `npm run
-bas:analyze:verify` is the procedure, `docs/bas-b5-verification.md` the
-record so far. `WHY-ITS-BUILT-THIS-WAY.md` § 52; `runbook.md` → *Analyze*.
+`infra/main.bicep` yet.
+
+**Verified live the same day, once a working key arrived**, and the live
+runs found three things a scripted planner could not: the widening rule
+keyed on `bas_readings` rather than on a declared period, so a gap question
+over `bas_data_gaps` showed *Scope: none, Gaps: NOT COMPUTED* beside a
+resolved range; the model wrote `now() - interval '30 days'` and declared no
+range, so nothing widened at all; and a 30-day average came back from ten
+days of readings with only the model happening to mention it. All three are
+now the platform's: a declared period widens on its own, a time expression
+with no declared range is sent back once and then flagged *Period not
+stated*, and **`coverageShortfall`** compares the range with `min(ts)` /
+`max(ts)` and renders amber on every answered result — *"Any figure above
+describes 10 days of the 30 days asked about."* `npm run bas:analyze:verify`
+asks a building-specific 30-day average precisely because that is where the
+silence is dangerous, and fails the run on either fault.
+`docs/bas-b5-verification.md` is the record, results pasted verbatim.
+`WHY-ITS-BUILT-THIS-WAY.md` § 52; `runbook.md` → *Analyze*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

@@ -317,10 +317,15 @@ cap), `provenance.ts`, `schema-context.ts` (built from
 `tests/bas-analyze-*.test.ts`, 74 of them, against the real test database
 through a throwaway copy of the role.
 
-**Not yet:** a working Anthropic key. The one in `.env.local` is refused with
-401, so the model's behaviour over the real data is unverified —
-`docs/bas-b5-verification.md` records what has been checked and what has not.
-Production wiring of the two variables into Key Vault is also not done.
+Verified live on 2026-09-21 with the real model over the PHBoffice and Spring
+Grove data — `docs/bas-b5-verification.md` has every result verbatim. The
+live runs found three faults the scripted tests could not (a widening rule
+keyed on the wrong thing, an undeclared period beside `now() - interval`, a
+30-day average from ten days of readings), and each became a platform rule:
+`periodUndeclared` and `coverageShortfall` on every result, both amber.
+
+**Not yet:** production wiring of the two variables into Key Vault, and the
+role on the Azure database.
 
 ### Settings — `/bas/settings`
 

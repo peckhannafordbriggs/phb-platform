@@ -16,7 +16,7 @@ import {
 import { computeProvenance } from "./provenance";
 import { QuestionRateLimiter, questionRateLimiter } from "./rate-limit";
 import { getSchemaContext, type SchemaContext } from "./schema-context";
-import { guardSql, readsReadings } from "./sql-guard";
+import { filtersByTime, guardSql, readsReadings } from "./sql-guard";
 import {
   PlannerError,
   type AnalyzeResult,
@@ -177,6 +177,24 @@ export async function analyzeQuestion(
         continue;
       }
 
+      // A period in the SQL with no declared range is unusable ONCE: the
+      // retry asks for the range, because without it the gap overlap - the
+      // one figure that checks a numeric answer over a month - cannot be
+      // computed. Found live on 2026-09-21: `now() - interval '30 days'` in
+      // the SQL, `time_range: null` beside it. If the second plan still
+      // omits it, the query runs and the provenance carries the flag; the
+      // screen then says "period not stated" in amber rather than
+      // pretending the question had no period.
+      if (plan.timeRange === null && filtersByTime(guarded.sql) && !retried) {
+        attempts.push({
+          sql: guarded.sql,
+          error:
+            "The SQL filters or buckets by time, but time_range was null. Declare the UTC " +
+            "start and end the SQL covers, resolving now() and any interval to timestamps.",
+        });
+        continue;
+      }
+
       try {
         ran = await runGuardedSelect(pool, guarded.sql, run);
         plan = { ...plan, sql: guarded.sql };
@@ -242,6 +260,7 @@ export async function analyzeQuestion(
       timeRange: plan.timeRange,
       readsReadings: touchesReadings,
       filtersByRole: plan.filtersByRole,
+      periodUndeclared: plan.timeRange === null && filtersByTime(plan.sql),
     });
 
     const table: ResultTable = {
@@ -425,24 +444,10 @@ export function explainNoData(
               : "."),
         );
       }
-      if (range !== null && coverage.earliest !== null && coverage.latest !== null) {
-        const askedStart = Date.parse(range.start);
-        const askedEnd = Date.parse(range.end);
-        const haveStart = Date.parse(coverage.earliest);
-        const haveEnd = Date.parse(coverage.latest);
-        if (askedEnd <= haveStart) {
-          notes.push(
-            `The range asked about ends before collection began. Readings for these points start ${coverage.earliest}.`,
-          );
-        } else if (askedStart >= haveEnd) {
-          notes.push(
-            `The range asked about begins after the last reading held, ${coverage.latest}.`,
-          );
-        } else if (askedStart < haveStart || askedEnd > haveEnd) {
-          notes.push(
-            `The range asked about is only partly covered. Readings run from ${coverage.earliest} to ${coverage.latest}.`,
-          );
-        }
+      // One definition of "the period is not covered", shared with every
+      // answered result through Provenance.coverageShortfall.
+      if (provenance.coverageShortfall !== null) {
+        notes.push(provenance.coverageShortfall);
       }
     }
   }

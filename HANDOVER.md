@@ -239,11 +239,12 @@ Explorer, Analyze, and a Settings tab behind a module-admin permission — four 
 database accounts, nightly backups with a tested restore.
 
 **Analyze (B5, 2026-09-21)** is a question box: the model writes one read-only `SELECT`,
-it runs as the `bas_analyze` role, and every answer shows the SQL, the rows, and the hours
-of the period nobody was watching. It needs two things production does not yet have: a
-working Anthropic API key (`ANTHROPIC_API_KEY` — the one supplied on 21 September is
-refused with 401, so the model's behaviour over real data is **unverified**) and the role
-on the Azure database (`npm run bas:analyze:role`, then `BAS_ASK_DATABASE_URL`). Without
+it runs as the `bas_analyze` role, and every answer shows the SQL, the rows, the hours of
+the period nobody was watching, and whether the readings held actually span the period
+asked about. Verified live on 21 September against the office data. It needs two things
+production does not yet have: the Anthropic API key in Key Vault (`ANTHROPIC_API_KEY`)
+and the role on the Azure database (`npm run bas:analyze:role`, then
+`BAS_ASK_DATABASE_URL`). Without
 them the tab says it is not configured and nothing else is affected. A key can be revoked
 or run out of credit, and when it does this tab — only this tab — stops; `runbook.md` →
 *Analyze says the model service rejected the API key*.

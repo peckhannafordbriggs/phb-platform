@@ -302,6 +302,31 @@ export function guardSql(raw: string): GuardVerdict {
  * quoted "bas_readings" does not either - the role would refuse a name spelled
  * that way anyway, since the tables are lower-case.
  */
+/**
+ * Does this SQL narrow or bucket by time at all? If so, the plan must declare
+ * the range it covers, or the gap overlap cannot be computed - and a query
+ * over "the last 30 days" with no declared range is exactly the silent
+ * partial answer this feature exists to prevent.
+ *
+ * Token-based, like readsReadings. The list is the ways a planner actually
+ * writes a period: the clock functions, an interval literal, a cast to a
+ * timestamp type, and the timestamp columns of the tables it may read.
+ */
+const TIME_TOKENS: ReadonlySet<string> = new Set([
+  "NOW", "CURRENT_DATE", "CURRENT_TIMESTAMP", "LOCALTIMESTAMP", "CLOCK_TIMESTAMP",
+  "STATEMENT_TIMESTAMP", "TRANSACTION_TIMESTAMP", "INTERVAL", "TIMESTAMPTZ",
+  "TIMESTAMP", "DATE_TRUNC", "DATE_BIN",
+  // Columns.
+  "TS", "GAP_START", "GAP_END", "DETECTED_AT", "LAST_RECORD_TS", "LAST_RUN_AT",
+  "STARTED_AT", "FINISHED_AT", "WINDOW_START", "WINDOW_END", "FIRST_SEEN_AT",
+  "LAST_SEEN_AT", "STATION_START", "STATION_END", "COMPLETENESS_CHECKED_AT",
+]);
+
+export function filtersByTime(sql: string): boolean {
+  const tokens = tokenize(sql) ?? [];
+  return tokens.some((token) => token.type === "word" && TIME_TOKENS.has(token.value));
+}
+
 export function readsReadings(sql: string): boolean {
   const tokens = tokenize(sql) ?? [];
   return tokens.some(
