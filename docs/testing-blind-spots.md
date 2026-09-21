@@ -118,3 +118,32 @@ spelling of "no label", so those two cases are the whole space.
 
 **Also worth asserting then:** that search matches both the label and the
 Niagara name for a point whose label is NULL, since that is every point.
+
+## Analyze (B5): the model is faked in every automated test
+
+`tests/bas-analyze-service.test.ts` drives every honesty path against the real
+test database and a throwaway copy of the `bas_analyze` role, with the planner
+replaced by a scripted one. The guard, the cursor, the READ ONLY transaction,
+the provenance queries, the audit write and the log line are real. What the
+suite therefore cannot see:
+
+- whether `claude-opus-5` actually writes a `SELECT` that the guard accepts
+  and the role can run, for the questions people ask;
+- whether it declares the time range and point ids its SQL reads — the
+  provenance is computed from those declarations, and a plan that names the
+  wrong points produces a gap figure about the wrong points (the scope is
+  widened to every point when it names none, or names one that does not exist,
+  but a plausible wrong id is not detectable);
+- whether the summary paragraph states only numbers that are in the rows.
+
+The procedure for those is `npm run bas:analyze:verify`, and the record is
+`docs/bas-b5-verification.md`. **As of 2026-09-21 it has not been run to
+completion**: the Anthropic key in `.env.local` is refused with 401, so the
+model's behaviour over the real data is unobserved. Every automated
+acceptance criterion in `docs/BAS-B5.md` is met; every manual one is open.
+
+One more, structural: `basSiteScope` returns `null` (every site) for everyone
+today, and free-form SQL cannot be confined to a subset of sites. The service
+refuses outright the day the scope becomes a list. That refusal is written but
+untested, because nothing in the suite can make `basSiteScope` return a list
+without mocking the module the service imports it from.

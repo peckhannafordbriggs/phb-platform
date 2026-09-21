@@ -1,10 +1,10 @@
 /**
  * The module's tabs, in one list.
  *
- * Adding B5's "Ask" is a line here plus `app/(modules)/bas/ask/page.tsx`. That is
- * the whole extension point - there is deliberately no tab framework, no
- * registry and no config file, because two tabs do not justify one and the cost
- * of adding the third is already a single line.
+ * B5's "Analyze" was a line here plus `app/(modules)/bas/analyze/page.tsx`,
+ * exactly as predicted. That is the whole extension point - there is
+ * deliberately no tab framework, no registry and no config file, because four
+ * tabs do not justify one and adding the fourth cost a single line.
  *
  * The sidebar shows ONE "Building Automation" entry regardless. Tabs are
  * navigation within a module, not modules; `components/sidebar.tsx` renders from
@@ -44,6 +44,15 @@ export const BAS_TABS: readonly BasTab[] = [
     label: "Point Explorer",
     // Was a list of what is on the screen. The screen shows it.
     blurb: "",
+  },
+  {
+    href: "/bas/analyze",
+    label: "Analyze",
+    // The one thing the screen cannot show until a question has been asked:
+    // that an answer comes with what was queried, and that a gap in the data
+    // is reported beside it rather than averaged away.
+    blurb:
+      "Ask a question of the sensor data. Every answer shows the SQL, the rows, and the hours of the period nobody was watching.",
   },
   {
     href: "/bas/settings",

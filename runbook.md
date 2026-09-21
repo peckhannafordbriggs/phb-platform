@@ -7363,3 +7363,192 @@ the bottom of the file.
 
 **If you see the disagreement sentence.** Something has grown a second
 definition again. Run that test file; it names the surface.
+
+---
+
+## Analyze says it is not configured
+
+**Symptom.** The Analyze tab (`/bas/analyze`) shows *Analyze is not configured
+on this server* and names one or two variables. Every other BAS tab works.
+
+**Cause.** `ANTHROPIC_API_KEY` or `BAS_ASK_DATABASE_URL` is absent or blank.
+Both are read lazily, on every request, and neither is part of the boot
+schema — the platform is meant to start and serve everything else without
+them. `GET /api/modules/bas/analyze` returns the missing NAMES (never values).
+
+**Fix.** The key comes from the Anthropic Console. The URL comes from
+
+```powershell
+npm run bas:analyze:role
+```
+
+which creates or rotates the `bas_analyze` role on `DATABASE_URL`, proves the
+refusals, and prints the URL once. Paste it as `BAS_ASK_DATABASE_URL`. The
+password is shown once and written nowhere by the script; re-running rotates
+it. Neither variable is in `infra/main.bicep` yet — production wiring is a
+separate step.
+
+---
+
+## Analyze says the model service rejected the API key
+
+**Symptom.** Every question answers *Could not answer — The model service
+rejected the API key. Nothing was queried.* in well under a second.
+
+**Cause.** Anthropic returned `401 authentication_error: API key is invalid`.
+The key is present and well-formed (`sk-ant-api03-…`, 108 characters) or the
+tab would say not configured; it has been revoked, belongs to a deleted
+Console key, or was pasted from the wrong place.
+
+**This happened on 2026-09-21**, on the first live run. The screen originally
+said *could not be reached*, which sends the reader to check the network; it
+now repeats the planner's own words so a key fault reads as a key fault.
+
+**Fix.** A new key in `.env.local` (or Key Vault). Nothing else changes.
+Confirm with `npm run bas:analyze:verify -- "how many stations are there"`.
+
+---
+
+## Analyze answers "permission denied" for every question
+
+**Symptom.** *Could not answer*, two attempts shown, each ending
+`permission denied for table bas_…`.
+
+**Cause.** A migration added a `bas_*` object that the `bas_analyze` role has
+never been granted. Grants are an explicit allowlist in
+`lib/modules/bas/analyze/role.ts` — the same shape as
+`setup_readonly_role_platform.sql` in phb-bas, for the same reason (*The
+read-only grant script is an allowlist*, above). A new object is invisible to
+the role until a person classifies it.
+
+**Fix.** Add the name to `ANALYZE_ALLOWLIST`, or to `ANALYZE_WITHHELD` with a
+reason if the AI must not read it, then
+
+```powershell
+npm run bas:analyze:role -- --password=<the existing password>
+```
+
+Until the name is on one list the script **refuses to run**, granting and
+rotating nothing:
+
+```
+Unclassified bas_* object(s): {bas_alarms}. Nothing has been granted or revoked.
+```
+
+That is the intended stop. `tests/bas-analyze-role.test.ts` builds a
+throwaway copy of the role from the same list on the test database, so the
+suite fails on the unclassified object too.
+
+---
+
+## An Analyze answer shows gap hours you did not expect
+
+**Symptom.** *64 hours of this period have no readings — 1 recorded gap.*
+
+**What it means.** `bas_data_gaps` holds a gap whose interval intersects the
+time range the plan resolved, for a point in scope. The hours are the
+intersection — a 48-hour gap that straddles the end of the range by 4 hours
+reports 4. This is computed by the platform after the query ran, from the
+range and point ids the plan declared; the model is not asked about gaps and
+cannot suppress the figure.
+
+**A gap means the platform was not watching.** It never means the equipment
+was off. Collection Health's gap list is the same table.
+
+**If the figure says "across every point".** The plan named no point ids (or
+named one that does not exist), and the SQL reads `bas_readings`, so the
+platform widened the scope to every point rather than report nothing. The
+figure over-reports rather than under-reports. The SQL is one click away;
+read which points it actually touches.
+
+**If it says "could not be computed".** The SQL reads readings but the plan
+stated no time range, so there is nothing to intersect with. The row is amber
+on purpose: this is "unknown", not "no gaps". Ask again with an explicit
+period.
+
+---
+
+## Analyze says "No data matched" and you expected a number
+
+**Symptom.** An amber *No data matched* heading, a sentence beginning *The
+query returned no rows. That is not an answer of zero*, and no table — or one
+row in which every cell reads `NULL`.
+
+**What it means.** Exactly what it says. Zero rows and an all-NULL aggregate
+(`avg()` over no readings returns one row holding NULL) are both rendered as
+`no_data`; the model is never asked to summarise them, because a model asked
+to summarise nothing writes a plausible sentence about zero.
+
+**The sentence beneath is computed from coverage**, not written by the model:
+
+- *…ends before collection began. Readings for these points start …* — the
+  range is earlier than the first reading held.
+- *…has never had a reading collected* — the point exists (usually
+  `is_active = false`) and `bas_readings` holds nothing for it.
+- *…only partly covered. Readings run from … to …* — the range overhangs the
+  data on one side.
+- *N points have no role and were outside a search by what a point measures*
+  — the SQL filtered by `point_role` and unclassified points were never
+  candidates.
+
+A genuine zero — a reading of 0, an average of 0 — renders as an answer with
+`0` in the table. `tests/bas-analyze-ui.test.tsx` asserts the two never read
+alike.
+
+---
+
+## Analyze: which layer refused a write, and why there are three
+
+Every Analyze query passes three independent barriers, and each is tested on
+its own with the others bypassed (`tests/bas-analyze-role.test.ts`):
+
+1. **The guard** (`sql-guard.ts`) — a tokenizer that accepts one `SELECT` or
+   `WITH … SELECT` and refuses any write keyword outside a literal, a second
+   statement, `SELECT INTO`, `FOR UPDATE`, and server-reading functions. It
+   gives the reason in words. `END` is allowed — every `CASE` needs it.
+2. **The transaction** (`pool.ts`) — `BEGIN READ ONLY`, a `SET LOCAL
+   statement_timeout` of 15 s, and the model's SQL as the body of a `DECLARE …
+   CURSOR` fetched to the row cap, sent over the **extended protocol**.
+   Measured: with an empty bind array `pg` uses the simple protocol, and the
+   simple protocol ran `DECLARE … FOR SELECT 1; SELECT 2` as two statements.
+   `queryMode: "extended"` is what fixed it, and a test tries the smuggled
+   statement.
+3. **The role** — `bas_analyze` has SELECT on the allowlist and nothing else.
+   Tested with `default_transaction_read_only = off`, so the grant is what
+   refuses. A writing CTE is refused by the cursor first (`0A000`, *DECLARE
+   CURSOR must not contain data-modifying statements in WITH*), which is fine:
+   what matters is that one of the three says no and nothing changed.
+
+`TEMP` is deliberately **not** revoked from the role. It is a `PUBLIC` grant on
+the database; `REVOKE TEMP … FROM bas_analyze` has no effect (measured), and
+`… FROM PUBLIC` would change what the collector may do. A temp table holds no
+BAS data, and layer 2 refuses `CREATE` anyway.
+
+---
+
+## Analyze: reading the log of questions
+
+Every question writes one `bas.question_asked` row to `audit_events` with the
+question, the SQL that ran (or was last tried), the row count, the duration,
+the outcome kind, the gap hours and the unknown-horizon count in `metadata`,
+and one `bas.analyze.question` log line with the same. `/admin/audit` filters
+by action; the sentence reads *Jim Schwarz asked Building Automation "…" — no
+data matched*.
+
+docs/BAS-B5.md: "The questions people actually ask will not be the ones either
+of us would predict, and that log is what tells you whether this is useful or
+a novelty." Read it after a month.
+
+`npm run bas:analyze:verify` attributes its rows to the operator running it
+(`--as=email` to choose), because the operator is the one asking.
+
+---
+
+## Analyze is rate limited
+
+**Symptom.** *Too many questions in a short time. Wait a moment and ask
+again.* — HTTP 429, `rate_limited`.
+
+**Cause.** Six questions a minute per employee, in memory, per process. A
+refused attempt is not counted. It is checked before any token is spent and
+before the pool is touched. A new revision starts with an empty window.

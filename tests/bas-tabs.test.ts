@@ -37,10 +37,13 @@ describe("the tabs are real routes", () => {
    * a given viewer is actually OFFERED is `visibleBasTabs`, covered in
    * tests/bas-settings.test.ts.
    */
-  it("registers Collection Health, Point Explorer and Settings, in that order", () => {
+  it("registers Collection Health, Point Explorer, Analyze and Settings, in that order", () => {
+    // Analyze (B5) sits after Point Explorer and before Settings, as the
+    // spec places it. Settings stays last.
     expect(BAS_TABS.map((tab) => tab.href)).toEqual([
       "/bas",
       "/bas/points",
+      "/bas/analyze",
       "/bas/settings",
     ]);
   });
@@ -84,6 +87,7 @@ describe("the tabs are real routes", () => {
   it("looks a tab up by href and fails loudly on a typo", () => {
     expect(basTab("/bas").label).toBe("Collection Health");
     expect(basTab("/bas/points").label).toBe("Point Explorer");
+    expect(basTab("/bas/analyze").label).toBe("Analyze");
     expect(() => basTab("/bas/nope")).toThrow();
   });
 });

@@ -590,6 +590,31 @@ PM", and the digest heading carries the same phrase. The login columns are
 unchanged and remain the audit record. `lib/activity/`;
 `WHY-ITS-BUILT-THIS-WAY.md` § 51; `runbook.md` → *Home*.
 
+**B5 complete — the Analyze tab (2026-09-21).** A question box over the
+sensor data, at `/bas/analyze`, between Point Explorer and Settings. The
+model writes ONE `SELECT`; it runs as a dedicated PostgreSQL role
+(`bas_analyze`, `npm run bas:analyze:role`, same allowlist shape as
+`bas_readonly_platform`, credentials table withheld) inside a `READ ONLY`
+transaction, as the body of a cursor, over the **extended protocol** — that
+last word is load-bearing: `pg` falls back to the simple protocol when the
+bind array is empty, and the simple protocol ran a smuggled second statement
+until a test tried it. Statement timeout 15s, row cap 200, six questions a
+minute per employee. **Provenance is computed by our code after the query
+runs** — gap hours clipped to the resolved range from `bas_data_gaps`,
+unknown-horizon points from `horizon_state = 'unknown'`, coverage from
+`bas_readings` — and rendered on every result, never collapsible. **Zero
+rows is not zero:** a result with no rows, or one row that is all NULL, is
+its own `no_data` kind, the summariser is never called for it, and the
+explanation is written from coverage. Every question is one audit row
+(`bas.question_asked`) and one log line, both carrying the question and the
+SQL. Two variables, both lazy: `ANTHROPIC_API_KEY` and `BAS_ASK_DATABASE_URL`;
+missing either renders a not-configured state. Neither is in
+`infra/main.bicep` yet. **The live manual checks are blocked:** the key in
+`.env.local` is refused by Anthropic with 401 `API key is invalid`, so what
+the model actually says over real data is unverified — `npm run
+bas:analyze:verify` is the procedure, `docs/bas-b5-verification.md` the
+record so far. `WHY-ITS-BUILT-THIS-WAY.md` § 52; `runbook.md` → *Analyze*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

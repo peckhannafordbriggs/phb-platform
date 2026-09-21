@@ -74,6 +74,19 @@ export type AuditAction =
    * different columns and this action only ever touches the first.
    */
   | "bas.point_visibility_changed"
+  /**
+   * A question typed into the Analyze tab (B5). One row per question,
+   * whatever the outcome, carrying the question, the SQL that ran (or was
+   * tried), the row count, the duration and the outcome kind.
+   *
+   * An audit row rather than only a log line because docs/BAS-B5.md says the
+   * record of questions is "the only way to audit a wrong answer after the
+   * fact", and container logs age out where audit_events does not. No
+   * `targetEmployeeId`: the subject is a question, not a person. Nothing in
+   * the metadata is a secret - the SQL runs on a role that can read nothing
+   * secret, and the question is the person's own words.
+   */
+  | "bas.question_asked"
   | "position.created"
   | "position.updated"
   | "department.created"

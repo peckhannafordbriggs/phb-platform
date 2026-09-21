@@ -19,9 +19,12 @@
     "db:test:setup": "tsx scripts/setup-test-db.ts",
     "bas:verify": "tsx scripts/bas-verify-import.ts",
     "bas:oracle": "tsx scripts/bas-health-oracle.ts",
+    "bas:analyze:role": "tsx scripts/setup-bas-analyze-role.ts",
+    "bas:analyze:verify": "tsx scripts/bas-analyze-verify.ts",
     "db:verify:prod": "tsx scripts/verify-prod-database.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.127.0",
     "@auth/core": "0.41.3",
     "@azure/identity": "^4.13.1",
     "@microsoft/microsoft-graph-client": "^3.0.7",
