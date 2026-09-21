@@ -300,7 +300,8 @@ What is on screen for every result that ran, and cannot be collapsed: the
 hours of recorded gaps inside the resolved time range (clipped to it, from
 `bas_data_gaps`), the points in scope whose roll horizon is unknown, the time
 range as resolved, the points and sites by name, what the database holds for
-them, the row count, and the SQL. All of it computed by the platform after the
+them, and the row count. The SQL itself is not rendered (decision of
+2026-09-21; it is in the audit row and the log line). All of it computed by the platform after the
 query ran — the model's only contribution to that panel is the time range and
 point ids it declared, and both are checked against the database and labelled
 where they could not be.

@@ -1338,8 +1338,12 @@ had been the authority:
   time range, the figure is `null` and renders amber as "could not be
   computed", never as "no gaps".
 - **No confidence score.** The model has no calibrated sense of whether its
-  SQL was right, so a number would look authoritative and mean nothing. The
-  SQL itself is shown instead, one click away, on every result.
+  SQL was right, so a number would look authoritative and mean nothing. What
+  is shown instead is what the query covered, in words: the points and sites,
+  the period, the gap hours, the coverage, the rows. The SQL itself was on
+  screen for the first day and was removed by decision on 2026-09-21 - it
+  stays in the audit row and the log line, where a wrong answer is audited,
+  and off the screen, where the people asking do not read SQL.
 - **"I can't tell you that, because…" is a success.** Clarify and
   cannot-answer are first-class kinds. One retry at most, and the screen says
   a retry happened.

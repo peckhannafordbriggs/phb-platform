@@ -134,8 +134,11 @@ describe("provenance is on screen for every result that ran", () => {
       expect(html).toContain("What was actually queried");
       expect(html).toContain("64 hours of this period");
       expect(html).toContain("collector down");
-      expect(html).toContain("SELECT avg(value_num)");
       expect(html).toContain("Zone Temp");
+      // The SQL is NOT on screen, by decision on 2026-09-21. It is in the
+      // audit row and the log line, and stays in the payload for them.
+      expect(html).not.toContain("SELECT avg(value_num)");
+      expect(html).not.toContain("SQL that ran");
     }
   });
 
@@ -290,6 +293,8 @@ describe("the other sentences", () => {
     expect(render(clarify)).toContain("Nothing was queried");
     expect(render(cannot)).toContain("Could not answer");
     expect(render(cannot)).toContain("permission denied");
+    // Each attempt shows its reason, not its SQL.
+    expect(render(cannot)).not.toContain("SELECT 1");
     expect(render(cannot)).toContain("a second was requested");
     expect(render(notConfigured)).toContain("ANTHROPIC_API_KEY");
     expect(render(notConfigured)).toContain("rest of Building Automation is unaffected");

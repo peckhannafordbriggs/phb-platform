@@ -52,7 +52,7 @@ export const BAS_TABS: readonly BasTab[] = [
     // that an answer comes with what was queried, and that a gap in the data
     // is reported beside it rather than averaged away.
     blurb:
-      "Ask a question of the sensor data. Every answer shows the SQL, the rows, and the hours of the period nobody was watching.",
+      "Ask a question of the sensor data. Every answer shows the rows, the points and period it covered, and the hours of the period nobody was watching.",
   },
   {
     href: "/bas/settings",

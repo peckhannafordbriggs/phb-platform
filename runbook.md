@@ -7458,8 +7458,9 @@ was off. Collection Health's gap list is the same table.
 **If the figure says "across every point".** The plan named no point ids (or
 named one that does not exist) and either reads `bas_readings` or states a
 time range, so the platform widened the scope to every point rather than
-report nothing. The figure over-reports rather than under-reports. The SQL is
-one click away; read which points it actually touches.
+report nothing. The figure over-reports rather than under-reports. The SQL is not on
+screen; it is in the `bas.question_asked` audit row for that question, where
+you can read which points it actually touches.
 
 **A declared period is always enough.** On 2026-09-21 the live run of "gap
 hours in the last 30 days, by point" showed *Scope: none, Gaps: NOT COMPUTED*
@@ -7572,7 +7573,9 @@ no gap figure or a time expression with no declared period.
 ## Analyze: reading the log of questions
 
 Every question writes one `bas.question_asked` row to `audit_events` with the
-question, the SQL that ran (or was last tried), the row count, the duration,
+question, the SQL that ran (or was last tried) - which is NOT rendered on
+the screen, by decision on 2026-09-21, so this row is where to read it - the
+row count, the duration,
 the outcome kind, the gap hours and the unknown-horizon count in `metadata`,
 and one `bas.analyze.question` log line with the same. `/admin/audit` filters
 by action; the sentence reads *Jim Schwarz asked Building Automation "…" — no

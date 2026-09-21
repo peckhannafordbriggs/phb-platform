@@ -118,10 +118,12 @@ Findings D and E for what the first two runs of this question showed.
 **"What was the temperature?"** → `clarify`, 5.6 s. *Which temperature, and
 over what period? …* ✔ ambiguous question asks rather than guesses.
 
-**"The SQL shown actually matches what ran."** Inferred, not separately
-observed: the SQL rendered is the guarded string that was passed to `DECLARE
-… CURSOR FOR`, byte for byte, and the service test asserts the audit row's
-`sql` equals it. There is no second string.
+**"The SQL shown actually matches what ran."** The SQL is no longer shown on
+screen - removed by decision on 2026-09-21, after the live runs; it stays in
+the audit row and the log line. What the criterion was protecting still
+holds and is asserted: the `sql` recorded is the guarded string that was
+passed to `DECLARE … CURSOR FOR`, byte for byte (service test on the audit
+row). There is no second string.
 
 ### What is still open
 
