@@ -23,10 +23,43 @@ export interface AnalyzeStatus {
   missing: string[];
 }
 
+/**
+ * A cancelled request is a navigation or a re-render, not a failure.
+ *
+ * In development React Strict Mode runs the mounting effect twice and aborts
+ * the first run. The status fetch turned that abort into "Could not reach the
+ * server", so the tab opened with that banner on every load, marked itself
+ * not configured, and the real answer arrived a moment later underneath.
+ * Found live on 2026-09-21; the route itself was answering in five seconds.
+ *
+ * Matched by NAME, not by `instanceof DOMException`: browsers and Node both
+ * throw a DOMException, but some fetch polyfills throw a plain Error named
+ * AbortError, and the component's decision to stay quiet must not depend on
+ * which. The signal is checked BEFORE fetch as well, because Node rejects a
+ * relative URL before it looks at the signal and a browser looks first - the
+ * helper should behave the same in both.
+ */
+export function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new DOMException("The request was cancelled.", "AbortError");
+  }
+}
+
 export async function fetchAnalyzeStatus(signal?: AbortSignal): Promise<AnalyzeStatus> {
-  const response = await fetch(BASE, { signal, cache: "no-store" }).catch(() => {
+  throwIfAborted(signal);
+  let response: Response;
+  try {
+    response = await fetch(BASE, { signal, cache: "no-store" });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new ApiError("network", "Could not reach the server.");
-  });
+  }
   return unwrap<AnalyzeStatus>(response);
 }
 
@@ -34,6 +67,7 @@ export async function askQuestion(
   question: string,
   signal?: AbortSignal,
 ): Promise<AnalyzeResult> {
+  throwIfAborted(signal);
   let response: Response;
   try {
     response = await fetch(BASE, {
@@ -44,7 +78,7 @@ export async function askQuestion(
       cache: "no-store",
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (isAbortError(error)) throw error;
     throw new ApiError("network", "Could not reach the server.");
   }
   return unwrap<AnalyzeResult>(response);

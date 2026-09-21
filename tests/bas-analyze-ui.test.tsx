@@ -3,12 +3,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Result } from "@/app/(modules)/bas/analyze";
 import {
+  askQuestion,
   cellText,
   describeGaps,
+  fetchAnalyzeStatus,
   describeRowCount,
   describeScope,
   describeUnknownHorizon,
   gapsTone,
+  isAbortError,
   resultHeading,
   resultTone,
 } from "@/app/(modules)/bas/analyze-client";
@@ -211,6 +214,43 @@ describe("the gap sentence has three states, not two", () => {
     const widened: Provenance = { ...provenance, scope: "all_points" };
     expect(describeGaps(widened)).toContain("across every point");
     expect(describeScope(widened)).toContain("did not name which ones");
+  });
+});
+
+describe("a cancelled request is not a failed one", () => {
+  /**
+   * Found live on 2026-09-21. React Strict Mode runs the mounting effect
+   * twice in development and aborts the first run; the status fetch turned
+   * that abort into ApiError("network") and the tab opened with "Could not
+   * reach the server" while the route was answering in five seconds. Both
+   * helpers must let an AbortError through untouched so the component can
+   * ignore it, and must still turn a real network failure into the message.
+   */
+  it("lets an AbortError through both helpers, untouched", async () => {
+    const aborted = new AbortController();
+    aborted.abort();
+
+    await expect(fetchAnalyzeStatus(aborted.signal)).rejects.toSatisfy(isAbortError);
+    await expect(askQuestion("anything at all", aborted.signal)).rejects.toSatisfy(isAbortError);
+    // And the predicate itself, since the component's silence depends on it.
+    expect(isAbortError(new DOMException("x", "AbortError"))).toBe(true);
+    expect(isAbortError(Object.assign(new Error("x"), { name: "AbortError" }))).toBe(true);
+    expect(isAbortError(new TypeError("fetch failed"))).toBe(false);
+  });
+
+  it("still reports a real network failure as 'Could not reach the server'", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new TypeError("fetch failed"))) as typeof fetch;
+    try {
+      await expect(fetchAnalyzeStatus()).rejects.toMatchObject({
+        name: "ApiError",
+        code: "network",
+        message: "Could not reach the server.",
+      });
+      await expect(askQuestion("anything at all")).rejects.toMatchObject({ code: "network" });
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });
 

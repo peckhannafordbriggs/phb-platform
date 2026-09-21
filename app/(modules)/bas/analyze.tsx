@@ -17,6 +17,7 @@ import {
   describeUnknownHorizon,
   fetchAnalyzeStatus,
   gapsTone,
+  isAbortError,
   rateLimitMessage,
   resultHeading,
   resultTone,
@@ -62,7 +63,7 @@ export function Analyze() {
     fetchAnalyzeStatus(controller.signal)
       .then(setStatus)
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (isAbortError(err)) return;
         setStatus({ configured: false, missing: [] });
         setError(err instanceof ApiError ? err.message : "Could not check the configuration.");
       });
@@ -86,7 +87,7 @@ export function Analyze() {
       const answer = await askQuestion(trimmed, controller.signal);
       setResult(answer);
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (isAbortError(err)) return;
       if (err instanceof ApiError) {
         setError(err.code === "rate_limited" ? rateLimitMessage() : err.message);
       } else {
