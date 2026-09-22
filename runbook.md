@@ -2033,6 +2033,14 @@ what lets development start, and it is the smaller ask by a distance. Sending
 only the first means waiting on a tenant-wide grant before anyone can find the
 first bug in `GraphFileStore` — which has never made a single HTTP request.
 
+**Both halves genuinely need Vitis.** Two routes that would have needed nobody
+were tried on 2026-09-22 and neither works: Graph Explorer demands admin
+consent before issuing a token with any Files or Sites scope, and the Azure
+CLI's own Graph token carries neither scope. There is no self-service path to a
+delegated token in this tenant, so *"we will just use a developer's own
+OneDrive"* is not available either — that still needs a scope somebody has to
+approve.
+
 **Substitute two values before sending**: the resource group and subscription id
 stay out of this repository, as in the earlier requests.
 
@@ -2101,24 +2109,39 @@ stay out of this repository, as in the earlier requests.
 > application. That means no tenant-wide grant: access is bounded by whatever
 > that person can already open in SharePoint.
 >
-> Either of these works, cheapest first:
+> **We have already tried the routes that need nothing from you, and neither
+> works**, which is why this is a request rather than a note:
 >
->     a) Files.ReadWrite         (delegated) — the developer's own OneDrive only.
->                                 Usually user-consentable with no admin action.
->     b) Sites.ReadWrite.All     (delegated) — acts as the signed-in user, bounded
->                                 by their own site permissions.
+>   - Graph Explorer asks for admin consent before it will issue a token with
+>     any Files or Sites scope.
+>   - The Azure CLI's own token (`az account get-access-token --resource
+>     https://graph.microsoft.com`) carries neither scope, so it cannot read or
+>     write a drive.
 >
-> **(a) is enough to start.** The Graph Files API is identical for a OneDrive
-> drive and a SharePoint document library — same `/drives/{id}/root:/path:`
-> addressing, same upload sessions, same copy semantics — so we can put a copy of
-> the tree in a developer's OneDrive and shake out the transport bugs there. We
-> would then want (b) to confirm the same code against a real SharePoint library,
-> because some behaviour genuinely differs between the two: list view thresholds,
-> library throttling, and how a server-side copy settles.
+> What we are asking for is **delegated** `Files.ReadWrite.All`, granted to
+> Mahi:
+>
+>     Files.ReadWrite.All   (DELEGATED, not application)
+>
+> Delegated means the token is issued to a signed-in person and carries that
+> person's own access — it can reach nothing in SharePoint that Mahi cannot
+> already open, and it expires in about an hour. It is not an application
+> identity and grants the container no standing access to anything.
+>
+> `Sites.Read.All` (delegated) would also unblock part of this, but only part:
+> it is read-only, and roughly half of what needs exercising is writes — an
+> exclusive create, a chunked upload, a server-side copy, a move and a delete.
+> If only one can be granted, `Files.ReadWrite.All` is the one that helps; if
+> `Sites.Read.All` is easier to approve, we will take it and verify the read
+> paths while the rest waits.
+>
+> Either can be attached to a small app registration for this purpose, or to an
+> existing one we can sign into — whichever is less work at your end.
 >
 > To be explicit about what we are **not** asking for: no access to the live `CO
-> Managment Process` folder is needed for any of this, and we are not asking for
-> application-level access to any site in part 2.
+> Managment Process` folder is needed for any of this, no application-level
+> permission is involved in part 2, and nothing here writes to any tree that
+> matters — the target is a disposable copy.
 >
 > Delegated access is for development only. Production stays managed identity
 > plus `Sites.Selected`, because a delegated token is tied to one person's account
@@ -2126,8 +2149,8 @@ stay out of this repository, as in the earlier requests.
 >
 > ---
 >
-> Happy to talk through any of it. If (a) is something we can self-service, say
-> so and we will, and then only part 1 and (b) need you.
+> Happy to talk through any of it. Part 2 is the one holding work up today;
+> part 1 can follow whenever suits.
 >
 > Thanks,
 > Mahi

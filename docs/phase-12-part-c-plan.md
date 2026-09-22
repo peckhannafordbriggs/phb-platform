@@ -150,13 +150,35 @@ drive a developer can already reach.
 |---|---|
 | URL construction for the real path names | **done** — `tests/test_graph_url_shapes.py`, 7 cases, no network |
 | Conformance harness | **done** — `tests/store_conformance.py`, 15/15 against `LocalFileStore` |
-| Run it against a real drive | **blocked on a token**, not on a permission |
+| Run it against a real drive | **blocked on Vitis** — see below. This was expected to need only a token; it does not |
 
 What the conformance harness targets, matching the four `GRAPH-TODO`s:
 `append_bytes` (read-modify-write, Graph has no append), `create_exclusive` (the
 409 from `conflictBehavior=fail`), whether `copy`'s async monitor is genuinely
 settled when it returns, `rglob`'s cost by depth, and the upload-session path
 above 4 MB.
+
+**The substitute-drive route needs a grant too, which was not the original
+reading.** The plan assumed a developer could obtain a delegated token
+unaided and exercise `GraphFileStore` against their own OneDrive with nobody's
+permission. Tried on 2026-09-22, and neither route exists in this tenant:
+
+- Graph Explorer requires **admin consent** before issuing a token carrying any
+  Files or Sites scope.
+- `az account get-access-token --resource https://graph.microsoft.com` returns a
+  token with **neither** scope, so it cannot address a drive at all.
+
+So the distinction between "blocked on a token" and "blocked on a permission"
+collapses: both need Vitis. What survives is the *size* of the ask —
+**delegated** `Files.ReadWrite.All` for one person is far smaller than an
+application-level `Sites.Selected` grant, is bounded by that person's own
+access, and expires in an hour. It is item 2 of `runbook.md` → *Request 4*.
+
+`Sites.Read.All` was offered as an alternative and would unblock only half:
+it is read-only, and the operations most likely to surprise are writes — the
+exclusive create behind the lock, the chunked upload above 4 MB, the
+server-side copy, the move and the delete. Worth taking if it is easier to
+approve, but it does not close step 5.
 
 **What a substitute drive cannot settle**, and must not be written up as if it
 had: SharePoint-specific behaviour — list view thresholds, library throttling,
@@ -209,17 +231,21 @@ Three things, none of which is a lock:
    inference, and the differ defect
 3. ~~Write up the timezone finding~~ — done, above
 4. ~~`--store` seam~~ — done
-5. **Exercise `GraphFileStore` against a substitute drive** — needs a delegated
-   token. `CO_GRAPH_TOKEN=<token> python tests/store_conformance.py --store graph
+5. ~~Define Part E equivalence for the judgment steps, in writing, first~~ —
+   done, `docs/phase-12-part-e-equivalence.md`. Deliberately written *before*
+   any comparison runs, per `PHASE-12.md`: deciding what counts as equivalent
+   after seeing a disagreement is how a bar gets moved to fit.
+6. **Exercise `GraphFileStore` against a drive** — waiting on Request 4 item 2.
+   `CO_GRAPH_TOKEN=<token> python tests/store_conformance.py --store graph
    --drive-id <id> --root "/conformance-scratch"`. Expect findings; Part B's own
    warning is that every external system in this project produced defects that
    mocked transports agreed with.
-6. Define Part E equivalence for the judgment steps, in writing, first
-7. When `Sites.Selected` lands: re-run 5 against the real library, then the
+7. When `Sites.Selected` lands: re-run 6 against the real library, then the
    byte-identical comparison and the flow-trigger check
 
-Steps 1–4 are complete without anybody granting anything. Step 5 needs a token,
-not a permission. Only step 7 needs Vitis.
+Steps 1–5 are complete without anybody granting anything. Steps 6 and 7 both
+need Vitis — 6 needs one delegated scope for one person, 7 needs the
+application grant.
 
 ---
 

@@ -736,3 +736,4 @@ either anywhere else — point at them.
 | `docs/phase-11-verification.md` | Evidence the platform has not disturbed the automation |
 | `docs/phase-12-part-b-verification.md` | The file-access extraction: what was measured, and what is still unproven |
 | `docs/phase-12-part-c-plan.md` | **Part C: what `Sites.Selected` actually blocks**, what it does not, and what has already been settled by measurement |
+| `docs/phase-12-part-e-equivalence.md` | **Part E: what counts as equivalent**, written before any comparison ran so the bar cannot be set to fit a disagreement |
