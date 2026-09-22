@@ -21,6 +21,19 @@ export const SITE_PARAM = "site";
 export const DAYS_PARAM = "days";
 export const POINT_PARAM = "point";
 
+/**
+ * A custom range: two calendar dates, `YYYY-MM-DD`, in the BUILDING's time
+ * zone. They are text here and text on the wire; only PostgreSQL turns them
+ * into instants, against `bas_sites.timezone` - see `getPointExplorer`. The
+ * browser never converts them, so the browser's zone cannot leak in.
+ *
+ * `days` and `from`/`to` are alternatives. `withRange` below is the one place
+ * that switches between them, so a URL can never carry both and leave the
+ * server to guess which the person meant.
+ */
+export const FROM_PARAM = "from";
+export const TO_PARAM = "to";
+
 /** The two levels B7.6 added either side of the building. */
 export const PROJECT_PARAM = "project";
 export const STATION_PARAM = "station";
@@ -66,6 +79,12 @@ export interface BasFilters {
   /** `null` means every building the employee may see. */
   siteId: string | null;
   windowDays: number;
+  /**
+   * A custom range, or `null` for a preset. Both dates present and well-formed,
+   * or nothing: a URL with only one is read as no custom range rather than as
+   * half of one. The server validates the dates themselves.
+   */
+  range: { from: string; to: string } | null;
   /** `null` means "whichever point the picker offers first". */
   pointId: string | null;
   /** `null` at either level means All (B7.6). */
@@ -95,9 +114,15 @@ export function readFilters(params: ParamsLike): BasFilters {
   const clean = (raw: string | null) =>
     raw === null || raw.length === 0 || raw === ALL_SITES ? null : raw;
 
+  const from = params.get(FROM_PARAM);
+  const to = params.get(TO_PARAM);
+  const dateShaped = (raw: string | null): raw is string =>
+    raw !== null && /^\d{4}-\d{2}-\d{2}$/.test(raw);
+
   return {
     siteId: clean(site),
     windowDays: Number.isFinite(days) ? days : DEFAULT_WINDOW_DAYS,
+    range: dateShaped(from) && dateShaped(to) ? { from, to } : null,
     pointId: point === null || point.length === 0 ? null : point,
     projectId: clean(params.get(PROJECT_PARAM)),
     stationId: clean(params.get(STATION_PARAM)),
@@ -134,6 +159,38 @@ export function withFilter(
 
   const query = next.toString();
   return query.length > 0 ? `?${query}` : "";
+}
+
+/**
+ * A new query string with the time range changed - to a preset, or to a
+ * custom pair of dates.
+ *
+ * The two forms are exclusive and this is the only writer of either, so
+ * choosing a preset removes `from`/`to` and choosing dates removes `days`.
+ * Everything else (the cascade, the point) is preserved: a range change must
+ * not lose the point somebody has spent three dropdowns reaching.
+ */
+export function withRange(
+  params: ParamsLike & { toString(): string },
+  range: { days: number } | { from: string; to: string },
+): string {
+  let query = params.toString();
+  const strip = (key: string) =>
+    (query = withFilter(new URLSearchParams(query.replace(/^\?/, "")), key, null));
+
+  if ("days" in range) {
+    strip(FROM_PARAM);
+    strip(TO_PARAM);
+    return withFilter(
+      new URLSearchParams(query.replace(/^\?/, "")),
+      DAYS_PARAM,
+      String(range.days),
+    );
+  }
+
+  strip(DAYS_PARAM);
+  query = withFilter(new URLSearchParams(query.replace(/^\?/, "")), FROM_PARAM, range.from);
+  return withFilter(new URLSearchParams(query.replace(/^\?/, "")), TO_PARAM, range.to);
 }
 
 

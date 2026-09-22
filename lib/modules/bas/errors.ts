@@ -29,6 +29,13 @@ export type BasErrorCode =
    * the URL, which is worse than an error: it is wrong and it looks fine.
    */
   | "point_not_found"
+  /**
+   * A custom date range the trend cannot be measured over: the end before the
+   * start, an end in the future (in the building's zone), or a date that is
+   * not a date. The message names which, and the route answers 422 - the
+   * request was understood and is wrong, which is not the same as not found.
+   */
+  | "invalid_range"
   // --- Settings (B7.3). Everything below is a write refusing to happen. ---
   /** No such project, or none this employee may see. Same conflation as above. */
   | "project_not_found"

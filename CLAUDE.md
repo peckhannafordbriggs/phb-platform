@@ -647,6 +647,36 @@ silence is dangerous, and fails the run on either fault.
 `docs/bas-b5-verification.md` is the record, results pasted verbatim.
 `WHY-ITS-BUILT-THIS-WAY.md` § 52; `runbook.md` → *Analyze*.
 
+**Point Explorer takes a custom date range, in the building's zone, and
+averages long ranges out loud (2026-09-22).** *Custom* beside the three
+presets opens two date inputs; year buttons are offered for every calendar
+year that holds readings, derived from the data, and the current year's ends
+today. The dates travel as `YYYY-MM-DD` text and **PostgreSQL resolves them
+against `bas_sites.timezone`** — midnight to midnight where the building is,
+end exclusive, so a single day is the whole day and 9 March 2025 is 23 hours
+long. The screen names the zone. The office station's 22-minute clock offset
+is stated beside the range and **not** corrected for. **Up to 10,000 readings
+are drawn raw; past that the trend is bucketed** on a fixed ladder (5 min to
+a day, day-buckets on local midnight) and drawn as an average line with a
+lowest-to-highest band, under a sentence that says so. The cap is a
+**measurement**, not a guess: the real chart in headless Chrome over the
+DevTools protocol on real readings — under 400 ms to draw and to zoom at
+10,000, half a second per zoom from 18,000, a 2.7 s hang at 70,000 — and the
+table is beside the constant in `lib/modules/bas/range.ts`. A range with no
+readings names the nearest data instead of drawing an empty chart; one that
+starts before the data says where the data begins; the recorded gaps from
+`bas_data_gaps` are outlined on the chart. **Collection Health keeps its
+presets**: its range scopes only run history and the screen spans buildings,
+so there is no single zone to resolve a date in. Tested over **real
+readings** committed as fixtures (`tests/fixtures/bas-live-*.json`): the
+11–12 September hole, a range from before the first reading, an empty
+December, the 23-hour day, and the −40 °F sensor fault of 24 August surviving
+into the band; the mutations that drop min/max, assume 24-hour days or cut
+day-buckets with `date_bin` each fail a named test.
+`WHY-ITS-BUILT-THIS-WAY.md` § 53; `runbook.md` → *The trend chart says
+"Averaged to one point per …"*, *A custom date range is refused*, *Which
+time zone a Point Explorer date range is in*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

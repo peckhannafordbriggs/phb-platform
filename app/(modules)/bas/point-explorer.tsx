@@ -18,10 +18,14 @@ import type {
 } from "@/lib/modules/bas/types";
 import {
   ApiError,
-  WINDOW_PRESETS,
   axisLabel,
+  describeClockOffset,
   describeDistinctValues,
+  describeExtentNotices,
+  describeNoReadings,
   describeNullRecords,
+  describeRange,
+  describeSampling,
   distinctValuesTone,
   fetchPointExplorer,
   formatChartTick,
@@ -29,12 +33,11 @@ import {
   formatHours,
   formatTimestamp,
   formatValue,
-  windowLabel,
   type Tone,
 } from "./health-client";
+import { RangePicker } from "./range-picker";
 import {
   ALL_SITES,
-  DAYS_PARAM,
   POINT_PARAM,
   PROJECT_PARAM,
   SITE_PARAM,
@@ -42,6 +45,7 @@ import {
   readFilters,
   withCascade,
   withFilter,
+  withRange,
 } from "./filters";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 import { formatAxisTick, formatTooltipValue, valueAxis } from "./value-axis";
@@ -83,12 +87,13 @@ export function PointExplorer() {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const { siteId, windowDays, pointId, projectId, stationId } = filters;
+  const { siteId, windowDays, range, pointId, projectId, stationId } = filters;
 
   const load = useCallback(
     async (
       selection: {
         days: number;
+        range: { from: string; to: string } | null;
         siteId: string | null;
         pointId: string | null;
         projectId: string | null;
@@ -103,11 +108,15 @@ export function PointExplorer() {
         setError(null);
       } catch (caught) {
         if (caught instanceof DOMException && caught.name === "AbortError") return;
-        setError(
+        const failure =
           caught instanceof ApiError
             ? caught
-            : new ApiError("unexpected", "Something went wrong."),
-        );
+            : new ApiError("unexpected", "Something went wrong.");
+        // A refused range is not a failed refresh. Keeping the previous chart
+        // up under "showing the previous reading" would show last week's data
+        // beneath a range control that says August; the refusal replaces it.
+        if (failure.code === "validation_failed") setData(null);
+        setError(failure);
       } finally {
         setLoading(false);
       }
@@ -115,16 +124,21 @@ export function PointExplorer() {
     [],
   );
 
+  // The range as two strings, so the effect's dependency is by value: a
+  // fresh object from readFilters on every render would re-fetch every render.
+  const rangeKey = range === null ? null : `${range.from}..${range.to}`;
+
   useEffect(() => {
-    void load({ days: windowDays, siteId, pointId, projectId, stationId });
-  }, [load, windowDays, siteId, pointId, projectId, stationId]);
+    void load({ days: windowDays, range, siteId, pointId, projectId, stationId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- range is keyed by rangeKey
+  }, [load, windowDays, rangeKey, siteId, pointId, projectId, stationId]);
 
   // The ref carries the CURRENT selection, so a poll cannot revert the screen to
   // whatever was selected when the timer was installed.
   const pollRef = useRef<() => void>(() => {});
   pollRef.current = () => {
     void load(
-      { days: windowDays, siteId, pointId, projectId, stationId },
+      { days: windowDays, range, siteId, pointId, projectId, stationId },
       { quiet: true },
     );
   };
@@ -184,26 +198,44 @@ export function PointExplorer() {
     });
   };
 
+  /** The time range: a preset, or two calendar dates. One writer for both. */
+  const setRange = (next: { days: number } | { from: string; to: string }) => {
+    router.replace(`${pathname}${withRange(searchParams, next)}`, { scroll: false });
+  };
+
   if (loading && data === null) return <ExplorerSkeleton />;
 
   if (error !== null && data === null) {
+    const refusedRange = error.code === "validation_failed" && range !== null;
     return (
       <section className="rounded border border-red-300 bg-red-50 p-6">
         <h2 className="text-sm font-medium text-red-900">
           {error.code === "bas_unavailable"
             ? "Building automation data is not available"
-            : "That did not load"}
+            : refusedRange
+              ? "That date range cannot be shown"
+              : "That did not load"}
         </h2>
         <p className="mt-1 text-sm text-red-900">{error.message}</p>
-        <button
-          type="button"
-          onClick={() =>
-            void load({ days: windowDays, siteId, pointId, projectId, stationId })
-          }
-          className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm hover:bg-red-100"
-        >
-          Try again
-        </button>
+        {refusedRange ? (
+          <button
+            type="button"
+            onClick={() => setRange({ days: windowDays })}
+            className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm hover:bg-red-100"
+          >
+            Back to the last {windowDays === 1 ? "24 hours" : `${windowDays} days`}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() =>
+              void load({ days: windowDays, range, siteId, pointId, projectId, stationId })
+            }
+            className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm hover:bg-red-100"
+          >
+            Try again
+          </button>
+        )}
       </section>
     );
   }
@@ -263,31 +295,12 @@ export function PointExplorer() {
           </select>
         </label>
 
-        <div
-          className="flex items-center gap-2 text-sm"
-          role="group"
-          aria-label="Time range"
-        >
-          <span className="text-[var(--muted)]">Range</span>
-          <div className="flex overflow-hidden rounded border border-[var(--border)]">
-            {WINDOW_PRESETS.map((preset) => (
-              <button
-                key={preset.days}
-                type="button"
-                aria-pressed={data.windowDays === preset.days}
-                onClick={() => setParam(DAYS_PARAM, String(preset.days))}
-                className={
-                  "border-l border-[var(--border)] px-2.5 py-1 text-sm first:border-l-0 " +
-                  (data.windowDays === preset.days
-                    ? "bg-[var(--accent)] text-white"
-                    : "bg-white hover:bg-[var(--surface)]")
-                }
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <RangePicker
+          range={data.range}
+          calendar={data.calendar}
+          onPreset={(days) => setRange({ days })}
+          onCustom={(from, to) => setRange({ from, to })}
+        />
 
         {error !== null && (
           <p className="text-xs text-red-700" role="alert">
@@ -304,11 +317,31 @@ export function PointExplorer() {
         {unit === null
           ? "no unit recorded for this point"
           : `values in ${unit}`}
-        {" · last "}
-        {windowLabel(data.windowDays)}
+        {" · "}
+        {describeRange(data.range)}
         {" · as of "}
-        {formatTimestamp(data.observedAt)}
+        {formatTimestamp(data.observedAt, undefined, data.range.timezone ?? undefined)}
+        {data.range.kind === "custom" && data.range.timezone !== null && (
+          <>
+            {" · "}
+            <span data-testid="bas-range-zone">
+              dates and times in {data.range.timezone}, the building&apos;s time zone
+            </span>
+          </>
+        )}
       </p>
+      {/*
+        The station's clock, when it is measurably off. Said once, in the
+        muted scope line rather than as a warning: it is a known separate
+        problem (runbook.md, *A BAS station's clock is wrong*), nothing here
+        corrects for it, and the one thing a person needs to know is that a
+        range boundary will not line up with these readings exactly.
+      */}
+      {describeClockOffset(data.stationClockOffsetS, data.stationClockMeasuredAt) !== null && (
+        <p className="-mt-4 text-xs text-[var(--muted)]" data-testid="bas-clock-note">
+          {describeClockOffset(data.stationClockOffsetS, data.stationClockMeasuredAt)}
+        </p>
+      )}
 
       {selectedPoint === null ? (
         <section className="rounded border border-[var(--border)] p-8 text-center">
@@ -338,7 +371,7 @@ export function PointExplorer() {
               }
             />
             <Tile
-              label={`Average (last ${windowLabel(data.windowDays)})`}
+              label={`Average (${describeRange(data.range)})`}
               value={formatValue(stats.average, unit)}
               tone="neutral"
             />
@@ -463,8 +496,19 @@ function Panel({
  *
  * All three are load-bearing and none is decoration. See
  * WHY-ITS-BUILT-THIS-WAY.md § 30.
+ *
+ * Custom ranges added three more sentences, each for a way a long range can
+ * lie by omission: a notice when the readings were averaged into buckets and
+ * what the band under the line is; a notice when the range starts before the
+ * data or ends after it; and, in place of an empty chart, a sentence saying
+ * there is nothing in the range and where the nearest data is. The recorded
+ * gaps from `bas_data_gaps` are now drawn on the chart too, as dashed outlines
+ * distinct from the bands derived from the readings.
+ *
+ * Exported so a test can render it with a bucketed payload and read the
+ * notice back off the DOM.
  */
-function TrendPanel({
+export function TrendPanel({
   data,
   unit,
 }: {
@@ -518,35 +562,80 @@ function TrendPanel({
       ? null
       : { from: Math.min(dragFrom, dragTo), to: Math.max(dragFrom, dragTo) };
 
+  const timeZone = data.range.timezone;
+  const rangeMs = { fromMs: Date.parse(data.range.from), toMs: Date.parse(data.range.to) };
+  const samplingNotice = describeSampling(data.sampling);
+  const extentNotices = describeExtentNotices(
+    data.range,
+    data.pointExtent,
+    data.stats.readings,
+    // The same slack the line breaks on, so the notice and the break agree.
+    Math.max((data.collectionIntervalS ?? 0) * 3, 900) * 1000,
+  );
+  const recordedGaps = data.dataGaps
+    .map((gap) => ({
+      fromMs: Date.parse(gap.gapStart),
+      toMs: Date.parse(gap.gapEnd),
+      cause: GAP_CAUSE_LABEL[gap.cause] ?? gap.cause,
+    }))
+    .filter((gap) => gap.toMs > rangeMs.fromMs && gap.fromMs < rangeMs.toMs);
+
+  const noticeStyle = {
+    color: "var(--phb-orange-ink)",
+    borderColor: "color-mix(in srgb, var(--phb-orange) 45%, transparent)",
+    background: "color-mix(in srgb, var(--phb-orange) 12%, transparent)",
+  } as const;
+
   return (
     <Panel title="Trend" description={gapSummary}>
       {data.trend.length === 0 ? (
-        <p className="px-4 py-8 text-center text-sm text-[var(--muted)]">
-          No readings in the last {windowLabel(data.windowDays)}. Widen the range,
-          or check Collection Health — this point may not be collecting at all.
+        <p
+          className="px-4 py-8 text-center text-sm text-[var(--muted)]"
+          data-testid="bas-no-readings"
+        >
+          {data.selectedPoint === null
+            ? "No point selected."
+            : describeNoReadings(data.selectedPoint.pointName, data.range, data.pointExtent)}
+          {data.range.kind === "preset" &&
+            " Widen the range, or check Collection Health — this point may not be collecting at all."}
         </p>
       ) : (
         <>
-          {data.trendTruncated && (
+          {/*
+            The downsampling notice. Not collapsible, not a tooltip, not an
+            icon: a sentence on the chart, in the warning tone, every time the
+            readings were averaged. A chart that quietly averaged a -40 spike
+            into a 74 is worse than no chart, because the person concludes
+            nothing happened.
+          */}
+          {samplingNotice !== null && (
             <p
               className="border-b px-4 py-2 text-xs"
-              style={{
-                color: "var(--phb-orange-ink)",
-                borderColor: "color-mix(in srgb, var(--phb-orange) 45%, transparent)",
-                background: "color-mix(in srgb, var(--phb-orange) 12%, transparent)",
-              }}
+              style={noticeStyle}
+              role="note"
+              data-testid="bas-sampling-notice"
             >
-              This window holds more samples than the chart will carry, so only
-              the most recent part is drawn. Narrow the range to see a complete
-              picture.
+              {samplingNotice}
             </p>
           )}
+          {extentNotices.map((notice) => (
+            <p
+              key={notice}
+              className="border-b px-4 py-2 text-xs"
+              style={noticeStyle}
+              role="note"
+              data-testid="bas-extent-notice"
+            >
+              {notice}
+            </p>
+          ))}
           {/* Reset sits with the chart, and only exists once there is something to reset. */}
           {zoom !== null && (
             <div className="flex items-center gap-3 px-5 pb-1 pt-1 text-xs text-[var(--muted)]">
               <span>
-                Zoomed to {formatTimestamp(new Date(zoom.from).toISOString())} –{" "}
-                {formatTimestamp(new Date(zoom.to).toISOString())}
+                Zoomed to{" "}
+                {formatTimestamp(new Date(zoom.from).toISOString(), undefined, timeZone ?? undefined)} –{" "}
+                {formatTimestamp(new Date(zoom.to).toISOString(), undefined, timeZone ?? undefined)}
               </span>
               <button
                 type="button"
@@ -568,8 +657,12 @@ function TrendPanel({
               <TrendChart
                 trend={data.trend}
                 gaps={data.trendGaps}
+                recordedGaps={recordedGaps}
                 unit={unit}
                 zoom={zoom}
+                range={rangeMs}
+                timeZone={timeZone}
+                sampled={data.sampling.kind === "bucketed"}
                 selection={selection}
                 onDragStart={setDragFrom}
                 onDragMove={(at) => {
@@ -580,15 +673,23 @@ function TrendPanel({
             </ResponsiveContainer>
           </div>
 
-          {data.trendGaps.length > 0 && (
+          {(data.trendGaps.length > 0 || recordedGaps.length > 0) && (
             <ul className="border-t border-[var(--border)] px-4 py-2.5 text-xs text-[var(--muted)]">
               {data.trendGaps.map((gap) => (
                 <li key={gap.fromMs}>
-                  No readings from {formatTimestamp(new Date(gap.fromMs).toISOString())}{" "}
-                  to {formatTimestamp(new Date(gap.toMs).toISOString())} —{" "}
+                  No readings from{" "}
+                  {formatTimestamp(new Date(gap.fromMs).toISOString(), undefined, timeZone ?? undefined)}{" "}
+                  to {formatTimestamp(new Date(gap.toMs).toISOString(), undefined, timeZone ?? undefined)} —{" "}
                   {formatHours(gap.hours)}
                 </li>
               ))}
+              {recordedGaps.length > 0 && (
+                <li className="mt-1" data-testid="bas-recorded-gaps-legend">
+                  Dashed outlines are the {formatCount(recordedGaps.length)} gap
+                  {recordedGaps.length === 1 ? "" : "s"} in this range that the collector
+                  recorded and explained — listed with their cause in the table below.
+                </li>
+              )}
             </ul>
           )}
         </>
@@ -616,8 +717,12 @@ const CHART_FONT_SIZE = 11;
 export function TrendChart({
   trend,
   gaps,
+  recordedGaps = [],
   unit,
   zoom,
+  range = null,
+  timeZone = null,
+  sampled = false,
   selection,
   onDragStart,
   onDragMove,
@@ -628,8 +733,25 @@ export function TrendChart({
 }: {
   trend: PointExplorerData["trend"];
   gaps: PointExplorerData["trendGaps"];
+  /**
+   * Gaps from `bas_data_gaps` that touch the range - what the collector
+   * recorded and explained, as opposed to `gaps`, which are derived from the
+   * readings. Drawn as dashed outlines so the two cannot be confused.
+   */
+  recordedGaps?: Array<{ fromMs: number; toMs: number; cause: string }>;
   unit: string | null;
   zoom: TrendZoom | null;
+  /**
+   * The range the data was asked for. Becomes the x domain when there is no
+   * zoom, so a range that starts before the data shows the empty stretch
+   * rather than starting the axis at the first reading and hiding it. Absent
+   * (a test that only cares about the y-axis) the axis fits the data.
+   */
+  range?: { fromMs: number; toMs: number } | null;
+  /** The building's zone for the tick labels and the tooltip. */
+  timeZone?: string | null;
+  /** Whether `value` is an average with `min`/`max` beside it. Names the tooltip rows. */
+  sampled?: boolean;
   /** The drag in progress, or null when the pointer is up. */
   selection: TrendZoom | null;
   onDragStart: (atMs: number) => void;
@@ -646,7 +768,19 @@ export function TrendChart({
   tooltipIndex?: number;
 }) {
   const domain: [number, number] | ["dataMin", "dataMax"] =
-    zoom === null ? ["dataMin", "dataMax"] : [zoom.from, zoom.to];
+    zoom !== null
+      ? [zoom.from, zoom.to]
+      : range !== null
+        ? [range.fromMs, range.toMs]
+        : ["dataMin", "dataMax"];
+
+  const zone = timeZone ?? undefined;
+  const spanMs =
+    typeof domain[0] === "number" && typeof domain[1] === "number"
+      ? domain[1] - domain[0]
+      : trend.length > 1
+        ? trend[trend.length - 1]!.tsMs - trend[0]!.tsMs
+        : 0;
 
   /**
    * The y-axis is decided here, at EVERY zoom level, and handed to Recharts as
@@ -667,13 +801,20 @@ export function TrendChart({
    * absent reading, and folding it into the range would drag the axis to zero
    * and flatten everything real. Nothing about the data changes: `trend` is
    * plotted as delivered, float32 values and all.
+   *
+   * A bucketed sample contributes its MIN and MAX as well as its average. This
+   * is what keeps an extreme on the axis: the lab sensor that went to -40 at
+   * 09:05 on 24 August 2026 averages about 4 degF over that day, and an axis
+   * fitted to averages alone would stop at zero and clip the band that
+   * shows the -40. Drop `min`/`max` here and
+   * tests/bas-range-chart.test.tsx fails.
    */
   const visibleValues = trend
     .filter(
       (point) =>
         zoom === null || (point.tsMs >= zoom.from && point.tsMs <= zoom.to),
     )
-    .map((point) => point.value)
+    .flatMap((point) => [point.value, point.min ?? null, point.max ?? null])
     .filter((value): value is number => value !== null);
   const axis = valueAxis(visibleValues, unit, { fontSize: CHART_FONT_SIZE });
 
@@ -727,7 +868,7 @@ export function TrendChart({
         // than a suggestion.
         allowDataOverflow
         domain={domain}
-        tickFormatter={(ms: number) => formatChartTick(ms)}
+        tickFormatter={(ms: number) => formatChartTick(ms, undefined, zone, spanMs)}
         stroke="var(--muted)"
         tick={{ fontSize: CHART_FONT_SIZE }}
         minTickGap={48}
@@ -754,15 +895,28 @@ export function TrendChart({
         defaultIndex={tooltipIndex}
         labelFormatter={(ms) =>
           typeof ms === "number"
-            ? formatTimestamp(new Date(ms).toISOString())
+            ? formatTimestamp(new Date(ms).toISOString(), undefined, zone)
             : ""
         }
         // One more decimal than the axis, with the unit. Still a display
         // choice: the value in the payload is the float32 reading itself.
-        formatter={(value) => [
-          typeof value === "number" ? formatTooltipValue(value, unit) : "—",
-          "reading",
-        ]}
+        // A bucket's band arrives as [min, max] and is shown as such, so the
+        // tooltip says what the band is rather than leaving it to be guessed.
+        formatter={(value, name) => {
+          if (Array.isArray(value)) {
+            const [low, high] = value as [unknown, unknown];
+            return [
+              typeof low === "number" && typeof high === "number"
+                ? `${formatTooltipValue(low, unit)} – ${formatTooltipValue(high, unit)}`
+                : "—",
+              "lowest – highest",
+            ];
+          }
+          return [
+            typeof value === "number" ? formatTooltipValue(value, unit) : "—",
+            name === "range" ? "lowest – highest" : sampled ? "average" : "reading",
+          ];
+        }}
         contentStyle={{
           fontSize: "0.75rem",
           border: "1px solid var(--border)",
@@ -790,6 +944,32 @@ export function TrendChart({
           ifOverflow="hidden"
         />
       ))}
+      {/*
+        The gaps the collector RECORDED, from bas_data_gaps. Usually they
+        coincide with a derived band above - the same hole seen two ways -
+        and sometimes they do not, which is exactly the case worth seeing.
+        Outline only, longer dashes, the cause written inside: a recorded gap
+        is a statement somebody made about the data, and it should look like
+        one rather than like more shading.
+      */}
+      {recordedGaps.map((gap) => (
+        <ReferenceArea
+          key={`recorded-${gap.fromMs}-${gap.toMs}`}
+          x1={gap.fromMs}
+          x2={gap.toMs}
+          fill="none"
+          stroke="var(--phb-maroon)"
+          strokeOpacity={0.75}
+          strokeDasharray="8 4"
+          ifOverflow="hidden"
+          label={{
+            value: gap.cause,
+            position: "insideTop",
+            fontSize: 10,
+            fill: "var(--phb-maroon)",
+          }}
+        />
+      ))}
       {/* The in-progress drag selection. */}
       {selection !== null && (
         <ReferenceArea
@@ -798,6 +978,30 @@ export function TrendChart({
           fill="var(--module-accent, var(--phb-cyan))"
           fillOpacity={0.12}
           ifOverflow="hidden"
+        />
+      )}
+      {/*
+        The min-max band, drawn only when the trend is bucketed. This is the
+        honest half of downsampling: the average line above it is smooth
+        because averaging makes it so, and the band is where the readings
+        actually went. A spike the average erased is a tooth in this band.
+        Range areas take a [low, high] pair per sample; a break's null stays
+        null so the band breaks where the line does.
+      */}
+      {sampled && (
+        <Area
+          type="monotone"
+          name="range"
+          dataKey={(point: PointExplorerData["trend"][number]) =>
+            point.min != null && point.max != null ? [point.min, point.max] : null
+          }
+          stroke="none"
+          fill="var(--module-accent, var(--phb-cyan))"
+          fillOpacity={0.18}
+          dot={false}
+          activeDot={false}
+          connectNulls={false}
+          isAnimationActive={false}
         />
       )}
       <Area
@@ -810,6 +1014,7 @@ export function TrendChart({
         */
         type="monotone"
         dataKey="value"
+        name="value"
         // One accent, and it is the module's. Sensor data is the content.
         stroke="var(--module-accent, var(--phb-cyan))"
         strokeWidth={1.75}

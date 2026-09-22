@@ -125,6 +125,7 @@ building is not recorded.
 | **Measured horizon, visibility, the clock** | The roll horizon measured from a full buffer's span; the verdict read by the view, the screen and the health check; the station's clock offset recorded; `add_bas_measured_horizon_and_visibility` | `2b88ba3` **(phb-bas)**, `09e0041` (2026-09-17) |
 | **The backup gets its own role** | `bas_backup`, `BAS_BACKUP_URL`, `.verified` markers, the health check watches freshness | `d77a0cb` **(phb-bas)**, on `fix/backup-role-and-monitoring`, **not yet merged** on 2026-09-17 |
 | **Axis precision** | The trend's y-axis chooses round ticks at every zoom, decimals by unit; the stored reading is untouched | `fix/bas-chart-axis-precision` (2026-09-18) |
+| **Custom date range** | Point Explorer takes two calendar dates or a year, resolved in the building's zone by PostgreSQL; over 10,000 readings the trend is bucketed with a min–max band and says so; real readings committed as fixtures | `feat/bas-custom-date-range` (2026-09-22) |
 
 ### Test count
 
@@ -290,6 +291,20 @@ widest label. The readings themselves are float32 as Niagara sent them and are
 rounded nowhere but the label. `runbook.md` → *The trend chart's y-axis prints
 long decimals*; `WHY-ITS-BUILT-THIS-WAY` § 50.
 
+**A custom date range, resolved in the building's zone (2026-09-22).** Two
+date inputs beside the presets, and a button per calendar year that holds
+readings. The dates go to PostgreSQL as text and come back as instants against
+`bas_sites.timezone`, end exclusive: a single day is the whole day, and the day
+the clocks change is 23 or 25 hours long. **Up to 10,000 readings are drawn
+raw** — a measured cap, table in `lib/modules/bas/range.ts` — and past that the
+trend is bucketed and drawn as an average line with a lowest-to-highest band,
+under a sentence on the chart that says so. A range with no readings names the
+nearest data instead of drawing an empty chart; one that starts before the
+first reading says where the data begins; `bas_data_gaps` rows are outlined on
+the chart. The office station's clock offset is stated, not corrected.
+`runbook.md` → *The trend chart says "Averaged to one point per …"*, *Which
+time zone a Point Explorer date range is in*; `WHY-ITS-BUILT-THIS-WAY` § 53.
+
 ### Analyze — `/bas/analyze` (B5, 2026-09-21)
 
 A question in plain English; one `SELECT` written by the model; the answer
@@ -403,10 +418,15 @@ is no longer reported by the station*.
 
 ### Filters
 
-Time range (24 h / 7 d / 30 d) and a project → building → station cascade with
-"All" at every level. Both live in the URL. Filtering happens in the `WHERE`
-clause, and entitlement and selection are kept apart and intersected; a site
-outside the entitlement returns 404, matching the module guard.
+Time range (24 h / 7 d / 30 d, and on Point Explorer a custom `from`/`to`
+pair of calendar dates in the building's zone, or a year) and a project →
+building → station cascade with "All" at every level. All live in the URL;
+`days` and `from`/`to` are alternatives and one helper switches between them.
+Filtering happens in the `WHERE` clause, and entitlement and selection are
+kept apart and intersected; a site outside the entitlement returns 404,
+matching the module guard. Collection Health keeps the three presets: its
+range scopes only run history and the screen spans buildings, so there is no
+single zone to resolve a calendar date in.
 
 ---
 

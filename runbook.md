@@ -7061,6 +7061,172 @@ same rows and formats its own axis; it is unaffected either way.
 
 ---
 
+## The trend chart says "Averaged to one point per …"
+
+**This is working correctly, and the sentence is the point.** The Point
+Explorer draws every reading in the range up to **10,000** of them. Past that
+it groups the readings into buckets and draws one point per bucket — the
+average as the line, and a shaded band from each bucket's lowest reading to
+its highest. The sentence at the top of the chart says the bucket width, how
+many readings became how many averages, and why.
+
+**Why 10,000.** Measured on 2026-09-22, not guessed: the real `TrendChart`
+was rendered 900 px wide in headless Chrome over the DevTools protocol, with
+real `points_RoomT` readings tiled forward for the larger counts, and three
+things were timed — first paint of the curve, a drag-to-zoom, and the
+tooltip's response to a mouse move. The table is in
+`lib/modules/bas/range.ts` beside the constant. In short: under about 400 ms
+to draw and to zoom up to 10,000 samples; the two runs at 12,000 disagreed
+(377 ms and 695 ms); from 18,000 every zoom is half a second or more; at
+70,000 — two years of a 15-minute point — the chart takes 2.7 s to appear and
+1.9 s per drag, and produces 3.3 MB of SVG path. Hover stays cheap at every
+count, so "it responds to the mouse" is not evidence the chart is usable.
+Headless, GPU disabled, on the platform owner's laptop, with nothing else on
+the page: a real page with the tiles and the gap table is slower, which is
+why the cap has margin under the knee rather than sitting on it.
+
+**The band is not optional.** An average erases exactly what an investigator
+is looking for. On 24 August 2026 at 09:05 the lab's zone sensor went from 76
+to **−40 °F** and stayed there (a disconnected sensor); that day's average is
+about 4 °F, and a chart of daily averages would show a sensor reading a
+little above freezing while the band's floor sits at −40. The y-axis
+includes the band, so the extreme is on the axis too. No shorter transient
+exists anywhere in the live data — the search for one is in the branch
+report — so this step is what the tests use.
+`tests/bas-custom-range.test.ts` asserts the bucket holding that reading
+carries −40 as its minimum and something else as its average;
+`tests/bas-range-chart.test.tsx` renders 18–24 August in day buckets and
+asserts the lowest tick is at or below −40 and two areas are drawn. The mutation record
+in each file says which single edits make them fail: drop `min`/`max` from
+`buildBucketedTrend`, drop them from the axis, remove the band.
+
+**Bucket widths** come from a ladder — 5, 10, 15, 30 minutes; 1, 2, 3, 6, 12
+hours; a day — and the finest one that keeps the range under 3,000 buckets is
+chosen from the **range length**, not from the readings, so an empty first
+year is empty rather than absent. Day buckets are cut on **local midnight**
+in the building's zone (`date_trunc` on the local time), because a bucket
+counted every 86,400 seconds drifts an hour off the calendar at each clock
+change and never comes back; sub-day buckets are `date_bin` from the range
+start. A tooltip on a bucket shows the average and "lowest – highest".
+
+**To see the raw readings**, narrow the range. Thirty-four days of a
+five-minute point fits under the cap; thirty-five does not. Drag-to-zoom does
+**not** re-fetch — it is a domain change over the same bucketed data — so a
+zoom into a bucketed chart is still bucketed and still says so.
+
+**If the sentence is missing on a chart that is plainly thinned**, the
+`sampling` field of the payload is `raw` while `trend` is shorter than
+`stats.readings`. That cannot happen from the code as written (the decision
+and the query are two arms of one `if`), so look for a second code path
+building `trend`.
+
+---
+
+## A custom date range is refused
+
+Three refusals, each a **422** with a sentence, and the screen shows the
+sentence in place of the chart with a button back to the preset. The range
+control also refuses the first two before sending anything.
+
+| Message | Cause | What to do |
+|---|---|---|
+| *The end date (…) is before the start date (…)* | Dates the wrong way round | Swap them |
+| *The end date (…) is in the future. Today in America/New_York is …* | An end after today **in the building's zone** | Pick today or earlier. The year shortcut for the current year ends today for this reason |
+| *The start date "…" is not a calendar date* | `2026-02-30`, or not `YYYY-MM-DD` | A hand-edited URL; the date inputs cannot produce it |
+| *from and to must both be given, as YYYY-MM-DD* | Half a pair in the URL | Both or neither |
+
+"Today" is decided by the database from `bas_sites.timezone`, not by the
+server's clock or the browser's. At 11 PM in Cincinnati it is already
+tomorrow in UTC, and a check against UTC would refuse a range ending today
+for the last hour of every day.
+
+---
+
+## Which time zone a Point Explorer date range is in, and why it is not the browser's
+
+**The building's**: `bas_sites.timezone` for the site the selected point's
+station belongs to — `America/New_York` for both current sites. The scope
+line under the controls says so whenever a custom range is on:
+*dates and times in America/New_York, the building's time zone*.
+
+A person typing 14 August into the range control means that calendar day
+where the sensor is. So the dates travel as `YYYY-MM-DD` text from the input
+to the URL to the route to the service, and **PostgreSQL** turns them into
+instants: `'2026-08-14'::date::timestamp AT TIME ZONE 'America/New_York'` is
+midnight at the start of that day in Cincinnati, and the end is the same
+expression for the day after, exclusive. Nothing in JavaScript converts a
+date, because a JavaScript `Date` is in the browser's zone and that is
+precisely the zone the request is not about.
+
+Two consequences that look like bugs and are not:
+
+- **A single day is a whole day**: start = end = 14 August is 00:00 to 24:00
+  on the 14th, 288 five-minute readings.
+- **The day the clocks change is 23 or 25 hours long.** 9 March 2025 in New
+  York runs from 05:00Z to 04:00Z the next day. `tests/bas-custom-range.test.ts`
+  asserts 23 hours over the six real `OpState` readings on that day, 71 hours
+  for 8–10 March, 73 for 1–3 November, and that day-buckets across the change
+  start at 05:00Z, 05:00Z, then 04:00Z. A range that silently assumed 24-hour
+  days would be an hour off from the change onwards; the mutation that does
+  exactly that is in the test file's record.
+
+**The office station's clock is 22 minutes fast** (*A BAS station's clock is
+wrong*, above) and the range does **not** correct for it. Its readings are
+stamped by that clock, so the last 22 minutes of a Steel Place day sit in
+the next day's range and a boundary will not line up with the readings
+exactly. The scope line says so, once, in the muted text, from
+`bas_stations.clock_offset_s` as last measured. Fixing the clock is a station
+change; when it is fixed the sentence disappears on the next collector pass.
+
+**The tick labels and the tooltip use the same zone.** Before this change
+they used the browser's. Every current user is in the building's zone, so
+nothing visibly moved; someone opening the platform from another zone now
+sees the building's clock, which is the one the readings happened on.
+
+---
+
+## The chart draws nothing for the first part of a range, or says "Data for this point begins …"
+
+**Not equipment being off.** The range starts before the earliest reading
+held for this point, and the notice says where the data begins. The x-axis
+spans the whole range asked for, so the empty stretch is visible as empty
+rather than the axis starting at the first reading and hiding it. The
+matching notice at the other end — *Data for this point ends …* — appears
+when the range runs on past the last reading held, with one break threshold
+of slack so a range ending today over a point collected ten minutes ago does
+not claim the data has ended.
+
+**A range with no readings at all** draws no chart. It says *No readings for
+`<point>` between X and Y (zone)* and names the earliest and latest reading
+held for the point, so "nothing here" cannot be mistaken for "nothing
+anywhere". The Latest tile still shows the latest value, because a window
+with nothing in it does not make the last known reading untrue.
+
+**The year buttons** are derived from the readings the viewer may see —
+every calendar year, in the building's zone, from the earliest reading to
+the latest — not from a constant. No readings in 2023, no 2023 button. A
+building whose own data starts in 2026 still shows 2024 and 2025 if another
+building's does, and pressing one gives the no-readings sentence above with
+that point's real earliest date. Per entitled point through the primary key,
+so it is two index probes per point on each poll, not a scan of the table.
+
+**Recorded gaps are on the chart now.** The dashed outlines with a cause
+written inside are `bas_data_gaps` rows that touch the range — what the
+collector recorded and explained — and the shaded bands are the holes
+derived from the readings themselves. Usually they coincide; when they do
+not, that is worth seeing. The line under the chart counts the outlines and
+points at the table.
+
+**Collection Health keeps the three presets.** Its range scopes only the run
+list, the run chart and the collector-silence figure, and the screen spans
+every building at once, so there is no single zone to resolve a calendar
+date in; and the run list is capped at 30 rows. A custom range there would
+have to answer "whose midnight?" before it could answer anything. If it is
+wanted, the contract is the one Point Explorer uses, and the zone question
+has to be settled first.
+
+---
+
 ## Comparing the Point Explorer against Grafana
 
 ```bash
