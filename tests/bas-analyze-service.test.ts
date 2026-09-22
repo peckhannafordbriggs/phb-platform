@@ -179,12 +179,23 @@ async function seed(): Promise<Seeded> {
   // A 64-hour gap from the 17th 12:00 to the 20th 04:00, entirely inside the
   // range; and a second gap that straddles the end of the range so clipping
   // is tested: the 20th 20:00 to the 22nd 20:00 = 48h, of which 4h are inside.
+  //
+  // Plus a DUPLICATE of the first: same start, earlier end - the shape the
+  // collector left behind on 2026-09-21 when a pass recorded a gap, timed
+  // out, and the next pass recorded the same outage again. Summing rows
+  // would count 40 of those hours twice. The total below must still be 68.
   await testDb.basDataGap.createMany({
     data: [
       {
         pointId: temp.pointId,
         gapStart: new Date("2026-09-17T12:00:00Z"),
         gapEnd: new Date("2026-09-20T04:00:00Z"),
+        cause: "collector_down",
+      },
+      {
+        pointId: temp.pointId,
+        gapStart: new Date("2026-09-17T12:00:00Z"),
+        gapEnd: new Date("2026-09-19T04:00:00Z"),
         cause: "collector_down",
       },
       {
@@ -322,9 +333,12 @@ describe("gap overlap is computed here, not by the model", () => {
 
     const gaps = result.provenance.gaps;
     expect(gaps).not.toBeNull();
-    // 64h fully inside + 4h of the straddling gap clipped to RANGE.end.
+    // 64h fully inside + 4h of the straddling gap clipped to RANGE.end. The
+    // duplicate row for the first outage is merged, not added: three rows in
+    // the table, two intervals, one merge reported.
     expect(gaps!.totalHours).toBe(68);
     expect(gaps!.items).toHaveLength(2);
+    expect(gaps!.mergedRows).toBe(1);
     expect(gaps!.items[0]).toMatchObject({ hours: 64, cause: "collector_down", pointName: "Zone Temp B5" });
     expect(gaps!.items[1]).toMatchObject({
       hours: 4,
@@ -533,7 +547,7 @@ describe("saying I don't know", () => {
       timeRange: RANGE,
       scope: "declared",
       points: [{ id: "1", name: "P", site: "S", station: "St", collected: true }],
-      gaps: { totalHours: 0, items: [] },
+      gaps: { totalHours: 0, items: [], mergedRows: 0 },
       unknownHorizon: { count: 0, names: [] },
       coverage: {
         earliest: "2026-09-15T00:00:00.000Z",

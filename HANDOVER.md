@@ -239,7 +239,7 @@ Explorer, Analyze, and a Settings tab behind a module-admin permission — four 
 database accounts, nightly backups with a tested restore.
 
 **Analyze (B5, 2026-09-21)** is a question box: the model writes one read-only `SELECT`,
-it runs as the `bas_analyze` role, and every answer shows the SQL, the rows, the hours of
+it runs as the `bas_analyze` role, and every answer shows the rows, the points and period covered, the hours of
 the period nobody was watching, and whether the readings held actually span the period
 asked about. Verified live on 21 September against the office data. It needs two things
 production does not yet have: the Anthropic API key in Key Vault (`ANTHROPIC_API_KEY`)

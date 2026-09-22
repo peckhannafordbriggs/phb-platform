@@ -943,21 +943,64 @@ one place rather than in every route. Not needed for one building.
 
 ---
 
-## The state of the data, as of 21 August 2026
+## The state of the data, as of 21 September 2026
 
-**It is synthetic.** The lab station at `196.1.1.213` has four active points:
-`Temp1`, `Temp2` and `Temp3` come from Niagara's History Emulator and nobody
-knows what they represent, and `points_RoomT` is real and reads in Fahrenheit.
-They are left unclassified on purpose — inventing a `point_role` would make the
-AI answer confidently about something untrue.
+Read from the development database on that day, as the `bas_analyze` role.
+The 21 August version of this section described one lab station with four
+synthetic points and named a production JACE as the open dependency. That
+dependency closed on 16 September; what follows replaces it.
 
-That station is also **not PH+B's asset**. Its licence belongs to Building
-Controls & Solutions under a Columbus Temperature Controls project.
+**Two sites, two stations, one org and one project** (`PHB` /
+`Peck Hannaford + Briggs`), both in `America/New_York`:
 
-**Access to a production JACE is the open dependency**, and the question that
-matters most is not the IP address — it is *whether history extensions are
-configured on it at all*. If nobody ever set them up, this becomes a Niagara
-engineering job before it is a data job.
+| Site | Station | Mode | Niagara | Histories | Collected |
+|---|---|---|---|---|---|
+| **PHB Steel Place** | `PHBoffice` | direct | 4.10.0.154 | 32 | **26** |
+| **PHB Spring Grove** | `SpringGroveLabComputer` (JACE-9000) | direct | 4.15.4.24 | 7 | **4** |
 
-Everything in B2 through B6 can be built against synthetic data. Whether it is
-*useful* is not knowable until a real building is behind it.
+**39 points, 30 collected.** The nine not collected each carry an
+`inactive_reason`: six Niagara system logs (`AuditHistory`, `LogHistory`,
+`SecurityHistory` on both stations), `Global_Alarm` as `alarm_history`, and
+two `_cfg0` histories superseded by a reconfiguration.
+
+**Classification.** At Steel Place, 20 of the 26 collected points carry a
+`point_role` across 11 roles: ten `zone_temp` (the VAVs), and one each of
+`supply_air_temp`, `supply_air_temp_sp`, `duct_static_pressure`,
+`duct_static_pressure_sp`, `outside_air_temp`, `supply_fan_speed`,
+`oa_damper_cmd`, `ra_damper_cmd`, `occupancy_cmd`, `occupancy_status`. The six
+unclassified are the station's own state and mode enumerations, left so on
+purpose (docs/09, *Classification*). At Spring Grove, `points_RoomT` is
+`zone_temp`; `Temp1`–`Temp3` are History Emulator output, nobody knows what
+they represent, and they stay unclassified — inventing a role would make the
+AI answer confidently about something untrue. A question phrased by what a
+point measures excludes all nine unclassified collected points, and the
+Analyze tab says so on every such answer.
+
+**Equipment is real at Steel Place: 11 rows.** `RV`, a rooftop unit (`rtu`),
+with 16 points attached, and `VAV-1` through `VAV-10` (`vav`), each with its
+zone temperature and each parented to `RV`. Every one of the 26 collected
+office points has an `equipment_id`. Spring Grove has no equipment rows.
+
+**`bas_point_links` is still empty.** Nothing is linked point-to-point.
+"Which unit serves this sensor" is answered from `parent_equipment_id` alone,
+and the Analyze tab's answer to that question says exactly that. The two
+setpoint pairs that exist resolve through `bas_point_roles.setpoint_for`, not
+through links.
+
+**Readings: 60,078**, split almost evenly. Steel Place holds 30,011 back to
+21 February 2024 (change-of-value points the station had kept); Spring Grove
+holds 30,067 from 18 August 2026. Each point's own buffer is about 500
+records, so a question over "the last 30 days" at Steel Place is answered
+from roughly ten days of readings — which is why the Analyze tab reports
+coverage against the period asked (WHY § 52).
+
+**Recorded gaps: 32, totalling 1,241.8 hours**, between 21 August and
+20 September 2026, all `roll_overwrite`. The Spring Grove points carry most
+of them (about 239 hours each in the last 30 days); at Steel Place the six
+gap-bearing points are the two status enumerations and four RV analogues.
+
+**The lab station is still not PH+B's asset.** Its licence belongs to
+Building Controls & Solutions under a Columbus Temperature Controls project;
+the office station is PH+B's own.
+
+The vocabularies are seeded: 91 point roles, 25 equipment types.

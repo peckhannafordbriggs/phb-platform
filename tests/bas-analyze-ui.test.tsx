@@ -3,12 +3,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Result } from "@/app/(modules)/bas/analyze";
 import {
+  askQuestion,
   cellText,
   describeGaps,
+  fetchAnalyzeStatus,
   describeRowCount,
   describeScope,
   describeUnknownHorizon,
   gapsTone,
+  isAbortError,
   resultHeading,
   resultTone,
 } from "@/app/(modules)/bas/analyze-client";
@@ -31,6 +34,7 @@ const provenance: Provenance = {
   points: [{ id: "1", name: "Zone Temp", site: "PHBoffice", station: "JACE", collected: true }],
   gaps: {
     totalHours: 64,
+    mergedRows: 0,
     items: [
       {
         pointId: "1",
@@ -131,8 +135,11 @@ describe("provenance is on screen for every result that ran", () => {
       expect(html).toContain("What was actually queried");
       expect(html).toContain("64 hours of this period");
       expect(html).toContain("collector down");
-      expect(html).toContain("SELECT avg(value_num)");
       expect(html).toContain("Zone Temp");
+      // The SQL is NOT on screen, by decision on 2026-09-21. It is in the
+      // audit row and the log line, and stays in the payload for them.
+      expect(html).not.toContain("SELECT avg(value_num)");
+      expect(html).not.toContain("SQL that ran");
     }
   });
 
@@ -163,7 +170,7 @@ describe("provenance is on screen for every result that ran", () => {
 
 describe("the gap sentence has three states, not two", () => {
   it("zero overlapping gaps is a sentence, and green", () => {
-    const none: Provenance = { ...provenance, gaps: { totalHours: 0, items: [] } };
+    const none: Provenance = { ...provenance, gaps: { totalHours: 0, items: [], mergedRows: 0 } };
     expect(describeGaps(none)).toContain("No recorded gap overlaps");
     expect(gapsTone(none)).toBe("ok");
   });
@@ -171,7 +178,16 @@ describe("the gap sentence has three states, not two", () => {
   it("gaps present is a sentence with the hours, and amber", () => {
     expect(describeGaps(provenance)).toContain("64 hours of this period");
     expect(describeGaps(provenance)).toContain("The platform was not watching");
+    expect(describeGaps(provenance)).not.toContain("merged");
     expect(gapsTone(provenance)).toBe("warn");
+  });
+
+  it("says when overlapping records were merged, so a duplicate row is visible rather than counted", () => {
+    const merged: Provenance = {
+      ...provenance,
+      gaps: { ...provenance.gaps!, mergedRows: 1 },
+    };
+    expect(describeGaps(merged)).toContain("1 overlapping record for the same outage was merged");
   });
 
   it("not computed is its own sentence, and amber - never 'no gaps'", () => {
@@ -214,6 +230,43 @@ describe("the gap sentence has three states, not two", () => {
   });
 });
 
+describe("a cancelled request is not a failed one", () => {
+  /**
+   * Found live on 2026-09-21. React Strict Mode runs the mounting effect
+   * twice in development and aborts the first run; the status fetch turned
+   * that abort into ApiError("network") and the tab opened with "Could not
+   * reach the server" while the route was answering in five seconds. Both
+   * helpers must let an AbortError through untouched so the component can
+   * ignore it, and must still turn a real network failure into the message.
+   */
+  it("lets an AbortError through both helpers, untouched", async () => {
+    const aborted = new AbortController();
+    aborted.abort();
+
+    await expect(fetchAnalyzeStatus(aborted.signal)).rejects.toSatisfy(isAbortError);
+    await expect(askQuestion("anything at all", aborted.signal)).rejects.toSatisfy(isAbortError);
+    // And the predicate itself, since the component's silence depends on it.
+    expect(isAbortError(new DOMException("x", "AbortError"))).toBe(true);
+    expect(isAbortError(Object.assign(new Error("x"), { name: "AbortError" }))).toBe(true);
+    expect(isAbortError(new TypeError("fetch failed"))).toBe(false);
+  });
+
+  it("still reports a real network failure as 'Could not reach the server'", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new TypeError("fetch failed"))) as typeof fetch;
+    try {
+      await expect(fetchAnalyzeStatus()).rejects.toMatchObject({
+        name: "ApiError",
+        code: "network",
+        message: "Could not reach the server.",
+      });
+      await expect(askQuestion("anything at all")).rejects.toMatchObject({ code: "network" });
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+
 describe("the other sentences", () => {
   it("names unknown-horizon points and says what it means", () => {
     const text = describeUnknownHorizon({
@@ -250,6 +303,9 @@ describe("the other sentences", () => {
     expect(render(clarify)).toContain("Nothing was queried");
     expect(render(cannot)).toContain("Could not answer");
     expect(render(cannot)).toContain("permission denied");
+    // A FAILED answer shows each SQL that was tried beside its reason - the
+    // one place the SQL is rendered. Decision of 2026-09-21, both halves.
+    expect(render(cannot)).toContain("SELECT 1");
     expect(render(cannot)).toContain("a second was requested");
     expect(render(notConfigured)).toContain("ANTHROPIC_API_KEY");
     expect(render(notConfigured)).toContain("rest of Building Automation is unaffected");

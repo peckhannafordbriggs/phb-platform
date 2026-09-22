@@ -17,6 +17,7 @@ import {
   describeUnknownHorizon,
   fetchAnalyzeStatus,
   gapsTone,
+  isAbortError,
   rateLimitMessage,
   resultHeading,
   resultTone,
@@ -32,8 +33,14 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * answer must LOOK DIFFERENT from a right one. So the result is rendered from
  * its `kind`, not from an `answer` string with decorations, and the provenance
  * panel - what was queried, how many rows, which points, how many hours of the
- * period nobody was watching - is not collapsible and not optional. The SQL is
- * collapsed by default and always one click away.
+ * period nobody was watching - is not collapsible and not optional.
+ *
+ * The SQL of a SUCCESSFUL answer is not rendered, by decision on 2026-09-21.
+ * It is in the `bas.question_asked` audit row and the `bas.analyze.question`
+ * log line, and stays in the API payload for both; the screen shows what was
+ * queried in words - points, period, gaps, coverage, rows. A FAILED answer
+ * does show each SQL that was tried, beside the reason it failed: there,
+ * what was tried is the diagnosis rather than noise.
  *
  * There is no confidence score, on purpose. There is no chart, on purpose: a
  * question that wants a picture is answered with a link to the Point Explorer.
@@ -62,7 +69,7 @@ export function Analyze() {
     fetchAnalyzeStatus(controller.signal)
       .then(setStatus)
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (isAbortError(err)) return;
         setStatus({ configured: false, missing: [] });
         setError(err instanceof ApiError ? err.message : "Could not check the configuration.");
       });
@@ -86,7 +93,7 @@ export function Analyze() {
       const answer = await askQuestion(trimmed, controller.signal);
       setResult(answer);
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (isAbortError(err)) return;
       if (err instanceof ApiError) {
         setError(err.code === "rate_limited" ? rateLimitMessage() : err.message);
       } else {
@@ -143,8 +150,8 @@ export function Analyze() {
               {busy ? "Working…" : "Ask"}
             </button>
             <p className="text-xs text-[var(--muted)]">
-              Read-only. The question becomes one SQL query, which is shown with the
-              answer. Enter asks; Shift+Enter is a new line.
+              Read-only. The question becomes one database query; the answer shows which
+              points and period it covered. Enter asks; Shift+Enter is a new line.
             </p>
           </div>
         </form>
@@ -274,7 +281,15 @@ export function Result({ result, asked }: { result: AnalyzeResult; asked: string
                 <ol className="mt-1.5 space-y-2">
                   {result.attempts.map((attempt, i) => (
                     <li key={i} className="rounded-md border border-[var(--border)] p-3">
-                      {attempt.sql.length > 0 && <Sql sql={attempt.sql} open />}
+                      {/* A failed answer is the one place the SQL earns its
+                          space: what was tried is the diagnosis. A successful
+                          answer's SQL is recorded, not rendered (see the file
+                          header). */}
+                      {attempt.sql.length > 0 && (
+                        <pre className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--neutral-50,var(--surface))] p-3 text-[0.75rem] leading-relaxed">
+                          <code>{attempt.sql}</code>
+                        </pre>
+                      )}
                       <p className="mt-1.5 text-xs" style={{ color: TONE_INK.warn }}>
                         {attempt.error}
                       </p>
@@ -294,7 +309,7 @@ export function Result({ result, asked }: { result: AnalyzeResult; asked: string
             <p className="text-xs text-[var(--muted)]">
               How the question was read: {result.interpretation}
             </p>
-            <ProvenancePanel provenance={result.provenance} table={result.table} sql={result.sql} durationMs={result.durationMs} />
+            <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
             {/* Always rendered: zero rows gets its own sentence, an all-NULL
                 row is shown AS the NULL row, so what the database returned is
                 never left to be inferred from an absence. */}
@@ -314,7 +329,7 @@ export function Result({ result, asked }: { result: AnalyzeResult; asked: string
             <p className="text-xs text-[var(--muted)]">
               How the question was read: {result.interpretation}
             </p>
-            <ProvenancePanel provenance={result.provenance} table={result.table} sql={result.sql} durationMs={result.durationMs} />
+            <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
             <RowsTable table={result.table} />
           </>
         )}
@@ -330,12 +345,10 @@ export function Result({ result, asked }: { result: AnalyzeResult; asked: string
 function ProvenancePanel({
   provenance,
   table,
-  sql,
   durationMs,
 }: {
   provenance: Provenance;
   table: ResultTable;
-  sql: string;
   durationMs: number;
 }) {
   const gTone = gapsTone(provenance);
@@ -431,10 +444,6 @@ function ProvenancePanel({
           {describeRowCount(table)}
           <span className="text-[var(--muted)]"> · {(durationMs / 1000).toFixed(1)} s end to end</span>
         </Row>
-
-        <Row label="SQL that ran">
-          <Sql sql={sql} />
-        </Row>
       </dl>
     </div>
   );
@@ -456,19 +465,6 @@ function Row({
         {children}
       </dd>
     </div>
-  );
-}
-
-function Sql({ sql, open = false }: { sql: string; open?: boolean }) {
-  return (
-    <details open={open} className="group">
-      <summary className="cursor-pointer select-none text-xs text-[var(--muted)] hover:text-[var(--foreground)]">
-        {open ? "SQL" : "Show the SQL"}
-      </summary>
-      <pre className="mt-2 overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--neutral-50,var(--surface))] p-3 text-[0.75rem] leading-relaxed">
-        <code>{sql}</code>
-      </pre>
-    </details>
   );
 }
 

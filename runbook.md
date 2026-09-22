@@ -7455,11 +7455,60 @@ cannot suppress the figure.
 **A gap means the platform was not watching.** It never means the equipment
 was off. Collection Health's gap list is the same table.
 
+**"N overlapping records for the same outage were merged before counting."**
+`bas_data_gaps` holds two rows for one outage on the same point. Found on
+2026-09-21: the 3-8 September outage was recorded twice for each Spring Grove
+point, same start, ends a day apart, because the collector's pass on the 8th
+recorded the gap (its own committed transaction) and then timed out against
+the station before advancing the checkpoint, so the pass on the 9th recorded
+the same outage again with a later end. Summing rows counted 71.7 hours twice
+per point - 1,162 hours instead of 866 over 30 days. Analyze now merges
+overlapping intervals per point before summing and says how many rows it
+merged; the total is right whatever the table holds. Collection Health and
+Point Explorer list rows and sum nothing, so they show both rows and inflate
+nothing.
+
+**The collector no longer writes them** *(phb-bas, `record_gap`, branch
+`fix/collector-gap-record-replace`, 2026-09-21)*: an existing row for the
+same point, start and cause is extended rather than duplicated, the end never
+shrinks, and pre-existing duplicates are all extended and none is added to -
+so it deploys safely before the cleanup. `test_gap_record.py` proves it on a
+throwaway cluster.
+
+**FOLLOW-UP, in this order, and not before the first step:**
+
+1. **Clean the four duplicate rows** on the live database. For each Spring
+   Grove point (41-44), two `roll_overwrite` rows share `gap_start`
+   2026-09-03T20:20Z: keep the one ending 2026-09-07T20:31Z, delete the one
+   ending 2026-09-06T20:04Z (gap_ids 17-20 on 2026-09-21). Touches data -
+   back up first (*Back up before any destructive BAS operation*), and
+   re-check with the overlapping-pairs query below, which must return zero
+   rows afterwards.
+2. **Then add the unique index**, as a platform migration:
+   `CREATE UNIQUE INDEX ON bas_data_gaps (point_id, gap_start, cause)`. It
+   cannot apply while step 1 is undone - the migration would fail on the
+   duplicates and `migrate deploy` would stop there. Once it exists,
+   `record_gap`'s select-then-update can become one `INSERT … ON CONFLICT`,
+   and a duplicate becomes impossible rather than merely unwritten.
+
+```sql
+-- Overlapping gap records for one point. Must be empty after step 1.
+SELECT a.point_id, a.gap_id, b.gap_id, a.gap_start, a.gap_end, b.gap_end
+  FROM bas_data_gaps a
+  JOIN bas_data_gaps b ON a.point_id = b.point_id AND a.gap_id < b.gap_id
+                       AND a.gap_start < b.gap_end AND b.gap_start < a.gap_end
+ ORDER BY 1, 4;
+```
+
+Until both steps are done, Analyze's merged total is right and its "N
+overlapping records merged" sentence is the reminder.
+
 **If the figure says "across every point".** The plan named no point ids (or
 named one that does not exist) and either reads `bas_readings` or states a
 time range, so the platform widened the scope to every point rather than
-report nothing. The figure over-reports rather than under-reports. The SQL is
-one click away; read which points it actually touches.
+report nothing. The figure over-reports rather than under-reports. The SQL is not on
+screen; it is in the `bas.question_asked` audit row for that question, where
+you can read which points it actually touches.
 
 **A declared period is always enough.** On 2026-09-21 the live run of "gap
 hours in the last 30 days, by point" showed *Scope: none, Gaps: NOT COMPUTED*
@@ -7572,7 +7621,9 @@ no gap figure or a time expression with no declared period.
 ## Analyze: reading the log of questions
 
 Every question writes one `bas.question_asked` row to `audit_events` with the
-question, the SQL that ran (or was last tried), the row count, the duration,
+question, the SQL that ran (or was last tried) - which is NOT rendered on
+the screen, by decision on 2026-09-21, so this row is where to read it - the
+row count, the duration,
 the outcome kind, the gap hours and the unknown-horizon count in `metadata`,
 and one `bas.analyze.question` log line with the same. `/admin/audit` filters
 by action; the sentence reads *Jim Schwarz asked Building Automation "…" — no

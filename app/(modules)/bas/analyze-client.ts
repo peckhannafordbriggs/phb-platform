@@ -23,10 +23,43 @@ export interface AnalyzeStatus {
   missing: string[];
 }
 
+/**
+ * A cancelled request is a navigation or a re-render, not a failure.
+ *
+ * In development React Strict Mode runs the mounting effect twice and aborts
+ * the first run. The status fetch turned that abort into "Could not reach the
+ * server", so the tab opened with that banner on every load, marked itself
+ * not configured, and the real answer arrived a moment later underneath.
+ * Found live on 2026-09-21; the route itself was answering in five seconds.
+ *
+ * Matched by NAME, not by `instanceof DOMException`: browsers and Node both
+ * throw a DOMException, but some fetch polyfills throw a plain Error named
+ * AbortError, and the component's decision to stay quiet must not depend on
+ * which. The signal is checked BEFORE fetch as well, because Node rejects a
+ * relative URL before it looks at the signal and a browser looks first - the
+ * helper should behave the same in both.
+ */
+export function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new DOMException("The request was cancelled.", "AbortError");
+  }
+}
+
 export async function fetchAnalyzeStatus(signal?: AbortSignal): Promise<AnalyzeStatus> {
-  const response = await fetch(BASE, { signal, cache: "no-store" }).catch(() => {
+  throwIfAborted(signal);
+  let response: Response;
+  try {
+    response = await fetch(BASE, { signal, cache: "no-store" });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new ApiError("network", "Could not reach the server.");
-  });
+  }
   return unwrap<AnalyzeStatus>(response);
 }
 
@@ -34,6 +67,7 @@ export async function askQuestion(
   question: string,
   signal?: AbortSignal,
 ): Promise<AnalyzeResult> {
+  throwIfAborted(signal);
   let response: Response;
   try {
     response = await fetch(BASE, {
@@ -44,7 +78,7 @@ export async function askQuestion(
       cache: "no-store",
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (isAbortError(error)) throw error;
     throw new ApiError("network", "Could not reach the server.");
   }
   return unwrap<AnalyzeResult>(response);
@@ -119,7 +153,7 @@ export function describeGaps(provenance: Provenance): string {
     }
     return "Gap overlap does not apply: the query has no period and reads no readings.";
   }
-  const { totalHours, items } = provenance.gaps;
+  const { totalHours, items, mergedRows } = provenance.gaps;
   if (items.length === 0) {
     return provenance.scope === "all_points"
       ? "No recorded gap overlaps this period for any point."
@@ -129,7 +163,11 @@ export function describeGaps(provenance: Provenance): string {
     provenance.scope === "all_points"
       ? "across every point, because the query did not say which points it reads"
       : `across ${provenance.points.length} point${provenance.points.length === 1 ? "" : "s"}`;
-  return `${formatHours(totalHours)} of this period ${items.length === 1 ? "has" : "have"} no readings - ${items.length} recorded gap${items.length === 1 ? "" : "s"}, ${scope}. The platform was not watching; that says nothing about the equipment.`;
+  const merged =
+    mergedRows > 0
+      ? ` ${mergedRows} overlapping record${mergedRows === 1 ? "" : "s"} for the same outage ${mergedRows === 1 ? "was" : "were"} merged before counting, so the hours are not inflated by them.`
+      : "";
+  return `${formatHours(totalHours)} of this period ${items.length === 1 ? "has" : "have"} no readings - ${items.length} gap${items.length === 1 ? "" : "s"}, ${scope}. The platform was not watching; that says nothing about the equipment.${merged}`;
 }
 
 export function gapsTone(provenance: Provenance): Tone {

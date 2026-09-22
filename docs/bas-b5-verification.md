@@ -118,10 +118,12 @@ Findings D and E for what the first two runs of this question showed.
 **"What was the temperature?"** → `clarify`, 5.6 s. *Which temperature, and
 over what period? …* ✔ ambiguous question asks rather than guesses.
 
-**"The SQL shown actually matches what ran."** Inferred, not separately
-observed: the SQL rendered is the guarded string that was passed to `DECLARE
-… CURSOR FOR`, byte for byte, and the service test asserts the audit row's
-`sql` equals it. There is no second string.
+**"The SQL shown actually matches what ran."** The SQL is no longer shown on
+screen - removed by decision on 2026-09-21, after the live runs; it stays in
+the audit row and the log line. What the criterion was protecting still
+holds and is asserted: the `sql` recorded is the guarded string that was
+passed to `DECLARE … CURSOR FOR`, byte for byte (service test on the audit
+row). There is no second string.
 
 ### What is still open
 
@@ -172,6 +174,22 @@ script now asks this question on purpose, because a numeric answer over a
 month is where the silence is dangerous rather than odd.
 
 **G. `END` cannot be a refused keyword.** Every `CASE` needs it.
+
+**H. `bas_data_gaps` held one outage twice, and the sum counted both.**
+Reported by the operator from the Analyze gap table. Read-only investigation:
+the 3-8 September outage on the four Spring Grove points has two rows each,
+same start, ends a day apart. Run 344 on 8 September 13:44 recorded the gaps
+and then timed out against the station on every point (no readings, checkpoints
+unchanged); runs 345-353 never reached the station (credential cutover); run
+354 on 9 September 14:11 saw the same checkpoint and recorded the outage again
+before fetching 2,000 records. The collector's `record_gap` commits before the
+fetch and has no uniqueness on point and start. Effect: 71.7 hours counted
+twice per point; the 30-day all-points figure read 1,162 hours. Collection
+Health and Point Explorer list rows and sum nothing, so they were not
+inflated. Fix on the platform side: overlapping intervals are merged per
+point before summing and the merge count is reported. Live after the fix:
+**866.26 hours in 28 intervals, 4 records merged.** The collector-side fix and
+the cleanup of the four rows are separate decisions.
 
 ---
 

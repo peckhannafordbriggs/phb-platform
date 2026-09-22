@@ -244,7 +244,7 @@ async function gapOverlap(
     [ids, range.start, range.end],
   );
 
-  const items: GapOverlap[] = rows.map((row) => ({
+  const clipped: GapOverlap[] = rows.map((row) => ({
     pointId: row.point_id,
     pointName: row.point_name,
     start: row.ov_start.toISOString(),
@@ -253,10 +253,71 @@ async function gapOverlap(
     cause: row.cause,
   }));
 
+  const { items, mergedRows } = mergeOverlapping(clipped);
+
   return {
     totalHours: round(items.reduce((sum, g) => sum + g.hours, 0), 2),
     items,
+    mergedRows,
   };
+}
+
+/**
+ * Merges overlapping (or touching) intervals per point, so a duplicate record
+ * can never inflate the total.
+ *
+ * Found on 2026-09-21: bas_data_gaps held the 3-8 September outage twice for
+ * each Spring Grove point - same start, ends a day apart - because the
+ * collector's pass on the 8th recorded the gap and then timed out before it
+ * could advance the checkpoint, and the pass on the 9th recorded it again.
+ * Summing rows counted 71.7 hours twice per point. The rows are the
+ * collector's to fix; this is the platform refusing to be misled by them.
+ *
+ * Intervals are already clipped to the queried range, so merging here is
+ * merging what will be summed. Causes that differ within one merged interval
+ * are joined, so nothing is silently dropped.
+ */
+export function mergeOverlapping(
+  gaps: GapOverlap[],
+): { items: GapOverlap[]; mergedRows: number } {
+  const byPoint = new Map<string, GapOverlap[]>();
+  for (const gap of gaps) {
+    const list = byPoint.get(gap.pointId) ?? [];
+    list.push(gap);
+    byPoint.set(gap.pointId, list);
+  }
+
+  const items: GapOverlap[] = [];
+  let mergedRows = 0;
+
+  for (const list of byPoint.values()) {
+    list.sort(
+      (a, b) =>
+        Date.parse(a.start) - Date.parse(b.start) || Date.parse(a.end) - Date.parse(b.end),
+    );
+    let current: GapOverlap | null = null;
+    for (const gap of list) {
+      if (current !== null && Date.parse(gap.start) <= Date.parse(current.end)) {
+        mergedRows += 1;
+        if (Date.parse(gap.end) > Date.parse(current.end)) current.end = gap.end;
+        if (!current.cause.split(" + ").includes(gap.cause)) {
+          current.cause = `${current.cause} + ${gap.cause}`;
+        }
+        continue;
+      }
+      if (current !== null) items.push(current);
+      current = { ...gap };
+    }
+    if (current !== null) items.push(current);
+  }
+
+  for (const item of items) {
+    item.hours = round((Date.parse(item.end) - Date.parse(item.start)) / 3_600_000, 2);
+  }
+  items.sort(
+    (a, b) => Date.parse(a.start) - Date.parse(b.start) || a.pointId.localeCompare(b.pointId),
+  );
+  return { items, mergedRows };
 }
 
 interface HorizonRow {
