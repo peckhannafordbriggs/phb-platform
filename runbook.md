@@ -2025,6 +2025,123 @@ registration, and it is the whole ask. Nothing in it expires.
 fails, see *Production sign-in bounces to `/signin?error=OAuthCallbackError`* -
 the failure will now name the credential rather than the absence of one.
 
+### Request 4 — SharePoint access for the containerised engine (Phase 12 Part C)
+
+**Ask for both halves in one message, and be clear which one unblocks what.** The
+application permission is what production eventually needs; the delegated one is
+what lets development start, and it is the smaller ask by a distance. Sending
+only the first means waiting on a tenant-wide grant before anyone can find the
+first bug in `GraphFileStore` — which has never made a single HTTP request.
+
+**Substitute two values before sending**: the resource group and subscription id
+stay out of this repository, as in the earlier requests.
+
+> Subject: SharePoint access for the change-order engine container
+>
+> Hi Zac,
+>
+> We are containerising the change-order engine — the Python that currently runs
+> as two scheduled tasks on one Windows laptop. The container reads and writes
+> the same SharePoint library the laptop does, through the Microsoft Graph Files
+> API instead of a synced folder. Nothing about the Power Automate flows changes,
+> and the container will run against a **copy** of the library throughout this
+> phase; the laptop keeps running the live process untouched.
+>
+> There are two parts to this, and they are needed at different times. The second
+> is the one that unblocks us today.
+>
+> ---
+>
+> **1. Eventually — an application identity with `Sites.Selected`**
+>
+> For when the container runs unattended in Azure rather than from a developer's
+> machine.
+>
+>     New app registration:  phb-co-engine
+>     Graph application permission:  Sites.Selected   (admin consent required)
+>
+> `Sites.Selected` is the least-privilege option deliberately: unlike
+> `Sites.ReadWrite.All` it grants access to **no** sites by default.
+>
+> **It also grants nothing on its own, and this is the step that is easy to
+> miss.** After consent, the app has to be granted access to the one specific
+> site, as a separate action:
+>
+>     Site:         AI Sandbox   (library "Documents", folder "CO Managment Process")
+>     Permission:   Write
+>
+>     Grant-PnPAzureADAppSitePermission `
+>       -AppId <the new app's client id> `
+>       -DisplayName "phb-co-engine" `
+>       -Site "https://<tenant>.sharepoint.com/sites/<AI Sandbox site>" `
+>       -Permissions Write
+>
+> (or the equivalent `POST /v1.0/sites/{siteId}/permissions`.) Without that
+> second step the app authenticates fine and then gets 403 on every request,
+> which reads like the consent never happened.
+>
+> Please could you also confirm the site's full URL and site ID — we have the
+> library name from the synced folder (`AI Sandbox - Documents`) but not the site
+> URL, and the container addresses a drive ID rather than a path.
+>
+> **No client secret, please.** Like the platform's other Azure identities this
+> will authenticate with a managed identity and a federated credential, so
+> nothing expires. We will send the identity details once that container is
+> deployed, exactly as we did for the mail app — this part is not urgent and can
+> follow.
+>
+> ---
+>
+> **2. Now — delegated access, so development can start**
+>
+> This is the part we would like first, and it is much smaller.
+>
+> For development the container runs from a developer's machine against a copy of
+> the tree, and can authenticate **as the signed-in developer** rather than as an
+> application. That means no tenant-wide grant: access is bounded by whatever
+> that person can already open in SharePoint.
+>
+> Either of these works, cheapest first:
+>
+>     a) Files.ReadWrite         (delegated) — the developer's own OneDrive only.
+>                                 Usually user-consentable with no admin action.
+>     b) Sites.ReadWrite.All     (delegated) — acts as the signed-in user, bounded
+>                                 by their own site permissions.
+>
+> **(a) is enough to start.** The Graph Files API is identical for a OneDrive
+> drive and a SharePoint document library — same `/drives/{id}/root:/path:`
+> addressing, same upload sessions, same copy semantics — so we can put a copy of
+> the tree in a developer's OneDrive and shake out the transport bugs there. We
+> would then want (b) to confirm the same code against a real SharePoint library,
+> because some behaviour genuinely differs between the two: list view thresholds,
+> library throttling, and how a server-side copy settles.
+>
+> To be explicit about what we are **not** asking for: no access to the live `CO
+> Managment Process` folder is needed for any of this, and we are not asking for
+> application-level access to any site in part 2.
+>
+> Delegated access is for development only. Production stays managed identity
+> plus `Sites.Selected`, because a delegated token is tied to one person's account
+> and expires — both of which our own rules forbid in production.
+>
+> ---
+>
+> Happy to talk through any of it. If (a) is something we can self-service, say
+> so and we will, and then only part 1 and (b) need you.
+>
+> Thanks,
+> Mahi
+
+**Why the delegated half matters more than it looks.** `GraphFileStore` is ~380
+lines of real Graph code — upload sessions, an async copy monitor polled to
+completion, `conflictBehavior=fail` for the exclusive create — and it has **never
+issued an HTTP request**. The only test that touches it constructs it with a fake
+token and checks pure path normalisation. Every phase of this project that met an
+external system found defects that mocked transports agreed with. Finding those
+against a OneDrive copy costs nothing and needs nobody; finding them for the first
+time against the real library, after a tenant-wide permission grant, wastes the
+grant and the week.
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not

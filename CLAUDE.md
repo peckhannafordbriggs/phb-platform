@@ -390,8 +390,27 @@ Two findings from it that change what a later part may assume:
   and recorded in `runbook.md` → *The Change Orders screen feels slow*.
 
 Part B extracted one file-access interface with two implementations.
-`GraphFileStore` is written and **has never run** — Part C is what selects it,
-against a copy, and its open questions are marked `GRAPH-TODO` in place.
+`GraphFileStore` is written and **has never issued an HTTP request** — its open
+questions are marked `GRAPH-TODO` in place.
+
+**Part C is underway, and it is far less blocked than `docs/PHASE-12.md`
+implies.** That doc says Part C needs `Sites.Selected`; read literally it
+blocks the whole part on a request to Vitis, and it does not — that permission
+gates talking to one SharePoint site with an *application* identity, which is
+the last step, not the first. The engine is containerised, and running the Part
+B differential inside it settled three things Part B could only infer: the
+engine runs on **Linux** with all eight COs still equivalent; the `NEWLINE`
+prediction holds; and the `Z`-suffixed timestamps are measured — the laptop
+emits local time labelled UTC, the container emits real UTC, so the same event
+stamps four to five hours later after cutover, in three fields, two of which
+are inside `scrub_result.json` and `vendor_drafts.json`.
+
+That run also found a defect in the differ itself: `normalize_text` erases line
+endings **and** timestamps, so a timestamp-only difference was reported as
+*"differs only in line endings"* — in a file with no CR byte. Fixed, with the
+classes split, because Part E is nothing but weeks of difference
+classification. `docs/phase-12-part-c-plan.md` is the reasoning and the
+blocked/not-blocked split; do not re-derive it from `PHASE-12.md` alone.
 
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
@@ -716,3 +735,4 @@ either anywhere else — point at them.
 | `docs/phase-9-verification.md` | Grouping, conflicts, and the latency that decides Part B |
 | `docs/phase-11-verification.md` | Evidence the platform has not disturbed the automation |
 | `docs/phase-12-part-b-verification.md` | The file-access extraction: what was measured, and what is still unproven |
+| `docs/phase-12-part-c-plan.md` | **Part C: what `Sites.Selected` actually blocks**, what it does not, and what has already been settled by measurement |
