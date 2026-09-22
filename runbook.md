@@ -7475,24 +7475,41 @@ shrinks, and pre-existing duplicates are all extended and none is added to -
 so it deploys safely before the cleanup. `test_gap_record.py` proves it on a
 throwaway cluster.
 
-**FOLLOW-UP, in this order, and not before the first step:**
+**BOTH FOLLOW-UPS DONE on 2026-09-22, in this order, on the local live
+database.** The order was forced: the index migration fails on a database that
+still holds the duplicates, and `migrate deploy` stops there.
 
-1. **Clean the four duplicate rows** on the live database. For each Spring
-   Grove point (41-44), two `roll_overwrite` rows share `gap_start`
-   2026-09-03T20:20Z: keep the one ending 2026-09-07T20:31Z, delete the one
-   ending 2026-09-06T20:04Z (gap_ids 17-20 on 2026-09-21). Touches data -
-   back up first (*Back up before any destructive BAS operation*), and
-   re-check with the overlapping-pairs query below, which must return zero
-   rows afterwards.
-2. **Then add the unique index**, as a platform migration:
-   `CREATE UNIQUE INDEX ON bas_data_gaps (point_id, gap_start, cause)`. It
-   cannot apply while step 1 is undone - the migration would fail on the
-   duplicates and `migrate deploy` would stop there. Once it exists,
-   `record_gap`'s select-then-update can become one `INSERT … ON CONFLICT`,
-   and a duplicate becomes impossible rather than merely unwritten.
+1. **Backup**, per *Back up before any destructive BAS operation*:
+   `C:\dev\phb_platform_2026-09-22_1009.dump`, 714,147 bytes. Verified two
+   ways - `pg_restore --list` showed `TABLE DATA public bas_readings` and
+   `bas_data_gaps`, and a restore into a scratch database counted 63,786
+   readings and 32 gaps, identical to live. The scratch database was dropped.
+2. **The four shorter rows deleted** - gap_ids 17-20, points 41-44,
+   `roll_overwrite`, start 2026-09-03T20:20Z, end 2026-09-06T20:04Z - inside one
+   transaction that first re-asserted exactly that shape (four rows, each with a
+   longer twin) and would have rolled back on any other count. 32 rows became
+   28. The overlapping-pairs query below **returned zero rows** before step 3.
+3. **The unique index**, migration `20260922140000_add_bas_data_gaps_unique`,
+   hand-written (Prisma's `migrate dev` refuses a non-interactive shell) and
+   checked against the schema with `migrate diff --from-config-datasource
+   --to-schema`: the only difference before deploy was the one index, and the
+   diff was empty after. Applied to the live database with `migrate deploy`
+   and to the test database with `db:test:setup`. The collector's test schema
+   *(phb-bas, `test_targets.py`)* carries the same index, and
+   `test_gap_record.py` proves a raw duplicate is refused by name while
+   `record_gap`'s extend never attempts one.
+
+**Not yet done:** switching `record_gap` from select-then-update to one
+`INSERT … ON CONFLICT`. It works as it is; the change is a simplification the
+index now permits, not a fix.
+
+**If this migration fails on another database** - the Azure one, or a restore
+from before the cleanup - the query below names what to clean, and step 2
+above is the procedure. Keep the row with the later `gap_end`.
 
 ```sql
--- Overlapping gap records for one point. Must be empty after step 1.
+-- Overlapping gap records for one point. Must be empty before
+-- add_bas_data_gaps_unique can apply. Returned zero rows on 2026-09-22.
 SELECT a.point_id, a.gap_id, b.gap_id, a.gap_start, a.gap_end, b.gap_end
   FROM bas_data_gaps a
   JOIN bas_data_gaps b ON a.point_id = b.point_id AND a.gap_id < b.gap_id
@@ -7500,8 +7517,9 @@ SELECT a.point_id, a.gap_id, b.gap_id, a.gap_start, a.gap_end, b.gap_end
  ORDER BY 1, 4;
 ```
 
-Until both steps are done, Analyze's merged total is right and its "N
-overlapping records merged" sentence is the reminder.
+Analyze's interval merge stays: it is what keeps a total right if a duplicate
+ever arrives by another route, and its "N overlapping records merged" sentence
+would be the first sign.
 
 **If the figure says "across every point".** The plan named no point ids (or
 named one that does not exist) and either reads `bas_readings` or states a

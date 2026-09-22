@@ -1028,6 +1028,14 @@ model BasDataGap {
 
   notes String?
 
+  /// One row per loss per point (add_bas_data_gaps_unique, 2026-09-22). The
+  /// collector recorded the 3-8 September 2026 outage twice for each Spring
+  /// Grove point - same start, ends a day apart - because a pass recorded the
+  /// gap and then failed before advancing the checkpoint. record_gap (phb-bas)
+  /// now extends the existing row; this makes a second row impossible rather
+  /// than merely unwritten. Cause is in the key because collector_down and
+  /// roll_overwrite can share a start and mean different things.
+  @@unique([pointId, gapStart, cause])
   @@index([pointId, gapStart])
   @@map("bas_data_gaps")
 }

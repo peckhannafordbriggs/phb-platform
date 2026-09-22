@@ -180,9 +180,11 @@ async function seed(): Promise<Seeded> {
   // range; and a second gap that straddles the end of the range so clipping
   // is tested: the 20th 20:00 to the 22nd 20:00 = 48h, of which 4h are inside.
   //
-  // Plus a DUPLICATE of the first: same start, earlier end - the shape the
-  // collector left behind on 2026-09-21 when a pass recorded a gap, timed
-  // out, and the next pass recorded the same outage again. Summing rows
+  // Plus an OVERLAPPING record of the first: same start, earlier end, a
+  // different cause. The shape the collector left behind on 2026-09-21 was an
+  // exact duplicate (same cause too); add_bas_data_gaps_unique now refuses
+  // that row outright, so an overlapping record with another cause stands in
+  // - the index permits it, and the merge must still absorb it. Summing rows
   // would count 40 of those hours twice. The total below must still be 68.
   await testDb.basDataGap.createMany({
     data: [
@@ -196,7 +198,7 @@ async function seed(): Promise<Seeded> {
         pointId: temp.pointId,
         gapStart: new Date("2026-09-17T12:00:00Z"),
         gapEnd: new Date("2026-09-19T04:00:00Z"),
-        cause: "collector_down",
+        cause: "station_unreachable",
       },
       {
         pointId: temp.pointId,
@@ -339,7 +341,9 @@ describe("gap overlap is computed here, not by the model", () => {
     expect(gaps!.totalHours).toBe(68);
     expect(gaps!.items).toHaveLength(2);
     expect(gaps!.mergedRows).toBe(1);
-    expect(gaps!.items[0]).toMatchObject({ hours: 64, cause: "collector_down", pointName: "Zone Temp B5" });
+    expect(gaps!.items[0]).toMatchObject({ hours: 64, pointName: "Zone Temp B5" });
+    // Both causes survive the merge; neither is silently dropped.
+    expect(gaps!.items[0]!.cause.split(" + ").sort()).toEqual(["collector_down", "station_unreachable"]);
     expect(gaps!.items[1]).toMatchObject({
       hours: 4,
       cause: "roll_overwrite",
