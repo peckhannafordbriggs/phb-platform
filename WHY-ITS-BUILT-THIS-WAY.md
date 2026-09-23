@@ -1397,6 +1397,81 @@ dangerous rather than odd — and fails the run on either fault.
 questions the model answered with a clarifying question where the spec
 expected a number, and why that was the right answer over two buildings.
 
+## 53 · A long range is averaged out loud, in the building's zone, and the band is not optional
+
+**Decision.** The Point Explorer takes a custom date range — two calendar
+dates, or a year button offered only for years that hold readings — and
+resolves it in the **building's** time zone, in PostgreSQL, from
+`bas_sites.timezone`. Up to 10,000 readings are drawn raw. Past that the
+readings are grouped into buckets from a fixed ladder and the chart draws the
+average as a line **and a band from each bucket's lowest reading to its
+highest**, with a sentence on the chart saying so: what the bucket is, how
+many readings became how many averages, and that the band is where a spike
+will be. A range that holds no readings draws no chart and names the nearest
+data that exists; one that starts before the data says where the data begins.
+
+**Why 10,000 is a measurement.** The first version of the cap, 12,000, was a
+guess with a plausible sentence beside it. This one was measured: the real
+chart component rendered in headless Chrome over the DevTools protocol, on
+real readings, timing first paint, a drag-to-zoom and a hover, twice per
+count. Hover stayed under 40 ms at every count because Recharts memoises the
+path — which is why "it responds" would have been the wrong thing to
+measure. Draw and zoom did not: 366 / 266 ms at 10,000; 377 or 695 ms at
+12,000 depending on the run; 842 / 548 ms at 18,000; 2.7 s / 1.9 s at
+70,000, which is two years of a 15-minute point. The table is in
+`lib/modules/bas/range.ts` next to the constant, and `runbook.md` → *The
+trend chart says "Averaged to one point per …"* carries the method. The
+first attempt used Chrome's `--virtual-time-budget` and measured every CPU
+cost as 0 ms; it is in the branch report so nobody repeats it.
+
+**Why average AND band, not average alone.** An average is the one statistic
+guaranteed to hide the thing a complaint is about. On 24 August 2026 the
+lab's zone sensor went from 76 to −40 °F and stayed there; that day's average
+is about 4 °F, and the band's floor is at −40. The alternative the
+brief allowed — cap the range and refuse — was honest but would have made
+"what did this room do in 2025" unanswerable. The band was the smaller cost,
+and it is enforced three ways: the SQL selects min and max, the sample
+carries them, the axis includes them. Each is mutation-checked.
+
+**Why the database resolves the dates.** A person picking 14 August means
+that day where the sensor is. JavaScript cannot express "midnight on 14
+August in America/New_York" without a library; PostgreSQL can, in one
+expression, and already holds the zone per site. So the dates are text all
+the way to the query, and the day the clocks change is 23 or 25 hours long
+without anyone writing DST code. The same reasoning put day-buckets on
+`date_trunc` of the local time rather than `date_bin(86400)`: the fixed
+interval drifts an hour off the calendar at each change and never recovers.
+
+**Why the year buttons come from the data.** A 2023 button over a database
+whose first reading is February 2024 is a button that always disappoints,
+and the list of years is one query away. It is derived per entitled point
+through the primary key rather than as `min(ts)` over the table, because a
+BRIN index cannot answer min or max and the alternative was a sequential
+scan on every poll.
+
+**Why the station's clock is mentioned and not corrected.** The office JACE
+is 22 minutes fast (§ 44's amendments; `runbook.md` → *A BAS station's clock
+is wrong*). Correcting the range for it would produce boundaries nobody
+measured, against an offset that is not constant. The range is the
+calendar's; the scope line says the station's readings are stamped by a
+clock that far off; that is the whole of it.
+
+**Why not Collection Health.** Its range scopes only run history, the screen
+spans every building at once so there is no single zone to resolve a
+calendar date in, and the run list is capped at 30. Declined, with the
+reasoning in the runbook, rather than built with a hidden "whose midnight"
+inside it.
+
+**What breaks if you undo it.** Drop `min`/`max` from `buildBucketedTrend`
+and *an extreme in the source data survives into what is drawn* fails in
+`tests/bas-custom-range.test.ts`; drop them from the axis or remove the band
+`<Area>` and `tests/bas-range-chart.test.tsx` fails on the SVG. Make the end
+of a day `start + 24 h` and *a single day is that whole day, even the
+23-hour one* fails on 9 March 2025. Cut day buckets with `date_bin` and *day
+buckets are cut on local midnight across the change* fails on the third
+bucket's start. Remove the sampling notice and the panel test fails on the
+missing element. Each of those was run, and the record is in the test files.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

@@ -150,3 +150,28 @@ today, and free-form SQL cannot be confined to a subset of sites. The service
 refuses outright the day the scope becomes a list. That refusal is written but
 untested, because nothing in the suite can make `basSiteScope` return a list
 without mocking the module the service imports it from.
+
+---
+
+## An inclusive range end cannot be made to miscount
+
+**Recorded:** 22 September 2026, from the custom date range. **Test:**
+`tests/bas-custom-range.test.ts`.
+
+**The claim.** A custom range is `ts >= from AND ts < to`, end exclusive, so a
+reading stamped exactly at the next day's midnight belongs to the next day.
+
+**Why it cannot be provoked.** Every reading in the two fixture files sits a
+few milliseconds past its minute (`14:20:00.028`), because that is when the
+station wrote it. No row lands on a midnight boundary, so `ts <= to` and
+`ts < to` agree on every count the tests make. The mutation was run and
+nothing failed.
+
+**What is asserted instead.** The resolved `range.to` instants themselves
+(`2026-09-15T04:00:00.000Z` for an end date of 14 September; `04:00Z` after
+the clock change where `05:00Z` was before it). That proves the bound the
+query is built with; it does not prove the comparison operator.
+
+**What would make it real.** A committed reading stamped exactly on a local
+midnight. None exists in the live data, and a synthetic one would be the one
+synthetic row in a fixture whose whole value is that it is not synthetic.

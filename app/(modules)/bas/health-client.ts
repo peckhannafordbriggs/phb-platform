@@ -6,10 +6,13 @@ import type {
   PointHorizon,
   InactiveReason,
   PointExplorer,
+  PointExtent,
   PointHealthRow,
   RollRisk,
   RunGap,
   StationPointsList,
+  TrendRange,
+  TrendSampling,
 } from "@/lib/modules/bas/types";
 
 /**
@@ -108,6 +111,152 @@ export function windowLabel(days: number): string {
   if (preset !== undefined) return preset.label;
   return days === 1 ? "24 hours" : `${days} days`;
 }
+
+// ------------------------------------------------------------ custom range
+
+/**
+ * A `YYYY-MM-DD` as a person reads it - "14 Aug 2026" - with no time zone
+ * conversion, because there is nothing to convert: it is a calendar date, and
+ * the zone it belongs to is stated beside it.
+ */
+export function formatCalendarDate(date: string, locale?: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (match === null) return date;
+  const [, y, m, d] = match;
+  // Noon UTC, so that formatting in any zone on Earth lands on the same day.
+  const noon = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d), 12));
+  return noon.toLocaleDateString(locale, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/**
+ * What the trend and the tiles cover, in words, with the zone named.
+ *
+ * "last 7 days" for a preset, as before. For a custom range the dates and the
+ * zone: someone reading "14 Aug" needs to know it is 14 August where the
+ * building is, not where they are. A single day is said once, not as "14 Aug
+ * – 14 Aug".
+ */
+export function describeRange(range: TrendRange): string {
+  if (range.kind === "preset" || range.fromDate === null || range.toDate === null) {
+    return `last ${windowLabel(range.days ?? DEFAULT_WINDOW_DAYS)}`;
+  }
+  const zone = range.timezone === null ? "" : ` (${range.timezone})`;
+  if (range.fromDate === range.toDate) {
+    return `${formatCalendarDate(range.fromDate)}${zone}`;
+  }
+  return `${formatCalendarDate(range.fromDate)} – ${formatCalendarDate(range.toDate)}${zone}`;
+}
+
+/**
+ * The sentence on the chart when the readings have been thinned. NEVER
+ * omitted, never collapsible, and it says what was kept: a spike survives in
+ * the band, not in the line.
+ */
+export function describeSampling(sampling: TrendSampling): string | null {
+  if (sampling.kind === "raw") return null;
+  return (
+    `Averaged to one point per ${sampling.bucketLabel}: ${formatCount(sampling.readings)} ` +
+    `readings are drawn as ${formatCount(sampling.buckets)} averages, because more than ` +
+    `${formatCount(sampling.maxRaw)} readings would make the chart unusable. The shaded ` +
+    `band is each ${sampling.bucketLabel}'s lowest and highest reading, so a spike stays ` +
+    `visible when the average is flat.`
+  );
+}
+
+/**
+ * The empty state for a range that holds no readings. Names the range AND the
+ * nearest data that does exist, so "nothing here" cannot be mistaken for
+ * "nothing anywhere".
+ */
+export function describeNoReadings(
+  pointName: string,
+  range: TrendRange,
+  extent: PointExtent,
+): string {
+  const where =
+    range.kind === "custom" && range.fromDate !== null && range.toDate !== null
+      ? range.fromDate === range.toDate
+        ? `on ${formatCalendarDate(range.fromDate)}`
+        : `between ${formatCalendarDate(range.fromDate)} and ${formatCalendarDate(range.toDate)}`
+      : `in the ${describeRange(range)}`;
+  const zone = range.timezone === null ? "" : ` (${range.timezone})`;
+  if (extent.earliestAt === null || extent.latestAt === null) {
+    return `No readings for ${pointName} ${where}${zone}. This point has never produced a reading.`;
+  }
+  return (
+    `No readings for ${pointName} ${where}${zone}. The earliest reading held for this point ` +
+    `is ${formatTimestamp(extent.earliestAt, undefined, range.timezone ?? undefined)} and the ` +
+    `latest is ${formatTimestamp(extent.latestAt, undefined, range.timezone ?? undefined)}.`
+  );
+}
+
+/**
+ * The two notices for a range that reaches past the data at either end.
+ *
+ * Both exist for the same misreading: a chart that starts flat at the left
+ * edge, or stops short of the right one, reads as the equipment being off or
+ * the building being empty. It is neither. It is the collector not having
+ * been there yet, or not any more.
+ *
+ * Slack at each end, so a range that ends "today" over a point collected ten
+ * minutes ago does not claim the data has ended. The caller passes the
+ * point's own break threshold.
+ */
+export function describeExtentNotices(
+  range: TrendRange,
+  extent: PointExtent,
+  readings: number,
+  slackMs: number,
+): string[] {
+  if (readings === 0 || extent.earliestAt === null || extent.latestAt === null) return [];
+  const zone = range.timezone ?? undefined;
+  const from = Date.parse(range.from);
+  const to = Date.parse(range.to);
+  const earliest = Date.parse(extent.earliestAt);
+  const latest = Date.parse(extent.latestAt);
+  const notices: string[] = [];
+  if (earliest - from > slackMs) {
+    notices.push(
+      `Data for this point begins ${formatTimestamp(extent.earliestAt, undefined, zone)}. ` +
+        `Nothing is drawn before that because nothing was collected, not because the equipment was off.`,
+    );
+  }
+  if (to - latest > slackMs) {
+    notices.push(
+      `Data for this point ends ${formatTimestamp(extent.latestAt, undefined, zone)}. ` +
+        `Nothing is drawn after that because nothing has been collected since.`,
+    );
+  }
+  return notices;
+}
+
+/**
+ * The one sentence about the station's clock, when it is measurably off.
+ *
+ * Nothing is corrected - runbook.md, *A BAS station's clock is wrong* - so
+ * a range boundary will not line up with the readings by this much, and the
+ * screen says so rather than letting someone conclude the range is wrong.
+ * Under a minute it is not worth a sentence.
+ */
+export function describeClockOffset(
+  offsetS: number | null,
+  measuredAt: string | null,
+): string | null {
+  if (offsetS === null || Math.abs(offsetS) < 60) return null;
+  const minutes = Math.round(Math.abs(offsetS) / 60);
+  const direction = offsetS > 0 ? "ahead of" : "behind";
+  const when = measuredAt === null ? "" : ` when last measured (${formatTimestamp(measuredAt)})`;
+  return (
+    `This station's clock was ${minutes} min ${direction} the collector${when}. ` +
+    `Its readings are stamped by that clock and are not corrected, so a range boundary is off by the same amount.`
+  );
+}
+
 
 /**
  * The sentence under the heading that says what is on screen.
@@ -603,7 +752,26 @@ export function formatChartTick(
   ms: number,
   locale?: string,
   timeZone?: string,
+  /**
+   * How much time the axis spans. Over about a year a tick needs its year -
+   * "Aug 14" three times over on a three-year axis says nothing - and under
+   * two days it needs its time of day. Absent, the day-and-month default.
+   */
+  spanMs?: number,
 ): string {
+  if (spanMs !== undefined && spanMs > 400 * 86_400_000) {
+    return new Date(ms).toLocaleString(locale, { month: "short", year: "numeric", timeZone });
+  }
+  if (spanMs !== undefined && spanMs > 0 && spanMs < 2 * 86_400_000) {
+    return new Date(ms).toLocaleString(locale, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone,
+    });
+  }
   return new Date(ms).toLocaleString(locale, {
     month: "short",
     day: "numeric",
@@ -757,6 +925,8 @@ export function describeHeadroom(headroom: Headroom): string {
 export async function fetchPointExplorer(
   options: {
     days?: number;
+    /** A custom range wins over `days`; the two are never both sent. */
+    range?: { from: string; to: string } | null;
     siteId?: string | null;
     pointId?: string | null;
     projectId?: string | null;
@@ -765,7 +935,12 @@ export async function fetchPointExplorer(
   signal?: AbortSignal,
 ): Promise<PointExplorer> {
   const params = new URLSearchParams();
-  if (options.days !== undefined) params.set("days", String(options.days));
+  if (options.range != null) {
+    params.set("from", options.range.from);
+    params.set("to", options.range.to);
+  } else if (options.days !== undefined) {
+    params.set("days", String(options.days));
+  }
   if (options.siteId != null) params.set("site", options.siteId);
   if (options.pointId != null) params.set("point", options.pointId);
   if (options.projectId != null) params.set("project", options.projectId);

@@ -19,8 +19,20 @@ import type {
   SiteOption,
   TrendGap,
   TrendPoint,
+  TrendRange,
+  TrendSampling,
   VanishedPoint,
 } from "./types";
+import {
+  MAX_RAW_TREND_POINTS,
+  MAX_TREND_BUCKETS,
+  bucketLabel,
+  chooseBucketSeconds,
+  compareCalendarDates,
+  isCalendarBucket,
+  isCalendarDate,
+  yearsBetween,
+} from "./range";
 import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk, toHorizonState } from "./types";
 
 /**
@@ -1169,20 +1181,6 @@ function breakThresholdMs(collectionIntervalS: number | null): number {
   return Math.max(fromInterval, MIN_BREAK_SECONDS) * 1000;
 }
 
-/**
- * The most samples the payload will carry.
- *
- * 90 days at one record per five minutes is about 26,000 rows, which is more
- * than a chart 800 pixels wide can express and more than is pleasant to ship.
- * Past this the MOST RECENT slice is returned and `trendTruncated` says so.
- *
- * Truncation rather than downsampling, deliberately. Averaging buckets together
- * would smooth over exactly the thing this chart exists to show: a hole where
- * the station overwrote data before anyone collected it. A shorter window that
- * is complete beats a long one that has been quietly averaged.
- */
-const MAX_TREND_POINTS = 12_000;
-
 interface PointOptionRow {
   point_id: bigint;
   point_name: string;
@@ -1190,6 +1188,10 @@ interface PointOptionRow {
   unit: string | null;
   site_name: string;
   collection_interval_s: number | null;
+  /** The building's IANA zone - what a calendar date is resolved in. */
+  site_timezone: string;
+  clock_offset_s: number | null;
+  clock_measured_at: Date | null;
 }
 
 interface PointStatsRow {
@@ -1211,10 +1213,60 @@ interface TrendRow {
   value_num: number | null;
 }
 
+/** One downsampled bucket. `ts` is the bucket's START. */
+interface BucketRow {
+  ts: Date;
+  average: number | null;
+  minimum: number | null;
+  maximum: number | null;
+  readings: number;
+}
+
+interface RangeRow {
+  from_ts: Date;
+  to_ts: Date;
+  today: string;
+}
+
+interface ExtentRow {
+  earliest: Date | null;
+  latest: Date | null;
+}
+
+interface CalendarRow {
+  earliest: Date | null;
+  latest: Date | null;
+  earliest_date: string | null;
+  latest_date: string | null;
+  first_year: number | null;
+  last_year: number | null;
+  today: string;
+}
+
+/** A custom range as the route hands it over: two calendar dates, already shaped. */
+export interface CustomRangeRequest {
+  from: string;
+  to: string;
+}
+
 export interface PointExplorerOptions extends BasSelectionRequest {
   windowDays?: number;
   /** Absent means "the first point the picker would offer". */
   pointId?: bigint | null;
+  /**
+   * A custom calendar range. When present it wins over `windowDays`, which
+   * then only says which preset button would be pressed if the person went
+   * back to one.
+   */
+  range?: CustomRangeRequest | null;
+  /**
+   * Test seams. The defaults are the measured constants in range.ts; a test
+   * lowers them so the real SQL downsampler runs over a few thousand real
+   * readings rather than needing seventy thousand. Nothing in the application
+   * passes either.
+   */
+  maxRawTrendPoints?: number;
+  maxTrendBuckets?: number;
 }
 
 /**
@@ -1232,6 +1284,14 @@ export interface PointExplorerOptions extends BasSelectionRequest {
  * Same transaction discipline as `getCollectionHealth`: one `now()` for the
  * window, the stats and the trend, so the tiles cannot disagree with the chart
  * they sit above.
+ *
+ * THE RANGE IS RESOLVED BY POSTGRESQL, IN THE BUILDING'S ZONE. A custom range
+ * arrives as two calendar dates. `'2026-08-14'::date::timestamp AT TIME ZONE
+ * 'America/New_York'` is midnight at the start of that day in Cincinnati,
+ * whatever the server's or the browser's clock is set to, and the end is the
+ * same expression for the day after, exclusive - so a single day is the whole
+ * day, and the day the clocks change is 23 or 25 hours long, because the
+ * database knows the zone's rules and this code does not pretend to.
  */
 export async function getPointExplorer(
   viewer: Viewer,
@@ -1239,8 +1299,30 @@ export async function getPointExplorer(
 ): Promise<PointExplorer> {
   const windowDays = clampWindowDays(options.windowDays);
   const requestedPointId = options.pointId ?? null;
+  const customRange = options.range ?? null;
+  const maxRaw = options.maxRawTrendPoints ?? MAX_RAW_TREND_POINTS;
+  const maxBuckets = options.maxTrendBuckets ?? MAX_TREND_BUCKETS;
   const scope = await basSiteScope(viewer);
   const entitled = scope.entitled;
+
+  // Shape first, before any query. A date that is not a date is refused with
+  // the date in the message, not with whatever PostgreSQL says about a cast.
+  if (customRange !== null) {
+    for (const [label, value] of [["start", customRange.from], ["end", customRange.to]] as const) {
+      if (!isCalendarDate(value)) {
+        throw new BasError(
+          "invalid_range",
+          `The ${label} date "${value}" is not a calendar date. Use YYYY-MM-DD.`,
+        );
+      }
+    }
+    if (compareCalendarDates(customRange.to, customRange.from) < 0) {
+      throw new BasError(
+        "invalid_range",
+        `The end date (${customRange.to}) is before the start date (${customRange.from}).`,
+      );
+    }
+  }
 
   const result = await prisma.$transaction(async (tx) => {
     const observedAt = firstRow(
@@ -1254,9 +1336,10 @@ export async function getPointExplorer(
     const selection = await resolveSelection(tx, entitled, options);
     const { siteIds, stationId } = selection;
 
-    // Grafana's $point variable query, plus the two columns the screen needs
-    // that a dropdown does not: the unit, and the interval the break threshold
-    // is derived from.
+    // Grafana's $point variable query, plus the columns the screen needs that a
+    // dropdown does not: the unit, the interval the break threshold is derived
+    // from, the building's zone the range is resolved in, and the station's
+    // clock offset the range notice mentions.
     //
     // ORDER BY carries point_id as a tie-break. Two points in one building can
     // share a display name - display_name is not unique, only
@@ -1267,13 +1350,17 @@ export async function getPointExplorer(
       AND ${stationFilter(stationId, Prisma.sql`v.station_id`)}`;
     const pointRows = await tx.$queryRaw<PointOptionRow[]>`
       SELECT v.point_id, v.point_name, v.point_role, v.unit, v.site_name,
-             v.collection_interval_s
+             v.collection_interval_s,
+             s.timezone AS site_timezone,
+             st.clock_offset_s, st.clock_measured_at
       FROM bas_v_point v
       -- B8.3: a hidden point leaves this picker, and only this. It is still
       -- collected, still in every Collection Health figure, and still in the
       -- views the AI reads - is_visible is a preference of the browsing
       -- screens, which is why it lives on bas_points and not in bas_v_point.
       JOIN bas_points p USING (point_id)
+      JOIN bas_stations st ON st.station_id = p.station_id
+      JOIN bas_sites s ON s.site_id = st.site_id
       WHERE v.is_active AND p.is_visible AND ${healthSitesV}
       ORDER BY v.site_name, v.point_name, v.point_id
     `;
@@ -1312,19 +1399,90 @@ export async function getPointExplorer(
         selection,
         pointRows,
         selectedPoint: null,
+        range: null as RangeRow | null,
+        calendar: null as CalendarRow | null,
         stats: null,
         latest: null,
+        extent: null as ExtentRow | null,
         trend: [] as TrendRow[],
-        trendTruncated: false,
+        buckets: null as BucketRow[] | null,
+        bucketSeconds: null as number | null,
         dataGaps: [] as GapRow[],
       };
     }
 
     const pointId = selectedPoint.point_id;
-    const since = Prisma.sql`now() - make_interval(days => ${windowDays}::int)`;
+    const zone = selectedPoint.site_timezone;
+
+    // --- the range, as two instants -----------------------------------------
+    //
+    // Custom: local midnights in the building's zone, end exclusive. Preset:
+    // the trailing window from this transaction's now(). Both come back from
+    // the database so that "today" and the bounds are read off one clock.
+    const range = firstRow(
+      customRange !== null
+        ? await tx.$queryRaw<RangeRow[]>`
+            SELECT
+              (${customRange.from}::date::timestamp AT TIME ZONE ${zone}) AS from_ts,
+              ((${customRange.to}::date + 1)::timestamp AT TIME ZONE ${zone}) AS to_ts,
+              to_char((now() AT TIME ZONE ${zone})::date, 'YYYY-MM-DD') AS today
+          `
+        : await tx.$queryRaw<RangeRow[]>`
+            SELECT
+              now() - make_interval(days => ${windowDays}::int) AS from_ts,
+              now() AS to_ts,
+              to_char((now() AT TIME ZONE ${zone})::date, 'YYYY-MM-DD') AS today
+          `,
+      "range",
+    );
+
+    // An end in the future is refused HERE, with the zone's own today, because
+    // "today" depends on the zone: at 11 PM in Cincinnati it is already
+    // tomorrow in UTC, and a check against the server's date would refuse a
+    // range ending today for the last hour of every day.
+    if (customRange !== null && compareCalendarDates(customRange.to, range.today) > 0) {
+      throw new BasError(
+        "invalid_range",
+        `The end date (${customRange.to}) is in the future. Today in ${zone} is ${range.today}.`,
+      );
+    }
+
+    const from = range.from_ts;
+    const to = range.to_ts;
+
+    // --- what the calendar may offer ----------------------------------------
+    //
+    // Derived from the readings the viewer may see, never from a constant.
+    // Per point through the primary key (point_id, ts), so this is two index
+    // probes per entitled point rather than a scan of the whole table on every
+    // poll; the whole-table min/max would be a sequential scan, because a
+    // BRIN index cannot answer min or max.
+    const calendar = firstRow(
+      await tx.$queryRaw<CalendarRow[]>`
+        WITH per_point AS (
+          SELECT
+            (SELECT min(r.ts) FROM bas_readings r WHERE r.point_id = p.point_id) AS earliest,
+            (SELECT max(r.ts) FROM bas_readings r WHERE r.point_id = p.point_id) AS latest
+          FROM bas_points p
+          JOIN bas_stations st ON st.station_id = p.station_id
+          WHERE ${siteFilter(entitled, Prisma.sql`st.site_id`)}
+        )
+        SELECT
+          min(earliest) AS earliest,
+          max(latest) AS latest,
+          to_char((min(earliest) AT TIME ZONE ${zone})::date, 'YYYY-MM-DD') AS earliest_date,
+          to_char((max(latest) AT TIME ZONE ${zone})::date, 'YYYY-MM-DD') AS latest_date,
+          extract(year FROM (min(earliest) AT TIME ZONE ${zone}))::int AS first_year,
+          extract(year FROM (max(latest) AT TIME ZONE ${zone}))::int AS last_year,
+          to_char((now() AT TIME ZONE ${zone})::date, 'YYYY-MM-DD') AS today
+        FROM per_point
+      `,
+      "calendar",
+    );
 
     // Grafana runs panels 2, 3, 4 and 5 as four queries over the same rows.
-    // One pass, the same five numbers.
+    // One pass, the same five numbers - and the count decides below whether
+    // the trend is drawn raw or bucketed.
     const stats = firstRow(
       await tx.$queryRaw<PointStatsRow[]>`
         SELECT
@@ -1337,7 +1495,7 @@ export async function getPointExplorer(
           round(min(value_num)::numeric, 2)::float8 AS minimum,
           round(max(value_num)::numeric, 2)::float8 AS maximum
         FROM bas_readings
-        WHERE point_id = ${pointId} AND ts >= ${since}
+        WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
       `,
       "point stats",
     );
@@ -1356,19 +1514,62 @@ export async function getPointExplorer(
         `
       )[0] ?? null;
 
-    // One extra row so truncation can be detected without a second count.
-    const trendRows = await tx.$queryRaw<TrendRow[]>`
-      SELECT ts, value_num
-      FROM bas_readings
-      WHERE point_id = ${pointId} AND ts >= ${since}
-      ORDER BY ts DESC
-      LIMIT ${MAX_TREND_POINTS + 1}
-    `;
+    // The first and last reading held for this point, ever. What the screen
+    // says when the range starts before the data does, or holds none of it.
+    const extent = firstRow(
+      await tx.$queryRaw<ExtentRow[]>`
+        SELECT min(ts) AS earliest, max(ts) AS latest
+        FROM bas_readings
+        WHERE point_id = ${pointId}
+      `,
+      "point extent",
+    );
 
-    const trendTruncated = trendRows.length > MAX_TREND_POINTS;
-    // Newest-first above so that truncation keeps the RECENT end; flipped here
-    // because a chart reads left to right.
-    const trend = trendRows.slice(0, MAX_TREND_POINTS).reverse();
+    // --- the trend: raw, or bucketed and SAID SO --------------------------------
+    //
+    // Raw up to the measured cap. Past it, one row per bucket carrying the
+    // average AND the minimum and maximum, because an average alone erases the
+    // one thing an investigator is looking for. The width comes from the
+    // ladder in range.ts; the notice on the chart is written from it.
+    let trend: TrendRow[] = [];
+    let buckets: BucketRow[] | null = null;
+    let bucketSeconds: number | null = null;
+
+    if (stats.readings <= maxRaw) {
+      trend = await tx.$queryRaw<TrendRow[]>`
+        SELECT ts, value_num
+        FROM bas_readings
+        WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
+        ORDER BY ts
+      `;
+    } else {
+      bucketSeconds = chooseBucketSeconds(to.getTime() - from.getTime(), maxBuckets);
+
+      // Two ways to cut a bucket, and the difference is the clock change.
+      // Sub-day widths are fixed intervals counted from the range start with
+      // date_bin - a 6-hour bucket is six hours long on every day of the year.
+      // A day bucket is a LOCAL calendar day: date_trunc on the local time,
+      // converted back, so the bucket for 8 March 2026 in New York starts at
+      // 05:00Z and the one for 9 March starts at 04:00Z, 23 hours later.
+      // date_bin(86400 s) would put the first hour of every day after the
+      // change into the day before, and never notice.
+      const bucketExpr = isCalendarBucket(bucketSeconds)
+        ? Prisma.sql`(date_trunc('day', ts AT TIME ZONE ${zone}) AT TIME ZONE ${zone})`
+        : Prisma.sql`date_bin(make_interval(secs => ${bucketSeconds}::int), ts, ${from})`;
+
+      buckets = await tx.$queryRaw<BucketRow[]>`
+        SELECT
+          ${bucketExpr} AS ts,
+          avg(value_num)::float8 AS average,
+          min(value_num)::float8 AS minimum,
+          max(value_num)::float8 AS maximum,
+          count(*)::int AS readings
+        FROM bas_readings
+        WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
+        GROUP BY 1
+        ORDER BY 1
+      `;
+    }
 
     const dataGaps = await tx.$queryRaw<GapRow[]>`
       SELECT
@@ -1394,21 +1595,73 @@ export async function getPointExplorer(
       selection,
       pointRows,
       selectedPoint,
+      range,
+      calendar,
       stats,
       latest,
+      extent,
       trend,
-      trendTruncated,
+      buckets,
+      bucketSeconds,
       dataGaps,
     };
   });
 
-  const { trend, gaps } = buildTrend(
-    result.trend,
-    result.selectedPoint?.collection_interval_s ?? null,
-  );
+  const intervalS = result.selectedPoint?.collection_interval_s ?? null;
+  const { trend, gaps } =
+    result.buckets !== null && result.bucketSeconds !== null
+      ? buildBucketedTrend(result.buckets, result.bucketSeconds)
+      : buildTrend(result.trend, intervalS);
+
+  const sampling: TrendSampling =
+    result.buckets !== null && result.bucketSeconds !== null
+      ? {
+          kind: "bucketed",
+          bucketSeconds: result.bucketSeconds,
+          bucketLabel: bucketLabel(result.bucketSeconds),
+          buckets: result.buckets.length,
+          readings: result.stats?.readings ?? 0,
+          maxRaw,
+        }
+      : { kind: "raw", readings: result.stats?.readings ?? 0 };
+
+  const zone = result.selectedPoint?.site_timezone ?? null;
+  const range: TrendRange =
+    result.range === null
+      ? {
+          kind: customRange === null ? "preset" : "custom",
+          days: customRange === null ? windowDays : null,
+          from: new Date(
+            result.observedAt.getTime() - windowDays * 86_400_000,
+          ).toISOString(),
+          to: result.observedAt.toISOString(),
+          fromDate: customRange?.from ?? null,
+          toDate: customRange?.to ?? null,
+          timezone: null,
+        }
+      : {
+          kind: customRange === null ? "preset" : "custom",
+          days: customRange === null ? windowDays : null,
+          from: result.range.from_ts.toISOString(),
+          to: result.range.to_ts.toISOString(),
+          fromDate: customRange?.from ?? null,
+          toDate: customRange?.to ?? null,
+          timezone: zone,
+        };
 
   const explorer: PointExplorer = {
     windowDays,
+    range,
+    calendar:
+      result.calendar === null || zone === null
+        ? null
+        : {
+            timezone: zone,
+            today: result.calendar.today,
+            earliestDate: result.calendar.earliest_date,
+            latestDate: result.calendar.latest_date,
+            years: yearsBetween(result.calendar.first_year, result.calendar.last_year),
+          },
     observedAt: result.observedAt.toISOString(),
     projects: result.selection.projects.map((row) => ({
       projectId: row.project_id.toString(),
@@ -1436,7 +1689,9 @@ export async function getPointExplorer(
     points: result.pointRows.map(toPointOption),
     selectedPoint:
       result.selectedPoint === null ? null : toPointOption(result.selectedPoint),
-    collectionIntervalS: result.selectedPoint?.collection_interval_s ?? null,
+    collectionIntervalS: intervalS,
+    stationClockOffsetS: result.selectedPoint?.clock_offset_s ?? null,
+    stationClockMeasuredAt: iso(result.selectedPoint?.clock_measured_at ?? null),
     stats: {
       readings: result.stats?.readings ?? 0,
       nullRecords: result.stats?.null_records ?? 0,
@@ -1447,9 +1702,13 @@ export async function getPointExplorer(
       minimum: result.stats?.minimum ?? null,
       maximum: result.stats?.maximum ?? null,
     },
+    pointExtent: {
+      earliestAt: iso(result.extent?.earliest ?? null),
+      latestAt: iso(result.extent?.latest ?? null),
+    },
     trend,
     trendGaps: gaps,
-    trendTruncated: result.trendTruncated,
+    sampling,
     dataGaps: result.dataGaps.map(toDataGapRow),
   };
 
@@ -1458,8 +1717,12 @@ export async function getPointExplorer(
     moduleKey: "bas",
     count: explorer.stats.readings,
     reason:
-      `window=${windowDays}d site=${explorer.selectedSiteId ?? "all"} ` +
+      (customRange === null
+        ? `window=${windowDays}d `
+        : `range=${customRange.from}..${customRange.to} zone=${zone ?? "none"} `) +
+      `site=${explorer.selectedSiteId ?? "all"} ` +
       `point=${explorer.selectedPoint?.pointId ?? "none"} ` +
+      `sampling=${sampling.kind === "raw" ? "raw" : `${sampling.bucketSeconds}s`} ` +
       `gaps=${gaps.length}`,
   });
 
@@ -1511,6 +1774,69 @@ export function buildTrend(
     // pushed with value null - the line cannot cross it either - but isBreak is
     // false, because something was collected here and the tiles count it.
     trend.push({ tsMs, value: row.value_num, isBreak: false });
+    previousMs = tsMs;
+  }
+
+  return { trend, gaps };
+}
+
+/**
+ * The same series, from buckets. One sample per bucket at the bucket's start,
+ * carrying the average as `value` and the minimum, maximum and count beside
+ * it, so the chart can draw the band that keeps a spike visible.
+ *
+ * A break is an EMPTY BUCKET: consecutive populated buckets whose starts are
+ * further apart than one bucket width. The gap runs from the end of the last
+ * populated bucket to the start of the next, which is where the readings
+ * actually stop. Half a bucket of slack, because a calendar-day bucket after
+ * a clock change starts 23 or 25 hours after the one before and is not a gap.
+ *
+ * Exported for the same reason as `buildTrend`, and mutation-checked by
+ * tests/bas-custom-range.test.ts: drop `min` and `max` from the sample and the
+ * spike test fails.
+ */
+export function buildBucketedTrend(
+  rows: Array<{
+    ts: Date;
+    average: number | null;
+    minimum: number | null;
+    maximum: number | null;
+    readings: number;
+  }>,
+  bucketSeconds: number,
+): { trend: TrendPoint[]; gaps: TrendGap[] } {
+  const bucketMs = bucketSeconds * 1000;
+  const threshold = bucketMs * 1.5;
+  const trend: TrendPoint[] = [];
+  const gaps: TrendGap[] = [];
+
+  let previousMs: number | null = null;
+
+  for (const row of rows) {
+    const tsMs = row.ts.getTime();
+
+    if (previousMs !== null && tsMs - previousMs > threshold) {
+      const gapFrom = previousMs + bucketMs;
+      trend.push({
+        tsMs: gapFrom + Math.floor((tsMs - gapFrom) / 2),
+        value: null,
+        isBreak: true,
+      });
+      gaps.push({
+        fromMs: gapFrom,
+        toMs: tsMs,
+        hours: (tsMs - gapFrom) / 3_600_000,
+      });
+    }
+
+    trend.push({
+      tsMs,
+      value: row.average,
+      isBreak: false,
+      min: row.minimum,
+      max: row.maximum,
+      readings: row.readings,
+    });
     previousMs = tsMs;
   }
 

@@ -496,9 +496,98 @@ export interface PointOption {
  */
 export interface TrendPoint {
   tsMs: number;
+  /**
+   * The reading itself when the trend is raw; the bucket's AVERAGE when it has
+   * been downsampled (see `TrendSampling`).
+   */
   value: number | null;
   /** `true` only for a synthetic break. A real null-valued row is `false`. */
   isBreak: boolean;
+  /**
+   * Downsampled buckets only: the lowest and highest reading inside the bucket,
+   * and how many readings it holds. These are what keep a spike visible when
+   * the average is flat - a zone that hit -40 for fifteen minutes inside a
+   * six-hour bucket moves the average by a degree and the minimum by a hundred.
+   * Absent on a raw sample.
+   */
+  min?: number | null;
+  max?: number | null;
+  readings?: number;
+}
+
+/**
+ * How the trend was thinned, if it was. Rendered on the chart, never hidden.
+ *
+ * `raw` is every reading in the range. `bucketed` is one point per bucket,
+ * carrying average, min and max, because the range held more readings than the
+ * chart can carry without hanging - see `MAX_RAW_TREND_POINTS` in
+ * lib/modules/bas/range.ts for the measurement that set the line.
+ */
+export type TrendSampling =
+  | { kind: "raw"; readings: number }
+  | {
+      kind: "bucketed";
+      /** Bucket width in seconds. */
+      bucketSeconds: number;
+      /** "hour", "6 hours", "day" - for the notice on the chart. */
+      bucketLabel: string;
+      /** How many buckets held at least one reading. */
+      buckets: number;
+      /** The readings that went into them. */
+      readings: number;
+      /** The raw cap that was exceeded, so the notice can say why. */
+      maxRaw: number;
+    };
+
+/**
+ * The time range the trend and the tiles were measured over.
+ *
+ * `from` is inclusive and `to` exclusive, both ISO instants. For a custom
+ * range they are midnight at the start of `fromDate` and midnight at the end
+ * of `toDate` IN THE BUILDING'S TIME ZONE, resolved by PostgreSQL against
+ * `bas_sites.timezone`, so a day that changes the clocks is 23 or 25 hours
+ * long here rather than 24. For a preset they are `now() - days` and `now()`.
+ */
+export interface TrendRange {
+  kind: "preset" | "custom";
+  /** Preset only. */
+  days: number | null;
+  from: string;
+  to: string;
+  /** Custom only: the calendar dates exactly as asked for, `YYYY-MM-DD`. */
+  fromDate: string | null;
+  toDate: string | null;
+  /** The IANA zone the dates were resolved in. `null` when no point is selected. */
+  timezone: string | null;
+}
+
+/**
+ * What the calendar picker is allowed to offer, derived from the readings the
+ * viewer may see rather than from a constant. `years` is every calendar year,
+ * in the building's zone, between the earliest and latest reading held -
+ * there is no 2023 button when nothing was recorded in 2023.
+ */
+export interface TrendCalendar {
+  timezone: string;
+  /** Today's date in `timezone`. The latest date the picker accepts. */
+  today: string;
+  earliestDate: string | null;
+  latestDate: string | null;
+  years: number[];
+}
+
+/**
+ * The first and last reading held for the selected point, over ALL time.
+ *
+ * Not limited to the range - that is the point of it. A range that starts
+ * before `earliestAt` is drawn from `earliestAt` with a notice saying data
+ * begins there, so a flat start is not read as the equipment being off; a
+ * range with no readings at all names these two instants instead of drawing
+ * an empty chart.
+ */
+export interface PointExtent {
+  earliestAt: string | null;
+  latestAt: string | null;
 }
 
 /**
@@ -540,7 +629,14 @@ export interface PointStats {
 }
 
 export interface PointExplorer {
+  /**
+   * The preset window in days. Kept for the preset buttons and for callers
+   * that predate custom ranges; `range` is the authority on what the figures
+   * cover, and for a custom range this is the default rather than a fact.
+   */
   windowDays: number;
+  range: TrendRange;
+  calendar: TrendCalendar | null;
   observedAt: string;
 
   sites: SiteOption[];
@@ -567,16 +663,25 @@ export interface PointExplorer {
    */
   collectionIntervalS: number | null;
 
+  /**
+   * The selected station's clock offset from the collector host, seconds, as
+   * last measured, and when. Positive means the station is ahead. Shown
+   * beside a custom range because every reading from that station is stamped
+   * that far off, so a range boundary will not line up exactly with it. Not
+   * compensated for anywhere - see runbook.md, *A BAS station's clock is wrong*.
+   */
+  stationClockOffsetS: number | null;
+  stationClockMeasuredAt: string | null;
+
   stats: PointStats;
+  pointExtent: PointExtent;
   trend: TrendPoint[];
   trendGaps: TrendGap[];
   /**
-   * `true` when the window held more samples than the payload will carry, so
-   * `trend` is the most recent slice rather than the whole window. Said out
-   * loud on screen: a silently truncated chart is a chart that lies about when
-   * the data starts.
+   * Whether `trend` is every reading or one point per bucket. Said out loud on
+   * the chart: a silently thinned chart is a chart that lies about spikes.
    */
-  trendTruncated: boolean;
+  sampling: TrendSampling;
   dataGaps: DataGapRow[];
 }
 
