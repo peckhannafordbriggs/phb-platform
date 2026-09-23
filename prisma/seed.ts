@@ -29,6 +29,22 @@ const MODULES = [
     icon: "gauge",
     sortOrder: 200,
   },
+  {
+    key: "cost-intelligence",
+    displayName: "Cost Intelligence",
+    description:
+      "Bid estimates and the reasoning behind each cost line.",
+    icon: "calculator",
+    sortOrder: 300,
+  },
+  {
+    key: "knowledge-base",
+    displayName: "Knowledge Base",
+    description:
+      "Ask questions about past bids and projects, answered from the documents they came from.",
+    icon: "search",
+    sortOrder: 400,
+  },
 ];
 
 // From docs/05-database-and-sources.md, so early users are not all choosing

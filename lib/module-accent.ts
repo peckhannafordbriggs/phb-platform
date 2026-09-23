@@ -64,6 +64,11 @@ const PALETTE: readonly ModuleAccent[] = [
 const ASSIGNED: ReadonlyMap<string, number> = new Map([
   ["change-orders", 0],
   ["bas", 1],
+  // Assigned rather than left to the fallback: the sidebar passes a list index
+  // and the module header passes none, so an unassigned key gets two different
+  // colours in the two places that have to agree.
+  ["cost-intelligence", 3],
+  ["knowledge-base", 4],
 ]);
 
 /**
