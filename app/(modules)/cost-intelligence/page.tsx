@@ -1,9 +1,9 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "./cip-shell";
-import { Skeleton } from "./skeleton";
+import { Bar, Button } from "./skeleton";
+import { RunsView } from "./views/runs-view";
 
 export const dynamic = "force-dynamic";
 
@@ -13,19 +13,8 @@ export default async function RunsPage() {
   const canAdminister = await hasModuleAdmin(access.viewer.id, COST_INTELLIGENCE_MODULE_KEY);
 
   return (
-    <CipShell canAdminister={canAdminister}>
-      <Skeleton
-        title="Runs"
-        items={[
-          "Filters: all, needs you, running, completed, failed",
-          "Search by job, job number, workflow or run number",
-          "Runs table: run, job, workflow, status, started",
-          "Empty state when nothing matches",
-        ]}
-      >
-        <Link href="/cost-intelligence/runs/new" className="underline">New run</Link>
-        <Link href="/cost-intelligence/runs/example" className="underline">Example run</Link>
-      </Skeleton>
+    <CipShell canAdminister={canAdminister} actions={<><div className="flex h-9 w-60 items-center rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3"><Bar w="60%" h={8} /></div><Button w={112} filled /></>}>
+      <RunsView />
     </CipShell>
   );
 }

@@ -1,9 +1,8 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "../cip-shell";
-import { Skeleton } from "../skeleton";
+import { JobsView } from "../views/job-view";
 
 export const dynamic = "force-dynamic";
 
@@ -14,12 +13,7 @@ export default async function JobsPage() {
 
   return (
     <CipShell canAdminister={canAdminister}>
-      <Skeleton
-        title="Jobs"
-        items={["Jobs you can open in SharePoint, searchable by number or name"]}
-      >
-        <Link href="/cost-intelligence/jobs/example" className="underline">Example job</Link>
-      </Skeleton>
+      <JobsView />
     </CipShell>
   );
 }

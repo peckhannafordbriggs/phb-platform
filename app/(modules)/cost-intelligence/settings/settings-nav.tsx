@@ -1,7 +1,7 @@
-import Link from "next/link";
+import { CipNav, type Tab } from "../cip-nav";
 
-const LINKS = [
-  { href: "/cost-intelligence/settings", label: "Skill catalog" },
+const TABS: Tab[] = [
+  { href: "/cost-intelligence/settings", label: "Skill catalog", prefixes: ["/cost-intelligence/settings/skills"] },
   { href: "/cost-intelligence/settings/workflows", label: "Workflows" },
   { href: "/cost-intelligence/settings/access", label: "Access & roles" },
   { href: "/cost-intelligence/settings/usage", label: "Usage & cost" },
@@ -9,12 +9,8 @@ const LINKS = [
 
 export function SettingsNav() {
   return (
-    <nav className="mb-6 flex gap-4 text-sm">
-      {LINKS.map((l) => (
-        <Link key={l.href} href={l.href} className="underline">
-          {l.label}
-        </Link>
-      ))}
-    </nav>
+    <div className="-mt-3 mb-6">
+      <CipNav tabs={TABS} label="Cost Intelligence settings" />
+    </div>
   );
 }

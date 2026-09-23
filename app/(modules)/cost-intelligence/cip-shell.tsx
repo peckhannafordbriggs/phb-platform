@@ -1,36 +1,50 @@
-import Link from "next/link";
 import { ModuleHeader } from "@/components/module-header";
+import { moduleAccentStyle } from "@/lib/module-accent";
 import {
   COST_INTELLIGENCE_MODULE_KEY,
   COST_INTELLIGENCE_MODULE_NAME,
 } from "@/lib/modules/cost-intelligence/constants";
+import { CipNav, type Tab } from "./cip-nav";
 
 /** Chrome for every CIP view. A component, not a layout, so it never wraps a 404. */
 export function CipShell({
   canAdminister = false,
+  actions,
   children,
 }: {
   canAdminister?: boolean;
+  /** Right-aligned controls on the header row, e.g. search and New run. */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const links = [
-    { href: "/cost-intelligence", label: "Runs" },
-    { href: "/cost-intelligence/jobs", label: "Jobs" },
-    ...(canAdminister ? [{ href: "/cost-intelligence/settings", label: "Settings" }] : []),
+  const tabs: Tab[] = [
+    { href: "/cost-intelligence", label: "Runs", prefixes: ["/cost-intelligence/runs"] },
+    { href: "/cost-intelligence/jobs", label: "Jobs", prefixes: ["/cost-intelligence/jobs"] },
+    ...(canAdminister
+      ? [{ href: "/cost-intelligence/settings", label: "Settings", prefixes: ["/cost-intelligence/settings"] }]
+      : []),
   ];
 
   return (
-    <div>
-      <ModuleHeader moduleKey={COST_INTELLIGENCE_MODULE_KEY} title={COST_INTELLIGENCE_MODULE_NAME}>
-        <nav className="mt-3 flex gap-4 text-sm">
-          {links.map((l) => (
-            <Link key={l.href} href={l.href} className="underline">
-              {l.label}
-            </Link>
-          ))}
-        </nav>
-      </ModuleHeader>
-      <div className="mt-6">{children}</div>
+    <div
+      className="dashboard-ground -mx-8 -my-8 px-8 py-8"
+      style={{ ...moduleAccentStyle(COST_INTELLIGENCE_MODULE_KEY), minHeight: "100vh" }}
+    >
+      <div className="mx-auto max-w-[88rem]">
+        <div className="relative">
+          <ModuleHeader
+            moduleKey={COST_INTELLIGENCE_MODULE_KEY}
+            title={COST_INTELLIGENCE_MODULE_NAME}
+            blurb="Run published cost workflows against SharePoint job folders."
+          >
+            <CipNav tabs={tabs} label="Cost Intelligence sections" />
+          </ModuleHeader>
+          {actions !== undefined && (
+            <div className="absolute right-0 top-0 flex items-center gap-2">{actions}</div>
+          )}
+        </div>
+        <div className="mt-6">{children}</div>
+      </div>
     </div>
   );
 }

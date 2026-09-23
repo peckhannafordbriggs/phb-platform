@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "../../cip-shell";
-import { Skeleton } from "../../skeleton";
+import { NewRunView } from "../../views/new-run-view";
 
 export const dynamic = "force-dynamic";
 
@@ -13,15 +13,7 @@ export default async function NewRunPage() {
 
   return (
     <CipShell canAdminister={canAdminister}>
-      <Skeleton
-        title="New run"
-        items={[
-          "Workflow picker: published workflows only",
-          "Job folder picker: only folders you can open in SharePoint, with last sync time and refresh",
-          "Skill versions this run will pin",
-          "Start run",
-        ]}
-      />
+      <NewRunView />
     </CipShell>
   );
 }
