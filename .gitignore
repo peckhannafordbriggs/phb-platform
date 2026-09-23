@@ -148,3 +148,14 @@ lib/generated/
 # Filled-in Bicep parameters. Holds real subscription and tenant identifiers;
 # the example file is the committed one.
 infra/main.parameters.json
+
+# design-sync: staged scripts, generated bundle, machine state, and the
+# build artifacts copied out of .next (regenerate with cfg.buildCmd).
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+.design-sync/compiled.css
+.design-sync/fonts/
+.design-sync/
