@@ -19,6 +19,13 @@ describe("the settled assignments", () => {
     expect(moduleAccent("bas").fill).toBe("var(--phb-cyan)");
   });
 
+  it("gives the two newer modules their own colours, at any index", () => {
+    expect(moduleAccent("cost-intelligence").fill).toBe("var(--phb-teal)");
+    expect(moduleAccent("cost-intelligence", 2).fill).toBe("var(--phb-teal)");
+    expect(moduleAccent("knowledge-base").fill).toBe("var(--phb-pink)");
+    expect(moduleAccent("knowledge-base", 3).fill).toBe("var(--phb-pink)");
+  });
+
   it("pairs every fill with an ink that clears AA as text", () => {
     // The fill fills shapes; the ink carries glyphs. app/globals.css explains
     // why they cannot be the same value for anything but purple and maroon.
@@ -54,12 +61,18 @@ describe("a module with no assignment", () => {
   });
 
   it("does not collide with a settled module until the palette runs out", () => {
-    // Three unassigned modules, three colours, none of them the two that are spoken for.
-    const taken = new Set(["var(--phb-red)", "var(--phb-cyan)"]);
+    // Four of five slots are assigned, so orange is all that is left. The
+    // palette is now exhausted: a fifth module has to be assigned by hand.
+    const taken = new Set([
+      "var(--phb-red)",
+      "var(--phb-cyan)",
+      "var(--phb-teal)",
+      "var(--phb-pink)",
+    ]);
     const given = [0, 1, 2].map((i) => moduleAccent(`future-${i}`, i).fill);
 
     for (const fill of given) expect(taken.has(fill)).toBe(false);
-    expect(new Set(given).size).toBe(3);
+    expect(new Set(given).size).toBe(1);
   });
 
   it("wraps rather than returning undefined when the palette is exhausted", () => {
@@ -111,12 +124,15 @@ describe("keys that are members of Object.prototype", () => {
     }
   });
 
-  it("treats them as unassigned, so the index still separates them", () => {
-    // An assigned module ignores the index; an unassigned one does not. This is
-    // what proves the lookup missed rather than matched.
-    const first = moduleAccent("constructor", 0).fill;
-    const second = moduleAccent("constructor", 1).fill;
-
-    expect(first).not.toBe(second);
+  it("treats them as unassigned, taking the fallback like any unknown key", () => {
+    // Proves the lookup missed rather than matched. Compared against a key that
+    // is definitely unassigned rather than across two indices, because with four
+    // of five slots assigned the fallback has one colour left and two indices no
+    // longer separate anything.
+    for (const key of PROTOTYPE_KEYS) {
+      expect(moduleAccent(key, 0).fill, key).toBe(
+        moduleAccent("definitely-not-a-module", 0).fill,
+      );
+    }
   });
 });
