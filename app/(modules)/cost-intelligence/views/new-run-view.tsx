@@ -15,7 +15,9 @@ export function NewRunView() {
           <Bar w={22} h={20} />
           <div className="h-11 w-80 rounded-[var(--radius-control)] border border-[var(--border)] bg-white" />
           <div className="flex-1" />
-          <Button w={128} filled />
+          <Button variant="primary">
+            Start run
+          </Button>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <Bar w={140} h={22} />

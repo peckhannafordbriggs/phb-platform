@@ -12,8 +12,8 @@ export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
   const pathname = usePathname();
 
   return (
-    <nav aria-label={label} className="mt-3 border-b border-[var(--border)] flex items-center justify-between">
-      <ul className="-mb-px flex gap-1">
+    <nav aria-label={label} className="mt-3  flex items-center justify-between">
+      <ul className="-mb-px flex gap-1 border-b border-[var(--border)]">
         {tabs.map((t) => {
           const active = pathname === t.href || (t.prefixes ?? []).some((p) => pathname.startsWith(p));
           return (
@@ -37,7 +37,9 @@ export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
       </ul>
       <div className="flex items-center gap-2">
         <SearchBar />
-        <Button />
+        <Button variant="primary" href="/cost-intelligence/runs/new">
+          + New run
+        </Button>
       </div>
     </nav>
   );

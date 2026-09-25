@@ -19,8 +19,10 @@ export function JobView() {
             <Bar w={320} h={9} className="mt-3" />
           </div>
           <div className="flex gap-2">
-            <Button w={104} />
-            <Button w={112} filled />
+            <Button>Switch job</Button>
+            <Button variant="primary" href="/cost-intelligence/runs/new">
+              New run
+            </Button>
           </div>
         </div>
 

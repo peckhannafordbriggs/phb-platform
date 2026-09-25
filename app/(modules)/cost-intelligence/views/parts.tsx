@@ -1,4 +1,5 @@
 import { Bar } from "../ui/Bar";
+import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Label } from "../ui/Label";
 import { Table } from "../ui/Table";
@@ -58,7 +59,9 @@ export function Checkpoint({ options = 3, columns = false }: { options?: number;
           </div>
         ))}
       </div>
-      <Bar w={130} h={30} className="mt-4" />
+      <Button variant="primary" className="mt-4">
+        Answer and resume
+      </Button>
     </div>
   );
 }

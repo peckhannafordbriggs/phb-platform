@@ -1,3 +1,5 @@
+"use client";
+
 import { Bar } from "../ui/Bar";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
@@ -43,7 +45,7 @@ function SkillDetail() {
       <div>
         <div className="mb-3 flex items-center justify-between">
           <Bar w={200} h={10} />
-          <Button w={100} />
+          <Button>Review</Button>
         </div>
         <div className="flex flex-col gap-2">
           {Array.from({ length: 3 }, (_, i) => (
@@ -83,13 +85,13 @@ function PublishRail() {
             </div>
           ))}
         </div>
-        <div className="mt-5"><Button w="100%" /></div>
+        <div className="mt-5"><Button fullWidth>Run test</Button></div>
       </Card>
       <Card>
         <Label>Publish</Label>
         <Bar w="90%" h={8} />
         <Bar w="70%" h={8} className="mt-1.5" />
-        <div className="mt-5"><Button w="100%" /></div>
+        <div className="mt-5"><Button fullWidth>Publish</Button></div>
       </Card>
     </div>
   );
