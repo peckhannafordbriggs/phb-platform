@@ -37,9 +37,13 @@ export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
       </ul>
       <div className="flex items-center gap-2">
         <SearchBar />
-        <Button variant="primary" href="/cost-intelligence/runs/new">
-          + New run
-        </Button>
+        {pathname === "/cost-intelligence/runs/new" ? (
+          <Button href="/cost-intelligence">Back</Button>
+        ) : (
+          <Button variant="primary" href="/cost-intelligence/runs/new">
+            + New run
+          </Button>
+        )}
       </div>
     </nav>
   );
