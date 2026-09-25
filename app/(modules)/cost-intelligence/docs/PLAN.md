@@ -38,9 +38,12 @@ Each step makes part of the existing screens real. Do them in order, and do not 
 the next until the "done when" line is true.
 
 The screens are **Runs** (the runs list, filterable by project, beside the selected
-run), **New run** (the launcher, ledger and status) and **Settings**. There is no
-separate Jobs or Project page: it was dropped in favour of the project filter on Runs.
-`CONTEXT.md` maps every part of these screens to its component.
+run, with the New run launcher opening above them), the **Run page**
+(`/runs/{id}`: the ledger, status, checkpoints and cost for one run) and
+**Settings**. Start run creates the run and goes to its Run page. There is no
+separate new-run page and no Jobs or Project page. `CONTEXT.md` maps every part of
+these screens to its component. Until each step lands, the screens read from
+`lib/modules/cost-intelligence/placeholder.ts`.
 
 ### Step 1: One run, start to finish, no pauses
 
@@ -56,7 +59,7 @@ exactly which files left our tenant.
 - Add a webhook endpoint so Anthropic tells us when a run moves forward.
 - Save every step into our own run history (the ledger).
 - Make the Runs page and the Run page show real runs, and fill the project filter from
-  them.
+  them. Start run creates the run and returns its id; the Run page loads by that id.
 
 **Done when:** you can start a run, close the tab, come back later, and the page shows
 exactly what happened.

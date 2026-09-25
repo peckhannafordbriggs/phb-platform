@@ -2,18 +2,29 @@ import { notFound } from "next/navigation";
 import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "../../cip-shell";
-import { RunView } from "../../views/runs-view";
+import { getPlaceholderRun } from "@/lib/modules/cost-intelligence/placeholder";
+import type { Run } from "@/lib/modules/cost-intelligence/types";
+import { RunMonitor } from "../../views/parts";
 
 export const dynamic = "force-dynamic";
 
-export default async function RunPage() {
+function getRunById(runId: string): Run | undefined {
+  // TODO(backend): Fetch the run by its ID from the backend.
+  return getPlaceholderRun(runId);
+}
+
+export default async function RunPage({ params }: { params: Promise<{ runId: string }> }) {
   const access = await requireModuleAccess(COST_INTELLIGENCE_MODULE_KEY);
   if (!access.ok) notFound();
   const canAdminister = await hasModuleAdmin(access.viewer.id, COST_INTELLIGENCE_MODULE_KEY);
 
+  const { runId } = await params;
+  const run = getRunById(runId);
+  if (!run) notFound();
+
   return (
     <CipShell canAdminister={canAdminister}>
-      <RunView />
+      <RunMonitor run={run} />
     </CipShell>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { ArrowLeft, Plus } from "lucide-react";
 import { SearchBar } from "./ui/searchbar";
 import { Button } from "./ui/Button";
@@ -11,6 +11,9 @@ export type Tab = { href: string; label: string; prefixes?: string[] };
 /** Underlined tab bar, the BAS pattern. */
 export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // On Runs with ?new=1 the launcher is showing, so New run closes it instead.
+  const launcherOpen = pathname === "/cost-intelligence" && searchParams.get("new") !== null;
 
   return (
     <nav aria-label={label} className="mt-3  flex items-center justify-between">
@@ -38,13 +41,13 @@ export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
       </ul>
       <div className="flex items-center gap-2">
         <SearchBar />
-        {pathname === "/cost-intelligence/runs/new" ? (
+        {pathname.startsWith("/cost-intelligence/runs/") ? (
           <Button variant="primary" href="/cost-intelligence">
             <ArrowLeft size={16} aria-hidden="true" />
             Back
           </Button>
         ) : (
-          <Button variant="primary" href="/cost-intelligence/runs/new">
+          <Button variant="primary" href={launcherOpen ? "/cost-intelligence" : "/cost-intelligence?new=1"}>
             <Plus size={16} aria-hidden="true" />
             New run
           </Button>

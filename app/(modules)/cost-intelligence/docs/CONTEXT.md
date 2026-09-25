@@ -1,35 +1,49 @@
 # Cost Intelligence: component map
 
-Use this to turn what someone calls a part of the screen ("the decision card", "the
+Use this to turn what someone calls a part of the screen ("the launcher", "the
 ledger", "the filter") into the component and file that renders it.
 
 The screens are **part skeleton, part real UI**. The chrome, the runs list and detail,
-the dropdowns and the buttons are real components over placeholder data; the ledger,
-the timeline, the checkpoint and most of Settings are still grey placeholder bars. No
-backend yet: every data source is a `PLACEHOLDER_*` constant marked `TODO(backend)`.
-The plan for making them real is `PLAN.md` beside this file.
+the launcher, the dropdowns and the buttons are real components over placeholder data;
+the ledger, the timeline, the checkpoint, Pinned and most of Settings are still grey
+placeholder bars. No backend yet: every data source is in
+`lib/modules/cost-intelligence/placeholder.ts`, marked `TODO(backend)`. The plan for
+making them real is `PLAN.md` beside this file.
 
 ## Where the design came from
 
 The design file was **CIP Directions** in Claude Design. It had four directions, and
 people may refer to them by number:
 
-| Direction | What it is | Route here |
+| Direction | What it is | Where it went |
 |---|---|---|
 | **1a** | Runs dashboard: list of runs beside the selected run | `/cost-intelligence` |
 | **1b** | Job page | **Dropped.** Projects are a filter on the Runs page instead |
-| **1c** | New run: launching a run is a sentence; the run streams as a ledger | `/cost-intelligence/runs/new` |
+| **1c** | New run: launching a run is a sentence; the run streams as a ledger | **Split.** The sentence is the launcher on Runs; the ledger is the Run page |
 | **1d** | PCE Settings: skill catalog | `/cost-intelligence/settings` |
+
+## How the screens fit together
+
+```
+Runs (/cost-intelligence)
+  ├─ New run  → /cost-intelligence?new=1   launcher appears above the cards
+  │               Start run → /cost-intelligence/runs/{id}
+  ├─ click a row → RunDetail on the right
+  │               Open run → /cost-intelligence/runs/{id}
+  └─ Run (/cost-intelligence/runs/{id})    the monitor; Back → /cost-intelligence
+```
+
+There is **no new-run page**. The launcher's open state lives in the URL (`?new=1`), so
+refresh and the browser's back button behave.
 
 ## Files
 
 ```
 app/(modules)/cost-intelligence/
   cip-shell.tsx          CipShell    - chrome for every page (ground, header, tabs)
-  cip-nav.tsx            CipNav      - underlined tab bar (+ search bar and New run / Back, right)
+  cip-nav.tsx            CipNav      - tab bar (+ search bar and New run / Back, right)
   page.tsx               Runs page
-  runs/new/page.tsx      New run page
-  runs/[runId]/page.tsx  Run page
+  runs/[runId]/page.tsx  Run page (the monitor)
   settings/
     settings-nav.tsx     SettingsNav - the second tab bar inside Settings
     page.tsx             Skill catalog page
@@ -38,47 +52,44 @@ app/(modules)/cost-intelligence/
     access/              Access & roles page
     usage/               Usage & cost page
   views/
-    runs-view.tsx        RunsView, RunView
-    new-run-view.tsx     NewRunView
+    runs-view.tsx        RunsView
     settings-views.tsx   SkillCatalogView, SkillView, SettingsTableView
-    parts.tsx            Run (type), RunHistory, RunDetail, Timeline, Checkpoint, Node
+    parts.tsx            RunHistory, RunDetail, RunLauncher, RunMonitor, Timeline, Checkpoint, Node
   ui/
     Bar.tsx Button.tsx Card.tsx Dropdown.tsx Label.tsx Table.tsx searchbar.tsx
+
+lib/modules/cost-intelligence/
+  constants.ts           module key and name
+  types.ts               Run, Option
+  placeholder.ts         PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun
 ```
 
-**Pages are guards only.** Each `page.tsx` checks access and renders one view. The
-layout lives in `views/`, the reusable pieces in `views/parts.tsx`, and the smallest
-building blocks in `ui/`.
+**Pages are guards only, and stay server components.** Each `page.tsx` checks access
+with `requireModuleAccess`, which reads the session through `next/headers` and so only
+works on the server. Never put `"use client"` on a page: put state and hooks in a view.
+`views/parts.tsx` and `views/runs-view.tsx` are client components.
 
 ## Page by page
 
 ### Runs · `/cost-intelligence` · `RunsView` (1a)
 
-Two columns. `RunsView` is a client component: it holds the selected run and the
-project filter.
+`RunsView` holds the selected run and the project filter, and reads `?new=1`.
 
 | People call it | Component | Notes |
 |---|---|---|
+| the launcher, the sentence, "Run X on Y" | `RunLauncher`, centred above the cards (max 48rem) | Only when the URL has `?new=1`. Workflow and project dropdowns; Start run is disabled until both are chosen, then goes to the run's page |
 | the project filter | `Dropdown` at the top of `RunHistory` | "All projects", then one entry per project that has runs |
 | the runs table, the runs list | `RunHistory`, a `Table` inside the left card | Columns: Project, Workflow, Status, Started. 8 per page. Clicking a row selects it |
-| the run panel, the right side | `RunDetail` | Same component as the Run page. "Select a run" when nothing is selected |
+| the run panel, the right side | `RunDetail` | Id, status, project, workflow, started, and **Open run**. Shows the latest run until you pick one, or when the filter hides your pick; empty only when there are no runs |
 
-### Run · `/cost-intelligence/runs/[runId]` · `RunView`
+### Run · `/cost-intelligence/runs/[runId]` · `RunMonitor`
 
-Just `RunDetail`, full width. Not loaded from `runId` yet, so it shows the empty state.
-
-`RunDetail` today shows the run id, status, project, workflow and start time. The design
-also puts the `Timeline`, a `Checkpoint` and a footer ("keeps running if you close this
-tab", Cancel run) in it; they come back when a run carries that data.
-
-### New run · `/cost-intelligence/runs/new` · `NewRunView` (1c)
-
-Two columns: the launcher and ledger on the left, Status and Pinned on the right. The
-top-right button reads **Back** on this page instead of **New run**.
+The detailed view of one run. The page reads `runId` from `params`, looks the run up
+(`getPlaceholderRun` for now) and returns a 404 for an id that does not exist.
 
 | People call it | Where |
 |---|---|
-| the launcher, the sentence, "Run X on Y" | top-left `Card`: workflow `Dropdown`, project `Dropdown`, Start run button |
+| the run header | full-width top `Card` in `RunMonitor`: id, status, project, workflow, started |
 | the ledger, the run log | left `Card` labelled **Run ledger**: timestamped entries, then a `Checkpoint` with options in three columns |
 | the status rail | right `Card` labelled **Status**, containing `Timeline` |
 | pinned, versions, tokens, cost | right `Card` labelled **Pinned for this run**: skill versions, then Tokens and Estimated cost |
@@ -116,7 +127,7 @@ The settings column names are placeholders, not decided.
 | the header, "Cost Intelligence" title | `ModuleHeader` (platform component) | `components/module-header.tsx` |
 | the tabs, Runs / Settings | `CipNav` | `cip-nav.tsx` |
 | the search bar | `SearchBar`, rendered inside `CipNav` | `ui/searchbar.tsx` |
-| the New run / Back button (top right) | `Button`, rendered inside `CipNav`: **Back** on `/runs/new`, **New run** everywhere else | `ui/Button.tsx` |
+| the New run / Back button (top right) | `Button` inside `CipNav`. On a run page (`/runs/…`): **Back** to Runs. Elsewhere: **New run**, which opens the launcher, or closes it when it is already open | `ui/Button.tsx` |
 | the settings tabs | `SettingsNav`, which reuses `CipNav` | `settings/settings-nav.tsx` |
 | the tinted background | `.dashboard-ground`, applied by `CipShell` | `cip-shell.tsx` |
 
@@ -138,17 +149,23 @@ page checks this itself with `requireModuleAdmin`.
 | `Node` | `views/parts.tsx` | The hollow diamond on timelines and pipelines |
 | `Timeline` | `views/parts.tsx` | The seven-step run timeline (placeholder bars) |
 | `Checkpoint` | `views/parts.tsx` | A paused-run question with options and Answer and resume (placeholder bars, button not wired) |
-| `RunDetail` | `views/parts.tsx` | The run panel for one `Run` |
 | `RunHistory` | `views/parts.tsx` | The project filter and the runs table |
+| `RunDetail` | `views/parts.tsx` | The quick-look panel for one `Run`, with Open run |
+| `RunLauncher` | `views/parts.tsx` | "Run [workflow] on [project]" and Start run |
+| `RunMonitor` | `views/parts.tsx` | The whole Run page for one `Run`: header, ledger, Status, Pinned |
 
 Icons come from **`lucide-react`**; do not hand-draw SVGs.
 
 ## What is wired
 
-Only these do anything: selecting a run on Runs, the project filter, Previous / Next on
-the runs table, the New run and Back buttons, and the two New run dropdowns. Every other
-button renders its label and has no handler; wire each one in its own view as the
-backend for it lands, never inside `Button`.
+- Selecting a run, the project filter, and Previous / Next on the runs table.
+- New run opening and closing the launcher; Back from a run page.
+- The launcher's dropdowns, and Start run going to a run page. It goes to the first
+  placeholder run until the backend returns a real id.
+- Open run, and the Run page loading that run (404 for an unknown id).
+
+Every other button renders its label and has no handler. Wire each one in its own view
+as the backend for it lands, never inside `Button`.
 
 ## Words that mean something specific here
 
@@ -166,9 +183,12 @@ backend for it lands, never inside `Button`.
 
 ## Rules when changing these screens
 
-- Put UI in `views/` or `ui/`, never in `page.tsx`.
+- Put UI in `views/` or `ui/`, never in `page.tsx`. Pages stay server components.
 - Do not move the chrome into a `layout.tsx`. A layout wraps a 404 page too, which
   would reveal the module to someone without access.
+- A run's page gets its data from the run id, never from the launcher. Start run
+  creates the run and navigates to its id; the page looks it up.
+- Placeholder data lives only in `lib/modules/cost-intelligence/placeholder.ts`.
 - Colours come from the platform tokens in `app/globals.css`. The module's colour is
   `var(--module-accent)` (teal); teal, orange and maroon also mean ok, warning and error,
   so never use them for decoration. Primary buttons are PHB red (`--phb-red-btn`).
