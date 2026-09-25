@@ -2,19 +2,27 @@
 
 import { useState } from "react";
 
-/** A table with equal-width columns. Pass `pageSize` to paginate; omit it to show every row. */
+/**
+ * A table with equal-width columns. Pass `pageSize` to paginate; omit it to show every row.
+ * `onRowClick` and `selected` both use the row's index in `rows`, not its index on the page.
+ */
 export function Table({
   headers,
   rows,
   pageSize,
+  onRowClick,
+  selected,
 }: {
   headers: string[];
   rows: React.ReactNode[][];
   pageSize?: number;
+  onRowClick?: (index: number) => void;
+  selected?: number;
 }) {
   const [page, setPage] = useState(0);
   const pageCount = pageSize ? Math.max(1, Math.ceil(rows.length / pageSize)) : 1;
-  const visible = pageSize ? rows.slice(page * pageSize, (page + 1) * pageSize) : rows;
+  const offset = pageSize ? page * pageSize : 0;
+  const visible = pageSize ? rows.slice(offset, offset + pageSize) : rows;
   const grid = { gridTemplateColumns: `repeat(${headers.length}, minmax(0, 1fr))` };
 
   return (
@@ -28,7 +36,16 @@ export function Table({
       </div>
 
       {visible.map((row, i) => (
-        <div key={i} className="grid items-center gap-4 border-b border-[var(--divider-soft)] py-3.5 text-[0.8125rem]" style={grid}>
+        <div
+          key={offset + i}
+          onClick={onRowClick ? () => onRowClick(offset + i) : undefined}
+          className={
+            "grid items-center gap-4 border-b border-[var(--divider-soft)] py-3.5 text-[0.8125rem] " +
+            (onRowClick ? "cursor-pointer hover:bg-[var(--neutral-50)] " : "") +
+            (selected === offset + i ? "bg-[var(--neutral-50)] font-medium" : "")
+          }
+          style={grid}
+        >
           {row.map((cell, j) => (
             <div key={j} className="min-w-0 truncate">
               {cell}

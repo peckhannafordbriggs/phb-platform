@@ -63,39 +63,63 @@ export function Checkpoint({ options = 3, columns = false }: { options?: number;
   );
 }
 
-/** Run detail: meta, title, pinned skills, timeline, checkpoint, footer. */
-export function RunDetail({selectedRun} : {selectedRun: Run | null}) {
+/** Run detail: the selected run's job, workflow, status and start time. */
+export function RunDetail({ selectedRun }: { selectedRun: Run | null }) {
+  if (!selectedRun) {
+    return (
+      <Card>
+        <p className="text-[0.8125rem] text-[var(--muted)]">Select a run to see its details.</p>
+      </Card>
+    );
+  }
+
   return (
     <Card className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
-        <Bar w={120} h={8} />
-        <Bar w={110} h={22} />
+        <span className="eyebrow text-[var(--muted)]">{selectedRun.id}</span>
+        <span className="text-[0.8125rem]">{selectedRun.status}</span>
       </div>
-      <div>
-        <Bar w="65%" h={18} />
-        <div className="mt-3 flex gap-2">
-          <Bar w={170} h={20} />
-          <Bar w={100} h={20} />
+      <h2 className="text-lg font-medium text-[var(--foreground)]">{selectedRun.job}</h2>
+      <dl className="grid grid-cols-2 gap-4 border-t border-[var(--divider-soft)] pt-4 text-[0.8125rem]">
+        <div>
+          <dt className="text-[var(--muted)]">Workflow</dt>
+          <dd>{selectedRun.workflow}</dd>
         </div>
-        <Bar w={80} h={8} className="mt-3" />
-      </div>
-      <Timeline />
-      <Checkpoint />
-      <div className="flex items-center justify-between border-t border-[var(--divider-soft)] pt-4">
-        <Bar w={160} h={8} />
-        <Bar w={70} h={8} />
-      </div>
+        <div>
+          <dt className="text-[var(--muted)]">Started</dt>
+          <dd>{selectedRun.started}</dd>
+        </div>
+      </dl>
     </Card>
   );
 }
 
-export function RunHistory({selectedRun, setSelectedRun} : {selectedRun: Run | null; setSelectedRun: (run: Run) => void}) {
+/** The runs list. Clicking a row selects that run. */
+export function RunHistory({
+  runs,
+  selectedRun,
+  setSelectedRun,
+}: {
+  runs: Run[];
+  selectedRun: Run | null;
+  setSelectedRun: (run: Run) => void;
+}) {
   return (
     <Card>
-      <Table
-        headers={["Job", "Workflow", "Status", "Started"]}
-        rows={Array.from({ length: 8 }, () => [<Bar key="j" w="85%" />, <Bar key="w" w="80%" />, <Bar key="s" w={110} />, <Bar key="t" w={44} />])}
-      />
+      {runs.length === 0 ? (
+        <p className="text-[0.8125rem] text-[var(--muted)]">No runs yet.</p>
+      ) : (
+        <Table
+          headers={["Job", "Workflow", "Status", "Started"]}
+          rows={runs.map((r) => [r.job, r.workflow, r.status, r.started])}
+          pageSize={8}
+          onRowClick={(i) => {
+            const run = runs[i];
+            if (run) setSelectedRun(run);
+          }}
+          selected={selectedRun ? runs.findIndex((r) => r.id === selectedRun.id) : undefined}
+        />
+      )}
     </Card>
   );
 }
