@@ -229,6 +229,23 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
       : `${actor} hid the point ${name} from the browsing screens (still collected)`;
   },
 
+  // Three shapes - set, changed, cleared - and the point is always identified
+  // by its oBIX key, because the label is the thing that moved and a sentence
+  // that named the point only by its new label would not survive the next
+  // rename. "Cleared" says where the point's name goes back to, so nobody
+  // reads it as the point having lost its name.
+  "bas.point_label_changed": ({ actor, meta }) => {
+    const key = stringField(meta, "niagaraHistoryName") ?? "a point";
+    const previous = stringField(meta, "previousLabel");
+    const label = stringField(meta, "label");
+    if (label === null) {
+      return `${actor} cleared the label "${previous ?? ""}" from the point ${key} (back to its Niagara name)`;
+    }
+    return previous === null
+      ? `${actor} labelled the point ${key} "${label}"`
+      : `${actor} relabelled the point ${key} from "${previous}" to "${label}"`;
+  },
+
   // Names the account. "The login changed" cannot show an escalation from
   // bas_collector to admin; "changed it to admin" can. The password is not here
   // and never will be - see the note on the action in lib/audit.ts.
@@ -496,6 +513,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.credential_set": "BAS station login set",
   "bas.credential_cleared": "BAS station login removed",
   "bas.point_visibility_changed": "BAS point shown or hidden",
+  "bas.point_label_changed": "BAS point labelled",
   "bas.question_asked": "BAS question asked",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",

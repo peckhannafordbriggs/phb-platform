@@ -1463,6 +1463,19 @@ export const updatePointVisibility = (pointId: string, visible: boolean) =>
   );
 
 /**
+ * Set, change or clear what a person calls a point (B8.4). `null` clears it
+ * and the screens fall back to Niagara's name. The server trims and turns a
+ * blank into null, and answers with the label it stored, which is what the
+ * row should show afterwards. Same path as the visibility change, one field
+ * per request, and never the oBIX key.
+ */
+export const updatePointLabel = (pointId: string, label: string | null) =>
+  settingsWrite<{ changed: boolean; label: string | null }>(
+    `/points/${encodeURIComponent(pointId)}`,
+    { method: "PATCH", body: JSON.stringify({ label }) },
+  );
+
+/**
  * Replace the stored Niagara login.
  *
  * The password leaves the browser once and is never sent back. There is no

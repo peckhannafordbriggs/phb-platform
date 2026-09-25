@@ -471,7 +471,10 @@ export interface CollectionHealth {
 /** One entry in the point picker. */
 export interface PointOption {
   pointId: string;
-  /** `display_name` falling back to the Niagara history name, as the view does. */
+  /**
+   * The person's label when there is one (B8.4), else `display_name` falling
+   * back to the Niagara history name as the view does. See pointDisplayName.
+   */
   pointName: string;
   pointRole: string | null;
   unit: string | null;
@@ -1006,7 +1009,12 @@ export function settingsCountState(counts: StationCounts): {
  */
 export interface SettingsPoint {
   pointId: string;
-  /** What a person typed. Null for most rows today. Nothing edits it until B8.4. */
+  /**
+   * What a person typed (B8.4). Null on every real row until somebody types
+   * one, so the fallback in `pointDisplayName` is the normal path. Wins on
+   * the browsing screens when present; edited on the Points list; never
+   * written by the collector.
+   */
   label: string | null;
   /** The oBIX key, verbatim, $-hex escapes and all. Never editable, by anyone. */
   niagaraHistoryName: string;
@@ -1037,7 +1045,7 @@ export interface SettingsPoint {
    */
   horizon: PointHorizon;
   lastRecordAt: string | null;
-  /** is_visible. Shown and not editable until B8.3, and NEVER filtered on here. */
+  /** is_visible. Editable since B8.3, and NEVER filtered on here. */
   visible: boolean;
 }
 
@@ -1049,11 +1057,13 @@ export interface SettingsPoint {
  *
  * The list walks LEFT JOINs to equipment, role and checkpoint. If one of them
  * is ever made inner, or a future join drops a row, the two disagree and the
- * screen says so. Two numbers rather than the stations' three because nothing
- * filters this list - B8.3 made `visible` editable here and deliberately kept
- * hidden points ON this list, so there is no `matched` to carry. The day
- * something does filter it, add `matched` the way B7.6 did, or the alarm
- * fires on every hide.
+ * screen says so. Two numbers rather than the stations' three because the
+ * SERVICE never filters this list - B8.3 made `visible` editable here and
+ * deliberately kept hidden points ON this list, so there is no `matched` to
+ * carry. B8.4's search narrows the rows in the browser, after the service
+ * has returned all of them, and the table says "N of M match" beside these
+ * two numbers rather than inside them. The day the service itself filters,
+ * add `matched` the way B7.6 did, or the alarm fires on every search.
  */
 export interface PointCounts {
   rendered: number;
@@ -1069,6 +1079,54 @@ export interface StationPointsList {
 /** RED is the list holding fewer points than the database says the station has. */
 export function pointsCountState(counts: PointCounts): { alarm: boolean } {
   return { alarm: counts.rendered !== counts.inDatabase };
+}
+
+/** The three names a point has, in the order a screen prefers them. */
+export interface PointNames {
+  /** What a person typed. NULL until somebody does - which today is every row. */
+  label: string | null;
+  /** What Niagara reports (bas_points.display_name). NULL when the station sent none. */
+  niagaraDisplayName: string | null;
+  /** The oBIX key. Never NULL, never editable. */
+  niagaraHistoryName: string;
+}
+
+/**
+ * The name a person sees for a point (B8.4), in ONE place.
+ *
+ *   1. label                 - what a person typed
+ *   2. niagaraDisplayName    - what Niagara reports, refreshed by discover
+ *   3. niagaraHistoryName    - the oBIX key, which always exists
+ *
+ * The SQL twin is `COALESCE(p.label, <view>.point_name)` in
+ * lib/modules/bas/service.ts, where the views already hold steps 2 and 3
+ * as `point_name`; this function is for anything that has the row in hand
+ * (the Points list's checkbox label, the audit sentence's fallback). The two
+ * must agree, and tests/bas-point-label.test.ts drives both from one fixture.
+ *
+ * THE FALLBACK IS THE NORMAL PATH. Every real point has label NULL today, so
+ * a mistake in step 2 or 3 blanks every name on every screen while a test
+ * that seeds a label passes. Test it with label NULL first.
+ */
+export function pointDisplayName(point: PointNames): string {
+  return point.label ?? point.niagaraDisplayName ?? point.niagaraHistoryName;
+}
+
+/**
+ * Whether a point matches a search term, by ANY of its three names (B8.4).
+ *
+ * Somebody will paste a history name straight out of Workbench, or type
+ * `VAV$2d8`, and it has to find the point even though the screen says "Zone
+ * Temp 104-105". Case-insensitive substring on each name; `$` is a literal
+ * because it is in every escaped history name. A blank term matches
+ * everything, so an empty search box is not a filter.
+ */
+export function pointMatchesSearch(point: PointNames, term: string): boolean {
+  const needle = term.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  return [point.label, point.niagaraDisplayName, point.niagaraHistoryName].some(
+    (name) => name !== null && name.toLowerCase().includes(needle),
+  );
 }
 
 

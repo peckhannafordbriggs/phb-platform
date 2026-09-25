@@ -130,6 +130,29 @@ function effectiveSiteIds(
  * performance preference: at ten buildings the hidden rows would still be in the
  * response, and a filter that ships the data it claims to exclude is a lie.
  */
+/**
+ * The name a browsing screen shows for a point (B8.4), as SQL.
+ *
+ *   COALESCE(p.label, <view>.point_name)
+ *
+ * The views already hold the Niagara half of the precedence - `point_name` is
+ * `COALESCE(display_name, niagara_history_name)` in every one of them - and
+ * this puts the person's label in front of it. The label is NOT in the views,
+ * deliberately: the six `bas_v_*` views are what Grafana, the healthcheck and
+ * the AI's SQL read, and a label is a preference of THESE screens, the same
+ * class of thing as `is_visible`. (The Analyze catalogue applies the same
+ * COALESCE itself, in schema-context.ts, so the model knows a labelled point
+ * by its label.) One fragment rather than five spellings, and a test fails
+ * the build if a query selects or orders by a bare `point_name` again.
+ *
+ * Every real row has label NULL, so the fallback half is the normal path.
+ * `view` is the alias of the view in the query; the query must also join
+ * `bas_points p`, which every caller already does for `is_visible`.
+ */
+function shownPointName(view: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`COALESCE(p.label, ${view}.point_name)`;
+}
+
 function siteFilter(siteIds: bigint[] | null, column: Prisma.Sql): Prisma.Sql {
   if (siteIds === null) return Prisma.sql`TRUE`;
   if (siteIds.length === 0) return Prisma.sql`FALSE`;
@@ -719,7 +742,7 @@ export async function getCollectionHealth(
     const points = await tx.$queryRaw<PointRow[]>`
       SELECT
         h.point_id,
-        h.point_name,
+        ${shownPointName(Prisma.sql`h`)} AS point_name,
         h.site_name,
         h.point_role,
         h.unit,
@@ -749,7 +772,8 @@ export async function getCollectionHealth(
       -- twice, so the table reshuffled itself on every one-minute refresh.
       -- Caught by scripts/bas-health-oracle.ts, which compared two runs of the
       -- same query and got two orders.
-      ORDER BY h.seconds_since_last_record DESC NULLS FIRST, h.point_name, h.point_id
+      ORDER BY h.seconds_since_last_record DESC NULLS FIRST,
+               ${shownPointName(Prisma.sql`h`)}, h.point_id
     `;
 
     // --- points the station stopped reporting (B8.3) ------------------------
@@ -760,7 +784,7 @@ export async function getCollectionHealth(
     const vanished = await tx.$queryRaw<VanishedRow[]>`
       SELECT
         h.point_id,
-        h.point_name,
+        ${shownPointName(Prisma.sql`h`)} AS point_name,
         h.site_name,
         COALESCE(st.display_name, st.niagara_station_name) AS station_name,
         h.last_record_ts
@@ -770,7 +794,7 @@ export async function getCollectionHealth(
       WHERE NOT h.is_active
         AND p.inactive_reason = 'no_longer_reported'
         AND ${healthSitesH}
-      ORDER BY h.last_record_ts DESC NULLS LAST, h.point_name, h.point_id
+      ORDER BY h.last_record_ts DESC NULLS LAST, ${shownPointName(Prisma.sql`h`)}, h.point_id
     `;
 
     // --- collector runs -----------------------------------------------------
@@ -856,7 +880,7 @@ export async function getCollectionHealth(
     const dataGaps = await tx.$queryRaw<GapRow[]>`
       SELECT
         g.gap_id,
-        h.point_name,
+        ${shownPointName(Prisma.sql`h`)} AS point_name,
         h.site_name,
         g.gap_start,
         g.gap_end,
@@ -867,7 +891,10 @@ export async function getCollectionHealth(
         g.notes
       FROM bas_data_gaps g
       JOIN bas_v_collection_health h USING (point_id)
-      WHERE ${healthSites}
+      -- For the label (B8.4). Both h and p carry station_id, so the filter
+      -- is the aliased one - the bare form was ambiguous under a JACE filter.
+      JOIN bas_points p USING (point_id)
+      WHERE ${healthSitesH}
       ORDER BY g.gap_start DESC
       LIMIT ${DATA_GAPS_LIMIT}
     `;
@@ -1349,7 +1376,9 @@ export async function getPointExplorer(
     const healthSitesV = Prisma.sql`${siteFilter(siteIds, Prisma.sql`v.site_id`)}
       AND ${stationFilter(stationId, Prisma.sql`v.station_id`)}`;
     const pointRows = await tx.$queryRaw<PointOptionRow[]>`
-      SELECT v.point_id, v.point_name, v.point_role, v.unit, v.site_name,
+      SELECT v.point_id,
+             ${shownPointName(Prisma.sql`v`)} AS point_name,
+             v.point_role, v.unit, v.site_name,
              v.collection_interval_s,
              s.timezone AS site_timezone,
              st.clock_offset_s, st.clock_measured_at
@@ -1358,11 +1387,15 @@ export async function getPointExplorer(
       -- collected, still in every Collection Health figure, and still in the
       -- views the AI reads - is_visible is a preference of the browsing
       -- screens, which is why it lives on bas_points and not in bas_v_point.
+      -- B8.4: the same join supplies the label the picker shows in front of
+      -- the view's point_name, for the same reason.
       JOIN bas_points p USING (point_id)
       JOIN bas_stations st ON st.station_id = p.station_id
       JOIN bas_sites s ON s.site_id = st.site_id
       WHERE v.is_active AND p.is_visible AND ${healthSitesV}
-      ORDER BY v.site_name, v.point_name, v.point_id
+      -- By the name on screen, so the picker reads alphabetically to the
+      -- person using it; point_id breaks ties, as before.
+      ORDER BY v.site_name, ${shownPointName(Prisma.sql`v`)}, v.point_id
     `;
 
     const selectedPoint =
@@ -1574,7 +1607,7 @@ export async function getPointExplorer(
     const dataGaps = await tx.$queryRaw<GapRow[]>`
       SELECT
         g.gap_id,
-        h.point_name,
+        ${shownPointName(Prisma.sql`h`)} AS point_name,
         h.site_name,
         g.gap_start,
         g.gap_end,
@@ -1585,6 +1618,7 @@ export async function getPointExplorer(
         g.notes
       FROM bas_data_gaps g
       JOIN bas_v_collection_health h USING (point_id)
+      JOIN bas_points p USING (point_id)
       WHERE g.point_id = ${pointId}
       ORDER BY g.gap_start DESC, g.gap_id DESC
       LIMIT ${DATA_GAPS_LIMIT}
