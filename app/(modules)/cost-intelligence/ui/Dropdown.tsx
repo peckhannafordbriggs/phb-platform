@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 
 export type DropdownOption = { value: string; label: string };
@@ -46,16 +47,11 @@ export function Dropdown({
       >
         <span className="truncate">{selected?.label ?? placeholder}</span>
       </button>
-      <svg
+      <ChevronDown
+        size={14}
         aria-hidden="true"
-        viewBox="0 0 16 16"
-        className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-      >
-        <path d="m4 6 4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
+        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)]"
+      />
 
       {open && (
         <ul className="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto rounded-[var(--radius-control)] border border-[var(--border)] bg-white p-1 shadow-lg">

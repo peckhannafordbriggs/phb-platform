@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Search, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 /**
@@ -16,7 +17,7 @@ async function searchCostIntelligence(query: string, signal: AbortSignal): Promi
 }
 
 
-export function SearchBar({ placeholder = "Search runs, jobs, skills" }: { placeholder?: string }) {
+export function SearchBar({ placeholder = "Search runs, projects, skills" }: { placeholder?: string }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
@@ -38,10 +39,7 @@ export function SearchBar({ placeholder = "Search runs, jobs, skills" }: { place
   return (
     <div ref={rootRef} className="relative w-64">
       <div className="flex h-9 items-center gap-2 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 focus-within:border-[var(--module-accent)]">
-        <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" fill="none" stroke="currentColor" strokeWidth="1.6">
-          <circle cx="7" cy="7" r="4.5" />
-          <path d="m10.5 10.5 3 3" strokeLinecap="round" />
-        </svg>
+        <Search size={14} aria-hidden="true" className="shrink-0 text-[var(--muted)]" />
         <input
           ref={inputRef}
           type="search"
@@ -66,9 +64,7 @@ export function SearchBar({ placeholder = "Search runs, jobs, skills" }: { place
             aria-label="Clear search"
             className="rounded p-0.5 text-[var(--muted)] hover:text-[var(--foreground)]"
           >
-            <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="m4 4 8 8M12 4l-8 8" strokeLinecap="round" />
-            </svg>
+            <X size={12} aria-hidden="true" />
           </button>
         ) : (
           <kbd className="rounded border border-[var(--border)] px-1.5 text-[0.6875rem] leading-4 text-[var(--muted)]">/</kbd>

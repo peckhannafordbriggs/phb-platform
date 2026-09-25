@@ -3,7 +3,7 @@ import Link from "next/link";
 type Variant = "primary" | "secondary";
 
 const BASE =
-  "inline-flex h-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] px-4 text-[0.8125rem] font-medium transition-opacity disabled:pointer-events-none disabled:opacity-50";
+  "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] px-4 text-[0.8125rem] font-medium transition-opacity disabled:pointer-events-none disabled:opacity-50";
 
 const VARIANTS: Record<Variant, string> = {
   primary: "bg-[var(--phb-red-btn)] text-white hover:opacity-90",

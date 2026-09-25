@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ArrowLeft, Plus } from "lucide-react";
 import { SearchBar } from "./ui/searchbar";
 import { Button } from "./ui/Button";
 
@@ -38,10 +39,14 @@ export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
       <div className="flex items-center gap-2">
         <SearchBar />
         {pathname === "/cost-intelligence/runs/new" ? (
-          <Button href="/cost-intelligence">Back</Button>
+          <Button variant="primary" href="/cost-intelligence">
+            <ArrowLeft size={16} aria-hidden="true" />
+            Back
+          </Button>
         ) : (
           <Button variant="primary" href="/cost-intelligence/runs/new">
-            + New run
+            <Plus size={16} aria-hidden="true" />
+            New run
           </Button>
         )}
       </div>

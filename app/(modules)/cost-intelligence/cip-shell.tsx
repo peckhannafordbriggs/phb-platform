@@ -19,7 +19,6 @@ export function CipShell({
 }) {
   const tabs: Tab[] = [
     { href: "/cost-intelligence", label: "Runs", prefixes: ["/cost-intelligence/runs"] },
-    { href: "/cost-intelligence/jobs", label: "Jobs", prefixes: ["/cost-intelligence/jobs"] },
     ...(canAdminister
       ? [{ href: "/cost-intelligence/settings", label: "Settings", prefixes: ["/cost-intelligence/settings"] }]
       : []),
@@ -35,7 +34,7 @@ export function CipShell({
           <ModuleHeader
             moduleKey={COST_INTELLIGENCE_MODULE_KEY}
             title={COST_INTELLIGENCE_MODULE_NAME}
-            blurb="Run published cost workflows against SharePoint job folders."
+            blurb="Run published cost workflows against SharePoint project folders."
           >
             <CipNav tabs={tabs} label="Cost Intelligence sections" />
           </ModuleHeader>

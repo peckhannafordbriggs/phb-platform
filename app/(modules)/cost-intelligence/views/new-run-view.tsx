@@ -5,17 +5,17 @@ import { Dropdown, type DropdownOption } from "../ui/Dropdown";
 import { Label } from "../ui/Label";
 import { Checkpoint, Node, Timeline } from "./parts";
 
-// TODO(backend): replace with workflows and jobs from the Cost Intelligence API.
+// TODO(backend): replace with workflows and projects from the Cost Intelligence API.
 const PLACEHOLDER_WORKFLOWS: DropdownOption[] = [
   { value: "estimate-review", label: "Estimate review" },
   { value: "cost-rollup", label: "Cost rollup" },
   { value: "bid-comparison", label: "Bid comparison" },
 ];
 
-const PLACEHOLDER_JOBS: DropdownOption[] = [
-  { value: "job-a", label: "Sample job A" },
-  { value: "job-b", label: "Sample job B" },
-  { value: "job-c", label: "Sample job C" },
+const PLACEHOLDER_PROJECTS: DropdownOption[] = [
+  { value: "project-a", label: "Sample project A" },
+  { value: "project-b", label: "Sample project B" },
+  { value: "project-c", label: "Sample project C" },
 ];
 
 export function NewRunView() {
@@ -27,7 +27,7 @@ export function NewRunView() {
             Run
             <Dropdown label="Workflow" placeholder="Choose a workflow" options={PLACEHOLDER_WORKFLOWS} className="min-w-40 flex-1" />
             on
-            <Dropdown label="Job" placeholder="Choose a job" options={PLACEHOLDER_JOBS} className="min-w-40 flex-1" />
+            <Dropdown label="Project" placeholder="Choose a project" options={PLACEHOLDER_PROJECTS} className="min-w-40 flex-1" />
             <Button variant="primary">Start run</Button>
           </div>
         </Card>

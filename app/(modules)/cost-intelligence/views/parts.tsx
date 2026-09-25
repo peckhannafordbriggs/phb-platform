@@ -1,12 +1,13 @@
 import { Bar } from "../ui/Bar";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
+import { Dropdown, type DropdownOption } from "../ui/Dropdown";
 import { Label } from "../ui/Label";
 import { Table } from "../ui/Table";
 
 export type Run = {
   id: string;
-  job: string;
+  project: string;
   workflow: string;
   status: string;
   started: string;
@@ -66,7 +67,7 @@ export function Checkpoint({ options = 3, columns = false }: { options?: number;
   );
 }
 
-/** Run detail: the selected run's job, workflow, status and start time. */
+/** Run detail: the selected run's project, workflow, status and start time. */
 export function RunDetail({ selectedRun }: { selectedRun: Run | null }) {
   if (!selectedRun) {
     return (
@@ -82,7 +83,7 @@ export function RunDetail({ selectedRun }: { selectedRun: Run | null }) {
         <span className="eyebrow text-[var(--muted)]">{selectedRun.id}</span>
         <span className="text-[0.8125rem]">{selectedRun.status}</span>
       </div>
-      <h2 className="text-lg font-medium text-[var(--foreground)]">{selectedRun.job}</h2>
+      <h2 className="text-lg font-medium text-[var(--foreground)]">{selectedRun.project}</h2>
       <dl className="grid grid-cols-2 gap-4 border-t border-[var(--divider-soft)] pt-4 text-[0.8125rem]">
         <div>
           <dt className="text-[var(--muted)]">Workflow</dt>
@@ -97,24 +98,37 @@ export function RunDetail({ selectedRun }: { selectedRun: Run | null }) {
   );
 }
 
-/** The runs list. Clicking a row selects that run. */
+/** The runs list, filterable by project. Clicking a row selects that run. */
 export function RunHistory({
   runs,
+  projects,
+  project,
+  setProject,
   selectedRun,
   setSelectedRun,
 }: {
   runs: Run[];
+  projects: DropdownOption[];
+  project: string;
+  setProject: (project: string) => void;
   selectedRun: Run | null;
   setSelectedRun: (run: Run) => void;
 }) {
   return (
     <Card>
+      <Dropdown
+        label="Project"
+        options={[{ value: "", label: "All projects" }, ...projects]}
+        value={project}
+        onChange={setProject}
+        className="mb-5 w-64"
+      />
       {runs.length === 0 ? (
         <p className="text-[0.8125rem] text-[var(--muted)]">No runs yet.</p>
       ) : (
         <Table
-          headers={["Job", "Workflow", "Status", "Started"]}
-          rows={runs.map((r) => [r.job, r.workflow, r.status, r.started])}
+          headers={["Project", "Workflow", "Status", "Started"]}
+          rows={runs.map((r) => [r.project, r.workflow, r.status, r.started])}
           pageSize={8}
           onRowClick={(i) => {
             const run = runs[i];
@@ -124,19 +138,6 @@ export function RunHistory({
         />
       )}
     </Card>
-  );
-}
-
-/** A file row: type badge, name, meta. */
-export function FileRow() {
-  return (
-    <div className="flex items-center gap-3 py-2">
-      <div className="h-7 w-7 shrink-0 rounded-md bg-[var(--neutral-100)]" />
-      <div className="flex-1">
-        <Bar w="70%" h={9} />
-        <Bar w="35%" h={7} className="mt-1.5" />
-      </div>
-    </div>
   );
 }
 
