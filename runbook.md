@@ -6531,7 +6531,11 @@ genuine exclusions; `is_active = false` is for those.
 each station in Settings (B8.3). It writes `is_visible` and nothing else -
 `tests/bas-point-visibility.test.ts` reads `is_active` before and after to
 prove it - and every change is an audit row, `bas.point_visibility_changed`,
-whose sentence says *still collected*. Labels are still SQL until B8.4:
+whose sentence says *still collected*. Labels are the *Label* cell on the
+same list (B8.4): click it, type, Enter; a blank saved over an existing label
+clears it, and the button says *Clear label* when that is what it will do.
+Each change is an audit row, `bas.point_label_changed`, carrying the previous
+and new label and the point's oBIX key. If you need SQL instead:
 
 ```sql
 UPDATE bas_points SET label = 'Zone Temp 104-105' WHERE point_id = 42;
@@ -6545,6 +6549,78 @@ A blank label is refused (`bas_points_label_not_blank`): "no label" is spelled
 `discover`, and a person's is `bas_points.label`. Both column comments say so,
 and the Prisma field on `BasPoint` is `niagaraDisplayName` for the same reason.
 `WHY-ITS-BUILT-THIS-WAY.md` § 45.
+
+**Who hid it, and when.** Every hide and show since B8.3 is an audit row with
+an actor. Nothing else writes `is_visible` - not the collector (it never
+reads the column), not discover, not any migration or seed - so if a point
+is hidden and nobody remembers hiding it, this is the whole history:
+
+```sql
+SELECT a.occurred_at, e.email, a.metadata->>'niagaraHistoryName' AS point,
+       a.metadata->>'visible' AS now_visible
+  FROM audit_events a
+  LEFT JOIN employees e ON e.id = a.actor_employee_id
+ WHERE a.action = 'bas.point_visibility_changed'
+ ORDER BY a.occurred_at;
+```
+
+Checked on 2026-09-25 for the office station: 25 rows, all on 18 September,
+all one person, all from the checkbox - ten hidden while B8.3 was being
+tested and nine shown again two hours later, then three more hidden and
+shown within a minute. One point (`SecurityHistory`) was never shown again
+and is the only hidden point today. A hidden point with no row here would
+mean a hand-run `UPDATE`, and that is the thing to look for.
+
+---
+
+## A point has one name in Point Explorer and another in Settings
+
+**Symptom.** Point Explorer's picker and the Collection Health table call a
+point *Zone Temp 104-105*; the Points list under its station in Settings
+shows that in the *Label* column beside `VAV$2d8$20104$2d105_ZoneTemperature`
+and `VAV-8 104-105_ZoneTemperature`. Or the reverse worry: somebody labelled
+a point and Grafana, or an Analyze answer's own result table, still shows the
+Niagara name.
+
+**Cause.** Not a fault. A point has three names, and they have a precedence
+(B8.4):
+
+| Name | Column | Who sets it | Editable |
+|---|---|---|---|
+| Label | `bas_points.label` | a person, on the Points list | yes |
+| Niagara's name | `bas_points.display_name` | the station, refreshed by every `discover` | no |
+| The oBIX key | `bas_points.niagara_history_name` | the station, at registration | **never** - it is the URL the collector fetches |
+
+The browsing screens - Point Explorer, Collection Health's table, gaps and
+vanished-points card - show the first of those that exists. Settings shows all
+three, because the key is what you match against Workbench when something
+breaks and the Niagara name is what the station's own displays call it. The
+precedence is applied in the platform's queries
+(`shownPointName` in `lib/modules/bas/service.ts`), **not in the six
+`bas_v_*` views**, which Grafana, the collector's `healthcheck.py` and the
+Analyze model's SQL read: a label is a preference of the platform's screens,
+the same class of thing as `is_visible`, and the views were left carrying
+Niagara's name on purpose. So Grafana keeps showing Niagara's name, and an
+Analyze answer's result rows carry whatever `point_name` the model selected -
+though the point catalogue the model is given does prefer the label, so it
+knows a labelled point by the name a person would ask about.
+
+**Fix.** If a screen shows the wrong one of the three, the label is what to
+change: the *Label* cell on the Points list, or the SQL in the previous
+entry. If the Niagara name is wrong, rename the history in Workbench and run
+`discover`; the label survives that (`test_point_management.py`, phb-bas). If
+the key is wrong, the point is a different point: register the new history,
+retire the old one with `inactive_reason = 'manual'`, and never edit the key
+in place - the next `sync` would ask the station for a history that does not
+exist and record a failure for a point that is actually collecting under its
+real name.
+
+**Finding a point by any of the names.** The search box at the top of
+Settings matches a point's label, its Niagara name and its oBIX key, and
+surfaces the station it sits on; the Points list under that station opens
+narrowed to the same term, with its own search box that matches the same
+three names. Paste straight out of Workbench, `$2d` and all. Point Explorer's
+picker has no search: hide what you do not want to scroll past.
 
 ---
 

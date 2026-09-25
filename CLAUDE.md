@@ -690,6 +690,37 @@ smaller cap or paging; `runbook.md` → *The per-point table on Collection
 Health is slow* carries the chart's 10,000-item knee as the reference to
 measure against.
 
+**B8.4 complete — editable labels, one precedence, three-name search
+(2026-09-25).** The *Label* cell on the Points list is editable; `PATCH
+/settings/points/{id}` takes `{ label }` or `{ visible }`, **one per
+request**, through a strict schema that refuses any other key - `isActive`
+and `niagaraHistoryName` are 422, not stripped. Audited as
+`bas.point_label_changed` with previous and new label and the oBIX key. A
+point's three names have a precedence, **label → Niagara's `display_name` →
+`niagara_history_name`**, and the browsing screens (Point Explorer picker
+and selected point, Collection Health table, gaps, vanished points) show the
+first that exists through ONE fragment, `shownPointName`; a source-text test
+fails on a bare `point_name` in a SELECT or ORDER BY in `service.ts`.
+Settings shows all three - the key is what you match against Workbench, and
+it is editable nowhere. **The six views were not changed**: `point_name` in
+`bas_v_*` is still Niagara's, for Grafana, `healthcheck.py` and the model's
+SQL; a label is a preference of the platform's screens, the same class as
+`is_visible`. Search - the Settings box and one on the Points list - matches
+all three names, so a name pasted from Workbench (`$2d` and all) finds a
+point the screen calls something else, and the list opens narrowed to the
+tree's term. **The fallback is the normal path**: every real point has
+`label` NULL and both real stations have `display_name` NULL, so
+`tests/bas-point-label.test.ts` asserts every screen with no labels first,
+then with Niagara's name nulled, then the station fallback, and seeds a
+label only after. `discover` still never writes `label`:
+`test_point_management.py` *(phb-bas)* was re-run against this checkout,
+27/27. The "six hidden points" were answered from the audit log: every hide
+was the B8.3 checkbox on 18 September, and one point is hidden today;
+nothing else in either repository writes `is_visible`. Roles, equipment and
+bulk actions are B8.5. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` → *A
+point has one name in Point Explorer and another in Settings*, and *Who hid
+it, and when* under *A point's label or hidden state disappeared*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

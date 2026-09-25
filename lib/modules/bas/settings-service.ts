@@ -19,7 +19,8 @@ import type {
   UpdateBuildingInput,
   UpdateProjectInput,
   UpdateStationInput,
-  UpdatePointInput,
+  UpdatePointLabelInput,
+  UpdatePointVisibilityInput,
 } from "@/lib/validation/bas-settings";
 import {
   COLLECTING_WITHIN_HOURS,
@@ -172,12 +173,25 @@ function stationPredicate(f: BasSettingsFilters): Prisma.Sql {
     // LIKE so a name containing % or _ searches for itself rather than
     // becoming a wildcard.
     const like = `%${q.replace(/([%_\\])/g, "\\$1")}%`;
+    // The EXISTS is B8.4: a station surfaces when one of ITS POINTS matches
+    // by any of the point's three names - the label a person typed, the name
+    // Niagara reports, or the oBIX key pasted straight out of Workbench. The
+    // ugly name keeps its diagnostic value without being on a browsing
+    // screen. The Points list under the station then narrows to the same
+    // term, so the match is visible rather than merely implied.
     clauses.push(Prisma.sql`(
          st.display_name          ILIKE ${like} ESCAPE '\\'
       OR st.niagara_station_name  ILIKE ${like} ESCAPE '\\'
       OR st.base_url              ILIKE ${like} ESCAPE '\\'
       OR s.name                   ILIKE ${like} ESCAPE '\\'
       OR p.name                   ILIKE ${like} ESCAPE '\\'
+      OR EXISTS (
+           SELECT 1 FROM bas_points pt
+            WHERE pt.station_id = st.station_id
+              AND (   pt.label                ILIKE ${like} ESCAPE '\\'
+                   OR pt.display_name         ILIKE ${like} ESCAPE '\\'
+                   OR pt.niagara_history_name ILIKE ${like} ESCAPE '\\')
+         )
     )`);
   }
 
@@ -518,7 +532,8 @@ export async function getBasSettingsTree(
 }
 
 // ---------------------------------------------------------------------------
-// Points (B8.2) - one station's points, read-only.
+// Points (B8.2) - one station's points. Read-only here; the two editable
+// fields (B8.3 visible, B8.4 label) have their own functions below.
 // ---------------------------------------------------------------------------
 
 interface PointListRow {
@@ -592,7 +607,10 @@ function toPoint(row: PointListRow): SettingsPoint {
  * EVERYTHING IS SHOWN. A point that is not collected is not filtered out - it
  * is exactly the row somebody needs to see, and hiding inactive points is how
  * the _cfg0 question went unnoticed for weeks. Nothing filters on is_visible
- * either: that is B8.3, and it carries the hidden-risk rule with it.
+ * either: a hidden point has to be somewhere it can be shown again. And
+ * nothing here searches - B8.4's search narrows the rows in the browser,
+ * after this has returned every one of them, so the counting guard below
+ * stays a statement about the database and not about a filter.
  *
  * Every join is LEFT. A point with no equipment, no role or no checkpoint row
  * is a point, and a query that lost it would be lying about the station. The
@@ -697,32 +715,9 @@ export async function getStationPoints(
 export async function setBasPointVisibility(
   viewer: Viewer,
   pointIdText: string,
-  input: UpdatePointInput,
+  input: UpdatePointVisibilityInput,
 ): Promise<{ changed: boolean }> {
-  if (!/^\d{1,18}$/.test(pointIdText)) {
-    throw new BasError("point_not_found", "That point does not exist.");
-  }
-  const pointId = BigInt(pointIdText);
-  const { entitled } = await basSiteScope(viewer);
-
-  const rows = await prisma.$queryRaw<
-    Array<{
-      station_id: bigint;
-      niagara_history_name: string;
-      label: string | null;
-      is_visible: boolean;
-      is_active: boolean;
-    }>
-  >`
-    SELECT p.station_id, p.niagara_history_name, p.label, p.is_visible, p.is_active
-      FROM bas_points p
-      JOIN bas_stations st ON st.station_id = p.station_id
-     WHERE p.point_id = ${pointId}
-       AND (${entitlementSql(entitled, Prisma.sql`st.site_id`)} OR st.site_id IS NULL)`;
-  const point = rows[0];
-  if (point === undefined) {
-    throw new BasError("point_not_found", "That point does not exist.");
-  }
+  const { pointId, point } = await loadScopedPoint(viewer, pointIdText);
 
   if (point.is_visible === input.visible) return { changed: false };
 
@@ -749,6 +744,102 @@ export async function setBasPointVisibility(
   });
 
   return { changed: true };
+}
+
+/**
+ * Set, change or clear what a person calls one point (B8.4).
+ *
+ * ONE COLUMN MOVES: `bas_points.label`. Not `niagara_history_name`, which is
+ * the oBIX key and goes into the collector's URL verbatim - editing it stops
+ * the point collecting, so there is no code path that writes it. Not
+ * `display_name`, which is Niagara's and is refreshed by every discover. Not
+ * `is_active` or `is_visible`. The update names `label` alone, and the test
+ * reads the other four columns before and after.
+ *
+ * `null` clears the label, and the screens fall back to Niagara's name. A
+ * blank string never reaches here - the schema turned it into null - and the
+ * CHECK `bas_points_label_not_blank` refuses it if one ever does, so "no
+ * label" has exactly one spelling.
+ *
+ * Scoped like the visibility change. `changed: false` with no audit row when
+ * the label is already what was sent. The audit row carries the previous and
+ * new label and the point's two Niagara names, so it identifies the point
+ * after any later rename.
+ */
+export async function setBasPointLabel(
+  viewer: Viewer,
+  pointIdText: string,
+  input: UpdatePointLabelInput,
+): Promise<{ changed: boolean; label: string | null }> {
+  const { pointId, point } = await loadScopedPoint(viewer, pointIdText);
+
+  if (point.label === input.label) return { changed: false, label: point.label };
+
+  await prisma.$transaction(async (tx) => {
+    await tx.basPoint.update({
+      where: { pointId },
+      data: { label: input.label },
+    });
+
+    await writeAuditEvent(tx, {
+      action: "bas.point_label_changed",
+      actorEmployeeId: viewer.id,
+      moduleKey: BAS_MODULE_KEY,
+      metadata: {
+        pointId: pointIdText,
+        stationId: point.station_id.toString(),
+        niagaraHistoryName: point.niagara_history_name,
+        niagaraDisplayName: point.display_name,
+        previousLabel: point.label,
+        label: input.label,
+      },
+    });
+  });
+
+  return { changed: true, label: input.label };
+}
+
+interface ScopedPointRow {
+  station_id: bigint;
+  niagara_history_name: string;
+  /** bas_points.display_name: Niagara's name. */
+  display_name: string | null;
+  label: string | null;
+  is_visible: boolean;
+  is_active: boolean;
+}
+
+/**
+ * One point, if it is the viewer's to change. Shared by the two point
+ * mutations so they cannot scope differently.
+ *
+ * A malformed id is not a point: BigInt() would throw on it and turn a bad
+ * URL into a 500. The station must be in the viewer's entitlement or attached
+ * to no building, and one that is not reads as not found - the same
+ * conflation as every other 404 in this module.
+ */
+async function loadScopedPoint(
+  viewer: Viewer,
+  pointIdText: string,
+): Promise<{ pointId: bigint; point: ScopedPointRow }> {
+  if (!/^\d{1,18}$/.test(pointIdText)) {
+    throw new BasError("point_not_found", "That point does not exist.");
+  }
+  const pointId = BigInt(pointIdText);
+  const { entitled } = await basSiteScope(viewer);
+
+  const rows = await prisma.$queryRaw<ScopedPointRow[]>`
+    SELECT p.station_id, p.niagara_history_name, p.display_name, p.label,
+           p.is_visible, p.is_active
+      FROM bas_points p
+      JOIN bas_stations st ON st.station_id = p.station_id
+     WHERE p.point_id = ${pointId}
+       AND (${entitlementSql(entitled, Prisma.sql`st.site_id`)} OR st.site_id IS NULL)`;
+  const point = rows[0];
+  if (point === undefined) {
+    throw new BasError("point_not_found", "That point does not exist.");
+  }
+  return { pointId, point };
 }
 
 // ---------------------------------------------------------------------------

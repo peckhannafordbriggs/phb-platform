@@ -7,8 +7,9 @@ says *what exists*.
 Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
 B7's plan, as written before it was built, is `docs/B7_settings_and_hierarchy_plan.md`.
-B8's is `docs/B8_point_management_plan.md`; B8.1 (the schema) and B8.2 (the
-read-only Points list) are built and the rest is not started.
+B8's is `docs/B8_point_management_plan.md`; B8.1 (the schema), B8.2 (the
+Points list), B8.3 (show/hide) and B8.4 (labels) are built; B8.5 onward is
+not started.
 
 **Last updated:** 17 September 2026 — a third pass. Every figure in it was read
 from the repositories, the git logs, the live database or the live stations on
@@ -417,6 +418,30 @@ proves it with 26 points and fails on any slice of the list. Virtualisation
 is the answer at a station with hundreds of points, not a smaller cap;
 `runbook.md` → *The per-point table on Collection Health is slow* has the
 reference figure to measure against.
+**Labels (B8.4, 25 September).** The *Label* cell on the Points list is
+editable: click, type, Enter; blank clears. `PATCH /settings/points/{id}`
+with `{ label }` - the same route as `{ visible }`, now a strict schema that
+takes exactly one of the two and refuses any other key, so a body carrying
+`isActive` or `niagaraHistoryName` is a 422 rather than silently stripped.
+Trimmed, 120 characters, blank stored as NULL. Audited as
+`bas.point_label_changed` with the previous and new label and the oBIX key,
+in three sentence shapes (labelled, relabelled, cleared). A point's three
+names have a precedence - **label, then Niagara's `display_name`, then the
+`niagara_history_name` key** - and the browsing screens show the first that
+exists: Point Explorer's picker and selected point, Collection Health's
+table, gap list and vanished-points card. Settings shows all three; the key
+is what you match against Workbench. The precedence is one SQL fragment,
+`shownPointName`, over `COALESCE(p.label, <view>.point_name)`, and a test
+fails the build on a bare `point_name` in any SELECT list or ORDER BY. **The
+views were not changed**: `point_name` in `bas_v_*` is still Niagara's, for
+Grafana, `healthcheck.py` and the model's SQL, though the Analyze catalogue
+already preferred the label. Search - the Settings box and a new one on the
+Points list - matches all three names, so a name pasted out of Workbench
+finds a point the screen calls something else. Every real point has label
+NULL, so the fallback is the normal path and `tests/bas-point-label.test.ts`
+asserts it first, on every screen, with the fixture's labels all NULL; the
+same file asserts the station-name fallback (`bas_stations.display_name` is
+NULL on both real stations too). The oBIX key is editable nowhere.
 
 **A point the station stopped reporting is surfaced (18 September).** Found
 while building B8.3: every figure on Collection Health was
@@ -481,8 +506,8 @@ doing this by hand. B8.1, the schema, is built: `bas_points.label` and
 `bas_points.is_visible`, both defaulting to how every row behaves today, with
 `test_point_management.py` *(phb-bas)* proving `discover` writes neither.
 B8.2 reads them: the Points level of the Settings tree shows every point on a
-station, read-only, uncollected ones included, with a counting guard of its
-own. Editing is B8.3 onward.
+station, uncollected ones included, with a counting guard of its own. B8.3
+made *Shown* editable and B8.4 the label; roles and equipment are B8.5.
 
 ---
 
@@ -830,9 +855,10 @@ started, **not a tab**. Blocked on a company Anthropic API key. It would live in
 
 **B8 — point management.** Designed 17 September; B8.1, the schema, and B8.2,
 the read-only Points list, built the same day; B8.3, show/hide with the risk
-rule, on 18 September; B8.4 onward not started:
+rule, on 18 September; B8.4, labels with precedence and three-name search, on
+25 September; B8.5 onward not started:
 `docs/B8_point_management_plan.md`. There is no way in the UI to set a role,
-create equipment, attach a point, rename one or mark one inactive; the office
+create equipment, attach a point or mark one inactive; the office
 was classified in SQL and the six state points wait for someone to decode them
 the same way. Thirty minutes for 26 points; a project with ten JACEs would take
 a week and nobody would do it.
