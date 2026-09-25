@@ -2,8 +2,8 @@ import { notFound } from "next/navigation";
 import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "../../cip-shell";
-import { getPlaceholderRun } from "@/lib/modules/cost-intelligence/placeholder";
-import type { Run } from "@/lib/modules/cost-intelligence/types";
+import { getPlaceholderActivity, getPlaceholderRun } from "@/lib/modules/cost-intelligence/placeholder";
+import type { Run, RunActivity } from "@/lib/modules/cost-intelligence/types";
 import { RunMonitor } from "../../views/parts";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +11,11 @@ export const dynamic = "force-dynamic";
 function getRunById(runId: string): Run | undefined {
   // TODO(backend): Fetch the run by its ID from the backend.
   return getPlaceholderRun(runId);
+}
+
+function getRunActivity(runId: string): RunActivity | undefined {
+  // TODO(backend): Load the run's ledger, steps, pinned skills and cost.
+  return getPlaceholderActivity(runId);
 }
 
 export default async function RunPage({ params }: { params: Promise<{ runId: string }> }) {
@@ -24,7 +29,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
 
   return (
     <CipShell canAdminister={canAdminister}>
-      <RunMonitor run={run} />
+      <RunMonitor run={run} activity={getRunActivity(runId)} />
     </CipShell>
   );
 }

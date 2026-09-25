@@ -4,38 +4,46 @@ import { useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { PLACEHOLDER_PROJECTS, PLACEHOLDER_RUNS, PLACEHOLDER_WORKFLOWS } from "@/lib/modules/cost-intelligence/placeholder";
-import type { Run } from "@/lib/modules/cost-intelligence/types";
+import type { Run, RunActivity, RunStep } from "@/lib/modules/cost-intelligence/types";
 import { Bar } from "../ui/Bar";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Dropdown, type DropdownOption } from "../ui/Dropdown";
+import { FilterMenu } from "../ui/FilterMenu";
 import { Label } from "../ui/Label";
 import { Table } from "../ui/Table";
 
 /** A diamond node, as on the skill pipeline and the step timeline. */
-export function Node({ size = 10 }: { size?: number }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="diamond"
-      style={{ width: size, height: size, color: "var(--neutral-300)" }}
-    />
-  );
+export function Node({ size = 10, color = "var(--neutral-300)" }: { size?: number; color?: string }) {
+  return <span aria-hidden="true" className="diamond" style={{ width: size, height: size, color }} />;
 }
 
+const STEP_COLOR: Record<RunStep["state"], string> = {
+  done: "var(--neutral-600)",
+  current: "var(--module-accent)",
+  pending: "var(--neutral-300)",
+};
+
 /** The seven-step run timeline: node, step name, time. */
-export function Timeline() {
+export function Timeline({ steps }: { steps: RunStep[] }) {
   return (
-    <div className="flex flex-col">
-      {[34, 42, 30, 48, 52, 44, 36].map((w, i) => (
-        <div key={i} className="flex items-center gap-3 py-1.5">
-          <Node />
-          <Bar w={`${w}%`} h={9} />
-          <div className="flex-1" />
-          <Bar w={34} h={8} />
-        </div>
+    <ol className="flex flex-col">
+      {steps.map((s) => (
+        <li
+          key={s.name}
+          aria-current={s.state === "current" ? "step" : undefined}
+          className={
+            "flex items-center gap-3 py-1.5 text-[0.8125rem] " +
+            (s.state === "pending" ? "text-[var(--muted)]" : "text-[var(--foreground)]") +
+            (s.state === "current" ? " font-medium" : "")
+          }
+        >
+          <Node color={STEP_COLOR[s.state]} />
+          <span className="flex-1">{s.name}</span>
+          {s.time && <span className="text-[var(--muted)]">{s.time}</span>}
+        </li>
       ))}
-    </div>
+    </ol>
   );
 }
 
@@ -120,18 +128,24 @@ export function RunHistory({
 }) {
   return (
     <Card>
-      <Dropdown
-        label="Project"
-        options={[{ value: "", label: "All projects" }, ...projects]}
-        value={project}
-        onChange={setProject}
-        className="mb-5 w-64"
-      />
       {runs.length === 0 ? (
         <p className="text-[0.8125rem] text-[var(--muted)]">No runs yet.</p>
       ) : (
         <Table
-          headers={["Project", "Workflow", "Status", "Started"]}
+          headers={[
+            <span key="project" className="inline-flex items-center gap-1">
+              Project
+              <FilterMenu
+                label="project"
+                options={[{ value: "", label: "All projects" }, ...projects]}
+                value={project}
+                onChange={setProject}
+              />
+            </span>,
+            "Workflow",
+            "Status",
+            "Started",
+          ]}
           rows={runs.map((r) => [r.project, r.workflow, r.status, r.started])}
           pageSize={8}
           onRowClick={(i) => {
@@ -192,7 +206,7 @@ export function RunLauncher() {
   );
 }
 
-export function RunMonitor({ run }: { run: Run }) {
+export function RunMonitor({ run, activity }: { run: Run; activity?: RunActivity }) {
   return (
     <div className="flex flex-col gap-5">
       <Card>
@@ -216,47 +230,68 @@ export function RunMonitor({ run }: { run: Run }) {
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <Card>
           <Label>Run ledger</Label>
-          <div className="flex flex-col gap-4">
-            {Array.from({ length: 5 }, (_, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <Bar w={52} h={8} className="mt-1" />
-                <Node />
-                <div className="flex-1">
-                  <Bar w="45%" h={10} />
-                  <Bar w="70%" h={8} className="mt-1.5" />
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-5">
-            <Checkpoint columns />
-          </div>
+          {activity?.ledger.length ? (
+            <ol className="flex flex-col gap-4">
+              {activity.ledger.map((e, i) => (
+                <li key={i} className="flex items-start gap-3 text-[0.8125rem]">
+                  <span className="w-12 shrink-0 text-[var(--muted)]">{e.time}</span>
+                  <span className="mt-1">
+                    <Node color="var(--neutral-600)" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-[var(--foreground)]">{e.title}</p>
+                    {e.detail && <p className="mt-0.5 text-[var(--muted)]">{e.detail}</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="text-[0.8125rem] text-[var(--muted)]">Nothing recorded yet.</p>
+          )}
+          {/* Only a run paused for a person has a question to show. */}
+          {run.status === "Waiting on you" && (
+            <div className="mt-5">
+              <Checkpoint columns />
+            </div>
+          )}
         </Card>
         <div className="flex flex-col gap-5">
           <Card>
             <Label>Status</Label>
-            <Timeline />
+            {activity ? (
+              <Timeline steps={activity.steps} />
+            ) : (
+              <p className="text-[0.8125rem] text-[var(--muted)]">No status yet.</p>
+            )}
           </Card>
           <Card>
             <Label>Pinned for this run</Label>
-            <div className="flex flex-col gap-3">
-              {Array.from({ length: 2 }, (_, i) => (
-                <div key={i}>
-                  <Bar w="80%" h={9} />
-                  <Bar w="50%" h={7} className="mt-1.5" />
-                </div>
-              ))}
-            </div>
-            <div className="mt-5 grid grid-cols-2 gap-4 border-t border-[var(--divider-soft)] pt-4">
+            {activity?.pinned.length ? (
+              <ul className="flex flex-col gap-3 text-[0.8125rem]">
+                {activity.pinned.map((p) => (
+                  <li key={p.name}>
+                    <p className="font-medium text-[var(--foreground)]">{p.name}</p>
+                    <p className="mt-0.5 text-[var(--muted)]">{p.version}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-[0.8125rem] text-[var(--muted)]">No skills pinned.</p>
+            )}
+            <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-[var(--divider-soft)] pt-4 text-[0.8125rem]">
               <div>
-                <Bar w={50} h={7} />
-                <Bar w={64} h={20} className="mt-2" />
+                <dt className="text-[var(--muted)]">Tokens</dt>
+                <dd className="mt-1 text-lg font-medium text-[var(--foreground)]">
+                  {activity ? activity.tokens.toLocaleString("en-US") : "—"}
+                </dd>
               </div>
               <div>
-                <Bar w={80} h={7} />
-                <Bar w={64} h={20} className="mt-2" />
+                <dt className="text-[var(--muted)]">Estimated cost</dt>
+                <dd className="mt-1 text-lg font-medium text-[var(--foreground)]">
+                  {activity ? `$${activity.cost.toFixed(2)}` : "—"}
+                </dd>
               </div>
-            </div>
+            </dl>
           </Card>
         </div>
       </div>

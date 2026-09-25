@@ -13,7 +13,8 @@ export function Table({
   onRowClick,
   selected,
 }: {
-  headers: string[];
+  /** Column headings. Usually text; can hold a control such as a `FilterMenu`. */
+  headers: React.ReactNode[];
   rows: React.ReactNode[][];
   pageSize?: number;
   onRowClick?: (index: number) => void;
@@ -28,8 +29,8 @@ export function Table({
   return (
     <div>
       <div className="grid gap-4 border-b border-[var(--border)] pb-3" style={grid}>
-        {headers.map((h) => (
-          <span key={h} className="eyebrow text-[var(--muted)]">
+        {headers.map((h, i) => (
+          <span key={i} className="eyebrow text-[var(--muted)]">
             {h}
           </span>
         ))}

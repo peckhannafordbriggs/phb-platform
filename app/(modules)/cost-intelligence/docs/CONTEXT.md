@@ -4,9 +4,9 @@ Use this to turn what someone calls a part of the screen ("the launcher", "the
 ledger", "the filter") into the component and file that renders it.
 
 The screens are **part skeleton, part real UI**. The chrome, the runs list and detail,
-the launcher, the dropdowns and the buttons are real components over placeholder data;
-the ledger, the timeline, the checkpoint, Pinned and most of Settings are still grey
-placeholder bars. No backend yet: every data source is in
+the launcher, the Run page's ledger, status and pinned cards, the dropdowns and the
+buttons are real components over placeholder data; the checkpoint and most of Settings
+are still grey placeholder bars. No backend yet: every data source is in
 `lib/modules/cost-intelligence/placeholder.ts`, marked `TODO(backend)`. The plan for
 making them real is `PLAN.md` beside this file.
 
@@ -56,12 +56,12 @@ app/(modules)/cost-intelligence/
     settings-views.tsx   SkillCatalogView, SkillView, SettingsTableView
     parts.tsx            RunHistory, RunDetail, RunLauncher, RunMonitor, Timeline, Checkpoint, Node
   ui/
-    Bar.tsx Button.tsx Card.tsx Dropdown.tsx Label.tsx Table.tsx searchbar.tsx
+    Bar.tsx Button.tsx Card.tsx Dropdown.tsx FilterMenu.tsx Label.tsx Table.tsx searchbar.tsx
 
 lib/modules/cost-intelligence/
   constants.ts           module key and name
-  types.ts               Run, Option
-  placeholder.ts         PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun
+  types.ts               Run, RunActivity, LedgerEntry, RunStep, PinnedSkill, Option
+  placeholder.ts         PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun, getPlaceholderActivity
 ```
 
 **Pages are guards only, and stay server components.** Each `page.tsx` checks access
@@ -78,21 +78,23 @@ works on the server. Never put `"use client"` on a page: put state and hooks in 
 | People call it | Component | Notes |
 |---|---|---|
 | the launcher, the sentence, "Run X on Y" | `RunLauncher`, centred above the cards (max 48rem) | Only when the URL has `?new=1`. Workflow and project dropdowns; Start run is disabled until both are chosen, then goes to the run's page |
-| the project filter | `Dropdown` at the top of `RunHistory` | "All projects", then one entry per project that has runs |
+| the project filter | `FilterMenu`, the filter icon beside the **Project** column header in `RunHistory` | "All projects", then one entry per project that has runs. The icon darkens while a filter is on |
 | the runs table, the runs list | `RunHistory`, a `Table` inside the left card | Columns: Project, Workflow, Status, Started. 8 per page. Clicking a row selects it |
 | the run panel, the right side | `RunDetail` | Id, status, project, workflow, started, and **Open run**. Shows the latest run until you pick one, or when the filter hides your pick; empty only when there are no runs |
 
 ### Run · `/cost-intelligence/runs/[runId]` · `RunMonitor`
 
-The detailed view of one run. The page reads `runId` from `params`, looks the run up
-(`getPlaceholderRun` for now) and returns a 404 for an id that does not exist.
+The detailed view of one run. The page reads `runId` from `params`, looks up the run
+and its `RunActivity` (`getPlaceholderRun` / `getPlaceholderActivity` for now), and
+returns a 404 for an id that does not exist. A run with no activity renders empty
+states rather than failing.
 
 | People call it | Where |
 |---|---|
 | the run header | full-width top `Card` in `RunMonitor`: id, status, project, workflow, started |
-| the ledger, the run log | left `Card` labelled **Run ledger**: timestamped entries, then a `Checkpoint` with options in three columns |
-| the status rail | right `Card` labelled **Status**, containing `Timeline` |
-| pinned, versions, tokens, cost | right `Card` labelled **Pinned for this run**: skill versions, then Tokens and Estimated cost |
+| the ledger, the run log | left `Card` labelled **Run ledger**: one line per `LedgerEntry` (time, title, detail). A `Checkpoint` follows only when the run's status is "Waiting on you" |
+| the status rail | right `Card` labelled **Status**: `Timeline` over the seven `RunStep`s. Done steps dark, the current one in the module colour, pending ones muted |
+| pinned, versions, tokens, cost | right `Card` labelled **Pinned for this run**: each `PinnedSkill` (name, version), then Tokens and Estimated cost |
 
 ### Settings · `/cost-intelligence/settings` · `SkillCatalogView` (1d)
 
@@ -143,16 +145,17 @@ page checks this itself with `requireModuleAdmin`.
 | `Button` | `ui/Button.tsx` | A button with no behaviour of its own. `variant`: `primary` (PHB red, `--phb-red-btn`) or `secondary` (white). Pass `onClick` for an action or `href` for navigation; also `disabled`, `fullWidth`, `type`. Icons go in `children` |
 | `Card` | `ui/Card.tsx` | The platform's `.card` surface with padding |
 | `Dropdown` | `ui/Dropdown.tsx` | A custom select with a rounded list. `options`, `placeholder`, `label` (accessible name); pass `value` + `onChange` to control it. Closes on blur |
+| `FilterMenu` | `ui/FilterMenu.tsx` | A filter icon that opens a small option list; for a table header. `label`, `options`, `value`, `onChange`. Closes on blur |
 | `Label` | `ui/Label.tsx` | Small uppercase section label (`.eyebrow`) |
-| `Table` | `ui/Table.tsx` | Equal-width columns. `headers`, `rows` (cells are any React node), optional `pageSize` for Previous / Next paging, optional `onRowClick` + `selected` (indexes into the whole `rows` array, not the page) |
+| `Table` | `ui/Table.tsx` | Equal-width columns. `headers` (text or any node, e.g. a heading with a `FilterMenu`), `rows` (cells are any React node), optional `pageSize` for Previous / Next paging, optional `onRowClick` + `selected` (indexes into the whole `rows` array, not the page) |
 | `SearchBar` | `ui/searchbar.tsx` | Search input with clear button. `searchCostIntelligence` is a stub marked `TODO(backend)` |
 | `Node` | `views/parts.tsx` | The hollow diamond on timelines and pipelines |
-| `Timeline` | `views/parts.tsx` | The seven-step run timeline (placeholder bars) |
+| `Timeline` | `views/parts.tsx` | The seven-step run timeline, from `steps` |
 | `Checkpoint` | `views/parts.tsx` | A paused-run question with options and Answer and resume (placeholder bars, button not wired) |
 | `RunHistory` | `views/parts.tsx` | The project filter and the runs table |
 | `RunDetail` | `views/parts.tsx` | The quick-look panel for one `Run`, with Open run |
 | `RunLauncher` | `views/parts.tsx` | "Run [workflow] on [project]" and Start run |
-| `RunMonitor` | `views/parts.tsx` | The whole Run page for one `Run`: header, ledger, Status, Pinned |
+| `RunMonitor` | `views/parts.tsx` | The whole Run page for one `Run` and its optional `RunActivity`: header, ledger, Status, Pinned |
 
 Icons come from **`lucide-react`**; do not hand-draw SVGs.
 
