@@ -5845,6 +5845,48 @@ what *The dev platform database gets staler every day* describes.
 
 ---
 
+## The per-point table on Collection Health is slow, or someone asks where the rest of the points went
+
+**Symptom.** *Per-point collection status* shows about seven rows in a box
+that scrolls, with the total in its heading — *Per-point collection status
+(26)*. Someone reads the seven and asks where the other nineteen are. Or, at
+a station with hundreds of points, the screen takes noticeably longer to
+draw and scrolling the box stutters.
+
+**Cause, first case.** Not a fault. Since 2026-09-25 the table is capped and
+scrolled like *Recent collector runs* and *Recorded data gaps* — one
+pattern, the same `max-h-72 overflow-auto` box with a sticky header — so a
+station with many points does not run the page long. The count in the
+heading is the number of rows in the box, stated there because with a
+scroll container it is no longer visible at the bottom. **Every row is in
+the box**; scroll it. And nothing on the screen reads the viewport: the
+tiles, the hidden-risk sentence, the reporting ratio and the completeness
+card are the service's numbers over every active point, hidden included,
+exactly as before. `tests/bas-health-point-table.test.ts` proves it with 26
+points — the at-risk figure reaches all 26 while the box would show seven —
+and fails if anything slices the list.
+
+**Cause, second case.** Every row is really in the DOM. A plain scrolled
+list is fine at a few dozen points and probably at a few hundred; it has
+not been measured past the office station's 26 and the lab's 13. At 600
+points it is 600 rows of nine cells each, with a badge or two per row, and
+the honest expectation is that it will be slow.
+
+**Fix, when that day comes.** Virtualise the table — render only the rows
+in and around the viewport — rather than lowering the cap or paging the
+service. Paging would make the count in the heading a claim about a page,
+and the whole rule above is that the figures never follow the viewport.
+Measure first, the way the trend chart was: the chart's knee was **about
+10,000 rendered items** in headless Chrome (*The trend chart says "Averaged
+to one point per …"* has the procedure and the table of timings). A table
+row is heavier than an SVG point, so the knee here will be lower, and the
+number to find is the station size at which drawing or scrolling this box
+crosses about half a second. Whatever virtualises must keep the count in the
+heading, the sticky header, and the rule that the rows are the full list,
+because those are what the test asserts.
+
+---
+
 ## Repointing the collector also repoints the nightly backup — and breaks it
 
 **Superseded on 17 September 2026.** The fix below was never applied, and a
