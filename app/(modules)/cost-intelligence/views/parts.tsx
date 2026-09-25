@@ -1,4 +1,6 @@
-import { Bar, Card, Label, Rows } from "../skeleton";
+import { Bar } from "../ui/Bar";
+import { Card } from "../ui/Card";
+import { Label } from "../ui/Label";
 
 /** A diamond node, as on the skill pipeline and the step timeline. */
 export function Node({ size = 10 }: { size?: number }) {
@@ -14,18 +16,16 @@ export function Node({ size = 10 }: { size?: number }) {
 /** The seven-step run timeline: node, step name, time. */
 export function Timeline() {
   return (
-    <Rows
-      n={7}
-      gap="gap-0"
-      row={(i) => (
-        <div className="flex items-center gap-3 py-1.5">
+    <div className="flex flex-col">
+      {[34, 42, 30, 48, 52, 44, 36].map((w, i) => (
+        <div key={i} className="flex items-center gap-3 py-1.5">
           <Node />
-          <Bar w={`${[34, 42, 30, 48, 52, 44, 36][i]}%`} h={9} />
+          <Bar w={`${w}%`} h={9} />
           <div className="flex-1" />
           <Bar w={34} h={8} />
         </div>
-      )}
-    />
+      ))}
+    </div>
   );
 }
 

@@ -1,4 +1,7 @@
-import { Bar, Button, Card, Label, Pill, Rows } from "../skeleton";
+import { Bar } from "../ui/Bar";
+import { Button } from "../ui/Button";
+import { Card } from "../ui/Card";
+import { Label } from "../ui/Label";
 import { Checkpoint, Node, Timeline } from "./parts";
 
 /** 1c: launching a run is a sentence; the run streams as a ledger. */
@@ -15,10 +18,10 @@ export function NewRunView() {
           <Button w={128} filled />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Pill w={140} />
-          <Pill w={160} />
-          <Pill w={150} />
-          <Pill w={170} />
+          <Bar w={140} h={22} />
+          <Bar w={160} h={22} />
+          <Bar w={150} h={22} />
+          <Bar w={170} h={22} />
         </div>
         <Bar w={260} h={8} className="mt-4" />
       </Card>
@@ -26,11 +29,9 @@ export function NewRunView() {
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <Card>
           <Label>Run ledger</Label>
-          <Rows
-            n={5}
-            gap="gap-4"
-            row={() => (
-              <div className="flex items-start gap-3">
+          <div className="flex flex-col gap-4">
+            {Array.from({ length: 5 }, (_, i) => (
+              <div key={i} className="flex items-start gap-3">
                 <Bar w={52} h={8} className="mt-1" />
                 <Node />
                 <div className="flex-1">
@@ -38,8 +39,8 @@ export function NewRunView() {
                   <Bar w="70%" h={8} className="mt-1.5" />
                 </div>
               </div>
-            )}
-          />
+            ))}
+          </div>
           <div className="mt-5">
             <Checkpoint columns />
           </div>
@@ -52,15 +53,14 @@ export function NewRunView() {
           </Card>
           <Card>
             <Label>Pinned for this run</Label>
-            <Rows
-              n={2}
-              row={() => (
-                <div>
+            <div className="flex flex-col gap-3">
+              {Array.from({ length: 2 }, (_, i) => (
+                <div key={i}>
                   <Bar w="80%" h={9} />
                   <Bar w="50%" h={7} className="mt-1.5" />
                 </div>
-              )}
-            />
+              ))}
+            </div>
             <div className="mt-5 grid grid-cols-2 gap-4 border-t border-[var(--divider-soft)] pt-4">
               <div>
                 <Bar w={50} h={7} />

@@ -1,4 +1,8 @@
-import { Bar, Button, Card, Label, Pill, Rows, Table } from "../skeleton";
+import { Bar } from "../ui/Bar";
+import { Button } from "../ui/Button";
+import { Card } from "../ui/Card";
+import { Label } from "../ui/Label";
+import { Table } from "../ui/Table";
 import { Node } from "./parts";
 
 /** Title row every settings view opens with: heading, repo and branch, last Git check. */
@@ -20,7 +24,7 @@ function SkillDetail() {
     <Card className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <Bar w={220} h={18} />
-        <Pill w={90} />
+        <Bar w={90} h={22} />
       </div>
 
       <div className="grid grid-cols-4">
@@ -41,26 +45,24 @@ function SkillDetail() {
           <Bar w={200} h={10} />
           <Button w={100} />
         </div>
-        <Rows
-          n={3}
-          gap="gap-2"
-          row={() => (
-            <div className="flex items-center gap-3 rounded-[var(--radius-control)] border border-[var(--border)] p-3">
+        <div className="flex flex-col gap-2">
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className="flex items-center gap-3 rounded-[var(--radius-control)] border border-[var(--border)] p-3">
               <Bar w={56} h={8} />
               <Bar w="55%" h={9} />
               <div className="flex-1" />
               <Bar w={48} h={8} />
             </div>
-          )}
-        />
+          ))}
+        </div>
       </div>
 
       <div className="rounded-[var(--radius-row)] bg-[var(--neutral-100)] p-4">
-        <Rows
-          n={9}
-          gap="gap-2"
-          row={(i) => <Bar w={`${[70, 55, 82, 40, 76, 62, 48, 88, 35][i]}%`} h={7} />}
-        />
+        <div className="flex flex-col gap-2">
+          {[70, 55, 82, 40, 76, 62, 48, 88, 35].map((w, i) => (
+            <Bar key={i} w={`${w}%`} h={7} />
+          ))}
+        </div>
       </div>
     </Card>
   );
@@ -73,16 +75,14 @@ function PublishRail() {
       <Card>
         <Label>Test against a fixture</Label>
         <Bar w="70%" h={20} />
-        <Rows
-          n={4}
-          gap="gap-2.5"
-          row={() => (
-            <div className="mt-3 flex items-center gap-2.5">
+        <div className="flex flex-col gap-2.5">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="mt-3 flex items-center gap-2.5">
               <span className="h-3.5 w-3.5 shrink-0 rounded-sm border border-[var(--neutral-300)]" />
               <Bar w="75%" h={8} />
             </div>
-          )}
-        />
+          ))}
+        </div>
         <div className="mt-5"><Button w="100%" /></div>
       </Card>
       <Card>
@@ -106,11 +106,10 @@ export function SkillCatalogView() {
             <Bar w={50} h={8} />
             <Bar w={110} h={8} />
           </div>
-          <Rows
-            n={5}
-            gap="gap-1.5"
-            row={(i) => (
+          <div className="flex flex-col gap-1.5">
+            {Array.from({ length: 5 }, (_, i) => (
               <div
+                key={i}
                 className={
                   "rounded-[var(--radius-control)] p-3 " +
                   (i === 1 ? "border border-[var(--neutral-300)] bg-[var(--neutral-50)]" : "")
@@ -122,8 +121,8 @@ export function SkillCatalogView() {
                 </div>
                 <Bar w="75%" h={7} className="mt-2" />
               </div>
-            )}
-          />
+            ))}
+          </div>
         </Card>
         <SkillDetail />
         <PublishRail />

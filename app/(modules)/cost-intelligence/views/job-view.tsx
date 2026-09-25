@@ -1,4 +1,7 @@
-import { Bar, Button, Card, Label, Rows } from "../skeleton";
+import { Bar } from "../ui/Bar";
+import { Button } from "../ui/Button";
+import { Card } from "../ui/Card";
+import { Label } from "../ui/Label";
 import { Checkpoint, FileRow, Node } from "./parts";
 
 /** 1b: the job is the page. Skills on a track, memory and files beside what is waiting on you. */
@@ -50,16 +53,14 @@ export function JobView() {
           <Bar w="95%" h={8} className="mt-3" />
           <Bar w="80%" h={8} className="mt-1.5" />
           <Bar w="100%" h={6} className="mt-5" />
-          <Rows
-            n={3}
-            gap="gap-2.5"
-            row={() => (
-              <div className="mt-4 flex justify-between">
+          <div className="flex flex-col gap-2.5">
+            {Array.from({ length: 3 }, (_, i) => (
+              <div key={i} className="mt-4 flex justify-between">
                 <Bar w="45%" h={8} />
                 <Bar w={40} h={8} />
               </div>
-            )}
-          />
+            ))}
+          </div>
         </Card>
 
         <div className="flex flex-col gap-5">
@@ -76,7 +77,11 @@ export function JobView() {
           </Card>
           <Card>
             <Label>Files</Label>
-            <Rows n={5} gap="gap-0" row={() => <FileRow />} />
+            <div className="flex flex-col">
+              {Array.from({ length: 5 }, (_, i) => (
+                <FileRow key={i} />
+              ))}
+            </div>
           </Card>
         </div>
 
