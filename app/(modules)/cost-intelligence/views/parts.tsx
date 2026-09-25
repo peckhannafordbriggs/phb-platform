@@ -1,6 +1,15 @@
 import { Bar } from "../ui/Bar";
 import { Card } from "../ui/Card";
 import { Label } from "../ui/Label";
+import { Table } from "../ui/Table";
+
+export type Run = {
+  id: string;
+  job: string;
+  workflow: string;
+  status: string;
+  started: string;
+};
 
 /** A diamond node, as on the skill pipeline and the step timeline. */
 export function Node({ size = 10 }: { size?: number }) {
@@ -55,7 +64,7 @@ export function Checkpoint({ options = 3, columns = false }: { options?: number;
 }
 
 /** Run detail: meta, title, pinned skills, timeline, checkpoint, footer. */
-export function RunDetail() {
+export function RunDetail({selectedRun} : {selectedRun: Run | null}) {
   return (
     <Card className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
@@ -76,6 +85,17 @@ export function RunDetail() {
         <Bar w={160} h={8} />
         <Bar w={70} h={8} />
       </div>
+    </Card>
+  );
+}
+
+export function RunHistory({selectedRun, setSelectedRun} : {selectedRun: Run | null; setSelectedRun: (run: Run) => void}) {
+  return (
+    <Card>
+      <Table
+        headers={["Job", "Workflow", "Status", "Started"]}
+        rows={Array.from({ length: 8 }, () => [<Bar key="j" w="85%" />, <Bar key="w" w="80%" />, <Bar key="s" w={110} />, <Bar key="t" w={44} />])}
+      />
     </Card>
   );
 }

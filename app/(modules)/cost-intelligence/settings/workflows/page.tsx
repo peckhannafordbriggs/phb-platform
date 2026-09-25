@@ -14,7 +14,7 @@ export default async function WorkflowsPage() {
   return (
     <CipShell canAdminister>
       <SettingsNav />
-      <SettingsTableView cols={["70%", "85%", 90, 60]} />
+      <SettingsTableView headers={["Workflow", "Skills", "Runs", "Updated"]} cols={["70%", "85%", 90, 60]} />
     </CipShell>
   );
 }

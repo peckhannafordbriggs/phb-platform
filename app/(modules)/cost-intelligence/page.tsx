@@ -3,7 +3,6 @@ import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "./cip-shell";
 import { RunsView } from "./views/runs-view";
-import { SearchBar } from "./searchbar";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +12,7 @@ export default async function RunsPage() {
   const canAdminister = await hasModuleAdmin(access.viewer.id, COST_INTELLIGENCE_MODULE_KEY);
 
   return (
-    <CipShell canAdminister={canAdminister} actions={<SearchBar />}>
+    <CipShell canAdminister={canAdminister}>
       <RunsView />
     </CipShell>
   );

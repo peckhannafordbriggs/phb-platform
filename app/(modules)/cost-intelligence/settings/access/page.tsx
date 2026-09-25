@@ -14,7 +14,7 @@ export default async function AccessPage() {
   return (
     <CipShell canAdminister>
       <SettingsNav />
-      <SettingsTableView cols={["75%", "60%", 100, 80]} rows={8} />
+      <SettingsTableView headers={["Employee", "Role", "Granted", "Last active"]} cols={["75%", "60%", 100, 80]} rows={8} />
     </CipShell>
   );
 }

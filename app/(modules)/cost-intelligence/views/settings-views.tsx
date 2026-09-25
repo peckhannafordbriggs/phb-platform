@@ -146,10 +146,12 @@ export function SkillView() {
 
 /** Workflows, Access & roles, Usage & cost: a heading, optional stats, a table. */
 export function SettingsTableView({
+  headers,
   cols,
   rows = 6,
   stats = 0,
 }: {
+  headers: string[];
   cols: (number | string)[];
   rows?: number;
   stats?: number;
@@ -168,7 +170,10 @@ export function SettingsTableView({
         </div>
       )}
       <Card>
-        <Table rows={rows} cols={cols} />
+        <Table
+          headers={headers}
+          rows={Array.from({ length: rows }, () => cols.map((w, i) => <Bar key={i} w={w} />))}
+        />
       </Card>
     </>
   );

@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SearchBar } from "./ui/searchbar";
+import { Button } from "./ui/Button";
 
 export type Tab = { href: string; label: string; prefixes?: string[] };
 
@@ -10,7 +12,7 @@ export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
   const pathname = usePathname();
 
   return (
-    <nav aria-label={label} className="mt-3 border-b border-[var(--border)]">
+    <nav aria-label={label} className="mt-3 border-b border-[var(--border)] flex items-center justify-between">
       <ul className="-mb-px flex gap-1">
         {tabs.map((t) => {
           const active = pathname === t.href || (t.prefixes ?? []).some((p) => pathname.startsWith(p));
@@ -33,6 +35,10 @@ export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
           );
         })}
       </ul>
+      <div className="flex items-center gap-2">
+        <SearchBar />
+        <Button />
+      </div>
     </nav>
   );
 }

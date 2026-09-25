@@ -39,9 +39,6 @@ export function CipShell({
           >
             <CipNav tabs={tabs} label="Cost Intelligence sections" />
           </ModuleHeader>
-          {actions !== undefined && (
-            <div className="absolute right-0 top-0 flex items-center gap-2">{actions}</div>
-          )}
         </div>
         <div className="mt-6">{children}</div>
       </div>

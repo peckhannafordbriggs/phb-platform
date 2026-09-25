@@ -14,7 +14,7 @@ export default async function UsagePage() {
   return (
     <CipShell canAdminister>
       <SettingsNav />
-      <SettingsTableView cols={["70%", "55%", 70, 70, 60]} stats={4} />
+      <SettingsTableView headers={["Job", "Workflow", "Runs", "Tokens", "Cost"]} cols={["70%", "55%", 70, 70, 60]} stats={4} />
     </CipShell>
   );
 }
