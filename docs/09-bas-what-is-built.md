@@ -405,6 +405,19 @@ point in a building and asserting the screen does not read as all clear;
 adding `is_visible` to a risk `FILTER` fails it. `is_visible` is in none of
 the six views; the service joins `bas_points` for it.
 
+**The per-point table scrolls (25 September).** *Per-point collection
+status* is capped at about seven rows and scrolls within the panel, the same
+`max-h-72 overflow-auto` box with a sticky header that *Recent collector
+runs* and *Recorded data gaps* already use, and the count of rows is in the
+heading - *Per-point collection status (26)* - because a scroll container
+takes the total off the bottom of the list. Every row stays in the DOM and
+nothing reads the viewport: the tiles, the hidden-risk sentence, the
+reporting ratio and the completeness card are the service's numbers over
+every active point, as they were. `tests/bas-health-point-table.test.ts`
+proves it with 26 points and fails on any slice of the list. Virtualisation
+is the answer at a station with hundreds of points, not a smaller cap;
+`runbook.md` → *The per-point table on Collection Health is slow* has the
+reference figure to measure against.
 **Labels (B8.4, 25 September).** The *Label* cell on the Points list is
 editable: click, type, Enter; blank clears. `PATCH /settings/points/{id}`
 with `{ label }` - the same route as `{ visible }`, now a strict schema that

@@ -677,6 +677,19 @@ day-buckets with `date_bin` each fail a named test.
 "Averaged to one point per …"*, *A custom date range is refused*, *Which
 time zone a Point Explorer date range is in*.
 
+**The per-point table on Collection Health scrolls (2026-09-25).** About
+seven rows, then scroll within the panel - the same `max-h-72
+overflow-auto` box with a sticky header the collector-runs and data-gaps
+tables use, not a second pattern - with the row count in the heading. Every
+row stays in the DOM and **no figure reads the viewport**: tiles, the
+hidden-risk sentence, the reporting ratio and completeness are the service's
+numbers over every active point, proved in
+`tests/bas-health-point-table.test.ts` with 26 points where the box would
+show seven. At hundreds of points the answer is virtualisation, not a
+smaller cap or paging; `runbook.md` → *The per-point table on Collection
+Health is slow* carries the chart's 10,000-item knee as the reference to
+measure against.
+
 **B8.4 complete — editable labels, one precedence, three-name search
 (2026-09-25).** The *Label* cell on the Points list is editable; `PATCH
 /settings/points/{id}` takes `{ label }` or `{ visible }`, **one per

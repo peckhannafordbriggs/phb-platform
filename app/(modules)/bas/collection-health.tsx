@@ -916,10 +916,17 @@ function RiskBadge({ risk }: { risk: RollRisk }) {
 
 function Panel({
   title,
+  count,
   description,
   children,
 }: {
   title: string;
+  /**
+   * How many rows the panel holds, shown beside the title. For a panel whose
+   * body scrolls, this is the only place the number is visible without
+   * scrolling to the bottom, and a person should not have to guess it.
+   */
+  count?: number;
   description?: string;
   children: React.ReactNode;
 }) {
@@ -928,6 +935,9 @@ function Panel({
       <header className="px-5 pb-3 pt-4">
         <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
           {title}
+          {count !== undefined && (
+            <span className="font-normal text-[var(--muted)]"> ({formatCount(count)})</span>
+          )}
         </h2>
         {description !== undefined && description.length > 0 && (
           <p className="mt-1 text-xs text-[var(--muted)]">{description}</p>
@@ -964,7 +974,12 @@ function Th({
   );
 }
 
-function PointTable({
+/**
+ * Exported for tests/bas-health-point-table.test.ts, which renders it with the
+ * real service's rows and reads the count and the scroll container off the
+ * HTML. Used by nothing else.
+ */
+export function PointTable({
   points: allPoints,
   siteName,
 }: {
@@ -980,6 +995,10 @@ function PointTable({
   return (
     <Panel
       title="Per-point collection status"
+      // The rows in the container below. With the body scrolling, the total
+      // is no longer visible at the bottom of the list, so it is stated here.
+      // Hidden points are not in it - the description line names those.
+      count={points.length}
       description={hiddenLine ?? undefined}
     >
       {points.length === 0 ? (
@@ -991,9 +1010,31 @@ function PointTable({
               : `No active points at ${siteName}. Another building may still have some — switch the filter to All.`}
         </Empty>
       ) : (
-        <div className="overflow-x-auto">
+        /*
+          Capped and scrolled, the same way the collector runs and data gaps
+          tables are - one pattern, not a second one. max-h-72 is about seven
+          rows plus the header at this row height. EVERY row is still in the
+          DOM: the container clips what is visible, it does not slice the
+          list, and nothing on this screen reads the viewport. The tiles, the
+          hidden-risk sentence, the reporting ratio and the completeness card
+          are computed from `health.totals` and the full `health.points`
+          array, exactly as they were when the table ran the page long. A
+          scroll container is one more way a screen can show less than it
+          knows, and the figures must not follow it (B8.3's rule).
+
+          At a few hundred points this is fine. At a station with 600 the
+          plain list will get slow, and the answer then is virtualisation,
+          not a smaller cap - see runbook.md, "The per-point table on
+          Collection Health is slow".
+        */
+        <div className="max-h-72 overflow-auto">
           <table className="w-full min-w-[52rem] border-collapse text-sm">
-            <thead className="bg-[var(--surface)] text-left">
+            {/*
+              Sticky, so the column headings stay put while the body scrolls.
+              Its own background or the rows show through; z-10 so the tone
+              badges in the cells do not paint over it.
+            */}
+            <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
               <tr>
                 <Th>Point</Th>
                 <Th>Site</Th>
