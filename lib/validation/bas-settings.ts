@@ -250,18 +250,55 @@ export const setCredentialSchema = z.object({
 });
 
 /**
- * Show or hide a point (B8.3). The one editable thing on a point today, and
- * deliberately only that. There is no `isActive` here and there must not be:
- * turning collection off is permanent in effect, and it does not belong on
- * the same payload as a cosmetic checkbox.
+ * A person's label for a point (B8.4). Trimmed; blank becomes NULL, because
+ * "no label" has exactly one spelling and the database refuses the others
+ * (`bas_points_label_not_blank`). Same length cap as every other name here.
  */
-export const updatePointSchema = z.object({
-  visible: z.boolean(),
-});
+const pointLabel = z
+  .string()
+  .trim()
+  .max(120, "Labels are limited to 120 characters.")
+  .transform((value) => (value.length === 0 ? null : value))
+  .nullable();
+
+/**
+ * What may change on a point: `visible` (B8.3) or `label` (B8.4). ONE per
+ * request, and nothing else.
+ *
+ * STRICT, so a key this schema does not name is refused rather than dropped.
+ * There is no `isActive` here and there must not be: turning collection off is
+ * permanent in effect, and it does not belong on the same payload as a
+ * cosmetic checkbox or a name. Before B8.4 an unknown key was silently
+ * stripped; now it is a 422, which is the answer a caller that tried to reach
+ * `is_active` should get. Nor is the oBIX key (`niagara_history_name`) here:
+ * it goes into the collector's URL verbatim and editing it stops the point
+ * collecting.
+ *
+ * One field per request keeps one audit row per change. A body that carries
+ * both is refused, not half-applied.
+ */
+export const updatePointSchema = z
+  .object({
+    visible: z.boolean().optional(),
+    label: pointLabel.optional(),
+  })
+  .strict()
+  .refine(
+    (value) => (value.visible !== undefined) !== (value.label !== undefined),
+    { message: "Send either visible or label, one per request." },
+  );
 
 export type CreateStationInput = z.infer<typeof createStationSchema>;
 export type UpdateStationInput = z.infer<typeof updateStationSchema>;
 export type UpdatePointInput = z.infer<typeof updatePointSchema>;
+/** The visibility half of UpdatePointInput, as the service takes it. */
+export interface UpdatePointVisibilityInput {
+  visible: boolean;
+}
+/** The label half. `null` clears the label; the screen falls back to Niagara's name. */
+export interface UpdatePointLabelInput {
+  label: string | null;
+}
 export type SetCredentialInput = z.infer<typeof setCredentialSchema>;
 
 // ---------------------------------------------------------------------------
