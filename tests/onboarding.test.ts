@@ -7,6 +7,7 @@ import { auth } from "@/auth";
 import { POST as onboardingRoute } from "@/app/api/onboarding/route";
 import { GET as meRoute } from "@/app/api/me/route";
 import { applyLoginGate } from "@/lib/auth/signin";
+import { seedBootstrapAdmins } from "@/lib/bootstrap-admins";
 import {
   createEmployee,
   disconnectDb,
@@ -110,6 +111,61 @@ describe("self-provisioning", () => {
     // The seeded admin flag survives.
     expect(after?.isPlatformAdmin).toBe(true);
     await expect(testDb.employee.count()).resolves.toBe(1);
+  });
+
+  it("replaces the seed's placeholder name with the token's on the bootstrap admin's first sign-in", async () => {
+    // The real seed, not a fixture: this is the row production had.
+    const email = `bootstrap@${TEST_ALLOWED_DOMAIN}`;
+    await seedBootstrapAdmins(testDb, [email]);
+    const before = await testDb.employee.findUnique({ where: { email } });
+    expect(before).toMatchObject({
+      firstName: "Platform",
+      lastName: "Administrator",
+      entraOid: null,
+      profileCompleted: false,
+    });
+
+    await applyLoginGate({
+      ...claims,
+      oid: "oid-bootstrap",
+      email,
+      preferred_username: email,
+      given_name: "Mahi",
+      family_name: "Sheth",
+    });
+
+    const after = await testDb.employee.findUnique({ where: { email } });
+    expect(after).toMatchObject({
+      firstName: "Mahi",
+      lastName: "Sheth",
+      entraOid: "oid-bootstrap",
+      isPlatformAdmin: true,
+      profileCompleted: false,
+    });
+  });
+
+  it("keeps stamping the token's name on every sign-in until onboarding is completed", async () => {
+    await applyLoginGate(claims);
+    await applyLoginGate({ ...claims, given_name: "Renamed", family_name: "InEntra" });
+
+    const row = await testDb.employee.findUnique({ where: { entraOid: claims.oid } });
+    expect(row).toMatchObject({ firstName: "Renamed", lastName: "InEntra", profileCompleted: false });
+  });
+
+  it("never writes the token's name over a completed profile", async () => {
+    // The employee corrected the directory's version during onboarding.
+    await createEmployee({
+      entraOid: claims.oid,
+      email: claims.email,
+      firstName: "Newton",
+      lastName: "Comer-Smith",
+      profileCompleted: true,
+    });
+
+    await applyLoginGate({ ...claims, given_name: "New", family_name: "Comer" });
+
+    const row = await testDb.employee.findUnique({ where: { entraOid: claims.oid } });
+    expect(row).toMatchObject({ firstName: "Newton", lastName: "Comer-Smith" });
   });
 
   it("rejects a disabled employee and creates nothing", async () => {

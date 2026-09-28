@@ -57,13 +57,13 @@ async function provision(identity: GatedIdentity): Promise<SignInOutcome> {
   const existing =
     (await prisma.employee.findUnique({
       where: { entraOid: identity.entraOid },
-      select: { id: true, status: true, email: true, lastLoginAt: true },
+      select: { id: true, status: true, email: true, lastLoginAt: true, profileCompleted: true },
     })) ??
     // A row seeded ahead of its owner's first sign-in - the bootstrap admin -
     // has a matching email and no entraOid yet.
     (await prisma.employee.findFirst({
       where: { email: identity.email, entraOid: null },
-      select: { id: true, status: true, email: true, lastLoginAt: true },
+      select: { id: true, status: true, email: true, lastLoginAt: true, profileCompleted: true },
     }));
 
   // Check 4 - status. Evaluated before any write, so a disabled employee's
@@ -80,9 +80,28 @@ async function provision(identity: GatedIdentity): Promise<SignInOutcome> {
         // Stamped once. Never included in a later update - see the comment on
         // Employee.entraOid in the schema.
         entraOid: identity.entraOid,
-        // Entra is authoritative for the address; people get renamed. Names are
-        // not overwritten because onboarding lets the employee correct them.
+        // Entra is authoritative for the address; people get renamed.
         email: identity.email,
+        /**
+         * The name, from the token, until the employee has completed
+         * onboarding - and never after.
+         *
+         * Before onboarding the row holds nobody's own words: a row seeded
+         * ahead of its owner (the bootstrap admin) says "Platform
+         * Administrator", and a row whose owner signed in once and never
+         * finished says whatever that first token said. Both are placeholders
+         * and the token is the better source. This used to be skipped on the
+         * grounds that onboarding lets the employee correct the name, which
+         * is true but was the wrong conclusion: it left the seed's placeholder
+         * on the first production admin, and the onboarding form prefilled it.
+         *
+         * Once the profile is completed the name is the employee's own
+         * correction (docs/04: prefilled from the token, editable), and Entra's
+         * version is not written over it.
+         */
+        ...(existing.profileCompleted
+          ? {}
+          : { firstName: identity.firstName, lastName: identity.lastName }),
         /**
          * The previous sign-in, carried across before it is lost.
          *
