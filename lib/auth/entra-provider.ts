@@ -53,7 +53,11 @@ export interface EntraProviderConfig {
   production: boolean;
   /** The platform's user-assigned managed identity, or null. Production only. */
   managedIdentityClientId: string | null;
-  /** Test seams. Production leaves both undefined. */
+  /**
+   * Test seams. Production leaves both undefined. `fetchImpl` stands in for
+   * the fetch BENEATH the assertion wrapper, which in production is Auth.js's
+   * own fetch for this provider (see below), not the global one.
+   */
   assertionProvider?: AssertionProvider;
   fetchImpl?: typeof fetch;
 }
@@ -77,14 +81,29 @@ export function buildEntraProvider(config: EntraProviderConfig) {
         managedIdentityClientId: config.managedIdentityClientId,
       });
 
-    return MicrosoftEntraID({
+    const provider = MicrosoftEntraID({
       clientId: config.clientId,
       issuer,
       // Auth.js sends no client credential of its own...
       client: { token_endpoint_auth_method: "none" },
-      // ...and this adds the assertion to the token request, and only to it.
-      [customFetch]: createAssertionFetch(getAssertion, config.fetchImpl),
     });
+
+    // ...and this adds the assertion to the token request, and only to it.
+    //
+    // ON THE PROVIDER OBJECT, NOT AMONG ITS OPTIONS. The Entra provider ships
+    // a customFetch of its own, which rewrites `{tenantid}` in the discovery
+    // document's issuer, and Auth.js's normalisation keeps a fetch already on
+    // the provider over one supplied in the options. Passed as an option,
+    // this wrapper was silently discarded: every production token request
+    // from 2026-09-17 to 2026-09-28 went out with no assertion, and Entra
+    // refused each as `invalid_client` while the federated identity
+    // credential sat unused. Auth.js's own fetch stays underneath ours, so the
+    // issuer rewrite still happens. tests/entra-assertion.test.ts proves the
+    // resolution through Auth.js's real parseProviders, which is the only
+    // place the difference shows.
+    const authJsFetch = provider[customFetch] ?? fetch;
+    provider[customFetch] = createAssertionFetch(getAssertion, config.fetchImpl ?? authJsFetch);
+    return provider;
   }
 
   // Outside production the secret is used when present and, when absent,

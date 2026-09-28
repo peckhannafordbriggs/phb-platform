@@ -1511,18 +1511,28 @@ its own copy again. The provider is composed in `auth.ts` (Node), not
 `GRAPH_CLIENT_SECRET`. The secret in `.env.local` is for developer machines and
 expires in 2028; production cannot be affected by it.
 
-**Status.** Built on `feat/sso-managed-identity-assertion`. It cannot work
-until Request 3 is done, and it is not merged until then: merging first would
-only change the failure from `invalid_client` to "no matching federated
-identity record".
+**Status.** Merged on 2026-09-17 as PR #8 and in every production image
+since. Vitis added the federated identity credential (Request 3) on
+2026-09-28, and the first four sign-in attempts that day still failed as
+`invalid_client` - with the log unable to say which AADSTS code was behind
+the word. The cause, found the same day and described under the next
+heading, was that the assertion wrapper had never run: Auth.js keeps the
+Entra provider's own `customFetch` over one passed as an option, so the
+wrapper is now set on the provider object itself
+(`fix/sso-provider-custom-fetch`).
 
 ### Production sign-in bounces to `/signin?error=OAuthCallbackError`
 
 Microsoft returned the authorization code and the token exchange failed. Pull
-the reason from Log Analytics. `az containerapp logs show` trips on the Next.js
-banner's non-ASCII character under the Windows code page unless `PYTHONUTF8=1`
-is set, and under Git Bash every `/subscriptions/...` id is rewritten as a
-filesystem path unless `MSYS_NO_PATHCONV=1` is set:
+the reason from Log Analytics. The line to look for is the platform's own,
+`"event":"auth.entra_token_error"`, and its `entraErrorCode` field is the
+AADSTS code;
+`entraErrorDescription` is Entra's full sentence, and `entraTraceId` /
+`entraCorrelationId` are what Microsoft support asks for. `az containerapp
+logs show` trips on the Next.js banner's non-ASCII character under the Windows
+code page unless `PYTHONUTF8=1` is set, and under Git Bash every
+`/subscriptions/...` id is rewritten as a filesystem path unless
+`MSYS_NO_PATHCONV=1` is set:
 
 ```bash
 WS=$(az containerapp env show -n phbplat-prod-env -g <resource-group> \
@@ -1530,19 +1540,59 @@ WS=$(az containerapp env show -n phbplat-prod-env -g <resource-group> \
 az monitor log-analytics query -w "$WS" --analytics-query "
   ContainerAppConsoleLogs_CL
   | where ContainerAppName_s == 'phbplat-prod-app'
-  | where Log_s has_any ('[auth]', 'AADSTS')
+  | where Log_s has_any ('auth.entra_token_error', '[auth]', 'AADSTS')
   | project TimeGenerated, Log_s | order by TimeGenerated desc | take 50"
 ```
 
 | Auth.js says | Entra meant | Fix |
 |---|---|---|
 | `invalid_client` | No client credential on the exchange - the state before the assertion shipped, or a secret was deployed and rejected | Production must carry the assertion, never a secret. Check the provider in `auth.ts` and that `AUTH_MICROSOFT_ENTRA_ID_SECRET` is absent |
-| `invalid_client`, and the log shows `AADSTS70021` or `AADSTS700213` | No federated identity credential on the SSO app matches the token's issuer and subject | Request 3: the credential is missing, or its subject is not the identity's **object** id |
+| `invalid_client`, `AADSTS70021` or `AADSTS700213` | No federated identity credential on the SSO app matches the token's issuer and subject | Request 3: the credential is missing, its subject is not the identity's **object** id, or it was created minutes ago and has not replicated yet - wait and retry before anything else |
+| `invalid_client`, `AADSTS7000218` | The token request reached Entra with no `client_assertion` at all | The platform's fault, not Entra's: the assertion fetch wrapper did not run. This was the actual cause from 2026-09-17 to 2026-09-28 - see *What the first deploy of that logging found* below. `lib/auth/entra-assertion-fetch.ts`, `tests/entra-assertion.test.ts` |
 | `invalid_request`, `AADSTS50011` | Redirect URI mismatch | The URI on the app registration must equal `AUTH_URL` + `/api/auth/callback/microsoft-entra-id` exactly |
 
-Auth.js logs only Entra's `error` field. If the code matters and the table does
-not settle it, one sign-in attempt with `debug: true` in the Auth.js config
-prints the `error_description` - then turn it off again.
+**Why the code is in the log at all, and why not through Auth.js.** Auth.js
+logs only Entra's `error` field, and it cannot do better: it reads the
+response body - `error_description` with the AADSTS code, `error_codes`,
+`trace_id`, `correlation_id` - and passes it to the Error constructor as the
+*options* object, from which `Error` keeps only `options.cause`. So
+`error.cause` is `undefined` (measured against `@auth/core` 0.41.3) and a
+custom `logger` in the Auth.js config has nothing to print. `debug: true`
+does not help either: the token-response branch has no debug call. On
+2026-09-28 the log therefore held `invalid_client` and nothing else, and
+nobody could tell whether the new credential was wrong or the request had
+carried no assertion. Two other ways to find out were closed too: this
+account cannot read Entra's sign-in logs
+(`Authentication_RequestFromUnsupportedUserRole`), and `az containerapp exec`
+answered 404 on the websocket handshake, so nothing could be probed from
+inside the container. The fix is where the body can still be seen: the fetch
+wrapper that adds the assertion receives the token endpoint's Response, and
+on any non-2xx answer it logs a whitelist of the body's fields as
+`auth.entra_token_error` before handing the Response back untouched.
+`lib/auth/entra-token-error.ts`; `tests/entra-token-error.test.ts` proves the
+code is there, the Response is still readable, and a token would not be
+copied.
+
+**What the first deploy of that logging found: nothing, which was the
+answer.** A sign-in on the fixed image still logged only Auth.js's
+`invalid_client` line, with no `auth.entra_token_error` beside it, and a
+probe with a bogus authorization code against the same build running
+locally, with no managed identity available, reached Entra instead of
+failing on the identity call. Both mean the same thing: the fetch wrapper
+that adds the assertion was not running. It was handed to Auth.js as a
+provider option, `MicrosoftEntraID({ ..., [customFetch]: wrapper })`, and
+the Entra provider ships a `customFetch` of its own - it rewrites
+`{tenantid}` in the discovery document's issuer. Auth.js's normalisation
+(`parseProviders`) copies the provider's own fetch onto the provider first
+and applies the option only where nothing is already set, so ours was
+discarded without a word. Every production token request from 2026-09-17 to
+2026-09-28 went out with no assertion at all: `AADSTS7000218`, the last row
+of the table, and the federated identity credential was never exercised.
+The wrapper is now set on the provider object, composed over Auth.js's own
+fetch so the issuer rewrite still runs, and `tests/entra-assertion.test.ts`
+resolves the provider through Auth.js's real `parseProviders` - the only
+place the difference is visible - and fails if the wrapper does not run.
+`WHY-ITS-BUILT-THIS-WAY.md` § 56.
 
 ### Symptom when it expires
 
@@ -2021,9 +2071,11 @@ registration, and it is the whole ask. Nothing in it expires.
 > Thanks,
 > Mahi
 
-**After it is in:** merge the branch, let the deploy finish, sign in once. If it
-fails, see *Production sign-in bounces to `/signin?error=OAuthCallbackError`* -
-the failure will now name the credential rather than the absence of one.
+**After it is in:** sign in once; the branch has been on `main` since
+2026-09-17. If it fails, see *Production sign-in bounces to
+`/signin?error=OAuthCallbackError`* - the `auth.entra_token_error` log line
+carries the AADSTS code that says whether the credential or the request is
+at fault.
 
 ### Request 4 — SharePoint access for the containerised engine (Phase 12 Part C)
 
@@ -2730,6 +2782,83 @@ npm approve-scripts <package-name>
 ```
 
 Then commit the `package.json` change. Do not disable the check globally.
+
+---
+
+## `npm audit` reports findings that no upgrade removes
+
+**Symptom.** `npm audit` reports high-severity findings in `mysql2`,
+`deepmerge-ts`, `@prisma/config` and `prisma`, and one moderate on `next` via
+`postcss`. `npm audit fix` does not clear them, and `npm audit fix --force`
+offers to fix them by installing **`prisma@6.19.3`**.
+
+**Cause.** These are known and accepted. None of them is reachable, and the fix
+npm proposes is a downgrade.
+
+*`mysql2` (via `prisma`).* The Prisma CLI depends on a MySQL driver for
+projects that use MySQL. This project is PostgreSQL through `@prisma/adapter-pg`.
+The CLI runs in two places only — `prisma generate` in CI and the image's build
+stage, and `prisma migrate deploy` in the deploy job — and neither opens a
+MySQL connection. The runtime image does not contain the CLI at all (see the
+Dockerfile's note on Prisma), so `mysql2` is not in anything that serves a
+request.
+
+*`deepmerge-ts` (via `@prisma/config`).* Used to merge Prisma's configuration
+objects. The only input is our own `prisma.config.ts`. The advisory is stack
+exhaustion on a recursive object graph, which needs hostile input; there is
+none. Same two places as above; also absent from the runtime image.
+
+*`postcss@8.4.31` (nested under `next`).* Next 15.5.x pins this exact version
+inside its own `node_modules`. It **is** in the standalone runtime image — the
+file tracer copies it — so do not argue it away as build-stage-only. What was
+checked instead (2026-09-23): every file in the shipped `next/dist` that
+requires `postcss` is under `build/webpack/` or `compiled/` (the CSS loader,
+the CSS minimiser, `cssnano`, `postcss-preset-env`), which is `next build`
+tooling that the request-serving code does not load. The `postcss` our own
+server bundles reach is the one `sanitize-html` uses to parse `style`
+attributes, and Node resolves that from the **top-level** copy, which is a
+current version outside the advisory range. Check with `npm ls postcss --all`:
+the nested copy shows under `next`, the top-level copy under
+`@tailwindcss/postcss` and `sanitize-html`.
+
+**Why the suggested fix is wrong.** Every released Prisma at the time of
+writing — 7.10.0 and the 8.0.0 release candidates — still pins the same
+`mysql2` and `deepmerge-ts` versions, so no version of Prisma 7 or 8 clears
+the findings. npm's `fixAvailable` therefore points at the newest version
+outside the affected range, which is **Prisma 6**. That is a major version
+*down*, off the decided stack (Prisma 7, `prisma-client` generator, driver
+adapters), and would break the generated client. Do not take it.
+
+**Why not an `overrides` entry.** An override forcing `mysql2` or
+`deepmerge-ts` to a version Prisma has not tested would make the audit read
+clean while leaving the question of whether the CLI still works to whoever
+next runs a migration. A finding someone can read about here is better than a
+finding hidden behind an override. **Do not add `overrides` for these.**
+
+**Fix.** None needed. Re-check the two conditions when Prisma or Next is next
+upgraded:
+
+```bash
+npm view prisma@latest dependencies.mysql2 dependencies.@prisma/config
+npm view @prisma/config@latest dependencies.deepmerge-ts
+npm view next@<version> dependencies.postcss
+```
+
+When Prisma ships a release that moves `mysql2` to 3.22.0 or later and
+`deepmerge-ts` to 8.0.0 or later, take that release through the normal
+upgrade path and delete this entry. When Next moves its nested `postcss`
+past 8.5.22, the same.
+
+**What did change on 2026-09-23.** `next` and `eslint-config-next` went
+from 15.5.23 to 15.5.26, clearing two Next advisories that *were* reachable —
+an unauthenticated image-optimisation vulnerability with hostile AVIF input,
+and a Windows-only path traversal that applied to `next dev` on a developer
+laptop — and moving `sharp` to 0.35.4. `sharp` **is** in the standalone
+runtime image; the `/_next/image` route is outside the login gate by design
+(the middleware matcher excludes it), and the change-order attachment routes
+serve vendor-supplied bytes with the vendor's content type. Keep Next current
+for that reason. `fast-uri`, `js-yaml` and `vitest` were patch-bumped the same
+day; all three are development-only.
 
 ---
 
@@ -5768,6 +5897,48 @@ what *The dev platform database gets staler every day* describes.
 
 ---
 
+## The per-point table on Collection Health is slow, or someone asks where the rest of the points went
+
+**Symptom.** *Per-point collection status* shows about seven rows in a box
+that scrolls, with the total in its heading — *Per-point collection status
+(26)*. Someone reads the seven and asks where the other nineteen are. Or, at
+a station with hundreds of points, the screen takes noticeably longer to
+draw and scrolling the box stutters.
+
+**Cause, first case.** Not a fault. Since 2026-09-25 the table is capped and
+scrolled like *Recent collector runs* and *Recorded data gaps* — one
+pattern, the same `max-h-72 overflow-auto` box with a sticky header — so a
+station with many points does not run the page long. The count in the
+heading is the number of rows in the box, stated there because with a
+scroll container it is no longer visible at the bottom. **Every row is in
+the box**; scroll it. And nothing on the screen reads the viewport: the
+tiles, the hidden-risk sentence, the reporting ratio and the completeness
+card are the service's numbers over every active point, hidden included,
+exactly as before. `tests/bas-health-point-table.test.ts` proves it with 26
+points — the at-risk figure reaches all 26 while the box would show seven —
+and fails if anything slices the list.
+
+**Cause, second case.** Every row is really in the DOM. A plain scrolled
+list is fine at a few dozen points and probably at a few hundred; it has
+not been measured past the office station's 26 and the lab's 13. At 600
+points it is 600 rows of nine cells each, with a badge or two per row, and
+the honest expectation is that it will be slow.
+
+**Fix, when that day comes.** Virtualise the table — render only the rows
+in and around the viewport — rather than lowering the cap or paging the
+service. Paging would make the count in the heading a claim about a page,
+and the whole rule above is that the figures never follow the viewport.
+Measure first, the way the trend chart was: the chart's knee was **about
+10,000 rendered items** in headless Chrome (*The trend chart says "Averaged
+to one point per …"* has the procedure and the table of timings). A table
+row is heavier than an SVG point, so the knee here will be lower, and the
+number to find is the station size at which drawing or scrolling this box
+crosses about half a second. Whatever virtualises must keep the count in the
+heading, the sticky header, and the rule that the rows are the full list,
+because those are what the test asserts.
+
+---
+
 ## Repointing the collector also repoints the nightly backup — and breaks it
 
 **Superseded on 17 September 2026.** The fix below was never applied, and a
@@ -6412,7 +6583,11 @@ genuine exclusions; `is_active = false` is for those.
 each station in Settings (B8.3). It writes `is_visible` and nothing else -
 `tests/bas-point-visibility.test.ts` reads `is_active` before and after to
 prove it - and every change is an audit row, `bas.point_visibility_changed`,
-whose sentence says *still collected*. Labels are still SQL until B8.4:
+whose sentence says *still collected*. Labels are the *Label* cell on the
+same list (B8.4): click it, type, Enter; a blank saved over an existing label
+clears it, and the button says *Clear label* when that is what it will do.
+Each change is an audit row, `bas.point_label_changed`, carrying the previous
+and new label and the point's oBIX key. If you need SQL instead:
 
 ```sql
 UPDATE bas_points SET label = 'Zone Temp 104-105' WHERE point_id = 42;
@@ -6426,6 +6601,78 @@ A blank label is refused (`bas_points_label_not_blank`): "no label" is spelled
 `discover`, and a person's is `bas_points.label`. Both column comments say so,
 and the Prisma field on `BasPoint` is `niagaraDisplayName` for the same reason.
 `WHY-ITS-BUILT-THIS-WAY.md` § 45.
+
+**Who hid it, and when.** Every hide and show since B8.3 is an audit row with
+an actor. Nothing else writes `is_visible` - not the collector (it never
+reads the column), not discover, not any migration or seed - so if a point
+is hidden and nobody remembers hiding it, this is the whole history:
+
+```sql
+SELECT a.occurred_at, e.email, a.metadata->>'niagaraHistoryName' AS point,
+       a.metadata->>'visible' AS now_visible
+  FROM audit_events a
+  LEFT JOIN employees e ON e.id = a.actor_employee_id
+ WHERE a.action = 'bas.point_visibility_changed'
+ ORDER BY a.occurred_at;
+```
+
+Checked on 2026-09-25 for the office station: 25 rows, all on 18 September,
+all one person, all from the checkbox - ten hidden while B8.3 was being
+tested and nine shown again two hours later, then three more hidden and
+shown within a minute. One point (`SecurityHistory`) was never shown again
+and is the only hidden point today. A hidden point with no row here would
+mean a hand-run `UPDATE`, and that is the thing to look for.
+
+---
+
+## A point has one name in Point Explorer and another in Settings
+
+**Symptom.** Point Explorer's picker and the Collection Health table call a
+point *Zone Temp 104-105*; the Points list under its station in Settings
+shows that in the *Label* column beside `VAV$2d8$20104$2d105_ZoneTemperature`
+and `VAV-8 104-105_ZoneTemperature`. Or the reverse worry: somebody labelled
+a point and Grafana, or an Analyze answer's own result table, still shows the
+Niagara name.
+
+**Cause.** Not a fault. A point has three names, and they have a precedence
+(B8.4):
+
+| Name | Column | Who sets it | Editable |
+|---|---|---|---|
+| Label | `bas_points.label` | a person, on the Points list | yes |
+| Niagara's name | `bas_points.display_name` | the station, refreshed by every `discover` | no |
+| The oBIX key | `bas_points.niagara_history_name` | the station, at registration | **never** - it is the URL the collector fetches |
+
+The browsing screens - Point Explorer, Collection Health's table, gaps and
+vanished-points card - show the first of those that exists. Settings shows all
+three, because the key is what you match against Workbench when something
+breaks and the Niagara name is what the station's own displays call it. The
+precedence is applied in the platform's queries
+(`shownPointName` in `lib/modules/bas/service.ts`), **not in the six
+`bas_v_*` views**, which Grafana, the collector's `healthcheck.py` and the
+Analyze model's SQL read: a label is a preference of the platform's screens,
+the same class of thing as `is_visible`, and the views were left carrying
+Niagara's name on purpose. So Grafana keeps showing Niagara's name, and an
+Analyze answer's result rows carry whatever `point_name` the model selected -
+though the point catalogue the model is given does prefer the label, so it
+knows a labelled point by the name a person would ask about.
+
+**Fix.** If a screen shows the wrong one of the three, the label is what to
+change: the *Label* cell on the Points list, or the SQL in the previous
+entry. If the Niagara name is wrong, rename the history in Workbench and run
+`discover`; the label survives that (`test_point_management.py`, phb-bas). If
+the key is wrong, the point is a different point: register the new history,
+retire the old one with `inactive_reason = 'manual'`, and never edit the key
+in place - the next `sync` would ask the station for a history that does not
+exist and record a failure for a point that is actually collecting under its
+real name.
+
+**Finding a point by any of the names.** The search box at the top of
+Settings matches a point's label, its Niagara name and its oBIX key, and
+surfaces the station it sits on; the Points list under that station opens
+narrowed to the same term, with its own search box that matches the same
+three names. Paste straight out of Workbench, `$2d` and all. Point Explorer's
+picker has no search: hide what you do not want to scroll past.
 
 ---
 

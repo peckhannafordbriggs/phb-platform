@@ -231,9 +231,6 @@ repository sends, and neither is `ref:refs/heads/main`. Both fail as
 `AADSTS70021` with no hint as to which half is wrong, and the subject has to be
 typed by hand. `runbook.md` → *What to ask IT for* → Request 3a carries it.
 
-The Graph federated credential and the production redirect URI are still with
-Vitis; sign-in cannot be tested until the redirect URI exists.
-
 **Production sign-in was tested on 2026-09-16 and failed as predicted** —
 `invalid_client` at the token exchange, because production carries no SSO
 secret and the SSO app registration is a confidential client. The decision
@@ -241,12 +238,26 @@ went the way prohibition 7 points: **not** a secret in Azure, but the managed
 identity's token presented as a `client_assertion`, matched by a federated
 identity credential on the SSO app registration — the same mechanism the Graph
 module already uses, now one shared implementation in
-`lib/azure/managed-identity-assertion.ts`. Built on
-`feat/sso-managed-identity-assertion`; **not merged**, because it cannot work
-until Vitis adds that credential (`runbook.md` → *What to ask IT for* →
-*Request 3*, one email, verbatim). Production refuses to boot if
-`AUTH_MICROSOFT_ENTRA_ID_SECRET` is set. The logo (`public/`) fix shipped
-separately.
+`lib/azure/managed-identity-assertion.ts`. Merged 2026-09-17 (PR #8).
+Production refuses to boot if `AUTH_MICROSOFT_ENTRA_ID_SECRET` is set. The
+logo (`public/`) fix shipped separately.
+
+**Vitis added the SSO federated credential on 2026-09-28, and sign-in still
+failed as `invalid_client`.** The log could not say why: Auth.js discards
+Entra's error body when it builds its error, so the AADSTS code never
+reached the log, and neither the Entra sign-in logs nor `az containerapp
+exec` were available to this account. The platform now logs the code itself,
+from the one place that still sees the body (`lib/auth/entra-token-error.ts`,
+`auth.entra_token_error`). The first deploy of that logging showed the
+assertion wrapper **had never run**: the Entra provider ships a `customFetch`
+of its own, and Auth.js keeps it over one passed as an option, so every
+production token request since the 17th went out with no assertion
+(`AADSTS7000218`). The wrapper is now set on the provider object, composed
+over Auth.js's own fetch, and the test resolves the provider through Auth.js's
+real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`; whether it
+signs in is not yet observed.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
+`runbook.md` → *Production sign-in bounces to
+`/signin?error=OAuthCallbackError`*.
 
 A defect Part B surfaced: the deploy workflow's firewall step passed the server
 as `--name` and the rule as `--rule-name`, so it could never have run. `-s` is
@@ -676,6 +687,50 @@ day-buckets with `date_bin` each fail a named test.
 `WHY-ITS-BUILT-THIS-WAY.md` § 53; `runbook.md` → *The trend chart says
 "Averaged to one point per …"*, *A custom date range is refused*, *Which
 time zone a Point Explorer date range is in*.
+
+**The per-point table on Collection Health scrolls (2026-09-25).** About
+seven rows, then scroll within the panel - the same `max-h-72
+overflow-auto` box with a sticky header the collector-runs and data-gaps
+tables use, not a second pattern - with the row count in the heading. Every
+row stays in the DOM and **no figure reads the viewport**: tiles, the
+hidden-risk sentence, the reporting ratio and completeness are the service's
+numbers over every active point, proved in
+`tests/bas-health-point-table.test.ts` with 26 points where the box would
+show seven. At hundreds of points the answer is virtualisation, not a
+smaller cap or paging; `runbook.md` → *The per-point table on Collection
+Health is slow* carries the chart's 10,000-item knee as the reference to
+measure against.
+
+**B8.4 complete — editable labels, one precedence, three-name search
+(2026-09-25).** The *Label* cell on the Points list is editable; `PATCH
+/settings/points/{id}` takes `{ label }` or `{ visible }`, **one per
+request**, through a strict schema that refuses any other key - `isActive`
+and `niagaraHistoryName` are 422, not stripped. Audited as
+`bas.point_label_changed` with previous and new label and the oBIX key. A
+point's three names have a precedence, **label → Niagara's `display_name` →
+`niagara_history_name`**, and the browsing screens (Point Explorer picker
+and selected point, Collection Health table, gaps, vanished points) show the
+first that exists through ONE fragment, `shownPointName`; a source-text test
+fails on a bare `point_name` in a SELECT or ORDER BY in `service.ts`.
+Settings shows all three - the key is what you match against Workbench, and
+it is editable nowhere. **The six views were not changed**: `point_name` in
+`bas_v_*` is still Niagara's, for Grafana, `healthcheck.py` and the model's
+SQL; a label is a preference of the platform's screens, the same class as
+`is_visible`. Search - the Settings box and one on the Points list - matches
+all three names, so a name pasted from Workbench (`$2d` and all) finds a
+point the screen calls something else, and the list opens narrowed to the
+tree's term. **The fallback is the normal path**: every real point has
+`label` NULL and both real stations have `display_name` NULL, so
+`tests/bas-point-label.test.ts` asserts every screen with no labels first,
+then with Niagara's name nulled, then the station fallback, and seeds a
+label only after. `discover` still never writes `label`:
+`test_point_management.py` *(phb-bas)* was re-run against this checkout,
+27/27. The "six hidden points" were answered from the audit log: every hide
+was the B8.3 checkbox on 18 September, and one point is hidden today;
+nothing else in either repository writes `is_visible`. Roles, equipment and
+bulk actions are B8.5. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` → *A
+point has one name in Point Explorer and another in Settings*, and *Who hid
+it, and when* under *A point's label or hidden state disappeared*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

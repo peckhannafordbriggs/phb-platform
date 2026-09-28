@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { customFetch } from "@auth/core";
+import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
+// Auth.js's real provider normalisation, imported by path because the
+// package does not export it. It is the one place the trap below shows.
+import parseProviders from "../node_modules/@auth/core/lib/utils/providers.js";
 import {
   AssertionFetchError,
   createAssertionFetch,
@@ -246,8 +250,10 @@ describe("the provider is built for its environment", () => {
     expect((options.client as { token_endpoint_auth_method: string }).token_endpoint_auth_method).toBe("none");
     expect(options.issuer).toBe(`https://login.microsoftonline.com/${TENANT}/v2.0`);
 
-    // And the fetch Auth.js will use is the wrapper, end to end.
-    const wrapped = options[customFetch] as typeof fetch;
+    // And the fetch Auth.js will use is the wrapper, end to end. On the
+    // provider OBJECT - an option is discarded, see the describe below.
+    expect(options[customFetch]).toBeUndefined();
+    const wrapped = provider[customFetch] as typeof fetch;
     expect(typeof wrapped).toBe("function");
     await wrapped(...tokenRequest());
     expect(bodyOf(calls[0]![1]).get("client_assertion")).toBe(ASSERTION);
@@ -265,6 +271,11 @@ describe("the provider is built for its environment", () => {
     expect(options.clientSecret).toBe("local-dev-secret");
     expect(options.client).toBeUndefined();
     expect(options[customFetch]).toBeUndefined();
+    // Auth.js's own fetch for this provider, untouched.
+    expect(typeof provider[customFetch]).toBe("function");
+    expect(provider[customFetch]).not.toBe(
+      buildEntraProvider({ ...base, production: true, clientSecret: null })[customFetch],
+    );
   });
 
   it("treats a blank secret as absent - an Azure app setting left empty arrives as an empty string", () => {
@@ -308,5 +319,115 @@ describe("the managed identity assertion provider", () => {
     expect(graph).not.toContain("new ManagedIdentityCredential(");
     expect(graph).not.toContain("api://AzureADTokenExchange");
     expect(graph).toContain("createManagedIdentityAssertionProvider");
+  });
+});
+
+describe("Auth.js keeps a provider's own custom fetch - so ours must be on the provider object", () => {
+  /**
+   * What production did from 2026-09-17 to 2026-09-28. The wrapper was passed
+   * as an option, `MicrosoftEntraID({ ..., [customFetch]: wrapper })`. The
+   * Entra provider ships a customFetch of its own (it rewrites `{tenantid}` in
+   * the discovery issuer), Auth.js's parseProviders copies that onto the
+   * provider first and applies the option only where nothing is set, and the
+   * wrapper never ran. Every token request went out with no assertion; Entra
+   * answered `invalid_client`; the federated identity credential was never
+   * exercised. Nothing in a unit test of the wrapper could see it - only
+   * Auth.js's real normalisation can, so that is what runs here.
+   */
+  const base = {
+    clientId: "220921c1-f23e-4d01-b354-736884ba3d00",
+    tenantId: TENANT,
+    managedIdentityClientId: "d6ed7dd3-a599-444b-b043-90f1e7282bea",
+  };
+  const DISCOVERY_URL = `https://login.microsoftonline.com/${TENANT}/v2.0/.well-known/openid-configuration`;
+
+  function resolve(provider: ReturnType<typeof buildEntraProvider>) {
+    const { provider: resolved } = parseProviders({
+      url: new URL("https://phb.example/api/auth"),
+      providerId: "microsoft-entra-id",
+      config: { providers: [provider] } as never,
+    });
+    return (resolved as Record<PropertyKey, unknown>)[customFetch] as typeof fetch;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("DISCARDS a customFetch passed as a provider option (the 2026-09-17 to 09-28 failure)", async () => {
+    const ours = vi.fn(async () => new Response("{}"));
+    const provider = MicrosoftEntraID({
+      clientId: base.clientId,
+      issuer: `https://login.microsoftonline.com/${TENANT}/v2.0`,
+      client: { token_endpoint_auth_method: "none" },
+      [customFetch]: ours as unknown as typeof fetch,
+    });
+    const { calls, baseFetch } = recorder();
+    vi.stubGlobal("fetch", baseFetch);
+
+    const resolved = resolve(provider as ReturnType<typeof buildEntraProvider>);
+    await resolved(...tokenRequest());
+
+    expect(ours).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+    expect(bodyOf(calls[0]![1]).has("client_assertion")).toBe(false);
+  });
+
+  it("the production provider, resolved by Auth.js, sends the assertion", async () => {
+    const provider = buildEntraProvider({
+      ...base,
+      production: true,
+      clientSecret: null,
+      assertionProvider: async () => ASSERTION,
+    });
+    const { calls, baseFetch } = recorder();
+    vi.stubGlobal("fetch", baseFetch);
+
+    const resolved = resolve(provider);
+    await resolved(...tokenRequest());
+
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0]![0])).toBe(TOKEN_URL);
+    expect(bodyOf(calls[0]![1]).get("client_assertion")).toBe(ASSERTION);
+    expect(bodyOf(calls[0]![1]).get("client_assertion_type")).toBe(CLIENT_ASSERTION_TYPE);
+  });
+
+  it("keeps Auth.js's own discovery-issuer rewrite underneath the wrapper", async () => {
+    const provider = buildEntraProvider({
+      ...base,
+      production: true,
+      clientSecret: null,
+      assertionProvider: async () => ASSERTION,
+    });
+    const seen: string[] = [];
+    let issuer = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        seen.push(String(input));
+        return Response.json({ issuer });
+      }),
+    );
+    const resolved = resolve(provider);
+
+    // Auth.js's fetch exists to replace a literal `{tenantid}`, which is what
+    // the `common` discovery document carries. Its regex takes `\w+` as the
+    // tenant, which a GUID is not, so for this issuer it substitutes "common"
+    // - Auth.js's behaviour, recorded rather than corrected. The point here is
+    // only that the rewrite HAPPENED, which proves Auth.js's fetch ran under
+    // ours: a wrapper that replaced it would return the placeholder verbatim.
+    issuer = "https://login.microsoftonline.com/{tenantid}/v2.0";
+    const placeholder = (await (await resolved(DISCOVERY_URL)).json()) as { issuer: string };
+    expect(placeholder.issuer).not.toContain("{tenantid}");
+    expect(placeholder.issuer).toBe("https://login.microsoftonline.com/common/v2.0");
+
+    // What the tenant-specific endpoint really returns (read live 2026-09-28):
+    // the GUID, no placeholder. Passed through untouched, so oauth4webapi's
+    // issuer comparison against the configured issuer holds in production.
+    issuer = `https://login.microsoftonline.com/${TENANT}/v2.0`;
+    const real = (await (await resolved(DISCOVERY_URL)).json()) as { issuer: string };
+    expect(real.issuer).toBe(`https://login.microsoftonline.com/${TENANT}/v2.0`);
+
+    expect(seen).toEqual([DISCOVERY_URL, DISCOVERY_URL]);
   });
 });

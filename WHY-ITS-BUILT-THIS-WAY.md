@@ -1472,6 +1472,108 @@ buckets are cut on local midnight across the change* fails on the third
 bucket's start. Remove the sampling notice and the panel test fails on the
 missing element. Each of those was run, and the record is in the test files.
 
+## 54 · A label wins on the browsing screens, the key stays in Settings, and the fallback is tested first
+
+**Decision.** A point has three names, and B8.4 (2026-09-25) fixed their
+precedence: what a person typed (`bas_points.label`), then what Niagara
+reports (`bas_points.display_name`), then the oBIX key
+(`niagara_history_name`), which always exists. The browsing screens show the
+first that exists; Settings shows all three. The precedence is one SQL
+fragment in the platform's read service, `shownPointName`, and one pure
+function, `pointDisplayName`, and a test fails the build if a query in that
+file selects or orders by a bare `point_name` again. **The six `bas_v_*`
+views were not changed** and still carry Niagara's name as `point_name`. The
+key is editable nowhere: the label PATCH is a strict schema that refuses a
+body naming `niagaraHistoryName` or `isActive`.
+
+**Why.** Nobody reading Point Explorer needs
+`VAV$2d8$20104$2d105_ZoneTemperature`, but the person matching a broken point
+against Workbench needs exactly that string, escapes and all, so the ugly
+name is hidden from the people browsing and one click away from the person
+troubleshooting. Search matches all three names for the same reason: the
+name someone pastes is the one they have, not the one the screen chose.
+
+The views were left alone because they are read by things that are not this
+platform's screens - Grafana, the collector's `healthcheck.py`, and the SQL
+the Analyze model writes - and a label is a preference of these screens, the
+same class of thing as `is_visible`, which § 45 kept out of the views on the
+same grounds. Restating six views to change one column's meaning for three
+consumers nobody asked to change was the larger and less reversible option.
+The Analyze catalogue already built the point list with
+`COALESCE(label, display_name, niagara_history_name)`, so the model knows a
+labelled point by the name a person would use; its result rows carry
+whatever `point_name` its own SQL selected, and the runbook says so.
+
+The key is not editable because it is the URL. It goes into the collector's
+oBIX request verbatim; edit it and the next `sync` asks the station for a
+history that does not exist, records a failure, and the real history rolls
+on uncollected under its real name. There is no code path that writes it.
+
+**The fallback is tested first.** Every real point has `label` NULL, and
+`bas_stations.display_name` is NULL on both real stations. A suite in which
+every fixture carries a label passes while the live system shows blanks
+everywhere. `tests/bas-point-label.test.ts` therefore starts from a fixture
+with no labels and asserts, on every screen, that Niagara's name renders,
+then nulls Niagara's name and asserts the key renders, then asserts the
+station-name fallback the same way - and only after that seeds a label. The
+note in `docs/testing-blind-spots.md` that asked for this order was written
+from the station mistake and has been removed now that the test exists.
+
+**What breaks if you undo this.** Put the label into the views and Grafana's
+panel titles, the healthcheck's messages and the model's result columns all
+change meaning in one migration, for consumers in another repository. Add
+`niagaraHistoryName` to the PATCH schema and a typo stops a point
+collecting with no error until the horizon has rolled past. Seed a label in
+the first test and the fallback - the path every point is on - goes back to
+being unproven. Select `h.point_name` directly in a new query and the
+source-text test fails; that is what it is for.
+
+## 56 · The assertion fetch is set on the provider object, and the test goes through Auth.js's own normalisation
+
+**What.** Production sign-in authenticates the token exchange with the managed
+identity's token as a `client_assertion`, added by a fetch wrapper handed to
+Auth.js as the provider's `customFetch`. The wrapper is assigned to the
+provider **object** that `MicrosoftEntraID()` returns, after the call,
+composed over the fetch Auth.js put there itself. It is not passed in the
+options. `tests/entra-assertion.test.ts` resolves the provider through
+Auth.js's real `parseProviders`, imported by file path because the package
+does not export it, and asserts the resolved fetch sends the assertion.
+
+**Why.** Because the other way looked right, passed every unit test, and did
+nothing. The Entra provider ships a `customFetch` of its own: it rewrites
+`{tenantid}` in the discovery document's issuer, which Entra returns
+literally for a tenant-specific issuer. Auth.js's normalisation rest-spreads
+the provider, which copies that symbol-keyed fetch onto the defaults, and
+then applies the option's fetch only where nothing is already set. So a
+wrapper passed as `MicrosoftEntraID({ ..., [customFetch]: wrapper })` is
+silently discarded for this provider, and this provider only. Every
+production token request from 2026-09-17 to 2026-09-28 went out with no
+assertion; Entra refused each as `invalid_client`; the federated identity
+credential, waited on for eleven days, was never presented. Nothing in a
+unit test of the wrapper could see this, and the test that checked
+`provider.options[customFetch]` was checking the copy Auth.js ignores.
+
+The composition is kept for a narrower reason than it first looked. Auth.js's
+fetch exists because the `common` and `organizations` discovery documents
+carry a literal `{tenantid}` as their issuer, which oauth4webapi would
+reject against the configured issuer. This platform's issuer is
+tenant-specific, and that document carries the GUID and no placeholder -
+read live on 2026-09-28 - so in production the rewrite is a no-op. Ours
+wraps theirs anyway: replacing a provider's own fetch changes that
+provider's behaviour for every issuer it supports, and a wrapper that only
+adds one thing to one request should not. (Auth.js's regex takes `\w+` as
+the tenant, which a GUID is not; the test records that as Auth.js's
+behaviour rather than correcting it.)
+
+**What breaks if you undo it.** Move the wrapper back into the options and
+sign-in fails as `invalid_client` again, with `AADSTS7000218` in the
+`auth.entra_token_error` line and every wrapper test still green. Drop the
+composition and nothing visible breaks today, which is exactly why the
+regression test asserts it: the day the issuer is changed to `common`,
+discovery would fail with no obvious connection to sign-in. Either way the
+test fails first, because it resolves the provider the way Auth.js does
+rather than the way the code reads.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

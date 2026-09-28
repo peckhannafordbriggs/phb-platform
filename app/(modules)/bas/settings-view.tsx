@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { pointsCountState, settingsCountState } from "@/lib/modules/bas/types";
+import {
+  pointDisplayName,
+  pointMatchesSearch,
+  pointsCountState,
+  settingsCountState,
+} from "@/lib/modules/bas/types";
 import type {
   BasSettingsTree,
   SettingsBuilding,
@@ -29,6 +34,7 @@ import {
   fetchBasSettings,
   fetchStationPoints,
   formatTimestamp,
+  updatePointLabel,
   updatePointVisibility,
   setStationCredential,
   updateBuilding,
@@ -826,6 +832,10 @@ function StationRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [showPoints, setShowPoints] = useState(false);
+  // The tree's search term, read from the URL like every other filter, so
+  // the Points list under a station that matched on a point's name opens
+  // narrowed to that term (B8.4).
+  const initialPointQuery = readSettingsFilters(useSearchParams()).q;
   const reach = describeReach(station);
   const activity = describeActivity(station.activity);
   const login = describeLogin(station);
@@ -994,6 +1004,7 @@ function StationRow({
         <StationPoints
           stationId={station.stationId}
           expectedTotal={station.totalPoints}
+          initialQuery={initialPointQuery}
         />
       )}
     </div>
@@ -1012,13 +1023,50 @@ function StationRow({
 function StationPoints({
   stationId,
   expectedTotal,
+  initialQuery,
 }: {
   stationId: string;
   expectedTotal: number;
+  /**
+   * The tree's search term, if any (B8.4). A station that surfaced because
+   * one of its points matched would otherwise show all of them and leave the
+   * person to find the match by eye.
+   */
+  initialQuery: string;
 }) {
   const [list, setList] = useState<StationPointsList | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [query, setQuery] = useState(initialQuery);
+
+  /**
+   * The label (B8.4). NOT optimistic, unlike the checkbox: the server trims
+   * and normalises what was typed, and the row should show what the database
+   * holds rather than what the input held. The cell stays in its editing
+   * state until the answer arrives.
+   */
+  const saveLabel = useCallback(
+    async (point: SettingsPoint, label: string | null): Promise<void> => {
+      setSaveError(null);
+      try {
+        const saved = await updatePointLabel(point.pointId, label);
+        setList((current) =>
+          current === null
+            ? current
+            : {
+                ...current,
+                points: current.points.map((row) =>
+                  row.pointId === point.pointId ? { ...row, label: saved.label } : row,
+                ),
+              },
+        );
+      } catch (cause: unknown) {
+        setSaveError(cause instanceof ApiError ? cause.message : "Something went wrong.");
+        throw cause;
+      }
+    },
+    [],
+  );
 
   /**
    * The Shown checkbox (B8.3). Optimistic: flip the row, call the API, flip
@@ -1083,14 +1131,17 @@ function StationPoints({
           style={TONE_STYLE.bad}
           role="alert"
         >
-          Could not save that change: {saveError} The checkbox shows what the
+          Could not save that change: {saveError} The row shows what the
           database still holds.
         </p>
       )}
       <PointsTable
         list={list}
         expectedTotal={expectedTotal}
+        query={query}
+        onQueryChange={setQuery}
         onToggleVisible={toggleVisible}
+        onSaveLabel={saveLabel}
       />
     </>
   );
@@ -1110,22 +1161,42 @@ const EMPTY = <span className="text-[var(--muted)]">—</span>;
  * where it gets shown again (B8.3). Hiding removes a point from Point
  * Explorer and the Collection Health table, never from here and never from
  * a total.
+ *
+ * The one thing that does narrow the rows is the search box (B8.4), and it
+ * narrows what is DRAWN, not what was fetched: the counts above the table
+ * are still the service's, the alarm still compares the service's two
+ * numbers, and the search reports its own "N of M match" beside them. It
+ * matches any of a point's three names, so a name pasted out of Workbench
+ * finds a point the screen calls something else.
  */
 export function PointsTable({
   list,
   expectedTotal,
+  query = "",
+  onQueryChange,
   onToggleVisible,
+  onSaveLabel,
 }: {
   list: StationPointsList;
   /** The tree's own count for the row above, so a stale tree is named as such. */
   expectedTotal: number;
+  /** The search term. Blank draws every row. */
+  query?: string;
+  /** Absent in a static render; the search box is then read-only. */
+  onQueryChange?: (query: string) => void;
   /** Absent in a static render; the checkbox is then read-only. */
   onToggleVisible?: (point: SettingsPoint, visible: boolean) => void;
+  /** Absent in a static render; the label is then plain text. */
+  onSaveLabel?: (point: SettingsPoint, label: string | null) => Promise<void>;
 }) {
   const { rendered, inDatabase } = list.pointsAccountedFor;
   const { alarm } = pointsCountState(list.pointsAccountedFor);
   const missing = inDatabase - rendered;
   const noun = (n: number) => (n === 1 ? "point" : "points");
+  const searching = query.trim().length > 0;
+  const shown = searching
+    ? list.points.filter((point) => pointMatchesSearch(point, query))
+    : list.points;
 
   return (
     <div className="mt-3 space-y-2">
@@ -1169,10 +1240,32 @@ export function PointsTable({
         </p>
       ) : (
         <div className="overflow-x-auto">
+          <div className="mb-2 flex flex-wrap items-center gap-3">
+            <input
+              className="w-full max-w-md rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
+              type="search"
+              value={query}
+              readOnly={onQueryChange === undefined}
+              placeholder="Search by label, station name, or Niagara name (e.g. VAV$2d8)"
+              aria-label="Search this station's points by any of their names"
+              onChange={(event) => onQueryChange?.(event.target.value)}
+            />
+            {searching && (
+              <span className="text-xs text-[var(--muted)]">
+                {shown.length} of {list.points.length} {noun(list.points.length)}{" "}
+                match
+              </span>
+            )}
+          </div>
           <table className="w-full text-xs">
             <thead>
               <tr className="text-left text-[var(--muted)]">
-                <th className="py-1 pr-3 font-medium">Label</th>
+                <th
+                  className="py-1 pr-3 font-medium"
+                  title="What a person calls this point. Shown in Point Explorer and Collection Health in place of the station's name. Blank means the station's name is used."
+                >
+                  Label
+                </th>
                 <th className="py-1 pr-3 font-medium">Niagara name</th>
                 <th
                   className="py-1 pr-3 font-medium"
@@ -1199,13 +1292,23 @@ export function PointsTable({
               </tr>
             </thead>
             <tbody>
-              {list.points.map((point) => (
+              {shown.map((point) => (
                 <PointRow
                   key={point.pointId}
                   point={point}
                   onToggleVisible={onToggleVisible}
+                  onSaveLabel={onSaveLabel}
                 />
               ))}
+              {searching && shown.length === 0 && (
+                <tr className="border-t border-[var(--border)]">
+                  <td className="py-2 text-[var(--muted)]" colSpan={9}>
+                    No point on this station matches &ldquo;{query.trim()}&rdquo; by
+                    label, station name or Niagara name. Clear the search to see
+                    all {list.points.length}.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -1215,8 +1318,10 @@ export function PointsTable({
         {inDatabase} {noun(inDatabase)} in the database for this station,{" "}
         {rendered} listed. Unticking Shown hides a point from Point Explorer
         and the Collection Health table only - it is still collected and still
-        counts in every risk figure. Labels and roles are edited in a later
-        phase.
+        counts in every risk figure. A label replaces the station&apos;s name
+        on those screens and nowhere else; the Niagara name is never editable,
+        because it is what the collector asks the station for. Roles and
+        equipment are edited in a later phase.
       </p>
     </div>
   );
@@ -1225,16 +1330,20 @@ export function PointsTable({
 function PointRow({
   point,
   onToggleVisible,
+  onSaveLabel,
 }: {
   point: SettingsPoint;
   onToggleVisible?: (point: SettingsPoint, visible: boolean) => void;
+  onSaveLabel?: (point: SettingsPoint, label: string | null) => Promise<void>;
 }) {
   const collected = describeCollected(point);
   const completeness = describePointCompleteness(point);
 
   return (
     <tr className="border-t border-[var(--border)] align-top">
-      <td className="py-1 pr-3">{point.label ?? EMPTY}</td>
+      <td className="py-1 pr-3">
+        <LabelCell point={point} onSave={onSaveLabel} />
+      </td>
       {/*
         The oBIX key, verbatim and monospace, escapes and all - it is what you
         match against Workbench when something breaks, and shown in full for
@@ -1265,12 +1374,114 @@ function PointRow({
             checked={point.visible}
             readOnly={onToggleVisible === undefined}
             onChange={(event) => onToggleVisible?.(point, event.target.checked)}
-            aria-label={`Show ${point.label ?? point.niagaraHistoryName} on the browsing screens`}
+            aria-label={`Show ${pointDisplayName(point)} on the browsing screens`}
           />
           {point.visible ? "Shown" : "Hidden"}
         </label>
       </td>
     </tr>
+  );
+}
+
+/**
+ * The Label cell (B8.4): text until clicked, then an input with Save and
+ * Cancel. Enter saves, Escape cancels. Saving a blank clears the label, and
+ * the cell says so rather than leaving a person to wonder whether an empty
+ * box is "no change" or "no label".
+ *
+ * The input is seeded with the current label, never with the Niagara name:
+ * pre-filling it with the fallback would invite people to save the station's
+ * own name as a label, which is a copy that stops tracking discover.
+ */
+function LabelCell({
+  point,
+  onSave,
+}: {
+  point: SettingsPoint;
+  onSave?: (point: SettingsPoint, label: string | null) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(point.label ?? "");
+  const [saving, setSaving] = useState(false);
+
+  if (onSave === undefined) {
+    return point.label ?? EMPTY;
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="rounded px-1 text-left hover:underline"
+        title={
+          point.label === null
+            ? "Add a label. Until one is set, the browsing screens use the station's name."
+            : "Edit the label"
+        }
+        aria-label={`Edit the label for ${pointDisplayName(point)}`}
+        onClick={() => {
+          setDraft(point.label ?? "");
+          setEditing(true);
+        }}
+      >
+        {point.label ?? <span className="text-[var(--muted)]">Add label</span>}
+      </button>
+    );
+  }
+
+  const commit = async () => {
+    const next = draft.trim().length === 0 ? null : draft.trim();
+    setSaving(true);
+    try {
+      await onSave(point, next);
+      setEditing(false);
+    } catch {
+      // The list-level banner has the message; the cell stays open so
+      // nothing typed is lost.
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <input
+        className="w-44 rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-xs"
+        type="text"
+        value={draft}
+        maxLength={120}
+        disabled={saving}
+        autoFocus
+        aria-label={`Label for ${point.niagaraHistoryName}`}
+        placeholder={point.niagaraDisplayName ?? point.niagaraHistoryName}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void commit();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setEditing(false);
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs disabled:opacity-50"
+        disabled={saving}
+        onClick={() => void commit()}
+      >
+        {draft.trim().length === 0 && point.label !== null ? "Clear label" : "Save"}
+      </button>
+      <button
+        type="button"
+        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs disabled:opacity-50"
+        disabled={saving}
+        onClick={() => setEditing(false)}
+      >
+        Cancel
+      </button>
+    </span>
   );
 }
 

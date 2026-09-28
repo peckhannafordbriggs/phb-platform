@@ -2,6 +2,7 @@ import {
   CLIENT_ASSERTION_TYPE,
   type AssertionProvider,
 } from "@/lib/azure/managed-identity-assertion";
+import { logEntraTokenError } from "./entra-token-error";
 
 /**
  * The one request sign-in makes that has to prove who the platform is.
@@ -30,6 +31,12 @@ import {
  * loudly, because a token request sent without its assertion fails as
  * `invalid_client` and looks nothing like "the wrapper could not read the
  * body".
+ *
+ * WHAT IS READ: a non-2xx answer from that endpoint is logged, with Entra's
+ * AADSTS code, before it is handed back. Auth.js discards the body when it
+ * builds its error (see entra-token-error.ts), so this is the only place the
+ * code can reach the log. The Response itself goes back untouched: the logger
+ * reads a clone.
  */
 
 export const ENTRA_HOST = "login.microsoftonline.com";
@@ -94,6 +101,8 @@ export function createAssertionFetch(
     params.set("client_assertion_type", CLIENT_ASSERTION_TYPE);
     params.set("client_assertion", await getAssertion());
 
-    return baseFetch(input, { ...init, body: params });
+    const response = await baseFetch(input, { ...init, body: params });
+    if (!response.ok) await logEntraTokenError(response);
+    return response;
   };
 }

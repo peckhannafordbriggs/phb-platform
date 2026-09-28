@@ -97,28 +97,6 @@ spots too, and this entry should be deleted rather than kept as history.
 
 ---
 
-## For B8.4: the label fallback must be tested with the label actually NULL
-
-**Recorded:** 17 September 2026. **Not yet a test** — a note for the phase that
-will need one.
-
-**The state of the data.** `bas_stations.display_name` is NULL on both
-stations. The Settings UI falls back to `niagara_station_name`, which is why
-nobody has noticed that no station has ever been given a display name. Every
-row the fallback has ever rendered took the fallback path.
-
-**Why it matters for points.** B8.4 adds the same label-with-fallback pattern to
-points: `label` wins when present, `display_name` (Niagara's) otherwise. Every
-real point today has `label` NULL. A test that seeds a label and asserts it
-shows proves the branch nobody is on. The test that matters seeds a point with
-`label` NULL and a Niagara `display_name` set, and asserts the Niagara name
-renders — and a second with both NULL, asserting the history name renders and
-never an empty cell. `bas_points_label_not_blank` guarantees NULL is the only
-spelling of "no label", so those two cases are the whole space.
-
-**Also worth asserting then:** that search matches both the label and the
-Niagara name for a point whose label is NULL, since that is every point.
-
 ## Analyze (B5): the model is faked in every automated test
 
 `tests/bas-analyze-service.test.ts` drives every honesty path against the real

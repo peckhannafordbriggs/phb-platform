@@ -75,6 +75,13 @@ export type AuditAction =
    */
   | "bas.point_visibility_changed"
   /**
+   * A point's label set, changed or cleared (B8.4). Carries `previousLabel`
+   * and `label` (NULL for "cleared - back to the Niagara name"), plus the oBIX
+   * key and Niagara's own name so the row identifies the point even after a
+   * later rename. Only `bas_points.label` moves; the key is never editable.
+   */
+  | "bas.point_label_changed"
+  /**
    * A question typed into the Analyze tab (B5). One row per question,
    * whatever the outcome, carrying the question, the SQL that ran (or was
    * tried), the row count, the duration and the outcome kind.
