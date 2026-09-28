@@ -1515,7 +1515,11 @@ expires in 2028; production cannot be affected by it.
 since. Vitis added the federated identity credential (Request 3) on
 2026-09-28, and the first four sign-in attempts that day still failed as
 `invalid_client` - with the log unable to say which AADSTS code was behind
-the word, which is what the next section is about.
+the word. The cause, found the same day and described under the next
+heading, was that the assertion wrapper had never run: Auth.js keeps the
+Entra provider's own `customFetch` over one passed as an option, so the
+wrapper is now set on the provider object itself
+(`fix/sso-provider-custom-fetch`).
 
 ### Production sign-in bounces to `/signin?error=OAuthCallbackError`
 
@@ -1544,7 +1548,7 @@ az monitor log-analytics query -w "$WS" --analytics-query "
 |---|---|---|
 | `invalid_client` | No client credential on the exchange - the state before the assertion shipped, or a secret was deployed and rejected | Production must carry the assertion, never a secret. Check the provider in `auth.ts` and that `AUTH_MICROSOFT_ENTRA_ID_SECRET` is absent |
 | `invalid_client`, `AADSTS70021` or `AADSTS700213` | No federated identity credential on the SSO app matches the token's issuer and subject | Request 3: the credential is missing, its subject is not the identity's **object** id, or it was created minutes ago and has not replicated yet - wait and retry before anything else |
-| `invalid_client`, `AADSTS7000218` | The token request reached Entra with no `client_assertion` at all | The platform's fault, not Entra's: the assertion fetch wrapper did not run. `lib/auth/entra-assertion-fetch.ts`, `tests/entra-assertion.test.ts` |
+| `invalid_client`, `AADSTS7000218` | The token request reached Entra with no `client_assertion` at all | The platform's fault, not Entra's: the assertion fetch wrapper did not run. This was the actual cause from 2026-09-17 to 2026-09-28 - see *What the first deploy of that logging found* below. `lib/auth/entra-assertion-fetch.ts`, `tests/entra-assertion.test.ts` |
 | `invalid_request`, `AADSTS50011` | Redirect URI mismatch | The URI on the app registration must equal `AUTH_URL` + `/api/auth/callback/microsoft-entra-id` exactly |
 
 **Why the code is in the log at all, and why not through Auth.js.** Auth.js
@@ -1568,6 +1572,27 @@ on any non-2xx answer it logs a whitelist of the body's fields as
 `lib/auth/entra-token-error.ts`; `tests/entra-token-error.test.ts` proves the
 code is there, the Response is still readable, and a token would not be
 copied.
+
+**What the first deploy of that logging found: nothing, which was the
+answer.** A sign-in on the fixed image still logged only Auth.js's
+`invalid_client` line, with no `auth.entra_token_error` beside it, and a
+probe with a bogus authorization code against the same build running
+locally, with no managed identity available, reached Entra instead of
+failing on the identity call. Both mean the same thing: the fetch wrapper
+that adds the assertion was not running. It was handed to Auth.js as a
+provider option, `MicrosoftEntraID({ ..., [customFetch]: wrapper })`, and
+the Entra provider ships a `customFetch` of its own - it rewrites
+`{tenantid}` in the discovery document's issuer. Auth.js's normalisation
+(`parseProviders`) copies the provider's own fetch onto the provider first
+and applies the option only where nothing is already set, so ours was
+discarded without a word. Every production token request from 2026-09-17 to
+2026-09-28 went out with no assertion at all: `AADSTS7000218`, the last row
+of the table, and the federated identity credential was never exercised.
+The wrapper is now set on the provider object, composed over Auth.js's own
+fetch so the issuer rewrite still runs, and `tests/entra-assertion.test.ts`
+resolves the provider through Auth.js's real `parseProviders` - the only
+place the difference is visible - and fails if the wrapper does not run.
+`WHY-ITS-BUILT-THIS-WAY.md` § 56.
 
 ### Symptom when it expires
 

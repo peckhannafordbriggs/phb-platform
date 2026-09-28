@@ -1528,6 +1528,52 @@ the first test and the fallback - the path every point is on - goes back to
 being unproven. Select `h.point_name` directly in a new query and the
 source-text test fails; that is what it is for.
 
+## 56 · The assertion fetch is set on the provider object, and the test goes through Auth.js's own normalisation
+
+**What.** Production sign-in authenticates the token exchange with the managed
+identity's token as a `client_assertion`, added by a fetch wrapper handed to
+Auth.js as the provider's `customFetch`. The wrapper is assigned to the
+provider **object** that `MicrosoftEntraID()` returns, after the call,
+composed over the fetch Auth.js put there itself. It is not passed in the
+options. `tests/entra-assertion.test.ts` resolves the provider through
+Auth.js's real `parseProviders`, imported by file path because the package
+does not export it, and asserts the resolved fetch sends the assertion.
+
+**Why.** Because the other way looked right, passed every unit test, and did
+nothing. The Entra provider ships a `customFetch` of its own: it rewrites
+`{tenantid}` in the discovery document's issuer, which Entra returns
+literally for a tenant-specific issuer. Auth.js's normalisation rest-spreads
+the provider, which copies that symbol-keyed fetch onto the defaults, and
+then applies the option's fetch only where nothing is already set. So a
+wrapper passed as `MicrosoftEntraID({ ..., [customFetch]: wrapper })` is
+silently discarded for this provider, and this provider only. Every
+production token request from 2026-09-17 to 2026-09-28 went out with no
+assertion; Entra refused each as `invalid_client`; the federated identity
+credential, waited on for eleven days, was never presented. Nothing in a
+unit test of the wrapper could see this, and the test that checked
+`provider.options[customFetch]` was checking the copy Auth.js ignores.
+
+The composition is kept for a narrower reason than it first looked. Auth.js's
+fetch exists because the `common` and `organizations` discovery documents
+carry a literal `{tenantid}` as their issuer, which oauth4webapi would
+reject against the configured issuer. This platform's issuer is
+tenant-specific, and that document carries the GUID and no placeholder -
+read live on 2026-09-28 - so in production the rewrite is a no-op. Ours
+wraps theirs anyway: replacing a provider's own fetch changes that
+provider's behaviour for every issuer it supports, and a wrapper that only
+adds one thing to one request should not. (Auth.js's regex takes `\w+` as
+the tenant, which a GUID is not; the test records that as Auth.js's
+behaviour rather than correcting it.)
+
+**What breaks if you undo it.** Move the wrapper back into the options and
+sign-in fails as `invalid_client` again, with `AADSTS7000218` in the
+`auth.entra_token_error` line and every wrapper test still green. Drop the
+composition and nothing visible breaks today, which is exactly why the
+regression test asserts it: the day the issuer is changed to `common`,
+discovery would fail with no obvious connection to sign-in. Either way the
+test fails first, because it resolves the provider the way Auth.js does
+rather than the way the code reads.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
