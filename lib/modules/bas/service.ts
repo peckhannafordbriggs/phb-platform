@@ -35,6 +35,14 @@ import {
   yearsBetween,
 } from "./range";
 import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk, toHorizonState } from "./types";
+import {
+  emptyNotChecked,
+  judgePlausibility,
+  type FlatPoint,
+  type PlausibilityRow,
+  type PlausibilitySummary,
+} from "./plausibility";
+import { plausibilityLateral } from "./plausibility-sql";
 
 /**
  * "This row is at risk", for SQL, generated from the one TypeScript list so
@@ -552,6 +560,16 @@ interface VanishedRow {
   last_record_ts: Date | null;
 }
 
+/** One active point with everything the plausibility judge needs, plus its names for the card. */
+interface PlausibilityQueryRow extends PlausibilityRow {
+  point_id: bigint;
+  point_name: string;
+  site_name: string;
+  station_name: string;
+  unit: string | null;
+  visible: boolean;
+}
+
 interface RunRow {
   run_id: bigint;
   started_at: Date;
@@ -798,6 +816,13 @@ export async function getCollectionHealth(
       ORDER BY h.last_record_ts DESC NULLS LAST, ${shownPointName(Prisma.sql`h`)}, h.point_id
     `;
 
+    // --- values that have stopped changing (2026-09-28) ---------------------
+
+    // Every active point in scope, hidden or not, with the flat facts computed
+    // for the ones the role says to check. Judged in TypeScript below; see
+    // lib/modules/bas/plausibility.ts for the rules and the measured cost.
+    const plausibilityRows = await loadPlausibilityRows(tx, healthSitesH);
+
     // --- collector runs -----------------------------------------------------
 
     // The LEFT JOIN and the `IS NULL` arm are Grafana's, and they matter: a run
@@ -943,14 +968,25 @@ export async function getCollectionHealth(
         )
       : null;
 
+    // The stuck-value count without the filter, by the same rule: the rows
+    // are judged by the same function as the in-scope list. Skipped, like
+    // the totals above, when nothing is filtered.
+    const unfilteredFlat = selection.filtered
+      ? summarisePlausibility(
+          await loadPlausibilityRows(tx, siteFilter(entitled, Prisma.sql`h.site_id`)),
+        ).flat.length
+      : null;
+
     return {
       observedAt,
       selection,
       unfiltered,
+      unfilteredFlat,
       totals,
       readingTotals,
       points,
       vanished,
+      plausibilityRows,
       runs,
       newestRun,
       runRecords,
@@ -1012,6 +1048,8 @@ export async function getCollectionHealth(
 
   const { selection } = result;
 
+  const plausibility = summarisePlausibility(result.plausibilityRows);
+
   const health: CollectionHealth = {
     windowDays,
 
@@ -1045,6 +1083,7 @@ export async function getCollectionHealth(
             activePoints: result.unfiltered.active_points,
             pointsAtRisk: result.unfiltered.points_at_risk,
             pointsNoLongerReported: result.unfiltered.points_no_longer_reported,
+            pointsFlat: result.unfilteredFlat ?? 0,
           },
 
     observedAt: result.observedAt.toISOString(),
@@ -1057,12 +1096,14 @@ export async function getCollectionHealth(
       hiddenPoints: result.totals.hidden_points,
       hiddenPointsAtRisk,
       pointsNoLongerReported: result.totals.points_no_longer_reported,
+      pointsFlat: plausibility.flat.length,
       pointsIncomplete: completenessCounts.incomplete,
       completenessCounts,
       minutesSinceNewestReading: result.readingTotals.minutes_since,
     },
     points,
     vanished: result.vanished.map(toVanishedPoint),
+    plausibility,
     runs: result.runs.map(toIngestRunRow),
     newestRunAt: iso(result.newestRun),
     runRecords: result.runRecords.map(toRunRecordPoint),
@@ -1296,6 +1337,102 @@ function toPointHealthRow(row: PointRow): PointHealthRow {
     heldCount: row.held_count,
     visible: row.visible,
   };
+}
+
+/**
+ * Every ACTIVE point matching `where` (a filter over the view aliased `h`),
+ * with the plausibility facts computed for the ones the role says to check.
+ * Hidden points included: a flagged point is listed whether or not somebody
+ * hid it from the browsing screens.
+ */
+async function loadPlausibilityRows(
+  tx: Prisma.TransactionClient,
+  where: Prisma.Sql,
+): Promise<PlausibilityQueryRow[]> {
+  return tx.$queryRaw<PlausibilityQueryRow[]>`
+    SELECT
+      h.point_id,
+      ${shownPointName(Prisma.sql`h`)} AS point_name,
+      h.site_name,
+      COALESCE(st.display_name, st.niagara_station_name) AS station_name,
+      h.unit,
+      p.is_visible AS visible,
+      p.is_active,
+      p.point_role,
+      pr.is_setpoint  AS role_is_setpoint,
+      pr.measurement  AS role_measurement,
+      p.collection_interval_s,
+      c.last_run_at,
+      c.last_status,
+      pl.*
+    FROM bas_v_collection_health h
+    JOIN bas_points p USING (point_id)
+    JOIN bas_stations st ON st.station_id = h.station_id
+    -- LEFT: a point with no role has no role row, and "no role" is one of the
+    -- answers this list exists to give.
+    LEFT JOIN bas_point_roles pr ON pr.point_role = p.point_role
+    LEFT JOIN bas_sync_checkpoints c ON c.point_id = p.point_id
+    ${plausibilityLateral(Prisma.sql`p`, Prisma.sql`pr`)}
+    WHERE h.is_active AND ${where}
+    ORDER BY ${shownPointName(Prisma.sql`h`)}, h.point_id
+  `;
+}
+
+/**
+ * Judges every row and counts the outcomes. The flagged list is worst first -
+ * longest flat - then by name, so the card reads top-down in order of how
+ * long nobody has looked.
+ */
+function summarisePlausibility(rows: PlausibilityQueryRow[]): PlausibilitySummary {
+  const summary: PlausibilitySummary = {
+    checked: 0,
+    moving: 0,
+    tooFewReadings: 0,
+    notChecked: emptyNotChecked(),
+    flat: [],
+  };
+
+  for (const row of rows) {
+    const plausibility = judgePlausibility(row);
+    switch (plausibility.state) {
+      case "not_checked":
+        // The judge always sets a reason on this state; the `?? "no_threshold"`
+        // is for the type, not the data.
+        summary.notChecked[plausibility.notCheckedReason ?? "no_threshold"] += 1;
+        break;
+      case "too_few_readings":
+        summary.checked += 1;
+        summary.tooFewReadings += 1;
+        break;
+      case "moving":
+        summary.checked += 1;
+        summary.moving += 1;
+        break;
+      case "flat": {
+        summary.checked += 1;
+        const point: FlatPoint = {
+          pointId: row.point_id.toString(),
+          pointName: row.point_name,
+          siteName: row.site_name,
+          stationName: row.station_name,
+          unit: row.unit,
+          visible: row.visible,
+          plausibility,
+        };
+        summary.flat.push(point);
+        break;
+      }
+    }
+  }
+
+  summary.flat.sort(
+    (a, b) =>
+      (b.plausibility.flatHours ?? 0) - (a.plausibility.flatHours ?? 0) ||
+      a.pointName.localeCompare(b.pointName) ||
+      a.pointId.localeCompare(b.pointId),
+  );
+
+  return summary;
 }
 
 function toVanishedPoint(row: VanishedRow): VanishedPoint {

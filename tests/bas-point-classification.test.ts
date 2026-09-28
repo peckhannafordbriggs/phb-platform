@@ -50,6 +50,7 @@ import {
   updatePointSchema,
 } from "@/lib/validation/bas-settings";
 import { BAS_POINT_ROLES } from "../prisma/bas-vocabularies";
+import { notCheckedPlausibility } from "@/lib/modules/bas/plausibility";
 import { PointsTable } from "@/app/(modules)/bas/settings-view";
 import {
   NO_POINT_FILTERS,
@@ -888,7 +889,8 @@ describe("the list's rules", () => {
     pointId: "1", label: null, niagaraHistoryName: "P", niagaraDisplayName: "P", pointRole: null, roleName: null,
     equipmentId: null, equipmentName: null, unit: null, suggestion: null,
     horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
-    collected: true, inactiveReason: null, completeness: null, lastRecordAt: null, visible: true, ...over,
+    collected: true, inactiveReason: null, completeness: null, lastRecordAt: null, visible: true,
+    plausibility: notCheckedPlausibility("no_role"), ...over,
   });
 
   it("filters by role, equipment and collected, and 'select all shown' is the filtered set", () => {

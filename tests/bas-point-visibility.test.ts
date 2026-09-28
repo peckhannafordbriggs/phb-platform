@@ -25,6 +25,9 @@ import {
   seedChangeOrdersModule,
   testDb,
 } from "./db";
+import { notCheckedPlausibility } from "@/lib/modules/bas/plausibility";
+
+const NOT_CHECKED_FIXTURE = notCheckedPlausibility("no_role");
 
 /**
  * The Shown checkbox (B8.3): one point, one field, and the field is not
@@ -375,6 +378,7 @@ describe("the Points list renders the checkbox", () => {
     completeness: "complete",
     lastRecordAt: null,
     visible,
+    plausibility: NOT_CHECKED_FIXTURE,
   });
 
   const render = (visible: boolean) =>
