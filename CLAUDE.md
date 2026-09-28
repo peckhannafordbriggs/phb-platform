@@ -231,9 +231,6 @@ repository sends, and neither is `ref:refs/heads/main`. Both fail as
 `AADSTS70021` with no hint as to which half is wrong, and the subject has to be
 typed by hand. `runbook.md` → *What to ask IT for* → Request 3a carries it.
 
-The Graph federated credential and the production redirect URI are still with
-Vitis; sign-in cannot be tested until the redirect URI exists.
-
 **Production sign-in was tested on 2026-09-16 and failed as predicted** —
 `invalid_client` at the token exchange, because production carries no SSO
 secret and the SSO app registration is a confidential client. The decision
@@ -241,12 +238,26 @@ went the way prohibition 7 points: **not** a secret in Azure, but the managed
 identity's token presented as a `client_assertion`, matched by a federated
 identity credential on the SSO app registration — the same mechanism the Graph
 module already uses, now one shared implementation in
-`lib/azure/managed-identity-assertion.ts`. Built on
-`feat/sso-managed-identity-assertion`; **not merged**, because it cannot work
-until Vitis adds that credential (`runbook.md` → *What to ask IT for* →
-*Request 3*, one email, verbatim). Production refuses to boot if
-`AUTH_MICROSOFT_ENTRA_ID_SECRET` is set. The logo (`public/`) fix shipped
-separately.
+`lib/azure/managed-identity-assertion.ts`. Merged 2026-09-17 (PR #8).
+Production refuses to boot if `AUTH_MICROSOFT_ENTRA_ID_SECRET` is set. The
+logo (`public/`) fix shipped separately.
+
+**Vitis added the SSO federated credential on 2026-09-28, and sign-in still
+failed as `invalid_client`.** The log could not say why: Auth.js discards
+Entra's error body when it builds its error, so the AADSTS code never
+reached the log, and neither the Entra sign-in logs nor `az containerapp
+exec` were available to this account. The platform now logs the code itself,
+from the one place that still sees the body (`lib/auth/entra-token-error.ts`,
+`auth.entra_token_error`). The first deploy of that logging showed the
+assertion wrapper **had never run**: the Entra provider ships a `customFetch`
+of its own, and Auth.js keeps it over one passed as an option, so every
+production token request since the 17th went out with no assertion
+(`AADSTS7000218`). The wrapper is now set on the provider object, composed
+over Auth.js's own fetch, and the test resolves the provider through Auth.js's
+real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`; whether it
+signs in is not yet observed.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
+`runbook.md` → *Production sign-in bounces to
+`/signin?error=OAuthCallbackError`*.
 
 A defect Part B surfaced: the deploy workflow's firewall step passed the server
 as `--name` and the rule as `--rule-name`, so it could never have run. `-s` is
