@@ -1521,6 +1521,30 @@ Entra provider's own `customFetch` over one passed as an option, so the
 wrapper is now set on the provider object itself
 (`fix/sso-provider-custom-fetch`).
 
+### An employee's name reads "Platform Administrator"
+
+**Symptom.** A bootstrap admin has signed in, and the shell, Home and the
+admin list show them as *Platform Administrator* - the seed's placeholder -
+rather than their name. Seen on the first production admin, 2026-09-28.
+
+**Cause.** The seed creates a bootstrap admin's row ahead of their first
+sign-in with placeholder names and `profile_completed = false`. Sign-in then
+finds that row by email, stamps `entra_oid`, the address and the login
+times, and until this entry did NOT stamp the name - on the reasoning that
+onboarding lets the employee correct it. The onboarding form prefills from
+the row, so it offered the placeholder back, and a person who accepts the
+form as shown keeps it.
+
+**Fix.** `lib/auth/signin.ts` stamps `first_name` / `last_name` from the
+token on every sign-in **while `profile_completed` is false**, and never
+once it is true - a completed profile holds the employee's own correction
+(docs/04). So for anyone who has not finished onboarding the next sign-in
+corrects the name by itself. For someone who completed onboarding with the
+placeholder still in place, the row now holds a name a person confirmed;
+there is no admin route to change a name, by design, and none should be
+added. `tests/onboarding.test.ts` runs the real seed and then a sign-in, and
+asserts the placeholder is gone and a completed profile is untouched.
+
 ### Production sign-in bounces to `/signin?error=OAuthCallbackError`
 
 Microsoft returned the authorization code and the token exchange failed. Pull
