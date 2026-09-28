@@ -97,6 +97,29 @@ spots too, and this entry should be deleted rather than kept as history.
 
 ---
 
+## Value plausibility: no change-of-value point is judged on the live estate
+
+**Recorded:** 28 September 2026. **Test:** `tests/bas-plausibility.test.ts`
+→ *change-of-value trends*.
+
+**The claim.** A change-of-value trend whose value has stopped changing is
+flagged from its last record to the collector's last successful pass, and a
+stalled collector is never mistaken for a dead sensor.
+
+**Why it cannot be provoked live.** Every change-of-value point on the estate
+- the eight office points with no `collection_interval_s` - is a status or
+command point, which the role excludes from the check. `npm run
+bas:plausibility:verify` therefore exercises only the interval path against
+real data; the change-of-value path is proved by three fixture points (flat to
+the ok pass, stalled collector, too few readings) and by mutation D.
+
+**What would make it real.** The first building with a change-of-value trend
+on a measured quantity - a zone temperature logged on change with a tolerance,
+say. Re-run the verify script there and check its verdict against Workbench,
+then delete this entry.
+
+---
+
 ## Analyze (B5): the model is faked in every automated test
 
 `tests/bas-analyze-service.test.ts` drives every honesty path against the real

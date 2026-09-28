@@ -1528,6 +1528,76 @@ the first test and the fallback - the path every point is on - goes back to
 being unproven. Select `h.point_name` directly in a new query and the
 source-text test fails; that is what it is for.
 
+## 55 · The evidence is the flatness, not the number, and the role decides who is judged
+
+**Decision.** The value-plausibility check (2026-09-28) asks one question of
+a point: has its value stopped changing when it should have? A run of
+identical readings longer than a threshold for the point's *kind* of
+measurement is flagged as "looks stuck, go and look". Which points are judged
+is decided by the role - `bas_point_roles.is_setpoint` and `measurement` -
+and by nothing else. There is no list of bad values. Nothing is stored; the
+check runs on every page load.
+
+**Why.** Every check before this one asked whether data was *arriving*.
+Two dead sensors arrived on time, complete, no gaps, for a month:
+`points_RoomT` at exactly -40 since 24 August (an open-circuit analog input)
+and `VAV-8 104-105_ZoneTemperature` at exactly 70.5 for its whole history.
+Both were found by a person reading numbers. The dashboard said all clear
+the whole time, which is worse than no dashboard.
+
+*The evidence is the flatness.* -40 and 32767 are what dead inputs often
+read, and a hard-coded list of them would have caught one of the two faults
+and missed the other - 70.5 is an ordinary room. It would also be a guess
+dressed as a fact: -40 is a real temperature somewhere. A step followed by a
+flat line and a flat line with no step have the same signature, and the
+signature is what is checked.
+
+*The role decides.* A check that flags every setpoint is worse than no
+check, because people learn to ignore it and then miss the real one. A
+setpoint holding still is the setpoint working; `Occupied` has 419 records in
+two and a half years and that is normal. The roles table already carried the
+distinction - `is_setpoint`, and a `measurement` kind of `status` or `mode`
+for the state words - and it was set on the twenty office points that matter.
+A point with no role is not checked and says *role not set*, never guessed
+at: Temp1, Temp2 and Temp3 are unclassified because nobody knows what they
+are, and a check that guessed would erase that fact. The SQL that picks the
+judged points is generated from the same threshold table the TypeScript
+applies, and a test walks all 91 roles in the vocabulary through both halves
+and fails on the first disagreement; the judge itself throws rather than
+guessing if it ever meets a row the two halves disagree on.
+
+*Thresholds are per kind, defended by measurement.* One number for
+everything would flag a damper at its minimum position (the office
+outside-air damper held exactly 10 % for 9.4 days in September, correctly)
+or miss a duct static that has been flat for six hours (broken). So pressure
+is 3 h, temperature 6 h, outputs and accumulators a week, electrical a day -
+each with its reason in the table and printed on the card, each sitting
+clear of the longest healthy run measured in the live history. A kind with
+no row is not judged with a default; it lands in a test that lists it until
+somebody decides.
+
+*Nothing is stored.* Measured against the live table: 6.5 ms for 17 judged
+points, because the plan walks backwards down the primary key and stops at
+the first different value - a healthy point costs four index probes whatever
+the table's size, and only a dead sensor's run is walked, bounded at 90
+days. A verdict stored per collector pass would live in the other repository
+(`phb-bas`), need a migration, and go stale whenever a threshold here
+changed. The condition to revisit is written down: 200 ms on the live screen.
+
+**What breaks if you undo it.** Add a bad-value list and the next stuck
+sensor at an ordinary value is missed while a cold-room sensor reading a
+real -40 is flagged. Drop `NOT is_setpoint` from `checkedRoleSql` and every
+setpoint on the office unit is flagged the next time the unit holds a
+setpoint for a shift - and the judge throws, because the two halves no
+longer agree; drop the TypeScript branch too and the acceptance test lists
+the setpoint in `flat`. Guess a role for an unclassified point and the check
+starts making claims about a number nobody can name. Use one threshold and
+either the dampers are flagged weekly or the pressures never are. Measure a
+change-of-value point to now() and a stopped collector reads as a dead
+sensor. Store the verdict and a threshold change here leaves the stored
+column wrong until the collector is redeployed. Deactivate a point to silence
+the card and the station overwrites what was not collected.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

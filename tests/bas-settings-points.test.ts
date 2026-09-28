@@ -46,6 +46,9 @@ import {
   seedChangeOrdersModule,
   testDb,
 } from "./db";
+import { notCheckedPlausibility } from "@/lib/modules/bas/plausibility";
+
+const NOT_CHECKED_FIXTURE = notCheckedPlausibility("no_role");
 
 /**
  * The Points level of the Settings tree (B8.2): every point on a station, with
@@ -432,6 +435,7 @@ describe("the screen says so when the list falls short", () => {
     completeness: "complete",
     lastRecordAt: null,
     visible: true,
+    plausibility: NOT_CHECKED_FIXTURE,
   });
 
   function render(list: StationPointsList, expectedTotal: number): string {

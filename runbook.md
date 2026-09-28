@@ -5428,6 +5428,7 @@ each answers a different question and they routinely disagree.
 | Did the collector **stop for longer than the station remembers** | *Longest collector silence* banner |
 | Has data **already been destroyed** | *Recorded data gaps* table, `roll_overwrite` rows |
 | Has the station **stopped offering a history** | *No longer reported by the station* card, each point by name with its last record |
+| Is a sensor **dead while still reporting** | *Values that have stopped changing* card, each point with how long, at what value, and when it was last different - see *Collection Health says a value has stopped changing* |
 
 The development database on 24 August 2026 is the worked example, and it is
 worth understanding because it is the case a naive screen gets wrong:
@@ -6703,6 +6704,109 @@ sentence says it.
 | A **device dropped** or a history stopped by accident | Fix it on the station. The next `discover` sees the history again and **re-activates the point itself**, clearing the reason - the collector's own decision, reversed by the station. The card empties on the next refresh |
 
 Do not delete the row. Its readings exist nowhere else.
+
+---
+
+## Collection Health says a value has stopped changing
+
+**Symptom.** The card *Values that have stopped changing* is amber and lists
+one or more points, each with a line like *flat 35.0 days at -40.00
+fahrenheit since Aug 24, 09:05 · last different 76.10 fahrenheit at Aug 24,
+09:00 · 7,550 identical readings · threshold 6.0 h for temperature*. On the
+Points list under Settings the same point's *Value* column reads *Flat 35.0
+days at -40.00 fahrenheit · threshold 6.0 h for temperature*. Every other
+figure for the point - collected, complete, roll risk - is green.
+
+**Cause.** The point's value has not changed for longer than a measured
+quantity of its kind can plausibly hold still. Every other check on this
+screen asks whether data is *arriving*; this one asks whether it means
+anything. It is a **reason to look, not a confirmed fault** - a technician
+confirms it at the sensor. The two faults it was built on (2026-09-28), both
+found by a person reading numbers and both green on every screen for a
+month:
+
+- `points_RoomT` (Spring Grove) read 76 °F, then **-40** at 09:05 on 24
+  August, and exactly -40 for every reading since - an open-circuit analog
+  input. 35 days flat when the check first ran.
+- `VAV-8 104-105_ZoneTemperature` (office) read exactly **70.5** for its
+  entire history - one distinct value in 1,626 readings.
+
+**What it looks for, and what it deliberately does not.** One check: a run of
+identical readings longer than the threshold for the point's kind. There is
+**no list of bad values** - -40 is a real temperature somewhere - so a sensor
+stuck at a perfectly ordinary 70.5 is caught the same way as one at -40. It
+never deactivates a point, never touches a reading, and never removes a
+flagged point from any figure; `tests/bas-plausibility.test.ts` refuses a
+write anywhere in the module.
+
+**Which points are judged is decided by the ROLE**, and by nothing else:
+
+| The point's role | Judged? | The Points list reads |
+|---|---|---|
+| No role (`point_role` NULL) | **No** | *Not checked · role not set* |
+| A setpoint (`bas_point_roles.is_setpoint`) | No - a setpoint holding still is the setpoint working | *Not checked · setpoint* |
+| A status, command or mode point (`measurement` is `status` or `mode`) | No - `Occupied` has 419 records in two and a half years, which is normal | *Not checked · status or command point* |
+| A measured quantity - temperature, pressure, flow, humidity, a damper position, a fan speed | **Yes**, against the threshold for its kind | *Changing*, *Flat …*, or *Too few readings* |
+
+Temp1, Temp2 and Temp3 at Spring Grove are unclassified on purpose - nobody
+knows what they are - and read *role not set*. Do not give a point a role to
+make the card judge it unless the role is true.
+
+**The thresholds**, in `PLAUSIBILITY_THRESHOLDS` in
+`lib/modules/bas/plausibility.ts`, each with its reason beside it, and
+printed on the card itself:
+
+| Kind | Flat for at least | Why |
+|---|---|---|
+| pressure | 3 h | moves with every fan and damper adjustment; the office duct static never repeated a value more than twice in a row |
+| temperature, humidity, flow, concentration | 6 h | drifts past a sensor's resolution every few hours; healthy office zones never held still longer than 1.8 h |
+| current, power, voltage, ratio | 24 h | zero while equipment is off; a day covers any off cycle |
+| position, speed, energy, volume, time, count | 7 days | an output sits at its limit as long as the strategy keeps it there (the office outside-air damper held exactly 10 % for 9.4 days in September); an accumulator advances whenever anything runs |
+
+Plus **at least 12 readings** in the last 90 days, and at least 12 identical
+readings in the run for an interval trend - so a point with three readings is
+new, not stuck. To change a threshold, change the table; the test that
+defends the per-kind rule (*the same four-hour run is changing for a
+temperature and flat for a pressure*) and the live acceptance
+(`npm run bas:plausibility:verify`, below) are what to run afterwards. A
+measurement kind with no row in the table is *not checked* and the card says
+so - never checked with a default.
+
+**Change-of-value trends** (no `collection_interval_s`, which on this estate
+is every one of the eight office status points) record only when the value
+changes, so "stuck" is *no new records*. For those the flat span runs from
+the last record to the collector's **last successful pass** over the point
+(`bas_sync_checkpoints.last_run_at` with `last_status = 'ok'`), never to
+now(): a stopped collector is a collection fault and the roll-risk tile
+reports it. On the live estate every change-of-value point is a status or
+command point and is not judged; the path is proved by fixture.
+
+**Fix - Workbench or the sensor, then one of these.**
+
+| What you find | Do |
+|---|---|
+| The sensor is **dead** (open circuit reads -40 on a Niagara analog input; a short reads the top of scale) or **stuck** | Repair or replace it. The readings it produced while dead are kept as they are - they are the evidence, and the check does not edit them. The card clears on its own once the value moves |
+| The point is a measured quantity that **genuinely holds still** for longer than its threshold | Read the *why* beside the threshold in `lib/modules/bas/plausibility.ts` and decide whether the threshold is wrong for that kind, or the point is not that kind. Change the table or the role - never silence it by deactivating the point (that stops collection and loses data permanently) or by hiding it (a hidden point is still listed here, on purpose) |
+| The point has the **wrong role** - a setpoint classified as a measurement, or a measurement classified as a setpoint | Set the role right (SQL until B8.5). The card follows the role on the next refresh |
+| The card flags something **not on the list above** | Look before tuning: the check was written to find the third dead sensor nobody has noticed yet |
+
+**Re-run the acceptance test against the real database.**
+`npm run bas:plausibility:verify` prints every active point's verdict as
+Markdown, asserts that both known faults are flagged and that no setpoint,
+status or unclassified point is, compares reading and active-point counts
+before and after, and exits 1 on any of those. It is what
+`docs/bas-plausibility-verification.md` was written from.
+
+**Cost.** Computed on every page load, not stored. Measured 2026-09-28
+against the live table (82,478 readings): 6.5 ms execution for 17 judged
+points, 25 ms round trip through Prisma. The plan walks backwards down the
+`(point_id, ts)` key and stops at the first different value, so a healthy
+point costs four index probes whatever the table's size; only a dead
+sensor's run is walked, and `LOOKBACK_DAYS` (90) bounds that. If the check
+ever passes 200 ms on the screen - measure it with the EXPLAIN in the
+verification doc - that is the day to store a verdict per collector pass,
+and not before: storing it puts the rule in the other repository, needs a
+migration, and goes stale whenever a threshold changes.
 
 ---
 

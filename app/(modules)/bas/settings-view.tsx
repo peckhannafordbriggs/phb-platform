@@ -29,6 +29,7 @@ import {
   describeActivity,
   describeCollected,
   describeLogin,
+  describePlausibility,
   describePointCompleteness,
   describeReach,
   fetchBasSettings,
@@ -1284,6 +1285,12 @@ export function PointsTable({
                   Roll horizon
                 </th>
                 <th
+                  className="py-1 pr-3 font-medium"
+                  title="Whether the value is still changing. A measured quantity - a temperature, a pressure, a damper position - is judged against a threshold for its kind; a setpoint, a status or command point, or a point with no role is not judged and says so. A flag means go and look, not that the sensor is confirmed dead."
+                >
+                  Value
+                </th>
+                <th
                   className="py-1 font-medium"
                   title="Whether the point appears in Point Explorer and the Collection Health table. It is collected either way, and it counts in every risk figure either way."
                 >
@@ -1338,6 +1345,7 @@ function PointRow({
 }) {
   const collected = describeCollected(point);
   const completeness = describePointCompleteness(point);
+  const plausibility = describePlausibility(point.plausibility, point.unit);
 
   return (
     <tr className="border-t border-[var(--border)] align-top">
@@ -1366,6 +1374,12 @@ function PointRow({
       </td>
       <td className="py-1 pr-3 tabular-nums">
         <HorizonCell horizon={point.horizon} />
+      </td>
+      <td className="py-1 pr-3 tabular-nums">
+        <span style={{ color: TONE_INK[plausibility.tone] }}>{plausibility.label}</span>
+        {plausibility.detail !== null && (
+          <span className="text-[var(--muted)]"> · {plausibility.detail}</span>
+        )}
       </td>
       <td className="py-1">
         <label className="inline-flex items-center gap-1.5">

@@ -1,4 +1,13 @@
 import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk } from "@/lib/modules/bas/types";
+import {
+  LOOKBACK_DAYS,
+  MIN_READINGS,
+  PLAUSIBILITY_THRESHOLDS,
+  type NotCheckedReason,
+  type PlausibilitySummary,
+  type PointPlausibility,
+  type ReadingValue,
+} from "@/lib/modules/bas/plausibility";
 import type {
   BasSettingsTree,
   CollectionHealth,
@@ -1649,4 +1658,165 @@ export function describeVanished(count: number, suffix: string): string {
     `off and cannot tell why: a deleted trend, a dropped device or a renamed history all ` +
     `look like this. Check in Workbench.`
   );
+}
+
+// ---------------------------------------------------------------------------
+// Value plausibility (2026-09-28) - values that have stopped changing
+// ---------------------------------------------------------------------------
+
+/**
+ * Amber from one flagged point, never red: a flag is "this looks wrong, go
+ * and look", and a human or a technician confirms it. Red is for data that is
+ * being destroyed. Never the ok tone above zero.
+ */
+export function stuckTone(count: number): Tone {
+  return count > 0 ? "warn" : "ok";
+}
+
+/**
+ * A total record, so a reason added to NotCheckedReason without wording here
+ * stops the build. "Role not set" is the wording the brief asked for, exactly:
+ * a point with no role is not guessed at, and the screen says so.
+ */
+export const NOT_CHECKED_WORDS: Record<NotCheckedReason, string> = {
+  not_collected: "not collected",
+  no_role: "role not set",
+  setpoint: "setpoint",
+  state: "status or command point",
+  no_threshold: "no threshold for this kind of measurement",
+};
+
+/**
+ * The sentence at the top of the card. At zero it says how many points were
+ * judged, so an empty card can be told apart from a check that judged nothing
+ * - "0 stuck of 0 checked" is not reassurance.
+ */
+export function describeStuck(summary: PlausibilitySummary, suffix: string): string {
+  const flat = summary.flat.length;
+  const checked = summary.checked;
+  if (checked === 0) {
+    return (
+      `No point${suffix} was checked. A point is judged only when its role names a ` +
+      `measured quantity; set roles under Settings → Points.`
+    );
+  }
+  if (flat === 0) {
+    return (
+      `Every checked point${suffix} is still changing value - ${formatCount(checked)} ` +
+      `${checked === 1 ? "point" : "points"} judged.`
+    );
+  }
+  return (
+    `${formatCount(flat)} of ${formatCount(checked)} checked ${checked === 1 ? "point" : "points"}${suffix} ` +
+    `${flat === 1 ? "has" : "have"} held one value past the threshold for ${flat === 1 ? "its" : "their"} ` +
+    `kind of measurement. This looks wrong and is not confirmed: go and look at the sensor.`
+  );
+}
+
+/** "Not checked: 4 with no role, 2 setpoints, 3 status or command points." Null when everything was. */
+export function describeNotChecked(summary: PlausibilitySummary): string | null {
+  const parts: string[] = [];
+  const n = summary.notChecked;
+  if (n.no_role > 0) parts.push(`${n.no_role} with no role`);
+  if (n.setpoint > 0) parts.push(`${n.setpoint} ${n.setpoint === 1 ? "setpoint" : "setpoints"}`);
+  if (n.state > 0) {
+    parts.push(`${n.state} status or command ${n.state === 1 ? "point" : "points"}`);
+  }
+  if (n.no_threshold > 0) {
+    parts.push(`${n.no_threshold} with no threshold for ${n.no_threshold === 1 ? "its" : "their"} kind`);
+  }
+  if (summary.tooFewReadings > 0) {
+    parts.push(
+      `${summary.tooFewReadings} with too few readings to judge (under ${MIN_READINGS})`,
+    );
+  }
+  if (parts.length === 0) return null;
+  return `Not judged: ${parts.join(", ")}.`;
+}
+
+/**
+ * The thresholds, on the screen rather than buried. Grouped by hours so the
+ * line reads as four rules rather than fifteen numbers.
+ */
+export function describeThresholds(): string {
+  const byHours = new Map<number, string[]>();
+  for (const t of PLAUSIBILITY_THRESHOLDS) {
+    const list = byHours.get(t.hours) ?? [];
+    list.push(t.measurement);
+    byHours.set(t.hours, list);
+  }
+  const groups = [...byHours.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([hours, kinds]) => `${kinds.join(", ")}: ${formatHours(hours)}`);
+  return (
+    `Flat for at least - ${groups.join(" · ")} - with at least ${MIN_READINGS} readings. ` +
+    `Setpoints, status and command points, and points with no role are not judged.`
+  );
+}
+
+/** A reading's value with its unit, or "no value" for a record the station logged empty. */
+export function formatReadingValue(value: ReadingValue | null, unit: string | null): string {
+  if (value === null) return "—";
+  if (value.num !== null) return formatValue(value.num, unit);
+  if (value.bool !== null) return value.bool ? "true" : "false";
+  if (value.str !== null) return value.str;
+  return "no value";
+}
+
+/**
+ * "35.0 days" or, when the search for a different value ran out of lookback,
+ * "at least 90.0 days" - a floor is not a measurement and must not read as
+ * one.
+ */
+export function formatFlatSpan(p: PointPlausibility): string {
+  if (p.flatHours === null) return "—";
+  return p.lookbackExhausted ? `at least ${formatHours(p.flatHours)}` : formatHours(p.flatHours);
+}
+
+/**
+ * "last different 76.10 fahrenheit at Aug 24 09:00", or the honest
+ * alternatives: never, in the readings held; or nothing different inside the
+ * lookback.
+ */
+export function describeLastDifferent(p: PointPlausibility, unit: string | null): string {
+  if (p.lastDifferentAt !== null) {
+    return `last different ${formatReadingValue(p.lastDifferentValue, unit)} at ${formatTimestamp(p.lastDifferentAt)}`;
+  }
+  if (p.lookbackExhausted) {
+    return `no different value in the last ${LOOKBACK_DAYS} days of readings`;
+  }
+  return `never different in the ${formatCount(p.readings ?? 0)} readings held`;
+}
+
+/**
+ * The Points list cell: one word, a detail, a tone. A flagged point is amber
+ * for the same reason the card is. A point that is not checked is neutral
+ * and says why, so "not checked, role not set" can never be read as fine.
+ */
+export function describePlausibility(
+  p: PointPlausibility,
+  unit: string | null,
+): { label: string; detail: string | null; tone: Tone } {
+  switch (p.state) {
+    case "flat":
+      return {
+        label: `Flat ${formatFlatSpan(p)} at ${formatReadingValue(p.value, unit)}`,
+        detail: `threshold ${formatHours(p.thresholdHours)} for ${p.measurement ?? "this kind"}`,
+        tone: "warn",
+      };
+    case "moving":
+      return { label: "Changing", detail: null, tone: "ok" };
+    case "too_few_readings":
+      return {
+        label: "Too few readings",
+        detail: `${formatCount(p.readings ?? 0)} of the ${MIN_READINGS} needed`,
+        tone: "neutral",
+      };
+    case "not_checked":
+      return {
+        label: "Not checked",
+        detail: p.notCheckedReason === null ? null : NOT_CHECKED_WORDS[p.notCheckedReason],
+        tone: "neutral",
+      };
+  }
 }

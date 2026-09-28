@@ -127,6 +127,7 @@ building is not recorded.
 | **The backup gets its own role** | `bas_backup`, `BAS_BACKUP_URL`, `.verified` markers, the health check watches freshness | `d77a0cb` **(phb-bas)**, on `fix/backup-role-and-monitoring`, **not yet merged** on 2026-09-17 |
 | **Axis precision** | The trend's y-axis chooses round ticks at every zoom, decimals by unit; the stored reading is untouched | `fix/bas-chart-axis-precision` (2026-09-18) |
 | **Custom date range** | Point Explorer takes two calendar dates or a year, resolved in the building's zone by PostgreSQL; over 10,000 readings the trend is bucketed with a min–max band and says so; real readings committed as fixtures | `feat/bas-custom-date-range` (2026-09-22) |
+| **Value plausibility** | Does the data mean anything: a run of identical readings past a per-kind threshold is flagged, by role, never by a bad-value list; a card on Collection Health and a *Value* column on the Points list; both known dead sensors flagged live, nothing else | `feat/bas-value-plausibility` (2026-09-28) |
 
 ### Test count
 
@@ -247,6 +248,7 @@ In render order:
 | **Run chart** | Records written per collector run, full width |
 | **Four tiles** | Active points (with a live *n of m reporting* badge), total readings, unclassified points, time since the newest reading |
 | **Station count against ours** | The completeness check, surfaced (17 Sep). Red from one `incomplete` point, amber for `backfilling` or `unknown`, green only when every active point was checked and agrees. Lists each such point by name with both numbers |
+| **Values that have stopped changing** | The value-plausibility check (28 Sep). Amber from one flagged point, never red: a flag is "go and look", not a confirmed fault. Lists each point with how long, at what value, since when, when it was last different and what it read, and the threshold for its kind; says which points were not judged and why (no role, setpoint, status or command); prints the thresholds. Hidden points listed and said. `docs/bas-plausibility-verification.md` |
 | **Tables** | Per-point status — now with a *Completeness* column and a *measured* mark on the roll horizon — recent collector runs, recorded data gaps |
 
 **Why the completeness card is always rendered, even when green.** The check it
@@ -556,6 +558,7 @@ pinning is stricter than one would be. Both direct stations are pinned.
 | `npx tsx scripts/bas-import.ts` | Dry run — counts only, writes nothing |
 | `… --apply` | Import. One transaction, verified before commit |
 | `npx tsx scripts/bas-checksum.ts` | Content checksum of the `bas_*` tables |
+| `npm run bas:plausibility:verify` | The value-plausibility acceptance test against the real database: every active point's verdict as Markdown, both known faults must be flagged, no setpoint or status point may be, counts compared before and after. Exit 1 on any failure |
 | `npm run bas:verify` | Independent content comparison of two databases |
 | `npm run bas:oracle` | Compares the screens against the Grafana dashboards' own SQL *(phb-bas)*, same moment |
 | `npx tsx scripts/bas-tables.ts` | Table inspection |

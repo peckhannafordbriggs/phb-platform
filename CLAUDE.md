@@ -721,6 +721,34 @@ bulk actions are B8.5. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` → *A
 point has one name in Point Explorer and another in Settings*, and *Who hid
 it, and when* under *A point's label or hidden state disappeared*.
 
+**The value-plausibility check (2026-09-28).** Every check before it asked
+whether data was arriving; none asked whether it meant anything, and two
+dead sensors sat green for a month - `points_RoomT` at exactly -40 since 24
+August, `VAV-8 104-105_ZoneTemperature` at exactly 70.5 for its whole
+history. One check now: a run of identical readings longer than a threshold
+for the point's KIND of measurement, from `lib/modules/bas/plausibility.ts`.
+**No list of bad values** - the evidence is the flatness, not the number.
+**The role decides who is judged**: `is_setpoint` and a `measurement` of
+`status` or `mode` exclude a point, no role means *not checked, role not
+set* and never a guess, and the SQL that selects judged points is generated
+from the same threshold table the TypeScript applies, with a test walking
+all 91 vocabulary roles through both. Thresholds are per kind (pressure 3 h,
+temperature 6 h, electrical 24 h, outputs and accumulators 7 days), each
+with its reason in the table and printed on the card, each defended against
+the longest healthy run measured in live history; plus at least 12 readings.
+A change-of-value trend is measured from its last record to the collector's
+last successful pass, never to now(). Shown as a card on Collection Health
+(same shape as *No longer reported*, always rendered, hidden points listed
+and said) and as a *Value* column on the Points list. Never deactivates,
+never edits a reading, never a confirmed fault, never removed from a figure.
+**Computed on every page load, not stored: 6.5 ms live** for 17 judged
+points, four index probes per healthy point; revisit at 200 ms.
+**Live acceptance passed** on the first run - both faults flagged, nothing
+else, no setpoint or status point - via `npm run bas:plausibility:verify`;
+`docs/bas-plausibility-verification.md` is the record, with the four
+mutations. `WHY-ITS-BUILT-THIS-WAY.md` § 55; `runbook.md` → *Collection
+Health says a value has stopped changing*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -809,4 +837,5 @@ either anywhere else — point at them.
 | `docs/phase-9-verification.md` | Grouping, conflicts, and the latency that decides Part B |
 | `docs/phase-11-verification.md` | Evidence the platform has not disturbed the automation |
 | `docs/phase-12-part-b-verification.md` | The file-access extraction: what was measured, and what is still unproven |
+| `docs/bas-plausibility-verification.md` | **The value-plausibility check against live data:** both dead sensors flagged, nothing else, the thresholds defended by the longest healthy runs, the cost measured, four mutations |
 | `docs/phase-12-part-c-plan.md` | **Part C: what `Sites.Selected` actually blocks**, what it does not, and what has already been settled by measurement |
