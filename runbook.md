@@ -1511,18 +1511,24 @@ its own copy again. The provider is composed in `auth.ts` (Node), not
 `GRAPH_CLIENT_SECRET`. The secret in `.env.local` is for developer machines and
 expires in 2028; production cannot be affected by it.
 
-**Status.** Built on `feat/sso-managed-identity-assertion`. It cannot work
-until Request 3 is done, and it is not merged until then: merging first would
-only change the failure from `invalid_client` to "no matching federated
-identity record".
+**Status.** Merged on 2026-09-17 as PR #8 and in every production image
+since. Vitis added the federated identity credential (Request 3) on
+2026-09-28, and the first four sign-in attempts that day still failed as
+`invalid_client` - with the log unable to say which AADSTS code was behind
+the word, which is what the next section is about.
 
 ### Production sign-in bounces to `/signin?error=OAuthCallbackError`
 
 Microsoft returned the authorization code and the token exchange failed. Pull
-the reason from Log Analytics. `az containerapp logs show` trips on the Next.js
-banner's non-ASCII character under the Windows code page unless `PYTHONUTF8=1`
-is set, and under Git Bash every `/subscriptions/...` id is rewritten as a
-filesystem path unless `MSYS_NO_PATHCONV=1` is set:
+the reason from Log Analytics. The line to look for is the platform's own,
+`"event":"auth.entra_token_error"`, and its `entraErrorCode` field is the
+AADSTS code;
+`entraErrorDescription` is Entra's full sentence, and `entraTraceId` /
+`entraCorrelationId` are what Microsoft support asks for. `az containerapp
+logs show` trips on the Next.js banner's non-ASCII character under the Windows
+code page unless `PYTHONUTF8=1` is set, and under Git Bash every
+`/subscriptions/...` id is rewritten as a filesystem path unless
+`MSYS_NO_PATHCONV=1` is set:
 
 ```bash
 WS=$(az containerapp env show -n phbplat-prod-env -g <resource-group> \
@@ -1530,19 +1536,38 @@ WS=$(az containerapp env show -n phbplat-prod-env -g <resource-group> \
 az monitor log-analytics query -w "$WS" --analytics-query "
   ContainerAppConsoleLogs_CL
   | where ContainerAppName_s == 'phbplat-prod-app'
-  | where Log_s has_any ('[auth]', 'AADSTS')
+  | where Log_s has_any ('auth.entra_token_error', '[auth]', 'AADSTS')
   | project TimeGenerated, Log_s | order by TimeGenerated desc | take 50"
 ```
 
 | Auth.js says | Entra meant | Fix |
 |---|---|---|
 | `invalid_client` | No client credential on the exchange - the state before the assertion shipped, or a secret was deployed and rejected | Production must carry the assertion, never a secret. Check the provider in `auth.ts` and that `AUTH_MICROSOFT_ENTRA_ID_SECRET` is absent |
-| `invalid_client`, and the log shows `AADSTS70021` or `AADSTS700213` | No federated identity credential on the SSO app matches the token's issuer and subject | Request 3: the credential is missing, or its subject is not the identity's **object** id |
+| `invalid_client`, `AADSTS70021` or `AADSTS700213` | No federated identity credential on the SSO app matches the token's issuer and subject | Request 3: the credential is missing, its subject is not the identity's **object** id, or it was created minutes ago and has not replicated yet - wait and retry before anything else |
+| `invalid_client`, `AADSTS7000218` | The token request reached Entra with no `client_assertion` at all | The platform's fault, not Entra's: the assertion fetch wrapper did not run. `lib/auth/entra-assertion-fetch.ts`, `tests/entra-assertion.test.ts` |
 | `invalid_request`, `AADSTS50011` | Redirect URI mismatch | The URI on the app registration must equal `AUTH_URL` + `/api/auth/callback/microsoft-entra-id` exactly |
 
-Auth.js logs only Entra's `error` field. If the code matters and the table does
-not settle it, one sign-in attempt with `debug: true` in the Auth.js config
-prints the `error_description` - then turn it off again.
+**Why the code is in the log at all, and why not through Auth.js.** Auth.js
+logs only Entra's `error` field, and it cannot do better: it reads the
+response body - `error_description` with the AADSTS code, `error_codes`,
+`trace_id`, `correlation_id` - and passes it to the Error constructor as the
+*options* object, from which `Error` keeps only `options.cause`. So
+`error.cause` is `undefined` (measured against `@auth/core` 0.41.3) and a
+custom `logger` in the Auth.js config has nothing to print. `debug: true`
+does not help either: the token-response branch has no debug call. On
+2026-09-28 the log therefore held `invalid_client` and nothing else, and
+nobody could tell whether the new credential was wrong or the request had
+carried no assertion. Two other ways to find out were closed too: this
+account cannot read Entra's sign-in logs
+(`Authentication_RequestFromUnsupportedUserRole`), and `az containerapp exec`
+answered 404 on the websocket handshake, so nothing could be probed from
+inside the container. The fix is where the body can still be seen: the fetch
+wrapper that adds the assertion receives the token endpoint's Response, and
+on any non-2xx answer it logs a whitelist of the body's fields as
+`auth.entra_token_error` before handing the Response back untouched.
+`lib/auth/entra-token-error.ts`; `tests/entra-token-error.test.ts` proves the
+code is there, the Response is still readable, and a token would not be
+copied.
 
 ### Symptom when it expires
 
@@ -2021,9 +2046,11 @@ registration, and it is the whole ask. Nothing in it expires.
 > Thanks,
 > Mahi
 
-**After it is in:** merge the branch, let the deploy finish, sign in once. If it
-fails, see *Production sign-in bounces to `/signin?error=OAuthCallbackError`* -
-the failure will now name the credential rather than the absence of one.
+**After it is in:** sign in once; the branch has been on `main` since
+2026-09-17. If it fails, see *Production sign-in bounces to
+`/signin?error=OAuthCallbackError`* - the `auth.entra_token_error` log line
+carries the AADSTS code that says whether the credential or the request is
+at fault.
 
 ### Request 4 — SharePoint access for the containerised engine (Phase 12 Part C)
 
