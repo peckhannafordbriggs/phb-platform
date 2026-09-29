@@ -1574,6 +1574,45 @@ discovery would fail with no obvious connection to sign-in. Either way the
 test fails first, because it resolves the provider the way Auth.js does
 rather than the way the code reads.
 
+## 57 · The data migration writes as a role that cannot reach the employee table
+
+**What.** `scripts/bas-migrate-to-azure/import.sql` loads the fourteen `bas_*`
+tables into the Azure database inside one transaction. Before the first row is
+written it creates `bas_migrate_tmp`, grants it INSERT on those tables, UPDATE
+on their eight sequences and SELECT on `employees (id, email)`, switches the
+session to it with `SET LOCAL ROLE`, and drops it again before `COMMIT`. Every
+non-`bas_*` table is fingerprinted before and after, and a difference refuses
+the commit.
+
+**Why.** The instruction was that the script be *incapable* of writing
+`employees`, `modules`, `module_grants` and the rest — not careful. Care is a
+property of the author on the day; a privilege boundary is a property of the
+run. With the role in place, a wrong table name in a future edit of the file
+fails with `permission denied` instead of succeeding quietly. The fingerprint is
+the second layer, there so that the run *prints* the proof rather than relying
+on the reader to know the role's grants.
+
+The role is transient because roles are cluster-wide and this migration runs
+once: a permanent `bas_migrate` would outlive its only use, and a rolled-back
+run should leave nothing — including no role — behind. It is created inside
+the transaction so that both hold at once.
+
+**What it cost.** One defect on the first run against a non-superuser
+administrator, which is what Azure's is: `DROP OWNED BY` at the teardown needs
+the administrator to *inherit* the role's privileges, and the first version
+granted membership with `INHERIT FALSE`. The load succeeded, the teardown was
+refused, and the whole thing rolled back — the failure mode the design wants,
+observed rather than argued. `GRANT … WITH SET TRUE, INHERIT TRUE` is the fix,
+and the comment beside it says so.
+
+**What breaks if you undo it.** Running the COPYs as the administrator makes
+the "must not touch" tables reachable by any statement in the file, and the
+only thing between a typo and the employee table is a reviewer's eye. The
+fingerprint would still catch a change after the fact, but "rolled back
+because it changed employees" is a worse place to be than "could not".
+
+---
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

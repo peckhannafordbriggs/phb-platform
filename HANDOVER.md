@@ -295,6 +295,16 @@ Two traps worth carrying out of it:
   lack permission to see deleted vaults. That reads exactly like "the name is free" and
   is not. Use `checkNameAvailability`, which answers honestly.
 
+**The BAS data is still on the office PC.** The Azure database has the platform's rows
+and zero `bas_*` rows. `scripts/bas-migrate-to-azure/` is the one-shot move (export,
+import in one transaction as a role that cannot touch the platform's tables, check),
+tested against a faithful scratch copy on 29 September 2026 and **not yet run against
+Azure**; `scripts/setup-bas-collector-role.sql` is the collector's least-privilege role
+for the Azure server. The container app also carries no `BAS_CREDENTIAL_KEY` and no
+`ANTHROPIC_API_KEY`, so in production the station-login panel and the Analyze tab both
+say so. All three are in `runbook.md` → *Moving the BAS data to the Azure database* and
+the two sections after it.
+
 ### Moving the AI layer off the laptop
 
 The two scheduled AI tasks that drive the change-order automation still run on one Windows
