@@ -765,6 +765,26 @@ Documentation is `chore/`. There is no `docs/` prefix.
 **An agent stops at the push.** Create the branch, commit, push, and report the
 branch name — the human opens the pull request.
 
+**`main` is protected by a repository ruleset** — pull request required, no
+force-push, no deletion — and the ruleset is authoritative. Where this file and
+the ruleset disagree, the ruleset wins and this file is what is out of date.
+
+**The owner holds bypass rights, and they are for emergencies.** A broken
+`main`, a revert that cannot wait. Not for routine work, not for a change that
+seems too small to be worth a PR, and never on an agent's own judgment.
+
+The trap is that **bypassing does not fail**. A direct push to `main` prints
+
+```
+remote: - Changes must be made through a pull request.
+```
+
+and then **succeeds**, which reads like a warning and is not — it is the
+protection being overridden. On 2026-09-22 an agent pushed documentation to
+`main` that way, having acted on a "commit straight to `main`" rule that
+predated the ruleset. Nothing looked wrong at the time. If you see that line,
+say so plainly instead of treating the exit code as permission.
+
 **Use judgment without asking** on reversible, conventional, low-risk, internal choices.
 
 **Stop and ask** before anything that could touch the existing change-order system,
