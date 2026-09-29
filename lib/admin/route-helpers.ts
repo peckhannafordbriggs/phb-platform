@@ -52,6 +52,7 @@ export function adminFailureResponse(
     case "self_admin_demote":
     case "self_disable":
     case "last_active_admin":
+    case "employee_disabled":
       return forbidden(message);
     case "no_settings_surface":
       return validationFailed(message);

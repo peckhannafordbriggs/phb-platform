@@ -130,6 +130,9 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "employee.profile_completed": ({ target }) =>
     `${target ?? "An employee"} completed their profile`,
 
+  "employee.profile_reset": ({ actor, target }) =>
+    `${actor} asked ${target ?? "an employee"} to complete their profile again`,
+
   "employee.enabled": ({ actor, target }) =>
     `${actor} re-enabled ${target ?? "an employee"}`,
 
@@ -493,6 +496,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "login.denied": "Sign-in denied",
   "employee.provisioned": "First sign-in",
   "employee.profile_completed": "Profile completed",
+  "employee.profile_reset": "Asked to complete profile again",
   "employee.enabled": "Employee enabled",
   "employee.disabled": "Employee disabled",
   "employee.admin_granted": "Made an administrator",

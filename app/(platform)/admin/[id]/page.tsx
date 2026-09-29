@@ -109,6 +109,7 @@ export default async function AdminEmployeePage({
         isSelf={employee.id === access.viewer.id}
         status={employee.status}
         isPlatformAdmin={employee.isPlatformAdmin}
+        profileCompleted={employee.profileCompleted}
         modules={modules}
         grantedModuleKeys={grantedKeys}
         moduleAdminKeys={moduleAdminKeys}
