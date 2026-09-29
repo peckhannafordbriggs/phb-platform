@@ -518,7 +518,7 @@ made *Shown* editable and B8.4 the label; roles and equipment are B8.5.
 | Account | Where | Can |
 |---|---|---|
 | `bas_collector` (Niagara) | on each JACE | Read histories, `HTTPBasicScheme`. Cannot write to the station at all |
-| `bas_collector` (Postgres) | platform database | Read/write `bas_*` only. Refused on `employees`, `audit_events`, `_prisma_migrations` — which is the refusal that broke the backup, below |
+| `bas_collector` (Postgres) | platform database | Read/write `bas_*` only. Refused on `employees`, `audit_events`, `_prisma_migrations` — which is the refusal that broke the backup, below. Created by hand on the office PC; for the Azure server, `scripts/setup-bas-collector-role.sql` *(this repo)* carries the same grants read from the live catalog and proves them |
 | `bas_readonly_platform` | platform database | SELECT on an **explicit allowlist** of `bas_*` objects, excluding the credentials table. Grafana and the MCP server |
 | `bas_backup` | platform database | `pg_read_all_data` — reads every table, writes none — plus `CREATEDB` for the restore test's scratch database. **Added 17 September**, `setup_backup_role.sql` *(phb-bas)*, which proves its own grants before finishing |
 | `bas_analyze` | platform database | SELECT on the **same explicit allowlist** as `bas_readonly_platform`, credentials table withheld. The Analyze tab's SQL and nothing else. **Added 21 September**, `npm run bas:analyze:role` *(this repo)*, which gates on unclassified `bas_*` objects and proves the refusals with read-only OFF before printing the URL. `TEMP` is deliberately not revoked — it is a `PUBLIC` grant and revoking it would change every role; the READ ONLY transaction refuses it instead |
@@ -866,7 +866,10 @@ a week and nobody would do it.
 **Production deployment.** Firewall rule for the site's egress IP, a scoped role
 on the Azure database, and an always-on host **that stays on the building
 network**. Five outages say the laptop is not that host. Blocked on the Azure
-subscription and the host.
+subscription and the host. The data move itself is scripted and tested but not
+yet run: `scripts/bas-migrate-to-azure/`, and the role is
+`scripts/setup-bas-collector-role.sql` — `runbook.md` → *Moving the BAS data
+to the Azure database*.
 
 **Multiple buildings, the way they were planned.** The 20 August plan was one
 central station importing other JACEs' histories over the NiagaraNetwork, so

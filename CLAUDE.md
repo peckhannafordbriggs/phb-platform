@@ -732,6 +732,26 @@ bulk actions are B8.5. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` → *A
 point has one name in Point Explorer and another in Settings*, and *Who hid
 it, and when* under *A point's label or hidden state disappeared*.
 
+**The BAS data migration to Azure is scripted and tested, not run
+(2026-09-29).** `scripts/bas-migrate-to-azure/` — `export.sql` from the office
+PC, `import.sql` into Azure in ONE transaction, `check.sql` after — moves the
+fourteen `bas_*` tables once. The import writes every row as `bas_migrate_tmp`,
+a role that exists only inside its transaction with INSERT on `bas_*`, UPDATE
+on their sequences and SELECT on two columns of `employees`, so it is
+**incapable** of touching the platform's tables rather than careful not to;
+every non-`bas_*` table is fingerprinted before and after as well. It refuses a
+target with any `bas_*` data (so a second run stops, verified), a schema
+mismatch, and a credential row whose `updated_by` email has no employee in the
+target — the one FK that leaves the family, carried as an email and resolved
+there. Sequences are set past the highest id and checked. Tested against a
+throwaway cluster as a non-superuser administrator, with the live 87,100
+readings, and `tests/bas-migration-scripts.test.ts` drives the real files
+through psql. `scripts/setup-bas-collector-role.sql` is the collector's role for
+Azure, written from the live grants (nothing in either repo created it before).
+**The container app has no `BAS_CREDENTIAL_KEY` and no `ANTHROPIC_API_KEY`** —
+written down, not fixed. `runbook.md` → *Moving the BAS data to the Azure
+database* and the two sections after it; `WHY-ITS-BUILT-THIS-WAY.md` § 57.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

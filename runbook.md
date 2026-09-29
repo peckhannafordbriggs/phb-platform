@@ -2715,6 +2715,216 @@ database setting.
 
 ---
 
+## Moving the BAS data to the Azure database
+
+**Written 2026-09-29. Not yet run against Azure.** The office PC's
+`phb_platform` holds every BAS reading since 21 February 2024, most of it gone
+from the JACE; the Azure database holds the platform's own rows (employees,
+modules, grants, the seed's positions and departments) and **zero rows in every
+`bas_*` table**. `scripts/bas-migrate-to-azure/` moves the fourteen `bas_*`
+tables across, once, and touches nothing else. Three psql files, run by a
+person, from the office PC:
+
+| File | Runs against | Does |
+|---|---|---|
+| `export.sql` | the **source** (office PC, as `postgres`) | Reads all fourteen tables inside one REPEATABLE READ snapshot into `bas-migration-data/*.csv`, plus a manifest (count, fingerprint, highest id per table) and a snapshot record (readings count and range, latest migration). Reads only |
+| `import.sql` | the **target** (Azure, as the server administrator) | ONE transaction: checks, prints the plan, asks for `YES`, loads, sets every sequence past the highest id, re-measures against the manifest, and commits only if everything matches |
+| `check.sql` | the target, afterwards | The same measurements again, read-only, any time the files are still around |
+
+`common.sql` is shared by all three and is where the table list lives. It also
+carries a gate: a `bas_*` table on either side that the list does not name stops
+the run. Read all four before running any of them.
+
+### The commands
+
+From an empty working directory - the files are written and read relative to
+wherever you run psql from, because `\copy` cannot take a variable for a path:
+
+```powershell
+cd C:\Users\<you>\bas-migration      # any empty folder, outside the repo
+mkdir bas-migration-data
+
+# 1. Export from the office PC. DATABASE_URL from the platform's .env.local.
+psql "postgresql://postgres:<pw>@localhost:5432/phb_platform" -f C:\Users\<you>\phb-platform\scripts\bas-migrate-to-azure\export.sql
+
+# 2. Read import.sql. Then load into Azure - the same URL the deploy workflow
+#    holds as PRODUCTION_DATABASE_URL (sslmode=require is part of it).
+psql "<production admin URL>" -f C:\Users\<you>\phb-platform\scripts\bas-migrate-to-azure\import.sql
+
+# 3. Check, from the same folder.
+psql "<production admin URL>" -f C:\Users\<you>\phb-platform\scripts\bas-migrate-to-azure\check.sql
+```
+
+The import prints, before it asks for `YES`: the snapshot it is loading; per
+table, rows in the files, rows in the target now, and rows it will insert; the
+two credential rows and the employee each resolves to; and a fingerprint of
+every non-BAS table. Read the credentials lines especially - see below. Then
+`YES` and Enter. Anything else rolls back with nothing written.
+
+Afterwards the collector on the office PC is still writing to the office PC.
+Repointing it at Azure needs the role in the next section, and is a separate
+decision: the roll horizon makes a gap in collection permanent, so the cutover
+is one deliberate pass with the new `DATABASE_URL`, not a gradual thing.
+
+### What the import refuses, and why a second run is safe
+
+Every one of these stops before a row is written and rolls back; the target is
+exactly as it was:
+
+- **A `bas_*` table already holds rows** - *"the target already holds BAS data:
+  {...}. This migration is a one-shot load into empty bas_* tables"*. This is
+  what a **second run** hits, verified 2026-09-29: exit code 3, every count
+  unchanged, no role left behind. It does not merge and it does not overwrite.
+  The two vocabulary tables (`bas_equipment_types`, `bas_point_roles`) are the
+  exception, because the production seed writes them too: rows already present
+  must be identical to the exported ones (else refused) and are skipped. Verified
+  against a target that had been seeded first: 0 vocabulary rows inserted, every
+  check passed.
+- **The applied migrations differ** from the source's. Both must be at the same
+  migration; `migrate deploy` runs on every production deploy, so pull and
+  migrate locally first if the export is refused for this.
+- **A credential row's `updated_by` email has no employee in the target.** The
+  one foreign key that leaves the `bas_*` family. Both rows on the office PC
+  point at `msheth@phb1899.com`; the export carries that email, and the import
+  finds the Azure employee with the same email. The person can sign in to
+  production once (which creates their row), or `updated_by_email` in
+  `bas_station_credentials.csv` can be edited to somebody who exists there, or
+  blanked to store NULL - the column allows it and it means "not recorded".
+- **A non-BAS table measures differently at the end than at the start.** Belt
+  and braces on top of the role below.
+
+**Sequences.** The rows arrive with their ids; the sequences behind
+`station_id`, `point_id`, `run_id` and the other five would otherwise still be
+at 1 and the collector's first insert would collide - weeks later, on a new
+point. The import sets each to its table's highest id, prints the next value,
+and `check.sql` verifies it. One consequence: sequences are not transactional,
+so a run that was rolled back leaves them advanced. Harmless (the next id is
+skipped, not reused) and the next run sets them again.
+
+**How it cannot write the platform's tables.** Every row is written by
+`bas_migrate_tmp`, a role that exists only inside the import's transaction:
+created after the checks pass, granted SELECT and INSERT on the fourteen
+`bas_*` tables, UPDATE on their sequences, SELECT on two columns of `employees`
+(`id`, `email`), nothing else, and dropped before COMMIT. A statement reaching
+`employees` or `audit_events` fails with `permission denied`; a rolled-back run
+never had the role at all. `tests/bas-migration-scripts.test.ts` fails if the
+import ever names a non-`bas_*` write target, and drives the real files through
+the real psql against the test database, twice. `WHY-ITS-BUILT-THIS-WAY.md`
+§ 57.
+
+### What was verified before this was written down
+
+On 2026-09-29, against a throwaway PostgreSQL 17 cluster with a **non-superuser
+administrator** owning every table (Azure's administrator is not a superuser
+either), migrated with the real migrations and seeded with the real seed, four
+bootstrap admins plus one self-provisioned employee, two modules, vocabulary
+tables emptied to match Azure: export of the live office data (87,100
+readings, 30 active points, 2 stations, first reading 2024-02-21 15:44 UTC),
+import committed, all 72 checks passed in-transaction and again from
+`check.sql`, `pg_dump` of every non-BAS table byte-identical before and after
+(apart from pg_dump's per-run `\restrict` token), and as `bas_collector` a
+new point took `point_id` 77, a reading and an ingest run inserted. Then the
+second run, refused as above; the prompt answered `no`, rolled back; the same
+import into a target seeded with the vocabularies first; and once more as a
+superuser. The first attempt found one defect: `DROP OWNED BY` at the end needs
+the administrator to *inherit* the temporary role, and with `INHERIT FALSE` the
+whole load succeeded and the teardown was refused - rolling everything back,
+which is the point.
+
+**Afterwards, delete `bas-migration-data/`.** It holds
+`bas_station_credentials.csv` - the ciphertext of the Niagara logins, not the
+plaintext, and useless without `BAS_CREDENTIAL_KEY` - but it is a dump of
+building data and it is gitignored for the same reason.
+
+### The rows that do not move
+
+`audit_events` is not a `bas_*` table and holds real production rows, so it is
+not touched - which means the 91 `bas.*` audit rows on the office PC (who hid
+which point, who set which credential, every Analyze question) stay there. In
+Azure the answer to *"who hid it, and when"* starts empty. Same for the
+office PC's 134 employee rows: Azure has the people who have signed in there,
+and nothing else about them is carried.
+
+---
+
+## The collector's role on the Azure database
+
+**The collector must never connect to production as the administrator.** That
+account owns every table. On the office PC it connects as `bas_collector`, a
+role created by hand on 24 August 2026 that no file in either repository
+records - the live grants, read from `pg_catalog` on 2026-09-29, are the
+specification, and `scripts/setup-bas-collector-role.sql` is that
+specification written down: SELECT, INSERT, UPDATE, DELETE on the thirteen
+`bas_*` data tables; SELECT only on `bas_station_credentials` and the six
+`bas_v_*` views; USAGE on seven sequences; no CREATE, nothing on any platform
+table. One deliberate oddity kept as found: the live role has no USAGE on
+`bas_data_gaps_gap_id_seq`, and the collector never inserts a gap, so the
+script does not grant it either and its proof fails if something does.
+
+```powershell
+psql "<production admin URL>" -v pw=<a new password> -f C:\Users\<you>\phb-platform\scripts\setup-bas-collector-role.sql
+```
+
+It gates on unclassified `bas_*` objects the way the read-only role scripts do,
+creates or alters the role, grants the allowlist, revokes the platform tables
+by name, and **proves the boundary** with `has_table_privilege` before it
+finishes; a failed proof exits non-zero and says not to hand out the password.
+Re-running rotates the password. Unlike the phb-bas role scripts it does not
+echo the `CREATE ROLE` statement - `\gexec` prints the generated statement,
+password included, and this one uses `\gset` instead.
+
+Then on the collector host, in `C:\dev\bas-collector\.env`:
+
+```
+DATABASE_URL=postgresql://bas_collector:<password>@<server>.postgres.database.azure.com:5432/phb_platform?sslmode=require
+```
+
+and prove it from the outside before the first scheduled run:
+
+```powershell
+psql "<that URL>" -c "SELECT count(*) FROM bas_points"      # must work
+psql "<that URL>" -c "SELECT count(*) FROM employees"       # must be DENIED
+psql "<that URL>" -c "CREATE TABLE zz (x int)"              # must be DENIED
+```
+
+Roles are cluster-wide but passwords are per server: rotating in Azure does not
+touch the office PC and vice versa. The host also needs a firewall rule on the
+Flexible Server for its egress IP (`-s` is the server, `-n` the rule - see *A
+deploy fails*), and the same `BAS_CREDENTIAL_KEY` as the platform, next section.
+
+---
+
+## The deployed Settings tab cannot store a station login, and the deployed Analyze tab says it is not configured
+
+**Symptom.** In production, Settings → a station → *Set login* is refused
+naming `BAS_CREDENTIAL_KEY`, and `/bas/analyze` shows *Analyze is not
+configured on this server*. Every other BAS screen works. Locally both work.
+
+**Cause.** The container app is not given `BAS_CREDENTIAL_KEY`,
+`BAS_CREDENTIAL_KEY_VERSION`, `ANTHROPIC_API_KEY` or `BAS_ASK_DATABASE_URL`.
+Look at the `env:` list in `infra/main.bicep`: none of the four is there, and
+nothing in Key Vault holds them. Both features read their variable lazily and
+say which one is missing, which is why the rest of the module is unaffected.
+**This is a separate job, recorded here on 2026-09-29 so it is not mistaken
+for a fault** - the Settings and Analyze code is the same code that works on
+the office PC.
+
+**What that job has to get right.** The credential rows the migration above
+carries were encrypted on the office PC under *its* `BAS_CREDENTIAL_KEY`, key
+version 1. The platform in Azure can only decrypt them with the **same** key -
+and so can the collector, wherever it runs. So either the office PC's key goes
+into Key Vault as the production key, or the two station passwords are
+re-entered through Settings once a different key is set (each save re-encrypts
+under the current key and stamps its version; *Station credentials, and the
+one secret that lives in two places* has the rotation steps). A key that
+matches nowhere leaves the rows undecryptable and collection stops. For
+Analyze: the key from the Anthropic Console, and `npm run bas:analyze:role`
+against the Azure database with `DATABASE_URL` set to the production admin
+URL, which prints the `BAS_ASK_DATABASE_URL` once - *Analyze says it is not
+configured*.
+
+---
+
 ## The database is unreachable
 
 **Symptom.** Every page returns the generic error boundary. The log carries
@@ -4659,7 +4869,8 @@ and not a flag.
 | `phb_platform_test` | `TEST_DATABASE_URL` | Whatever the suite is asserting on; truncated between files | `npm test`, `npm run db:test:setup` |
 
 Production in Azure is a fourth, reached by `migrate deploy` from the deploy
-workflow and by nothing on a laptop.
+workflow, by the one-shot BAS data migration run by a person from the office PC
+(*Moving the BAS data to the Azure database*), and by nothing else on a laptop.
 
 **How it is enforced.** `prisma.config.ts` reads the command from the CLI's own
 arguments and picks the URL. `migrate dev`, `migrate reset` and `db push` — the
@@ -6472,6 +6683,10 @@ collector run afterwards rather than assuming.
 
 A row whose `key_version` names a key nobody has any more is undecryptable and
 unrecoverable from here. Re-enter it.
+
+The rows the BAS migration copies to Azure were encrypted under the office PC's
+key. Production has no key at all yet; what that means is under *The deployed
+Settings tab cannot store a station login*.
 
 ---
 

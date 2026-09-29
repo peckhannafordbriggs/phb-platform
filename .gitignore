@@ -148,3 +148,7 @@ lib/generated/
 # Filled-in Bicep parameters. Holds real subscription and tenant identifiers;
 # the example file is the committed one.
 infra/main.parameters.json
+
+# The BAS migration export (scripts/bas-migrate-to-azure/export.sql): 87,000
+# readings and the credentials ciphertext. Never committed.
+bas-migration-data/
