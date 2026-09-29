@@ -19,7 +19,9 @@ export type AdminFailure =
   | "self_disable"
   | "last_active_admin"
   | "unknown_module"
-  | "no_settings_surface";
+  | "no_settings_surface"
+  /** A profile reset on a disabled employee, who cannot sign in to complete it. */
+  | "employee_disabled";
 
 export type AdminResult<T> =
   | { ok: true; data: T }
@@ -543,6 +545,63 @@ export async function setStatus(
   });
 
   return { ok: true, data: { status } };
+}
+
+/**
+ * Asks an employee to complete their profile again.
+ *
+ * Not an edit. Admins may set position and department; the name comes from
+ * Microsoft and the profile is the employee's own, so the only correction the
+ * platform offers for a profile holding words nobody chose - the seed's
+ * "Platform Administrator" accepted at onboarding, a bad directory prefill
+ * accepted unread - is to run onboarding again.
+ *
+ * Two writes, and the second is what makes the first work. Clearing
+ * profileCompleted alone would send the person to the onboarding form on
+ * their next click, prefilled from the row as it stands - the placeholder
+ * again - because the name is stamped from the token at SIGN-IN
+ * (lib/auth/signin.ts) and a session lasts days. So sessionsValidAfter is
+ * bumped too, the mechanism disabling already uses: the next request is
+ * rejected, the sign-in that follows stamps the name, and only then does the
+ * form open. Prefilled correctly.
+ *
+ * Refused for a disabled employee: they cannot sign in, so there is nothing
+ * to complete, and re-enabling is a separate decision with its own audit row.
+ * Allowed on yourself - you are signed out and asked, which is what the
+ * button says. Allowed on a profile that is already incomplete - the session
+ * still ends and the name is still re-stamped, and `wasCompleted` records
+ * which case it was.
+ */
+export async function resetProfile(
+  actorId: string,
+  employeeId: string,
+): Promise<AdminResult<{ profileCompleted: false }>> {
+  const employee = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: { id: true, status: true, profileCompleted: true },
+  });
+  if (employee === null) return fail("not_found", "Employee not found.");
+  if (employee.status === "disabled") {
+    return fail(
+      "employee_disabled",
+      "This employee is disabled and cannot sign in to complete a profile. Enable the account first.",
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.employee.update({
+      where: { id: employeeId },
+      data: { profileCompleted: false, sessionsValidAfter: new Date() },
+    });
+    await writeAuditEvent(tx, {
+      action: "employee.profile_reset",
+      actorEmployeeId: actorId,
+      targetEmployeeId: employeeId,
+      metadata: { wasCompleted: employee.profileCompleted },
+    });
+  });
+
+  return { ok: true, data: { profileCompleted: false } };
 }
 
 export async function setAdminFlag(

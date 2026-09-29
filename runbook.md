@@ -1540,10 +1540,17 @@ token on every sign-in **while `profile_completed` is false**, and never
 once it is true - a completed profile holds the employee's own correction
 (docs/04). So for anyone who has not finished onboarding the next sign-in
 corrects the name by itself. For someone who completed onboarding with the
-placeholder still in place, the row now holds a name a person confirmed;
-there is no admin route to change a name, by design, and none should be
-added. `tests/onboarding.test.ts` runs the real seed and then a sign-in, and
-asserts the placeholder is gone and a completed profile is untouched.
+placeholder still in place, open their employee page and use **Ask to
+complete profile again**. It clears the profile flag AND ends their session:
+their next click goes to sign-in, the sign-in stamps the name from the
+token, and the onboarding form opens prefilled correctly. Clearing the flag
+alone would not do it - the name is stamped at sign-in, a session lasts
+days, and the form would offer the placeholder back. Audited as
+`employee.profile_reset`; refused for a disabled employee. There is still no
+admin route to type a name, by design. `tests/onboarding.test.ts` runs the
+real seed and then a sign-in and asserts the placeholder is gone and a
+completed profile is untouched; `tests/admin-profile-reset.test.ts` runs the
+reset and then the sign-in and asserts the name lands before the form would.
 
 ### Production sign-in bounces to `/signin?error=OAuthCallbackError`
 

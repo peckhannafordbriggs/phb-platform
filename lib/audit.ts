@@ -10,6 +10,14 @@ export type AuditAction =
   | "login.denied"
   | "employee.provisioned"
   | "employee.profile_completed"
+  /**
+   * An admin asked the employee to complete their profile again
+   * (lib/admin/service.ts, resetProfile). The only correction the platform
+   * offers for a profile holding words nobody chose: the name comes from
+   * Microsoft and the rest is the employee's own, so an admin edits neither.
+   * `metadata.wasCompleted` records whether the profile had been completed.
+   */
+  | "employee.profile_reset"
   | "employee.enabled"
   | "employee.disabled"
   | "employee.admin_granted"
