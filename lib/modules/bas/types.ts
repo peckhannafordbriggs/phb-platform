@@ -237,6 +237,58 @@ export interface CollectionHealthTotals {
   minutesSinceNewestReading: number | null;
 }
 
+/**
+ * One project's health, for its Dashboard card. `null` on the card when the
+ * project has no active point - see `DashboardProject.health`.
+ *
+ * The SAME shape `basFigure` (lib/home/bas-figure.ts) reads from the
+ * Collection Health totals, so the card's health line is worded by the same
+ * function as the Home tile: "No points at risk" or "N points at risk", over
+ * the age of the newest reading. `pointsAtRisk` is `atRiskCount(riskCounts)`
+ * by the one list in AT_RISK_ROLL_RISKS, scoped to the project, and
+ * tests/bas-at-risk-predicate.test.ts holds it to Collection Health filtered
+ * to the same project.
+ */
+export interface DashboardProjectHealth {
+  activePoints: number;
+  pointsAtRisk: number;
+  riskCounts: Record<RollRisk, number>;
+  /** Minutes since the project's newest reading; `null` when it has none. */
+  minutesSinceNewestReading: number | null;
+}
+
+export interface DashboardProject {
+  projectId: string;
+  name: string;
+  orgName: string;
+  /** Buildings in the project, counted without reference to points or readings. */
+  buildings: number;
+  /** JACEs registered under those buildings, active or not. */
+  stations: number;
+  /**
+   * `null` when the project has no active point: no stations yet, or stations
+   * that have not discovered a point. The card then shows its counts and no
+   * health line at all, because "No points at risk" over zero points is a
+   * claim about nothing dressed as a verdict.
+   */
+  health: DashboardProjectHealth | null;
+}
+
+export interface BasDashboard {
+  observedAt: string;
+  /** One per project the viewer may see, in org-then-name order. Never hardcoded. */
+  projects: DashboardProject[];
+  /**
+   * `count(*)` of the same projects with no joins at all - the guard the
+   * Points list carries (`stationsAccountedFor`). The card query joins
+   * buildings and the health view to build each card; if a join ever drops or
+   * doubles a project, `projects.length` and this disagree and the screen
+   * says so in red rather than quietly showing fewer cards than there are
+   * projects.
+   */
+  projectsInDatabase: number;
+}
+
 export interface PointHealthRow {
   pointId: string;
   pointName: string;

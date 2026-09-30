@@ -1680,6 +1680,79 @@ breaks the two tests named above.
 
 ---
 
+## 59 · The Dashboard card's number is Collection Health's, and "nothing loaded" had to become sayable
+
+**What.** On 2026-09-30 the BAS module gained a Dashboard and opens on it:
+one card per row of `bas_projects`, about three across. Each card is the
+project's name, its health in the Home tile's words — *No points at risk*, or
+*N points at risk* in a maroon mark — over the age of its newest reading, and
+*N buildings · N JACEs*. Collection Health moved from `/bas` to `/bas/health`.
+Clicking a card opens Point Explorer with the project set and **no point
+loaded**, at `/bas/points?project=<id>&point=none`.
+
+**Why the number comes from where it does.** The card's at-risk figure is
+per-state counts over `bas_v_collection_health` filtered on `is_active` alone
+— hidden points in — summed in TypeScript by `atRiskCount` over
+`AT_RISK_ROLL_RISKS`. It decides nothing itself; the component never sees a
+risk state and takes the service's number through the same `basFigure` the
+Home tile uses. Four private definitions of "at risk" were found on one
+screen on 2026-09-18 (§ 49) and unified; a new screen is precisely where a
+fifth appears, because it is the one place nobody is looking for the old
+bug. So `tests/bas-at-risk-predicate.test.ts` holds a card to
+`getCollectionHealth(viewer, { projectId })` for the same project, from the
+fixture that has a point in every horizon state.
+
+Two mutations were run to prove the hold is real. Give the card its own
+count — `active_points - risk_ok`, the 18 September sentence's answer — and
+three tests fail, all in the predicate file, while the Dashboard's own test
+file passes 31 of 31: its fixture has no not-full point, so it cannot tell
+the difference. Zero one state on the card alone and two fail, again only
+there. That asymmetry is the argument for holding every surface in one file
+against one fixture rather than each in its own: the fixture that can tell
+is the one that matters, and a surface tested only against a fixture that
+cannot is a surface with a hole shaped exactly like the last defect.
+
+**Why the health line is sometimes absent.** A project with no active point
+— no JACE yet, or one that has discovered nothing — shows its counts and no
+health line. *No points at risk* over zero points is a verdict about nothing,
+and § 58's rule was to be quiet when fine, not to be reassuring when empty.
+It appears with the first active point; with no readings it reads *No
+readings yet*, never a healthy zero. And a project with no buildings is a card
+but not a link: the Point Explorer cascade has always offered only projects
+that have a building, and answers one that has none with a 404. A card that
+leads to a 404 is worse than one that leads nowhere.
+
+**Why `point=none` exists.** Point Explorer's URL is its state — the filters
+live in the query string, `app/(modules)/bas/filters.ts` — and an absent
+`point` has always meant "the first point the picker offers". That is right for a
+bookmark and wrong for a card: someone who clicked *Liberty Center* would see
+whichever point sorts first drawn as if they had asked for it, under a URL
+that says nothing about a point. There was no value that meant "nothing", so
+one was added — `none`, which no id can collide with — and the route turns it
+into `selectPoint: false`, the service returns the lists and runs no point
+query, and the screen says *Choose a point*. Choosing one replaces it;
+changing a level above clears it through the same cascade as before. The card
+is a real href, so the back button returns to the Dashboard.
+
+**Why the counts have a guard.** The card query LEFT JOINs buildings and the
+health view and groups by project; a join that dropped or doubled a project
+would show the wrong number of cards with nothing on screen to notice it by.
+The payload carries a joinless `count(*)` of the same projects, and the screen
+says so in red when they differ — the `stationsAccountedFor` pattern from the
+Points list (§ 45), applied to the one screen where "how many projects" is the
+whole point.
+
+**What breaks if you undo it.** Computing the card's number in the component,
+or in SQL of its own, is the September defect with a new address; the
+predicate test's card case and its source-text guard both fail. Rendering a
+health line for a project with no active point fails the dashboard test's
+absence cases. Making the card an href for a project with no buildings sends
+people to a 404. Dropping `selectPoint` and letting a card arrive with an
+absent `point` draws the first point under a URL that never asked for it, and
+the "nothing loaded" tests fail.
+
+---
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

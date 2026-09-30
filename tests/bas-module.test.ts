@@ -66,6 +66,9 @@ const importBasPage = () =>
 const importBasPointsPage = () =>
   import("@/app/(modules)/bas/points/page").then((m) => m.default);
 
+const importBasHealthPage = () =>
+  import("@/app/(modules)/bas/health/page").then((m) => m.default);
+
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -226,6 +229,7 @@ describe("every tab is guarded on its own route", () => {
   const TABS: Array<[string, () => Promise<() => Promise<unknown>>]> = [
     ["/bas", importBasPage],
     ["/bas/points", importBasPointsPage],
+    ["/bas/health", importBasHealthPage],
   ];
 
   for (const [route, importPage] of TABS) {

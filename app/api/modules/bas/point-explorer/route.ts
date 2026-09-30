@@ -11,6 +11,7 @@ import {
   parseSiteId,
   parseStationId,
 } from "@/lib/modules/bas/service";
+import { NO_POINT } from "@/lib/modules/bas/constants";
 import { ok, withBas } from "@/lib/modules/bas/route-helpers";
 
 // Prisma needs Node, and every route under app/api/modules/* is database-backed.
@@ -90,7 +91,10 @@ export async function GET(request: Request) {
             siteId: parseSiteId(input.site),
             projectId: parseProjectId(input.project),
             stationId: parseStationId(input.station),
-            pointId: parsePointId(input.point),
+            // `point=none` (a Dashboard card): the lists, and no point loaded.
+            // Anything else is a point id, or absent for the picker's first.
+            pointId: input.point === NO_POINT ? null : parsePointId(input.point),
+            selectPoint: input.point !== NO_POINT,
           }),
         );
       } catch (error) {

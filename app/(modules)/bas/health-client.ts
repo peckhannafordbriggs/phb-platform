@@ -1,6 +1,7 @@
 import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk } from "@/lib/modules/bas/types";
 import { unitSymbol, withUnit } from "@/lib/modules/bas/units";
 import type {
+  BasDashboard,
   BasSettingsTree,
   CollectionHealth,
   Completeness,
@@ -923,6 +924,32 @@ export function describeHeadroom(headroom: Headroom): string {
 }
 
 // ------------------------------------------------------- B4: Point Explorer
+
+/** The Dashboard's one request: every project card, from one `now()`. */
+export async function fetchDashboard(signal?: AbortSignal): Promise<BasDashboard> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/dashboard`, { signal, cache: "no-store" });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: BasDashboard; error?: { code?: string; message?: string } }
+    | null;
+
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+  if (payload?.data === undefined) {
+    throw new ApiError("unexpected", "The server returned no data.");
+  }
+  return payload.data;
+}
 
 export async function fetchPointExplorer(
   options: {

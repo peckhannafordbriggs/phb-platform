@@ -64,7 +64,12 @@ describe("the rendered tab bar", () => {
   it("omits Settings entirely for a BAS user without the admin flag", () => {
     const html = render(false);
 
-    expect(renderedTabs(html)).toEqual(["Collection Health", "Point Explorer", "Analyze"]);
+    expect(renderedTabs(html)).toEqual([
+      "Dashboard",
+      "Point Explorer",
+      "Analyze",
+      "Collection Health",
+    ]);
 
     // Not just the label - the href must not be in the markup either, or the
     // route is discoverable by reading the page source.
@@ -76,12 +81,14 @@ describe("the rendered tab bar", () => {
     const html = render(true);
 
     expect(renderedTabs(html)).toEqual([
-      "Collection Health",
+      "Dashboard",
       "Point Explorer",
       "Analyze",
+      "Collection Health",
       "Settings",
     ]);
     expect(html).toContain("/bas/settings");
+    expect(html).toContain("/bas/health");
   });
 
   /**
@@ -92,14 +99,14 @@ describe("the rendered tab bar", () => {
    * survived that; it would have failed had the new tab been appended after
    * Settings instead.
    */
-  it("puts Settings last, on the right, with Analyze between Point Explorer and it", () => {
+  it("puts the Dashboard first and Settings last, with Collection Health between Analyze and Settings", () => {
     const tabs = renderedTabs(render(true));
+    expect(tabs[0]).toBe("Dashboard");
     expect(tabs[tabs.length - 1]).toBe("Settings");
-    expect(tabs.indexOf("Collection Health")).toBeLessThan(
-      tabs.indexOf("Point Explorer"),
-    );
+    expect(tabs.indexOf("Dashboard")).toBeLessThan(tabs.indexOf("Point Explorer"));
     expect(tabs.indexOf("Point Explorer")).toBeLessThan(tabs.indexOf("Analyze"));
-    expect(tabs.indexOf("Analyze")).toBeLessThan(tabs.indexOf("Settings"));
+    expect(tabs.indexOf("Analyze")).toBeLessThan(tabs.indexOf("Collection Health"));
+    expect(tabs.indexOf("Collection Health")).toBeLessThan(tabs.indexOf("Settings"));
   });
 
   /**

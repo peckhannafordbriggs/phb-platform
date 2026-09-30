@@ -1,3 +1,4 @@
+import { NO_POINT } from "@/lib/modules/bas/constants";
 import { DEFAULT_WINDOW_DAYS } from "./health-client";
 
 /**
@@ -37,6 +38,29 @@ export const TO_PARAM = "to";
 /** The two levels B7.6 added either side of the building. */
 export const PROJECT_PARAM = "project";
 export const STATION_PARAM = "station";
+
+/**
+ * Where a Dashboard card goes: Point Explorer with the project set and no
+ * point loaded.
+ *
+ * `project` is the ordinary cascade parameter, so the Building, JACE and Point
+ * lists arrive narrowed to it and the Project dropdown reads the project -
+ * and stays a dropdown: changing it afterwards is the same `withCascade` as
+ * ever. `point=none` (NO_POINT) is what makes "nothing loaded" expressible:
+ * an absent `point` means "the first point the picker offers", and a card
+ * must not arrive drawing whichever point happens to sort first. Choosing a
+ * point overwrites it; changing a level above clears it, as `CASCADE_CLEARS`
+ * says, and the first point loads as before.
+ *
+ * A real href rather than a click handler, so the back button returns to the
+ * Dashboard, a middle-click opens a tab, and the result can be pasted.
+ */
+export function dashboardCardHref(projectId: string): string {
+  const params = new URLSearchParams();
+  params.set(PROJECT_PARAM, projectId);
+  params.set(POINT_PARAM, NO_POINT);
+  return `/bas/points?${params.toString()}`;
+}
 
 /**
  * Which parameters a change at each level must CLEAR.

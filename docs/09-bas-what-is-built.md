@@ -31,7 +31,7 @@ under decides where to look and what can hold it to account.
 
 | | Owns | Where |
 |---|---|---|
-| **`phb-platform`** (this repo) | The `bas_*` schema and migrations, the API routes, the Building Automation module and its three screens, the module guard, the BAS tests, the verification tooling — `bas-import`, `bas-checksum`, `bas-verify-import`, `bas-health-oracle`, `bas-tables` — and these docs | `prisma/migrations/`, `app/(modules)/bas/`, `app/api/modules/bas/`, `lib/modules/bas/`, `tests/bas-*.test.ts`, `scripts/bas-*.ts`, `docs/` |
+| **`phb-platform`** (this repo) | The `bas_*` schema and migrations, the API routes, the Building Automation module and its five screens, the module guard, the BAS tests, the verification tooling — `bas-import`, `bas-checksum`, `bas-verify-import`, `bas-health-oracle`, `bas-tables` — and these docs | `prisma/migrations/`, `app/(modules)/bas/`, `app/api/modules/bas/`, `lib/modules/bas/`, `tests/bas-*.test.ts`, `scripts/bas-*.ts`, `docs/` |
 | **`phb-bas`** | `bas-collector` — the Python collector, `healthcheck.py`, `Backup-BasDatabase.ps1`, `Test-BasRestore.ps1`, `setup_backup_role.sql`, `Install-BasTasks.ps1`, its tests — plus `bas-db` (retired), `bas-mcp` and `bas-grafana` | those directories at the repo root, checked out locally with `C:\dev` **as** the repository root |
 
 **This is the module's view. The pipeline's view is
@@ -72,7 +72,7 @@ permanently. Thirty-nine histories in all, thirty collected: the office has 26
 real points and history back to February 2024, attached to one rooftop unit and
 ten VAVs (11 equipment rows, `bas_point_links` still empty); the lab has four
 synthetic ones. The platform's Building Automation module reads that data in
-four tabs; Grafana and Claude Desktop read the same tables. Nothing
+five tabs; Grafana and Claude Desktop read the same tables. Nothing
 is installed on either controller, the account used to read them cannot write
 back, and the collector reads its station list and logins from the platform
 database, entered through the module's own Settings tab.
@@ -88,7 +88,7 @@ database, entered through the module's own Settings tab.
 | **`bas_collector` Niagara account** | — | on each station | Read-only, `HTTPBasicScheme`. The only thing added to a JACE |
 | **Collector** | `phb-bas` | `bas-collector/` | Python. Reads oBIX every 15 min, writes to Postgres. Stations and logins from the database |
 | **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 14 tables, 6 views, 20 CHECK constraints, 3 triggers. Permanent |
-| **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Three tabs behind the platform's own login and grants |
+| **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Five tabs behind the platform's own login and grants |
 | **Grafana dashboards** | `phb-bas` | `bas-grafana/`, served at `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
 | **`bas-mcp`** | `phb-bas` | `bas-mcp/` | Lets Claude Desktop query the data, read-only. Superseded by B5 when that ships |
 | **Nightly backup** | `phb-bas` | `bas-collector/Backup-BasDatabase.ps1`, 02:15 to OneDrive, as `bas_backup` | Load-bearing — see *The backup incident* |
@@ -232,12 +232,29 @@ constraints and triggers.
 
 ## The screens
 
-One module, **three** tabs — real routes, not client-side state, so each is
+One module, **five** tabs — real routes, not client-side state, so each is
 bookmarkable and each guards itself independently. Listed in
-`app/(modules)/bas/tabs.ts`, which is the one place that knows they exist. A
-fourth, **B5 "Ask"**, is designed and is not a tab yet — see *Not built*.
+`app/(modules)/bas/tabs.ts`, which is the one place that knows they exist. The
+module opens on the Dashboard (2026-09-30); Collection Health, which opened it
+before, is at `/bas/health`.
 
-### Collection Health — `/bas`
+### Dashboard — `/bas`
+
+One rounded card per row of `bas_projects`, about three across, wrapping. Each
+card: the project's name, big; its health in the Home tile's words — *No points
+at risk*, or *N points at risk* in a maroon mark — over the age of its newest
+reading; and *N buildings · N JACEs*. The at-risk number is Collection Health's
+for that project: the same per-state counts over `bas_v_collection_health`,
+summed by `atRiskCount` over the one list, hidden points included.
+`tests/bas-at-risk-predicate.test.ts` holds a card to the filtered screen. A
+project with no active point shows its counts and no health line; one with no
+building is a card and not a link. Clicking a card opens Point Explorer with the
+project set and **no point loaded** (`?project=<id>&point=none`) — the person
+picks. The payload carries a joinless project count beside the cards, and the
+screen says so in red if they differ. `runbook.md` → *The BAS module opens on a
+Dashboard*.
+
+### Collection Health — `/bas/health`
 
 In render order:
 
@@ -847,7 +864,7 @@ stations:
 | 6 views, all `bas_v_` prefixed | `information_schema.views` — 6 |
 | 20 CHECK constraints, 3 triggers | `pg_constraint`, `pg_trigger` on the live database |
 | 17 migrations applied | `_prisma_migrations`; the last five dated 17 September. `add_bas_comments` appears twice there — a rolled-back attempt and the successful re-application a minute later — and that is correct |
-| Three tabs, and B5 not among them | `app/(modules)/bas/tabs.ts` lists three; its comment says where B5's line would go |
+| Five tabs, Dashboard first | `app/(modules)/bas/tabs.ts` lists five (Dashboard added 2026-09-30); the module opens on `/bas`, Collection Health is `/bas/health` |
 | Credentials never returned | the settings query selects `cred.username` and `cred.updated_at` and says why the ciphertext is not there |
 | Every settings write audited | `audit_events`: `bas.project_created`, `bas.building_created`, `bas.station_created`, `bas.credential_set`, and their updates and deletes, each with an actor |
 | Two direct stations, one via-parent placeholder | `bas_stations`, with addresses, versions, pins and clock offsets |
