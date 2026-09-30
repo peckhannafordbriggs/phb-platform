@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { BasError } from "./errors";
 import type {
+  BasDashboard,
   CollectionHealth,
   Completeness,
   DataGapRow,
@@ -1082,6 +1083,176 @@ export async function getCollectionHealth(
   return health;
 }
 
+// ============================================================== dashboard
+
+interface DashboardRow {
+  project_id: bigint;
+  name: string;
+  org_name: string;
+  buildings: number;
+  stations: number;
+  active_points: number;
+  risk_ok: number;
+  risk_at_risk: number;
+  risk_data_lost: number;
+  risk_buffer_not_full: number;
+  risk_roll_horizon_unknown: number;
+  risk_never_collected: number;
+  minutes_since: number | null;
+}
+
+/**
+ * Which projects this employee may see, as SQL over `bas_projects pr`.
+ *
+ * The entitlement is per SITE (`basSiteScope`), so once it is a list a project
+ * is visible when any of its buildings is. `null` - everyone, today - is every
+ * project, INCLUDING one with no buildings yet: a project somebody has just
+ * created in Settings has to get a card, or the Dashboard would read "no
+ * projects" over a Settings screen that lists one.
+ */
+function projectScope(entitled: bigint[] | null): Prisma.Sql {
+  if (entitled === null) return Prisma.sql`TRUE`;
+  if (entitled.length === 0) return Prisma.sql`FALSE`;
+  return Prisma.sql`EXISTS (
+    SELECT 1 FROM bas_sites es
+    WHERE es.project_id = pr.project_id AND es.site_id IN (${Prisma.join(entitled)})
+  )`;
+}
+
+/**
+ * The Dashboard: one card per project.
+ *
+ * Each card's at-risk figure is the Collection Health tile's, scoped to the
+ * project: the same six per-state counts over `bas_v_collection_health`,
+ * filtered on `is_active` alone (hidden points count, as everywhere), summed
+ * in TypeScript by `atRiskCount` over the one list. Nothing here decides
+ * at-risk-ness on its own - four private definitions of it were found and
+ * unified in September, and a fifth on a new screen would be the regression.
+ * tests/bas-at-risk-predicate.test.ts holds a card to
+ * `getCollectionHealth(viewer, { projectId })` for the same project.
+ *
+ * The newest-reading age is the Collection Health "Since newest reading"
+ * query, project-scoped - `now() - max(ts)` over the readings the project's
+ * points hold - so the card and that tile cannot disagree about it either.
+ *
+ * Building and JACE counts are correlated subqueries with no reference to
+ * points or readings, and `projectsInDatabase` is a joinless `count(*)` over
+ * the same scope: if the card join ever drops or doubles a project, the screen
+ * can tell. One transaction, one `now()`, like every other read here.
+ */
+export async function getDashboard(viewer: Viewer): Promise<BasDashboard> {
+  const scope = await basSiteScope(viewer);
+  const entitled = scope.entitled;
+
+  const result = await prisma.$transaction(async (tx) => {
+    const observedAt = firstRow(
+      await tx.$queryRaw<Array<{ now: Date }>>`SELECT now() AS now`,
+      "now()",
+    ).now;
+
+    const rows = await tx.$queryRaw<DashboardRow[]>`
+      SELECT
+        pr.project_id,
+        pr.name,
+        o.name AS org_name,
+        -- Counted on their own, so a project with buildings and no points
+        -- still says how many buildings it has.
+        (SELECT count(*) FROM bas_sites s
+          WHERE s.project_id = pr.project_id
+            AND ${siteFilter(entitled, Prisma.sql`s.site_id`)})::int AS buildings,
+        (SELECT count(*) FROM bas_stations st
+          JOIN bas_sites s ON s.site_id = st.site_id
+          WHERE s.project_id = pr.project_id
+            AND ${siteFilter(entitled, Prisma.sql`s.site_id`)})::int AS stations,
+        -- THE RISK RULE, as on Collection Health: every FILTER is on is_active
+        -- alone. is_visible appears nowhere. A hidden point is still collected
+        -- and can still lose data, so it is in the card's figure.
+        count(*) FILTER (WHERE h.is_active)::int AS active_points,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'ok')::int AS risk_ok,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'at_risk')::int AS risk_at_risk,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'data_lost')::int AS risk_data_lost,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'buffer_not_full')::int
+          AS risk_buffer_not_full,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'roll_horizon_unknown')::int
+          AS risk_roll_horizon_unknown,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'never_collected')::int
+          AS risk_never_collected,
+        -- Collection Health's "Since newest reading", scoped to the project.
+        (SELECT (EXTRACT(EPOCH FROM (now() - max(r.ts))) / 60.0)::float8
+           FROM bas_readings r
+           JOIN bas_points rp USING (point_id)
+           JOIN bas_stations rst USING (station_id)
+           JOIN bas_sites rs ON rs.site_id = rst.site_id
+          WHERE rs.project_id = pr.project_id
+            AND ${siteFilter(entitled, Prisma.sql`rs.site_id`)}) AS minutes_since
+      FROM bas_projects pr
+      JOIN bas_orgs o ON o.org_id = pr.org_id
+      -- LEFT, twice: a project with no buildings, or buildings with no
+      -- points, is still a project and still gets a card.
+      LEFT JOIN bas_sites ps
+        ON ps.project_id = pr.project_id
+       AND ${siteFilter(entitled, Prisma.sql`ps.site_id`)}
+      LEFT JOIN bas_v_collection_health h ON h.site_id = ps.site_id
+      WHERE ${projectScope(entitled)}
+      GROUP BY pr.project_id, pr.name, o.name
+      ORDER BY o.name, pr.name
+    `;
+
+    // No joins. The guard against the query above.
+    const inDatabase = firstRow(
+      await tx.$queryRaw<Array<{ n: number }>>`
+        SELECT count(*)::int AS n FROM bas_projects pr WHERE ${projectScope(entitled)}
+      `,
+      "project count",
+    ).n;
+
+    return { observedAt, rows, inDatabase };
+  });
+
+  const dashboard: BasDashboard = {
+    observedAt: result.observedAt.toISOString(),
+    projects: result.rows.map((row) => {
+      const riskCounts: Record<RollRisk, number> = {
+        ok: row.risk_ok,
+        at_risk: row.risk_at_risk,
+        data_lost: row.risk_data_lost,
+        buffer_not_full: row.risk_buffer_not_full,
+        roll_horizon_unknown: row.risk_roll_horizon_unknown,
+        never_collected: row.risk_never_collected,
+      };
+      return {
+        projectId: row.project_id.toString(),
+        name: row.name,
+        orgName: row.org_name,
+        buildings: row.buildings,
+        stations: row.stations,
+        health:
+          row.active_points === 0
+            ? null
+            : {
+                activePoints: row.active_points,
+                // By the one list. See AT_RISK_ROLL_RISKS.
+                pointsAtRisk: atRiskCount(riskCounts),
+                riskCounts,
+                minutesSinceNewestReading: row.minutes_since,
+              },
+      };
+    }),
+    projectsInDatabase: result.inDatabase,
+  };
+
+  logger.info("bas.dashboard", {
+    employeeId: scope.employeeId,
+    moduleKey: "bas",
+    count: dashboard.projects.length,
+    outcome: dashboard.projects.some((p) => (p.health?.pointsAtRisk ?? 0) > 0)
+      ? "at_risk"
+      : "ok",
+  });
+
+  return dashboard;
+}
+
 export function clampWindowDays(requested: number | undefined): number {
   if (requested === undefined || !Number.isFinite(requested)) {
     return DEFAULT_WINDOW_DAYS;
@@ -1281,6 +1452,15 @@ export interface PointExplorerOptions extends BasSelectionRequest {
   /** Absent means "the first point the picker would offer". */
   pointId?: bigint | null;
   /**
+   * `false`: load NO point. The cascade is resolved and the picker's lists
+   * come back, `selectedPoint` is null, and no point query runs. This is how
+   * a Dashboard card arrives (`?point=none`): with the project set and the
+   * person still to choose, rather than with whichever point sorts first
+   * drawn as if they had asked for it. `pointId` is ignored when this is
+   * false. Default true, so every existing caller is unchanged.
+   */
+  selectPoint?: boolean;
+  /**
    * A custom calendar range. When present it wins over `windowDays`, which
    * then only says which preset button would be pressed if the person went
    * back to one.
@@ -1325,7 +1505,8 @@ export async function getPointExplorer(
   options: PointExplorerOptions = {},
 ): Promise<PointExplorer> {
   const windowDays = clampWindowDays(options.windowDays);
-  const requestedPointId = options.pointId ?? null;
+  const selectPoint = options.selectPoint !== false;
+  const requestedPointId = selectPoint ? (options.pointId ?? null) : null;
   const customRange = options.range ?? null;
   const maxRaw = options.maxRawTrendPoints ?? MAX_RAW_TREND_POINTS;
   const maxBuckets = options.maxTrendBuckets ?? MAX_TREND_BUCKETS;
@@ -1398,8 +1579,11 @@ export async function getPointExplorer(
       ORDER BY v.site_name, ${shownPointName(Prisma.sql`v`)}, v.point_id
     `;
 
-    const selectedPoint =
-      requestedPointId === null
+    // No point at all when the caller said so; otherwise the requested point,
+    // or the first the picker offers.
+    const selectedPoint = !selectPoint
+      ? null
+      : requestedPointId === null
         ? (pointRows[0] ?? null)
         : (pointRows.find((row) => row.point_id === requestedPointId) ?? null);
 

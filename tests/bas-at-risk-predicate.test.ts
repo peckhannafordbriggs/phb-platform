@@ -11,7 +11,8 @@ import { auth } from "@/auth";
 import type { Viewer } from "@/lib/authz";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { resetBasAvailabilityCache } from "@/lib/modules/bas/route-helpers";
-import { getCollectionHealth } from "@/lib/modules/bas/service";
+import { getCollectionHealth, getDashboard } from "@/lib/modules/bas/service";
+import { basFigure } from "@/lib/home/bas-figure";
 import {
   AT_RISK_ROLL_RISKS,
   atRiskCount,
@@ -261,6 +262,8 @@ describe("the one predicate", () => {
       "app/(modules)/bas/collection-health.tsx",
       "app/(modules)/bas/settings-view.tsx",
       "app/(modules)/bas/point-explorer.tsx",
+      "app/(modules)/bas/dashboard.tsx",
+      "lib/home/bas-figure.ts",
     ];
     const sources = await Promise.all(
       files.map(async (f) => [f, await readFile(path.join(process.cwd(), f), "utf8")] as const),
@@ -335,6 +338,40 @@ describe("every surface answers from the one predicate, and they agree", () => {
 
     expect(reportingPoints(result.points)).toBe(result.totals.activePoints - result.totals.pointsAtRisk);
     expect(reportingPoints(result.points)).toBe(4);
+  });
+
+  it("the Dashboard card: the project's figure is Collection Health filtered to that project", async () => {
+    /**
+     * The fifth surface (2026-09-30). The card has its own SQL - per-project
+     * per-state counts - and its own opportunity to grow a private
+     * definition, which is exactly what this holds it against: the card's
+     * number must be the number Collection Health shows when filtered to the
+     * same project, and both must be the list applied to the same rows.
+     * Hidden points are in it, as everywhere - CfgLost is hidden and lost.
+     */
+    const dashboard = await getDashboard(viewer);
+    const card = dashboard.projects.find((p) => p.name === `${PREFIX}PROJECT`);
+    expect(card).toBeDefined();
+    expect(card!.health).not.toBeNull();
+
+    const filtered = await getCollectionHealth(viewer, {
+      projectId: BigInt(card!.projectId),
+    });
+    expect(filtered.scope.filtered).toBe(true);
+
+    expect(card!.health!.pointsAtRisk).toBe(filtered.totals.pointsAtRisk);
+    expect(card!.health!.riskCounts).toEqual(filtered.totals.riskCounts);
+    expect(card!.health!.activePoints).toBe(filtered.totals.activePoints);
+    // By the one list, and absolutely: the four at-risk shapes, not the two
+    // not-full ones.
+    expect(card!.health!.pointsAtRisk).toBe(atRiskCount(card!.health!.riskCounts));
+    expect(card!.health!.pointsAtRisk).toBe(EXPECTED_AT_RISK.length);
+    expect(card!.health!.pointsAtRisk).toBe(4);
+    // And the words on the card are the Home tile's words for the same number.
+    expect(basFigure(card!.health!)).toMatchObject({
+      value: "4 points at risk",
+      alarm: true,
+    });
   });
 });
 
@@ -428,6 +465,19 @@ describe("the live shape of 2026-09-18: only not-full points hidden, nothing at 
     );
     expect(computeHeadroom(result.points).unknown).toBe(0);
     expect(reportingPoints(result.points)).toBe(4);
+
+    // The Dashboard card, same shape: two not-full points, hidden, are not
+    // at risk. The card reads calm and carries no mark.
+    const card = (await getDashboard(viewer)).projects.find(
+      (p) => p.name === `${PREFIX}PROJECT`,
+    );
+    expect(card?.health?.pointsAtRisk).toBe(0);
+    expect(card?.health?.riskCounts.buffer_not_full).toBe(2);
+    expect(basFigure(card!.health!)).toEqual({
+      state: "none",
+      value: "No points at risk",
+      status: expect.stringMatching(/^(No readings yet|newest reading .* ago)$/),
+    });
   });
 });
 
@@ -454,6 +504,14 @@ describe("a hidden point that IS at risk is never silent", () => {
     );
     // And the not-full hidden point beside it adds nothing to either number.
     expect(result.totals.hiddenPoints).toBe(2);
+
+    // The Dashboard card counts the hidden at-risk point too: hiding is a
+    // preference of the browsing screens and changes nothing about collection.
+    const card = (await getDashboard(viewer)).projects.find(
+      (p) => p.name === `${PREFIX}PROJECT`,
+    );
+    expect(card?.health?.pointsAtRisk).toBe(1);
+    expect(basFigure(card!.health!)).toMatchObject({ value: "1 point at risk", alarm: true });
   });
 
   it("refuses to build prose over numbers that disagree", () => {
@@ -493,6 +551,16 @@ describe("a hidden point that IS at risk is never silent", () => {
 //       "asks the predicate, not the horizon" block above was added for it,
 //       with rows that are deliberately incoherent; re-run: 2 failures, both
 //       there.
+//
+//   P5. (2026-09-30, the Dashboard card) A private definition on the new
+//       screen: getDashboard's pointsAtRisk becomes `active_points - risk_ok`,
+//       the 2026-09-18 sentence's answer -> 3 failures, ALL in this file: the
+//       card test (6 vs 4), the live shape (2 vs 0) and hidden-at-risk (2 vs 1).
+//       tests/bas-dashboard.test.tsx passed untouched, 31/31 - its fixture has
+//       no not-full point, so it cannot tell. That is why the card is held HERE.
+//   P6. (same day) The card forgets one state: roll_horizon_unknown zeroed in
+//       the card's riskCounts -> 2 failures, both here: the card test (3 vs 4)
+//       and hidden-at-risk, where Unknown is the only at-risk point (0 vs 1).
 //
 // Reproduced on the live database first, inside a rolled-back transaction,
 // with the service's SQL verbatim from origin/main and the four office points

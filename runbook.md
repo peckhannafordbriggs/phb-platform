@@ -7245,6 +7245,91 @@ drives every state, will say where.
 
 ---
 
+## The BAS module opens on a Dashboard, and Collection Health is at `/bas/health`
+
+**Symptom.** Opening Building Automation from the sidebar, or a bookmark to
+`/bas`, shows a grid of project cards rather than the tiles and tables. The
+tab bar reads *Dashboard · Point Explorer · Analyze · Collection Health ·
+Settings*.
+
+**Cause.** Since 2026-09-30 the module opens on the **Dashboard**: one card
+per row of `bas_projects`, never hardcoded, about three across. Collection
+Health moved to `/bas/health` and is otherwise unchanged. That is the one deep
+link that changed; Point Explorer, Analyze and Settings kept theirs. The Home
+card and Home's *new data gaps* line link straight to `/bas/health`, because
+their words are Collection Health's.
+
+**Fix.** Nothing to fix. Update any bookmark or ticket that says `/bas` and
+means Collection Health.
+
+### What a card says, and where its numbers come from
+
+Top to bottom: the project's name; its health line in the Home tile's exact
+words - *No points at risk*, or *N points at risk* in a maroon mark; the age
+of the project's newest reading; and *N buildings · N JACEs*.
+
+**The at-risk number is Collection Health's, filtered to that project.** The
+service (`getDashboard` in `lib/modules/bas/service.ts`) counts the six
+`roll_risk` states per project over `bas_v_collection_health` on `is_active`
+alone and sums them with `atRiskCount` over `AT_RISK_ROLL_RISKS` - the one
+predicate. Hidden points are in it, as everywhere. If a card and Collection
+Health filtered to the same project ever disagree, the predicate has grown a
+second definition and `tests/bas-at-risk-predicate.test.ts` should already be
+failing; that file holds the card to the filtered screen and was mutated
+twice on 2026-09-30 to prove it can tell (the mutation record is at the
+bottom of the file).
+
+**The newest-reading age** is the *Since newest reading* query scoped to the
+project, worded by `basFigure` - the same function as the Home tile, so the
+same clock-offset caveat applies (*A BAS station's clock is wrong*).
+
+**The counts** are correlated subqueries with no reference to points or
+readings, and the payload carries `projectsInDatabase`, a joinless `count(*)`
+of the same projects. If the number of cards ever disagrees with it the screen
+says so in red above the cards - *N projects are in the database but not shown
+here* - the same guard the Points list carries.
+
+### A card shows counts and no health line
+
+**Symptom.** A card reads, say, *1 building · 1 JACE* and nothing about
+points at risk or a newest reading.
+
+**Cause.** The project has no active point: no JACE yet, or a JACE that has
+not been discovered. *No points at risk* over zero points would be a verdict
+about nothing, so the line is absent rather than invented. It appears the
+moment one active point exists; with no readings yet it reads *No readings
+yet*, never a healthy zero.
+
+### A card is not clickable
+
+**Symptom.** One card has no hover lift and does not open Point Explorer.
+
+**Cause.** The project has no buildings. Point Explorer's Project dropdown
+offers only projects that have one - there is nothing to narrow to otherwise
+- and answers `?project=` for such a project with a 404. A card that led to
+that would be worse than one that leads nowhere. Add a building under
+Settings and the card links.
+
+### Clicking a card lands on Point Explorer with nothing drawn
+
+**Symptom.** Point Explorer opens with the Project dropdown set, the
+Building, JACE and Point lists narrowed to it, the Point dropdown reading
+*Choose a point*, and a box saying *Choose a point · N points in <project>*
+where the chart would be.
+
+**Cause.** By design. The card's href is `/bas/points?project=<id>&point=none`
+(`dashboardCardHref` in `app/(modules)/bas/filters.ts`). An absent `point`
+has always meant "the first point the picker offers", and a card must not
+arrive drawing whichever point sorts first as if the person had asked for it.
+`point=none` (`NO_POINT` in `lib/modules/bas/constants.ts`) is the one value
+that says "nothing loaded"; the route turns it into `selectPoint: false` and
+the service returns the lists and runs no point query. Choosing a point
+replaces it; changing a level above clears it (`CASCADE_CLEARS`) and the first
+point loads as before. The URL is a real link - the back button returns to the
+Dashboard and a middle-click opens a tab.
+
+---
+
 ## The Home tile says "N points at risk" in a maroon box, and Collection Health should agree
 
 **Symptom.** The Building Automation card on Home reads *3 points at risk*

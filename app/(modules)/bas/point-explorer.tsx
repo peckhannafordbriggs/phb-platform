@@ -287,6 +287,17 @@ export function PointExplorer() {
             className="min-w-56 rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
           >
             {data.points.length === 0 && <option value="">No points</option>}
+            {/*
+              Arrived from a Dashboard card (`?point=none`): the list is
+              there and nothing is chosen. A disabled placeholder holds the
+              empty value so the select does not display the first point as
+              though it were selected. Choosing one writes `point=<id>`.
+            */}
+            {data.points.length > 0 && selectedPoint === null && (
+              <option value="" disabled>
+                Choose a point
+              </option>
+            )}
             {data.points.map((point) => (
               <option key={point.pointId} value={point.pointId}>
                 {point.pointName}
@@ -343,14 +354,29 @@ export function PointExplorer() {
       )}
 
       {selectedPoint === null ? (
-        <section className="rounded border border-[var(--border)] p-8 text-center">
-          <p className="text-sm font-medium">No active points</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            {data.sites.length === 0
-              ? "No buildings have been discovered yet."
-              : "Nothing has been discovered on the station for this building, or every point is marked inactive."}
-          </p>
-        </section>
+        data.points.length > 0 ? (
+          // Nothing loaded, by request: a Dashboard card lands here. Points
+          // exist and the person picks one; nothing is drawn until they do.
+          <section
+            className="rounded border border-[var(--border)] p-8 text-center"
+            data-testid="bas-choose-point"
+          >
+            <p className="text-sm font-medium">Choose a point</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              {data.points.length === 1 ? "1 point" : `${data.points.length} points`}
+              {data.scope.label === null ? "" : ` in ${data.scope.label}`}
+            </p>
+          </section>
+        ) : (
+          <section className="rounded border border-[var(--border)] p-8 text-center">
+            <p className="text-sm font-medium">No active points</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              {data.sites.length === 0
+                ? "No buildings have been discovered yet."
+                : "Nothing has been discovered on the station for this building, or every point is marked inactive."}
+            </p>
+          </section>
+        )
       ) : (
         <>
           {/* ---------------------------------------------------- tiles */}

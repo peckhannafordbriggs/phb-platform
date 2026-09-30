@@ -772,6 +772,24 @@ every quieted element into its failure state and asserts the loud wording
 survived. `WHY-ITS-BUILT-THIS-WAY.md` § 58; `runbook.md` → *Collection Health
 shows one line of checks where two cards used to be*.
 
+**The BAS module opens on a Dashboard (2026-09-30).** New first tab at `/bas`;
+Collection Health moved to `/bas/health` and is the one deep link that changed
+(Home's card and its *new data gaps* line point there). One card per row of
+`bas_projects`, never hardcoded: name, the Home tile's health line via the same
+`basFigure`, newest-reading age, *N buildings · N JACEs*. **The per-project
+at-risk number is the one predicate scoped to the project** — per-state counts
+over the view, `atRiskCount` over `AT_RISK_ROLL_RISKS`, hidden points in — and
+`tests/bas-at-risk-predicate.test.ts` now holds the card to Collection Health
+filtered to that project; two mutations (a private not-ok count; a dropped
+state) failed there and **only** there, because the dashboard's own fixture has
+no not-full point to tell them apart with. No active point → counts and no
+health line, never an invented one. A project with no building is a card and not
+a link: the cascade 404s it. A card opens Point Explorer with the project set and
+**nothing loaded** — `?point=none` (`NO_POINT`), the first value that can say so;
+absent `point` still means the picker's first. `projectsInDatabase` is the
+joinless guard beside the cards. `runbook.md` → *The BAS module opens on a
+Dashboard*; `WHY-ITS-BUILT-THIS-WAY.md` § 59.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

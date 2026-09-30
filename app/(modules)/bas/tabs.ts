@@ -32,12 +32,14 @@ export interface BasTab {
 
 export const BAS_TABS: readonly BasTab[] = [
   {
+    // The module opens here (2026-09-30). One card per project; a card is a
+    // way into Point Explorer with that project set. Collection Health held
+    // this href before and moved to /bas/health - a bookmark to /bas now
+    // lands on the cards, which is the one deep link that changed.
     href: "/bas",
-    label: "Collection Health",
-    // The roll horizon is the one fact that makes this screen make sense and it
-    // is nowhere on screen. Everything else it used to say was visible.
-    blurb:
-      "The controller keeps roughly two days of history, then overwrites it.",
+    label: "Dashboard",
+    // The cards say what they are. Nothing here would add to them.
+    blurb: "",
   },
   {
     href: "/bas/points",
@@ -53,6 +55,14 @@ export const BAS_TABS: readonly BasTab[] = [
     // is reported beside it rather than averaged away.
     blurb:
       "Ask a question of the sensor data. Every answer shows the rows, the points and period it covered, and the hours of the period nobody was watching.",
+  },
+  {
+    href: "/bas/health",
+    label: "Collection Health",
+    // The roll horizon is the one fact that makes this screen make sense and it
+    // is nowhere on screen. Everything else it used to say was visible.
+    blurb:
+      "The controller keeps roughly two days of history, then overwrites it.",
   },
   {
     href: "/bas/settings",
@@ -92,7 +102,7 @@ export function basTab(href: string): BasTab {
  * Which tab a path belongs to: the longest `href` that is a prefix of it.
  *
  * Longest-first rather than `startsWith` in list order, because every BAS path
- * starts with `/bas` - a naive prefix match would light up Collection Health on
+ * starts with `/bas` - a naive prefix match would light up the Dashboard on
  * every tab. The boundary check stops `/bas/pointsomething` from matching
  * `/bas/points`.
  */
