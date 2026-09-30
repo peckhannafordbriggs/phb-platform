@@ -541,8 +541,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                 path: '/api/health'
                 port: containerPort
               }
-              initialDelaySeconds: 5
-              periodSeconds: 10
+              // Tuned from a measured cold start (2026-09-30, runbook.md ->
+              // "A cold start takes about 30 seconds"): the web container is
+              // listening 1.7 s after it starts, and with a 5 s initial delay
+              // and a 10 s period the readiness gate alone cost 8 to 12 of the
+              // 30 s. 1 s and 2 s take most of that back. /api/health touches
+              // nothing, so a 2 s period costs the process nothing to answer.
+              initialDelaySeconds: 1
+              periodSeconds: 2
               failureThreshold: 3
             }
           ]
