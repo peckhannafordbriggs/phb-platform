@@ -234,7 +234,7 @@ is `docs/DESIGN-BRIEF.md` and the token comments in `app/globals.css`.
 
 ### BAS — working, on synthetic data
 
-Fourteen tables, six views, the collector running, five tabs — a Dashboard of project
+Fourteen tables, six views, the collector running, five tabs — a Projects tab of
 cards, Point Explorer, Analyze, Collection Health, and a Settings tab behind a module-admin
 permission — four scoped
 database accounts, nightly backups with a tested restore.
@@ -336,7 +336,7 @@ module on. Effective immediately.
 
 **Someone leaves.** Disable them in Admin. Don't delete.
 
-**Checking BAS health.** The Dashboard at `/bas` shows each project's points at risk; the Collection Health screen at `/bas/health` has the detail. *Points at risk* counts
+**Checking BAS health.** The Projects tab at `/bas` shows each project's points at risk; the Collection Health screen at `/bas/health` has the detail. *Points at risk* counts
 both confirmed data loss and points whose capacity is unknown — **unknown is not safe and
 never renders green.**
 

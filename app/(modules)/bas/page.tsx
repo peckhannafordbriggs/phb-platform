@@ -8,7 +8,8 @@ import { basTab } from "./tabs";
 export const dynamic = "force-dynamic";
 
 /**
- * Dashboard - the tab the module opens on, at /bas (2026-09-30).
+ * Projects - the tab the module opens on, at /bas (2026-09-30). Rendered by
+ * the Dashboard component: "Projects" is the label, dashboard.tsx the file.
  *
  * Collection Health lived here until then and is at /bas/health now; every
  * other tab kept its route.

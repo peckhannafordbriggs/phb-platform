@@ -1,7 +1,7 @@
 import { decorativeCardFill } from "@/lib/module-accent";
 
 /**
- * Which brand fill a project's Dashboard card takes.
+ * Which brand fill a project's Projects card takes.
  *
  * BY CREATION ORDER, NOT DISPLAY ORDER. The cards are shown org-then-name,
  * and a project named "Aardvark Plaza" created next year would sort first and

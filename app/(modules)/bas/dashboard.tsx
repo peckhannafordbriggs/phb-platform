@@ -9,7 +9,12 @@ import { dashboardCardHref } from "./filters";
 import { projectFills } from "./project-colours";
 
 /**
- * The Dashboard - the tab the module opens on. One card per project.
+ * The Projects tab - the tab the module opens on. One card per project.
+ *
+ * Called Dashboard here, in the route and in the payload types; "Projects"
+ * is the label on screen (renamed 2026-09-30, same day it shipped). The
+ * file was not renamed because that churns every import for no user
+ * benefit - `runbook.md` says so, so nobody hunts for a projects.tsx.
  *
  * A card is three facts and a way in: the project's name, its health in the
  * Home tile's words, and how many buildings and JACEs it holds. Clicking it
@@ -97,7 +102,7 @@ export function Dashboard({ canAdminister = false }: { canAdminister?: boolean }
     return (
       <section className="card p-8 text-center" role="alert">
         <p className="text-sm font-medium">
-          {error.code === "bas_unavailable" ? "BAS data unavailable" : "Could not load the dashboard"}
+          {error.code === "bas_unavailable" ? "BAS data unavailable" : "Could not load the projects"}
         </p>
         <p className="mt-1 text-sm text-[var(--muted)]">{error.message}</p>
       </section>

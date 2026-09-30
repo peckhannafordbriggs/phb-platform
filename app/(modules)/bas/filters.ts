@@ -40,7 +40,7 @@ export const PROJECT_PARAM = "project";
 export const STATION_PARAM = "station";
 
 /**
- * Where a Dashboard card goes: Point Explorer with the project set and no
+ * Where a Projects card goes: Point Explorer with the project set and no
  * point loaded.
  *
  * `project` is the ordinary cascade parameter, so the Building, JACE and Point
@@ -53,7 +53,7 @@ export const STATION_PARAM = "station";
  * says, and the first point loads as before.
  *
  * A real href rather than a click handler, so the back button returns to the
- * Dashboard, a middle-click opens a tab, and the result can be pasted.
+ * Projects tab, a middle-click opens a tab, and the result can be pasted.
  */
 export function dashboardCardHref(projectId: string): string {
   const params = new URLSearchParams();

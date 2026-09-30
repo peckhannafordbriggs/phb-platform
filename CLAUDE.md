@@ -772,7 +772,9 @@ every quieted element into its failure state and asserts the loud wording
 survived. `WHY-ITS-BUILT-THIS-WAY.md` § 58; `runbook.md` → *Collection Health
 shows one line of checks where two cards used to be*.
 
-**The BAS module opens on a Dashboard (2026-09-30).** New first tab at `/bas`;
+**The BAS module opens on a Projects tab (2026-09-30).** New first tab at `/bas`,
+labelled *Projects* on screen and `dashboard` in code (component, route, types
+- renamed on screen the same day, files left alone, runbook says so);
 Collection Health moved to `/bas/health` and is the one deep link that changed
 (Home's card and its *new data gaps* line point there). One card per row of
 `bas_projects`, never hardcoded: name, the Home tile's health line via the same
@@ -787,8 +789,8 @@ health line, never an invented one. A project with no building is a card and not
 a link: the cascade 404s it. A card opens Point Explorer with the project set and
 **nothing loaded** — `?point=none` (`NO_POINT`), the first value that can say so;
 absent `point` still means the picker's first. `projectsInDatabase` is the
-joinless guard beside the cards. `runbook.md` → *The BAS module opens on a
-Dashboard*; `WHY-ITS-BUILT-THIS-WAY.md` § 59.
+joinless guard beside the cards. `runbook.md` → *The BAS module opens on
+Projects*; `WHY-ITS-BUILT-THIS-WAY.md` § 59.
 
 **The cards are filled in brand colours that mean nothing (same day).**
 Home's `.card--filled`, one of six fills (`DECORATIVE_CARD_FILLS`, token

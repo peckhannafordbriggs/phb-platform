@@ -340,7 +340,7 @@ describe("every surface answers from the one predicate, and they agree", () => {
     expect(reportingPoints(result.points)).toBe(4);
   });
 
-  it("the Dashboard card: the project's figure is Collection Health filtered to that project", async () => {
+  it("the Projects card: the project's figure is Collection Health filtered to that project", async () => {
     /**
      * The fifth surface (2026-09-30). The card has its own SQL - per-project
      * per-state counts - and its own opportunity to grow a private
@@ -466,7 +466,7 @@ describe("the live shape of 2026-09-18: only not-full points hidden, nothing at 
     expect(computeHeadroom(result.points).unknown).toBe(0);
     expect(reportingPoints(result.points)).toBe(4);
 
-    // The Dashboard card, same shape: two not-full points, hidden, are not
+    // The Projects card, same shape: two not-full points, hidden, are not
     // at risk. The card reads calm and carries no mark.
     const card = (await getDashboard(viewer)).projects.find(
       (p) => p.name === `${PREFIX}PROJECT`,
@@ -505,7 +505,7 @@ describe("a hidden point that IS at risk is never silent", () => {
     // And the not-full hidden point beside it adds nothing to either number.
     expect(result.totals.hiddenPoints).toBe(2);
 
-    // The Dashboard card counts the hidden at-risk point too: hiding is a
+    // The Projects card counts the hidden at-risk point too: hiding is a
     // preference of the browsing screens and changes nothing about collection.
     const card = (await getDashboard(viewer)).projects.find(
       (p) => p.name === `${PREFIX}PROJECT`,
@@ -552,7 +552,7 @@ describe("a hidden point that IS at risk is never silent", () => {
 //       with rows that are deliberately incoherent; re-run: 2 failures, both
 //       there.
 //
-//   P5. (2026-09-30, the Dashboard card) A private definition on the new
+//   P5. (2026-09-30, the Projects card) A private definition on the new
 //       screen: getDashboard's pointsAtRisk becomes `active_points - risk_ok`,
 //       the 2026-09-18 sentence's answer -> 3 failures, ALL in this file: the
 //       card test (6 vs 4), the live shape (2 vs 0) and hidden-at-risk (2 vs 1).

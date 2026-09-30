@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 /**
  * Collection Health, at /bas/health.
  *
- * It was the module root until the Dashboard took that route (2026-09-30);
+ * It was the module root until the Projects tab took that route (2026-09-30);
  * nothing about the screen changed, only where it lives. The Home card and
  * the "new data gaps" line on Home link here directly, because their words
  * are Collection Health's.

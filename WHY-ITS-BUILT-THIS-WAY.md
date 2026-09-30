@@ -1680,9 +1680,11 @@ breaks the two tests named above.
 
 ---
 
-## 59 · The Dashboard card's number is Collection Health's, and "nothing loaded" had to become sayable
+## 59 · The Projects card's number is Collection Health's, and "nothing loaded" had to become sayable
 
-**What.** On 2026-09-30 the BAS module gained a Dashboard and opens on it:
+**What.** On 2026-09-30 the BAS module gained a Projects tab and opens on it
+(labelled *Dashboard* for a day; the component, route and types still carry
+that name, deliberately - see the runbook):
 one card per row of `bas_projects`, about three across. Each card is the
 project's name, its health in the Home tile's words — *No points at risk*, or
 *N points at risk* in a maroon mark — over the age of its newest reading, and
@@ -1704,7 +1706,7 @@ fixture that has a point in every horizon state.
 
 Two mutations were run to prove the hold is real. Give the card its own
 count — `active_points - risk_ok`, the 18 September sentence's answer — and
-three tests fail, all in the predicate file, while the Dashboard's own test
+three tests fail, all in the predicate file, while the Projects tab's own test
 file passes 31 of 31: its fixture has no not-full point, so it cannot tell
 the difference. Zero one state on the card alone and two fail, again only
 there. That asymmetry is the argument for holding every surface in one file
@@ -1732,7 +1734,7 @@ one was added — `none`, which no id can collide with — and the route turns i
 into `selectPoint: false`, the service returns the lists and runs no point
 query, and the screen says *Choose a point*. Choosing one replaces it;
 changing a level above clears it through the same cascade as before. The card
-is a real href, so the back button returns to the Dashboard.
+is a real href, so the back button returns to the Projects tab.
 
 **Why the counts have a guard.** The card query LEFT JOINs buildings and the
 health view and groups by project; a join that dropped or doubled a project
@@ -1753,7 +1755,7 @@ the "nothing loaded" tests fail.
 
 ---
 
-## 60 · The Dashboard cards are filled in brand colours, and the colour is allowed to mean nothing
+## 60 · The Projects cards are filled in brand colours, and the colour is allowed to mean nothing
 
 **What.** Same day as § 59, the project cards became filled cards in Home's
 `.card--filled` language. Each project takes one of six brand fills —

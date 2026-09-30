@@ -925,7 +925,7 @@ export function describeHeadroom(headroom: Headroom): string {
 
 // ------------------------------------------------------- B4: Point Explorer
 
-/** The Dashboard's one request: every project card, from one `now()`. */
+/** The Projects tab's one request (the route is still /dashboard): every project card, from one `now()`. */
 export async function fetchDashboard(signal?: AbortSignal): Promise<BasDashboard> {
   let response: Response;
   try {
