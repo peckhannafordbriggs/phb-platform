@@ -612,7 +612,9 @@ describe("the cards as rendered", () => {
     const mark = /<span[^>]*data-testid="bas-dashboard-alarm"[^>]*>([^<]*)<\/span>/.exec(html);
     expect(mark).not.toBeNull();
     expect(mark![1]).toBe("2 points at risk");
-    expect(mark![0]).toContain("var(--phb-maroon)");
+    // The mark's colours live in one stylesheet rule, .card-mark - maroon,
+    // white words, white edge. tests/bas-dashboard-colours.test.ts reads it.
+    expect(mark![0]).toContain('class="card-mark"');
     expect(html).toContain("newest reading 4 min ago");
   });
 

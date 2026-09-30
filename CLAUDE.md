@@ -790,6 +790,17 @@ absent `point` still means the picker's first. `projectsInDatabase` is the
 joinless guard beside the cards. `runbook.md` → *The BAS module opens on a
 Dashboard*; `WHY-ITS-BUILT-THIS-WAY.md` § 59.
 
+**The cards are filled in brand colours that mean nothing (same day).**
+Home's `.card--filled`, one of six fills (`DECORATIVE_CARD_FILLS`, token
+references, no red and no maroon) by **creation order** of `project_id`, so a
+new project takes the next colour and nobody else's moves. All text full
+white: Home's 85% white measures under AA on the ink fills. The at-risk mark
+gained a white edge (`.card-mark`) because maroon against every fill is under
+2:1 and 1.03 on purple. Colour-blind reading: the boxed words, never the hue.
+Mutation run: colour from the at-risk count fails two tests by name.
+`WHY-ITS-BUILT-THIS-WAY.md` § 60; `runbook.md` → *The cards are coloured, and
+what the colour means*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

@@ -7289,6 +7289,25 @@ of the same projects. If the number of cards ever disagrees with it the screen
 says so in red above the cards - *N projects are in the database but not shown
 here* - the same guard the Points list carries.
 
+### The cards are coloured, and what the colour means
+
+Nothing. Each card is filled in one of six brand colours — cyan, orange,
+teal, pink, purple, gold — by the project's place in **creation order**, so
+a project keeps its colour on every visit and a new one takes the next
+colour without recolouring the rest (`projectFills` in
+`app/(modules)/bas/project-colours.ts`; the palette is
+`DECORATIVE_CARD_FILLS` in `lib/module-accent.ts`, token references only).
+Red and maroon are deliberately not in it: red reads as an alarm and maroon
+is the mark. A seventh project shares the first's colour.
+
+The state is in the words. *No points at risk* is plain; *N points at risk*
+sits in a maroon box with a white edge (`.card--filled .card-mark` in
+`app/globals.css`). The edge exists because maroon against these fills
+measures under 2:1 — on purple, 1.03 — so the box would otherwise vanish
+into the card. A colour-blind reader tells the two apart by the box and the
+wording, not by hue. If two cards ever swap colours after a project is
+deleted, that is the creation-order rule doing what it says, not a fault.
+
 ### A card shows counts and no health line
 
 **Symptom.** A card reads, say, *1 building · 1 JACE* and nothing about
