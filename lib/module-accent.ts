@@ -96,6 +96,53 @@ export function moduleAccent(moduleKey: string, index = 0): ModuleAccent {
 }
 
 /**
+ * The fills a DECORATIVE filled card may take, in order (2026-09-30).
+ *
+ * For the BAS Dashboard's project cards, which are filled like Home's module
+ * cards but are all the same module - so the colour cannot mean "which
+ * system", and it is not allowed to mean anything else either. It is rhythm:
+ * the same set of brand hues in the order the mark reads them, so a row of
+ * projects looks like the logo rather than like a row of alarms.
+ *
+ * Every entry is an INK value, or purple, which clears AA unmodified: white
+ * on each measures between 4.82 and 9.13, so full-white text is legible on
+ * any of them (tests/bas-dashboard-colours.test.ts reads the tokens and
+ * checks). Two brand colours are deliberately absent:
+ *
+ *   red     - Change Orders' identity on Home, and the one hue a person reads
+ *             as an alarm without being told. A project card in it would say
+ *             "something is wrong here" about a project that is fine.
+ *   maroon  - the at-risk MARK's colour, everywhere. A card filled in it
+ *             would be one large alarm mark with a project's name on it.
+ *
+ * Maroon against any of these fills measures under 2:1 (1.03 on purple), so
+ * the mark on a filled card does not read by its colour at all. It reads by
+ * its white edge and its white words - see .card-mark in app/globals.css -
+ * which is the rule the brief states: colour is decorative, the mark and the
+ * wording carry the state.
+ */
+export const DECORATIVE_CARD_FILLS: readonly string[] = [
+  "var(--phb-cyan-ink)",
+  "var(--phb-orange-ink)",
+  "var(--phb-teal-ink)",
+  "var(--phb-pink-ink)",
+  "var(--phb-purple)",
+  "var(--phb-gold-ink)",
+];
+
+/**
+ * The fill for the n-th thing in a stable order. Wraps once the palette is
+ * exhausted - a seventh project shares the first's colour, which is a
+ * limitation of having six and not a fault: the colour never had to be
+ * unique, because it never meant anything.
+ */
+export function decorativeCardFill(rank: number): string {
+  const n = DECORATIVE_CARD_FILLS.length;
+  const index = ((Math.trunc(rank) % n) + n) % n;
+  return DECORATIVE_CARD_FILLS[index]!;
+}
+
+/**
  * The accent variables as an inline style, for any element that needs to open a
  * module's colour scope.
  *

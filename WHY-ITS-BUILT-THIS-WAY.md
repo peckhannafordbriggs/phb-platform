@@ -1753,6 +1753,59 @@ the "nothing loaded" tests fail.
 
 ---
 
+## 60 · The Dashboard cards are filled in brand colours, and the colour is allowed to mean nothing
+
+**What.** Same day as § 59, the project cards became filled cards in Home's
+`.card--filled` language. Each project takes one of six brand fills —
+cyan, orange, teal, pink, purple, gold, in the mark's order — by its place in
+**creation order** (`project_id`), through `DECORATIVE_CARD_FILLS` and
+`decorativeCardFill` in `lib/module-accent.ts` and `projectFills` beside the
+component. All text on a card is full white. The at-risk mark is the Home
+tile's maroon box, now with a one-pixel white edge, from one stylesheet rule
+(`.card--filled .card-mark`).
+
+**Why creation order.** The cards display org-then-name. Had colour followed
+position on screen, a project named *Aardvark Plaza* created next year would
+sort first and recolour every other card; had it followed a hash of the id,
+two of three projects could share a colour on the day there are three. Rank
+by id is stable on every visit, gives a new project the next colour, and
+changes nobody else's. The one thing that shifts it is deleting a project,
+which shifts those created after it by one — the rarer event by far, and the
+colour never meant anything, so nothing is lost.
+
+**Why not red, and why not maroon.** Red is Change Orders' identity on Home,
+and the one hue a person reads as an alarm untaught; a project card in it
+would say something is wrong about a project that is fine. Maroon is the
+mark's colour on every surface. Both are left out rather than argued
+legible.
+
+**Why the mark has a white edge.** Measured from the tokens: maroon against
+every ink fill is under 2:1, and against purple it is 1.03 — the box would
+vanish into the card. On Home's cyan card the same box measures 1.94 and
+reads only because its white words do. Here the edge is white, which clears
+3:1 against every fill by a wide margin because the fills were chosen so that
+white *text* clears 4.5, and the words inside are white on maroon at 9.36. So
+the mark never relies on its own colour. A colour-blind reader tells a
+healthy card from an at-risk one by the boxed words *N points at risk*
+against the unboxed *No points at risk*; the fill tells them only which
+project.
+
+**Why full white.** Home's status line is white at 85%. On the ink fills that
+measures between 3.8 and 4.1, under AA; the ink tier was derived so that full
+white clears 4.5, not tinted white. `tests/bas-dashboard-colours.test.ts`
+records the measurement rather than fixing Home, which is a separate
+decision.
+
+**What breaks if you undo it.** Deriving the fill from anything but ids —
+the mutation run was `decorativeCardFill(pointsAtRisk)` — fails the
+"does not change with its health" test and the source-text guard on
+`project-colours.ts`. Adding red or maroon to the palette fails the palette
+test by name. Putting the mark's colours back inline, or dropping its edge,
+fails the stylesheet-rule test. Tinting the text fails the contrast test on
+the first ink fill it is measured against.
+
+---
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

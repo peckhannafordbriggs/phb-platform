@@ -251,8 +251,10 @@ project with no active point shows its counts and no health line; one with no
 building is a card and not a link. Clicking a card opens Point Explorer with the
 project set and **no point loaded** (`?project=<id>&point=none`) — the person
 picks. The payload carries a joinless project count beside the cards, and the
-screen says so in red if they differ. `runbook.md` → *The BAS module opens on a
-Dashboard*.
+screen says so in red if they differ. The cards are filled in six brand
+colours by creation order — decorative only, no red, no maroon — and the
+at-risk mark carries a white edge so it reads on every fill. `runbook.md` →
+*The BAS module opens on a Dashboard*.
 
 ### Collection Health — `/bas/health`
 

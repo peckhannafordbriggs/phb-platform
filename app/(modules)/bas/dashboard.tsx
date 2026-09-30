@@ -6,6 +6,7 @@ import type { BasDashboard, DashboardProject } from "@/lib/modules/bas/types";
 import { basFigure } from "@/lib/home/bas-figure";
 import { ApiError, fetchDashboard } from "./health-client";
 import { dashboardCardHref } from "./filters";
+import { projectFills } from "./project-colours";
 
 /**
  * The Dashboard - the tab the module opens on. One card per project.
@@ -135,6 +136,11 @@ export function DashboardCards({
     return <NoProjects canAdminister={canAdminister} />;
   }
 
+  // One fill per project, by creation order, from the whole list - see
+  // project-colours.ts. Decided once here, not per card, because a rank
+  // needs the others to exist.
+  const fills = projectFills(data.projects);
+
   return (
     <>
       <CountGuard rendered={data.projects.length} inDatabase={data.projectsInDatabase} />
@@ -150,7 +156,10 @@ export function DashboardCards({
       >
         {data.projects.map((project) => (
           <li key={project.projectId}>
-            <ProjectCard project={project} />
+            <ProjectCard
+              project={project}
+              fill={fills.get(project.projectId) ?? DEFAULT_FILL}
+            />
           </li>
         ))}
       </ul>
@@ -158,22 +167,35 @@ export function DashboardCards({
   );
 }
 
+/** Unreachable - every project in the list has a rank - but never a blank card. */
+const DEFAULT_FILL = "var(--phb-cyan-ink)";
+
 /**
  * One project.
  *
  * The whole card is the link, as on Home: a card whose only target is a small
- * link at the bottom is a decoration with a button on it. The shape is the
- * module's own `.card` on the tinted ground rather than Home's filled tile -
- * Home fills in identity colour because it has one card per module; here
- * every card is the same module, and a row of three identical cyan blocks
- * would say nothing.
+ * link at the bottom is a decoration with a button on it.
+ *
+ * FILLED, IN A BRAND COLOUR THAT MEANS NOTHING. The shape is Home's
+ * `.card--filled`; the fill is one of DECORATIVE_CARD_FILLS, chosen by the
+ * project's place in creation order (project-colours.ts) and by nothing
+ * else - not its health, not its size. On Home the fill is identity (red IS
+ * Change Orders); here every card is the same module, so the fill is rhythm,
+ * and the rule that keeps Home honest keeps this honest: the fill never
+ * carries a state, the state is in the words, and a fault is a maroon mark
+ * ON the fill with a white edge so it reads on every one of them. All text
+ * is full white - measured at 4.82 or better on every fill; Home's 85% white
+ * would not clear AA on the inks.
  */
-function ProjectCard({ project }: { project: DashboardProject }) {
+function ProjectCard({ project, fill }: { project: DashboardProject; fill: string }) {
   // Only when there is something to have health. A project with no active
   // point shows its counts and stops: "No points at risk" over zero points
   // would be a verdict about nothing.
   const figure = project.health === null ? null : basFigure(project.health);
   const alarm = figure !== null && figure.state === "ok" && figure.alarm === true;
+  // The fill is a token reference, never a hex value: the palette is the
+  // stylesheet's and a palette change happens in one file.
+  const style = { "--card-fill": fill } as React.CSSProperties;
 
   /**
    * A project with no buildings is a card and not a link. Point Explorer's
@@ -185,7 +207,8 @@ function ProjectCard({ project }: { project: DashboardProject }) {
    */
   const href = project.buildings > 0 ? dashboardCardHref(project.projectId) : null;
   const body = (
-    <>
+    // Above the ::after shade, which is inset over the whole card.
+    <div className="relative z-10">
       <h2 className="font-display text-2xl font-semibold leading-tight tracking-tight">
         {project.name}
       </h2>
@@ -194,36 +217,37 @@ function ProjectCard({ project }: { project: DashboardProject }) {
         <div className="mt-4" data-testid="bas-dashboard-health">
           {/*
             The Home tile's mark: a maroon box around the words, never maroon
-            words and never a maroon card. Semantic colour on a neutral card
-            stays a mark, so the card itself is never read as a state.
+            words and never a maroon card - here with a white edge, because
+            maroon does not read against these fills (app/globals.css,
+            .card-mark). The state is the boxed words, not the hue.
           */}
           <p className="font-display text-lg font-semibold leading-none">
             {alarm ? (
-              <span
-                role="status"
-                data-testid="bas-dashboard-alarm"
-                className="inline-block rounded-md px-2.5 py-1"
-                style={{ background: "var(--phb-maroon)", color: "#fff" }}
-              >
+              <span role="status" data-testid="bas-dashboard-alarm" className="card-mark">
                 {figure.value}
               </span>
             ) : (
               figure.value
             )}
           </p>
-          <p className="mt-2 text-xs text-[var(--muted)]">{figure.status}</p>
+          <p className="mt-2 text-xs text-white">{figure.status}</p>
         </div>
       )}
 
-      <p className="mt-4 text-xs text-[var(--muted)]" data-testid="bas-dashboard-counts">
+      <p className="mt-4 text-xs text-white" data-testid="bas-dashboard-counts">
         {describeCounts(project)}
       </p>
-    </>
+    </div>
   );
 
   if (href === null) {
     return (
-      <div className="card block h-full p-6" data-testid="bas-dashboard-card">
+      <div
+        className="card--filled block h-full overflow-hidden p-6"
+        style={style}
+        data-testid="bas-dashboard-card"
+        data-fill={fill}
+      >
         {body}
       </div>
     );
@@ -233,7 +257,9 @@ function ProjectCard({ project }: { project: DashboardProject }) {
     <Link
       href={href}
       data-testid="bas-dashboard-card"
-      className="card group block h-full p-6 transition-transform hover:-translate-y-0.5 focus-visible:-translate-y-0.5"
+      data-fill={fill}
+      style={style}
+      className="card--filled group block h-full overflow-hidden p-6 transition-transform hover:-translate-y-0.5 focus-visible:-translate-y-0.5"
     >
       {body}
     </Link>

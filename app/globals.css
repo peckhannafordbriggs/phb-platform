@@ -555,3 +555,24 @@ body {
     rgb(0 0 0 / 0.16) 100%
   );
 }
+
+/*
+  The at-risk mark on a filled card: the Home tile's maroon box, with an edge.
+
+  Maroon against every fill in DECORATIVE_CARD_FILLS (lib/module-accent.ts)
+  measures under 2:1, and against purple 1.03 - the box would vanish into the
+  card. So the mark does not rely on its colour to be seen. Its edge is white,
+  which clears 3:1 against every fill by a wide margin (the fills are chosen
+  so that WHITE TEXT clears 4.5), and its words are white on maroon, 9.36. A
+  colour-blind reader tells a healthy card from an at-risk one by the boxed
+  words "N points at risk" against the unboxed "No points at risk", never by
+  hue. Plain rgb/hex, no color-mix, for the reason given on ::after above.
+*/
+.card--filled .card-mark {
+  display: inline-block;
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  background: var(--phb-maroon);
+  color: #fff;
+  border: 1px solid #fff;
+}
