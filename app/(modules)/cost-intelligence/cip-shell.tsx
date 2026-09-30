@@ -36,7 +36,7 @@ export function CipShell({
             title={COST_INTELLIGENCE_MODULE_NAME}
             blurb="Run published cost workflows against SharePoint project folders."
           >
-            <CipNav tabs={tabs} label="Cost Intelligence sections" />
+            <CipNav tabs={tabs} label="Cost Intelligence sections" actions={actions} />
           </ModuleHeader>
         </div>
         <div className="mt-6">{children}</div>

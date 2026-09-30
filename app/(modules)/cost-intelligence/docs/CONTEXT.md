@@ -41,7 +41,8 @@ refresh and the browser's back button behave.
 ```
 app/(modules)/cost-intelligence/
   cip-shell.tsx          CipShell    - chrome for every page (ground, header, tabs)
-  cip-nav.tsx            CipNav      - tab bar (+ search bar and New run / Back, right)
+  cip-nav.tsx            CipNav      - tab bar; renders the page's `actions` on the right
+  header-actions.tsx     NewRunActions, RunActions - what pages put on the right
   page.tsx               Runs page
   runs/[runId]/page.tsx  Run page (the monitor)
   settings/
@@ -128,9 +129,8 @@ The settings column names are placeholders, not decided.
 |---|---|---|
 | the header, "Cost Intelligence" title | `ModuleHeader` (platform component) | `components/module-header.tsx` |
 | the tabs, Runs / Settings | `CipNav` | `cip-nav.tsx` |
-| the search bar | `SearchBar`, rendered inside `CipNav` | `ui/searchbar.tsx` |
-| the New run / Back button (top right) | `Button` inside `CipNav`. On a run page (`/runs/…`): **Back** to Runs. Elsewhere: **New run**, which opens the launcher, or closes it when it is already open | `ui/Button.tsx` |
-| the settings tabs | `SettingsNav`, which reuses `CipNav` | `settings/settings-nav.tsx` |
+| the search bar, the New run / Back button (top right) | Whatever the **page** passes as `actions` to `CipShell`, which hands it to `CipNav`. Two ready-made sets: `NewRunActions` (search, and **New run**, which opens the launcher or closes it when `launcherOpen`) on Runs and every Settings page; `RunActions` (search, and **Back** to Runs) on a run page | `header-actions.tsx` |
+| the settings tabs | `SettingsNav`, which reuses `CipNav` with no `actions`, so nothing shows on its right | `settings/settings-nav.tsx` |
 | the tinted background | `.dashboard-ground`, applied by `CipShell` | `cip-shell.tsx` |
 
 The **Settings** tab only appears for Cost Intelligence **module admins** (the

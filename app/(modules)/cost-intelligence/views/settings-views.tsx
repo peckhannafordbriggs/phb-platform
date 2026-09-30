@@ -7,18 +7,7 @@ import { Label } from "../ui/Label";
 import { Table } from "../ui/Table";
 import { Node } from "./parts";
 
-/** Title row every settings view opens with: heading, repo and branch, last Git check. */
-function SettingsHeading() {
-  return (
-    <div className="mb-5">
-      <Bar w={200} h={20} />
-      <div className="mt-3 flex items-center gap-3">
-        <Bar w={170} h={20} />
-        <Bar w={150} h={8} />
-      </div>
-    </div>
-  );
-}
+
 
 /** A skill's detail: versions on a track, changes waiting on main, the SKILL.md diff. */
 function SkillDetail() {
@@ -70,38 +59,11 @@ function SkillDetail() {
   );
 }
 
-/** Test against a fixture, then publish. */
-function PublishRail() {
-  return (
-    <div className="flex flex-col gap-5">
-      <Card>
-        <Label>Test against a fixture</Label>
-        <Bar w="70%" h={20} />
-        <div className="flex flex-col gap-2.5">
-          {Array.from({ length: 4 }, (_, i) => (
-            <div key={i} className="mt-3 flex items-center gap-2.5">
-              <span className="h-3.5 w-3.5 shrink-0 rounded-sm border border-[var(--neutral-300)]" />
-              <Bar w="75%" h={8} />
-            </div>
-          ))}
-        </div>
-        <div className="mt-5"><Button fullWidth>Run test</Button></div>
-      </Card>
-      <Card>
-        <Label>Publish</Label>
-        <Bar w="90%" h={8} />
-        <Bar w="70%" h={8} className="mt-1.5" />
-        <div className="mt-5"><Button fullWidth>Publish</Button></div>
-      </Card>
-    </div>
-  );
-}
 
 /** 1d: skills on the left, the selected skill in the middle, test and publish on the right. */
 export function SkillCatalogView() {
   return (
     <>
-      <SettingsHeading />
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[16rem_minmax(0,1fr)_18rem]">
         <Card className="p-3">
           <div className="flex items-center justify-between px-2 pb-3 pt-1">
@@ -127,7 +89,6 @@ export function SkillCatalogView() {
           </div>
         </Card>
         <SkillDetail />
-        <PublishRail />
       </div>
     </>
   );
@@ -137,10 +98,8 @@ export function SkillCatalogView() {
 export function SkillView() {
   return (
     <>
-      <SettingsHeading />
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_18rem]">
         <SkillDetail />
-        <PublishRail />
       </div>
     </>
   );
@@ -160,7 +119,6 @@ export function SettingsTableView({
 }) {
   return (
     <>
-      <SettingsHeading />
       {stats > 0 && (
         <div className="mb-5 grid grid-cols-2 gap-5 md:grid-cols-4">
           {Array.from({ length: stats }, (_, i) => (

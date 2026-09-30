@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { requireModuleAdmin } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "../../cip-shell";
+import { NewRunActions } from "../../header-actions";
 import { SettingsNav } from "../../settings/settings-nav";
 import { SettingsTableView } from "../../views/settings-views";
 
@@ -12,7 +13,7 @@ export default async function UsagePage() {
   if (!access.ok) notFound();
 
   return (
-    <CipShell canAdminister>
+    <CipShell canAdminister actions={<NewRunActions />}>
       <SettingsNav />
       <SettingsTableView headers={["Project","Workflow", "Runs", "Tokens", "Cost"]} cols={["70%", "55%", 70, 70, 60]} stats={4} />
     </CipShell>

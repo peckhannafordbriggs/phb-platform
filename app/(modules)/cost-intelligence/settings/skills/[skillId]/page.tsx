@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { requireModuleAdmin } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "../../../cip-shell";
+import { NewRunActions } from "../../../header-actions";
 import { SettingsNav } from "../../../settings/settings-nav";
 import { SkillView } from "../../../views/settings-views";
 
@@ -12,7 +13,7 @@ export default async function SkillPage() {
   if (!access.ok) notFound();
 
   return (
-    <CipShell canAdminister>
+    <CipShell canAdminister actions={<NewRunActions />}>
       <SettingsNav />
       <SkillView />
     </CipShell>

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "../../cip-shell";
+import { RunActions } from "../../header-actions";
 import { getPlaceholderActivity, getPlaceholderRun } from "@/lib/modules/cost-intelligence/placeholder";
 import type { Run, RunActivity } from "@/lib/modules/cost-intelligence/types";
 import { RunMonitor } from "../../views/parts";
@@ -28,7 +29,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
   if (!run) notFound();
 
   return (
-    <CipShell canAdminister={canAdminister}>
+    <CipShell canAdminister={canAdminister} actions={<RunActions />}>
       <RunMonitor run={run} activity={getRunActivity(runId)} />
     </CipShell>
   );

@@ -1,19 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import { ArrowLeft, Plus } from "lucide-react";
-import { SearchBar } from "./ui/searchbar";
-import { Button } from "./ui/Button";
+import { usePathname } from "next/navigation";
 
 export type Tab = { href: string; label: string; prefixes?: string[] };
 
-/** Underlined tab bar, the BAS pattern. */
-export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
+/**
+ * Underlined tab bar, the BAS pattern. `actions` is whatever the caller puts on the
+ * right; the nav itself only knows about tabs.
+ */
+export function CipNav({
+  tabs,
+  label,
+  actions,
+}: {
+  tabs: Tab[];
+  label: string;
+  actions?: React.ReactNode;
+}) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  // On Runs with ?new=1 the launcher is showing, so New run closes it instead.
-  const launcherOpen = pathname === "/cost-intelligence" && searchParams.get("new") !== null;
 
   return (
     <nav aria-label={label} className="mt-3  flex items-center justify-between">
@@ -39,20 +44,7 @@ export function CipNav({ tabs, label }: { tabs: Tab[]; label: string }) {
           );
         })}
       </ul>
-      <div className="flex items-center gap-2">
-        <SearchBar />
-        {pathname.startsWith("/cost-intelligence/runs/") ? (
-          <Button variant="primary" href="/cost-intelligence">
-            <ArrowLeft size={16} aria-hidden="true" />
-            Back
-          </Button>
-        ) : (
-          <Button variant="primary" href={launcherOpen ? "/cost-intelligence" : "/cost-intelligence?new=1"}>
-            <Plus size={16} aria-hidden="true" />
-            New run
-          </Button>
-        )}
-      </div>
+      {actions !== undefined && <div className="flex items-center gap-2">{actions}</div>}
     </nav>
   );
 }
