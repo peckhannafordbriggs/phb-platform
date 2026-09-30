@@ -2925,6 +2925,85 @@ configured*.
 
 ---
 
+## A cold start takes about 30 seconds
+
+**Symptom.** The first page after the site has been idle takes far longer
+than a page normally does; once it answers, everything is fast again.
+
+**Cause.** Scale to zero, and nothing else. `minReplicas` is 0
+(`infra/main.bicep`, deliberately), so five minutes after the last request
+(`cooldownPeriod` 300) KEDA deactivates the only replica, and the next request
+waits while Container Apps starts one. Measured on 2026-09-30 with one timed
+request to `/api/health` from a scaled-to-zero state, against the platform's
+own event timestamps:
+
+| Step | Elapsed |
+|---|---|
+| Request sent | 0 s |
+| KEDA activates, replica scheduled to a node | 1.5 s |
+| Platform sidecar containers started | 9.5 s |
+| Web image pulled (cached, 134 ms) and container started | 16.5 s |
+| Next.js "Ready in 280ms" | 18 s |
+| Readiness probe passes, ingress endpoint updated, response served | 30 s |
+
+**What it is not.** Not a slow boot — Node is listening 1.7 s after its
+container starts, and the 102 MB image is cached on the node. Not a probe
+retrying — no `ReplicaUnhealthy` event appears at any startup; the only ones
+in the log follow `StoppingContainer` at scale-down. Not the database or
+Graph — warm, every route answers in about 150 ms.
+
+**How to see it.** The system log:
+`az containerapp logs show -n phbplat-prod-app -g <rg> --type system` shows
+`KEDAScaleTargetActivated`, `AssigningReplica`, `ContainerStarted` and
+`ImagePulled` with timestamps; the console log has Next's *Ready in* line.
+Log Analytics (`ContainerAppSystemLogs_CL`, `ContainerAppConsoleLogs_CL`)
+holds the same for the last 30 days. The ingress `ResponseTime` and
+`Requests` metrics do NOT record the cold-start request, so they read
+healthy across a cold start — measure with a timed request instead.
+
+**The readiness probe was the one lever, and it was pulled.** The probe's
+`initialDelaySeconds` went from 5 to 1 and `periodSeconds` from 10 to 2 on
+2026-09-30: the gate between "listening" and "served" was 8 to 12 of the
+30 s, and `/api/health` touches nothing, so probing every 2 s costs nothing.
+The remaining 16 s of scheduling and sidecars belongs to the Consumption
+platform; a Dedicated workload profile or `minReplicas: 1` are the only
+things that remove it, and the cost of the latter is in *Keeping one replica
+warm* below.
+
+**If a load ever takes minutes rather than 30 s**, the cold start is not the
+cause. Two things to check: a request that landed in the scale-down window
+(after `StoppingContainer` the dying replica keeps failing readiness for
+about 30 s, and a request routed to it waits on the ingress), and an expired
+session, which adds the Entra sign-in bounce on top.
+
+---
+
+## Keeping one replica warm — what `minReplicas: 1` costs
+
+Consumption billing in eastus2, from the retail price list (2026-09-30): a
+vCPU-second is $0.000024 active and $0.000003 idle; a GiB-second is $0.000003
+whether active or idle; each subscription gets 180,000 vCPU-seconds and
+360,000 GiB-seconds free per month. This app is 0.5 vCPU and 1 GiB.
+
+A replica that exists all month (2,628,000 s) and is idle for nearly all of
+it bills about **$3.94 for vCPU and $7.88 for memory, $11.83 before the free
+grant and about $10 after it** — the grant is worth 100 hours of this
+container. If it were active every second the vCPU line would be $31.54 and
+the month about $39, which is the ceiling, not the expectation: "active"
+means processing a request, and this app is idle between polls.
+
+**Against today's usage.** The `Replicas` metric
+(`az monitor metrics list --metric Replicas --interval PT1H`) summed to
+**10.2 replica-hours over the 30 days to 2026-09-30** — 49 hours with a
+replica, never more than one — which sits entirely inside the free grant, so
+the app's compute currently costs nothing. The budget's month-to-date spend
+for the whole resource group was $12.03 on the same day, nearly all of it the
+Postgres Flexible Server. One warm replica therefore adds roughly $10 a month
+and about doubles the bill; it buys back the 30 s cold start for every first
+visit after a five-minute gap.
+
+---
+
 ## The database is unreachable
 
 **Symptom.** Every page returns the generic error boundary. The log carries
