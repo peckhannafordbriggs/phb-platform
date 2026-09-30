@@ -18,59 +18,14 @@
  * tests/bas-chart-axis.test.tsx and WHY-ITS-BUILT-THIS-WAY.md § 50.
  */
 
-export type UnitKind = "temperature" | "percentage" | "pressure" | "other";
+import { unitKind, withUnit, type UnitKind } from "@/lib/modules/bas/units";
 
 /**
- * Unit names as `bas_points.unit` carries them - Niagara's own unit-database
- * names, lower case, plus the common written forms. Matched after
- * normalisation (trimmed, lower-cased, spaces collapsed), never by substring:
- * "percent" must not match "percent of full scale" by accident, and a unit that
- * is not here gets the default rather than a guess.
- *
- * Add a unit by adding its name to the right list. Nothing else changes.
+ * The unit names and their symbols live in lib/modules/bas/units.ts, because
+ * the Analyze context on the server needs the same symbol the chart shows.
+ * Re-exported so the axis test keeps importing them from here.
  */
-const UNIT_NAMES: Record<Exclude<UnitKind, "other">, readonly string[]> = {
-  temperature: [
-    "fahrenheit",
-    "celsius",
-    "centigrade",
-    "kelvin",
-    "degrees fahrenheit",
-    "degrees celsius",
-    "°f",
-    "°c",
-    "degf",
-    "degc",
-    "deg f",
-    "deg c",
-    "f",
-    "c",
-    "k",
-  ],
-  percentage: ["percent", "percentage", "%", "pct"],
-  pressure: [
-    "inches of water",
-    "inch of water",
-    "inches water column",
-    "in wc",
-    "in. w.c.",
-    "inwc",
-    "inh2o",
-    "in h2o",
-    "pounds per square inch",
-    "psi",
-    "psig",
-    "pascal",
-    "pascals",
-    "pa",
-    "kilopascal",
-    "kilopascals",
-    "kpa",
-    "bar",
-    "millibar",
-    "mbar",
-  ],
-};
+export { unitKind, type UnitKind };
 
 /**
  * Decimals on an AXIS label, by the kind of quantity. The tooltip shows one
@@ -89,20 +44,6 @@ const AXIS_DECIMALS: Record<UnitKind, number> = {
   other: 2,
 };
 
-function normaliseUnit(unit: string): string {
-  return unit.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-export function unitKind(unit: string | null): UnitKind {
-  if (unit === null) return "other";
-  const name = normaliseUnit(unit);
-  if (name.length === 0) return "other";
-  for (const kind of Object.keys(UNIT_NAMES) as Array<keyof typeof UNIT_NAMES>) {
-    if (UNIT_NAMES[kind].includes(name)) return kind;
-  }
-  return "other";
-}
-
 export function axisDecimals(unit: string | null): number {
   return AXIS_DECIMALS[unitKind(unit)];
 }
@@ -116,14 +57,13 @@ export function formatAxisTick(value: number, decimals: number): string {
   return value.toFixed(decimals);
 }
 
-/** The tooltip's reading: one more decimal than the axis, with the unit. */
+/** The tooltip's reading: one more decimal than the axis, with the unit's symbol. */
 export function formatTooltipValue(
   value: number | null,
   unit: string | null,
 ): string {
   if (value === null) return "—";
-  const rendered = value.toFixed(tooltipDecimals(unit));
-  return unit === null ? rendered : `${rendered} ${unit}`;
+  return withUnit(value.toFixed(tooltipDecimals(unit)), unit);
 }
 
 /**

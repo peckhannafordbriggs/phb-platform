@@ -1,5 +1,18 @@
 import type { Pool } from "pg";
 import { queryAsAnalyzeRole } from "./pool";
+import { unitSymbol } from "../units";
+
+/**
+ * A point's unit for the model: the stored name, which is what its SQL must
+ * match against, and beside it the symbol the screens show, so an answer can
+ * say "72.0 °F" the way the tiles do. Display only - the stored value is
+ * carried unchanged, and a point with no unit still reads "unknown".
+ */
+function describeUnit(unit: string | null): string {
+  if (unit === null) return "unknown";
+  const symbol = unitSymbol(unit);
+  return symbol === null || symbol === unit ? unit : `${unit} (shown as ${symbol})`;
+}
 
 /**
  * What the planner is told about the database, assembled from the database.
@@ -290,7 +303,7 @@ export async function buildSchemaContext(pool: Pool): Promise<SchemaContext> {
     for (const p of points) {
       lines.push(
         `point_id=${p.point_id} | "${p.name}" | ${p.niagara_name} | ${p.station} | ${p.site} | ` +
-          `role=${p.point_role ?? "NONE (unclassified)"} | unit=${p.unit ?? "unknown"} | ${p.data_type} | ` +
+          `role=${p.point_role ?? "NONE (unclassified)"} | unit=${describeUnit(p.unit)} | ${p.data_type} | ` +
           `${p.is_active ? "collected" : `NOT COLLECTED (${p.inactive_reason ?? "no reason recorded"})`} | ` +
           `${p.readings} readings | last ${p.last_ts ? p.last_ts.toISOString() : "never"}`,
       );

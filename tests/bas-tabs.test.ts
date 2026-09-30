@@ -304,8 +304,9 @@ describe("a null reading is not a missing reading", () => {
 });
 
 describe("units are never left implicit", () => {
-  it("labels the axis with the unit when there is one", () => {
-    expect(axisLabel("fahrenheit")).toBe("fahrenheit");
+  it("labels the axis with the unit's symbol when there is one", () => {
+    // The symbol, not the stored name (2026-09-30): lib/modules/bas/units.ts.
+    expect(axisLabel("fahrenheit")).toBe("°F");
   });
 
   it("says the unit is unknown rather than leaving the axis bare", () => {
@@ -315,7 +316,7 @@ describe("units are never left implicit", () => {
   });
 
   it("renders a value with its unit, and without inventing one", () => {
-    expect(formatValue(58.51, "fahrenheit")).toBe("58.51 fahrenheit");
+    expect(formatValue(58.51, "fahrenheit")).toBe("58.51 °F");
     expect(formatValue(58.51, null)).toBe("58.51");
     expect(formatValue(null, "fahrenheit")).toBe("—");
   });

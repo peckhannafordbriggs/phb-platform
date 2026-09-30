@@ -11,10 +11,7 @@ import {
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { basDataAvailability } from "@/lib/modules/bas/route-helpers";
 import { getCollectionHealth } from "@/lib/modules/bas/service";
-import {
-  computeHeadroom,
-  describeHeadroom,
-} from "@/app/(modules)/bas/health-client";
+import { basFigure } from "./bas-figure";
 
 /**
  * Everything Home shows, gathered in one place.
@@ -33,7 +30,18 @@ import {
 
 /** A live figure, or an honest account of why there isn't one. */
 export type Figure =
-  | { state: "ok"; value: string; status: string }
+  | {
+      state: "ok";
+      value: string;
+      status: string;
+      /**
+       * The value is a fault that needs acting on - "3 points at risk" - and
+       * the card marks it red. Set by the module's own figure builder from
+       * the same predicate its screen uses, never from the count alone. A
+       * card may never look calmer than the screen behind it.
+       */
+      alarm?: true;
+    }
   /** The module is reachable and has nothing to report. Still a real answer. */
   | { state: "none"; value: string; status: string }
   /** Reached for and failed. Never rendered as zero. */
@@ -260,13 +268,19 @@ async function changeOrdersCard(modules: MeModule[]): Promise<HomeModuleCard> {
 // ------------------------------------------------------------------------ bas
 
 /**
- * Headroom and points at risk.
+ * Points at risk, and the age of the newest reading - see lib/home/bas-figure.ts
+ * for the wording and the rule.
  *
- * Headroom is the module's own idiom - hours until the station starts
- * overwriting data nobody collected - and it is reused here rather than
- * recomputed, so Home and the BAS screen cannot disagree about it. The same
- * applies to `describeHeadroom`, which is what keeps a partly-unknown set from
- * rendering as a clean confident number.
+ * Both come from the same service call Collection Health makes, so Home and
+ * the BAS screen cannot disagree about either.
+ *
+ * NO TONE COLOUR ON THE FILL. The card is filled in the module's identity cyan
+ * and the fill never changes with state - teal, orange and maroon mean ok,
+ * warn and bad on the BAS screen, and a fill in one of them would let the
+ * card itself be read as a state. The at-risk headline is marked in maroon
+ * ON the card instead (see FigureBlock in app/(platform)/page.tsx): a
+ * semantic mark on an identity fill, the two kept distinct rather than one
+ * standing in for the other.
  */
 async function basCardFor(
   viewer: Viewer,
@@ -290,51 +304,8 @@ async function basCardFor(
     }
 
     const health = await getCollectionHealth(viewer);
-    const headroom = computeHeadroom(health.points);
-    const atRisk = health.totals.pointsAtRisk;
 
-    /**
-     * The number is the headroom and the sentence carries the risk, because
-     * headroom is the countdown this module is built around - "how long until
-     * data starts being destroyed" is the question, and the risk count is what
-     * qualifies it.
-     *
-     * NO TONE COLOUR. The card is filled in the module's identity cyan and state
-     * is stated in words, deliberately: teal, orange and maroon mean ok, warn
-     * and bad on the BAS screen, and putting one of them on an identity-filled
-     * card would let the fill itself be read as a state. See .card--filled in
-     * app/globals.css.
-     */
-    const risk =
-      atRisk === 0
-        ? "No points at risk"
-        : atRisk === 1
-          ? "1 point at risk of data loss"
-          : `${atRisk} points at risk of data loss`;
-
-    if (headroom.known === 0) {
-      /**
-       * Unknown is not safe and it is not zero. `describeHeadroom` already says
-       * so in words; what it must not do is become a number derived from the
-       * points that happen to have one.
-       */
-      return {
-        ...card,
-        figure: {
-          state: "unavailable",
-          status: `${describeHeadroom(headroom)} · ${risk}`,
-        },
-      };
-    }
-
-    return {
-      ...card,
-      figure: {
-        state: atRisk === 0 ? "none" : "ok",
-        value: describeHeadroom(headroom),
-        status: risk,
-      },
-    };
+    return { ...card, figure: basFigure(health.totals) };
   } catch (error) {
     logger.warn("home.bas_figure_failed", {
       moduleKey: BAS_MODULE_KEY,

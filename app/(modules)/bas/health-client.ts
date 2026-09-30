@@ -1,4 +1,5 @@
 import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk } from "@/lib/modules/bas/types";
+import { unitSymbol, withUnit } from "@/lib/modules/bas/units";
 import type {
   BasSettingsTree,
   CollectionHealth,
@@ -159,12 +160,13 @@ export function describeRange(range: TrendRange): string {
  */
 export function describeSampling(sampling: TrendSampling): string | null {
   if (sampling.kind === "raw") return null;
+  // What was kept, and nothing about why the chart does it: the band is what
+  // stops a flat average being read as a quiet day.
   return (
     `Averaged to one point per ${sampling.bucketLabel}: ${formatCount(sampling.readings)} ` +
-    `readings are drawn as ${formatCount(sampling.buckets)} averages, because more than ` +
-    `${formatCount(sampling.maxRaw)} readings would make the chart unusable. The shaded ` +
-    `band is each ${sampling.bucketLabel}'s lowest and highest reading, so a spike stays ` +
-    `visible when the average is flat.`
+    `readings drawn as ${formatCount(sampling.buckets)} averages. The band is each ` +
+    `${sampling.bucketLabel}'s lowest and highest reading, so a spike stays visible when ` +
+    `the average is flat.`
   );
 }
 
@@ -1050,7 +1052,8 @@ export function describeNullRecords(
 }
 
 /**
- * The unit for an axis label, and the honest answer when there is not one.
+ * The unit for an axis label, as its symbol, and the honest answer when there
+ * is not one.
  *
  * `points_RoomT` is fahrenheit; `Temp1` to `Temp3` carry no unit at all. The
  * chart plots one point at a time, so two units can never share an axis here -
@@ -1058,14 +1061,13 @@ export function describeNullRecords(
  * an unlabelled axis reads as "no unit needed" rather than "unit unknown".
  */
 export function axisLabel(unit: string | null): string {
-  return unit ?? "value (no unit recorded)";
+  return unitSymbol(unit) ?? "no unit recorded";
 }
 
-/** A reading, at the precision the database rounds to. */
+/** A reading, at the precision the database rounds to, with the unit's symbol. */
 export function formatValue(value: number | null, unit: string | null): string {
   if (value === null) return "—";
-  const rendered = value.toFixed(2);
-  return unit === null ? rendered : `${rendered} ${unit}`;
+  return withUnit(value.toFixed(2), unit);
 }
 
 

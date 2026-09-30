@@ -1233,13 +1233,23 @@ export function PointsTable({
         </p>
       )}
 
+      {/*
+        The count, above the list rather than below it, because the body
+        scrolls and the total would otherwise be off the bottom. `inDatabase`
+        is the joinless count; `rendered` is what the joined query returned.
+      */}
+      <p className="text-xs text-[var(--muted)]">
+        {inDatabase} {noun(inDatabase)} in the database for this station,{" "}
+        {rendered} listed.
+      </p>
+
       {list.points.length === 0 ? (
         <p className="text-xs text-[var(--muted)]">
           No points registered. Run discover against this station to register
           its histories.
         </p>
       ) : (
-        <div className="overflow-x-auto">
+        <div>
           <div className="mb-2 flex flex-wrap items-center gap-3">
             <input
               className="w-full max-w-md rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
@@ -1257,72 +1267,74 @@ export function PointsTable({
               </span>
             )}
           </div>
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left text-[var(--muted)]">
-                <th
-                  className="py-1 pr-3 font-medium"
-                  title="What a person calls this point. Shown in Point Explorer and Collection Health in place of the station's name. Blank means the station's name is used."
-                >
-                  Label
-                </th>
-                <th className="py-1 pr-3 font-medium">Niagara name</th>
-                <th
-                  className="py-1 pr-3 font-medium"
-                  title="What the station reports for this history. Not the person's label - that is the Label column."
-                >
-                  Station name
-                </th>
-                <th className="py-1 pr-3 font-medium">Role</th>
-                <th className="py-1 pr-3 font-medium">Equipment</th>
-                <th className="py-1 pr-3 font-medium">Collected</th>
-                <th className="py-1 pr-3 font-medium">Completeness</th>
-                <th
-                  className="py-1 pr-3 font-medium"
-                  title="How long the station keeps this history before overwriting it. Measured from the shortest span its full buffer has been seen to hold, or configured from capacity x interval. A buffer that has never filled has overwritten nothing and reads Not full yet."
-                >
-                  Roll horizon
-                </th>
-                <th
-                  className="py-1 font-medium"
-                  title="Whether the point appears in Point Explorer and the Collection Health table. It is collected either way, and it counts in every risk figure either way."
-                >
-                  Shown
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((point) => (
-                <PointRow
-                  key={point.pointId}
-                  point={point}
-                  onToggleVisible={onToggleVisible}
-                  onSaveLabel={onSaveLabel}
-                />
-              ))}
-              {searching && shown.length === 0 && (
-                <tr className="border-t border-[var(--border)]">
-                  <td className="py-2 text-[var(--muted)]" colSpan={9}>
-                    No point on this station matches &ldquo;{query.trim()}&rdquo; by
-                    label, station name or Niagara name. Clear the search to see
-                    all {list.points.length}.
-                  </td>
+          {/*
+            The one scroll pattern the module uses for a table: about seven
+            rows, a sticky header, the count in the line above. What each
+            column means is on the column's own tooltip and nowhere else.
+          */}
+          <div className="max-h-72 overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
+                <tr className="text-left text-[var(--muted)]">
+                  <th
+                    className="py-1 pr-3 font-medium"
+                    title="What a person calls this point. Shown in Point Explorer and Collection Health in place of the station's name, and nowhere else. Blank means the station's name is used. A label replaces the station's name on those screens; it never changes what the collector asks the station for."
+                  >
+                    Label
+                  </th>
+                  <th
+                    className="py-1 pr-3 font-medium"
+                    title="The oBIX history key, exactly as the station spells it. This is what the collector asks the station for, so the Niagara name is never editable."
+                  >
+                    Niagara name
+                  </th>
+                  <th
+                    className="py-1 pr-3 font-medium"
+                    title="What the station reports for this history. Not the person's label - that is the Label column."
+                  >
+                    Station name
+                  </th>
+                  <th className="py-1 pr-3 font-medium">Role</th>
+                  <th className="py-1 pr-3 font-medium">Equipment</th>
+                  <th className="py-1 pr-3 font-medium">Collected</th>
+                  <th className="py-1 pr-3 font-medium">Completeness</th>
+                  <th
+                    className="py-1 pr-3 font-medium"
+                    title="How long the station keeps this history before overwriting it. Measured from the shortest span its full buffer has been seen to hold, or configured from capacity x interval. A buffer that has never filled has overwritten nothing and reads Not full yet."
+                  >
+                    Roll horizon
+                  </th>
+                  <th
+                    className="py-1 font-medium"
+                    title="Whether the point appears in Point Explorer and the Collection Health table. Unticking hides it from those two screens only: it is still collected and still counts in every risk figure."
+                  >
+                    Shown
+                  </th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {shown.map((point) => (
+                  <PointRow
+                    key={point.pointId}
+                    point={point}
+                    onToggleVisible={onToggleVisible}
+                    onSaveLabel={onSaveLabel}
+                  />
+                ))}
+                {searching && shown.length === 0 && (
+                  <tr className="border-t border-[var(--border)]">
+                    <td className="py-2 text-[var(--muted)]" colSpan={9}>
+                      No point on this station matches &ldquo;{query.trim()}&rdquo; by
+                      label, station name or Niagara name. Clear the search to see
+                      all {list.points.length}.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
-
-      <p className="text-xs text-[var(--muted)]">
-        {inDatabase} {noun(inDatabase)} in the database for this station,{" "}
-        {rendered} listed. Unticking Shown hides a point from Point Explorer
-        and the Collection Health table only - it is still collected and still
-        counts in every risk figure. A label replaces the station&apos;s name
-        on those screens and nowhere else; the Niagara name is never editable,
-        because it is what the collector asks the station for. Roles and
-        equipment are edited in a later phase.
-      </p>
     </div>
   );
 }

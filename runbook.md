@@ -3420,12 +3420,17 @@ and module header already. The semantic tones are teal / orange / maroon —
 `--danger` is deliberately maroon, *not* red — so red carries no state meaning
 anywhere in this platform.
 
-That only holds while **no semantic tone appears on these cards**. State on a
-Home card is said in words ("3 points at risk of data loss"), never in colour.
-A tone-coloured number on an identity-filled card would let the fill itself be
-read as a state, and then the red card really would look like an alarm.
+That only holds while **the fill of these cards never carries a semantic
+tone**. State on a Home card is said in words ("3 points at risk"), and a
+fault is marked in maroon *on* the fill — a box around the headline
+(`app/(platform)/figure-block.tsx`, the `alarm` mark) — never by recolouring
+the fill itself. A fill that changed with state would let the red card be read
+as an alarm; a maroon box on a cyan card reads as a mark on it. Decorative and
+semantic stay disjoint: cyan is never a state, maroon is never decoration.
 `tests/home.test.ts` asserts that `app/(platform)/page.tsx` mentions none of
-`--phb-teal`, `--phb-orange` or `--phb-maroon`.
+`--phb-teal`, `--phb-orange` or `--phb-maroon`, and
+`tests/bas-quiet-ui.test.tsx` asserts the mark appears exactly when the BAS
+at-risk count is above zero.
 
 ---
 
@@ -5721,7 +5726,8 @@ each answers a different question and they routinely disagree.
 | Is data being lost **right now** | *Points at risk of data loss* tile |
 | Did the collector **stop for longer than the station remembers** | *Longest collector silence* banner |
 | Has data **already been destroyed** | *Recorded data gaps* table, `roll_overwrite` rows |
-| Has the station **stopped offering a history** | *No longer reported by the station* card, each point by name with its last record |
+| Has the station **stopped offering a history** | *No longer reported by the station* card, each point by name with its last record — shown only when it fails; when it passes it is half of the one-line *Checks:* row under the tiles |
+| Does the platform **hold what the station holds** | *Station count against ours* card, each short point with both numbers — same rule: a full card on failure, the other half of the *Checks:* row on a pass |
 
 The development database on 24 August 2026 is the worked example, and it is
 worth understanding because it is the case a naive screen gets wrong:
@@ -5837,9 +5843,12 @@ column nobody reads is the 28 August failure again. `bas_v_collection_health`
 carries `completeness`, `completeness_note`, `station_count`, `held_count` and
 `completeness_checked_at` (`add_bas_measured_horizon_and_visibility`). The
 Collection Health screen shows a *Station count against ours* card — red from
-one `incomplete` point, amber for `backfilling` or `unknown`, green only when
-every active point was checked and agrees — listing each such point by name
-with both numbers, plus a *Completeness* column in the per-point table.
+one `incomplete` point, amber for `backfilling` or `unknown` — listing each
+such point by name with both numbers, plus a *Completeness* column in the
+per-point table. When every active point was checked and agrees the card is
+not drawn; the check is reported as *station counts match* on the one-line
+*Checks:* row (see *Collection Health shows one line of checks where two cards
+used to be*).
 `healthcheck.py` *(phb-bas)* check 2b reports `incomplete` as CRITICAL,
 `backfilling` as informational, `unknown` as WARNING. A point with no
 checkpoint row at all reads `unknown` everywhere: never checked is not the
@@ -7124,6 +7133,85 @@ and write the reason with the statement above. Do not guess it into the screen.
 
 ---
 
+## Collection Health shows one line of checks where two cards used to be
+
+**Symptom.** Under the four tiles there is a single muted line — *Checks:
+station counts match · no vanished points* — and neither the *Station count
+against ours* card nor the *No longer reported by the station* card is on the
+screen.
+
+**Cause.** Both checks passed. Since 2026-09-30 the two always-rendered cards
+collapse into that one line when they pass: quiet when fine, loud when
+broken. The checks still run on every render — `evaluateChecks` in
+`app/(modules)/bas/collection-health.tsx` is the only place either verdict is
+decided, and the line and the cards are two renderings of the same result.
+The line exists for the reason the cards were always rendered: a card that
+appears only when something is wrong cannot be told apart from a check that
+stopped running. The line is that proof at one-tenth the height.
+
+**What "passed" means, and it is stricter than "green".** The completeness
+check passes when every active point is `complete`; one `backfilling` or
+`unknown` point fails it, exactly as it used to turn the card amber. The
+vanished check passes when the count is zero **and** no vanished point sits
+outside the current filter — a filtered zero over two vanished points
+elsewhere fails it, and the full card comes back naming them (the B7.6 rule).
+
+**When one fails.** Its full card comes back, in its tone, **above the hero
+tile**, with the wording it always had; the line keeps only the check that
+passed. When both fail there is no line at all.
+
+**Fix.** Nothing — this is the healthy state. If the line is missing *and* no
+card is showing, the screen is broken and `tests/bas-quiet-ui.test.tsx`, which
+drives every state, will say where.
+
+---
+
+## The Home tile says "N points at risk" in a maroon box, and Collection Health should agree
+
+**Symptom.** The Building Automation card on Home reads *3 points at risk*
+inside a maroon box, over a small line such as *newest reading 2 min ago*.
+Before 2026-09-30 the big text was the headroom figure and the risk was the
+small line underneath; that was inverted, and headroom is now only on
+Collection Health.
+
+**Cause.** The count is `totals.pointsAtRisk` from the same service call
+Collection Health makes, decided by the one at-risk predicate
+(`lib/modules/bas/types.ts`), so the card and the hero tile cannot disagree. A
+point with an unknown horizon is in it — unknown is not safe. The maroon is a
+mark *on* the identity-cyan fill, never a change to the fill; see *The red
+Change Orders card looks like an alarm*. The small line is the age of the
+newest reading, the same number as the *Since newest reading* tile; *No
+readings yet* means the database holds none, and is never shown as an age of
+zero.
+
+**If the tile and Collection Health disagree**, one of them has grown a second
+definition of at-risk. `tests/bas-at-risk-predicate.test.ts` and
+`tests/bas-quiet-ui.test.tsx` between them pin both surfaces to the one list.
+
+---
+
+## A unit reads °F on screen and `fahrenheit` in the database
+
+**Symptom.** A Point Explorer tile says *72.03 °F*, the chart axis is labelled
+*°F*, the per-point table's Unit column says *%*, and `bas_points.unit` — and
+an Analyze query's `WHERE unit = 'fahrenheit'` — still carry Niagara's names.
+
+**Cause.** Display only. `lib/modules/bas/units.ts` is the one formatter: it
+maps the stored name to a symbol (`fahrenheit` → °F, `percent` → %, `inches
+of water` → inWC) for every place a value or an axis shows one — the tiles,
+the axis label, the tooltip, the per-point table — and the Analyze context
+tells the model the stored name *and* the symbol (`unit=fahrenheit (shown as
+°F)`) so its SQL matches the column and its answer reads like the tiles. The
+stored value is never changed, by this or by anything else.
+
+**A unit it does not know** is shown exactly as stored, never guessed at; a
+point with **no unit** shows a bare number, and the axis says *no unit
+recorded* rather than going blank. To add a unit, add its spellings to the
+list in `units.ts` and its symbol beside them — `tests/bas-unit-symbols.test.tsx`
+fails if a name has no symbol.
+
+---
+
 ## A BAS fixture leaves an org behind and the next test file blames a previous run
 
 **Cost about fifteen minutes on 8 September 2026, and the error message points
@@ -7494,9 +7582,10 @@ A single-point chart cannot express that mistake, so it does not need to guard
 against it.
 
 **The axis still says which situation it is in.** `axisLabel(null)` renders
-"value (no unit recorded)" rather than leaving the axis bare, because a bare axis
+"no unit recorded" rather than leaving the axis bare, because a bare axis
 reads as *no unit needed* and the truth is *unit unknown*. Those are different
-claims.
+claims. With a unit, the label is its symbol — °F, %, inWC — from
+`lib/modules/bas/units.ts`, never the stored name.
 
 ### If a compare mode is ever added
 

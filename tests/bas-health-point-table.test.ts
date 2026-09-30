@@ -204,13 +204,16 @@ describe("the container", () => {
       path.join(process.cwd(), "app", "(modules)", "bas", "collection-health.tsx"),
       "utf8",
     );
-    // Three scrolling tables, one pattern: a max-h-* overflow-auto box with a
+    // Three scrolling tables, one pattern: a max-h-72 overflow-auto box with a
     // sticky thead. Count the boxes and the sticky headers; both are three.
+    // Since 2026-09-29 the collector runs table uses the same seven-row
+    // height as the other two, and tests/bas-quiet-ui.test.tsx holds the
+    // Point Explorer, Settings and Analyze tables to the same box.
     const boxes = source.match(/className="max-h-\d+ overflow-auto"/g) ?? [];
     expect(boxes).toHaveLength(3);
     const sticky = source.match(/<thead className="sticky top-0[^"]*bg-\[var\(--surface\)\]/g) ?? [];
     expect(sticky).toHaveLength(3);
-    // And the points table uses the seven-row height the gaps table settled on.
-    expect(source.match(/max-h-72 overflow-auto/g)).toHaveLength(2);
+    // And every one of them uses the seven-row height the gaps table settled on.
+    expect(source.match(/max-h-72 overflow-auto/g)).toHaveLength(3);
   });
 });

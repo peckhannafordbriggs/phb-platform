@@ -49,6 +49,7 @@ import {
 } from "./filters";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 import { formatAxisTick, formatTooltipValue, valueAxis } from "./value-axis";
+import { unitSymbol } from "@/lib/modules/bas/units";
 
 /**
  * Point Explorer - what one point has been doing.
@@ -314,9 +315,7 @@ export function PointExplorer() {
           ? "No point selected"
           : `${selectedPoint.pointName} at ${selectedPoint.siteName}`}
         {" · "}
-        {unit === null
-          ? "no unit recorded for this point"
-          : `values in ${unit}`}
+        {unitSymbol(unit) ?? "no unit recorded"}
         {" · "}
         {describeRange(data.range)}
         {" · as of "}
@@ -364,10 +363,12 @@ export function PointExplorer() {
               label="Latest"
               value={formatValue(stats.latest, unit)}
               tone="neutral"
+              // The one thing worth saying: this value may sit outside the
+              // range the other tiles cover, so the timestamp is stated.
               detail={
                 stats.latestAt === null
                   ? "This point has never produced a value."
-                  : `Most recent value, from ${formatTimestamp(stats.latestAt)}. Not limited to the window.`
+                  : `${formatTimestamp(stats.latestAt)} · not limited to the range`
               }
             />
             <Tile
@@ -380,7 +381,7 @@ export function PointExplorer() {
               value={
                 stats.minimum === null || stats.maximum === null
                   ? "—"
-                  : `${stats.minimum.toFixed(2)} – ${stats.maximum.toFixed(2)}`
+                  : `${stats.minimum.toFixed(2)} – ${formatValue(stats.maximum, unit)}`
               }
               tone="neutral"
             />
@@ -416,7 +417,8 @@ export function PointExplorer() {
 
 // ------------------------------------------------------------------ pieces
 
-function Tile({
+/** Exported for tests/bas-unit-symbols.test.tsx, which renders one with a unit. */
+export function Tile({
   label,
   value,
   tone,
@@ -450,10 +452,13 @@ function Tile({
 
 function Panel({
   title,
+  count,
   description,
   children,
 }: {
   title: string;
+  /** Rows in a scrolling body, beside the title, so nobody scrolls to count. */
+  count?: number;
   description?: string;
   children: React.ReactNode;
 }) {
@@ -462,6 +467,9 @@ function Panel({
       <header className="px-5 pb-3 pt-4">
         <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
           {title}
+          {count !== undefined && (
+            <span className="font-normal text-[var(--muted)]"> ({formatCount(count)})</span>
+          )}
         </h2>
         {description !== undefined && description.length > 0 && (
           <p className="mt-1 text-xs text-[var(--muted)]">{description}</p>
@@ -518,12 +526,12 @@ export function TrendPanel({
   /**
    * The count and the longest are invisible from the chart; that the line stops
    * at a break is not - it is the thing you are looking at. No breaks needs no
-   * sentence at all.
+   * sentence at all, and nothing here describes the shading.
    */
   const gapSummary =
     data.trendGaps.length === 0
       ? undefined
-      : `${formatCount(data.trendGaps.length)} break${data.trendGaps.length === 1 ? "" : "s"}, shaded. Longest ${formatHours(Math.max(...data.trendGaps.map((g) => g.hours)))}.`;
+      : `${formatCount(data.trendGaps.length)} break${data.trendGaps.length === 1 ? "" : "s"} · longest ${formatHours(Math.max(...data.trendGaps.map((g) => g.hours)))}`;
 
   /**
    * Drag across the plot to zoom into a range; Reset goes back.
@@ -673,7 +681,13 @@ export function TrendPanel({
             </ResponsiveContainer>
           </div>
 
-          {(data.trendGaps.length > 0 || recordedGaps.length > 0) && (
+          {/*
+            The written list of breaks: both timestamps and a duration, which
+            is the one form that survives being read out over the phone. The
+            recorded gaps get no sentence here - their outline on the chart
+            carries the cause and a tooltip, and the table below lists them.
+          */}
+          {data.trendGaps.length > 0 && (
             <ul className="border-t border-[var(--border)] px-4 py-2.5 text-xs text-[var(--muted)]">
               {data.trendGaps.map((gap) => (
                 <li key={gap.fromMs}>
@@ -683,13 +697,6 @@ export function TrendPanel({
                   {formatHours(gap.hours)}
                 </li>
               ))}
-              {recordedGaps.length > 0 && (
-                <li className="mt-1" data-testid="bas-recorded-gaps-legend">
-                  Dashed outlines are the {formatCount(recordedGaps.length)} gap
-                  {recordedGaps.length === 1 ? "" : "s"} in this range that the collector
-                  recorded and explained — listed with their cause in the table below.
-                </li>
-              )}
             </ul>
           )}
         </>
@@ -957,11 +964,25 @@ export function TrendChart({
           key={`recorded-${gap.fromMs}-${gap.toMs}`}
           x1={gap.fromMs}
           x2={gap.toMs}
-          fill="none"
-          stroke="var(--phb-maroon)"
-          strokeOpacity={0.75}
-          strokeDasharray="8 4"
           ifOverflow="hidden"
+          // The outline is drawn here rather than through the fill/stroke
+          // props so that a <title> can sit on it: what the dashed outline
+          // means is said on the outline itself, on hover, and nowhere else.
+          shape={(props: { x?: number; y?: number; width?: number; height?: number }) => (
+            <g className="recharts-reference-area-rect">
+              <title>{`Recorded gap: ${gap.cause}. Listed in the table below.`}</title>
+              <rect
+                x={props.x}
+                y={props.y}
+                width={props.width}
+                height={props.height}
+                fill="none"
+                stroke="var(--phb-maroon)"
+                strokeOpacity={0.75}
+                strokeDasharray="8 4"
+              />
+            </g>
+          )}
           label={{
             value: gap.cause,
             position: "insideTop",
@@ -1047,6 +1068,7 @@ function GapTable({
   return (
     <Panel
       title="Known data gaps — periods we did not collect"
+      count={gaps.length}
       // Same misreading, same one line, same wording as the health screen.
       description="A gap means we were not watching, not that equipment was off."
     >
@@ -1059,14 +1081,19 @@ function GapTable({
           {overwritten.length > 0 && (
             <p className="border-b border-red-300 bg-red-50 px-4 py-2.5 text-sm text-red-900">
               {formatCount(overwritten.length)} of these
-              {overwritten.length === 1 ? " is" : " are"} a station overwrite: the
-              data existed, the station destroyed it before we read it, and it
-              cannot be recovered from anywhere.
+              {overwritten.length === 1 ? " is a station overwrite" : " are station overwrites"}:
+              the data existed, the station destroyed it before we read it, and
+              it cannot be recovered.
             </p>
           )}
-          <div className="overflow-x-auto">
+          {/*
+            The one scroll pattern, as on Collection Health: about seven rows,
+            a sticky header, the count in the heading. The red line above
+            stays outside the box so it cannot scroll away from the rows.
+          */}
+          <div className="max-h-72 overflow-auto">
             <table className="w-full min-w-[42rem] border-collapse text-sm">
-              <thead className="bg-[var(--surface)] text-left">
+              <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
                 <tr>
                   <th className="px-3 py-2 font-medium">From</th>
                   <th className="px-3 py-2 font-medium">To</th>

@@ -739,16 +739,22 @@ describe("the Points list", () => {
     expect(readOnly).not.toContain("Edit the label");
   });
 
-  it("says what a label does and does not change", async () => {
+  it("says what a label does and does not change - on the column, not under the table", async () => {
     const html = renderToStaticMarkup(
       createElement(PointsTable, {
         list: list(point(null, null)),
         expectedTotal: 1,
       }),
     );
+    // Since 2026-09-29 the explanation is the Label and Niagara name
+    // columns' own tooltips; the paragraph under the table is the count only.
     expect(html).toContain("A label replaces the station");
     expect(html).toContain("the Niagara name is never editable");
     expect(html).not.toContain("Labels and roles are edited in a later phase");
+    expect(html).not.toContain("Roles and equipment are edited in a later phase");
+    const body = html.replace(/title="[^"]*"/g, "");
+    expect(body).not.toContain("A label replaces the station");
+    expect(body).not.toContain("never editable");
   });
 });
 

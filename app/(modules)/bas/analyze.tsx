@@ -150,8 +150,7 @@ export function Analyze() {
               {busy ? "Working…" : "Ask"}
             </button>
             <p className="text-xs text-[var(--muted)]">
-              Read-only. The question becomes one database query; the answer shows which
-              points and period it covered. Enter asks; Shift+Enter is a new line.
+              Enter asks · Shift+Enter for a new line
             </p>
           </div>
         </form>
@@ -198,8 +197,7 @@ export function Analyze() {
       {busy && (
         <section className="card p-5" aria-live="polite">
           <p className="text-sm text-[var(--muted)]">
-            Working on “{asked}”. Writing the query, running it read-only, then
-            checking the period for gaps. Usually under half a minute.
+            Working on “{asked}”. Usually under half a minute.
           </p>
         </section>
       )}
@@ -321,9 +319,10 @@ export function Result({ result, asked }: { result: AnalyzeResult; asked: string
           <>
             <div>
               <p className="text-sm leading-relaxed">{result.answer}</p>
+              {/* Stays: it stops a number in the prose being trusted over the rows. */}
               <p className="mt-1.5 text-xs text-[var(--muted)]">
-                The paragraph above is the model&apos;s reading of the rows below. The rows
-                are what the database returned. Where they disagree, the rows are right.
+                The paragraph above is the model&apos;s reading of the rows below; where
+                they disagree, the rows are right.
               </p>
             </div>
             <p className="text-xs text-[var(--muted)]">
@@ -442,7 +441,7 @@ function ProvenancePanel({
 
         <Row label="Rows">
           {describeRowCount(table)}
-          <span className="text-[var(--muted)]"> · {(durationMs / 1000).toFixed(1)} s end to end</span>
+          <span className="text-[var(--muted)]"> · {(durationMs / 1000).toFixed(1)} s</span>
         </Row>
       </dl>
     </div>
@@ -480,12 +479,15 @@ function RowsTable({ table, nullOnly = false }: { table: ResultTable; nullOnly?:
   return (
     <div>
       <p className="text-xs font-medium">
-        {nullOnly ? "The row the database returned - every cell is NULL" : "Rows the database returned"}
+        {nullOnly
+          ? "The row the database returned - every cell is NULL"
+          : `Rows the database returned (${table.rowCount})`}
       </p>
-      <div className="mt-1.5 overflow-x-auto rounded-md border border-[var(--border)]">
+      {/* The module's one scroll pattern: up to 200 rows, sticky header, count above. */}
+      <div className="mt-1.5 max-h-72 overflow-auto rounded-md border border-[var(--border)]">
         <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-[var(--border)] bg-[var(--neutral-50,var(--surface))] text-left">
+          <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
+            <tr className="border-b border-[var(--border)] text-left">
               {table.columns.map((column, i) => (
                 <th key={`${column}-${i}`} className="px-3 py-2 font-medium">
                   {column}

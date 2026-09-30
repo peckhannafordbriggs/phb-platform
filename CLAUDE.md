@@ -752,6 +752,26 @@ Azure, written from the live grants (nothing in either repo created it before).
 written down, not fixed. `runbook.md` → *Moving the BAS data to the Azure
 database* and the two sections after it; `WHY-ITS-BUILT-THIS-WAY.md` § 57.
 
+**The BAS screens are quiet when fine and loud when broken (2026-09-30).**
+Display and wording only; no query, figure or predicate changed. The two
+always-rendered check cards on Collection Health collapse to one line —
+*Checks: station counts match · no vanished points* — when both pass, and a
+failing check is its full card, in its tone, **above** the hero. The check
+runs in both states: `evaluateChecks` is the one place either verdict is
+decided, and *pass* is stricter than *green* (a filtered zero with vanished
+points elsewhere fails). The Home tile leads with the state — *No points at
+risk*, or *3 points at risk* in a maroon **mark on** the cyan fill, never a
+recoloured fill — over the newest reading's age; headroom is Collection
+Health's alone. Units are symbols everywhere (°F, %, inWC) from ONE formatter,
+`lib/modules/bas/units.ts`, driven by the unit column and leaving the stored
+value untouched. Every table in the module scrolls in the same seven-row box
+with the count in its heading. About a dozen sentences of meta-commentary
+went; the test for each was whether it stops a **number** being misread
+(stays) or explains the **UI** (goes). `tests/bas-quiet-ui.test.tsx` drives
+every quieted element into its failure state and asserts the loud wording
+survived. `WHY-ITS-BUILT-THIS-WAY.md` § 58; `runbook.md` → *Collection Health
+shows one line of checks where two cards used to be*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
