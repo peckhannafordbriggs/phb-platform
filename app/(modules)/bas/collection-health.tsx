@@ -71,6 +71,7 @@ import {
   withFilter,
 } from "./filters";
 import { describeHiddenRisk, scopeSuffix } from "@/lib/modules/bas/types";
+import { unitSymbol } from "@/lib/modules/bas/units";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 
 /**
@@ -386,8 +387,7 @@ export function CollectionHealth() {
         )}
         {" · "}
         {describeScope(null, health.windowDays)} · as of{" "}
-        {formatTimestamp(health.observedAt)} · refreshes every minute while this
-        tab is open
+        {formatTimestamp(health.observedAt)}
       </p>
 
       {/*
@@ -412,6 +412,15 @@ export function CollectionHealth() {
           {hiddenRisk}
         </p>
       )}
+
+      {/* ----------------------------------------------- checks that failed */}
+
+      {/*
+        A completeness shortfall or a vanished point comes here, at the top,
+        as its full card. When both checks pass they are one quiet line
+        further down (PassedChecks); see the two components for the rule.
+      */}
+      <FailedChecks health={health} suffix={suffix} />
 
       {/* ------------------------------------------------------------- hero */}
 
@@ -492,9 +501,6 @@ export function CollectionHealth() {
           label={`Unclassified points${suffix}`}
           value={formatCount(totals.unclassifiedPoints)}
           tone={unclassifiedTone(totals.unclassifiedPoints)}
-          detail={
-            totals.unclassifiedPoints === 0 ? undefined : "A backlog, not a fault."
-          }
         />
 
         <Tile
@@ -503,21 +509,18 @@ export function CollectionHealth() {
           tone={stalenessTone(totals.minutesSinceNewestReading)}
           // Not a delta - a reference value, so the number above is judgeable.
           badge="every 15 min"
+          // The dash above is not a zero, and the one sentence says which.
           detail={
             totals.minutesSinceNewestReading === null
-              ? "No readings at all — not a healthy zero."
+              ? "No readings at all."
               : undefined
           }
         />
       </section>
 
-      {/* ------------------------------------------------------ completeness */}
+      {/* ------------------------------------------------ checks that passed */}
 
-      <CompletenessCard health={health} suffix={suffix} />
-
-      {/* ------------------------------------ no longer reported by the station */}
-
-      <VanishedCard health={health} suffix={suffix} />
+      <PassedChecks health={health} suffix={suffix} />
 
       {/* -------------------------------------------------- collector silence */}
 
@@ -722,12 +725,101 @@ function HeroTile({
 }
 
 /**
+ * The two checks that used to be two always-rendered cards: does the platform
+ * hold what the station says it holds, and has any point vanished from its
+ * station.
+ *
+ * Both checks run on every render, in both states - `evaluateChecks` is the
+ * only place either verdict is decided, and the quiet line and the loud card
+ * are two renderings of the same result. When both pass, ONE line of checks
+ * sits where the cards were: "Checks: station counts match · no vanished
+ * points". A check that fails comes back as its full card, in its tone, at
+ * the top of the screen, with the wording it always had.
+ *
+ * The line exists for the reason the cards were always rendered: a card that
+ * appears only when something is wrong cannot be told apart from a check
+ * that stopped running. The line is that proof at one-tenth the height. What
+ * changed is only how much a HEALTHY screen says about itself.
+ *
+ * "Passes" is stricter than "green". The vanished check passes only when the
+ * count is zero AND nothing is hidden by the filter: a filtered zero with two
+ * vanished points elsewhere is the B7.6 false calm, and it renders the full
+ * card, which names them. tests/bas-quiet-ui.test.tsx drives every state.
+ */
+export function evaluateChecks(health: CollectionHealthData): {
+  completenessOk: boolean;
+  vanishedOk: boolean;
+} {
+  const completenessOk =
+    completenessTileTone(health.totals.completenessCounts) === "ok";
+  const vanished = health.totals.pointsNoLongerReported;
+  const vanishedOk =
+    vanishedTone(vanished) === "ok" && vanishedElsewhere(health) === 0;
+  return { completenessOk, vanishedOk };
+}
+
+/** Vanished points outside the current filter: the B7.6 rule's count. */
+function vanishedElsewhere(health: CollectionHealthData): number {
+  return health.unfiltered !== null && health.scope.filtered
+    ? health.unfiltered.pointsNoLongerReported -
+        health.totals.pointsNoLongerReported
+    : 0;
+}
+
+/** The failed checks, each as its full card. Nothing when both pass. */
+export function FailedChecks({
+  health,
+  suffix,
+}: {
+  health: CollectionHealthData;
+  suffix: string;
+}) {
+  const checks = evaluateChecks(health);
+  if (checks.completenessOk && checks.vanishedOk) return null;
+  return (
+    <>
+      {!checks.completenessOk && (
+        <CompletenessCard health={health} suffix={suffix} />
+      )}
+      {!checks.vanishedOk && <VanishedCard health={health} suffix={suffix} />}
+    </>
+  );
+}
+
+/** The passed checks, as one line. Nothing when neither passes. */
+export function PassedChecks({
+  health,
+  suffix,
+}: {
+  health: CollectionHealthData;
+  suffix: string;
+}) {
+  const checks = evaluateChecks(health);
+  const passed = [
+    checks.completenessOk ? "station counts match" : null,
+    checks.vanishedOk ? "no vanished points" : null,
+  ].filter((check): check is string => check !== null);
+  if (passed.length === 0) return null;
+  return (
+    <p
+      className="text-xs text-[var(--muted)]"
+      role="status"
+      data-testid="bas-checks-passed"
+    >
+      <span className="font-medium" style={{ color: TONE_INK.ok }}>
+        Checks{suffix}:
+      </span>{" "}
+      {passed.join(" · ")}
+    </p>
+  );
+}
+
+/**
  * Points the station stopped reporting (B8.3, and the hole found on
  * 18 September 2026).
  *
- * ALWAYS rendered, at zero too, for the CompletenessCard's reason: a card that
- * appears only when something is wrong cannot be told apart from a check that
- * stopped running. Not folded into the at-risk hero - see `vanishedTone` for
+ * Rendered as a card only when it fails - see FailedChecks; the check runs
+ * either way. Not folded into the at-risk hero - see `vanishedTone` for
  * why - and never silent, which is what this closes: the collector
  * deactivating a point used to remove it from every figure on this screen, so
  * a point VANISHING made the dashboard look better. The four deliberate
@@ -745,10 +837,7 @@ function VanishedCard({
   const tone = vanishedTone(count);
   // The B7.6 rule, applied to this figure too: a vanished point outside the
   // filter is still said, so a filtered zero cannot read as an estate zero.
-  const elsewhere =
-    health.unfiltered !== null && health.scope.filtered
-      ? health.unfiltered.pointsNoLongerReported - count
-      : 0;
+  const elsewhere = vanishedElsewhere(health);
 
   return (
     <section
@@ -791,12 +880,11 @@ function VanishedCard({
 /**
  * Does the platform hold what the station says it holds?
  *
- * Always rendered, including when the answer is yes: this card exists because
- * the check it reports spent a day writing verdicts nobody read, and a card
- * that only appears when something is wrong cannot be told apart from a check
- * that stopped running. The names are listed because "2 points short" sends
- * somebody to a query and "Unit_Status_Mode: 500 on the station, 430 here"
- * sends them to Workbench.
+ * Rendered as a card only when the answer is no - see FailedChecks, and the
+ * passed-checks line that stands in for it when the answer is yes. This check
+ * exists because it spent a day writing verdicts nobody read. The names are
+ * listed because "2 points short" sends somebody to a query and
+ * "Unit_Status_Mode: 500 on the station, 430 here" sends them to Workbench.
  */
 function CompletenessCard({
   health,
@@ -1065,7 +1153,7 @@ export function PointTable({
                     )}
                   </td>
                   <td className="px-3 py-2 text-[var(--muted)]">
-                    {point.unit ?? "—"}
+                    {unitSymbol(point.unit) ?? "—"}
                   </td>
                   <td className="px-3 py-2">
                     <RiskBadge risk={point.risk} />
@@ -1200,6 +1288,7 @@ function RunTable({ health }: { health: CollectionHealthData }) {
   return (
     <Panel
       title="Recent collector runs"
+      count={runs.length}
     >
       {runs.length === 0 ? (
         // Never "no runs" on its own. An empty list because the collector has
@@ -1213,9 +1302,11 @@ function RunTable({ health }: { health: CollectionHealthData }) {
           )}
         </Empty>
       ) : (
-        <div className="max-h-64 overflow-auto">
+        // The one scroll pattern: about seven rows, sticky header, the count
+        // in the heading. Same box as the per-point and data-gaps tables.
+        <div className="max-h-72 overflow-auto">
           <table className="w-full min-w-[34rem] border-collapse text-sm">
-            <thead className="sticky top-0 bg-[var(--surface)] text-left">
+            <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
               <tr>
                 <Th>Started</Th>
                 <Th>Status</Th>
@@ -1279,6 +1370,7 @@ function DataGapTable({
   return (
     <Panel
       title="Recorded data gaps — periods we did not collect"
+      count={gaps.length}
       // Survives the cut: somebody will read a gap as equipment being off.
       description="A gap means we were not watching, not that equipment was off."
     >
@@ -1293,10 +1385,9 @@ function DataGapTable({
           {overwritten.length > 0 && (
             <p className="border-b border-red-300 bg-red-50 px-4 py-2.5 text-sm text-red-900">
               {formatCount(overwritten.length)} of these
-              {overwritten.length === 1 ? " is" : " are"} station overwrites:
+              {overwritten.length === 1 ? " is a station overwrite" : " are station overwrites"}:
               the data existed, the station destroyed it before we read it, and
-              it cannot be recovered from anywhere. Each one means the poll
-              cadence was wrong for that point.
+              it cannot be recovered.
             </p>
           )}
           {/*

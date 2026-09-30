@@ -94,7 +94,7 @@ const SUMMARY_RULES = `You are given the rows a PostgreSQL query returned, the q
 
 Rules:
 - State only numbers that appear in the rows. Do not compute new ones (no averaging the rows, no adding them up). If the rows are bucketed, describe the shape and name the extremes that are in the rows.
-- Include units when a column name or the interpretation carries one; otherwise say the unit is not recorded.
+- Include units when a column name or the interpretation carries one, written as the symbol the schema gives beside the unit (°F, %, inWC); otherwise say the unit is not recorded.
 - If "truncated" is true, say the rows shown are the first N of more.
 - Do not claim completeness. If gap hours are reported, mention them in one clause: "with N hours of the period unrecorded". If "period_not_fully_covered" is set, the answer MUST say which part of the period has no readings and that the figure describes only the covered part - never present a number as covering the whole period asked about. If points with an unknown roll horizon are reported, do not mention it - the screen does.
 - If the rows do not actually answer the question as asked, say so rather than answering a nearby one.

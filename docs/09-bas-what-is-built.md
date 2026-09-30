@@ -243,17 +243,36 @@ In render order:
 
 | | What |
 |---|---|
-| **Hero tile** | Headroom — *how long until data starts being lost* — with the per-point risk breakdown behind it |
+| **Hero tile** | Points at risk, with headroom — *how long until data starts being lost* — as its badge and the per-point risk breakdown behind it. Any check that failed sits above it |
 | **Run chart** | Records written per collector run, full width |
 | **Four tiles** | Active points (with a live *n of m reporting* badge), total readings, unclassified points, time since the newest reading |
-| **Station count against ours** | The completeness check, surfaced (17 Sep). Red from one `incomplete` point, amber for `backfilling` or `unknown`, green only when every active point was checked and agrees. Lists each such point by name with both numbers |
-| **Tables** | Per-point status — now with a *Completeness* column and a *measured* mark on the roll horizon — recent collector runs, recorded data gaps |
+| **Checks line, or two cards** | Two checks: the completeness check (17 Sep) — does the platform hold what the station reports holding — and the vanished-point check (18 Sep). When both pass they are one muted line, *Checks: station counts match · no vanished points*. A check that fails is its full card, in its tone, above the hero: *Station count against ours* (red from one `incomplete` point, amber for `backfilling` or `unknown`, each short point by name with both numbers) or *No longer reported by the station* (each vanished point by name with its last record) |
+| **Tables** | Per-point status — with a *Completeness* column, the unit as its symbol and a *measured* mark on the roll horizon — recent collector runs, recorded data gaps. Every one scrolls in the same seven-row box with a sticky header and its row count in the heading |
 
-**Why the completeness card is always rendered, even when green.** The check it
-reports spent a day writing verdicts to a column nothing read — which is the
-28 August failure again, gaps recorded correctly and unread. A card that only
-appeared when something was wrong could not be told apart from a check that had
-stopped running.
+**Why the checks are always rendered, as a line when green (30 Sep).** The
+completeness check spent a day writing verdicts to a column nothing read —
+which is the 28 August failure again, gaps recorded correctly and unread. A
+card that only appeared when something was wrong could not be told apart from
+a check that had stopped running. So both checks were always-rendered cards,
+and now they are always-rendered as one line when they pass and as the full
+card when they fail: the same proof at one-tenth the height. `evaluateChecks`
+is the one place either verdict is decided, and *pass* is stricter than
+*green* — a filtered zero over vanished points elsewhere fails the vanished
+check and the card names them.
+
+**The screens stopped narrating themselves the same day.** A label says what
+a number is; it no longer explains the feature, justifies the design or
+describes the screen's own drawing. The test for every sentence: does it stop
+a person misreading a *number* (kept: *a gap means we were not watching, not
+that equipment was off*; *reads as a stuck sensor, not a stable room*) or does
+it explain the *UI* (gone: *refreshes every minute while this tab is open*;
+*dashed outlines are the gaps the collector recorded*; *a backlog, not a
+fault*). Units are symbols everywhere — °F, %, inWC — from one formatter in
+`lib/modules/bas/units.ts`, and the stored `unit` column is untouched. The
+Home tile leads with the state, *No points at risk* or *3 points at risk* in
+a maroon mark, over the newest reading's age; headroom is Collection Health's
+alone. `tests/bas-quiet-ui.test.tsx` drives every quieted element into its
+failure state and asserts the loud wording survived.
 
 **Two things here have semantics that must not drift.** Headroom over a partly
 unknown set never renders as a bare number — the rule and its reasoning are in

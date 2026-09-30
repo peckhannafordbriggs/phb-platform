@@ -1613,6 +1613,73 @@ because it changed employees" is a worse place to be than "could not".
 
 ---
 
+## 58 · Quiet when fine, loud when broken — and the loud half is what the tests hold
+
+**What.** On 2026-09-30 the BAS screens stopped narrating themselves. A label
+says what a number is; it no longer explains the feature, justifies the
+design, or describes the screen's own drawing. Concretely: the two
+always-rendered check cards on Collection Health — *Station count against
+ours* and *No longer reported by the station* — collapse to one muted line,
+*Checks: station counts match · no vanished points*, when both pass, and each
+comes back as its full card, in its tone, above the hero, when it fails. The
+Home tile leads with the state (*No points at risk*, or *3 points at risk* in
+a maroon mark) over the newest reading's age, and headroom moved to Collection
+Health alone. Units are symbols — °F, %, inWC — from one formatter driven by
+the unit column, with the stored value untouched. Every table in the module
+scrolls in the same seven-row box. And about a dozen sentences went: *refreshes
+every minute while this tab is open*, *a backlog, not a fault*, *dashed
+outlines are the gaps the collector recorded and explained*, *not limited to
+the window*, *read-only; the question becomes one database query*.
+
+**Why.** That prose was useful while the module was being built — every
+sentence was a design decision written where its author would see it — and to
+a person running a building it is noise, and noise is how a real warning gets
+skimmed past. The test for each sentence was one question: does it stop a
+person misreading a **number**, or does it explain the **UI**? The first stays
+— *a gap means we were not watching, not that equipment was off* prevents a
+real misreading by a real user; *reads as a stuck sensor, not a stable room*
+is the product working. The second goes.
+
+The check cards are the case worth writing down. They were always rendered,
+green included, because a card that appears only when something is wrong
+cannot be told apart from a check that stopped running (§ 43's lesson, again).
+That reasoning still holds and the line is its answer: the check runs on
+every render — `evaluateChecks` is the only place either verdict is decided —
+and the line and the card are two renderings of one result. A screen with
+neither a line nor a card is a broken screen, not a healthy one. And *pass*
+is stricter than *green*: the vanished check fails on a filtered zero with
+vanished points elsewhere, so the B7.6 false calm still renders the full card.
+
+**The Home tile's mark is the one place this brushed against § 38.** The
+redesign's rule is that decorative colour and semantic colour are disjoint
+sets, and the runbook said a Home card carries no state colour at all. The
+brief asked for the at-risk headline in red, because a tile that reads calmer
+than the screen behind it is worse than one that clashes. The resolution keeps
+the rule and satisfies the brief: the **fill** is identity cyan and never
+changes with state; the fault is a maroon **mark on** the fill. Cyan is still
+never a state, maroon is still never decoration. `tests/home.test.ts` still
+asserts `page.tsx` names no tone token; the mark lives in `figure-block.tsx`
+and `tests/bas-quiet-ui.test.tsx` asserts it appears exactly when the count is
+above zero.
+
+**What it cost.** The diet is cheap; what it must not cost is the failure
+states, and so `tests/bas-quiet-ui.test.tsx` drives every collapsed or quieted
+element into its unhealthy state and asserts the full loud wording on the
+rendered HTML: a station-count mismatch, a vanished point, a filtered zero with
+vanished points elsewhere, both checks failing at once, points at risk on the
+Home tile. Each collapse was mutated to swallow the unhealthy state too, and
+the tests failed by name. `tests/bas-unit-symbols.test.tsx` renders a tile, the
+axis label, the tooltip and the per-point table and reads the symbol back.
+
+**What breaks if you undo it.** Adding a sentence back is harmless. Making a
+check card conditional on failure *without* the line — "it only shows when
+there is a problem" — recreates the indistinguishable-from-broken screen the
+cards existed to prevent, and the quiet-UI test fails on the healthy fixture.
+Rendering the Home tile from a second at-risk count, or tinting its fill,
+breaks the two tests named above.
+
+---
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

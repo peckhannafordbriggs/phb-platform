@@ -358,9 +358,12 @@ describe("the trend panel says what it did", () => {
         unit: "fahrenheit",
       }),
     );
-    const legend = host.querySelector('[data-testid="bas-recorded-gaps-legend"]');
-    expect(legend).not.toBeNull();
-    expect(legend!.textContent).toContain("the 1 gap in this range");
+    // No prose legend about the dashed outlines (2026-09-29): what the
+    // outline means is on the outline itself, as a tooltip - asserted on the
+    // chart below, since a ResponsiveContainer has no size in jsdom and draws
+    // nothing here. The table under the panel still lists the gap.
+    expect(host.querySelector('[data-testid="bas-recorded-gaps-legend"]')).toBeNull();
+    expect(host.textContent).not.toContain("Dashed outlines");
   });
 });
 
@@ -387,5 +390,10 @@ describe("recorded gaps are outlined on the chart", () => {
     const areas = host.querySelectorAll(".recharts-reference-area");
     expect(areas).toHaveLength(1);
     expect(host.textContent).toContain("Station overwrote it");
+    // The one place the outline is explained: a tooltip on the outline itself.
+    const title = areas[0]!.querySelector("title");
+    expect(title).not.toBeNull();
+    expect(title!.textContent).toBe("Recorded gap: Station overwrote it. Listed in the table below.");
+    expect(areas[0]!.querySelector("rect")?.getAttribute("stroke-dasharray")).toBe("8 4");
   });
 });
