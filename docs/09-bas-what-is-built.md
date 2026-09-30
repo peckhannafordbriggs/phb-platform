@@ -235,11 +235,13 @@ constraints and triggers.
 One module, **five** tabs — real routes, not client-side state, so each is
 bookmarkable and each guards itself independently. Listed in
 `app/(modules)/bas/tabs.ts`, which is the one place that knows they exist. The
-module opens on the Dashboard (2026-09-30); Collection Health, which opened it
+module opens on Projects (2026-09-30); Collection Health, which opened it
 before, is at `/bas/health`.
 
-### Dashboard — `/bas`
+### Projects — `/bas`
 
+*Projects* on screen; `dashboard` in code (`dashboard.tsx`, `/api/modules/bas/dashboard`,
+`getDashboard`) — renamed on screen the day it shipped, files left alone.
 One rounded card per row of `bas_projects`, about three across, wrapping. Each
 card: the project's name, big; its health in the Home tile's words — *No points
 at risk*, or *N points at risk* in a maroon mark — over the age of its newest
@@ -254,7 +256,7 @@ picks. The payload carries a joinless project count beside the cards, and the
 screen says so in red if they differ. The cards are filled in six brand
 colours by creation order — decorative only, no red, no maroon — and the
 at-risk mark carries a white edge so it reads on every fill. `runbook.md` →
-*The BAS module opens on a Dashboard*.
+*The BAS module opens on Projects*.
 
 ### Collection Health — `/bas/health`
 
@@ -866,7 +868,7 @@ stations:
 | 6 views, all `bas_v_` prefixed | `information_schema.views` — 6 |
 | 20 CHECK constraints, 3 triggers | `pg_constraint`, `pg_trigger` on the live database |
 | 17 migrations applied | `_prisma_migrations`; the last five dated 17 September. `add_bas_comments` appears twice there — a rolled-back attempt and the successful re-application a minute later — and that is correct |
-| Five tabs, Dashboard first | `app/(modules)/bas/tabs.ts` lists five (Dashboard added 2026-09-30); the module opens on `/bas`, Collection Health is `/bas/health` |
+| Five tabs, Projects first | `app/(modules)/bas/tabs.ts` lists five (Projects added 2026-09-30, `Dashboard` in code); the module opens on `/bas`, Collection Health is `/bas/health` |
 | Credentials never returned | the settings query selects `cred.username` and `cred.updated_at` and says why the ciphertext is not there |
 | Every settings write audited | `audit_events`: `bas.project_created`, `bas.building_created`, `bas.station_created`, `bas.credential_set`, and their updates and deletes, each with an actor |
 | Two direct stations, one via-parent placeholder | `bas_stations`, with addresses, versions, pins and clock offsets |

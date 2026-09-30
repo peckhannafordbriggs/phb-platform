@@ -7245,19 +7245,26 @@ drives every state, will say where.
 
 ---
 
-## The BAS module opens on a Dashboard, and Collection Health is at `/bas/health`
+## The BAS module opens on Projects, and Collection Health is at `/bas/health`
 
 **Symptom.** Opening Building Automation from the sidebar, or a bookmark to
 `/bas`, shows a grid of project cards rather than the tiles and tables. The
-tab bar reads *Dashboard · Point Explorer · Analyze · Collection Health ·
+tab bar reads *Projects · Point Explorer · Analyze · Collection Health ·
 Settings*.
 
-**Cause.** Since 2026-09-30 the module opens on the **Dashboard**: one card
+**Cause.** Since 2026-09-30 the module opens on **Projects**: one card
 per row of `bas_projects`, never hardcoded, about three across. Collection
 Health moved to `/bas/health` and is otherwise unchanged. That is the one deep
 link that changed; Point Explorer, Analyze and Settings kept theirs. The Home
 card and Home's *new data gaps* line link straight to `/bas/health`, because
 their words are Collection Health's.
+
+**The tab is called *Projects* on screen and `dashboard` in code.** The
+component is `app/(modules)/bas/dashboard.tsx`, the route is
+`/api/modules/bas/dashboard`, the service function is `getDashboard` and the
+payload type is `BasDashboard`. It shipped as *Dashboard* and was renamed on
+screen the same day without renaming the files, because that churns every
+import for no user benefit. There is no `projects.tsx`; stop looking.
 
 **Fix.** Nothing to fix. Update any bookmark or ticket that says `/bas` and
 means Collection Health.
@@ -7345,7 +7352,7 @@ that says "nothing loaded"; the route turns it into `selectPoint: false` and
 the service returns the lists and runs no point query. Choosing a point
 replaces it; changing a level above clears it (`CASCADE_CLEARS`) and the first
 point loads as before. The URL is a real link - the back button returns to the
-Dashboard and a middle-click opens a tab.
+Projects tab and a middle-click opens a tab.
 
 ---
 

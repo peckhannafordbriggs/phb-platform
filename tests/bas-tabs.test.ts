@@ -37,8 +37,8 @@ describe("the tabs are real routes", () => {
    * a given viewer is actually OFFERED is `visibleBasTabs`, covered in
    * tests/bas-settings.test.ts.
    */
-  it("registers Dashboard, Point Explorer, Analyze, Collection Health and Settings, in that order", () => {
-    // The Dashboard took the module root on 2026-09-30 and Collection Health
+  it("registers Projects, Point Explorer, Analyze, Collection Health and Settings, in that order", () => {
+    // The Projects tab (component: Dashboard) took the module root on 2026-09-30 and Collection Health
     // moved to /bas/health, after Analyze. Settings stays last.
     expect(BAS_TABS.map((tab) => tab.href)).toEqual([
       "/bas",
@@ -48,7 +48,7 @@ describe("the tabs are real routes", () => {
       "/bas/settings",
     ]);
     expect(BAS_TABS.map((tab) => tab.label)).toEqual([
-      "Dashboard",
+      "Projects",
       "Point Explorer",
       "Analyze",
       "Collection Health",
@@ -56,8 +56,8 @@ describe("the tabs are real routes", () => {
     ]);
   });
 
-  it("opens on the Dashboard: the module root is the Dashboard tab", () => {
-    expect(basTab("/bas").label).toBe("Dashboard");
+  it("opens on Projects: the module root is the Projects tab", () => {
+    expect(basTab("/bas").label).toBe("Projects");
     expect(BAS_TABS[0]?.href).toBe("/bas");
   });
 
@@ -98,7 +98,7 @@ describe("the tabs are real routes", () => {
   });
 
   it("looks a tab up by href and fails loudly on a typo", () => {
-    expect(basTab("/bas").label).toBe("Dashboard");
+    expect(basTab("/bas").label).toBe("Projects");
     expect(basTab("/bas/health").label).toBe("Collection Health");
     expect(basTab("/bas/points").label).toBe("Point Explorer");
     expect(basTab("/bas/analyze").label).toBe("Analyze");
@@ -107,7 +107,7 @@ describe("the tabs are real routes", () => {
 });
 
 describe("which tab is active", () => {
-  it("does not light up the Dashboard on every path", () => {
+  it("does not light up Projects on every path", () => {
     // Every BAS path starts with /bas, so a naive startsWith would mark the
     // first tab active on all of them. Longest match wins.
     expect(activeTabHref("/bas")).toBe("/bas");

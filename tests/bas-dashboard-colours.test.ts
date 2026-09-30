@@ -27,7 +27,7 @@ import {
 } from "./db";
 
 /**
- * The Dashboard cards are filled in brand colours (2026-09-30), and the
+ * The Projects tab's cards are filled in brand colours (2026-09-30), and the
  * colour means nothing.
  *
  * Three things are held here, and the third is the one that matters:

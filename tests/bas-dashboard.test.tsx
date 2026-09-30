@@ -46,7 +46,7 @@ import {
 } from "./db";
 
 /**
- * The Dashboard tab (2026-09-30): one card per project, and the module opens
+ * The Projects tab (2026-09-30; the component is Dashboard): one card per project, and the module opens
  * on it.
  *
  * What is held here, in order:
@@ -55,7 +55,7 @@ import {
  *      directly - independently of the joins that built the card - and a
  *      joinless guard the screen can compare against.
  *   2. A project with no active point gets counts and NO health line.
- *   3. The module opens on the Dashboard; deep links to Collection Health
+ *   3. The module opens on Projects; deep links to Collection Health
  *      and Settings still open those.
  *   4. A card's href lands on Point Explorer with the project set and nothing
  *      loaded, and the dropdowns still work afterwards.
@@ -373,20 +373,20 @@ describe("the health line", () => {
 });
 
 // =============================================================================
-// 3. The module opens on the Dashboard; deep links still work
+// 3. The module opens on Projects; deep links still work
 // =============================================================================
 
-describe("the module opens on the Dashboard", () => {
+describe("the module opens on Projects", () => {
   type ShellElement = ReactElement<{ blurb: string; children: ReactElement }>;
 
-  it("/bas renders the Dashboard inside the shell", async () => {
+  it("/bas renders the Projects tab (the Dashboard component) inside the shell", async () => {
     const BasPage = (await import("@/app/(modules)/bas/page")).default;
     const element = (await BasPage()) as ShellElement;
 
     expect(element.type).toBe(BasShell);
     expect(element.props.children.type).toBe(Dashboard);
     expect(element.props.blurb).toBe(basTab("/bas").blurb);
-    expect(BAS_TABS[0]).toMatchObject({ href: "/bas", label: "Dashboard" });
+    expect(BAS_TABS[0]).toMatchObject({ href: "/bas", label: "Projects" });
   });
 
   it("/bas/health renders Collection Health - the deep link moved with the screen", async () => {

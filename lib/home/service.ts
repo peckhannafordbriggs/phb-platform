@@ -291,7 +291,7 @@ async function basCardFor(
     key: BAS_MODULE_KEY,
     displayName: registered?.displayName ?? "Building Automation",
     // Collection Health's own route, not the module root: the module opens on
-    // the Dashboard since 2026-09-30, and this card's figure and action are
+    // the Projects tab since 2026-09-30, and this card's figure and action are
     // Collection Health's, so the link goes where the words say.
     href: `/${BAS_MODULE_KEY}/health`,
     action: "Open collection health",

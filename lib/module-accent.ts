@@ -98,7 +98,7 @@ export function moduleAccent(moduleKey: string, index = 0): ModuleAccent {
 /**
  * The fills a DECORATIVE filled card may take, in order (2026-09-30).
  *
- * For the BAS Dashboard's project cards, which are filled like Home's module
+ * For the BAS Projects tab's cards, which are filled like Home's module
  * cards but are all the same module - so the colour cannot mean "which
  * system", and it is not allowed to mean anything else either. It is rhythm:
  * the same set of brand hues in the order the mark reads them, so a row of

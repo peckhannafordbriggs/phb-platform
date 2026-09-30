@@ -288,7 +288,7 @@ export function PointExplorer() {
           >
             {data.points.length === 0 && <option value="">No points</option>}
             {/*
-              Arrived from a Dashboard card (`?point=none`): the list is
+              Arrived from a Projects card (`?point=none`): the list is
               there and nothing is chosen. A disabled placeholder holds the
               empty value so the select does not display the first point as
               though it were selected. Choosing one writes `point=<id>`.
@@ -355,7 +355,7 @@ export function PointExplorer() {
 
       {selectedPoint === null ? (
         data.points.length > 0 ? (
-          // Nothing loaded, by request: a Dashboard card lands here. Points
+          // Nothing loaded, by request: a Projects card lands here. Points
           // exist and the person picks one; nothing is drawn until they do.
           <section
             className="rounded border border-[var(--border)] p-8 text-center"

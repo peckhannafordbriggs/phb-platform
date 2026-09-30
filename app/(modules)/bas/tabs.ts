@@ -36,8 +36,12 @@ export const BAS_TABS: readonly BasTab[] = [
     // way into Point Explorer with that project set. Collection Health held
     // this href before and moved to /bas/health - a bookmark to /bas now
     // lands on the cards, which is the one deep link that changed.
+    //
+    // "Projects" on screen; the component, route and payload are still called
+    // Dashboard (app/(modules)/bas/dashboard.tsx, /api/modules/bas/dashboard).
+    // Renamed on screen only, so nobody hunts for a projects.tsx.
     href: "/bas",
-    label: "Dashboard",
+    label: "Projects",
     // The cards say what they are. Nothing here would add to them.
     blurb: "",
   },
@@ -102,7 +106,7 @@ export function basTab(href: string): BasTab {
  * Which tab a path belongs to: the longest `href` that is a prefix of it.
  *
  * Longest-first rather than `startsWith` in list order, because every BAS path
- * starts with `/bas` - a naive prefix match would light up the Dashboard on
+ * starts with `/bas` - a naive prefix match would light up Projects on
  * every tab. The boundary check stops `/bas/pointsomething` from matching
  * `/bas/points`.
  */

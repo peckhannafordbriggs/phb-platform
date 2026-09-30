@@ -1107,7 +1107,7 @@ interface DashboardRow {
  * The entitlement is per SITE (`basSiteScope`), so once it is a list a project
  * is visible when any of its buildings is. `null` - everyone, today - is every
  * project, INCLUDING one with no buildings yet: a project somebody has just
- * created in Settings has to get a card, or the Dashboard would read "no
+ * created in Settings has to get a card, or the Projects tab would read "no
  * projects" over a Settings screen that lists one.
  */
 function projectScope(entitled: bigint[] | null): Prisma.Sql {
@@ -1120,7 +1120,7 @@ function projectScope(entitled: bigint[] | null): Prisma.Sql {
 }
 
 /**
- * The Dashboard: one card per project.
+ * The Projects tab: one card per project. (`dashboard` in code, *Projects* on screen.)
  *
  * Each card's at-risk figure is the Collection Health tile's, scoped to the
  * project: the same six per-state counts over `bas_v_collection_health`,
@@ -1454,7 +1454,7 @@ export interface PointExplorerOptions extends BasSelectionRequest {
   /**
    * `false`: load NO point. The cascade is resolved and the picker's lists
    * come back, `selectedPoint` is null, and no point query runs. This is how
-   * a Dashboard card arrives (`?point=none`): with the project set and the
+   * a Projects card arrives (`?point=none`): with the project set and the
    * person still to choose, rather than with whichever point sorts first
    * drawn as if they had asked for it. `pointId` is ignored when this is
    * false. Default true, so every existing caller is unchanged.

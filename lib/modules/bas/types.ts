@@ -238,7 +238,7 @@ export interface CollectionHealthTotals {
 }
 
 /**
- * One project's health, for its Dashboard card. `null` on the card when the
+ * One project's health, for its Projects card. `null` on the card when the
  * project has no active point - see `DashboardProject.health`.
  *
  * The SAME shape `basFigure` (lib/home/bas-figure.ts) reads from the

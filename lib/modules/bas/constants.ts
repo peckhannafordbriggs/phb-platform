@@ -12,7 +12,7 @@ export const BAS_MODULE_KEY = "bas";
 /**
  * `?point=none` on Point Explorer: no point is loaded, the person picks.
  *
- * Absent `point` means "the first point the picker offers", and a Dashboard
+ * Absent `point` means "the first point the picker offers", and a Projects
  * card cannot use that: arriving from a card should show the project's lists
  * and nothing else, so nobody mistakes whichever point happens to sort first
  * for the one they came to look at. Written by `dashboardCardHref` in

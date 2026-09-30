@@ -91,7 +91,7 @@ export async function GET(request: Request) {
             siteId: parseSiteId(input.site),
             projectId: parseProjectId(input.project),
             stationId: parseStationId(input.station),
-            // `point=none` (a Dashboard card): the lists, and no point loaded.
+            // `point=none` (a Projects card): the lists, and no point loaded.
             // Anything else is a point id, or absent for the picker's first.
             pointId: input.point === NO_POINT ? null : parsePointId(input.point),
             selectPoint: input.point !== NO_POINT,
