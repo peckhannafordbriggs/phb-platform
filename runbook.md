@@ -68,6 +68,14 @@ Only these. Everything else above you can do without talking to anyone.
 
 `GRAPH_MANAGED_IDENTITY_CLIENT_ID` is **Azure only**. Leave it empty locally.
 
+`ANTHROPIC_API_KEY` is neither generated nor IT's: it comes from the company
+Anthropic Console, and the platform owner holds it. It is **optional** - blank
+disables BAS Ask (B5) and the Phase 12 Part D engine calls and nothing else, and
+as of 2026-09-17 neither is built, so nothing reads it yet. The name is the
+Anthropic SDK's default and is decided in one place, `readAnthropicApiKey` in
+`lib/env.ts`; do not introduce a second one. In Azure it is a Key Vault
+reference - see *The Anthropic API key in Azure* below.
+
 **Wording that gets a useful answer**, because "send me the client secret" gets
 the Secret ID about half the time:
 
@@ -1387,6 +1395,8 @@ broken auth callback. **Do not remove the `-p`.**
 |---|---|---|---|
 | SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local sign-in only. Production authenticates with the managed identity — see *Production sign-in authenticates with the managed identity*. **Cannot affect production**, which refuses to boot with it set |
 | Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only. **Cannot affect production** |
+| Anthropic API key | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** Revocable in the Anthropic Console, and a revoked key fails as `401 authentication_error` on the next call | The Analyze tab (B5). The platform boots and everything else runs without it |
+| BAS credential key | Key Vault `BAS-CREDENTIAL-KEY` → `BAS_CREDENTIAL_KEY` on the container app; the collector's `.env` on the office PC; `.env.local` locally | **Does not expire.** Rotated only on purpose - *Station credentials, and the one secret that lives in two places* | Storing and decrypting Niagara station logins in Settings; the collector, wherever it runs. A value that differs from the collector's makes every stored login unreadable |
 
 > **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
 > carries a note reading `Expiry Date of Entra : 8/13/2028`, but the same note
@@ -2544,6 +2554,116 @@ server had no such file.
 
 ---
 
+## Secrets set by hand in Key Vault: the Anthropic API key and the BAS credential key
+
+Two secrets reach the container app this way as of 2026-10-01: the Anthropic
+API key (this section) and the BAS credential key (the subsection after it,
+*The BAS credential key, the same way*). The command sequence for both is in
+`infra/README.md`.
+
+The Anthropic key is the first secret the template does not write. `DATABASE-URL` and
+`AUTH-SECRET` are generated at deploy time and passed on every deploy;
+the Anthropic key is issued once by the Anthropic Console and pasted into
+Key Vault once, by hand, so that a routine redeploy never needs it on the
+command line and can never overwrite it with a blank. The template knows only
+the secret's **name**, `ANTHROPIC-API-KEY`, and wires it to the container app
+as `ANTHROPIC_API_KEY` by reference when the `anthropicApiKeyInKeyVault`
+parameter is true. The command sequence is in `infra/README.md`.
+
+**Symptom: the deployment fails creating the revision, naming the secret.**
+Something like `Unable to get value using Managed identity … for secret
+anthropic-api-key`, or the vault reporting `SecretNotFound`. The parameter was
+set to true before the secret existed. Container Apps resolves every Key Vault
+reference at revision creation, and one that does not resolve fails the whole
+deployment - it does not degrade to an unset variable. Set the secret first,
+then redeploy. If the secret exists and the error is `Forbidden`, the managed
+identity's `Key Vault Secrets User` role assignment is missing - the same
+check as the `AUTH_SECRET` row under *The container starts and immediately
+exits*.
+
+**Symptom: `az keyvault secret set` says `ForbiddenByRbac`.** The vault uses
+RBAC. `Contributor` and `Owner` on the resource group are management-plane
+roles and grant nothing on the vault's data plane; setting a secret needs **Key
+Vault Secrets Officer** on the vault itself. This is the same scope-not-role
+shape as the three walls under *Deploying to Azure*, and it is what to ask for
+if you hit it. *(Expected from how RBAC vaults work; not yet observed on this
+subscription.)*
+
+**Confirm the secret without printing it.** `az keyvault secret show` with
+`--query value` puts the key in your terminal and your history. Use
+`--query "{enabled:attributes.enabled, updated:attributes.updated}"` instead;
+that the secret exists and when it was last set is all a check needs.
+
+**Rotating.** Run the same `secret set` with the new key - it becomes a new
+version of the same secret, and the reference in the template carries no
+version, so it points at the latest. Then create a new revision
+(`az containerapp revision restart`, or any `az containerapp update`) so the
+app re-reads it rather than waiting for Container Apps' periodic refresh.
+Revoke the old key in the Anthropic Console **after** the new revision is
+serving, not before.
+
+**What reads it.** The Analyze tab (B5, built 2026-09-21), through
+`readAnalyzeEnv` in `lib/modules/bas/analyze/env.ts`, which imports the name
+from `lib/env.ts`. The tab also needs `BAS_ASK_DATABASE_URL`, the URL of the
+`bas_analyze` role on the Azure server, and **that is not wired into the
+template yet**: with only the key set, `/bas/analyze` still says *not
+configured* and names `BAS_ASK_DATABASE_URL`. Creating the role is `npm run
+bas:analyze:role` against the Azure database - *Analyze says it is not
+configured*. The Phase 12 Part D engine calls are not built.
+
+### The BAS credential key, the same way
+
+`BAS-CREDENTIAL-KEY` is the second secret set by hand (2026-10-01): the
+32-byte base64 AES key that encrypts Niagara station passwords in
+`bas_station_credentials`. Same shape exactly - never a parameter, never
+written by the template, referenced as `BAS_CREDENTIAL_KEY` on the container
+app when `basCredentialKeyInKeyVault` is true, under the same managed identity
+and the same **Key Vault Secrets User** grant on the vault, so no new role
+assignment is needed (the deploy-guard test asserts that from the template's
+grants). `BAS_CREDENTIAL_KEY_VERSION` rides beside it as a plain value from
+the `basCredentialKeyVersion` parameter, default `1`; it is not a secret, and
+decryption never reads it - `currentKeyVersion` stamps it on a row when a
+password is saved.
+
+**The value is not generated. It is copied, and it must be byte-identical.**
+Every credential row the BAS migration carries to Azure was encrypted on the
+office PC under the collector's `BAS_CREDENTIAL_KEY`, and the collector still
+uses that key wherever it runs. A production key that differs by one
+character turns every stored credential into unreadable ciphertext: the
+Settings tab reports `decrypt_failed` on every station and the collector,
+once it reads credentials from the Azure database, cannot log in to any JACE
+and collection stops. So the value in the vault is the value from the
+collector's `.env` on the office PC - *Station credentials, and the one
+secret that lives in two places* is the rotation procedure if the two ever
+have to diverge on purpose.
+
+```powershell
+# On a machine that can read the office PC's collector .env. Read-Host keeps the
+# key out of the command line and the shell history.
+az keyvault secret set --vault-name <vault-name> --name BAS-CREDENTIAL-KEY --value (Read-Host "BAS_CREDENTIAL_KEY, exactly as in the collector .env")
+
+# Confirm it exists WITHOUT printing it, and that its length is a 32-byte key
+# (44 base64 characters) - the one check that catches a truncated paste.
+az keyvault secret show --vault-name <vault-name> --name BAS-CREDENTIAL-KEY --query "{enabled:attributes.enabled, updated:attributes.updated, length:length(value)}"
+
+# Then basCredentialKeyInKeyVault = true in infra/main.parameters.json and redeploy.
+```
+
+**Symptom: Settings → a station → *Set login* is refused naming
+`BAS_CREDENTIAL_KEY`, in production.** The parameter is still false, or the
+revision predates it. Check `az containerapp show … --query
+"properties.template.containers[0].env[].name"` for `BAS_CREDENTIAL_KEY`.
+
+**Symptom: the login panel says the stored password could not be decrypted
+(`decrypt_failed`) on every station, in production.** The key in the vault
+is not the key the rows were encrypted under. Compare lengths first (above),
+then re-set the secret from the collector's `.env` and create a new revision.
+Do **not** re-enter the passwords through Settings to make it go green: that
+re-encrypts them under the wrong key, and the collector on the office PC then
+cannot read them.
+
+---
+
 ## The container starts and immediately exits
 
 **Symptom.** Revisions cycle. `az containerapp logs show` shows the process starting
@@ -2900,14 +3020,18 @@ deploy fails*), and the same `BAS_CREDENTIAL_KEY` as the platform, next section.
 naming `BAS_CREDENTIAL_KEY`, and `/bas/analyze` shows *Analyze is not
 configured on this server*. Every other BAS screen works. Locally both work.
 
-**Cause.** The container app is not given `BAS_CREDENTIAL_KEY`,
-`BAS_CREDENTIAL_KEY_VERSION`, `ANTHROPIC_API_KEY` or `BAS_ASK_DATABASE_URL`.
-Look at the `env:` list in `infra/main.bicep`: none of the four is there, and
-nothing in Key Vault holds them. Both features read their variable lazily and
-say which one is missing, which is why the rest of the module is unaffected.
-**This is a separate job, recorded here on 2026-09-29 so it is not mistaken
-for a fault** - the Settings and Analyze code is the same code that works on
-the office PC.
+**Cause, as of 2026-10-01.** The template now carries `BAS_CREDENTIAL_KEY`,
+`BAS_CREDENTIAL_KEY_VERSION` and `ANTHROPIC_API_KEY` - the first and last
+from Key Vault by reference, each behind a boolean parameter - but the two
+secret VALUES are set in the vault by hand and the parameters default to
+false, so a deployment that has not had those steps done still shows exactly
+this. `BAS_ASK_DATABASE_URL` is **not** wired at all, so the Analyze half of
+the symptom outlives the other even once both secrets are in. Both features
+read their variables lazily and say which one is missing, which is why the
+rest of the module is unaffected. The steps are *Secrets set by hand in Key
+Vault* and `infra/README.md`. Before 2026-10-01 none of the three was in the
+template; that was recorded here on 2026-09-29 so it was not mistaken for a
+fault.
 
 **What that job has to get right.** The credential rows the migration above
 carries were encrypted on the office PC under *its* `BAS_CREDENTIAL_KEY`, key
@@ -6774,8 +6898,11 @@ A row whose `key_version` names a key nobody has any more is undecryptable and
 unrecoverable from here. Re-enter it.
 
 The rows the BAS migration copies to Azure were encrypted under the office PC's
-key. Production has no key at all yet; what that means is under *The deployed
-Settings tab cannot store a station login*.
+key. Production takes that same key from Key Vault (`BAS-CREDENTIAL-KEY`,
+set by hand, byte-identical) as of 2026-10-01 - *Secrets set by hand in Key
+Vault*. Until the secret is set and the parameter turned on, production has
+no key; what that looks like is under *The deployed Settings tab cannot store
+a station login*.
 
 ---
 

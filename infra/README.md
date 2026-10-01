@@ -103,6 +103,82 @@ failure it prevents destroys data held nowhere else while the cost of a larger d
 recoverable. The budget carries notification contacts only and no action group, so no
 spending threshold can stop the server.
 
+## Two secrets are set by hand, not by the template
+
+Two secrets are issued elsewhere and pasted into the vault once, by a person:
+the Anthropic API key (next heading) and the BAS credential key (the heading
+after it). The template knows their names only - `ANTHROPIC-API-KEY` and
+`BAS-CREDENTIAL-KEY` - and references each from the container app behind a
+boolean parameter. Both are read under the managed identity's existing **Key
+Vault Secrets User** grant on the vault; no new role assignment is needed, and
+`tests/deploy-guards.test.ts` asserts that from the template's grants.
+
+## The Anthropic API key is set by hand, not by the template
+
+`DATABASE-URL` and `AUTH-SECRET` are written into Key Vault by the template from
+secure parameters, because both are generated at deploy time. The Anthropic API key
+is different: it is issued once by the Anthropic Console, and the person holding it
+puts it in the vault themselves. The template never sees the value - it knows only
+the name, `ANTHROPIC-API-KEY`, and references it from the container app as the
+`ANTHROPIC_API_KEY` environment variable when `anthropicApiKeyInKeyVault` is true.
+
+Order matters. Container Apps resolves every Key Vault reference when it creates a
+revision, so the secret has to exist before the parameter is turned on.
+
+```powershell
+# 1. Find the vault. Its name carries a hash suffix, so read it rather than guess it.
+az keyvault list --resource-group <resource-group> --query "[].name" -o tsv
+
+# 2. Set the secret. Read-Host keeps the key out of the command line and the
+#    shell history; it is echoed to the screen, so do this at your own desk.
+az keyvault secret set --vault-name <vault-name> --name ANTHROPIC-API-KEY --value (Read-Host "Anthropic API key")
+
+# 3. Confirm it exists WITHOUT printing it.
+az keyvault secret show --vault-name <vault-name> --name ANTHROPIC-API-KEY --query "{enabled:attributes.enabled, updated:attributes.updated}"
+
+# 4. Set anthropicApiKeyInKeyVault to true in infra/main.parameters.json and redeploy.
+```
+
+The vault uses RBAC, so setting a secret needs **Key Vault Secrets Officer** on the
+vault. `Contributor` and `Owner` on the resource group are management-plane roles
+and do not grant it - expect `ForbiddenByRbac` without it, the same shape as the
+three permission walls under *Deploying to Azure* in `runbook.md`.
+
+The key does not expire, which is what prohibition 7 requires; it can be revoked in
+the Anthropic Console. To rotate, run step 2 again with the new key - a new version
+of the same secret - and create a new revision so the app picks it up.
+
+## The BAS credential key is copied from the collector, byte for byte
+
+`BAS_CREDENTIAL_KEY` is the AES-256 key that encrypts Niagara station passwords in
+`bas_station_credentials`. It is **not generated for Azure**: every stored credential
+was encrypted on the office PC under the collector's key, and the collector keeps
+using that key wherever it runs. The value in the vault must be the value in the
+collector's `.env` on the office PC, byte for byte - one character out and every
+stored credential is unreadable ciphertext (`runbook.md` → *The BAS credential key,
+the same way*). `BAS_CREDENTIAL_KEY_VERSION` is not a secret; it is the
+`basCredentialKeyVersion` parameter, default `"1"`, which is what the office PC's rows
+carry.
+
+```powershell
+# 1. Same vault as above.
+# 2. Set the secret from the collector's .env. Read-Host keeps it out of the
+#    command line and the shell history.
+az keyvault secret set --vault-name <vault-name> --name BAS-CREDENTIAL-KEY --value (Read-Host "BAS_CREDENTIAL_KEY, exactly as in the collector .env")
+
+# 3. Confirm it exists WITHOUT printing it. A 32-byte key is 44 base64
+#    characters; a different length is a truncated or padded paste.
+az keyvault secret show --vault-name <vault-name> --name BAS-CREDENTIAL-KEY --query "{enabled:attributes.enabled, updated:attributes.updated, length:length(value)}"
+
+# 4. Set basCredentialKeyInKeyVault to true in infra/main.parameters.json and redeploy.
+```
+
+To confirm it works on the deployed site: Settings → a station that has a stored
+login → the login panel shows the username and *password set* rather than
+`decrypt_failed` or *not configured*, and *Replace* is offered. Do not re-enter a
+password to make a red panel go green - that re-encrypts it under whatever key the
+container has, and if that key is wrong the collector can no longer read it.
+
 ## First deployment ordering
 
 The container app needs an image and its secrets before it can start, and its own URL
@@ -116,3 +192,7 @@ before Auth.js can build a callback. So the first pass is not a single command:
    to that identity. Neither can be requested before this deployment exists.
 4. Push to `main`. CI builds the real image, runs migrations, and deploys it.
 5. Run the production seed **once**, by hand. See `runbook.md`.
+6. Set the two hand-set secrets as above - `BAS-CREDENTIAL-KEY` from the collector's
+   `.env`, `ANTHROPIC-API-KEY` from the Anthropic Console - then redeploy with
+   `basCredentialKeyInKeyVault=true` and `anthropicApiKeyInKeyVault=true`. Nothing
+   before this step needs either.

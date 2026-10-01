@@ -20,7 +20,7 @@ more than its checklist.
 | 13 | Not started, planned | `docs/PHASE-13.md` |
 | 14 | Not started | `docs/PHASE-12.md` for the sequencing it depends on |
 | B1–B4, B6, B7 | See below | `docs/09-bas-what-is-built.md` |
-| B5 | **Complete** as the Analyze tab, 2026-09-21 — automated criteria met, live runs done with the real model; two spec questions answered with a clarifying question over two buildings, recorded as such. Not yet wired into Key Vault. Spec: `docs/BAS-B5.md`; record: `docs/bas-b5-verification.md` | `docs/08-bas-and-niagara.md` |
+| B5 | **Complete** as the Analyze tab, 2026-09-21 — automated criteria met, live runs done with the real model; two spec questions answered with a clarifying question over two buildings, recorded as such. The API key is wired from Key Vault by reference as of 2026-10-01 (`ANTHROPIC-API-KEY`, set by hand); `BAS_ASK_DATABASE_URL` is not wired yet, so the deployed tab still says not configured until it is. Spec: `docs/BAS-B5.md`; record: `docs/bas-b5-verification.md` | `docs/08-bas-and-niagara.md` |
 
 The **UI redesign** is not a numbered phase and shipped across several of them.
 Its record is `docs/DESIGN-BRIEF.md` (the brief, plus what the build actually
