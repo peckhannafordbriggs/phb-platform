@@ -1808,6 +1808,77 @@ the first ink fill it is measured against.
 
 ---
 
+## 61 · A suggestion is a sentence until a person clicks, a bulk change is all or nothing, and the acceptance test is the SQL we did by hand
+
+**Decision.** B8.5 (2026-10-01) put roles and equipment in the UI three
+ways: a picker per point through the same strict one-field PATCH as the
+label, a bulk endpoint that takes a selection and is all-or-nothing in one
+transaction, and name-pattern suggestions that the platform computes on
+every read and writes never. The feature was accepted against one test:
+the office JACE's 26 active points, classified by hand in SQL on 17
+September, reproduced through the routes the UI calls and compared row for
+row with a fixture read from the live database.
+
+**Why suggestions never auto-apply.** The standing rule from B7: `Temp1`-
+`Temp3` on the lab are deliberately unclassified because nobody knows what
+they measure, and a made-up role makes the Analyze model answer confidently
+about something untrue. A pattern that is right about `VAV-3 120-121_
+ZoneTemperature` is still a guess; a guess a human confirms is fine and a
+guess written silently is not. So the engine returns a sentence and a
+button, the read that computes it is proven to change nothing, and the
+mutation that applied suggestions on read with a loosened "Temp" pattern
+fails the canon test by name. "Confident" is defined per pattern and shown
+on the row: a whole measurement phrase, setpoint words only to setpoint
+roles, disagreement is silence, a unit conflict is silence, a role the
+vocabulary lacks is silence. The next integrator's `VAV1_ZN_T` gets nothing,
+and that is the intended failure.
+
+**Why bulk is all or nothing.** A selection is one statement - "these ten
+are zone temperatures on their VAVs" - and nine right points plus one wrong
+one is a wrong statement, not nine right ones. Applying what can be applied
+leaves a person reconciling a half-applied selection against a list that
+no longer matches what they chose; refusing with the count and changing
+nothing is recovered from by adjusting the selection and clicking again.
+It costs nothing in traceability because a bulk change is one audit row per
+point per field either way, with `viaBulk` and the selection size on the
+row. The bulk endpoint is also the one place a role and an equipment travel
+together, because accepting a suggestion is one human action on both; the
+single-point PATCH stays one field per request so one request stays one
+audit row.
+
+**Why a role is not cosmetic, and the test says so.** The pairing views
+join a measurement to its setpoint from `setpoint_for` and shared equipment,
+the unclassified tile is `point_role IS NULL`, and the Analyze catalogue
+lists roles with counts. Assigning a role moves a point into those verdicts
+and clearing it moves it out, and the test asserts that against the real
+views rather than a description of them. The one line beside the picker
+says so in the words the quiet-UI rule allows: it stops a number being
+misread. The catalogue's five-minute cache is dropped on every
+classification write; the collector reads none of these columns.
+
+**Why the acceptance test is the one from September.** The plan said it in
+so many words: we classified the office by hand first so this feature would
+have a known-correct answer. The fixture is that answer, read from live on
+1 October. The test does not call the service; it calls the route handlers
+with the bodies the UI sends, uses *Apply all* where the suggestions were
+confident (17 points, ten VAVs created), creates the RTU and reparents the
+VAVs afterwards (the edit the prompt said must be possible), attaches the
+16 RTU points in one bulk request selected the way the filters select, and
+sets the three remaining roles one at a time. If the routes could not
+reproduce something the SQL did, that would be a missing feature, and the
+fixture is not the thing to relax.
+
+**What breaks if you undo this.** Write a suggestion on read and the lab
+test fails on `Temp1`. Apply a bulk change to the filter or the station
+instead of the selection and the "NO other point" test fails by point id.
+Drop `.strict()` from the PATCH and `isActive` rides in beside `role`; two
+tests fail, one at the schema and one at the route. Let a partial bulk
+succeed and the all-or-nothing tests see rows change after a 404. Give the
+single PATCH two fields and one request becomes two audit rows with one
+cause.
+
+---
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

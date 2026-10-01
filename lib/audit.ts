@@ -90,6 +90,30 @@ export type AuditAction =
    */
   | "bas.point_label_changed"
   /**
+   * A point's role or equipment set, changed or cleared (B8.5). Each carries
+   * the previous and new value, the oBIX key, Niagara's name and the label,
+   * so the row identifies the point after any rename. `viaBulk` and
+   * `selectionSize` say whether it was one of a bulk assignment; a bulk
+   * change is one row PER POINT, never one row for the selection, so the
+   * history of any single point is complete on its own.
+   *
+   * A role is not cosmetic: the pairing views and the unclassified count
+   * read it, so a wrong role changes what a point is judged against. The
+   * previous value is here so a judgment that went wrong can be traced to
+   * the change that caused it.
+   */
+  | "bas.point_role_changed"
+  | "bas.point_equipment_changed"
+  /**
+   * Equipment created, edited or deleted (B8.5). The update row carries the
+   * previous and new value of every field that moved, including the parent,
+   * because reparenting a VAV under a different RTU changes which setpoints
+   * it pairs with.
+   */
+  | "bas.equipment_created"
+  | "bas.equipment_updated"
+  | "bas.equipment_deleted"
+  /**
    * A question typed into the Analyze tab (B5). One row per question,
    * whatever the outcome, carrying the question, the SQL that ran (or was
    * tried), the row count, the duration and the outcome kind.

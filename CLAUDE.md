@@ -728,7 +728,7 @@ label only after. `discover` still never writes `label`:
 27/27. The "six hidden points" were answered from the audit log: every hide
 was the B8.3 checkbox on 18 September, and one point is hidden today;
 nothing else in either repository writes `is_visible`. Roles, equipment and
-bulk actions are B8.5. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` → *A
+bulk actions were B8.5, below. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` → *A
 point has one name in Point Explorer and another in Settings*, and *Who hid
 it, and when* under *A point's label or hidden state disappeared*.
 
@@ -802,6 +802,46 @@ gained a white edge (`.card-mark`) because maroon against every fill is under
 Mutation run: colour from the at-risk count fails two tests by name.
 `WHY-ITS-BUILT-THIS-WAY.md` § 60; `runbook.md` → *The cards are coloured, and
 what the colour means*.
+
+**B8.5 complete — roles and equipment through the UI, with suggestions
+(2026-10-01).** The Points list gained a **role picker** (the 91-role
+vocabulary in four groups from the flags it already carries: measurements,
+setpoints, commands, statuses, plus the vocabulary's own `unclassified` for
+"reviewed, not mappable"), an **equipment picker** with **create equipment
+inline** (name, type, optional parent, optional notes - the office VAVs carry
+their rooms there) and an equipment panel where a parent can be set after
+creation, a **selection with bulk assign** (all shown / none; role and/or
+equipment on the selection in one action, confirmed with the count), and
+**suggestions** from name patterns that are **never written by anything but
+a click**. The single-point PATCH is the same strict one-field schema
+(`{ role }` or `{ equipmentId }`, unknown keys 422); `POST
+/settings/points/bulk` is **all-or-nothing in one transaction** - one bad id
+or equipment on another building refuses the whole selection with the count
+and writes nothing - and is the one place a role and an equipment travel
+together, because accepting a suggestion is one human action on both. One
+audit row per point per field, previous and new value, `viaBulk` and
+`selectionSize` on the row. **A role is not cosmetic**: the setpoint and
+command/status pair views, the unclassified tile and the Analyze catalogue
+judge a point by it, and `tests/bas-point-classification.test.ts` asserts a
+role brings a point into the pair views and clearing it takes it out; the
+tile reads live, the catalogue's five-minute cache is dropped on every
+classification write, and the Projects cards read nothing role-derived.
+**The acceptance test** (`tests/bas-office-classification.test.ts`) seeds
+the office JACE's real 32 names and reproduces the 17 September SQL
+classification - 20 roles, one RTU, ten VAVs under it with their rooms in
+notes, two labels - **through the routes the UI calls**, using "Apply all"
+for 17 points and one bulk request for the 16 RTU points, and asserts the end
+state row for row against `tests/fixtures/bas-office-classification.json`,
+read from live. The lab's `Temp1`-`Temp3` carry no suggestion and end as
+unclassified as they began. Mutations run: auto-applying suggestions with a
+loosened "Temp" pattern fails the canon test; a bulk path that wrote the
+whole station fails by point id; dropping `.strict()` from the role PATCH
+fails at both the schema and the route. `station_unassigned` is unreachable
+while `bas_stations.site_id` is NOT NULL and is recorded in
+`docs/testing-blind-spots.md`. `WHY-ITS-BUILT-THIS-WAY.md` § 61;
+`runbook.md` → *A point's role or equipment is wrong, or a suggestion looks
+wrong*, *Bulk assign refused the whole selection*, *Equipment cannot be
+created or deleted*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

@@ -413,7 +413,8 @@ describe("every table in the module scrolls, using the one pattern", () => {
   it.each([
     ["app/(modules)/bas/collection-health.tsx", 3],
     ["app/(modules)/bas/point-explorer.tsx", 1],
-    ["app/(modules)/bas/settings-view.tsx", 1],
+    // The Points list and the equipment panel (B8.5) live in their own file.
+    ["app/(modules)/bas/settings-points.tsx", 2],
     ["app/(modules)/bas/analyze.tsx", 1],
   ])("%s: each <table> sits in a capped box with a sticky header (%i)", async (file, tables) => {
     const text = await source(file);

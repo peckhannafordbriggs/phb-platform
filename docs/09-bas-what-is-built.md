@@ -8,8 +8,8 @@ Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
 B7's plan, as written before it was built, is `docs/B7_settings_and_hierarchy_plan.md`.
 B8's is `docs/B8_point_management_plan.md`; B8.1 (the schema), B8.2 (the
-Points list), B8.3 (show/hide) and B8.4 (labels) are built; B8.5 onward is
-not started.
+Points list), B8.3 (show/hide), B8.4 (labels) and B8.5 (roles, equipment,
+bulk assign and suggestions) are built; B8.6 is not started.
 
 **Last updated:** 17 September 2026 — a third pass. Every figure in it was read
 from the repositories, the git logs, the live database or the live stations on
@@ -483,6 +483,35 @@ asserts it first, on every screen, with the fixture's labels all NULL; the
 same file asserts the station-name fallback (`bas_stations.display_name` is
 NULL on both real stations too). The oBIX key is editable nowhere.
 
+**Roles and equipment (B8.5, 1 October).** The *Role* cell is a picker over
+the 91 roles in four groups (measurements, setpoints, commands, statuses, from
+`is_setpoint` / `is_command` / `is_status`), with the vocabulary's own
+`unclassified` in a fifth, "reviewed, not mappable"; *No role* is NULL. The
+*Equipment* cell is a picker over the building's equipment with *New
+equipment…*, which opens an inline form - name, type from
+`bas_equipment_types`, optional parent, optional notes - and attaches the
+point on creation. An *Equipment in this building* panel under the list
+edits name, type, parent and notes after the fact and deletes equipment
+nothing depends on. A selection column with *Select all N shown* (the search
+and the three filters - role, equipment, collected - decide what is shown)
+feeds a bulk form: role and/or equipment on the selection, confirmed with a
+sentence naming the count. A *Suggestion* column shows what a name pattern
+would classify a point as, with an *Apply* button, and *Apply all N* in the
+toolbar - nothing is written until one of those is clicked; a point with no
+confident pattern shows a dash. API: `PATCH /settings/points/{id}` takes
+`{ role }` or `{ equipmentId }` under the same strict one-field schema;
+`POST /settings/points/bulk` takes `{ pointIds, role?, equipmentId? }`,
+all-or-nothing in one transaction, one audit row per point per field;
+`GET /settings/vocabularies`, `GET /settings/buildings/{siteId}/equipment`,
+`POST /settings/equipment`, `PATCH`/`DELETE /settings/equipment/{id}`. Five
+audit actions (`bas.point_role_changed`, `bas.point_equipment_changed`,
+`bas.equipment_created/updated/deleted`). The patterns and what "confident"
+means for each are in `lib/modules/bas/suggestions.ts`; a role is judged
+against the real vocabulary and the point's unit, and ambiguity is silence.
+The acceptance test reproduces the office's 17 September SQL classification
+through the routes (`tests/bas-office-classification.test.ts`, fixture read
+from live). Not changed: the collector, the views, the vocabulary itself.
+
 **A point the station stopped reporting is surfaced (18 September).** Found
 while building B8.3: every figure on Collection Health was
 `FILTER (WHERE is_active)`, so the collector marking a vanished history
@@ -547,7 +576,9 @@ doing this by hand. B8.1, the schema, is built: `bas_points.label` and
 `test_point_management.py` *(phb-bas)* proving `discover` writes neither.
 B8.2 reads them: the Points level of the Settings tree shows every point on a
 station, uncollected ones included, with a counting guard of its own. B8.3
-made *Shown* editable and B8.4 the label; roles and equipment are B8.5.
+made *Shown* editable, B8.4 the label, and B8.5 the role and equipment, with
+bulk assign and suggestions - the office classification is now reproducible
+through the UI, and the acceptance test does so on every run.
 
 ---
 
@@ -896,12 +927,11 @@ started, **not a tab**. Blocked on a company Anthropic API key. It would live in
 **B8 — point management.** Designed 17 September; B8.1, the schema, and B8.2,
 the read-only Points list, built the same day; B8.3, show/hide with the risk
 rule, on 18 September; B8.4, labels with precedence and three-name search, on
-25 September; B8.5 onward not started:
-`docs/B8_point_management_plan.md`. There is no way in the UI to set a role,
-create equipment, attach a point or mark one inactive; the office
-was classified in SQL and the six state points wait for someone to decode them
-the same way. Thirty minutes for 26 points; a project with ten JACEs would take
-a week and nobody would do it.
+25 September; B8.5, roles and equipment with bulk assign and suggestions, on
+1 October; B8.6 not started: `docs/B8_point_management_plan.md`. A role,
+equipment and a label are set in the UI now; marking a point inactive is
+still SQL, by design. The six office state points still wait for someone to
+decode them, and the picker is where that answer goes.
 
 **Production deployment.** Firewall rule for the site's egress IP, a scoped role
 on the Azure database, and an always-on host **that stays on the building

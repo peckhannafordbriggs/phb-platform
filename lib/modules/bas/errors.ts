@@ -81,7 +81,43 @@ export type BasErrorCode =
    * hours after recording them. Deletion is refused rather than cascaded, and
    * the message offers "mark it inactive" instead.
    */
-  | "station_has_points";
+  | "station_has_points"
+  // --- Roles and equipment (B8.5) ---
+  /**
+   * A role that is not in bas_point_roles. 422, like `invalid_timezone`: the
+   * request was understood and names a value that does not exist. The
+   * vocabulary is not editable from here, so there is nothing to create.
+   */
+  | "role_not_found"
+  /** An equipment type that is not in bas_equipment_types. Same class as above. */
+  | "equipment_type_not_found"
+  /**
+   * No such equipment, or none this employee may see. Same conflation as every
+   * other not-found in this module.
+   */
+  | "equipment_not_found"
+  /**
+   * Equipment on a different building from a point it was to be assigned to.
+   * Equipment belongs to a building (bas_equipment.site_id) and the pairing
+   * views join through it, so a point on building A attached to an RTU on
+   * building B would pair with B's setpoints. 409: well-formed, refused by the
+   * world. Said plainly rather than conflated with not-found, because the
+   * viewer can already see both buildings.
+   */
+  | "equipment_other_building"
+  /**
+   * A parent that would make the equipment chain loop, including a parent of
+   * itself. The FK is RESTRICT and says nothing about A -> B -> A.
+   */
+  | "equipment_cycle"
+  /** Equipment that still has points attached or equipment under it. Refused, never cascaded. */
+  | "equipment_in_use"
+  /**
+   * A point whose station is attached to no building cannot be given
+   * equipment: there is no building to look the equipment up on. Attach the
+   * station first. 409.
+   */
+  | "station_unassigned";
 
 export class BasError extends Error {
   constructor(

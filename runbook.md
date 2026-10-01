@@ -7084,7 +7084,7 @@ sentence says it.
 
 | What you find | Do |
 |---|---|
-| The history was **renamed** | The new name was registered as a new point on the same `discover`. The old row keeps every reading it collected and stays inactive. Give the new point the old one's role and equipment (SQL until B8.5). Then retire the old row: `UPDATE bas_points SET inactive_reason = 'manual' WHERE point_id = …;` - it leaves this card and stays out of the figures |
+| The history was **renamed** | The new name was registered as a new point on the same `discover`. The old row keeps every reading it collected and stays inactive. Give the new point the old one's role and equipment (the pickers on the Points list, since B8.5). Then retire the old row: `UPDATE bas_points SET inactive_reason = 'manual' WHERE point_id = …;` - it leaves this card and stays out of the figures |
 | The trend was **deleted** on purpose | Same `UPDATE`. Its readings stay; nothing is lost that was collected |
 | A **device dropped** or a history stopped by accident | Fix it on the station. The next `discover` sees the history again and **re-activates the point itself**, clearing the reason - the collector's own decision, reversed by the station. The card empties on the next refresh |
 
@@ -7209,6 +7209,171 @@ collector's constants equal the values the CHECK accepts.
 **Still reads "reason not recorded"?** Then the row was deactivated by a hand
 `UPDATE` that set only `is_active`. Look at the collector log or the name, decide,
 and write the reason with the statement above. Do not guess it into the screen.
+
+---
+
+## A point's role or equipment is wrong, or a suggestion looks wrong
+
+**Symptom.** A point on the Points list under its station in Settings shows a
+role or an equipment that is not what it measures; the *Unclassified points*
+tile on Collection Health moved when nobody expected it to; a setpoint pairing
+in `bas_v_setpoint_pair` appeared or vanished; an Analyze answer selected the
+wrong points "by what they measure". Or the *Suggestion* column proposes
+something that is not right.
+
+**Cause, first case: a person set it.** Since B8.5 (2026-10-01) the *Role*
+and *Equipment* cells on the Points list are pickers, there is a bulk form that
+sets either on a selection, and a suggestion can be applied with one click.
+Every one of those writes an audit row with the previous and new value, so
+"who, when, from what" is one query:
+
+```sql
+SELECT a.occurred_at, e.email, a.action,
+       a.metadata->>'niagaraHistoryName' AS point,
+       a.metadata->>'previousRole'       AS was_role,
+       a.metadata->>'role'               AS now_role,
+       a.metadata->>'previousEquipmentName' AS was_equipment,
+       a.metadata->>'equipmentName'      AS now_equipment,
+       a.metadata->>'viaBulk'            AS bulk,
+       a.metadata->>'selectionSize'      AS selection
+  FROM audit_events a
+  LEFT JOIN employees e ON e.id = a.actor_employee_id
+ WHERE a.action IN ('bas.point_role_changed', 'bas.point_equipment_changed')
+ ORDER BY a.occurred_at;
+```
+
+A bulk change is **one row per point**, never one for the selection, with
+`viaBulk = true` and the selection size; the audit viewer's sentence ends
+*(one of 10 in a bulk change)*. A row with no audit event behind it is a hand
+`UPDATE`, and that is the thing to look for.
+
+**Cause, second case: a suggestion was accepted that should not have been.**
+A suggestion is never applied by the platform. `getStationPoints` computes it
+on every read and writes nothing - `tests/bas-point-classification.test.ts`
+reads and renders the list and proves no row and no audit row changed - so if
+a point carries what the suggestion said, somebody clicked *Apply* or *Apply
+all N*, and the audit rows above say who. The patterns, and what "confident"
+means for each, are in `lib/modules/bas/suggestions.ts`: a whole measurement
+phrase in the name ("Zone Temperature", "Duct Static Pressure", "Outside Air
+Damper"), never a word that could belong to several; a setpoint word only ever
+matches a setpoint role; two patterns disagreeing is silence; a recorded unit
+that disagrees with the role's typical unit is silence; a role this database's
+vocabulary lacks is silence. `Temp1`-`Temp3` on the lab are the canon - no
+pattern says anything about a bare "Temp", and
+`tests/bas-office-classification.test.ts` holds them unclassified through an
+*Apply all*. The next integrator's `VAV1_ZN_T` will get no suggestion, and
+that is the intended failure: a person classifies by hand.
+
+**Fix.** Change it in the picker. *No role* is `NULL` - "nobody has looked".
+The vocabulary's own `unclassified` role is offered in a group of its own,
+*Reviewed, not mappable*, because that is what the vocabulary says it is for;
+it is a role to the database, so a point carrying it **leaves** the
+unclassified count (`point_role IS NULL`) while meaning "a person looked and
+could not say". Use it for exactly that. If you need SQL instead:
+
+```sql
+UPDATE bas_points SET point_role = 'zone_temp' WHERE point_id = 42;
+UPDATE bas_points SET point_role = NULL        WHERE point_id = 42;   -- nobody has looked
+UPDATE bas_points SET equipment_id = 7         WHERE point_id = 42;
+```
+
+**What a role changes, so you know what to look at afterwards.** A role is not
+a label. `bas_v_setpoint_pair` pairs a measurement with its setpoint from
+`setpoint_for` and **shared equipment**; `bas_v_command_status_pair` does the
+same from `status_of`. Give a point `supply_air_temp` on equipment that holds
+a `supply_air_temp_sp` and the pair exists at once; clear either and it is
+gone. The *Unclassified points* tile is `point_role IS NULL` over active
+points and reads live. The Analyze catalogue caches the vocabulary and point
+list for five minutes per process, and every classification write drops that
+cache, so the model sees the new role on its next question; on a second
+replica it would see it within five minutes. The Projects cards read nothing
+role-derived. The collector reads none of this: `sync` selects on `is_active`
+alone and `discover` never writes `point_role` or `equipment_id`
+(`collector/db.py`, phb-bas).
+
+**Equipment is per building.** `bas_equipment.site_id` is the building, the
+picker offers only that building's equipment, and the service refuses
+equipment on another building with 409 `equipment_other_building`, naming it.
+A station attached to no building would be refused with 409
+`station_unassigned`; today `bas_stations.site_id` is NOT NULL, so that
+refusal is unreachable (`docs/testing-blind-spots.md`).
+
+---
+
+## Bulk assign refused the whole selection
+
+**Symptom.** *Apply to N points* on the Points list answers with a red banner
+and nothing changed: *"1 of the 12 selected points do not exist or are not
+available to you. Nothing was changed."* (404), or *"RV is in a different
+building from 3 of the 12 selected points. Nothing was changed."* (409), or
+*"... attached to no building ..."* (409).
+
+**Cause.** Working as designed. `POST /api/modules/bas/settings/points/bulk`
+is **all-or-nothing in one transaction**: every point in the selection is
+loaded and checked - exists and in scope, on the equipment's building - before
+anything is written, and the first refusal fails the whole request with the
+count in the message. The alternative, applying what can be applied and
+reporting the rest, leaves a person reconciling a half-applied selection
+against a list that no longer matches what they chose. A refusal that changes
+nothing is recovered from by adjusting the selection and clicking again.
+
+The first message usually means the list was stale: a point was deleted or
+moved to another station between loading the list and clicking. Reload. The
+second means the selection spans buildings and equipment does not: narrow the
+selection with the building's station (a selection is one station's list, so
+this needs two tabs or a stale list) or set the role alone, which needs no
+building.
+
+**What the request accepts.** `{ pointIds, role?, equipmentId? }` - one to
+500 distinct ids, at least one of the two fields. A field **present with
+`null`** clears it on every point; a field **absent** leaves it alone. No
+`visible`, no `isActive`, nothing else: a bulk path that could reach
+`is_active` would be the way a whole station stops collecting in one request,
+and the schema is strict. It answers
+`{ points, roleChanged, equipmentChanged, unchanged }`; `unchanged` points
+already held every value sent and got no audit row, like a no-op on the
+single-point route.
+
+**It is also how a suggestion is accepted.** *Apply* on a row sends a
+selection of one with both halves, and *Apply all N* sends one request per
+distinct (role, equipment) pair after creating any equipment the suggestions
+name - the plan is `planSuggestionBatches` in
+`lib/modules/bas/suggestions.ts`, and the acceptance test executes the same
+plan through the same routes. If *Apply all* stops halfway, the equipment it
+created stays (it is correct equipment) and the batches that ran stayed; the
+rest were refused whole, and the banner says which.
+
+---
+
+## Equipment cannot be created or deleted
+
+**Symptom.** The inline *New equipment* form answers *Equipment called "VAV-3"
+already exists in this building* (409 `name_taken`); or *hovercraft is not an
+equipment type in the vocabulary* (422); or *That parent equipment does not
+exist in this building* (404) when the parent is on another building; or
+*That parent would make the equipment serve each other in a loop* (409
+`equipment_cycle`). *Delete* in the equipment panel is disabled, or answers
+*RV still has 16 points attached and 10 pieces of equipment under it. Detach
+or move them first.* (409 `equipment_in_use`).
+
+**Cause.** `(site_id, name)` is unique on `bas_equipment` - two buildings may
+each have an `RTU-1`, one building may not. The type must be in
+`bas_equipment_types`, which is seeded and not editable from the UI. A parent
+must be on the same building and must not be a descendant. Both foreign keys
+from points and child equipment are RESTRICT, and the service refuses before
+the database does so the message carries the counts instead of a constraint
+name.
+
+**Fix.** Rename, pick a type from the list, choose a parent on this building,
+or detach the points (bulk form: select them, *Detach from equipment*) and
+reparent the children (*Edit* on each, *Under*) before deleting. Deleting is
+never a cascade: a cascade here would silently detach points from the
+equipment that makes their setpoint pairings work. Every create, edit and
+delete is an audit row (`bas.equipment_created`, `bas.equipment_updated` with
+every changed field's previous value, `bas.equipment_deleted`); the update
+sentence calls out a reparent ahead of a rename, because reparenting changes
+which setpoints the equipment's points pair with and a rename changes nothing
+the views read.
 
 ---
 

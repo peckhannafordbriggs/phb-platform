@@ -1,0 +1,508 @@
+{
+    "lab": {
+        "points": [
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "str",
+                "isActive": false,
+                "equipment": null,
+                "inactiveReason": "niagara_system_log",
+                "niagaraDisplayName": "AuditHistory",
+                "niagaraHistoryName": "AuditHistory"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "str",
+                "isActive": false,
+                "equipment": null,
+                "inactiveReason": "niagara_system_log",
+                "niagaraDisplayName": "LogHistory",
+                "niagaraHistoryName": "LogHistory"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": null,
+                "inactiveReason": null,
+                "niagaraDisplayName": "points_RoomT",
+                "niagaraHistoryName": "points_RoomT"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "str",
+                "isActive": false,
+                "equipment": null,
+                "inactiveReason": "niagara_system_log",
+                "niagaraDisplayName": "SecurityHistory",
+                "niagaraHistoryName": "SecurityHistory"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": null,
+                "inactiveReason": null,
+                "niagaraDisplayName": "Temp1",
+                "niagaraHistoryName": "Temp1"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": null,
+                "inactiveReason": null,
+                "niagaraDisplayName": "Temp2",
+                "niagaraHistoryName": "Temp2"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": null,
+                "inactiveReason": null,
+                "niagaraDisplayName": "Temp3",
+                "niagaraHistoryName": "Temp3"
+            }
+        ]
+    },
+    "office": {
+        "points": [
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "str",
+                "isActive": false,
+                "equipment": null,
+                "inactiveReason": "niagara_system_log",
+                "niagaraDisplayName": "AuditHistory",
+                "niagaraHistoryName": "AuditHistory"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "bool",
+                "isActive": false,
+                "equipment": null,
+                "inactiveReason": "alarm_history",
+                "niagaraDisplayName": "Global_Alarm",
+                "niagaraHistoryName": "Global_Alarm"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "str",
+                "isActive": false,
+                "equipment": null,
+                "inactiveReason": "niagara_system_log",
+                "niagaraDisplayName": "LogHistory",
+                "niagaraHistoryName": "LogHistory"
+            },
+            {
+                "role": "occupancy_cmd",
+                "unit": null,
+                "label": null,
+                "dataType": "bool",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "OccupancyCommand",
+                "niagaraHistoryName": "OccupancyCommand"
+            },
+            {
+                "role": "occupancy_status",
+                "unit": null,
+                "label": null,
+                "dataType": "bool",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Occupied",
+                "niagaraHistoryName": "Occupied"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "OperatingState",
+                "niagaraHistoryName": "OperatingState"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "enum",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "OperatingStateOR",
+                "niagaraHistoryName": "OperatingStateOR"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "enum",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "OpState",
+                "niagaraHistoryName": "OpState"
+            },
+            {
+                "role": "oa_damper_cmd",
+                "unit": "percent",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Outside_Air_Damper_Analog_Output1",
+                "niagaraHistoryName": "Outside_Air_Damper_Analog_Output1"
+            },
+            {
+                "role": "outside_air_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Outside_Air_Temp_Analog_Input1",
+                "niagaraHistoryName": "Outside_Air_Temp_Analog_Input1"
+            },
+            {
+                "role": "ra_damper_cmd",
+                "unit": "percent",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Return Air Damper",
+                "niagaraHistoryName": "Return$20Air$20Damper"
+            },
+            {
+                "role": "supply_fan_speed",
+                "unit": "percent",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "RV_Supply_Fan_Speed_Analog_Output",
+                "niagaraHistoryName": "RV_Supply_Fan_Speed_Analog_Output"
+            },
+            {
+                "role": null,
+                "unit": "percent",
+                "label": null,
+                "dataType": "real",
+                "isActive": false,
+                "equipment": null,
+                "inactiveReason": "reconfigured_cfg0",
+                "niagaraDisplayName": "RV_Supply_Fan_Speed_Analog_Output_cfg0",
+                "niagaraHistoryName": "RV_Supply_Fan_Speed_Analog_Output_cfg0"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "str",
+                "isActive": false,
+                "equipment": null,
+                "inactiveReason": "niagara_system_log",
+                "niagaraDisplayName": "SecurityHistory",
+                "niagaraHistoryName": "SecurityHistory"
+            },
+            {
+                "role": "duct_static_pressure",
+                "unit": "inches of water",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Supply_Duct_Static_Pressure_Analog_Input",
+                "niagaraHistoryName": "Supply_Duct_Static_Pressure_Analog_Input"
+            },
+            {
+                "role": null,
+                "unit": "inches of water",
+                "label": null,
+                "dataType": "real",
+                "isActive": false,
+                "equipment": null,
+                "inactiveReason": "reconfigured_cfg0",
+                "niagaraDisplayName": "Supply_Duct_Static_Pressure_Analog_Input_cfg0",
+                "niagaraHistoryName": "Supply_Duct_Static_Pressure_Analog_Input_cfg0"
+            },
+            {
+                "role": "duct_static_pressure_sp",
+                "unit": "inches of water",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Supply_Duct_Static_Pressure_Setpoint",
+                "niagaraHistoryName": "Supply_Duct_Static_Pressure_Setpoint"
+            },
+            {
+                "role": "supply_air_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Supply_Temp_Analog_Input",
+                "niagaraHistoryName": "Supply_Temp_Analog_Input"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "bool",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "System_Enable",
+                "niagaraHistoryName": "System_Enable"
+            },
+            {
+                "role": "supply_air_temp_sp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Temperature_Setpoint",
+                "niagaraHistoryName": "Temperature_Setpoint"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "enum",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Unit Status",
+                "niagaraHistoryName": "Unit$20Status"
+            },
+            {
+                "role": null,
+                "unit": null,
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "RV",
+                "inactiveReason": null,
+                "niagaraDisplayName": "Unit_Status_Mode",
+                "niagaraHistoryName": "Unit_Status_Mode"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": "ROOM 130-132",
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-1",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-1 130-132_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d1$20130$2d132_ZoneTemperature"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": "ROOM 107",
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-10",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-10 107_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d10$20107_ZoneTemperature"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-2",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-2 122-125_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d2$20122$2d125_ZoneTemperature"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-3",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-3 120-121_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d3$20120$2d121_ZoneTemperature"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-4",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-4 114-115_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d4$20114$2d115_ZoneTemperature"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-5",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-5 117-118_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d5$20117$2d118_ZoneTemperature"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-6",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-6 113_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d6$20113_ZoneTemperature"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-7",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-7 111-112_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d7$20111$2d112_ZoneTemperature"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-8",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-8 104-105_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d8$20104$2d105_ZoneTemperature"
+            },
+            {
+                "role": "zone_temp",
+                "unit": "fahrenheit",
+                "label": null,
+                "dataType": "real",
+                "isActive": true,
+                "equipment": "VAV-9",
+                "inactiveReason": null,
+                "niagaraDisplayName": "VAV-9 106_ZoneTemperature",
+                "niagaraHistoryName": "VAV$2d9$20106_ZoneTemperature"
+            }
+        ],
+        "equipment": [
+            {
+                "name": "RV",
+                "notes": null,
+                "parent": null,
+                "equipType": "rtu"
+            },
+            {
+                "name": "VAV-1",
+                "notes": "Serves 130-132",
+                "parent": "RV",
+                "equipType": "vav"
+            },
+            {
+                "name": "VAV-2",
+                "notes": "Serves 122-125",
+                "parent": "RV",
+                "equipType": "vav"
+            },
+            {
+                "name": "VAV-3",
+                "notes": "Serves 120-121",
+                "parent": "RV",
+                "equipType": "vav"
+            },
+            {
+                "name": "VAV-4",
+                "notes": "Serves 114-115",
+                "parent": "RV",
+                "equipType": "vav"
+            },
+            {
+                "name": "VAV-5",
+                "notes": "Serves 117-118",
+                "parent": "RV",
+                "equipType": "vav"
+            },
+            {
+                "name": "VAV-6",
+                "notes": "Serves 113",
+                "parent": "RV",
+                "equipType": "vav"
+            },
+            {
+                "name": "VAV-7",
+                "notes": "Serves 111-112",
+                "parent": "RV",
+                "equipType": "vav"
+            },
+            {
+                "name": "VAV-8",
+                "notes": "Serves 104-105",
+                "parent": "RV",
+                "equipType": "vav"
+            },
+            {
+                "name": "VAV-9",
+                "notes": "Serves 106",
+                "parent": "RV",
+                "equipType": "vav"
+            },
+            {
+                "name": "VAV-10",
+                "notes": "Serves 107",
+                "parent": "RV",
+                "equipType": "vav"
+            }
+        ]
+    },
+    "source": "phb_platform live database, PHBoffice (station 6) and SpringGroveLabComputer (station 5), read 2026-10-01"
+}

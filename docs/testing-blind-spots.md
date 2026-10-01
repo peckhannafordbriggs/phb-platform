@@ -153,3 +153,27 @@ query is built with; it does not prove the comparison operator.
 **What would make it real.** A committed reading stamped exactly on a local
 midnight. None exists in the live data, and a synthetic one would be the one
 synthetic row in a fixture whose whole value is that it is not synthetic.
+
+---
+
+## `station_unassigned` cannot be provoked
+
+**Recorded:** 1 October 2026, from B8.5. **Test:**
+`tests/bas-point-classification.test.ts` → *PATCH { equipmentId }*.
+
+**The claim.** A point on a station attached to no building cannot be given
+equipment, because equipment belongs to a building and there is none to look
+it up on; the refusal is 409 `station_unassigned` and nothing is written.
+
+**Why it cannot be provoked.** `bas_stations.site_id` is NOT NULL at the
+current schema, so no station is attached to no building and Prisma refuses
+to create one. The settings tree and the Points list both carry the state
+(`unassignedStations`, `siteId: null`) for the day the column is relaxed, and
+the service has the refusal ready for the same day.
+
+**What is asserted instead.** Nothing about this code path. The code is kept
+because the two screens already model the state and a silent attach to
+equipment on some other building would be the wrong answer when it arrives.
+
+**What would make it real.** Relaxing the NOT NULL, which is the change the
+tree's *Discovered, unassigned* bucket was written for.

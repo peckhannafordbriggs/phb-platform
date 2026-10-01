@@ -676,8 +676,10 @@ describe("the Points list", () => {
     niagaraDisplayName,
     pointRole: null,
     roleName: null,
+    equipmentId: null,
     equipmentName: null,
     unit: null,
+    suggestion: null,
     horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
     collected: true,
     inactiveReason: null,
@@ -687,6 +689,7 @@ describe("the Points list", () => {
   });
   const list = (p: SettingsPoint): StationPointsList => ({
     stationId: "1",
+    siteId: "1",
     points: [p],
     pointsAccountedFor: { rendered: 1, inDatabase: 1 },
   });

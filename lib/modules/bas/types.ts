@@ -1072,11 +1072,28 @@ export interface SettingsPoint {
   niagaraHistoryName: string;
   /** What the STATION calls it - bas_points.display_name. Refreshed by every discover. */
   niagaraDisplayName: string | null;
+  /**
+   * bas_points.point_role. Editable since B8.5, through the role picker or a
+   * bulk assignment. NOT cosmetic: the setpoint and command/status pairings,
+   * the unclassified count and the Analyze catalogue all read it, so a wrong
+   * role is judged by the wrong rule. NULL means nobody has looked.
+   */
   pointRole: string | null;
   /** The vocabulary's wording for the role, when the point has one. */
   roleName: string | null;
+  /** bas_points.equipment_id, for the picker. Editable since B8.5. */
+  equipmentId: string | null;
   equipmentName: string | null;
   unit: string | null;
+  /**
+   * What a name pattern would classify this point as (B8.5), or null when no
+   * pattern is confident. NEVER applied by the platform: a suggestion is a
+   * sentence on the row until a person clicks it, and `Temp1`-`Temp3` on the
+   * lab station must carry null here forever unless someone says otherwise.
+   * Only the missing half is suggested - a point that already has a role gets
+   * no role suggestion. See lib/modules/bas/suggestions.ts.
+   */
+  suggestion: PointSuggestion | null;
   /**
    * is_active: whether the collector FETCHES this point. Off is permanent in
    * effect. Why it is off is `inactiveReason`, when somebody recorded one.
@@ -1124,8 +1141,146 @@ export interface PointCounts {
 
 export interface StationPointsList {
   stationId: string;
+  /**
+   * The station's building, or null for a discovered-but-unassigned station.
+   * Equipment lives on a building (B8.5), so a null here means the equipment
+   * picker has nothing to offer and says why.
+   */
+  siteId: string | null;
   points: SettingsPoint[];
   pointsAccountedFor: PointCounts;
+}
+
+// ---------------------------------------------------------------------------
+// Roles and equipment (B8.5)
+// ---------------------------------------------------------------------------
+
+/** One row of bas_point_roles, as the picker needs it. */
+export interface PointRoleOption {
+  pointRole: string;
+  displayName: string;
+  description: string;
+  measurement: string | null;
+  typicalUnit: string | null;
+  isSetpoint: boolean;
+  isCommand: boolean;
+  isStatus: boolean;
+  setpointFor: string | null;
+  statusOf: string | null;
+}
+
+export interface EquipmentTypeOption {
+  equipType: string;
+  displayName: string;
+  category: string;
+}
+
+/** The two static vocabularies, fetched once per Points list. */
+export interface BasVocabularies {
+  roles: PointRoleOption[];
+  equipmentTypes: EquipmentTypeOption[];
+}
+
+export type RoleGroupKey = "measurement" | "setpoint" | "command" | "status" | "reviewed";
+
+export interface RoleGroup {
+  key: RoleGroupKey;
+  label: string;
+  roles: PointRoleOption[];
+}
+
+/**
+ * The vocabulary's own escape hatch: a role that MEANS "a person looked and
+ * could not map it". Distinct from NULL, which means nobody has looked. It is
+ * offered in the picker, in its own group, because that is what the vocabulary
+ * says it is for - but it is a role like any other to the database, so a point
+ * carrying it leaves the "unclassified" count (which is `point_role IS NULL`).
+ */
+export const REVIEWED_UNMAPPABLE_ROLE = "unclassified";
+
+/**
+ * The 91 roles in four groups a person can scan, from the flags the
+ * vocabulary already carries. Measurements are what is left when a role is
+ * not a setpoint, a command or a status. Within a group, by display name.
+ *
+ * A role that is both a command and a status (none today) would land in the
+ * first group that claims it, in the order below; the test asserts every role
+ * lands in exactly one group.
+ */
+export function groupRoles(roles: readonly PointRoleOption[]): RoleGroup[] {
+  const groups: RoleGroup[] = [
+    { key: "measurement", label: "Measurements", roles: [] },
+    { key: "setpoint", label: "Setpoints", roles: [] },
+    { key: "command", label: "Commands", roles: [] },
+    { key: "status", label: "Statuses and modes", roles: [] },
+    { key: "reviewed", label: "Reviewed, not mappable", roles: [] },
+  ];
+  const by = (key: RoleGroupKey) => groups.find((g) => g.key === key)!;
+  for (const role of roles) {
+    if (role.pointRole === REVIEWED_UNMAPPABLE_ROLE) by("reviewed").roles.push(role);
+    else if (role.isSetpoint) by("setpoint").roles.push(role);
+    else if (role.isCommand) by("command").roles.push(role);
+    else if (role.isStatus) by("status").roles.push(role);
+    else by("measurement").roles.push(role);
+  }
+  for (const group of groups) {
+    group.roles.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }
+  return groups.filter((g) => g.roles.length > 0);
+}
+
+/** One row of bas_equipment, with its type and parent named. */
+export interface SettingsEquipment {
+  equipmentId: string;
+  siteId: string;
+  name: string;
+  equipType: string | null;
+  equipTypeName: string | null;
+  parentEquipmentId: string | null;
+  parentName: string | null;
+  notes: string | null;
+  /** Points attached, over every station. What a delete is refused on. */
+  pointCount: number;
+}
+
+export interface BuildingEquipmentList {
+  siteId: string;
+  equipment: SettingsEquipment[];
+  /** Same guard as the Points list: a joinless count against the joined rows. */
+  equipmentAccountedFor: PointCounts;
+}
+
+/**
+ * What a bulk classification did. All-or-nothing: if any point in the
+ * selection could not be changed, nothing was and the request failed, so
+ * these numbers only ever describe a selection that was applied in full.
+ * `unchanged` is points that already held every value sent - not a failure,
+ * not an audit row.
+ */
+export interface BulkClassifyResult {
+  points: number;
+  roleChanged: number;
+  equipmentChanged: number;
+  unchanged: number;
+}
+
+/**
+ * What a name pattern proposes for one point (B8.5). Either half may be null
+ * when the point already has that half, or the pattern only speaks to one.
+ * `equipmentId` is set when equipment of that name already exists on the
+ * building; null with a name means accepting it creates the equipment first.
+ */
+export interface PointSuggestion {
+  role: string | null;
+  roleName: string | null;
+  equipmentName: string | null;
+  equipmentId: string | null;
+  /** The type the equipment would be created with. */
+  equipType: string | null;
+  /** The pattern that fired, for the tooltip and the audit row. */
+  pattern: string;
+  /** What "confident" means for this pattern, in one sentence. */
+  confidence: string;
 }
 
 /** RED is the list holding fewer points than the database says the station has. */
