@@ -262,8 +262,22 @@ const pointLabel = z
   .nullable();
 
 /**
- * What may change on a point: `visible` (B8.3) or `label` (B8.4). ONE per
- * request, and nothing else.
+ * A role key as the vocabulary spells it: `zone_temp`, `supply_air_temp_sp`.
+ * Shape only - whether it is IN bas_point_roles is the service's question,
+ * because the vocabulary is a table. `null` clears the role back to "nobody
+ * has looked".
+ */
+const pointRole = z
+  .string()
+  .trim()
+  .min(1, "Choose a role.")
+  .max(64)
+  .regex(/^[a-z0-9_]+$/, "That is not a role key.")
+  .nullable();
+
+/**
+ * What may change on a point: `visible` (B8.3), `label` (B8.4), `role` or
+ * `equipmentId` (B8.5). ONE per request, and nothing else.
  *
  * STRICT, so a key this schema does not name is refused rather than dropped.
  * There is no `isActive` here and there must not be: turning collection off is
@@ -275,17 +289,95 @@ const pointLabel = z
  * collecting.
  *
  * One field per request keeps one audit row per change. A body that carries
- * both is refused, not half-applied.
+ * two is refused, not half-applied. The bulk endpoint is the one place a role
+ * and an equipment travel together, because accepting a suggestion is one
+ * human action on both - see bulkClassifySchema.
  */
 export const updatePointSchema = z
   .object({
     visible: z.boolean().optional(),
     label: pointLabel.optional(),
+    role: pointRole.optional(),
+    equipmentId: bigintText.nullable().optional(),
   })
   .strict()
   .refine(
-    (value) => (value.visible !== undefined) !== (value.label !== undefined),
-    { message: "Send either visible or label, one per request." },
+    (value) =>
+      [value.visible, value.label, value.role, value.equipmentId].filter(
+        (field) => field !== undefined,
+      ).length === 1,
+    { message: "Send exactly one of visible, label, role or equipmentId per request." },
+  );
+
+/**
+ * A bulk classification (B8.5): a selection of points, and a role and/or an
+ * equipment to set on every one of them. A key PRESENT with `null` clears
+ * that field; a key ABSENT leaves it alone. At least one of the two must be
+ * present, or the request asks for nothing.
+ *
+ * STRICT like the single-point schema, for the same reason: `isActive` and
+ * `visible` are not here, and a bulk path that could reach `is_active` would
+ * be a way to stop collecting a whole station in one request.
+ *
+ * Capped at 500 ids. The office JACE has 26 points and the plan's large site
+ * has 600 per project; a selection is one station's list, and 500 is above
+ * any station seen while keeping one transaction's work bounded.
+ */
+export const bulkClassifySchema = z
+  .object({
+    pointIds: z
+      .array(bigintText)
+      .min(1, "Select at least one point.")
+      .max(500, "Bulk changes are limited to 500 points at a time.")
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: "The same point is listed twice.",
+      }),
+    role: pointRole.optional(),
+    equipmentId: bigintText.nullable().optional(),
+  })
+  .strict()
+  .refine((value) => value.role !== undefined || value.equipmentId !== undefined, {
+    message: "Send a role, an equipmentId, or both.",
+  });
+
+/**
+ * Equipment (B8.5). A name unique within its building, a type from
+ * bas_equipment_types, an optional parent on the same building, optional
+ * notes - the office VAVs carry their room numbers there ("Serves 130-132").
+ * Whether the type exists, the parent is on the same building and the chain
+ * does not loop are the service's questions.
+ */
+export const createEquipmentSchema = z
+  .object({
+    siteId: bigintText,
+    name: displayName,
+    equipType: z.string().trim().min(1, "Choose an equipment type.").max(64),
+    parentEquipmentId: bigintText.nullable().optional(),
+    notes: optionalText(2000),
+  })
+  .strict();
+
+/**
+ * Edit carries only what changes, like updateProjectSchema. `parentEquipmentId`
+ * absent means "leave it"; `null` means "no parent" - which is the edit the
+ * prompt names: the ten VAVs all point at the RTU, and that has to be settable
+ * after the fact.
+ */
+export const updateEquipmentSchema = z
+  .object({
+    name: displayName.optional(),
+    equipType: z.string().trim().min(1, "Choose an equipment type.").max(64).optional(),
+    parentEquipmentId: bigintText.nullable().optional(),
+    notes: optionalText(2000),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.name !== undefined ||
+      value.equipType !== undefined ||
+      value.parentEquipmentId !== undefined ||
+      value.notes !== undefined,
+    { message: "Nothing to change." },
   );
 
 export type CreateStationInput = z.infer<typeof createStationSchema>;
@@ -299,6 +391,17 @@ export interface UpdatePointVisibilityInput {
 export interface UpdatePointLabelInput {
   label: string | null;
 }
+/** The role half (B8.5). `null` clears the role. */
+export interface UpdatePointRoleInput {
+  role: string | null;
+}
+/** The equipment half (B8.5). `null` detaches the point. */
+export interface UpdatePointEquipmentInput {
+  equipmentId: string | null;
+}
+export type BulkClassifyInput = z.infer<typeof bulkClassifySchema>;
+export type CreateEquipmentInput = z.infer<typeof createEquipmentSchema>;
+export type UpdateEquipmentInput = z.infer<typeof updateEquipmentSchema>;
 export type SetCredentialInput = z.infer<typeof setCredentialSchema>;
 
 // ---------------------------------------------------------------------------

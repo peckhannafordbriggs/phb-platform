@@ -21,6 +21,14 @@ import { GET as settingsTree } from "@/app/api/modules/bas/settings/route";
 import { POST as createStation } from "@/app/api/modules/bas/settings/stations/route";
 import { GET as stationPoints } from "@/app/api/modules/bas/settings/stations/[stationId]/points/route";
 import { PATCH as patchPoint } from "@/app/api/modules/bas/settings/points/[pointId]/route";
+import { POST as bulkPoints } from "@/app/api/modules/bas/settings/points/bulk/route";
+import { GET as vocabularies } from "@/app/api/modules/bas/settings/vocabularies/route";
+import { GET as buildingEquipment } from "@/app/api/modules/bas/settings/buildings/[siteId]/equipment/route";
+import { POST as createEquipment } from "@/app/api/modules/bas/settings/equipment/route";
+import {
+  DELETE as deleteEquipment,
+  PATCH as patchEquipment,
+} from "@/app/api/modules/bas/settings/equipment/[equipmentId]/route";
 import {
   DELETE as deleteStation,
   PATCH as patchStation,
@@ -313,10 +321,12 @@ describe("no settings route ever returns the password or the ciphertext", () => 
   }
 
   it("exercises every route file that exists", async () => {
-    // 10: settings, projects, projects/[id], buildings, buildings/[id],
+    // 15: settings, projects, projects/[id], buildings, buildings/[id],
     // stations, stations/[id], stations/[id]/credential,
-    // stations/[id]/points (B8.2) and points/[id] (B8.3).
-    expect((await routeFiles()).length).toBe(10);
+    // stations/[id]/points (B8.2), points/[id] (B8.3), and the five from
+    // B8.5: points/bulk, vocabularies, buildings/[id]/equipment, equipment,
+    // equipment/[id].
+    expect((await routeFiles()).length).toBe(15);
   });
 
   it("returns neither the plaintext nor the ciphertext from ANY of them", async () => {
@@ -418,6 +428,64 @@ describe("no settings route ever returns the password or the ciphertext", () => 
       await (
         await patchPoint(json({ visible: "yes" }, "PATCH"), pointParams(pointId))
       ).text(),
+      // Roles and equipment (B8.5): the vocabularies, the building's
+      // equipment, a create and a rejected create, an edit, a role and an
+      // equipment on the point, a bulk change and a rejected one, a delete.
+      // None of these joins bas_station_credentials; this keeps that true.
+      await (await vocabularies()).text(),
+      await (
+        await buildingEquipment(new Request("http://localhost/api/modules/bas/settings"), {
+          params: Promise.resolve({ siteId: siteId.toString() }),
+        })
+      ).text(),
+      ...(await (async () => {
+        // A type to create against, so the create succeeds and the edit,
+        // the attach and the delete run against a real row. Removed below.
+        await testDb.basEquipmentType.upsert({
+          where: { equipType: "zztest_leak_rtu" },
+          update: {},
+          create: {
+            equipType: "zztest_leak_rtu",
+            displayName: "Leak test RTU",
+            description: "Fixture.",
+            category: "air_side",
+          },
+        });
+        const created = await createEquipment(
+          json({ siteId: siteId.toString(), name: "ZZTEST_LeakRTU", equipType: "zztest_leak_rtu" }),
+        );
+        const createdBody = await created.clone().text();
+        const equipmentId =
+          created.status === 201
+            ? ((await created.json()) as { data: { equipmentId: string } }).data.equipmentId
+            : "999999";
+        return [
+          createdBody,
+          await (
+            await createEquipment(json({ siteId: siteId.toString(), name: "", equipType: "zztest_leak_rtu" }))
+          ).text(),
+          await (
+            await patchEquipment(json({ notes: "leak test" }, "PATCH"), {
+              params: Promise.resolve({ equipmentId }),
+            })
+          ).text(),
+          await (
+            await patchPoint(json({ equipmentId }, "PATCH"), pointParams(pointId))
+          ).text(),
+          await (
+            await bulkPoints(json({ pointIds: [pointId], equipmentId: null }))
+          ).text(),
+          await (await bulkPoints(json({ pointIds: [pointId], role: "no_such_role" }))).text(),
+          await (await bulkPoints(json({ pointIds: [] }))).text(),
+          await (
+            await deleteEquipment(json({}, "DELETE"), { params: Promise.resolve({ equipmentId }) })
+          ).text(),
+        ];
+      })()),
+      ...(await (async () => {
+        await testDb.basEquipmentType.deleteMany({ where: { equipType: "zztest_leak_rtu" } });
+        return [];
+      })()),
       // A rejected credential write.
       await (
         await setCredential(json({ username: "", password: PLAINTEXT }, "PUT"), stationParams(id))

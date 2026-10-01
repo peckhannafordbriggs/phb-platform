@@ -82,6 +82,12 @@ function stringField(meta: Record<string, unknown>, key: string): string | null 
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/** " (one of 10 in a bulk change)" - B8.5's bulk rows are one per point. */
+function bulkSuffix(meta: Record<string, unknown>): string {
+  const n = meta.selectionSize;
+  return typeof n === "number" && n > 1 ? ` (one of ${n} in a bulk change)` : " (in a bulk change)";
+}
+
 /**
  * A module's display name, or its key when the module is not in the lookup.
  *
@@ -248,6 +254,78 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
       ? `${actor} labelled the point ${key} "${label}"`
       : `${actor} relabelled the point ${key} from "${previous}" to "${label}"`;
   },
+
+  // B8.5. The point is named by label, then oBIX key - the label is a person's
+  // name for it and the key survives every rename. "Cleared" says what the
+  // point goes back to (nobody has looked), so it does not read as a deletion.
+  // The bulk suffix is there because ten identical sentences in a row are
+  // otherwise indistinguishable from ten separate decisions.
+  "bas.point_role_changed": ({ actor, meta }) => {
+    const name =
+      stringField(meta, "label") ?? stringField(meta, "niagaraHistoryName") ?? "a point";
+    const previous = stringField(meta, "previousRole");
+    const role = stringField(meta, "role");
+    const bulk = meta.viaBulk === true ? bulkSuffix(meta) : "";
+    if (role === null) {
+      return `${actor} cleared the role ${previous ?? ""} from the point ${name} (back to unclassified)${bulk}`;
+    }
+    return previous === null
+      ? `${actor} gave the point ${name} the role ${role}${bulk}`
+      : `${actor} changed the role of the point ${name} from ${previous} to ${role}${bulk}`;
+  },
+
+  "bas.point_equipment_changed": ({ actor, meta }) => {
+    const name =
+      stringField(meta, "label") ?? stringField(meta, "niagaraHistoryName") ?? "a point";
+    const previous = stringField(meta, "previousEquipmentName");
+    const equipment = stringField(meta, "equipmentName");
+    const bulk = meta.viaBulk === true ? bulkSuffix(meta) : "";
+    if (equipment === null) {
+      return `${actor} detached the point ${name} from the equipment ${previous ?? ""}${bulk}`;
+    }
+    return previous === null
+      ? `${actor} attached the point ${name} to the equipment ${equipment}${bulk}`
+      : `${actor} moved the point ${name} from the equipment ${previous} to ${equipment}${bulk}`;
+  },
+
+  "bas.equipment_created": ({ actor, meta }) => {
+    const type = stringField(meta, "equipType");
+    const parent = stringField(meta, "parentName");
+    return (
+      `${actor} added the equipment ${stringField(meta, "name") ?? "(unnamed)"}` +
+      (type !== null ? ` (${type})` : "") +
+      (parent !== null ? ` under ${parent}` : "")
+    );
+  },
+
+  // The parent is called out ahead of a rename, because reparenting changes
+  // which setpoints the equipment's points pair with and a rename changes
+  // nothing the views read.
+  "bas.equipment_updated": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "equipment";
+    const previousName = stringField(meta, "previousName");
+    const changed = Array.isArray(meta.changed)
+      ? (meta.changed as unknown[]).filter((f): f is string => typeof f === "string")
+      : [];
+    if (changed.includes("parentEquipmentId")) {
+      const parent = stringField(meta, "parentName");
+      const previousParent = stringField(meta, "previousParentName");
+      if (parent === null) {
+        return `${actor} removed the equipment ${name} from under ${previousParent ?? "its parent"}`;
+      }
+      return previousParent === null
+        ? `${actor} placed the equipment ${name} under ${parent}`
+        : `${actor} moved the equipment ${name} from under ${previousParent} to under ${parent}`;
+    }
+    if (previousName !== null && previousName !== name) {
+      return `${actor} renamed the equipment ${previousName} to ${name}`;
+    }
+    const fields = changed.length > 0 ? changed.join(", ") : "its details";
+    return `${actor} edited the equipment ${name} (${fields})`;
+  },
+
+  "bas.equipment_deleted": ({ actor, meta }) =>
+    `${actor} deleted the equipment ${stringField(meta, "name") ?? "(unnamed)"}`,
 
   // Names the account. "The login changed" cannot show an escalation from
   // bas_collector to admin; "changed it to admin" can. The password is not here
@@ -518,6 +596,11 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.credential_cleared": "BAS station login removed",
   "bas.point_visibility_changed": "BAS point shown or hidden",
   "bas.point_label_changed": "BAS point labelled",
+  "bas.point_role_changed": "BAS point role changed",
+  "bas.point_equipment_changed": "BAS point equipment changed",
+  "bas.equipment_created": "BAS equipment added",
+  "bas.equipment_updated": "BAS equipment updated",
+  "bas.equipment_deleted": "BAS equipment deleted",
   "bas.question_asked": "BAS question asked",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",

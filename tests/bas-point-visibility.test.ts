@@ -365,8 +365,10 @@ describe("the Points list renders the checkbox", () => {
     niagaraDisplayName: null,
     pointRole: null,
     roleName: null,
+    equipmentId: null,
     equipmentName: null,
     unit: null,
+    suggestion: null,
     horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
     collected: true,
     inactiveReason: null,
@@ -380,6 +382,7 @@ describe("the Points list renders the checkbox", () => {
       createElement(PointsTable, {
         list: {
           stationId: "1",
+          siteId: "1",
           points: [point(visible)],
           pointsAccountedFor: { rendered: 1, inDatabase: 1 },
         },

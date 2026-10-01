@@ -11,15 +11,26 @@ import {
   encryptPassword,
 } from "./credentials";
 import { basSiteScope } from "./service";
+import { resetSchemaContextCache } from "./analyze/schema-context";
+import {
+  suggestClassification,
+  type EquipmentFacts,
+  type RoleFacts,
+} from "./suggestions";
 import type {
+  BulkClassifyInput,
   CreateBuildingInput,
+  CreateEquipmentInput,
   CreateProjectInput,
   CreateStationInput,
   SetCredentialInput,
   UpdateBuildingInput,
+  UpdateEquipmentInput,
   UpdateProjectInput,
   UpdateStationInput,
+  UpdatePointEquipmentInput,
   UpdatePointLabelInput,
+  UpdatePointRoleInput,
   UpdatePointVisibilityInput,
 } from "@/lib/validation/bas-settings";
 import {
@@ -31,8 +42,13 @@ import {
 import type {
   BasSettingsFilters,
   BasSettingsTree,
+  BasVocabularies,
+  BuildingEquipmentList,
+  BulkClassifyResult,
   Completeness,
+  PointSuggestion,
   SettingsBuilding,
+  SettingsEquipment,
   SettingsPoint,
   SettingsProject,
   SettingsStation,
@@ -544,6 +560,7 @@ interface PointListRow {
   display_name: string | null;
   point_role: string | null;
   role_name: string | null;
+  equipment_id: bigint | null;
   equipment_name: string | null;
   unit: string | null;
   is_active: boolean;
@@ -566,7 +583,7 @@ const COMPLETENESS_VALUES: readonly Completeness[] = [
   "incomplete",
 ];
 
-function toPoint(row: PointListRow): SettingsPoint {
+function toPoint(row: PointListRow, suggestion: PointSuggestion | null): SettingsPoint {
   return {
     pointId: row.point_id.toString(),
     label: row.label,
@@ -574,8 +591,10 @@ function toPoint(row: PointListRow): SettingsPoint {
     niagaraDisplayName: row.display_name,
     pointRole: row.point_role,
     roleName: row.role_name,
+    equipmentId: row.equipment_id?.toString() ?? null,
     equipmentName: row.equipment_name,
     unit: row.unit,
+    suggestion,
     collected: row.is_active,
     // Closed by bas_points_inactive_reason_check; the guard is for the type.
     inactiveReason: isInactiveReason(row.inactive_reason) ? row.inactive_reason : null,
@@ -634,16 +653,18 @@ export async function getStationPoints(
   const stationId = BigInt(stationIdText);
   const { entitled } = await basSiteScope(viewer);
 
-  const station = await prisma.$queryRaw<Array<{ station_id: bigint }>>`
-    SELECT st.station_id
+  const station = await prisma.$queryRaw<Array<{ station_id: bigint; site_id: bigint | null }>>`
+    SELECT st.station_id, st.site_id
       FROM bas_stations st
      WHERE st.station_id = ${stationId}
        AND (${entitlementSql(entitled, Prisma.sql`st.site_id`)} OR st.site_id IS NULL)`;
-  if (station.length === 0) {
+  const found = station[0];
+  if (found === undefined) {
     throw new BasError("station_not_found", "That station does not exist.");
   }
+  const siteId = found.site_id;
 
-  const [rows, total] = await Promise.all([
+  const [rows, total, roleFacts, buildingEquipment] = await Promise.all([
     prisma.$queryRaw<PointListRow[]>`
       SELECT
         p.point_id,
@@ -652,6 +673,7 @@ export async function getStationPoints(
         p.display_name,
         p.point_role,
         pr.display_name AS role_name,
+        p.equipment_id,
         e.name          AS equipment_name,
         p.unit,
         p.is_active,
@@ -685,11 +707,51 @@ export async function getStationPoints(
     // construction. See PointCounts.
     prisma.$queryRaw<Array<{ n: bigint }>>`
       SELECT count(*) AS n FROM bas_points WHERE station_id = ${stationId}`,
+
+    // For the suggestions (B8.5): the vocabulary as THIS database holds it,
+    // so a pattern can only suggest a role that can be assigned here, and
+    // the building's equipment, so a suggested "VAV-3" is matched to the
+    // existing row or offered as new. READ ONLY - nothing in this function
+    // writes, and the test proves a read changes no row.
+    prisma.$queryRaw<Array<{ point_role: string; display_name: string; typical_unit: string | null }>>`
+      SELECT point_role, display_name, typical_unit FROM bas_point_roles`,
+    siteId === null
+      ? Promise.resolve([] as Array<{ equipment_id: bigint; name: string }>)
+      : prisma.$queryRaw<Array<{ equipment_id: bigint; name: string }>>`
+          SELECT equipment_id, name FROM bas_equipment WHERE site_id = ${siteId}`,
   ]);
+
+  const roles = new Map<string, RoleFacts>(
+    roleFacts.map((r) => [
+      r.point_role,
+      { pointRole: r.point_role, displayName: r.display_name, typicalUnit: r.typical_unit },
+    ]),
+  );
+  const equipmentFacts: EquipmentFacts[] = buildingEquipment.map((e) => ({
+    equipmentId: e.equipment_id.toString(),
+    name: e.name,
+  }));
 
   return {
     stationId: stationId.toString(),
-    points: rows.map(toPoint),
+    siteId: siteId?.toString() ?? null,
+    points: rows.map((row) =>
+      toPoint(
+        row,
+        suggestClassification(
+          {
+            niagaraHistoryName: row.niagara_history_name,
+            niagaraDisplayName: row.display_name,
+            unit: row.unit,
+            pointRole: row.point_role,
+            equipmentId: row.equipment_id?.toString() ?? null,
+            collected: row.is_active,
+          },
+          roles,
+          equipmentFacts,
+        ),
+      ),
+    ),
     pointsAccountedFor: {
       rendered: rows.length,
       inDatabase: Number(total[0]?.n ?? 0),
@@ -840,6 +902,744 @@ async function loadScopedPoint(
     throw new BasError("point_not_found", "That point does not exist.");
   }
   return { pointId, point };
+}
+
+// ---------------------------------------------------------------------------
+// Roles and equipment (B8.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * A point as the classification path needs it: its two names and label for
+ * the audit row, its station's building for the equipment check, and what it
+ * holds now so an unchanged value writes nothing.
+ */
+interface ClassifiablePoint {
+  point_id: bigint;
+  station_id: bigint;
+  site_id: bigint | null;
+  niagara_history_name: string;
+  display_name: string | null;
+  label: string | null;
+  point_role: string | null;
+  equipment_id: bigint | null;
+  equipment_name: string | null;
+}
+
+/**
+ * The points of a selection that are the viewer's to change, in one query.
+ *
+ * Scoped like loadScopedPoint. A selection with an id that is not found - it
+ * does not exist, or is on a station outside the viewer's entitlement - is
+ * refused WHOLE with `point_not_found`, before anything is written: the
+ * selection is one statement ("these are the zone temperatures on VAV-3"),
+ * and nine right points plus one wrong one is a wrong statement, not nine
+ * right ones. The caller never learns which id was the problem, for the same
+ * reason every other not-found here conflates.
+ */
+async function loadClassifiablePoints(
+  viewer: Viewer,
+  pointIds: readonly bigint[],
+): Promise<ClassifiablePoint[]> {
+  const { entitled } = await basSiteScope(viewer);
+  const rows = await prisma.$queryRaw<ClassifiablePoint[]>`
+    SELECT p.point_id, p.station_id, st.site_id, p.niagara_history_name, p.display_name,
+           p.label, p.point_role, p.equipment_id, e.name AS equipment_name
+      FROM bas_points p
+      JOIN bas_stations st ON st.station_id = p.station_id
+      LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
+     WHERE p.point_id IN (${Prisma.join([...pointIds])})
+       AND (${entitlementSql(entitled, Prisma.sql`st.site_id`)} OR st.site_id IS NULL)`;
+  if (rows.length !== pointIds.length) {
+    throw new BasError(
+      "point_not_found",
+      pointIds.length === 1
+        ? "That point does not exist."
+        : `${pointIds.length - rows.length} of the ${pointIds.length} selected points ` +
+          `do not exist or are not available to you. Nothing was changed.`,
+    );
+  }
+  return rows;
+}
+
+/** The role must be in the vocabulary as this database holds it. */
+async function assertRoleExists(role: string): Promise<void> {
+  const found = await prisma.basPointRole.findUnique({
+    where: { pointRole: role },
+    select: { pointRole: true },
+  });
+  if (found === null) {
+    throw new BasError(
+      "role_not_found",
+      `${role} is not a role in the vocabulary. The vocabulary is not editable from here.`,
+    );
+  }
+}
+
+interface AssignableEquipment {
+  equipment_id: bigint;
+  site_id: bigint;
+  name: string;
+}
+
+/**
+ * Equipment that may be assigned to EVERY point in the selection.
+ *
+ * Three refusals, in order: equipment the viewer cannot see (or that does not
+ * exist) is not found; a point whose station has no building cannot take
+ * equipment at all; equipment on a different building from any point is
+ * refused by name. The pairing views join a point to its setpoint THROUGH the
+ * equipment's building, so cross-building equipment would pair a zone on one
+ * site with a setpoint on another and the answer would look fine.
+ */
+async function loadAssignableEquipment(
+  viewer: Viewer,
+  equipmentId: bigint,
+  points: readonly ClassifiablePoint[],
+): Promise<AssignableEquipment> {
+  const { entitled } = await basSiteScope(viewer);
+  const rows = await prisma.$queryRaw<AssignableEquipment[]>`
+    SELECT e.equipment_id, e.site_id, e.name
+      FROM bas_equipment e
+     WHERE e.equipment_id = ${equipmentId}
+       AND ${entitlementSql(entitled, Prisma.sql`e.site_id`)}`;
+  const equipment = rows[0];
+  if (equipment === undefined) {
+    throw new BasError("equipment_not_found", "That equipment does not exist.");
+  }
+
+  const unassigned = points.filter((p) => p.site_id === null);
+  if (unassigned.length > 0) {
+    throw new BasError(
+      "station_unassigned",
+      unassigned.length === points.length
+        ? "This station is attached to no building, so its points cannot be given " +
+            "equipment. Attach the station to a building first."
+        : `${unassigned.length} of the selected points are on a station attached to no ` +
+            `building, so they cannot be given equipment. Nothing was changed.`,
+    );
+  }
+  const elsewhere = points.filter((p) => p.site_id !== equipment.site_id);
+  if (elsewhere.length > 0) {
+    throw new BasError(
+      "equipment_other_building",
+      elsewhere.length === points.length
+        ? `${equipment.name} is in a different building from ${
+            points.length === 1 ? "this point" : "these points"
+          }. Equipment and its points must share a building.`
+        : `${equipment.name} is in a different building from ${elsewhere.length} of the ` +
+            `${points.length} selected points. Nothing was changed.`,
+    );
+  }
+  return equipment;
+}
+
+interface ClassificationChange {
+  /** Absent: leave the role alone. null: clear it. */
+  role?: string | null;
+  /** Absent: leave the equipment alone. null: detach. */
+  equipment?: AssignableEquipment | null;
+}
+
+/**
+ * THE ONE WRITE PATH for roles and equipment. The single-point functions and
+ * the bulk endpoint all come through here, so the audit shape, the
+ * "unchanged writes nothing" rule and the building check cannot drift between
+ * them.
+ *
+ * One transaction for the whole selection. A row is updated only where the
+ * value differs, and every update is one audit row for that one point - a
+ * bulk change is N rows, not one, so any point's own history is complete
+ * without knowing it was part of a selection. `viaBulk` and `selectionSize`
+ * are on the row so the sentence can say so.
+ *
+ * The Analyze catalogue caches the vocabulary and point list for five minutes
+ * per process; a classification is exactly the kind of change it should see,
+ * so the cache is dropped after the commit. The unclassified tile, the pair
+ * views and the Projects cards read the tables live and need nothing.
+ */
+async function applyClassification(
+  viewer: Viewer,
+  points: readonly ClassifiablePoint[],
+  change: ClassificationChange,
+  options: { viaBulk: boolean },
+): Promise<BulkClassifyResult> {
+  let roleChanged = 0;
+  let equipmentChanged = 0;
+  let unchanged = 0;
+
+  await prisma.$transaction(async (tx) => {
+    for (const point of points) {
+      let touched = false;
+      const identity = {
+        pointId: point.point_id.toString(),
+        stationId: point.station_id.toString(),
+        niagaraHistoryName: point.niagara_history_name,
+        niagaraDisplayName: point.display_name,
+        label: point.label,
+        viaBulk: options.viaBulk,
+        selectionSize: points.length,
+      };
+
+      if (change.role !== undefined && change.role !== point.point_role) {
+        await tx.basPoint.update({
+          where: { pointId: point.point_id },
+          data: { pointRole: change.role },
+        });
+        await writeAuditEvent(tx, {
+          action: "bas.point_role_changed",
+          actorEmployeeId: viewer.id,
+          moduleKey: BAS_MODULE_KEY,
+          metadata: { ...identity, previousRole: point.point_role, role: change.role },
+        });
+        roleChanged += 1;
+        touched = true;
+      }
+
+      if (change.equipment !== undefined) {
+        const nextId = change.equipment === null ? null : change.equipment.equipment_id;
+        if (nextId !== point.equipment_id) {
+          await tx.basPoint.update({
+            where: { pointId: point.point_id },
+            data: { equipmentId: nextId },
+          });
+          await writeAuditEvent(tx, {
+            action: "bas.point_equipment_changed",
+            actorEmployeeId: viewer.id,
+            moduleKey: BAS_MODULE_KEY,
+            metadata: {
+              ...identity,
+              previousEquipmentId: point.equipment_id?.toString() ?? null,
+              previousEquipmentName: point.equipment_name,
+              equipmentId: nextId?.toString() ?? null,
+              equipmentName: change.equipment?.name ?? null,
+            },
+          });
+          equipmentChanged += 1;
+          touched = true;
+        }
+      }
+
+      if (!touched) unchanged += 1;
+    }
+  });
+
+  if (roleChanged + equipmentChanged > 0) resetSchemaContextCache();
+
+  return { points: points.length, roleChanged, equipmentChanged, unchanged };
+}
+
+/**
+ * Set, change or clear one point's role (B8.5).
+ *
+ * `null` clears it back to "nobody has looked". The vocabulary's own
+ * `unclassified` role ("reviewed, not mappable") is assignable like any
+ * other, because that is what the vocabulary says it is for - but it is a
+ * role, and a point carrying it leaves the unclassified count.
+ */
+export async function setBasPointRole(
+  viewer: Viewer,
+  pointIdText: string,
+  input: UpdatePointRoleInput,
+): Promise<{ changed: boolean; role: string | null; roleName: string | null }> {
+  const point = await loadOneClassifiablePoint(viewer, pointIdText);
+  if (input.role !== null) await assertRoleExists(input.role);
+
+  const result = await applyClassification(viewer, [point], { role: input.role }, { viaBulk: false });
+
+  const roleName =
+    input.role === null
+      ? null
+      : ((
+          await prisma.basPointRole.findUnique({
+            where: { pointRole: input.role },
+            select: { displayName: true },
+          })
+        )?.displayName ?? null);
+  return { changed: result.roleChanged > 0, role: input.role, roleName };
+}
+
+/** Attach one point to equipment on its building, move it, or detach it (B8.5). */
+export async function setBasPointEquipment(
+  viewer: Viewer,
+  pointIdText: string,
+  input: UpdatePointEquipmentInput,
+): Promise<{ changed: boolean; equipmentId: string | null; equipmentName: string | null }> {
+  const point = await loadOneClassifiablePoint(viewer, pointIdText);
+  const equipment =
+    input.equipmentId === null
+      ? null
+      : await loadAssignableEquipment(viewer, BigInt(input.equipmentId), [point]);
+
+  const result = await applyClassification(viewer, [point], { equipment }, { viaBulk: false });
+  return {
+    changed: result.equipmentChanged > 0,
+    equipmentId: equipment?.equipment_id.toString() ?? null,
+    equipmentName: equipment?.name ?? null,
+  };
+}
+
+/**
+ * Role and/or equipment on a whole selection, in one transaction (B8.5).
+ *
+ * ALL OR NOTHING. Every point is loaded and checked - exists, in scope, on a
+ * building, on the equipment's building - before the transaction opens, and a
+ * single refusal fails the whole request with nothing written. The
+ * alternative, applying what can be applied and reporting the rest, leaves a
+ * person reconciling a half-applied selection against a list that no longer
+ * matches what they chose; a refusal that names the count and changes nothing
+ * is the easier state to recover from, because the fix is "adjust the
+ * selection and click again". The audit rows are one per point either way, so
+ * all-or-nothing costs nothing in traceability.
+ *
+ * This is also the one endpoint that takes a role AND an equipment together,
+ * because accepting a suggestion ("zone_temp on VAV-3") is one human action
+ * on both halves and the UI sends it here with a selection of one.
+ */
+export async function bulkClassifyPoints(
+  viewer: Viewer,
+  input: BulkClassifyInput,
+): Promise<BulkClassifyResult> {
+  const pointIds = input.pointIds.map((id) => BigInt(id));
+  const points = await loadClassifiablePoints(viewer, pointIds);
+
+  if (input.role !== undefined && input.role !== null) await assertRoleExists(input.role);
+
+  const change: ClassificationChange = {};
+  if (input.role !== undefined) change.role = input.role;
+  if (input.equipmentId !== undefined) {
+    change.equipment =
+      input.equipmentId === null
+        ? null
+        : await loadAssignableEquipment(viewer, BigInt(input.equipmentId), points);
+  }
+
+  return applyClassification(viewer, points, change, { viaBulk: true });
+}
+
+function parsePointId(pointIdText: string): bigint {
+  if (!/^\d{1,18}$/.test(pointIdText)) {
+    throw new BasError("point_not_found", "That point does not exist.");
+  }
+  return BigInt(pointIdText);
+}
+
+/** The single-point case of loadClassifiablePoints. */
+async function loadOneClassifiablePoint(
+  viewer: Viewer,
+  pointIdText: string,
+): Promise<ClassifiablePoint> {
+  const [point] = await loadClassifiablePoints(viewer, [parsePointId(pointIdText)]);
+  if (point === undefined) {
+    // Unreachable: the loader throws when the count falls short.
+    throw new BasError("point_not_found", "That point does not exist.");
+  }
+  return point;
+}
+
+// --- equipment --------------------------------------------------------------
+
+interface EquipmentRow {
+  equipment_id: bigint;
+  site_id: bigint;
+  name: string;
+  equip_type: string | null;
+  equip_type_name: string | null;
+  parent_equipment_id: bigint | null;
+  parent_name: string | null;
+  notes: string | null;
+  point_count: number;
+}
+
+function toEquipment(row: EquipmentRow): SettingsEquipment {
+  return {
+    equipmentId: row.equipment_id.toString(),
+    siteId: row.site_id.toString(),
+    name: row.name,
+    equipType: row.equip_type,
+    equipTypeName: row.equip_type_name,
+    parentEquipmentId: row.parent_equipment_id?.toString() ?? null,
+    parentName: row.parent_name,
+    notes: row.notes,
+    pointCount: row.point_count,
+  };
+}
+
+/**
+ * Every piece of equipment on one building, for the picker and the
+ * equipment panel (B8.5). LEFT JOIN on type and parent - equipment with a
+ * type nobody set is still equipment - and the same joinless counting guard
+ * the Points list carries.
+ */
+export async function listBuildingEquipment(
+  viewer: Viewer,
+  siteIdText: string,
+): Promise<BuildingEquipmentList> {
+  if (!/^\d{1,18}$/.test(siteIdText)) {
+    throw new BasError("building_not_found", "That building does not exist.");
+  }
+  const siteId = BigInt(siteIdText);
+  const { entitled } = await basSiteScope(viewer);
+
+  const site = await prisma.$queryRaw<Array<{ site_id: bigint }>>`
+    SELECT s.site_id FROM bas_sites s
+     WHERE s.site_id = ${siteId} AND ${entitlementSql(entitled, Prisma.sql`s.site_id`)}`;
+  if (site.length === 0) {
+    throw new BasError("building_not_found", "That building does not exist.");
+  }
+
+  const [rows, total] = await Promise.all([
+    prisma.$queryRaw<EquipmentRow[]>`
+      SELECT e.equipment_id, e.site_id, e.name, e.equip_type,
+             t.display_name AS equip_type_name,
+             e.parent_equipment_id, pe.name AS parent_name, e.notes,
+             (SELECT count(*) FROM bas_points p WHERE p.equipment_id = e.equipment_id)::int
+               AS point_count
+        FROM bas_equipment e
+        LEFT JOIN bas_equipment_types t ON t.equip_type = e.equip_type
+        LEFT JOIN bas_equipment pe ON pe.equipment_id = e.parent_equipment_id
+       WHERE e.site_id = ${siteId}
+       ORDER BY e.name`,
+    prisma.$queryRaw<Array<{ n: bigint }>>`
+      SELECT count(*) AS n FROM bas_equipment WHERE site_id = ${siteId}`,
+  ]);
+
+  return {
+    siteId: siteIdText,
+    equipment: rows.map(toEquipment),
+    equipmentAccountedFor: { rendered: rows.length, inDatabase: Number(total[0]?.n ?? 0) },
+  };
+}
+
+async function assertEquipmentTypeExists(equipType: string): Promise<void> {
+  const found = await prisma.basEquipmentType.findUnique({
+    where: { equipType },
+    select: { equipType: true },
+  });
+  if (found === null) {
+    throw new BasError(
+      "equipment_type_not_found",
+      `${equipType} is not an equipment type in the vocabulary.`,
+    );
+  }
+}
+
+async function assertEquipmentNameFree(
+  siteId: bigint,
+  name: string,
+  exceptEquipmentId: bigint | null,
+): Promise<void> {
+  const clash = await prisma.basEquipment.findUnique({
+    where: { siteId_name: { siteId, name } },
+    select: { equipmentId: true },
+  });
+  if (clash !== null && clash.equipmentId !== exceptEquipmentId) {
+    throw new BasError(
+      "name_taken",
+      `Equipment called "${name}" already exists in this building.`,
+    );
+  }
+}
+
+/**
+ * A parent on the same building whose chain does not loop back. Modelled on
+ * assertNoParentCycle for stations; the FK is RESTRICT and says nothing about
+ * A -> B -> A.
+ */
+async function assertEquipmentParent(
+  equipmentId: bigint | null,
+  parentId: bigint,
+  siteId: bigint,
+): Promise<{ name: string }> {
+  if (equipmentId !== null && parentId === equipmentId) {
+    throw new BasError("equipment_cycle", "Equipment cannot be its own parent.");
+  }
+  const parent = await prisma.basEquipment.findUnique({
+    where: { equipmentId: parentId },
+    select: { siteId: true, name: true },
+  });
+  if (parent === null || parent.siteId !== siteId) {
+    // Conflated: a parent on another building reads like one that does not
+    // exist, because the picker only ever offers this building's equipment.
+    throw new BasError("equipment_not_found", "That parent equipment does not exist in this building.");
+  }
+
+  const total = await prisma.basEquipment.count({ where: { siteId } });
+  const seen = new Set<string>();
+  if (equipmentId !== null) seen.add(equipmentId.toString());
+  let cursor: bigint | null = parentId;
+  let hops = 0;
+  while (cursor !== null) {
+    const key = cursor.toString();
+    if (seen.has(key)) {
+      throw new BasError(
+        "equipment_cycle",
+        "That parent would make the equipment serve each other in a loop.",
+      );
+    }
+    seen.add(key);
+    if (++hops > total + 1) {
+      throw new BasError(
+        "equipment_cycle",
+        "The parent chain does not terminate. Check the existing equipment.",
+      );
+    }
+    const next: { parentEquipmentId: bigint | null } | null =
+      await prisma.basEquipment.findUnique({
+        where: { equipmentId: cursor },
+        select: { parentEquipmentId: true },
+      });
+    cursor = next?.parentEquipmentId ?? null;
+  }
+  return { name: parent.name };
+}
+
+/**
+ * Create equipment on a building (B8.5): the RTU, then the ten VAVs under it
+ * with their rooms in `notes`. The building must be in the viewer's scope,
+ * the type in the vocabulary, the name free within the building, and the
+ * parent on the same building.
+ */
+export async function createBasEquipment(
+  viewer: Viewer,
+  input: CreateEquipmentInput,
+): Promise<{ equipmentId: string }> {
+  const siteId = BigInt(input.siteId);
+  const { entitled } = await basSiteScope(viewer);
+  const site = await prisma.$queryRaw<Array<{ site_id: bigint }>>`
+    SELECT s.site_id FROM bas_sites s
+     WHERE s.site_id = ${siteId} AND ${entitlementSql(entitled, Prisma.sql`s.site_id`)}`;
+  if (site.length === 0) {
+    throw new BasError("building_not_found", "That building does not exist.");
+  }
+
+  await assertEquipmentTypeExists(input.equipType);
+  await assertEquipmentNameFree(siteId, input.name, null);
+  const parentId =
+    input.parentEquipmentId === undefined || input.parentEquipmentId === null
+      ? null
+      : BigInt(input.parentEquipmentId);
+  const parent = parentId === null ? null : await assertEquipmentParent(null, parentId, siteId);
+
+  const equipmentId = await prisma.$transaction(async (tx) => {
+    const created = await tx.basEquipment.create({
+      data: {
+        siteId,
+        name: input.name,
+        equipType: input.equipType,
+        parentEquipmentId: parentId,
+        notes: input.notes ?? null,
+      },
+      select: { equipmentId: true },
+    });
+    await writeAuditEvent(tx, {
+      action: "bas.equipment_created",
+      actorEmployeeId: viewer.id,
+      moduleKey: BAS_MODULE_KEY,
+      metadata: {
+        equipmentId: created.equipmentId.toString(),
+        siteId: input.siteId,
+        name: input.name,
+        equipType: input.equipType,
+        parentEquipmentId: parentId?.toString() ?? null,
+        parentName: parent?.name ?? null,
+        notes: input.notes ?? null,
+      },
+    });
+    return created.equipmentId;
+  });
+
+  resetSchemaContextCache();
+  return { equipmentId: equipmentId.toString() };
+}
+
+/**
+ * Edit equipment (B8.5): name, type, parent, notes - only what was sent.
+ * Reparenting is the edit that matters: the office VAVs were created and
+ * THEN pointed at the RTU, and that order has to work. The audit row names
+ * every field that moved with its previous value.
+ */
+export async function updateBasEquipment(
+  viewer: Viewer,
+  equipmentIdText: string,
+  input: UpdateEquipmentInput,
+): Promise<{ changed: boolean }> {
+  if (!/^\d{1,18}$/.test(equipmentIdText)) {
+    throw new BasError("equipment_not_found", "That equipment does not exist.");
+  }
+  const equipmentId = BigInt(equipmentIdText);
+  const { entitled } = await basSiteScope(viewer);
+  const rows = await prisma.$queryRaw<
+    Array<{
+      site_id: bigint;
+      name: string;
+      equip_type: string | null;
+      parent_equipment_id: bigint | null;
+      parent_name: string | null;
+      notes: string | null;
+    }>
+  >`
+    SELECT e.site_id, e.name, e.equip_type, e.parent_equipment_id, pe.name AS parent_name, e.notes
+      FROM bas_equipment e
+      LEFT JOIN bas_equipment pe ON pe.equipment_id = e.parent_equipment_id
+     WHERE e.equipment_id = ${equipmentId}
+       AND ${entitlementSql(entitled, Prisma.sql`e.site_id`)}`;
+  const current = rows[0];
+  if (current === undefined) {
+    throw new BasError("equipment_not_found", "That equipment does not exist.");
+  }
+
+  const name = input.name ?? current.name;
+  const equipType = input.equipType ?? current.equip_type;
+  const notes = input.notes === undefined ? current.notes : input.notes;
+  const parentId =
+    input.parentEquipmentId === undefined
+      ? current.parent_equipment_id
+      : input.parentEquipmentId === null
+        ? null
+        : BigInt(input.parentEquipmentId);
+
+  if (name !== current.name) await assertEquipmentNameFree(current.site_id, name, equipmentId);
+  if (equipType !== null && equipType !== current.equip_type) {
+    await assertEquipmentTypeExists(equipType);
+  }
+  let parentName = current.parent_name;
+  if (parentId !== current.parent_equipment_id) {
+    parentName =
+      parentId === null
+        ? null
+        : (await assertEquipmentParent(equipmentId, parentId, current.site_id)).name;
+  }
+
+  const changed: string[] = [];
+  if (name !== current.name) changed.push("name");
+  if (equipType !== current.equip_type) changed.push("equipType");
+  if (parentId !== current.parent_equipment_id) changed.push("parentEquipmentId");
+  if (notes !== current.notes) changed.push("notes");
+  if (changed.length === 0) return { changed: false };
+
+  await prisma.$transaction(async (tx) => {
+    await tx.basEquipment.update({
+      where: { equipmentId },
+      data: { name, equipType, parentEquipmentId: parentId, notes },
+    });
+    await writeAuditEvent(tx, {
+      action: "bas.equipment_updated",
+      actorEmployeeId: viewer.id,
+      moduleKey: BAS_MODULE_KEY,
+      metadata: {
+        equipmentId: equipmentIdText,
+        siteId: current.site_id.toString(),
+        changed,
+        name,
+        previousName: current.name,
+        equipType,
+        previousEquipType: current.equip_type,
+        parentEquipmentId: parentId?.toString() ?? null,
+        previousParentEquipmentId: current.parent_equipment_id?.toString() ?? null,
+        parentName,
+        previousParentName: current.parent_name,
+        notes,
+        previousNotes: current.notes,
+      },
+    });
+  });
+
+  resetSchemaContextCache();
+  return { changed: true };
+}
+
+/**
+ * Delete equipment nothing depends on (B8.5). Refused - never cascaded - while
+ * points are attached or other equipment sits under it; the FKs are RESTRICT
+ * and this check turns the constraint into a sentence with the counts.
+ */
+export async function deleteBasEquipment(
+  viewer: Viewer,
+  equipmentIdText: string,
+): Promise<{ deleted: boolean }> {
+  if (!/^\d{1,18}$/.test(equipmentIdText)) {
+    throw new BasError("equipment_not_found", "That equipment does not exist.");
+  }
+  const equipmentId = BigInt(equipmentIdText);
+  const { entitled } = await basSiteScope(viewer);
+  const rows = await prisma.$queryRaw<
+    Array<{ site_id: bigint; name: string; points: number; children: number }>
+  >`
+    SELECT e.site_id, e.name,
+           (SELECT count(*) FROM bas_points p WHERE p.equipment_id = e.equipment_id)::int AS points,
+           (SELECT count(*) FROM bas_equipment c WHERE c.parent_equipment_id = e.equipment_id)::int AS children
+      FROM bas_equipment e
+     WHERE e.equipment_id = ${equipmentId}
+       AND ${entitlementSql(entitled, Prisma.sql`e.site_id`)}`;
+  const equipment = rows[0];
+  if (equipment === undefined) {
+    throw new BasError("equipment_not_found", "That equipment does not exist.");
+  }
+
+  const parts: string[] = [];
+  if (equipment.points > 0) {
+    parts.push(`${equipment.points} point${equipment.points === 1 ? "" : "s"} attached`);
+  }
+  if (equipment.children > 0) {
+    parts.push(
+      `${equipment.children} piece${equipment.children === 1 ? "" : "s"} of equipment under it`,
+    );
+  }
+  if (parts.length > 0) {
+    throw new BasError(
+      "equipment_in_use",
+      `${equipment.name} still has ${parts.join(" and ")}. Detach or move them first.`,
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.basEquipment.delete({ where: { equipmentId } });
+    await writeAuditEvent(tx, {
+      action: "bas.equipment_deleted",
+      actorEmployeeId: viewer.id,
+      moduleKey: BAS_MODULE_KEY,
+      metadata: {
+        equipmentId: equipmentIdText,
+        siteId: equipment.site_id.toString(),
+        name: equipment.name,
+      },
+    });
+  });
+
+  resetSchemaContextCache();
+  return { deleted: true };
+}
+
+/**
+ * The two vocabularies as this database holds them (B8.5). Read from the
+ * tables, not from prisma/bas-vocabularies.ts, so the picker offers exactly
+ * what the foreign keys will accept. Not viewer-scoped: a vocabulary is not
+ * a building's data.
+ */
+export async function listBasVocabularies(): Promise<BasVocabularies> {
+  const [roles, types] = await Promise.all([
+    prisma.basPointRole.findMany({ orderBy: { pointRole: "asc" } }),
+    prisma.basEquipmentType.findMany({ orderBy: [{ category: "asc" }, { displayName: "asc" }] }),
+  ]);
+  return {
+    roles: roles.map((r) => ({
+      pointRole: r.pointRole,
+      displayName: r.displayName,
+      description: r.description,
+      measurement: r.measurement,
+      typicalUnit: r.typicalUnit,
+      isSetpoint: r.isSetpoint,
+      isCommand: r.isCommand,
+      isStatus: r.isStatus,
+      setpointFor: r.setpointFor,
+      statusOf: r.statusOf,
+    })),
+    equipmentTypes: types.map((t) => ({
+      equipType: t.equipType,
+      displayName: t.displayName,
+      category: t.category,
+    })),
+  };
 }
 
 // ---------------------------------------------------------------------------

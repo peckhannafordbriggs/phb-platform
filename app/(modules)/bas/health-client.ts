@@ -3,6 +3,9 @@ import { unitSymbol, withUnit } from "@/lib/modules/bas/units";
 import type {
   BasDashboard,
   BasSettingsTree,
+  BasVocabularies,
+  BuildingEquipmentList,
+  BulkClassifyResult,
   CollectionHealth,
   Completeness,
   PointHorizon,
@@ -10,6 +13,7 @@ import type {
   PointExplorer,
   PointExtent,
   PointHealthRow,
+  PointSuggestion,
   RollRisk,
   RunGap,
   StationPointsList,
@@ -1503,6 +1507,184 @@ export const updatePointLabel = (pointId: string, label: string | null) =>
     `/points/${encodeURIComponent(pointId)}`,
     { method: "PATCH", body: JSON.stringify({ label }) },
   );
+
+// ---------------------------------------------------------------------------
+// Roles and equipment (B8.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * One point's role, through the same strict one-field PATCH. `null` clears
+ * it back to "nobody has looked".
+ */
+export const updatePointRole = (pointId: string, role: string | null) =>
+  settingsWrite<{ changed: boolean; role: string | null; roleName: string | null }>(
+    `/points/${encodeURIComponent(pointId)}`,
+    { method: "PATCH", body: JSON.stringify({ role }) },
+  );
+
+/** One point's equipment. `null` detaches it. */
+export const updatePointEquipment = (pointId: string, equipmentId: string | null) =>
+  settingsWrite<{ changed: boolean; equipmentId: string | null; equipmentName: string | null }>(
+    `/points/${encodeURIComponent(pointId)}`,
+    { method: "PATCH", body: JSON.stringify({ equipmentId }) },
+  );
+
+/**
+ * Role and/or equipment on a selection, all or nothing. A key present with
+ * null clears; a key absent leaves the field alone. Also how ONE suggestion
+ * is accepted - a selection of one, both halves in one request - because
+ * that is one human action.
+ */
+export const bulkClassifyPoints = (body: {
+  pointIds: string[];
+  role?: string | null;
+  equipmentId?: string | null;
+}) =>
+  settingsWrite<BulkClassifyResult>("/points/bulk", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const createEquipment = (body: {
+  siteId: string;
+  name: string;
+  equipType: string;
+  parentEquipmentId?: string | null;
+  notes?: string | null;
+}) =>
+  settingsWrite<{ equipmentId: string }>("/equipment", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateEquipment = (
+  equipmentId: string,
+  body: {
+    name?: string;
+    equipType?: string;
+    parentEquipmentId?: string | null;
+    notes?: string | null;
+  },
+) =>
+  settingsWrite<{ changed: boolean }>(`/equipment/${encodeURIComponent(equipmentId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+
+export const deleteEquipment = (equipmentId: string) =>
+  settingsWrite<{ deleted: boolean }>(`/equipment/${encodeURIComponent(equipmentId)}`, {
+    method: "DELETE",
+  });
+
+/** A settings GET, with the same three answers fetchStationPoints gives. */
+async function settingsRead<T>(path: string, signal?: AbortSignal): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/settings${path}`, { signal, cache: "no-store" });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+  if (response.status === 404) {
+    throw new ApiError(
+      "no_access",
+      "That is not available. It may have been removed, or you may no longer " +
+        "have access to Building Automation settings.",
+    );
+  }
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: T; error?: { code?: string; message?: string } }
+    | null;
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+  if (payload?.data === undefined) {
+    throw new ApiError("unexpected", "The server returned nothing.");
+  }
+  return payload.data;
+}
+
+export const fetchBuildingEquipment = (siteId: string, signal?: AbortSignal) =>
+  settingsRead<BuildingEquipmentList>(
+    `/buildings/${encodeURIComponent(siteId)}/equipment`,
+    signal,
+  );
+
+/**
+ * The vocabularies, fetched once per page load and shared by every Points
+ * list on the screen: 91 roles and 25 types that change only on a seed. A
+ * failed fetch is forgotten so the next list can try again.
+ */
+let vocabulariesPromise: Promise<BasVocabularies> | null = null;
+
+export function fetchVocabularies(): Promise<BasVocabularies> {
+  if (vocabulariesPromise === null) {
+    vocabulariesPromise = settingsRead<BasVocabularies>("/vocabularies").catch((error) => {
+      vocabulariesPromise = null;
+      throw error;
+    });
+  }
+  return vocabulariesPromise;
+}
+
+/**
+ * The one line beside the role picker. Short, because the quiet-UI rule
+ * says a sentence stays only if it stops a NUMBER being misread - and this
+ * one does: the setpoint and command/status pairings, the unclassified
+ * count and the Analyze catalogue all judge a point by its role.
+ */
+export const ROLE_RIPPLE_NOTE =
+  "A role is not a label: the checks judge a point by what its role says it measures, so a wrong role is judged by the wrong rule.";
+
+/** "Zone Temperature · VAV-3 (new)", "Zone Temperature", or "VAV-3". */
+export function describeSuggestion(suggestion: PointSuggestion): string {
+  const parts: string[] = [];
+  if (suggestion.roleName !== null || suggestion.role !== null) {
+    parts.push(suggestion.roleName ?? suggestion.role ?? "");
+  }
+  if (suggestion.equipmentName !== null) {
+    parts.push(
+      suggestion.equipmentId === null
+        ? `${suggestion.equipmentName} (new)`
+        : suggestion.equipmentName,
+    );
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * What a bulk change did, in one sentence, from the server's counts rather
+ * than from the selection: "Changed the role on 10 points." / "Attached 16
+ * points to equipment; 2 already were." / "No point needed changing."
+ */
+export function describeBulkResult(result: BulkClassifyResult): string {
+  const noun = (n: number) => (n === 1 ? "point" : "points");
+  const parts: string[] = [];
+  if (result.roleChanged > 0) {
+    parts.push(`changed the role on ${result.roleChanged} ${noun(result.roleChanged)}`);
+  }
+  if (result.equipmentChanged > 0) {
+    parts.push(
+      `changed the equipment on ${result.equipmentChanged} ${noun(result.equipmentChanged)}`,
+    );
+  }
+  if (parts.length === 0) {
+    return `No point needed changing: all ${result.points} already held ${
+      result.points === 1 ? "that value" : "those values"
+    }.`;
+  }
+  const sentence = parts.join(" and ");
+  const unchanged =
+    result.unchanged > 0
+      ? ` ${result.unchanged} ${noun(result.unchanged)} already held ${
+          result.unchanged === 1 ? "it" : "them"
+        }.`
+      : "";
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.${unchanged}`;
+}
 
 /**
  * Replace the stored Niagara login.

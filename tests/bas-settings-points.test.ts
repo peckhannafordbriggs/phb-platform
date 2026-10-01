@@ -424,8 +424,10 @@ describe("the screen says so when the list falls short", () => {
     niagaraDisplayName: null,
     pointRole: null,
     roleName: null,
+    equipmentId: null,
     equipmentName: null,
     unit: null,
+    suggestion: null,
     horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
     collected: true,
     inactiveReason: null,
@@ -442,6 +444,7 @@ describe("the screen says so when the list falls short", () => {
     const html = render(
       {
         stationId: "1",
+        siteId: "1",
         points: [point("A"), point("B"), point("C")],
         pointsAccountedFor: { rendered: 3, inDatabase: 4 },
       },
@@ -458,6 +461,7 @@ describe("the screen says so when the list falls short", () => {
     const html = render(
       {
         stationId: "1",
+        siteId: "1",
         points: [point("A"), point("B")],
         pointsAccountedFor: { rendered: 2, inDatabase: 2 },
       },
@@ -472,6 +476,7 @@ describe("the screen says so when the list falls short", () => {
     const html = render(
       {
         stationId: "1",
+        siteId: "1",
         points: [point("A"), point("B")],
         pointsAccountedFor: { rendered: 2, inDatabase: 2 },
       },

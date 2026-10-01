@@ -16,6 +16,13 @@ type SettingsErrorCode = Extract<
   | "station_cycle"
   | "station_has_points"
   | "point_not_found"
+  | "role_not_found"
+  | "equipment_type_not_found"
+  | "equipment_not_found"
+  | "equipment_other_building"
+  | "equipment_cycle"
+  | "equipment_in_use"
+  | "station_unassigned"
 >;
 
 /**
@@ -51,6 +58,17 @@ const STATUS: Record<SettingsErrorCode, number> = {
   // B8.3. Same conflation as every other not-found: a point on a station the
   // viewer may not see reads exactly like one that does not exist.
   point_not_found: 404,
+  // B8.5. A role or type that is not in its vocabulary is bad input, like a
+  // timezone PostgreSQL does not know. Equipment the viewer cannot see is
+  // not-found. The three refusals that need the world to change first are
+  // 409, like the other "you cannot do that yet" codes.
+  role_not_found: 422,
+  equipment_type_not_found: 422,
+  equipment_not_found: 404,
+  equipment_other_building: 409,
+  equipment_cycle: 409,
+  equipment_in_use: 409,
+  station_unassigned: 409,
 };
 
 function isSettingsError(code: BasErrorCode): code is SettingsErrorCode {
