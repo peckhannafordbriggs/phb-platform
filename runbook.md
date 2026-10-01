@@ -4121,6 +4121,45 @@ test starts failing after a UI change, the fix is to read the key from the
 `modules` table rather than to relax the test — CLAUDE.md keys authorization on
 the stable `key`, never on a display label.
 
+The full walkthrough — row, grant, page, constants, accent, and the migration —
+is `docs/10-adding-a-module.md`. Read the next entry before you consider the
+row done.
+
+## A module works locally but is missing from production
+
+**Symptom.** The module's page is deployed, it appears for everyone on their own
+machine and in CI, and in production an admin cannot grant it: it is not in the
+*Module* filter on `/admin`, not among the toggles on any employee's page, and
+not in anyone's sidebar. Querying production shows no row for its key:
+
+```sql
+SELECT key, display_name, status FROM modules ORDER BY sort_order;
+```
+
+**Cause.** The row was added to `prisma/seed.ts` only. The seed runs on fresh
+databases — every developer machine, the test database, CI — and **never on
+production**: it ran there once, by hand, on 9 September 2026, and
+`.github/workflows/deploy.yml` deliberately does not call it (re-running it on
+every deploy could recreate an admin row someone had removed). So the row exists
+everywhere except the one database that is never fresh. No test catches this,
+because every test database runs the seed or builds the row itself.
+
+This is the second time it nearly shipped. Cost Intelligence and Knowledge Base
+went out on 23 September 2026 with seed lines only; the gap was caught by the
+query above on 24 September, before it mattered, and closed by
+`20261001120000_register_cost_intelligence_and_knowledge_base` a week later.
+
+**Fix.** A migration that inserts the row with the same values as the seed and
+ends with `ON CONFLICT (key) DO NOTHING`, so it is a no-op wherever the seed
+already ran. Keep the seed line — fresh databases still need it. The migration
+above is the pattern, and `docs/10-adding-a-module.md` § 3 is the rule. After
+the deploy, run the query above against production and look for the key.
+
+**The rule, so it is not learned a third time: a module row reaches production
+by migration, never by seed.** `tests/module-registry.test.ts` fails the build
+for any directory under `app/(modules)/` whose key appears in no migration, and
+its message names the document.
+
 ## The "Can change settings" checkbox is missing for a module
 
 **It is missing on purpose for every module except Building Automation.** The
