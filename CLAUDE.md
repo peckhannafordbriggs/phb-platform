@@ -821,11 +821,15 @@ and writes nothing - and is the one place a role and an equipment travel
 together, because accepting a suggestion is one human action on both. One
 audit row per point per field, previous and new value, `viaBulk` and
 `selectionSize` on the row. **A role is not cosmetic**: the setpoint and
-command/status pair views, the unclassified tile and the Analyze catalogue
-judge a point by it, and `tests/bas-point-classification.test.ts` asserts a
-role brings a point into the pair views and clearing it takes it out; the
-tile reads live, the catalogue's five-minute cache is dropped on every
-classification write, and the Projects cards read nothing role-derived.
+command/status pair views, the unclassified tile, the Analyze catalogue and
+the value-plausibility check (next entry; it was not on main when B8.5 was
+built, which is why that PR said no such check existed) judge a point by it.
+`tests/bas-point-classification.test.ts` asserts a role brings a point into
+the pair views and clearing it takes it out, and
+`tests/bas-plausibility.test.ts` that a point with no role is *not checked,
+role not set* and a setpoint is never flagged; the tile reads live, the
+catalogue's five-minute cache is dropped on every classification write, and
+the Projects cards read nothing role-derived.
 **The acceptance test** (`tests/bas-office-classification.test.ts`) seeds
 the office JACE's real 32 names and reproduces the 17 September SQL
 classification - 20 roles, one RTU, ten VAVs under it with their rooms in
@@ -842,6 +846,45 @@ while `bas_stations.site_id` is NOT NULL and is recorded in
 `runbook.md` → *A point's role or equipment is wrong, or a suggestion looks
 wrong*, *Bulk assign refused the whole selection*, *Equipment cannot be
 created or deleted*.
+**The value-plausibility check (built 2026-09-28, LANDED 2026-10-01).** It
+sat unmerged on `feat/bas-value-plausibility` for ten days while main moved
+under it, and these notes said it was deployed when it was not; the B8.5
+work on 1 October, looking only at main, then wrote that no role-keyed check
+existed. It exists now. Every check before it asked whether data was
+arriving; none asked whether it meant anything, and two dead sensors sat
+green for a month - `points_RoomT` at exactly -40 since 24 August, `VAV-8
+104-105_ZoneTemperature` at exactly 70.5 for its whole history. One check:
+a run of identical readings longer than a threshold for the point's KIND of
+measurement, from `lib/modules/bas/plausibility.ts`. **No list of bad
+values** - the evidence is the flatness, not the number. **The role decides
+who is judged**: `is_setpoint` and a `measurement` of `status` or `mode`
+exclude a point, no role means *not checked, role not set* and never a
+guess, and the SQL that selects judged points is generated from the same
+threshold table the TypeScript applies, with a test walking all 91
+vocabulary roles through both. Thresholds are per kind (pressure 3 h,
+temperature 6 h, electrical 24 h, outputs and accumulators 7 days), each
+with its reason in the table and printed on the card, each defended against
+the longest healthy run measured in live history; plus at least 12 readings.
+A change-of-value trend is measured from its last record to the collector's
+last successful pass, never to now(). **Under the quiet-UI rules it is the
+third check**: `evaluateChecks` decides it beside completeness and vanished
+points; when nothing is flagged it is one phrase on the *Checks:* line,
+*values still changing (17 judged)* - or *no values judged (no roles set)*,
+because a check that judged nothing is not reassurance - and when something
+is, the full card, amber, above the hero, with its finding sentences intact
+and hidden points listed and said. On the Points list it is a *Value*
+column, in `settings-points.tsx` where the list now lives; *Not checked ·
+role not set* is a label for the row's role picker, so the words are the
+door. Values print through the unit-symbol formatter (°F, inH₂O). Never
+deactivates, never edits a reading, never a confirmed fault, never removed
+from a figure. **Computed on every page load, not stored: 6.5 ms** for 17
+judged points, four index probes per healthy point; revisit at 200 ms.
+**Acceptance re-run on 1 October against the frozen 29 September database**
+- both faults flagged, nothing else, no setpoint or status point, Temp1-3
+*not checked, role not set* - via `npm run bas:plausibility:verify`;
+`docs/bas-plausibility-verification.md` is the record, both runs, with the
+mutations re-run. `WHY-ITS-BUILT-THIS-WAY.md` § 55; `runbook.md` →
+*Collection Health says a value has stopped changing*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
@@ -951,4 +994,5 @@ either anywhere else — point at them.
 | `docs/phase-9-verification.md` | Grouping, conflicts, and the latency that decides Part B |
 | `docs/phase-11-verification.md` | Evidence the platform has not disturbed the automation |
 | `docs/phase-12-part-b-verification.md` | The file-access extraction: what was measured, and what is still unproven |
+| `docs/bas-plausibility-verification.md` | **The value-plausibility check against live data:** both dead sensors flagged, nothing else, the thresholds defended by the longest healthy runs, the cost measured, four mutations |
 | `docs/phase-12-part-c-plan.md` | **Part C: what `Sites.Selected` actually blocks**, what it does not, and what has already been settled by measurement |

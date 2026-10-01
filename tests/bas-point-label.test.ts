@@ -54,6 +54,9 @@ import {
   seedChangeOrdersModule,
   testDb,
 } from "./db";
+import { notCheckedPlausibility } from "@/lib/modules/bas/plausibility";
+
+const NOT_CHECKED_FIXTURE = notCheckedPlausibility("no_role");
 
 /**
  * Editable labels (B8.4): three names, one precedence, tested with the label
@@ -686,6 +689,7 @@ describe("the Points list", () => {
     completeness: "complete",
     lastRecordAt: null,
     visible: true,
+    plausibility: NOT_CHECKED_FIXTURE,
   });
   const list = (p: SettingsPoint): StationPointsList => ({
     stationId: "1",

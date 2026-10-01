@@ -42,6 +42,7 @@ import {
   fetchCollectionHealth,
   formatChartTick,
   formatCount,
+  formatHours,
   formatMinutes,
   formatTimestamp,
   riskBreakdown,
@@ -58,8 +59,16 @@ import {
   reportingPoints,
   splitHiddenPoints,
   vanishedTone,
+  describeLastDifferent,
+  describeNotChecked,
+  describeStuck,
+  describeThresholds,
+  formatFlatSpan,
+  formatReadingValue,
+  stuckTone,
   type Tone,
 } from "./health-client";
+import type { PlausibilitySummary } from "@/lib/modules/bas/plausibility";
 import {
   ALL_SITES,
   DAYS_PARAM,
@@ -749,13 +758,24 @@ function HeroTile({
 export function evaluateChecks(health: CollectionHealthData): {
   completenessOk: boolean;
   vanishedOk: boolean;
+  /**
+   * The value-plausibility check (built 2026-09-28, landed 2026-10-01):
+   * passes when no checked point in scope has held one value past the
+   * threshold for its kind AND none is flagged outside the filter - the
+   * same strictness as the vanished check. A screen with nothing judged
+   * passes too, and the line says so ("no values judged") rather than
+   * claiming they are still changing.
+   */
+  stuckOk: boolean;
 } {
   const completenessOk =
     completenessTileTone(health.totals.completenessCounts) === "ok";
   const vanished = health.totals.pointsNoLongerReported;
   const vanishedOk =
     vanishedTone(vanished) === "ok" && vanishedElsewhere(health) === 0;
-  return { completenessOk, vanishedOk };
+  const stuckOk =
+    stuckTone(health.plausibility.flat.length) === "ok" && stuckElsewhere(health) === 0;
+  return { completenessOk, vanishedOk, stuckOk };
 }
 
 /** Vanished points outside the current filter: the B7.6 rule's count. */
@@ -766,7 +786,14 @@ function vanishedElsewhere(health: CollectionHealthData): number {
     : 0;
 }
 
-/** The failed checks, each as its full card. Nothing when both pass. */
+/** Flagged values outside the current filter: the same rule, for this check. */
+function stuckElsewhere(health: CollectionHealthData): number {
+  return health.unfiltered !== null && health.scope.filtered
+    ? health.unfiltered.pointsFlat - health.plausibility.flat.length
+    : 0;
+}
+
+/** The failed checks, each as its full card. Nothing when all pass. */
 export function FailedChecks({
   health,
   suffix,
@@ -775,18 +802,32 @@ export function FailedChecks({
   suffix: string;
 }) {
   const checks = evaluateChecks(health);
-  if (checks.completenessOk && checks.vanishedOk) return null;
+  if (checks.completenessOk && checks.vanishedOk && checks.stuckOk) return null;
   return (
     <>
       {!checks.completenessOk && (
         <CompletenessCard health={health} suffix={suffix} />
       )}
       {!checks.vanishedOk && <VanishedCard health={health} suffix={suffix} />}
+      {!checks.stuckOk && <StuckCard health={health} suffix={suffix} />}
     </>
   );
 }
 
-/** The passed checks, as one line. Nothing when neither passes. */
+/**
+ * What the passed line says for the value check. "values still changing"
+ * is a claim about judged points, so it carries how many were judged; with
+ * none judged it says that instead - "0 stuck of 0 checked" is not
+ * reassurance, and a building with no roles set must not read as one whose
+ * sensors were all found alive.
+ */
+export function stuckPassedPhrase(summary: PlausibilitySummary): string {
+  return summary.checked === 0
+    ? "no values judged (no roles set)"
+    : `values still changing (${formatCount(summary.checked)} judged)`;
+}
+
+/** The passed checks, as one line. Nothing when none passes. */
 export function PassedChecks({
   health,
   suffix,
@@ -798,6 +839,7 @@ export function PassedChecks({
   const passed = [
     checks.completenessOk ? "station counts match" : null,
     checks.vanishedOk ? "no vanished points" : null,
+    checks.stuckOk ? stuckPassedPhrase(health.plausibility) : null,
   ].filter((check): check is string => check !== null);
   if (passed.length === 0) return null;
   return (
@@ -867,6 +909,98 @@ function VanishedCard({
           ))}
         </ul>
       )}
+      {elsewhere > 0 && (
+        <p className="mt-2 text-xs opacity-80">
+          {elsewhere} more outside {health.scope.label ?? "this filter"}. Clear the
+          filter to see {elsewhere === 1 ? "it" : "them"}.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Values that have stopped changing (built 2026-09-28, landed 2026-10-01
+ * under the quiet-UI rules). The third check beside the two above: when
+ * nothing is flagged it is one phrase on the checks line, carrying how many
+ * points were judged; when something is, this card, in amber, above the
+ * hero. The check runs in both states - `evaluateChecks` decides - so a
+ * quiet screen is still a screen that looked.
+ *
+ * Per flagged point: how long it has been flat, at what value (with the
+ * unit's symbol), when it was last different and what it read then, how
+ * many identical readings, and the threshold it was judged against. A hidden
+ * point is listed and says so - hiding never removes a point from a figure,
+ * and this is a figure. The thresholds themselves are on the card, in words,
+ * because a threshold nobody can see is a threshold nobody can argue with -
+ * and they stop the flat hours being misread, which is the test a sentence
+ * has to pass to stay.
+ *
+ * Exported for tests/bas-plausibility.test.ts, which renders it statically
+ * and reads the names off the HTML.
+ */
+export function StuckCard({
+  health,
+  suffix,
+}: {
+  health: CollectionHealthData;
+  suffix: string;
+}) {
+  const summary = health.plausibility;
+  const count = summary.flat.length;
+  const tone = stuckTone(count);
+  const elsewhere =
+    health.unfiltered !== null && health.scope.filtered
+      ? health.unfiltered.pointsFlat - count
+      : 0;
+  const notChecked = describeNotChecked(summary);
+
+  return (
+    <section
+      aria-label="Values that have stopped changing"
+      className="card p-5 text-sm"
+      style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
+    >
+      <p className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+        Values that have stopped changing{suffix}
+      </p>
+      <p className="mt-1 font-medium">{describeStuck(summary, suffix)}</p>
+      {summary.flat.length > 0 && (
+        <ul className="mt-3 space-y-2">
+          {summary.flat.map((point) => {
+            const p = point.plausibility;
+            return (
+              <li key={point.pointId} className="tabular-nums">
+                <div className="flex flex-wrap gap-x-3">
+                  <span className="font-medium">{point.pointName}</span>
+                  <span className="opacity-75">
+                    {point.stationName} · {point.siteName}
+                  </span>
+                  {!point.visible && (
+                    <span className="opacity-75">hidden from the browsing screens, still collected</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-x-3 text-xs opacity-90">
+                  <span>
+                    flat {formatFlatSpan(p)} at {formatReadingValue(p.value, point.unit)}
+                    {p.flatSince !== null && <> since {formatTimestamp(p.flatSince)}</>}
+                  </span>
+                  <span>{describeLastDifferent(p, point.unit)}</span>
+                  {p.trendKind === "interval" && (
+                    <span>{formatCount(p.readings ?? 0)} identical readings</span>
+                  )}
+                  <span>
+                    threshold {formatHours(p.thresholdHours)} for {p.measurement}
+                    {p.trendKind === "cov" && " (change-of-value trend: no new record since)"}
+                  </span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {notChecked !== null && <p className="mt-2 text-xs opacity-80">{notChecked}</p>}
+      <p className="mt-2 text-xs opacity-80">{describeThresholds()}</p>
       {elsewhere > 0 && (
         <p className="mt-2 text-xs opacity-80">
           {elsewhere} more outside {health.scope.label ?? "this filter"}. Clear the

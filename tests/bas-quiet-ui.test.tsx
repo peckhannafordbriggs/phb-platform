@@ -16,7 +16,13 @@ import {
   FailedChecks,
   PassedChecks,
   evaluateChecks,
+  stuckPassedPhrase,
 } from "@/app/(modules)/bas/collection-health";
+import {
+  emptyNotChecked,
+  notCheckedPlausibility,
+  type FlatPoint,
+} from "@/lib/modules/bas/plausibility";
 import { FigureBlock } from "@/app/(platform)/figure-block";
 import { basFigure } from "@/lib/home/bas-figure";
 import type {
@@ -66,6 +72,7 @@ function health(over: {
   totals?: Partial<CollectionHealth["totals"]>;
   points?: CollectionHealth["points"];
   vanished?: CollectionHealth["vanished"];
+  plausibility?: CollectionHealth["plausibility"];
   scope?: CollectionHealth["scope"];
   unfiltered?: CollectionHealth["unfiltered"];
 } = {}): CollectionHealth {
@@ -92,6 +99,7 @@ function health(over: {
       hiddenPoints: 0,
       hiddenPointsAtRisk: 0,
       pointsNoLongerReported: 0,
+      pointsFlat: 0,
       pointsIncomplete: 0,
       completenessCounts: completeness({ complete: 26 }),
       minutesSinceNewestReading: 2,
@@ -99,6 +107,13 @@ function health(over: {
     },
     points: over.points ?? [],
     vanished: over.vanished ?? [],
+    plausibility: over.plausibility ?? {
+      checked: 17,
+      moving: 17,
+      tooFewReadings: 0,
+      notChecked: emptyNotChecked(),
+      flat: [],
+    },
     runs: [],
     newestRunAt: "2026-09-29T11:58:00.000Z",
     runRecords: [],
@@ -136,14 +151,32 @@ const render = (
 describe("when both checks pass, one line stands where two cards were", () => {
   it("renders the compact checks line and no card", () => {
     const data = health();
-    expect(evaluateChecks(data)).toEqual({ completenessOk: true, vanishedOk: true });
+    expect(evaluateChecks(data)).toEqual({ completenessOk: true, vanishedOk: true, stuckOk: true });
 
     const line = render(PassedChecks, data);
     expect(line).toContain('data-testid="bas-checks-passed"');
     expect(line).toContain("Checks:");
-    expect(line).toContain("station counts match · no vanished points");
+    expect(line).toContain(
+      "station counts match · no vanished points · values still changing (17 judged)",
+    );
 
     expect(render(FailedChecks, data)).toBe("");
+  });
+
+  it("says 'no values judged' rather than 'still changing' when no role has been set", () => {
+    const data = health({
+      plausibility: {
+        checked: 0,
+        moving: 0,
+        tooFewReadings: 0,
+        notChecked: { ...emptyNotChecked(), no_role: 26 },
+        flat: [],
+      },
+    });
+    expect(evaluateChecks(data).stuckOk).toBe(true);
+    expect(stuckPassedPhrase(data.plausibility)).toBe("no values judged (no roles set)");
+    expect(render(PassedChecks, data)).toContain("no values judged (no roles set)");
+    expect(render(PassedChecks, data)).not.toContain("still changing");
   });
 
   it("carries the scope suffix, so a filtered pass is not an estate pass", () => {
@@ -172,7 +205,7 @@ describe("a station count mismatch comes back as its full card", () => {
   });
 
   it("is judged failed by the same check that judged the healthy screen passed", () => {
-    expect(evaluateChecks(data)).toEqual({ completenessOk: false, vanishedOk: true });
+    expect(evaluateChecks(data)).toEqual({ completenessOk: false, vanishedOk: true, stuckOk: true });
   });
 
   it("renders the card with the wording it always had, and the point by name", () => {
@@ -221,7 +254,7 @@ describe("a vanished point comes back as its full card", () => {
   });
 
   it("is judged failed", () => {
-    expect(evaluateChecks(data)).toEqual({ completenessOk: true, vanishedOk: false });
+    expect(evaluateChecks(data)).toEqual({ completenessOk: true, vanishedOk: false, stuckOk: true });
   });
 
   it("renders the card with the wording it always had, and the point by name", () => {
@@ -244,7 +277,7 @@ describe("a vanished point comes back as its full card", () => {
   it("is not passed by a filtered zero when vanished points sit outside the filter (B7.6)", () => {
     const filtered = health({
       scope: { filtered: true, label: "Liberty Center" },
-      unfiltered: { activePoints: 40, pointsAtRisk: 0, pointsNoLongerReported: 2 },
+      unfiltered: { activePoints: 40, pointsAtRisk: 0, pointsNoLongerReported: 2, pointsFlat: 0 },
     });
     expect(evaluateChecks(filtered).vanishedOk).toBe(false);
     const cards = render(FailedChecks, filtered, " in Liberty Center");
@@ -256,22 +289,138 @@ describe("a vanished point comes back as its full card", () => {
   });
 });
 
-describe("when both checks fail there is no line at all", () => {
-  it("renders two cards and nothing quiet", () => {
+describe("a value that has stopped changing comes back as its full card", () => {
+  const stuck: FlatPoint = {
+    pointId: "9",
+    pointName: "points_RoomT",
+    siteName: "PHB Spring Grove",
+    stationName: "SpringGroveLabComputer",
+    unit: "fahrenheit",
+    visible: true,
+    plausibility: {
+      state: "flat",
+      notCheckedReason: null,
+      measurement: "temperature",
+      thresholdHours: 6,
+      trendKind: "interval",
+      readings: 7550,
+      flatHours: 840,
+      flatSince: "2026-08-24T13:05:00.000Z",
+      flatUntil: "2026-09-28T13:00:00.000Z",
+      value: { num: -40, bool: null, str: null },
+      lastDifferentAt: "2026-08-24T13:00:00.000Z",
+      lastDifferentValue: { num: 76.1, bool: null, str: null },
+      runIsWholeHistory: false,
+      lookbackExhausted: false,
+    },
+  };
+  const data = health({
+    totals: { pointsFlat: 1 },
+    plausibility: {
+      checked: 17,
+      moving: 16,
+      tooFewReadings: 0,
+      notChecked: { ...emptyNotChecked(), no_role: 9, setpoint: 2, state: 2 },
+      flat: [stuck],
+    },
+  });
+
+  it("is judged failed by the same check", () => {
+    expect(evaluateChecks(data)).toEqual({ completenessOk: true, vanishedOk: true, stuckOk: false });
+  });
+
+  it("renders the card with its finding sentences, the point by name, and the unit as a symbol", () => {
+    const cards = render(FailedChecks, data);
+    expect(cards).toContain('aria-label="Values that have stopped changing"');
+    expect(cards).toContain("Values that have stopped changing");
+    expect(cards).toContain("1 of 17 checked points");
+    expect(cards).toContain("This looks wrong and is not confirmed: go and look at the sensor.");
+    expect(cards).toContain("points_RoomT");
+    expect(cards).toContain("flat 35.0 days at -40.00 °F");
+    expect(cards).toContain("last different 76.10 °F at");
+    expect(cards).toContain("7,550 identical readings");
+    expect(cards).toContain("threshold 6.0 h for temperature");
+    expect(cards).toContain("Not judged: 9 with no role, 2 setpoints, 2 status or command points.");
+    expect(cards).toContain("Flat for at least");
+    expect(cards).not.toContain("fahrenheit");
+    // Amber, never red: a flag is "go and look".
+    expect(cards).toContain("--phb-orange");
+    expect(cards).not.toContain("--phb-maroon");
+  });
+
+  it("keeps the other two checks on the line, and not this one", () => {
+    const line = render(PassedChecks, data);
+    expect(line).toContain("station counts match · no vanished points");
+    expect(line).not.toContain("values still changing");
+  });
+
+  it("is not passed by a filtered zero when flagged values sit outside the filter", () => {
+    const filtered = health({
+      scope: { filtered: true, label: "Liberty Center" },
+      unfiltered: { activePoints: 40, pointsAtRisk: 0, pointsNoLongerReported: 0, pointsFlat: 2 },
+    });
+    expect(evaluateChecks(filtered).stuckOk).toBe(false);
+    const cards = render(FailedChecks, filtered, " in Liberty Center");
+    expect(cards).toContain("Values that have stopped changing in Liberty Center");
+    expect(cards).toContain("2 more outside Liberty Center");
+    expect(render(PassedChecks, filtered, " in Liberty Center")).not.toContain("values still changing");
+  });
+
+  it("a point with no role is 'not checked' in the fixture helper the Points-list tests use", () => {
+    expect(notCheckedPlausibility("no_role")).toMatchObject({ state: "not_checked", notCheckedReason: "no_role" });
+  });
+});
+
+describe("when all three checks fail there is no line at all", () => {
+  it("renders three cards and nothing quiet", () => {
     const data = health({
       totals: {
         pointsNoLongerReported: 1,
+        pointsFlat: 1,
         completenessCounts: completeness({ complete: 24, incomplete: 1 }),
       },
       points: [shortPoint],
       vanished: [
         { pointId: "7", pointName: "Occupied", siteName: "PHBoffice", stationName: "PHBoffice", lastReadingAt: null },
       ],
+      plausibility: {
+        checked: 17,
+        moving: 16,
+        tooFewReadings: 0,
+        notChecked: emptyNotChecked(),
+        flat: [
+          {
+            pointId: "9",
+            pointName: "points_RoomT",
+            siteName: "PHB Spring Grove",
+            stationName: "SpringGroveLabComputer",
+            unit: "fahrenheit",
+            visible: true,
+            plausibility: {
+              state: "flat",
+              notCheckedReason: null,
+              measurement: "temperature",
+              thresholdHours: 6,
+              trendKind: "interval",
+              readings: 7550,
+              flatHours: 840,
+              flatSince: "2026-08-24T13:05:00.000Z",
+              flatUntil: "2026-09-28T13:00:00.000Z",
+              value: { num: -40, bool: null, str: null },
+              lastDifferentAt: null,
+              lastDifferentValue: null,
+              runIsWholeHistory: true,
+              lookbackExhausted: false,
+            },
+          },
+        ],
+      },
     });
     const cards = render(FailedChecks, data);
     expect(cards).toContain("Station count against ours");
     expect(cards).toContain("No longer reported by the station");
     expect(cards).toContain("never received");
+    expect(cards).toContain("Values that have stopped changing");
     expect(render(PassedChecks, data)).toBe("");
   });
 });

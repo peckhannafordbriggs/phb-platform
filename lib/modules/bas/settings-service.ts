@@ -56,6 +56,8 @@ import type {
   StationReach,
 } from "./types";
 import { toHorizonState } from "./types";
+import { judgePlausibility, type PlausibilityRow } from "./plausibility";
+import { plausibilityLateral } from "./plausibility-sql";
 
 /**
  * The Settings tab's data: organisation -> project -> building -> station.
@@ -552,7 +554,7 @@ export async function getBasSettingsTree(
 // fields (B8.3 visible, B8.4 label) have their own functions below.
 // ---------------------------------------------------------------------------
 
-interface PointListRow {
+interface PointListRow extends PlausibilityRow {
   point_id: bigint;
   label: string | null;
   niagara_history_name: string;
@@ -617,6 +619,9 @@ function toPoint(row: PointListRow, suggestion: PointSuggestion | null): Setting
     },
     lastRecordAt: row.last_record_ts?.toISOString() ?? null,
     visible: row.is_visible,
+    // The same judge Collection Health uses, over the same facts, so the two
+    // screens cannot disagree about whether a value is stuck.
+    plausibility: judgePlausibility(row),
   };
 }
 
@@ -685,7 +690,17 @@ export async function getStationPoints(
         (h.horizon_s / 3600.0)::float8          AS horizon_hours,
         (h.current_full_span_s / 3600.0)::float8 AS current_horizon_hours,
         c.station_count,
-        p.capacity
+        p.capacity,
+        -- For the value-plausibility judge (lib/modules/bas/plausibility.ts):
+        -- the role's kind and setpoint flag word the not-checked reason, the
+        -- interval decides interval-versus-change-of-value, and the last
+        -- successful pass bounds a change-of-value point's flat span.
+        pr.is_setpoint          AS role_is_setpoint,
+        pr.measurement          AS role_measurement,
+        p.collection_interval_s,
+        c.last_run_at,
+        c.last_status,
+        pl.*
       FROM bas_points p
       -- LEFT, all four. An unclassified point has no role row, an unassigned
       -- one has no equipment row, one the collector has never passed has no
@@ -697,6 +712,9 @@ export async function getStationPoints(
       -- The horizon in its three states, from the one place that decides them.
       -- Cheap: the view reads checkpoints, never bas_readings.
       LEFT JOIN bas_v_collection_health h ON h.point_id    = p.point_id
+      -- The flat facts, LEFT and LATERAL: NULL for every point the role says
+      -- not to check, four index probes for each that it does.
+      ${plausibilityLateral(Prisma.sql`p`, Prisma.sql`pr`)}
       WHERE p.station_id = ${stationId}
       -- By the key, which is stable and unique per station. Labels are mostly
       -- NULL today and a sort that switched columns as they filled in would

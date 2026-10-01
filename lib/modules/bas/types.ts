@@ -15,6 +15,8 @@
  *    *Four invariants*); local time is a rendering choice, never a stored one.
  */
 
+import type { PlausibilitySummary, PointPlausibility } from "./plausibility";
+
 /**
  * `roll_risk` from `bas_v_collection_health`, unchanged. The view is the only
  * thing that decides which one a point is in; nothing here re-derives it.
@@ -223,6 +225,15 @@ export interface CollectionHealthTotals {
    * deliberate reasons are not counted anywhere here; we chose those.
    */
   pointsNoLongerReported: number;
+  /**
+   * Active points whose value has stopped changing past the threshold for
+   * their kind of measurement (lib/modules/bas/plausibility.ts). "Looks
+   * stuck, go and look" - never a confirmed fault. Counted over EVERY active
+   * point in scope, hidden or not, and never subtracted from any other
+   * figure: a flagged point is still collected, still complete, still at
+   * whatever roll risk it is at.
+   */
+  pointsFlat: number;
   /** Active points whose last check said the station holds records we do not. */
   pointsIncomplete: number;
   /** Every completeness state's count, so the tile can say which. */
@@ -452,6 +463,8 @@ export interface UnfilteredTotals {
   pointsAtRisk: number;
   /** Same rule as `pointsAtRisk`: a vanished point outside the filter is still said. */
   pointsNoLongerReported: number;
+  /** Same rule again: a stuck value outside the filter is still said. */
+  pointsFlat: number;
 }
 
 export interface CollectionHealth {
@@ -499,6 +512,13 @@ export interface CollectionHealth {
    * an empty list is a claim the screen makes out loud - see VanishedCard.
    */
   vanished: VanishedPoint[];
+  /**
+   * The value-plausibility check (2026-09-28): which points in scope were
+   * judged, which were not and why, and every point whose value has stopped
+   * changing, by name. Always present; an empty `flat` list is a claim the
+   * card makes out loud, like `vanished`.
+   */
+  plausibility: PlausibilitySummary;
   runs: IngestRunRow[];
 
   /**
@@ -1116,6 +1136,13 @@ export interface SettingsPoint {
   lastRecordAt: string | null;
   /** is_visible. Editable since B8.3, and NEVER filtered on here. */
   visible: boolean;
+  /**
+   * Whether the value is still changing, judged the same way Collection
+   * Health judges it (lib/modules/bas/plausibility.ts). A point that is not
+   * checked says why - "role not set", "setpoint" - rather than reading as
+   * fine.
+   */
+  plausibility: PointPlausibility;
 }
 
 /**

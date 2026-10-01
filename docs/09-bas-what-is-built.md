@@ -127,6 +127,7 @@ building is not recorded.
 | **The backup gets its own role** | `bas_backup`, `BAS_BACKUP_URL`, `.verified` markers, the health check watches freshness | `d77a0cb` **(phb-bas)**, on `fix/backup-role-and-monitoring`, **not yet merged** on 2026-09-17 |
 | **Axis precision** | The trend's y-axis chooses round ticks at every zoom, decimals by unit; the stored reading is untouched | `fix/bas-chart-axis-precision` (2026-09-18) |
 | **Custom date range** | Point Explorer takes two calendar dates or a year, resolved in the building's zone by PostgreSQL; over 10,000 readings the trend is bucketed with a min–max band and says so; real readings committed as fixtures | `feat/bas-custom-date-range` (2026-09-22) |
+| **Value plausibility** | Does the data mean anything: a run of identical readings past a per-kind threshold is flagged, by role, never by a bad-value list; a card on Collection Health and a *Value* column on the Points list; both known dead sensors flagged live, nothing else | `feat/bas-value-plausibility` (2026-09-28), landed from `feat/bas-value-plausibility-reland` (2026-10-01) under the quiet-UI rules |
 
 ### Test count
 
@@ -267,7 +268,7 @@ In render order:
 | **Hero tile** | Points at risk, with headroom — *how long until data starts being lost* — as its badge and the per-point risk breakdown behind it. Any check that failed sits above it |
 | **Run chart** | Records written per collector run, full width |
 | **Four tiles** | Active points (with a live *n of m reporting* badge), total readings, unclassified points, time since the newest reading |
-| **Checks line, or two cards** | Two checks: the completeness check (17 Sep) — does the platform hold what the station reports holding — and the vanished-point check (18 Sep). When both pass they are one muted line, *Checks: station counts match · no vanished points*. A check that fails is its full card, in its tone, above the hero: *Station count against ours* (red from one `incomplete` point, amber for `backfilling` or `unknown`, each short point by name with both numbers) or *No longer reported by the station* (each vanished point by name with its last record) |
+| **Checks line, or cards** | Three checks: the completeness check (17 Sep) — does the platform hold what the station reports holding — the vanished-point check (18 Sep), and the value-plausibility check (built 28 Sep, landed 1 Oct) — has a measured quantity stopped changing. When all pass they are one muted line, *Checks: station counts match · no vanished points · values still changing (17 judged)*. A check that fails is its full card, in its tone, above the hero: *Station count against ours* (red from one `incomplete` point, amber for `backfilling` or `unknown`, each short point by name with both numbers), *No longer reported by the station* (each vanished point by name with its last record), or *Values that have stopped changing* (amber from one flagged point, never red — a flag is "go and look", not a confirmed fault; each point with how long, at what value with its unit symbol, since when, when it was last different and what it read, and the threshold for its kind; which points were not judged and why; the thresholds themselves; hidden points listed and said. `docs/bas-plausibility-verification.md`) |
 | **Tables** | Per-point status — with a *Completeness* column, the unit as its symbol and a *measured* mark on the roll horizon — recent collector runs, recorded data gaps. Every one scrolls in the same seven-row box with a sticky header and its row count in the heading |
 
 **Why the checks are always rendered, as a line when green (30 Sep).** The
@@ -483,6 +484,17 @@ asserts it first, on every screen, with the fixture's labels all NULL; the
 same file asserts the station-name fallback (`bas_stations.display_name` is
 NULL on both real stations too). The oBIX key is editable nowhere.
 
+**Value plausibility (built 28 September, landed 1 October).** The
+third check: a measured quantity whose value has held still past the
+threshold for its kind, by role. One phrase on the *Checks:* line when
+nothing is flagged, the full amber card when something is (the *Checks
+line, or cards* row above). On the Points list, a *Value* column per point -
+*Flat 35.0 days at -40.00 °F · threshold 6.0 h for temperature*,
+*Changing*, *Too few readings*, or *Not checked* with the reason: *role not
+set*, *setpoint*, *status or command point*, *not collected*. *Role not set*
+is a label for the row's role picker. `lib/modules/bas/plausibility.ts`;
+`docs/bas-plausibility-verification.md`.
+
 **Roles and equipment (B8.5, 1 October).** The *Role* cell is a picker over
 the 91 roles in four groups (measurements, setpoints, commands, statuses, from
 `is_setpoint` / `is_command` / `is_status`), with the vocabulary's own
@@ -627,6 +639,7 @@ pinning is stricter than one would be. Both direct stations are pinned.
 | `npx tsx scripts/bas-import.ts` | Dry run — counts only, writes nothing |
 | `… --apply` | Import. One transaction, verified before commit |
 | `npx tsx scripts/bas-checksum.ts` | Content checksum of the `bas_*` tables |
+| `npm run bas:plausibility:verify` | The value-plausibility acceptance test against the real database: every active point's verdict as Markdown, both known faults must be flagged, no setpoint or status point may be, counts compared before and after. Exit 1 on any failure |
 | `npm run bas:verify` | Independent content comparison of two databases |
 | `npm run bas:oracle` | Compares the screens against the Grafana dashboards' own SQL *(phb-bas)*, same moment |
 | `npx tsx scripts/bas-tables.ts` | Table inspection |
