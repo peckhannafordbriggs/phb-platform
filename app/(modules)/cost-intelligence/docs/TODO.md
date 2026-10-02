@@ -9,3 +9,4 @@ Jobs:
 
 Settings:
 - remove placeholders
+- skill catalog: show when main has unpublished changes, and a publish flow (acceptance checks against a fixture, then publish). Without it the PCE cannot tell a skill is behind its live tag or ship a new version from the platform

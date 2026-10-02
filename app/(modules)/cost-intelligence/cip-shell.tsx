@@ -25,21 +25,22 @@ export function CipShell({
   ];
 
   return (
+    // Exactly one screen tall: the header stays put and only the content below it scrolls.
     <div
-      className="dashboard-ground -mx-8 -my-8 px-8 py-8"
-      style={{ ...moduleAccentStyle(COST_INTELLIGENCE_MODULE_KEY), minHeight: "100vh" }}
+      className="dashboard-ground -mx-8 -my-8 flex h-dvh flex-col"
+      style={moduleAccentStyle(COST_INTELLIGENCE_MODULE_KEY)}
     >
-      <div className="mx-auto max-w-[88rem]">
-        <div className="relative">
-          <ModuleHeader
-            moduleKey={COST_INTELLIGENCE_MODULE_KEY}
-            title={COST_INTELLIGENCE_MODULE_NAME}
-            blurb="Run published cost workflows against SharePoint project folders."
-          >
-            <CipNav tabs={tabs} label="Cost Intelligence sections" actions={actions} />
-          </ModuleHeader>
-        </div>
-        <div className="mt-6">{children}</div>
+      <div className="relative mx-auto w-full max-w-[88rem] shrink-0 px-8 pt-8">
+        <ModuleHeader
+          moduleKey={COST_INTELLIGENCE_MODULE_KEY}
+          title={COST_INTELLIGENCE_MODULE_NAME}
+          blurb="Run published cost workflows against SharePoint project folders."
+        >
+          <CipNav tabs={tabs} label="Cost Intelligence sections" actions={actions} />
+        </ModuleHeader>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-8 pt-6">
+        <div className="mx-auto flex min-h-full max-w-[88rem] flex-col">{children}</div>
       </div>
     </div>
   );

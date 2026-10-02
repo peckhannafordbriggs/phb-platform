@@ -3,12 +3,11 @@
 Use this to turn what someone calls a part of the screen ("the launcher", "the
 ledger", "the filter") into the component and file that renders it.
 
-The screens are **part skeleton, part real UI**. The chrome, the runs list and detail,
-the launcher, the Run page's ledger, status and pinned cards, the dropdowns and the
-buttons are real components over placeholder data; the checkpoint and most of Settings
-are still grey placeholder bars. No backend yet: every data source is in
-`lib/modules/cost-intelligence/placeholder.ts`, marked `TODO(backend)`. The plan for
-making them real is `PLAN.md` beside this file.
+The screens are **real UI over placeholder data**, apart from the checkpoint, which is
+still grey placeholder bars. No backend yet: every data source is in
+`lib/modules/cost-intelligence/placeholder.ts` (runs) or `placeholder-settings.ts`
+(Settings), marked `TODO(backend)`. The plan for making them real is `PLAN.md` beside
+this file.
 
 ## Where the design came from
 
@@ -53,16 +52,23 @@ app/(modules)/cost-intelligence/
     access/              Access & roles page
     usage/               Usage & cost page
   views/
-    runs-view.tsx        RunsView
-    settings-views.tsx   SkillCatalogView, SkillView, SettingsTableView
-    parts.tsx            RunHistory, RunDetail, RunLauncher, RunMonitor, Timeline, Checkpoint, Node
+    runs-view.tsx           RunsView
+    skill-catalog-view.tsx  SkillCatalogView
+    workflows-view.tsx      WorkflowsView
+    access-view.tsx         AccessView
+    usage-view.tsx          UsageView
+    parts.tsx               RunHistory, RunDetail, RunLauncher, RunMonitor, Timeline, Checkpoint, Node
   ui/
-    Bar.tsx Button.tsx Card.tsx Dropdown.tsx FilterMenu.tsx Label.tsx Table.tsx searchbar.tsx
+    Bar.tsx Button.tsx Card.tsx Dropdown.tsx FilterMenu.tsx Label.tsx
+    Pill.tsx Segmented.tsx Table.tsx searchbar.tsx
 
 lib/modules/cost-intelligence/
-  constants.ts           module key and name
-  types.ts               Run, RunActivity, LedgerEntry, RunStep, PinnedSkill, Option
-  placeholder.ts         PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun, getPlaceholderActivity
+  constants.ts              module key and name
+  types.ts                  runs: Run, RunActivity, LedgerEntry, RunStep, PinnedSkill, Option
+                            settings: Skill, Workflow, Role, Permission, Person, Usage, Budget
+  placeholder.ts            PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun, getPlaceholderActivity
+  placeholder-settings.ts   PLACEHOLDER_SKILLS, _SETTINGS_WORKFLOWS, CIP_ROLES, CIP_PERMISSIONS, _PEOPLE, _USAGE, _BUDGET,
+                            getPlaceholderSkill
 ```
 
 **Pages are guards only, and stay server components.** Each `page.tsx` checks access
@@ -97,31 +103,41 @@ states rather than failing.
 | the status rail | right `Card` labelled **Status**: `Timeline` over the seven `RunStep`s. Done steps dark, the current one in the module colour, pending ones muted |
 | pinned, versions, tokens, cost | right `Card` labelled **Pinned for this run**: each `PinnedSkill` (name, version), then Tokens and Estimated cost |
 
-### Settings · `/cost-intelligence/settings` · `SkillCatalogView` (1d)
+All Settings pages are for module admins only, and follow the mockups in the
+**CIP Directions** design file.
 
-Module admins only. Three columns under `SettingsHeading`.
+### Skill catalog · `/cost-intelligence/settings` and `settings/skills/[skillId]` · `SkillCatalogView` (1d)
+
+The skills list on the left, the selected skill on the right. Picking a skill goes to
+its URL; `/settings` opens on the first skill. Unknown ids 404.
 
 | People call it | Where |
 |---|---|
-| the settings header | `SettingsHeading`: title, repo and branch, "checked against Git" |
-| the skills list | left `Card`: one row per skill, name and status |
-| the skill detail | `SkillDetail` (middle): title and status, version track, "changes on main" list with a Review button, SKILL.md block |
-| the version track | row of four `Node`s at the top of `SkillDetail` |
-| test, publish, the right rail | `PublishRail`: **Test against a fixture** checklist and Run test, then **Publish** |
+| the skills list | left `Card`: name and live version. The selected one is raised with a teal edge |
+| the skill header | top of the right `Card`: name, how many workflows use it, and the live version |
+| the version track | `VersionTrack`: a `Node` per published tag, the live one filled teal and marked **LIVE** |
 
-`SettingsHeading`, `SkillDetail` and `PublishRail` are local to `settings-views.tsx`,
-not exported.
+### Workflows · `settings/workflows` · `WorkflowsView`
 
-### Other settings pages
+| People call it | Where |
+|---|---|
+| the workflows list | left `Card`: **New workflow**, then name, status and runs in 30 days. Clicking one selects it |
+| the workflow header | right `Card`: name, status, description, **Pause / Resume / Activate workflow** |
+| the steps | **Steps · run in order**: numbered rows, each with a light `Segmented` **Follow live · vX** / **Pin vX** |
 
-| Page | Component | Table columns |
-|---|---|---|
-| Skill · `settings/skills/[skillId]` | `SkillView`: `SkillDetail` and `PublishRail`, no skills list | |
-| Workflows · `settings/workflows` | `SettingsTableView` | Workflow, Skills, Runs, Updated |
-| Access & roles · `settings/access` | `SettingsTableView` | Employee, Role, Granted, Last active |
-| Usage & cost · `settings/usage` | `SettingsTableView` with four stat tiles on top | Project, Workflow, Runs, Tokens, Cost |
+### Access & roles · `settings/access` · `AccessView`
 
-The settings column names are placeholders, not decided.
+| People call it | Where |
+|---|---|
+| the people table | left `Card`: **Add person**, then Name (initials, name, email), Role (`Dropdown`) and Last active. The last PCE can only be PCE |
+| the role matrix | right `Card`, **What each role can do**: a permission per row, a role per column with its head count. PCE is fixed (grey ticks); the rest toggle |
+
+### Usage & cost · `settings/usage` · `UsageView`
+
+A dark `Segmented` 7 days / 30 days / Quarter, four stats (Runs, Tokens, Spend, Average
+per run, totalled from the per-skill rows), **Spend per day** bars (hover for the
+amount), the month's budget with a tick at the alert level and **Change budget**, and
+**By skill** with a spend bar, runs, tokens, spend and per run.
 
 ## The chrome
 
@@ -129,9 +145,15 @@ The settings column names are placeholders, not decided.
 |---|---|---|
 | the header, "Cost Intelligence" title | `ModuleHeader` (platform component) | `components/module-header.tsx` |
 | the tabs, Runs / Settings | `CipNav` | `cip-nav.tsx` |
-| the search bar, the New run / Back button (top right) | Whatever the **page** passes as `actions` to `CipShell`, which hands it to `CipNav`. Two ready-made sets: `NewRunActions` (search, and **New run**, which opens the launcher or closes it when `launcherOpen`) on Runs and every Settings page; `RunActions` (search, and **Back** to Runs) on a run page | `header-actions.tsx` |
+| the search bar, the New run / Back button (top right) | Whatever the **page** passes as `actions` to `CipShell`, which hands it to `CipNav`. Two ready-made sets: `NewRunActions` (search, and **New run**, which opens the launcher or closes it when `launcherOpen`) on Runs and every Settings page. Both take `canAdminister`, which decides whether search lists skills; `RunActions` (search, and **Back** to Runs) on a run page | `header-actions.tsx` |
 | the settings tabs | `SettingsNav`, which reuses `CipNav` with no `actions`, so nothing shows on its right | `settings/settings-nav.tsx` |
 | the tinted background | `.dashboard-ground`, applied by `CipShell` | `cip-shell.tsx` |
+
+**Height.** `CipShell` is exactly one screen tall: the header stays put and only the area
+below it scrolls. The platform sidebar is pinned at full height too. The Skill catalog,
+Workflows and Access views fill the leftover height (`flex-[1_1_0px]`, never below
+`min-h-[22rem]`) and their cards scroll inside instead of growing. Below the `lg` / `xl`
+breakpoint the cards stack and the page scrolls instead.
 
 The **Settings** tab only appears for Cost Intelligence **module admins** (the
 "Can change settings" flag on the grant), not for every platform admin. Every settings
@@ -143,13 +165,15 @@ page checks this itself with `requireModuleAdmin`.
 |---|---|---|
 | `Bar` | `ui/Bar.tsx` | A grey rounded placeholder bar. Width and height as props |
 | `Button` | `ui/Button.tsx` | A button with no behaviour of its own. `variant`: `primary` (PHB red, `--phb-red-btn`) or `secondary` (white). Pass `onClick` for an action or `href` for navigation; also `disabled`, `fullWidth`, `type`. Icons go in `children` |
-| `Card` | `ui/Card.tsx` | The platform's `.card` surface with padding |
+| `Card` | `ui/Card.tsx` | The platform's `.card` surface. Change the padding with the `padding` prop (default `p-5`), never with a `p-*` in `className`: that one loses to the default |
+| `Pill` | `ui/Pill.tsx` | A small status label. `tone`: `ok` (teal), `draft` (purple), `muted` (grey), `warn` (orange). A tone is a state, never decoration |
+| `Segmented` | `ui/Segmented.tsx` | Mutually exclusive buttons in one strip. `options`, `value`, `onChange`, `label`; `tone` `dark` (date range) or `light` (Follow live / Pin) |
 | `Dropdown` | `ui/Dropdown.tsx` | A custom select with a rounded list. `options`, `placeholder`, `label` (accessible name); pass `value` + `onChange` to control it. Closes on blur |
 | `FilterMenu` | `ui/FilterMenu.tsx` | A filter icon that opens a small option list; for a table header. `label`, `options`, `value`, `onChange`. Closes on blur |
 | `Label` | `ui/Label.tsx` | Small uppercase section label (`.eyebrow`) |
 | `Table` | `ui/Table.tsx` | Equal-width columns. `headers` (text or any node, e.g. a heading with a `FilterMenu`), `rows` (cells are any React node), optional `pageSize` for Previous / Next paging, optional `onRowClick` + `selected` (indexes into the whole `rows` array, not the page) |
-| `SearchBar` | `ui/searchbar.tsx` | Search input with clear button. `searchCostIntelligence` is a stub marked `TODO(backend)` |
-| `Node` | `views/parts.tsx` | The hollow diamond on timelines and pipelines |
+| `SearchBar` | `ui/searchbar.tsx` | Live search over runs and (admins only) skills. `/` anywhere focuses it; arrows and Enter open a result, Escape closes. `search` reads placeholder data, marked `TODO(backend)` |
+| `Node` | `views/parts.tsx` | The diamond on timelines and the version track. Hollow by default; `filled` for a solid one |
 | `Timeline` | `views/parts.tsx` | The seven-step run timeline, from `steps` |
 | `Checkpoint` | `views/parts.tsx` | A paused-run question with options and Answer and resume (placeholder bars, button not wired) |
 | `RunHistory` | `views/parts.tsx` | The project filter and the runs table |
@@ -166,6 +190,10 @@ Icons come from **`lucide-react`**; do not hand-draw SVGs.
 - The launcher's dropdowns, and Start run going to a run page. It goes to the first
   placeholder run until the backend returns a real id.
 - Open run, and the Run page loading that run (404 for an unknown id).
+- Search.
+- Settings, all local to the page and lost on reload: picking a workflow, Pause /
+  Resume / Activate, Follow live / Pin, changing a person's role, the role matrix
+  checkboxes, and the usage range. Picking a skill is a link, so it survives reload.
 
 Every other button renders its label and has no handler. Wire each one in its own view
 as the backend for it lands, never inside `Button`.
@@ -191,7 +219,9 @@ as the backend for it lands, never inside `Button`.
   would reveal the module to someone without access.
 - A run's page gets its data from the run id, never from the launcher. Start run
   creates the run and navigates to its id; the page looks it up.
-- Placeholder data lives only in `lib/modules/cost-intelligence/placeholder.ts`.
+- Placeholder data lives only in `lib/modules/cost-intelligence/placeholder.ts` and
+  `placeholder-settings.ts`. Placeholder people use `@sample.invalid` addresses, like the
+  dev seed, so none can be mistaken for a real employee.
 - Colours come from the platform tokens in `app/globals.css`. The module's colour is
   `var(--module-accent)` (teal); teal, orange and maroon also mean ok, warning and error,
   so never use them for decoration. Primary buttons are PHB red (`--phb-red-btn`).

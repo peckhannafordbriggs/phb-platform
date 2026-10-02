@@ -9,7 +9,7 @@ const TABS: Tab[] = [
 
 export function SettingsNav() {
   return (
-    <div className="-mt-3 mb-6">
+    <div className="-mt-3 mb-6 shrink-0">
       <CipNav
         tabs={TABS}
         label="Cost Intelligence settings"

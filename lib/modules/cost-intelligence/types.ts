@@ -35,8 +35,6 @@ export type Skill = {
   name: string;
   live: string | null;
   versions: string[];
-  anthropicId: string | null;
-  lastRun: string;
 };
 
 export type WorkflowStatus = "Active" | "Paused" | "Draft";
@@ -50,7 +48,6 @@ export type Workflow = {
   description: string;
   status: WorkflowStatus;
   steps: WorkflowStep[];
-  roles: RoleId[];
   runs30d: number;
 };
 

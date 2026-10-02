@@ -45,7 +45,7 @@ export function Sidebar({
   const pathname = usePathname();
 
   return (
-    <nav className="chrome flex w-60 shrink-0 flex-col bg-[var(--chrome)] text-[var(--chrome-text)]">
+    <nav className="chrome sticky top-0 flex h-dvh w-60 shrink-0 flex-col overflow-y-auto bg-[var(--chrome)] text-[var(--chrome-text)]">
       <div className="px-5 pb-3 pt-5">
         <Link href="/" className="flex items-center gap-2.5">
           {/*

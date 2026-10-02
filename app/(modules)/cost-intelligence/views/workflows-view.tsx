@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Plus } from "lucide-react";
-import { CIP_ROLES, PLACEHOLDER_SETTINGS_WORKFLOWS } from "@/lib/modules/cost-intelligence/placeholder-settings";
+import { Plus } from "lucide-react";
+import { PLACEHOLDER_SETTINGS_WORKFLOWS } from "@/lib/modules/cost-intelligence/placeholder-settings";
 import type { Workflow, WorkflowStatus, WorkflowStep } from "@/lib/modules/cost-intelligence/types";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
@@ -17,7 +17,7 @@ const TOGGLE: Record<WorkflowStatus, { label: string; to: WorkflowStatus }> = {
   Draft: { label: "Activate workflow", to: "Active" },
 };
 
-/** Workflows on the left; the selected one's steps and who can start it on the right. */
+/** Workflows on the left; the selected one's steps on the right. */
 export function WorkflowsView() {
   const [workflows, setWorkflows] = useState(PLACEHOLDER_SETTINGS_WORKFLOWS);
   const [selectedId, setSelectedId] = useState(workflows[0]?.id);
@@ -28,16 +28,16 @@ export function WorkflowsView() {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[24rem_minmax(0,1fr)]">
-      <Card padding="p-0">
-        <div className="flex items-center justify-between border-b border-[var(--divider-soft)] px-5 py-3">
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[24rem_minmax(0,1fr)] lg:min-h-[22rem] lg:flex-[1_1_0px] lg:grid-rows-[minmax(0,1fr)]">
+      <Card padding="p-0" className="flex min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--divider-soft)] px-5 py-3">
           <span className="eyebrow text-[var(--muted)]">Workflows</span>
           <Button>
             <Plus size={14} aria-hidden="true" />
             New workflow
           </Button>
         </div>
-        <ul className="flex flex-col gap-1 p-2">
+        <ul className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
           {workflows.map((w) => {
             const selected = w.id === wf?.id;
             return (
@@ -56,7 +56,7 @@ export function WorkflowsView() {
                     <Pill tone={STATUS_TONE[w.status]}>{w.status}</Pill>
                   </span>
                   <span className="mt-1 block text-[0.75rem] text-[var(--muted)]">
-                    {w.runs30d} runs in 30 days · {w.roles.length} role{w.roles.length === 1 ? "" : "s"}
+                    {w.runs30d} runs in 30 days
                   </span>
                 </button>
               </li>
@@ -66,7 +66,7 @@ export function WorkflowsView() {
       </Card>
 
       {wf && (
-        <Card padding="p-6" className="flex flex-col">
+        <Card padding="p-6" className="min-h-0 overflow-y-auto">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2.5">

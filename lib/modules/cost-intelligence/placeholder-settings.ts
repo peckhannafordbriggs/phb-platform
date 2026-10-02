@@ -4,50 +4,36 @@
  */
 import type { Budget, Permission, Person, Role, Skill, Usage, UsageRange, Workflow } from "./types";
 
-const NONE = { unpublished: [], diff: [], md5: null, anthropicId: null };
-
 export const PLACEHOLDER_SKILLS: Skill[] = [
   {
-    ...NONE,
     id: "phb-bid-kickoff",
     name: "Bid kickoff",
     live: "v1.4.0",
     versions: ["v1.2.0", "v1.3.0", "v1.3.1", "v1.4.0"],
-    anthropicId: "skill_01KQ…8TZ2",
-    lastRun: "10:05 today",
   },
   {
     id: "phb-estimate-population",
     name: "Estimate population",
     live: "v2.3.1",
     versions: ["v2.0.0", "v2.1.0", "v2.2.0", "v2.3.0", "v2.3.1"],
-    anthropicId: "skill_01HR…2K9M",
-    lastRun: "09:42 today",
   },
   {
-    ...NONE,
     id: "phb-estimate-qa",
     name: "Estimate QA",
     live: null,
     versions: [],
-    lastRun: "Never",
   },
   {
-    ...NONE,
     id: "phb-jv-summary",
     name: "JV partner summary",
     live: "v1.0.0",
     versions: ["v1.0.0"],
-    anthropicId: "skill_01JB…7XW4",
-    lastRun: "Sep 12",
   },
   {
-    ...NONE,
     id: "phb-legacy-import",
     name: "Legacy CE import",
     live: null,
     versions: ["v1.0.0"],
-    lastRun: "Aug 2",
   },
 ];
 
@@ -64,7 +50,6 @@ export const PLACEHOLDER_SETTINGS_WORKFLOWS: Workflow[] = [
     description: "Runs kickoff, then populates the estimate from its outputs.",
     status: "Active",
     steps: [step("phb-bid-kickoff", "Bid kickoff", "v1.4.0"), step("phb-estimate-population", "Estimate population", "v2.3.1")],
-    roles: ["pce", "cost-engineer"],
     runs30d: 38,
   },
   {
@@ -73,7 +58,6 @@ export const PLACEHOLDER_SETTINGS_WORKFLOWS: Workflow[] = [
     description: "Reads the bid documents and drafts the kickoff summary.",
     status: "Active",
     steps: [step("phb-bid-kickoff", "Bid kickoff", "v1.4.0")],
-    roles: ["pce", "cost-engineer", "estimator"],
     runs30d: 61,
   },
   {
@@ -82,7 +66,6 @@ export const PLACEHOLDER_SETTINGS_WORKFLOWS: Workflow[] = [
     description: "Populates the estimate from an existing kickoff.",
     status: "Active",
     steps: [step("phb-estimate-population", "Estimate population", "v2.3.1")],
-    roles: ["pce", "cost-engineer"],
     runs30d: 44,
   },
   {
@@ -91,7 +74,6 @@ export const PLACEHOLDER_SETTINGS_WORKFLOWS: Workflow[] = [
     description: "Summarises the estimate for a joint-venture partner.",
     status: "Active",
     steps: [step("phb-jv-summary", "JV partner summary", "v1.0.0")],
-    roles: ["pce"],
     runs30d: 19,
   },
   {
@@ -100,7 +82,6 @@ export const PLACEHOLDER_SETTINGS_WORKFLOWS: Workflow[] = [
     description: "Checks a finished estimate before it goes out.",
     status: "Draft",
     steps: [step("phb-estimate-qa", "Estimate QA", "main")],
-    roles: ["pce"],
     runs30d: 0,
   },
 ];
