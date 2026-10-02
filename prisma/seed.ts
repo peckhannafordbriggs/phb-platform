@@ -12,6 +12,14 @@ import { seedBasVocabularies } from "./bas-vocabularies";
  * refuses to run in production.
  */
 
+// A module row needs a migration AS WELL as a line here. This seed reaches
+// every fresh database and never production, which was seeded once by hand on
+// 9 September 2026 and is not seeded by deploys. Cost Intelligence and
+// Knowledge Base were listed here only, and existed everywhere except the
+// deployed platform until 20261001120000_register_cost_intelligence_and_
+// knowledge_base. Same values in both, ON CONFLICT (key) DO NOTHING in the
+// migration; tests/module-registry.test.ts holds every module page to it.
+// docs/10-adding-a-module.md.
 const MODULES = [
   {
     key: "change-orders",

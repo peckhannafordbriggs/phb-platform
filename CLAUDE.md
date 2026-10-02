@@ -887,6 +887,24 @@ judged points, four index probes per healthy point; revisit at 200 ms.
 mutations re-run. `WHY-ITS-BUILT-THIS-WAY.md` § 55; `runbook.md` →
 *Collection Health says a value has stopped changing*.
 
+**Cost Intelligence and Knowledge Base are registered by migration
+(2026-10-01).** Their rows were in `prisma/seed.ts` only, from PR #25 on
+23 September. The seed runs on every fresh database and never on production
+— once, by hand, on 9 September, before either row existed — so the deployed
+platform had both pages and neither row: nothing to grant, nothing in any
+sidebar. Verified by querying the production `modules` table on 24 September
+(`bas` and `change-orders` only). One migration,
+`20261001120000_register_cost_intelligence_and_knowledge_base`, inserts both
+with the seed's values and `ON CONFLICT (key) DO NOTHING`; they land `active`,
+because that is what every other database holds, a row with no grants is
+invisible, and no admin screen could un-hide them later. The seed lines stay.
+**A module row reaches production by migration, never by seed**, and
+`tests/module-registry.test.ts` fails the build for any directory under
+`app/(modules)/` whose key is in no migration — it also drives the real
+migration file against a seed-populated database (nothing changes) and an
+empty one (both appear). `docs/10-adding-a-module.md` is the walkthrough,
+written for a new developer and an agent alike; `runbook.md` → *A module
+works locally but is missing from production*.
 **Two secrets reach the container app from Key Vault by reference (built
 2026-09-17, LANDED and extended 2026-10-01).** `feat/anthropic-api-key-keyvault`
 was the second branch found built, verified and never merged. Re-applied onto
@@ -1019,6 +1037,7 @@ either anywhere else — point at them.
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
 | `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon, headroom |
 | `docs/09-bas-what-is-built.md` | BAS: what exists, and which of the two repos owns each piece |
+| `docs/10-adding-a-module.md` | **Read before adding a module.** The five pieces, Cost Intelligence as the worked example, and the rule that a module row reaches production only by migration |
 | `docs/12-ai-layer-inventory.md` | **Phase 12: what the change-order engine reads, writes and decides.** The input to every later part |
 | `docs/DESIGN-BRIEF.md` | The redesign brief as issued, plus what the build actually chose where the two differ |
 | `docs/phase-1-verification.md` | Manual verification record |
