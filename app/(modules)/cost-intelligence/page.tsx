@@ -18,7 +18,7 @@ export default async function RunsPage({
   const launcherOpen = (await searchParams).new !== undefined;
 
   return (
-    <CipShell canAdminister={canAdminister} actions={<NewRunActions launcherOpen={launcherOpen} />}>
+    <CipShell canAdminister={canAdminister} actions={<NewRunActions launcherOpen={launcherOpen} canAdminister={canAdminister} />}>
       <RunsView />
     </CipShell>
   );

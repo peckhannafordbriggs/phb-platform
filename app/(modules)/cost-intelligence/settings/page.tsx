@@ -4,7 +4,7 @@ import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/co
 import { CipShell } from "../cip-shell";
 import { NewRunActions } from "../header-actions";
 import { SettingsNav } from "./settings-nav";
-import { SkillCatalogView } from "../views/settings-views";
+import { SkillCatalogView } from "../views/skill-catalog-view";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +13,7 @@ export default async function SkillCatalogPage() {
   if (!access.ok) notFound();
 
   return (
-    <CipShell canAdminister actions={<NewRunActions />}>
+    <CipShell canAdminister actions={<NewRunActions canAdminister />}>
       <SettingsNav />
       <SkillCatalogView />
     </CipShell>

@@ -29,7 +29,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
   if (!run) notFound();
 
   return (
-    <CipShell canAdminister={canAdminister} actions={<RunActions />}>
+    <CipShell canAdminister={canAdminister} actions={<RunActions canAdminister={canAdminister} />}>
       <RunMonitor run={run} activity={getRunActivity(runId)} />
     </CipShell>
   );
