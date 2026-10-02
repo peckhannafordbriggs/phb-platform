@@ -301,10 +301,15 @@ and zero `bas_*` rows. `scripts/bas-migrate-to-azure/` is the one-shot move (exp
 import in one transaction as a role that cannot touch the platform's tables, check),
 tested against a faithful scratch copy on 29 September 2026 and **not yet run against
 Azure**; `scripts/setup-bas-collector-role.sql` is the collector's least-privilege role
-for the Azure server. The container app also carries no `BAS_CREDENTIAL_KEY` and no
-`ANTHROPIC_API_KEY`, so in production the station-login panel and the Analyze tab both
-say so. All three are in `runbook.md` → *Moving the BAS data to the Azure database* and
-the two sections after it.
+for the Azure server. `BAS_CREDENTIAL_KEY` and `ANTHROPIC_API_KEY` reach the container
+app from Key Vault by reference as of 2026-10-01 (`BAS-CREDENTIAL-KEY`,
+`ANTHROPIC-API-KEY`, each behind a boolean parameter), but the two secret VALUES are
+set in the vault by hand and nothing in the repository can tell you whether that has
+been done: if the station-login panel or the Analyze tab says it is not configured in
+production, it has not. `infra/README.md` has the steps; the Analyze tab also needs
+`BAS_ASK_DATABASE_URL`, which is not wired yet. All of it is in `runbook.md` → *Moving
+the BAS data to the Azure database* and the sections after it, and *Secrets set by hand
+in Key Vault*.
 
 ### Moving the AI layer off the laptop
 

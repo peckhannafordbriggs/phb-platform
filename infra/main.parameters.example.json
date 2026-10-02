@@ -80,6 +80,15 @@
     "coMailbox": {
       "value": ""
     },
+    "anthropicApiKeyInKeyVault": {
+      "value": false
+    },
+    "basCredentialKeyInKeyVault": {
+      "value": false
+    },
+    "basCredentialKeyVersion": {
+      "value": "1"
+    },
 
     "enableBudget": {
       "value": false

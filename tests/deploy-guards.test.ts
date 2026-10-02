@@ -197,6 +197,188 @@ describe("production refuses a Graph client secret", () => {
   });
 });
 
+describe("the Anthropic API key reaches the container only by Key Vault reference", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+  it("is an environment variable backed by a secretRef, never a plain value", async () => {
+    const bicep = await readBicep();
+
+    expect(bicep).toMatch(
+      /name:\s*'ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'anthropic-api-key'/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'ANTHROPIC_API_KEY'[\s\S]{0,80}value:/);
+  });
+
+  it("is never a template parameter - the value is set in the vault by hand", async () => {
+    const bicep = await readBicep();
+
+    // A secure string parameter would put the key on every deploy's command
+    // line and let a blank redeploy overwrite it. The only parameter about it
+    // is the boolean saying the secret already exists.
+    expect(bicep).toMatch(/param anthropicApiKeyInKeyVault bool = false/);
+    expect(bicep).not.toMatch(/param \w*[aA]nthropic\w* string/);
+    // And the template never writes the secret itself.
+    expect(bicep).not.toMatch(
+      /vaults\/secrets@[\d-]+'\s*=\s*\{[\s\S]{0,120}name:\s*'ANTHROPIC-API-KEY'/,
+    );
+  });
+
+  it("is read lazily by the app, so a missing key cannot stop the boot", async () => {
+    const { readAnthropicApiKey } = await import("@/lib/env");
+    const before = process.env.ANTHROPIC_API_KEY;
+    try {
+      delete process.env.ANTHROPIC_API_KEY;
+      expect(readAnthropicApiKey()).toBeNull();
+      // .env.example ships it as "", and an Azure setting left blank arrives the
+      // same way. Blank is absent, not malformed.
+      process.env.ANTHROPIC_API_KEY = "   ";
+      expect(readAnthropicApiKey()).toBeNull();
+      process.env.ANTHROPIC_API_KEY = " not-a-real-key ";
+      expect(readAnthropicApiKey()).toBe("not-a-real-key");
+    } finally {
+      if (before === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = before;
+    }
+  });
+});
+
+/**
+ * The BAS credential key, the same way (2026-10-01). It encrypts the Niagara
+ * station passwords; the deployed Settings tab could not decrypt them because
+ * the container app was never given it. The mutation this block is for:
+ * remove either env entry from the bicep and the first test here fails.
+ */
+describe("the BAS credential key reaches the container only by Key Vault reference", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+  const readSource = (file: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, file), "utf8"),
+    );
+
+  it("is an environment variable backed by a secretRef, never a plain value", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(
+      /name:\s*'BAS_CREDENTIAL_KEY'[\s\S]{0,80}secretRef:\s*'bas-credential-key'/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'BAS_CREDENTIAL_KEY'[\s\S]{0,80}value:/);
+    // The secretRef resolves to a Key Vault URL under the managed identity,
+    // in the vault's naming style (DATABASE-URL, AUTH-SECRET, ANTHROPIC-API-KEY).
+    expect(bicep).toMatch(/var basCredentialKeySecretName = 'BAS-CREDENTIAL-KEY'/);
+    expect(bicep).toMatch(
+      /name:\s*'bas-credential-key'\s*keyVaultUrl:\s*'\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{basCredentialKeySecretName\}'\s*identity:\s*identity\.id/,
+    );
+  });
+
+  it("carries the key version beside it as a plain value, because it is not a secret", async () => {
+    const bicep = await readBicep();
+    // currentKeyVersion in credentials.ts reads it when a password is saved;
+    // decryption does not. The office PC's rows carry version 1, so the
+    // default is 1 and anything else is a deliberate rotation.
+    expect(bicep).toMatch(/param basCredentialKeyVersion string = '1'/);
+    expect(bicep).toMatch(
+      /name:\s*'BAS_CREDENTIAL_KEY_VERSION'[\s\S]{0,80}value:\s*basCredentialKeyVersion/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'BAS_CREDENTIAL_KEY_VERSION'[\s\S]{0,80}secretRef:/);
+  });
+
+  it("is never a template parameter - the value is set in the vault by hand, byte-identical to the collector's", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(/param basCredentialKeyInKeyVault bool = false/);
+    // The only string parameter about it is the version, which is not a
+    // secret; nothing carries the key itself, secure or otherwise.
+    expect(bicep).not.toMatch(/param \w*[cC]redentialKey(?!Version)\w* string/);
+    expect(bicep).not.toMatch(/@secure\(\)\s*param \w*[cC]redentialKey/);
+    // And the template never writes the secret itself.
+    expect(bicep).not.toMatch(
+      /vaults\/secrets@[\d-]+'\s*=\s*\{[\s\S]{0,120}name:\s*'BAS-CREDENTIAL-KEY'/,
+    );
+  });
+
+  it("needs no new role assignment: the identity already holds Key Vault Secrets User on the whole vault", async () => {
+    const bicep = await readBicep();
+    // Asserted from the grants in the template, not assumed. One role
+    // assignment scoped to the vault itself, for the container app's identity,
+    // with the Secrets User role id - which covers every secret in the vault,
+    // the two set by hand included. There is no per-secret assignment and
+    // there must not need to be.
+    const vaultAssignments = bicep.match(
+      /resource \w+ 'Microsoft\.Authorization\/roleAssignments@[\d-]+' = \{\s*scope: keyVault[\s\S]*?\n\}/g,
+    );
+    expect(vaultAssignments, "one role assignment scoped to the vault").toHaveLength(1);
+    const assignment = vaultAssignments![0]!;
+    expect(assignment).toContain("keyVaultSecretsUserRoleId");
+    expect(assignment).toMatch(/principalId:\s*identity\.properties\.principalId/);
+    expect(bicep).toMatch(
+      /var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'/,
+    );
+    // Both hand-set secrets are read under that same identity.
+    for (const secret of ["anthropic-api-key", "bas-credential-key"]) {
+      expect(bicep).toMatch(
+        new RegExp(`name:\\s*'${secret}'[\\s\\S]{0,160}identity:\\s*identity\\.id`),
+      );
+    }
+    // The app waits for the grant before it starts.
+    expect(bicep).toMatch(/dependsOn:\s*\[[\s\S]{0,80}keyVaultRead/);
+  });
+
+  it("spells each variable's name in lib/env.ts and nowhere else in the readers", async () => {
+    const env = await import("@/lib/env");
+    expect(env.ANTHROPIC_API_KEY_VAR).toBe("ANTHROPIC_API_KEY");
+    expect(env.BAS_CREDENTIAL_KEY_VAR).toBe("BAS_CREDENTIAL_KEY");
+    expect(env.BAS_CREDENTIAL_KEY_VERSION_VAR).toBe("BAS_CREDENTIAL_KEY_VERSION");
+    // The readers import the name; a literal in either would be a second
+    // place a rename has to reach. Comments may mention it; code may not.
+    const strip = (source: string) =>
+      source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const credentials = strip(await readSource("lib/modules/bas/credentials.ts"));
+    expect(credentials).not.toMatch(/["'`]BAS_CREDENTIAL_KEY(_VERSION)?["'`]/);
+    expect(credentials).not.toMatch(/process\.env\.BAS_CREDENTIAL_KEY/);
+    const analyze = strip(await readSource("lib/modules/bas/analyze/env.ts"));
+    expect(analyze).not.toMatch(/["'`]ANTHROPIC_API_KEY["'`]/);
+    // And the bicep spells the same names, so the three cannot drift.
+    const bicep = await readBicep();
+    for (const name of [env.ANTHROPIC_API_KEY_VAR, env.BAS_CREDENTIAL_KEY_VAR, env.BAS_CREDENTIAL_KEY_VERSION_VAR]) {
+      expect(bicep).toContain(`name: '${name}'`);
+    }
+  });
+
+  it("is read lazily, so a missing key disables credential storage and nothing else", async () => {
+    const { credentialKeyState, currentKeyVersion } = await import("@/lib/modules/bas/credentials");
+    const before = process.env.BAS_CREDENTIAL_KEY;
+    const beforeVersion = process.env.BAS_CREDENTIAL_KEY_VERSION;
+    try {
+      delete process.env.BAS_CREDENTIAL_KEY;
+      expect(credentialKeyState()).toEqual({ available: false, reason: "key_missing" });
+      process.env.BAS_CREDENTIAL_KEY = "   ";
+      expect(credentialKeyState()).toEqual({ available: false, reason: "key_missing" });
+      delete process.env.BAS_CREDENTIAL_KEY_VERSION;
+      expect(currentKeyVersion()).toBe(1);
+      process.env.BAS_CREDENTIAL_KEY_VERSION = "2";
+      expect(currentKeyVersion()).toBe(2);
+    } finally {
+      if (before === undefined) delete process.env.BAS_CREDENTIAL_KEY;
+      else process.env.BAS_CREDENTIAL_KEY = before;
+      if (beforeVersion === undefined) delete process.env.BAS_CREDENTIAL_KEY_VERSION;
+      else process.env.BAS_CREDENTIAL_KEY_VERSION = beforeVersion;
+    }
+  });
+
+  it("has an example parameters file that ships both flags off and the version at 1", async () => {
+    const example = JSON.parse(
+      await readSource("infra/main.parameters.example.json"),
+    ) as { parameters: Record<string, { value: unknown }> };
+    expect(example.parameters.anthropicApiKeyInKeyVault?.value).toBe(false);
+    expect(example.parameters.basCredentialKeyInKeyVault?.value).toBe(false);
+    expect(example.parameters.basCredentialKeyVersion?.value).toBe("1");
+  });
+});
+
 describe("no deployment file hardcodes an organisation", () => {
   const files = [
     "infra/main.bicep",

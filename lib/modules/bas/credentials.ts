@@ -4,6 +4,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
+import { BAS_CREDENTIAL_KEY_VAR, BAS_CREDENTIAL_KEY_VERSION_VAR } from "@/lib/env";
 
 /**
  * AES-256-GCM for the Niagara station passwords (B7.4).
@@ -23,8 +24,12 @@ import {
  * a live JACE, weeks later, with nothing pointing here.
  */
 
-/** Read LAZILY, exactly like readGraphEnv. */
-const ENV_VAR = "BAS_CREDENTIAL_KEY";
+/**
+ * Read LAZILY, exactly like readGraphEnv. The NAME is decided in lib/env.ts
+ * and shared with infra/main.bicep, which delivers it from Key Vault by
+ * reference; the deploy-guard test holds the two to each other.
+ */
+const ENV_VAR = BAS_CREDENTIAL_KEY_VAR;
 
 /** AES-256. Anything else is a configuration mistake, not a shorter key. */
 const KEY_BYTES = 32;
@@ -136,7 +141,7 @@ function readKey(): Buffer {
  * set, so the rotation does not need a deploy of this file.
  */
 export function currentKeyVersion(): number {
-  const raw = process.env.BAS_CREDENTIAL_KEY_VERSION?.trim();
+  const raw = process.env[BAS_CREDENTIAL_KEY_VERSION_VAR]?.trim();
   if (raw === undefined || !/^[0-9]{1,4}$/.test(raw)) return 1;
   return Number(raw);
 }
