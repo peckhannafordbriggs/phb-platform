@@ -14,8 +14,22 @@ import { Label } from "../ui/Label";
 import { Table } from "../ui/Table";
 
 /** A diamond node, as on the skill pipeline and the step timeline. */
-export function Node({ size = 10, color = "var(--neutral-300)" }: { size?: number; color?: string }) {
-  return <span aria-hidden="true" className="diamond" style={{ width: size, height: size, color }} />;
+export function Node({
+  size = 10,
+  color = "var(--neutral-300)",
+  filled = false,
+}: {
+  size?: number;
+  color?: string;
+  filled?: boolean;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      className={"diamond" + (filled ? " diamond--filled" : "")}
+      style={{ width: size, height: size, color }}
+    />
+  );
 }
 
 const STEP_COLOR: Record<RunStep["state"], string> = {

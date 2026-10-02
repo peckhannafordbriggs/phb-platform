@@ -4,7 +4,7 @@ import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/co
 import { CipShell } from "../../cip-shell";
 import { NewRunActions } from "../../header-actions";
 import { SettingsNav } from "../../settings/settings-nav";
-import { SettingsTableView } from "../../views/settings-views";
+import { UsageView } from "../../views/usage-view";
 
 export const dynamic = "force-dynamic";
 
@@ -13,9 +13,9 @@ export default async function UsagePage() {
   if (!access.ok) notFound();
 
   return (
-    <CipShell canAdminister actions={<NewRunActions />}>
+    <CipShell canAdminister actions={<NewRunActions canAdminister />}>
       <SettingsNav />
-      <SettingsTableView headers={["Project","Workflow", "Runs", "Tokens", "Cost"]} cols={["70%", "55%", 70, 70, 60]} stats={4} />
+      <UsageView />
     </CipShell>
   );
 }
