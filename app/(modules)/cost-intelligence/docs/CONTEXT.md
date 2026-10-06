@@ -131,8 +131,8 @@ are formatted in UTC. Formatting them in New York time shows the day before.
 
 | People call it | Where |
 |---|---|
-| the workflows list | left `Card`: **New workflow**, then name, status and runs in 30 days. Clicking one selects it |
-| the workflow header | right `Card`: name, status, description, **Pause / Resume / Activate workflow** |
+| the workflows list | left `Card`: **New workflow**, then one compact row per workflow, name and status. The selected row is tinted in the module colour, like the skills list. Clicking one selects it |
+| the workflow header | right `Card`: name, status, description, runs in 30 days, **Pause / Resume / Activate workflow** |
 | the steps | **Steps · run in order**: numbered rows, each with a light `Segmented` **Follow live · vX** / **Pin vX** |
 
 ### Access & roles · `settings/access` · `AccessView`

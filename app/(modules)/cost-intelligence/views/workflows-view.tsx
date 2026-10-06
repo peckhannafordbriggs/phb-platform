@@ -28,16 +28,16 @@ export function WorkflowsView() {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[24rem_minmax(0,1fr)] lg:min-h-[22rem] lg:flex-[1_1_0px] lg:grid-rows-[minmax(0,1fr)]">
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[21rem_minmax(0,1fr)] lg:min-h-[22rem] lg:flex-[1_1_0px] lg:grid-rows-[minmax(0,1fr)]">
       <Card padding="p-0" className="flex min-h-0 flex-col">
-        <div className="flex shrink-0 items-center justify-between border-b border-[var(--divider-soft)] px-5 py-3">
-          <span className="eyebrow text-[var(--muted)]">Workflows</span>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--divider-soft)] px-4 py-3">
+          <span className="eyebrow whitespace-nowrap text-[var(--muted)]">Workflows · {workflows.length}</span>
           <Button>
             <Plus size={14} aria-hidden="true" />
             New workflow
           </Button>
         </div>
-        <ul className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
+        <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
           {workflows.map((w) => {
             const selected = w.id === wf?.id;
             return (
@@ -47,17 +47,14 @@ export function WorkflowsView() {
                   aria-current={selected ? "true" : undefined}
                   onClick={() => setSelectedId(w.id)}
                   className={
-                    "block w-full rounded-[var(--radius-row)] border-l-2 px-4 py-3 text-left transition-colors " +
-                    (selected ? "border-[var(--module-accent)] bg-white shadow-sm" : "border-transparent hover:bg-[var(--neutral-50)]")
+                    "flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] px-3 py-1.5 text-left text-[0.8125rem] transition-colors " +
+                    (selected
+                      ? "bg-[color-mix(in_srgb,var(--module-accent)_16%,transparent)] font-semibold text-[var(--module-accent-ink)]"
+                      : "text-[var(--foreground)] hover:bg-[var(--neutral-100)]")
                   }
                 >
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="truncate text-[0.875rem] font-semibold">{w.name}</span>
-                    <Pill tone={STATUS_TONE[w.status]}>{w.status}</Pill>
-                  </span>
-                  <span className="mt-1 block text-[0.75rem] text-[var(--muted)]">
-                    {w.runs30d} runs in 30 days
-                  </span>
+                  <span className="truncate">{w.name}</span>
+                  <Pill tone={STATUS_TONE[w.status]}>{w.status}</Pill>
                 </button>
               </li>
             );
@@ -74,6 +71,7 @@ export function WorkflowsView() {
                 <Pill tone={STATUS_TONE[wf.status]}>{wf.status}</Pill>
               </div>
               <p className="mt-1 text-[0.8125rem] text-[var(--muted)]">{wf.description}</p>
+              <p className="mt-1 text-[0.75rem] text-[var(--muted)]">{wf.runs30d} runs in 30 days</p>
             </div>
             <Button onClick={() => update((w) => ({ status: TOGGLE[w.status].to }))}>{TOGGLE[wf.status].label}</Button>
           </div>
