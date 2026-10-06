@@ -950,6 +950,29 @@ five bool and string points with identical reasons. Either half removed
 makes the agreement guard throw. `WHY-ITS-BUILT-THIS-WAY.md` § 55
 amendment; `docs/bas-plausibility-verification.md` → *The type gate*;
 `runbook.md` → *Collection Health says a value has stopped changing*.
+**The trend chart knows what kind of value it is drawing (2026-10-06).**
+`bas_readings` has three value columns and the collector fills one per row
+from the oBIX type; every Point Explorer query read `value_num`, so the two
+visible boolean points (`Occupied`, `System_Enable`) rendered as an empty
+plot under an axis of `-0.01 / 0.00 / 0.01` with *Distinct values 0 · Reads
+as a stuck sensor* beside it. Now the service picks the column from
+`bas_points.data_type` - the collector's declaration from the record
+prototype, which agrees with the populated column on all 39 live points;
+`unknown` falls back to the readings, and a declared type is never overruled
+by them - and carries `valueKind` and, for a boolean, two `states` words to
+the browser. A boolean point is a **stepped line** between **two labelled
+states** (occupancy → Occupied/Unoccupied, alarm → Alarm/Normal, "enable" →
+Enabled/Disabled, any status or command role → On/Off, else True/False), the
+axis is those two words and nothing else, the tooltip and Latest tile say
+the word, Average is `—`, Range is the states seen, and the distinct-values
+tile is not judged. The reading travels as 1/0 so breaks, bucketing, custom
+ranges and zoom are one code path; a bucketed boolean reads *"Occupied 72%
+of readings"*. Numeric points are unchanged. **String points (three on
+live, enum codes in `value_str`) are recognised and otherwise untouched, by
+decision.** No chart shows two units: one point at a time, since B4. Four
+mutations run. `lib/modules/bas/value-kind.ts`;
+`WHY-ITS-BUILT-THIS-WAY.md` § 63; `runbook.md` → *A boolean point's chart
+is empty, or its axis reads On / Off*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

@@ -1,5 +1,6 @@
 import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk } from "@/lib/modules/bas/types";
 import { unitSymbol, withUnit } from "@/lib/modules/bas/units";
+import type { ValueKind } from "@/lib/modules/bas/value-kind";
 import {
   LOOKBACK_DAYS,
   MIN_READINGS,
@@ -1042,10 +1043,18 @@ export const DISTINCT_VALUES_GREEN = 20;
 export function distinctValuesTone(
   distinct: number,
   readings: number,
+  /**
+   * A boolean point has two values to be distinct between, so the numeric
+   * thresholds would call every healthy one a stuck sensor. It is not judged
+   * here at all. A string point is not judged either: nothing counts its
+   * values yet, and a zero that means "not counted" must not read as red.
+   */
+  kind: ValueKind = "numeric",
 ): Tone {
   // No readings at all is not a stuck sensor, it is no evidence. Rendering it
   // red would be as wrong as rendering it green.
   if (readings === 0) return "neutral";
+  if (kind !== "numeric") return "neutral";
   if (distinct >= DISTINCT_VALUES_GREEN) return "ok";
   if (distinct >= DISTINCT_VALUES_AMBER) return "warn";
   return "bad";
@@ -1055,10 +1064,14 @@ export function distinctValuesTone(
 export function describeDistinctValues(
   distinct: number,
   readings: number,
+  kind: ValueKind = "numeric",
 ): string {
   if (readings === 0) return "Nothing to judge in this window.";
 
   const of = `Across ${formatCount(readings)} readings.`;
+  // The stuck-sensor sentences below are about a quantity that should wander.
+  // A state should not, so a boolean or string point gets the denominator only.
+  if (kind !== "numeric") return of;
 
   // The denominator is invisible from the tile, and the low cases prevent a real
   // misreading: a flat line is a stable room OR a dead sensor, and they look

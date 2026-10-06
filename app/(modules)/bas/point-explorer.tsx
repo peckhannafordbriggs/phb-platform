@@ -48,8 +48,17 @@ import {
   withRange,
 } from "./filters";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
-import { formatAxisTick, formatTooltipValue, valueAxis } from "./value-axis";
+import {
+  formatAxisTick,
+  formatStateBand,
+  formatStateTick,
+  formatStateTooltip,
+  formatTooltipValue,
+  stateAxis,
+  valueAxis,
+} from "./value-axis";
 import { unitSymbol } from "@/lib/modules/bas/units";
+import { stateWord, type BooleanStates } from "@/lib/modules/bas/value-kind";
 
 /**
  * Point Explorer - what one point has been doing.
@@ -245,6 +254,12 @@ export function PointExplorer() {
 
   const { stats, selectedPoint } = data;
   const unit = selectedPoint?.unit ?? null;
+  // A boolean point's two state words; null for every other kind. Where this
+  // is set, a reading is shown as its word and never as the 1 or 0 it travels
+  // as - on the tiles here and on the chart's axis and tooltip below.
+  const states = selectedPoint?.states ?? null;
+  const reading = (value: number | null): string =>
+    states === null ? formatValue(value, unit) : (stateWord(value, states) ?? "—");
 
   return (
     <div className="space-y-6">
@@ -326,7 +341,9 @@ export function PointExplorer() {
           ? "No point selected"
           : `${selectedPoint.pointName} at ${selectedPoint.siteName}`}
         {" · "}
-        {unitSymbol(unit) ?? "no unit recorded"}
+        {states !== null
+          ? `${states.on} / ${states.off}`
+          : (unitSymbol(unit) ?? "no unit recorded")}
         {" · "}
         {describeRange(data.range)}
         {" · as of "}
@@ -387,7 +404,7 @@ export function PointExplorer() {
           >
             <Tile
               label="Latest"
-              value={formatValue(stats.latest, unit)}
+              value={reading(stats.latest)}
               tone="neutral"
               // The one thing worth saying: this value may sit outside the
               // range the other tiles cover, so the timestamp is stated.
@@ -399,7 +416,9 @@ export function PointExplorer() {
             />
             <Tile
               label={`Average (${describeRange(data.range)})`}
-              value={formatValue(stats.average, unit)}
+              // A state has no average. The database's mean of 1s and 0s is a
+              // share of readings, not of time, and a dash is truer than it.
+              value={states !== null ? "—" : formatValue(stats.average, unit)}
               tone="neutral"
             />
             <Tile
@@ -407,10 +426,13 @@ export function PointExplorer() {
               value={
                 stats.minimum === null || stats.maximum === null
                   ? "—"
-                  : `${stats.minimum.toFixed(2)} – ${formatValue(stats.maximum, unit)}`
+                  : states !== null
+                    ? formatStateBand(stats.minimum, stats.maximum, states)
+                    : `${stats.minimum.toFixed(2)} – ${formatValue(stats.maximum, unit)}`
               }
               tone="neutral"
             />
+            {/* Boolean: 1 or 2 is the healthy count, so the numeric thresholds do not apply (see the function). */}
             <Tile
               label="Readings / null records"
               value={`${formatCount(stats.readings)} / ${formatCount(stats.nullRecords)}`}
@@ -420,8 +442,16 @@ export function PointExplorer() {
             <Tile
               label="Distinct values"
               value={formatCount(stats.distinctValues)}
-              tone={distinctValuesTone(stats.distinctValues, stats.readings)}
-              detail={describeDistinctValues(stats.distinctValues, stats.readings)}
+              tone={distinctValuesTone(
+                stats.distinctValues,
+                stats.readings,
+                selectedPoint.valueKind,
+              )}
+              detail={describeDistinctValues(
+                stats.distinctValues,
+                stats.readings,
+                selectedPoint.valueKind,
+              )}
             />
           </section>
 
@@ -693,6 +723,7 @@ export function TrendPanel({
                 gaps={data.trendGaps}
                 recordedGaps={recordedGaps}
                 unit={unit}
+                states={data.selectedPoint?.states ?? null}
                 zoom={zoom}
                 range={rangeMs}
                 timeZone={timeZone}
@@ -752,6 +783,7 @@ export function TrendChart({
   gaps,
   recordedGaps = [],
   unit,
+  states = null,
   zoom,
   range = null,
   timeZone = null,
@@ -773,6 +805,13 @@ export function TrendChart({
    */
   recordedGaps?: Array<{ fromMs: number; toMs: number; cause: string }>;
   unit: string | null;
+  /**
+   * Set for a BOOLEAN point, and it changes what the chart IS: a stepped line
+   * between two labelled states instead of a curve over a numeric axis. The
+   * values in `trend` are 1 and 0 either way; these are the words they are
+   * drawn as. Null for a numeric point. See value-kind.ts.
+   */
+  states?: BooleanStates | null;
   zoom: TrendZoom | null;
   /**
    * The range the data was asked for. Becomes the x domain when there is no
@@ -849,7 +888,23 @@ export function TrendChart({
     )
     .flatMap((point) => [point.value, point.min ?? null, point.max ?? null])
     .filter((value): value is number => value !== null);
-  const axis = valueAxis(visibleValues, unit, { fontSize: CHART_FONT_SIZE });
+  /**
+   * A boolean point gets the state axis: two ticks at 0 and 1, labelled with
+   * its words, whatever is on screen - a day that was "On" throughout still
+   * shows both states, because an axis with one label is not an axis. The
+   * numeric path above is not consulted for it, so no zoom level and no
+   * bucket average can put a decimal on a state axis.
+   */
+  const axis =
+    states !== null
+      ? stateAxis(states, { fontSize: CHART_FONT_SIZE })
+      : valueAxis(visibleValues, unit, { fontSize: CHART_FONT_SIZE });
+  /**
+   * A state holds until it changes, then jumps: `stepAfter`. A curve between
+   * Off and On would draw the point half-occupied for a while, which is a
+   * value it cannot have. Numeric points keep `monotone` - see the Area below.
+   */
+  const lineType = states !== null ? "stepAfter" : "monotone";
 
   return (
     <AreaChart
@@ -916,13 +971,23 @@ export function TrendChart({
         // Every tick we chose is drawn. Recharts would otherwise thin the
         // list by its own measurement, and the list is already sized to fit.
         interval={0}
-        tickFormatter={(value: number) => formatAxisTick(value, axis.decimals)}
-        label={{
-          value: axisLabel(unit),
-          angle: -90,
-          position: "insideLeft",
-          style: { fontSize: CHART_FONT_SIZE, fill: "var(--muted)" },
-        }}
+        tickFormatter={(value: number) =>
+          states !== null
+            ? formatStateTick(value, states)
+            : formatAxisTick(value, axis.decimals)
+        }
+        // The rotated unit label. A boolean point has no unit and its states
+        // ARE the axis, so it carries none rather than "no unit recorded".
+        label={
+          states !== null
+            ? undefined
+            : {
+                value: axisLabel(unit),
+                angle: -90,
+                position: "insideLeft",
+                style: { fontSize: CHART_FONT_SIZE, fill: "var(--muted)" },
+              }
+        }
       />
       <Tooltip
         defaultIndex={tooltipIndex}
@@ -936,6 +1001,24 @@ export function TrendChart({
         // A bucket's band arrives as [min, max] and is shown as such, so the
         // tooltip says what the band is rather than leaving it to be guessed.
         formatter={(value, name) => {
+          // A boolean point: the state word, never the 1 or 0 behind it. A
+          // bucket's band is the states seen in it; its value is the share
+          // of readings that were on, said as such.
+          if (states !== null) {
+            if (Array.isArray(value)) {
+              const [low, high] = value as [unknown, unknown];
+              return [
+                typeof low === "number" && typeof high === "number"
+                  ? formatStateBand(low, high, states)
+                  : "—",
+                "states seen",
+              ];
+            }
+            return [
+              typeof value === "number" ? formatStateTooltip(value, states) : "—",
+              name === "range" ? "states seen" : sampled ? "share of readings" : "state",
+            ];
+          }
           if (Array.isArray(value)) {
             const [low, high] = value as [unknown, unknown];
             return [
@@ -1037,7 +1120,7 @@ export function TrendChart({
       */}
       {sampled && (
         <Area
-          type="monotone"
+          type={lineType}
           name="range"
           dataKey={(point: PointExplorerData["trend"][number]) =>
             point.min != null && point.max != null ? [point.min, point.max] : null
@@ -1057,9 +1140,9 @@ export function TrendChart({
           rather than a set of measurements joined with a ruler.
           `monotone` specifically: it will not overshoot between
           samples, so the curve never draws a peak the sensor did not
-          record.
+          record. A boolean point steps instead - see `lineType`.
         */
-        type="monotone"
+        type={lineType}
         dataKey="value"
         name="value"
         // One accent, and it is the module's. Sensor data is the content.

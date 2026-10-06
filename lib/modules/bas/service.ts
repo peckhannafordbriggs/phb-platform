@@ -43,6 +43,12 @@ import {
   type PlausibilitySummary,
 } from "./plausibility";
 import { plausibilityLateral } from "./plausibility-sql";
+import {
+  booleanStates,
+  valueKindFromDataType,
+  valueKindOf,
+  type ValueKind,
+} from "./value-kind";
 
 /**
  * "This row is at risk", for SQL, generated from the one TypeScript list so
@@ -1528,6 +1534,23 @@ interface PointOptionRow {
   site_timezone: string;
   clock_offset_s: number | null;
   clock_measured_at: Date | null;
+  /**
+   * Which value column the readings live in, as the collector declared it
+   * from the oBIX record prototype. Decides the chart's axis - see
+   * value-kind.ts - and the two role flags and the raw history name are what
+   * a boolean point's state words are chosen from.
+   */
+  data_type: string;
+  is_status: boolean;
+  is_command: boolean;
+  niagara_history_name: string;
+}
+
+/** How many rows in the window populate each value column. */
+interface PopulatedRow {
+  num_rows: number;
+  bool_rows: number;
+  str_rows: number;
 }
 
 interface PointStatsRow {
@@ -1700,7 +1723,8 @@ export async function getPointExplorer(
              v.point_role, v.unit, v.site_name,
              v.collection_interval_s,
              s.timezone AS site_timezone,
-             st.clock_offset_s, st.clock_measured_at
+             st.clock_offset_s, st.clock_measured_at,
+             v.data_type, v.is_status, v.is_command, v.niagara_history_name
       FROM bas_v_point v
       -- B8.3: a hidden point leaves this picker, and only this. It is still
       -- collected, still in every Collection Health figure, and still in the
@@ -1754,6 +1778,7 @@ export async function getPointExplorer(
         selection,
         pointRows,
         selectedPoint: null,
+        valueKind: null as ValueKind | null,
         range: null as RangeRow | null,
         calendar: null as CalendarRow | null,
         stats: null,
@@ -1835,6 +1860,45 @@ export async function getPointExplorer(
       "calendar",
     );
 
+    // --- which value column this point's readings live in -------------------
+    //
+    // `data_type` is the collector's declaration from the record prototype and
+    // decides it outright. Only an undeclared type (`unknown`, the column's
+    // default) costs a query: a count of which columns the window populates,
+    // so the chart draws what is there rather than the numeric column it has
+    // always read. On live every point is declared, so this branch runs for
+    // none of them. See value-kind.ts.
+    const declared =
+      selectedPoint.data_type !== "unknown" && selectedPoint.data_type !== "abstime";
+    const populatedCounts = declared
+      ? { num: 0, bool: 0, str: 0 }
+      : await (async () => {
+            const row = firstRow(
+              await tx.$queryRaw<PopulatedRow[]>`
+                SELECT
+                  count(value_num)::int AS num_rows,
+                  count(value_bool)::int AS bool_rows,
+                  count(value_str)::int AS str_rows
+                FROM bas_readings
+                WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
+              `,
+              "populated columns",
+            );
+            return { num: row.num_rows, bool: row.bool_rows, str: row.str_rows };
+          })();
+    const valueKind = valueKindOf(selectedPoint.data_type, populatedCounts);
+
+    // The reading, as a number, whatever column it lives in. A boolean travels
+    // as 1 or 0 - NULL stays NULL through the cast - so the break logic, the
+    // bucketing and the series shape are the same for every kind, and the
+    // chart alone turns it back into a state word. A string point reads the
+    // numeric column as it always has: nothing is built for it yet, by
+    // decision, and its readings stay null on the chart.
+    const valueExpr =
+      valueKind === "boolean"
+        ? Prisma.sql`(value_bool::int)::float8`
+        : Prisma.sql`value_num`;
+
     // Grafana runs panels 2, 3, 4 and 5 as four queries over the same rows.
     // One pass, the same five numbers - and the count decides below whether
     // the trend is drawn raw or bucketed.
@@ -1845,10 +1909,10 @@ export async function getPointExplorer(
           count(*) FILTER (
             WHERE value_num IS NULL AND value_bool IS NULL AND value_str IS NULL
           )::int AS null_records,
-          count(DISTINCT value_num)::int AS distinct_values,
-          round(avg(value_num)::numeric, 2)::float8 AS average,
-          round(min(value_num)::numeric, 2)::float8 AS minimum,
-          round(max(value_num)::numeric, 2)::float8 AS maximum
+          count(DISTINCT ${valueExpr})::int AS distinct_values,
+          round(avg(${valueExpr})::numeric, 2)::float8 AS average,
+          round(min(${valueExpr})::numeric, 2)::float8 AS minimum,
+          round(max(${valueExpr})::numeric, 2)::float8 AS maximum
         FROM bas_readings
         WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
       `,
@@ -1861,9 +1925,9 @@ export async function getPointExplorer(
     const latest =
       (
         await tx.$queryRaw<LatestRow[]>`
-          SELECT value_num, ts
+          SELECT ${valueExpr} AS value_num, ts
           FROM bas_readings
-          WHERE point_id = ${pointId} AND value_num IS NOT NULL
+          WHERE point_id = ${pointId} AND ${valueExpr} IS NOT NULL
           ORDER BY ts DESC
           LIMIT 1
         `
@@ -1892,7 +1956,7 @@ export async function getPointExplorer(
 
     if (stats.readings <= maxRaw) {
       trend = await tx.$queryRaw<TrendRow[]>`
-        SELECT ts, value_num
+        SELECT ts, ${valueExpr} AS value_num
         FROM bas_readings
         WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
         ORDER BY ts
@@ -1915,9 +1979,9 @@ export async function getPointExplorer(
       buckets = await tx.$queryRaw<BucketRow[]>`
         SELECT
           ${bucketExpr} AS ts,
-          avg(value_num)::float8 AS average,
-          min(value_num)::float8 AS minimum,
-          max(value_num)::float8 AS maximum,
+          avg(${valueExpr})::float8 AS average,
+          min(${valueExpr})::float8 AS minimum,
+          max(${valueExpr})::float8 AS maximum,
           count(*)::int AS readings
         FROM bas_readings
         WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
@@ -1951,6 +2015,7 @@ export async function getPointExplorer(
       selection,
       pointRows,
       selectedPoint,
+      valueKind: valueKind as ValueKind | null,
       range,
       calendar,
       stats,
@@ -2042,9 +2107,11 @@ export async function getPointExplorer(
       filtered: result.selection.filtered,
       label: describeSelection(result.selection),
     },
-    points: result.pointRows.map(toPointOption),
+    points: result.pointRows.map((row) => toPointOption(row)),
     selectedPoint:
-      result.selectedPoint === null ? null : toPointOption(result.selectedPoint),
+      result.selectedPoint === null
+        ? null
+        : toPointOption(result.selectedPoint, result.valueKind ?? undefined),
     collectionIntervalS: intervalS,
     stationClockOffsetS: result.selectedPoint?.clock_offset_s ?? null,
     stationClockMeasuredAt: iso(result.selectedPoint?.clock_measured_at ?? null),
@@ -2199,12 +2266,30 @@ export function buildBucketedTrend(
   return { trend, gaps };
 }
 
-function toPointOption(row: PointOptionRow): PointOption {
+/**
+ * A picker row as the screen sees it. The kind is the declared type unless
+ * the caller has refined it from the readings (the selected point); a boolean
+ * point carries its two state words, chosen from role, flags and names.
+ */
+function toPointOption(
+  row: PointOptionRow,
+  valueKind: ValueKind = valueKindFromDataType(row.data_type),
+): PointOption {
   return {
     pointId: row.point_id.toString(),
     pointName: row.point_name,
     pointRole: row.point_role,
     unit: row.unit,
     siteName: row.site_name,
+    valueKind,
+    states:
+      valueKind === "boolean"
+        ? booleanStates({
+            role: row.point_role,
+            isStatus: row.is_status,
+            isCommand: row.is_command,
+            names: [row.point_name, row.niagara_history_name],
+          })
+        : null,
   };
 }

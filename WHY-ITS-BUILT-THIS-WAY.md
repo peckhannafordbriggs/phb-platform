@@ -2044,6 +2044,85 @@ that mutation was run.
 
 ---
 
+## 63 · A boolean point is a state, and the chart has to know which kind it is drawing before it chooses an axis
+
+**Decision.** The Point Explorer reads the value column a point's readings
+actually live in, decided from `bas_points.data_type`, and draws a boolean
+point as a stepped line between two labelled states - "Occupied" /
+"Unoccupied", "Enabled" / "Disabled", "On" / "Off", or "True" / "False" when
+nothing says better. The y-axis is those two words and nothing else; the
+tooltip and the Latest tile say the word, never the number. Numeric points
+are untouched: unit on the axis and in the tooltip through the one
+formatter, two decimals and "no unit recorded" when no unit is stored.
+String points are recognised (`valueKind: "string"`) and otherwise left
+exactly as they were, by decision, until the evidence has been looked at.
+2026-10-06.
+
+**What was wrong.** `bas_readings` has `value_num`, `value_bool` and
+`value_str`, the collector fills exactly one per row from the oBIX record
+type, and every Point Explorer query read `value_num`. A boolean point's 421
+rows therefore arrived as 421 null samples: an empty plot under an axis that
+read -0.01 / 0.00 / 0.01 (observed by calling `valueAxis([], null)`),
+"Latest —", and "Distinct values 0 · Reads as a stuck sensor, not a stable
+room" on a point that was working perfectly. The chart had no idea what kind
+of thing it was drawing, because nothing told it.
+
+**Where the knowledge comes from, and why there.** `data_type` is written by
+the collector at discovery from the history's `#RecordDef` prototype and is
+CHECK-constrained to seven values. On live it agrees with the populated
+column on all 39 points, and no point has readings in two columns - so it is
+the authority, and the readings refine it only when it is `unknown` (the
+column default, held by no live point). A declared type is never overruled by
+the data: a `real` point with a stray boolean row is a collector defect to
+find, not a chart to redraw, and letting the data vote would let the axis
+change kind as the window moved. The decision is one pure function,
+`valueKindOf` in `lib/modules/bas/value-kind.ts`, used by the service to
+pick the SQL expression and carried to the browser as `PointOption.valueKind`.
+
+**Why 1 and 0 in the series rather than a second series type.** A boolean
+travels through `TrendPoint.value` as `(value_bool::int)::float8` - NULL stays
+NULL - so the break logic, the bucketing, the custom date range and the
+zoom are the same code for every kind. The chart alone turns the number back
+into the word (`stateWord`), and the only place that is awkward is a
+downsampled bucket, where the average is the share of readings that were
+true. The tooltip says exactly that - "Occupied 72% of readings" beside a
+band of "Unoccupied – Occupied" - and the axis still shows only the two
+states, because a bucket average is not a third state. Two state points
+with 811 readings between them will not hit the 10,000 cap soon; the path
+exists so that when one does, nothing lies.
+
+**Why the state words are chosen the way they are.** The data cannot say -
+`value_bool` is true or false. The words come from what the point is FOR:
+occupancy roles or names, alarm roles or names, "enable" in the name, then
+any status or command role as On / Off, then True / False. Roles before
+names, because a role is a person's classification and a name is whatever
+the integrator typed. The table is five lines in `booleanStates` and is
+meant to be added to.
+
+**Why the tiles changed too.** The chart and the tiles are one screen about
+one point. A chart saying "Occupied" above a tile saying "stuck sensor" is
+the same false claim in a different box. Average reads "—" for a state - the
+database's mean of 1s and 0s is a share of readings, not of time, and a dash
+is truer; Range reads the states seen; Distinct values is not judged for a
+boolean or string point, because two is the healthy maximum and the numeric
+thresholds would call every working one dead.
+
+**Why no second axis.** The question "what happens when one chart shows two
+units" has no case: the Point Explorer is one point at a time, and that is a
+correctness decision recorded in the component's header since B4. No shared
+axis exists to fix.
+
+**What breaks if you undo this.** Draw the boolean with `monotone` and three
+tests fail (the line slopes between states, the band slopes, the source
+guard). Hand a boolean the numeric axis and six fail - raw, zoomed, bucketed,
+a single sample, a mostly-null series, and the gridline rule. Read
+`value_num` for every kind in the service and four fail against the real
+database, including the undeclared-type fallback. Judge a boolean's distinct
+values on the numeric thresholds and one fails. All four mutations were run.
+`tests/bas-value-kinds.test.tsx`, `tests/bas-value-kinds-service.test.ts`.
+
+---
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

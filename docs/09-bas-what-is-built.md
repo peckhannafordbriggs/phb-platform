@@ -128,6 +128,7 @@ building is not recorded.
 | **Axis precision** | The trend's y-axis chooses round ticks at every zoom, decimals by unit; the stored reading is untouched | `fix/bas-chart-axis-precision` (2026-09-18) |
 | **Custom date range** | Point Explorer takes two calendar dates or a year, resolved in the building's zone by PostgreSQL; over 10,000 readings the trend is bucketed with a min–max band and says so; real readings committed as fixtures | `feat/bas-custom-date-range` (2026-09-22) |
 | **Value plausibility** | Does the data mean anything: a run of identical readings past a per-kind threshold is flagged, by role, never by a bad-value list; a card on Collection Health and a *Value* column on the Points list; both known dead sensors flagged live, nothing else | `feat/bas-value-plausibility` (2026-09-28), landed from `feat/bas-value-plausibility-reland` (2026-10-01) under the quiet-UI rules |
+| **Value kinds on the chart** | The Point Explorer reads the column a point's readings live in, from `data_type`; a boolean point is a stepped line between two labelled states with no numeric axis; string points recognised and left alone | `feat/bas-chart-value-kinds` (2026-10-06) |
 
 ### Test count
 
@@ -323,8 +324,9 @@ chart. See `WHY-ITS-BUILT-THIS-WAY` § 30.
 
 **Drag across the plot to zoom; Reset returns.** The zoom is a domain change,
 never a filter on the data, so no zoom can smooth over a gap. **The curve is
-`monotone`**, so it never draws a peak the sensor did not record. **One point at
-a time**, so two units never share an axis.
+`monotone`** for a numeric point, so it never draws a peak the sensor did not
+record, and `stepAfter` for a boolean one, so it never slopes between states.
+**One point at a time**, so two units never share an axis.
 
 **The y-axis is chosen by the chart, not by Recharts.** Round ticks at every
 zoom, a fixed number of decimals by the kind of unit (temperature 1, percent 0,
@@ -346,6 +348,21 @@ first reading says where the data begins; `bas_data_gaps` rows are outlined on
 the chart. The office station's clock offset is stated, not corrected.
 `runbook.md` → *The trend chart says "Averaged to one point per …"*, *Which
 time zone a Point Explorer date range is in*; `WHY-ITS-BUILT-THIS-WAY` § 53.
+
+**The chart knows which kind of value it is drawing (2026-10-06).** The
+service reads the value column the point's `data_type` names - the
+collector's declaration from the oBIX record prototype, which agrees with the
+populated column on every live point - and carries `valueKind` and, for a
+boolean, two `states` words to the browser. A **boolean point** is a stepped
+line between two labelled states (Occupied / Unoccupied, Enabled / Disabled,
+Alarm / Normal, On / Off, or True / False), its y-axis is those two words and
+nothing else, and the tooltip and Latest tile say the word. The reading
+travels as 1 or 0, so the break, bucket, custom-range and zoom code is shared;
+a bucketed boolean reads as a share of readings. Numeric points are unchanged.
+**String and enum points are recognised and otherwise untouched**, pending a
+look at the evidence. `lib/modules/bas/value-kind.ts`; `runbook.md` → *A
+boolean point's chart is empty, or its axis reads On / Off*;
+`WHY-ITS-BUILT-THIS-WAY` § 63.
 
 ### Analyze — `/bas/analyze` (B5, 2026-09-21)
 
