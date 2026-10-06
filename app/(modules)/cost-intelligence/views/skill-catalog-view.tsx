@@ -1,7 +1,7 @@
-import Link from "next/link";
 import type { CipSkill, CipSkillSync } from "@/lib/generated/prisma/client";
 import { Card } from "../ui/Card";
 import { Pill } from "../ui/Pill";
+import { SkillList } from "./skill-list";
 import { SkillSyncButton } from "./skill-sync-button";
 
 /** CHANGELOG dates are stored as midnight UTC; formatting in UTC keeps them on the right day. */
@@ -27,18 +27,17 @@ export function SkillCatalogView({
   return (
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-[21rem_minmax(0,1fr)] lg:min-h-[22rem] lg:flex-[1_1_0px] lg:grid-rows-[minmax(0,1fr)]">
       <Card padding="p-0" className="flex min-h-0 flex-col">
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--divider-soft)] px-5 py-3">
-          <span className="eyebrow text-[var(--muted)]">Skills · {skills.length}</span>
-          <SkillSyncButton />
+        <div className="shrink-0 border-b border-[var(--divider-soft)] px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="eyebrow whitespace-nowrap text-[var(--muted)]">Skills · {skills.length}</span>
+            <SkillSyncButton />
+          </div>
+          <SyncStatus sync={lastSync} />
         </div>
-        <SyncStatus sync={lastSync} />
-        <ul className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
-          {skills.map((s) => (
-            <li key={s.folderName}>
-              <SkillRow skill={s} selected={s.folderName === selected?.folderName} />
-            </li>
-          ))}
-        </ul>
+        <SkillList
+          skills={skills.map(({ folderName, name, version }) => ({ folderName, name, version }))}
+          selected={selected?.folderName ?? null}
+        />
       </Card>
       {selected ? <SkillDetail skill={selected} /> : <EmptyCatalog />}
     </div>
@@ -47,10 +46,10 @@ export function SkillCatalogView({
 
 function SyncStatus({ sync }: { sync: CipSkillSync | null }) {
   if (sync === null) {
-    return <p className="px-5 pt-3 text-[0.75rem] text-[var(--muted)]">Never synced.</p>;
+    return <p className="mt-2 text-[0.75rem] text-[var(--muted)]">Never synced.</p>;
   }
   if (sync.status === "running") {
-    return <p className="px-5 pt-3 text-[0.75rem] text-[var(--muted)]">Sync in progress…</p>;
+    return <p className="mt-2 text-[0.75rem] text-[var(--muted)]">Sync in progress…</p>;
   }
 
   const when = MOMENT.format(sync.finishedAt ?? sync.startedAt);
@@ -58,7 +57,7 @@ function SyncStatus({ sync }: { sync: CipSkillSync | null }) {
   if (sync.status === "failed") {
     const reason = firstReason(sync.errors);
     return (
-      <div className="flex flex-col gap-1 px-5 pt-3 text-[0.75rem]">
+      <div className="mt-2 flex flex-col gap-1 text-[0.75rem]">
         <span>
           <Pill tone="warn">Sync failed</Pill> <span className="text-[var(--muted)]">{when}</span>
         </span>
@@ -69,8 +68,8 @@ function SyncStatus({ sync }: { sync: CipSkillSync | null }) {
 
   const skipped = Array.isArray(sync.errors) ? sync.errors.length : 0;
   return (
-    <p className="px-5 pt-3 text-[0.75rem] text-[var(--muted)]">
-      Last synced {when}
+    <p className="mt-2 text-[0.75rem] text-[var(--muted)]">
+      Last synced {when} · {sync.skillsAdded} added, {sync.skillsUpdated} updated, {sync.skillsDeleted} removed
       {sync.status === "partial" && (
         <>
           {" "}
@@ -87,24 +86,6 @@ function firstReason(errors: unknown): string | null {
   return first !== null && typeof first === "object" && "reason" in first && typeof first.reason === "string"
     ? first.reason
     : null;
-}
-
-function SkillRow({ skill, selected }: { skill: CipSkill; selected: boolean }) {
-  return (
-    <Link
-      href={`/cost-intelligence/settings/skills/${encodeURIComponent(skill.folderName)}`}
-      aria-current={selected ? "page" : undefined}
-      className={
-        "block rounded-[var(--radius-row)] border-l-2 px-4 py-3 transition-colors " +
-        (selected ? "border-[var(--module-accent)] bg-white shadow-sm" : "border-transparent hover:bg-[var(--neutral-50)]")
-      }
-    >
-      <p className="truncate text-[0.875rem] font-semibold">{skill.name}</p>
-      <p className="mt-1.5 font-mono text-[0.75rem] text-[var(--muted)]">
-        v{skill.version} · {DAY.format(skill.lastModified)}
-      </p>
-    </Link>
-  );
 }
 
 function SkillDetail({ skill }: { skill: CipSkill }) {

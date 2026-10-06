@@ -56,6 +56,7 @@ app/(modules)/cost-intelligence/
     runs-view.tsx           RunsView
     skill-catalog-view.tsx  SkillCatalogView
     skill-sync-button.tsx   SkillSyncButton (client) - the Sync button
+    skill-list.tsx          SkillList (client) - the skills list; keeps the selected row in view
     workflows-view.tsx      WorkflowsView
     access-view.tsx         AccessView
     usage-view.tsx          UsageView
@@ -118,9 +119,9 @@ Unknown folder names 404. No skills yet shows an empty state that points at Sync
 
 | People call it | Where |
 |---|---|
-| the Sync button | `SkillSyncButton`, top right of the left `Card`. POSTs to `/api/modules/cost-intelligence/skills/sync`, shows the counts or the failure reason, then refreshes the page |
-| last synced | `SyncStatus` under the header: "Last synced …" (New York time), "Sync failed" with the reason, or "N could not be read" for a partial sync |
-| the skills list | left `Card`: name, version and last-updated date. The selected one is raised with a teal edge |
+| the Sync button | `SkillSyncButton`, top right of the left `Card`. POSTs to `/api/modules/cost-intelligence/skills/sync`, then refreshes the page. Only a 409 or network error shows a message, floated under the button so the header never reflows |
+| last synced | `SyncStatus` under the header: "Last synced …" (New York time) with the added / updated / removed counts, "Sync failed" with the reason, or "N could not be read" for a partial sync |
+| the skills list | `SkillList`, left `Card`: one compact row per skill, name and version. The selected row is tinted in the module colour. Rows link with `scroll={false}` and the selected row scrolls back into view after the page re-renders |
 | the skill detail | right `Card`: name, folder name, version, last updated, last synced, description |
 
 Last-updated dates come from CHANGELOG headings and are stored as midnight UTC, so they

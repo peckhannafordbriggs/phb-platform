@@ -5,52 +5,45 @@ import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "../ui/Button";
 
-type Outcome = {
-  status: "ok" | "partial" | "failed";
-  skillsAdded: number;
-  skillsUpdated: number;
-  skillsDeleted: number;
-  message: string | null;
-};
-
-/** Runs a skill sync, then refreshes the page so the list and "Last synced" line update. */
+/**
+ * Runs a skill sync, then refreshes the page so the list and the status line
+ * update. Only a request that never produced a sync row (409, network) shows a
+ * message here, floated under the button so the header never reflows; every
+ * other outcome is in the status line.
+ */
 export function SkillSyncButton() {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function sync() {
     setSyncing(true);
-    setNote(null);
+    setError(null);
     try {
       const response = await fetch("/api/modules/cost-intelligence/skills/sync", { method: "POST" });
-      const body = (await response.json().catch(() => null)) as
-        | { data?: Outcome; error?: { message: string } }
-        | null;
-
-      if (!response.ok || !body?.data) {
-        setNote(body?.error?.message ?? "Sync failed. Try again.");
-      } else if (body.data.status === "failed") {
-        setNote(body.data.message ?? "Sync failed.");
-      } else {
-        const { skillsAdded, skillsUpdated, skillsDeleted } = body.data;
-        setNote(`${skillsAdded} added, ${skillsUpdated} updated, ${skillsDeleted} removed`);
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: { message: string } } | null;
+        setError(body?.error?.message ?? "Sync failed. Try again.");
       }
       router.refresh();
     } catch {
-      setNote("Could not reach the server. Try again.");
+      setError("Could not reach the server. Try again.");
     } finally {
       setSyncing(false);
     }
   }
 
   return (
-    <div className="flex items-center gap-3">
-      {note && <span className="max-w-[12rem] truncate text-[0.75rem] text-[var(--muted)]" title={note}>{note}</span>}
+    <div className="relative shrink-0">
       <Button onClick={sync} disabled={syncing}>
         <RefreshCw size={14} aria-hidden="true" className={syncing ? "animate-spin" : undefined} />
         {syncing ? "Syncing…" : "Sync"}
       </Button>
+      {error && (
+        <p role="alert" className="absolute right-0 top-full z-10 mt-1 w-56 rounded-md bg-white p-2 text-[0.75rem] shadow-md">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
