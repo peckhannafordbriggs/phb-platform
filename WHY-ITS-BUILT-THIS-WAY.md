@@ -1613,6 +1613,24 @@ change-of-value point to now() and a stopped collector reads as a dead
 sensor. Store the verdict and a threshold change here leaves the stored
 column wrong until the collector is redeployed. Deactivate a point to silence
 the card and the station overwrites what was not collected.
+
+**Amendment, 2026-10-06: the type is a gate too.** The role gate alone had a
+hole: a boolean or enum point given a measurement role - a fan status
+misclassified as `zone_temp` - would have been judged on that measurement's
+threshold and flagged after six hours of running. Nothing on live was in that
+position, but the vocabulary makes it one click away. The gate now has a
+second half, `checkedTypeSql` in SQL and the same `STATE_DATA_TYPES` list in
+the judge: `bool`, `str` and `enum` are never judged, whatever the role, with
+their own reason, `state_type`, worded *state point*. It sits AFTER the role
+gates on purpose, so a state point with no role still reads *role not set* -
+the words that open the role picker - and so no verdict or wording that
+existed before changed: the live run before and after is 17 judged, 2 flat,
+15 changing, and the five bool and string points carry the same reasons they
+did. A test walks all seven declared types through both halves; removing
+either half makes the agreement guard throw and fails the named test.
+
+---
+
 ## 56 · The assertion fetch is set on the provider object, and the test goes through Auth.js's own normalisation
 
 **What.** Production sign-in authenticates the token exchange with the managed

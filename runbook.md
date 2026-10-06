@@ -7304,6 +7304,7 @@ write anywhere in the module.
 | No role (`point_role` NULL) | **No** | *Not checked · role not set* |
 | A setpoint (`bas_point_roles.is_setpoint`) | No - a setpoint holding still is the setpoint working | *Not checked · setpoint* |
 | A status, command or mode point (`measurement` is `status` or `mode`) | No - `Occupied` has 419 records in two and a half years, which is normal | *Not checked · status or command point* |
+| A point whose readings are states, not quantities (`bas_points.data_type` is `bool`, `str` or `enum`), **whatever its role** | No - a state can hold one value for days legitimately, and no measurement threshold applies to it. Gated AFTER the role rows above, so this is the reason only when a measurement role was put on such a point (2026-10-06) | *Not checked · state point* |
 | A measured quantity - temperature, pressure, flow, humidity, a damper position, a fan speed | **Yes**, against the threshold for its kind | *Changing*, *Flat …*, or *Too few readings* |
 
 Temp1, Temp2 and Temp3 at Spring Grove are unclassified on purpose - nobody

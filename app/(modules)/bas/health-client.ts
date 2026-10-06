@@ -1896,6 +1896,7 @@ export const NOT_CHECKED_WORDS: Record<NotCheckedReason, string> = {
   no_role: "role not set",
   setpoint: "setpoint",
   state: "status or command point",
+  state_type: "state point",
   no_threshold: "no threshold for this kind of measurement",
 };
 
@@ -1934,6 +1935,9 @@ export function describeNotChecked(summary: PlausibilitySummary): string | null 
   if (n.setpoint > 0) parts.push(`${n.setpoint} ${n.setpoint === 1 ? "setpoint" : "setpoints"}`);
   if (n.state > 0) {
     parts.push(`${n.state} status or command ${n.state === 1 ? "point" : "points"}`);
+  }
+  if (n.state_type > 0) {
+    parts.push(`${n.state_type} state ${n.state_type === 1 ? "point" : "points"} (true/false or text values)`);
   }
   if (n.no_threshold > 0) {
     parts.push(`${n.no_threshold} with no threshold for ${n.no_threshold === 1 ? "its" : "their"} kind`);

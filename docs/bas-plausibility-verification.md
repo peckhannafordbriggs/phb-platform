@@ -296,3 +296,46 @@ and `tests/bas-plausibility.test.ts` and their text asserted. No change-of-value
 point is judged on the estate. The local database is a copy frozen on 29
 September, so "live" above means the live data as of that day, not a station
 read today.
+
+---
+
+## The type gate, 2026-10-06
+
+**What changed.** A boolean, string or enum point (`bas_points.data_type`
+in `bool`, `str`, `enum`) is never judged on a measurement threshold,
+whatever role it carries. The role gate alone would have judged a fan
+status misclassified as `zone_temp` on the six-hour temperature threshold.
+The gate sits after the role gates, so no existing verdict or wording moved.
+
+**Live run after the change**, `npm run bas:plausibility:verify` against the
+same frozen copy, compared line by line with a run before it:
+
+| | Before | After |
+|---|---|---|
+| Active points | 30 | 30 |
+| Judged (flat, changing, too few) | 17 | 17 |
+| Flat | 2 (points_RoomT, VAV-8 104-105) | 2, the same two |
+| Changing | 15 | 15 |
+| Not checked, no role | 9 | 9 |
+| Not checked, setpoint | 2 | 2 |
+| Not checked, state (status or command role) | 2 (Occupied, OccupancyCommand) | 2, the same two |
+| Not checked, state point (the new reason) | — | 0 |
+| Acceptance | PASS | PASS |
+
+The five bool and string points - Occupied, System_Enable, OpState,
+OperatingStateOR, Unit Status - carry the identical reasons they did. The new
+reason appears on live for no point, because no state-typed point carries a
+measurement role; the script would now also fail the run if one were flagged.
+
+**Mutation E, both halves, each reverted and the files byte-identical
+afterwards.** Removing the SQL half (`AND checkedTypeSql(p)` from the
+lateral): 8 tests, the agreement guard throwing *SQL evaluated a point
+TypeScript would not check (state_type …)* on every service call, including
+*"a boolean point given a temperature role is NOT judged, and reads 'not
+checked, state point'"*. Removing the TypeScript half (the
+`STATE_DATA_TYPES` branch of the judge) instead: the same 8, the guard now
+throwing *SQL did not evaluate a point TypeScript expected to check*. The
+test that proves the gate seeds a `bool` point with the temperature role and
+seventy identical `true` readings, seventeen hours flat against a six-hour
+threshold, and asserts it is absent from the card with the new reason on the
+Points list. A second test walks all seven declared types through both halves.

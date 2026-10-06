@@ -24,12 +24,13 @@ import {
   MIN_READINGS,
   NOT_CHECKED_REASONS,
   PLAUSIBILITY_THRESHOLDS,
+  STATE_DATA_TYPES,
   STATE_MEASUREMENTS,
   judgePlausibility,
   thresholdFor,
   type PlausibilityRow,
 } from "@/lib/modules/bas/plausibility";
-import { checkedRoleSql } from "@/lib/modules/bas/plausibility-sql";
+import { checkedRoleSql, checkedTypeSql } from "@/lib/modules/bas/plausibility-sql";
 import { getCollectionHealth } from "@/lib/modules/bas/service";
 import { getStationPoints } from "@/lib/modules/bas/settings-service";
 import { resetBasAvailabilityCache } from "@/lib/modules/bas/route-helpers";
@@ -102,6 +103,14 @@ import {
  *   C. set MIN_READINGS to 3 -> "three readings are not stuck" fails.
  *   D. measure a COV point to now() instead of last_run_at -> the stalled
  *      collector test fails: the point is flagged.
+ *
+ * MUTATIONS RUN (2026-10-06), the type gate, each reverted:
+ *   E. drop `AND checkedTypeSql(p)` from the lateral -> the judge throws
+ *      "SQL evaluated a point TypeScript would not check" for bool_as_temp;
+ *      drop the STATE_DATA_TYPES branch of the judge instead -> it throws
+ *      "SQL did not evaluate a point TypeScript expected to check". Either
+ *      half alone fails "a boolean point given a temperature role is NOT
+ *      judged" and the declared-type walk.
  */
 
 const authMock = vi.mocked(auth);
@@ -213,6 +222,7 @@ async function seed(): Promise<Seeded> {
       visible?: boolean;
       active?: boolean;
       unit?: string | null;
+      dataType?: string;
     } = {},
   ) => {
     const row = await testDb.basPoint.create({
@@ -221,7 +231,7 @@ async function seed(): Promise<Seeded> {
         niagaraHistoryName: `${PREFIX}${name}`,
         pointRole: role,
         unit: options.unit === undefined ? "fahrenheit" : options.unit,
-        dataType: "real",
+        dataType: options.dataType ?? "real",
         capacity: 500,
         collectionIntervalS: options.intervalS === undefined ? 900 : options.intervalS,
         isVisible: options.visible ?? true,
@@ -336,6 +346,19 @@ async function seed(): Promise<Seeded> {
     [{ agoMs: 8 * HOUR + 15 * MINUTE, value: 66 }, ...flat(72, 33, 15 * MINUTE)],
   );
 
+  // 13. State-typed points GIVEN a measurement role, flat far past the
+  // temperature threshold. The role says temperature; the type says the
+  // readings are states. The type must win, or a misclassified fan status
+  // is "stuck" after six hours of running.
+  const boolAsTemp = await point("bool_as_temp", ROLES.sat, { dataType: "bool", unit: null });
+  await testDb.basReading.createMany({
+    data: flat(null, 70, 15 * MINUTE).map((r) => ({ pointId: boolAsTemp, ts: ago(r.agoMs), valueBool: true })),
+  });
+  const enumAsTemp = await point("enum_as_temp", ROLES.sat, { dataType: "enum", unit: null });
+  await testDb.basReading.createMany({
+    data: flat(null, 70, 15 * MINUTE).map((r) => ({ pointId: enumAsTemp, ts: ago(r.agoMs), valueStr: "3" })),
+  });
+
   return { fixture, now, ids, covLastRunAt };
 }
 
@@ -419,13 +442,56 @@ describe("the role exclusion", () => {
     });
   });
 
+  it("a boolean point given a temperature role is NOT judged, and reads 'not checked, state point'", async () => {
+    // Seventy identical `true` readings, 15 minutes apart: seventeen hours
+    // flat against a six-hour temperature threshold. Judged, it would be the
+    // longest-flat point on the card.
+    const result = await health();
+    expect(result.plausibility.flat.map((p) => p.pointName)).not.toContain(name("bool_as_temp"));
+
+    const list = await getStationPoints(viewer, seeded.fixture.stationId.toString());
+    const bool = list.points.find((p) => p.niagaraHistoryName === name("bool_as_temp"))!;
+    expect(bool.pointRole).toBe(ROLES.sat);
+    expect(bool.plausibility).toMatchObject({ state: "not_checked", notCheckedReason: "state_type" });
+    expect(bool.plausibility.thresholdHours).toBeNull();
+    expect(bool.plausibility.flatHours).toBeNull();
+    expect(NOT_CHECKED_WORDS.state_type).toBe("state point");
+    expect(describePlausibility(bool.plausibility, null)).toEqual({
+      label: "Not checked",
+      detail: "state point",
+      tone: "neutral",
+    });
+  });
+
+  it("an enum point given a temperature role is not judged either", async () => {
+    const result = await health();
+    expect(result.plausibility.flat.map((p) => p.pointName)).not.toContain(name("enum_as_temp"));
+
+    const list = await getStationPoints(viewer, seeded.fixture.stationId.toString());
+    const text = list.points.find((p) => p.niagaraHistoryName === name("enum_as_temp"))!;
+    expect(text.plausibility).toMatchObject({ state: "not_checked", notCheckedReason: "state_type" });
+  });
+
+  it("the type gate sits AFTER the role gates: a boolean with no role or a status role keeps its reason", async () => {
+    // fanCmd is bool with a status role; fanStatus is bool with a status
+    // role; neither changes. On live this is what keeps every existing
+    // verdict's wording as it was, and "role not set" the door to the picker.
+    const list = await getStationPoints(viewer, seeded.fixture.stationId.toString());
+    const cmd = list.points.find((p) => p.niagaraHistoryName === "AHU$2d1_FanCmd")!;
+    expect(cmd.plausibility.notCheckedReason).toBe("state");
+    const status = list.points.find((p) => p.niagaraHistoryName === "AHU$2d1_FanStatus")!;
+    expect(status.plausibility.notCheckedReason).toBe("state");
+  });
+
   it("counts the exclusions by reason, over active points only", async () => {
     const result = await health();
     // satSp; fanCmd and fanStatus (fixture) plus site B's bOk is a role with
     // interval 900 - the fixture's roles: sat (temperature), satSp, fanCmd,
-    // fanStatus (status). unknown and bUnknown have no role.
+    // fanStatus (status). unknown and bUnknown have no role. bool_as_temp and
+    // enum_as_temp carry a temperature role on a state type.
     expect(result.plausibility.notChecked.setpoint).toBe(1);
     expect(result.plausibility.notChecked.state).toBe(2);
+    expect(result.plausibility.notChecked.state_type).toBe(2);
     expect(result.plausibility.notChecked.no_role).toBe(2);
     expect(result.plausibility.notChecked.no_threshold).toBe(0);
     // Inactive points are outside every active figure, this one included.
@@ -714,6 +780,7 @@ describe("the SQL decision and the TypeScript reason agree", () => {
 
       const row: PlausibilityRow = {
         is_active: true,
+        data_type: "real",
         point_role: role.pointRole,
         role_is_setpoint: role.isSetpoint,
         role_measurement: role.measurement,
@@ -746,6 +813,51 @@ describe("the SQL decision and the TypeScript reason agree", () => {
     expect(checked).toBeGreaterThan(30);
   });
 
+  it("on every declared type: bool, str and enum are refused by both halves, real and int by neither", async () => {
+    // Every value the CHECK on bas_points.data_type admits, each against a
+    // role that WOULD be judged. The SQL half and the TypeScript half must
+    // agree, and the state types must land on the one reason made for them.
+    const types = ["real", "int", "bool", "str", "enum", "abstime", "unknown"];
+    for (const dataType of types) {
+      const sql = await testDb.$queryRaw<Array<{ checked: boolean | null }>>`
+        SELECT ${checkedTypeSql(Prisma.sql`p`)} AS checked
+          FROM (VALUES (${dataType}::text)) AS p(data_type)`;
+      const sqlChecked = sql[0]!.checked === true;
+      expect(sqlChecked, dataType).toBe(!STATE_DATA_TYPES.includes(dataType));
+
+      const verdict = judgePlausibility({
+        is_active: true,
+        data_type: dataType,
+        point_role: ROLES.sat,
+        role_is_setpoint: false,
+        role_measurement: "temperature",
+        collection_interval_s: 900,
+        last_run_at: null,
+        last_status: null,
+        pl_checked: sqlChecked ? true : null,
+        pl_last_ts: null,
+        pl_value_num: null,
+        pl_value_bool: null,
+        pl_value_str: null,
+        pl_diff_ts: null,
+        pl_diff_num: null,
+        pl_diff_bool: null,
+        pl_diff_str: null,
+        pl_run_readings: null,
+        pl_flat_since: null,
+        pl_history_start: null,
+        pl_window_readings: null,
+      });
+      if (STATE_DATA_TYPES.includes(dataType)) {
+        expect(verdict, dataType).toMatchObject({ state: "not_checked", notCheckedReason: "state_type" });
+      } else {
+        // Checked, with nothing to judge yet: the role gate let it through.
+        expect(verdict.state, dataType).toBe("too_few_readings");
+      }
+    }
+    expect(STATE_DATA_TYPES).toEqual(["bool", "str", "enum"]);
+  });
+
   it("every measurement kind in the vocabulary is either judged, a state word, or absent on purpose", () => {
     const kinds = new Set(BAS_POINT_ROLES.map((r) => r.measurement));
     const unaccounted = [...kinds].filter(
@@ -764,6 +876,7 @@ describe("the SQL decision and the TypeScript reason agree", () => {
   it("the judge refuses a row the two halves disagree on", () => {
     const base: PlausibilityRow = {
       is_active: true,
+      data_type: "real",
       point_role: "x",
       role_is_setpoint: true,
       role_measurement: "temperature",
@@ -868,7 +981,7 @@ describe("the Collection Health card", () => {
       checked: 5,
       moving: 5,
       tooFewReadings: 0,
-      notChecked: { not_collected: 0, no_role: 3, setpoint: 0, state: 0, no_threshold: 0 },
+      notChecked: { not_collected: 0, no_role: 3, setpoint: 0, state: 0, state_type: 0, no_threshold: 0 },
       flat: [],
     };
     expect(describeStuck(zero, "")).toBe("Every checked point is still changing value - 5 points judged.");
