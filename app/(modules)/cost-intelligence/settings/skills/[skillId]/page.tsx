@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireModuleAdmin } from "@/lib/authz";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
-import { getPlaceholderSkill } from "@/lib/modules/cost-intelligence/placeholder-settings";
+import { getLatestSkillSync, listCatalogSkills } from "@/lib/modules/cost-intelligence/skill-sync";
 import { CipShell } from "../../../cip-shell";
 import { NewRunActions } from "../../../header-actions";
 import { SettingsNav } from "../../../settings/settings-nav";
@@ -13,14 +13,15 @@ export default async function SkillPage({ params }: { params: Promise<{ skillId:
   const access = await requireModuleAdmin(COST_INTELLIGENCE_MODULE_KEY);
   if (!access.ok) notFound();
 
-  // TODO(backend): look the skill up in the catalog.
   const { skillId } = await params;
-  if (!getPlaceholderSkill(skillId)) notFound();
+  const [skills, lastSync] = await Promise.all([listCatalogSkills(), getLatestSkillSync()]);
+  const selected = skills.find((s) => s.folderName === decodeURIComponent(skillId));
+  if (!selected) notFound();
 
   return (
     <CipShell canAdminister actions={<NewRunActions canAdminister />}>
       <SettingsNav />
-      <SkillCatalogView selectedId={skillId} />
+      <SkillCatalogView skills={skills} selected={selected} lastSync={lastSync} />
     </CipShell>
   );
 }

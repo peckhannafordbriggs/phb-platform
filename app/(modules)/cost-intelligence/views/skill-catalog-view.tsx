@@ -1,38 +1,98 @@
-import { Fragment } from "react";
 import Link from "next/link";
-import { PLACEHOLDER_SETTINGS_WORKFLOWS, PLACEHOLDER_SKILLS } from "@/lib/modules/cost-intelligence/placeholder-settings";
-import type { Skill } from "@/lib/modules/cost-intelligence/types";
+import type { CipSkill, CipSkillSync } from "@/lib/generated/prisma/client";
 import { Card } from "../ui/Card";
-import { Node } from "./parts";
+import { Pill } from "../ui/Pill";
+import { SkillSyncButton } from "./skill-sync-button";
 
-const usedBy = (id: string) => PLACEHOLDER_SETTINGS_WORKFLOWS.filter((w) => w.steps.some((s) => s.skillId === id)).length;
+/** CHANGELOG dates are stored as midnight UTC; formatting in UTC keeps them on the right day. */
+const DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+const MOMENT = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "America/New_York",
+});
 
-/** 1d: every skill on the left, the selected one on the right. */
-export function SkillCatalogView({ selectedId }: { selectedId?: string }) {
-  const skill = PLACEHOLDER_SKILLS.find((s) => s.id === selectedId) ?? PLACEHOLDER_SKILLS[0]!;
+/** 1d: every skill on the left, the selected one on the right. Data comes from cip_skills. */
+export function SkillCatalogView({
+  skills,
+  selected,
+  lastSync,
+}: {
+  skills: CipSkill[];
+  selected: CipSkill | null;
+  lastSync: CipSkillSync | null;
+}) {
   return (
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-[21rem_minmax(0,1fr)] lg:min-h-[22rem] lg:flex-[1_1_0px] lg:grid-rows-[minmax(0,1fr)]">
       <Card padding="p-0" className="flex min-h-0 flex-col">
-        <div className="shrink-0 border-b border-[var(--divider-soft)] px-5 py-4">
-          <span className="eyebrow text-[var(--muted)]">Skills</span>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--divider-soft)] px-5 py-3">
+          <span className="eyebrow text-[var(--muted)]">Skills · {skills.length}</span>
+          <SkillSyncButton />
         </div>
+        <SyncStatus sync={lastSync} />
         <ul className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
-          {PLACEHOLDER_SKILLS.map((s) => (
-            <li key={s.id}>
-              <SkillRow skill={s} selected={s.id === skill.id} />
+          {skills.map((s) => (
+            <li key={s.folderName}>
+              <SkillRow skill={s} selected={s.folderName === selected?.folderName} />
             </li>
           ))}
         </ul>
       </Card>
-      <SkillDetail skill={skill} />
+      {selected ? <SkillDetail skill={selected} /> : <EmptyCatalog />}
     </div>
   );
 }
 
-function SkillRow({ skill, selected }: { skill: Skill; selected: boolean }) {
+function SyncStatus({ sync }: { sync: CipSkillSync | null }) {
+  if (sync === null) {
+    return <p className="px-5 pt-3 text-[0.75rem] text-[var(--muted)]">Never synced.</p>;
+  }
+  if (sync.status === "running") {
+    return <p className="px-5 pt-3 text-[0.75rem] text-[var(--muted)]">Sync in progress…</p>;
+  }
+
+  const when = MOMENT.format(sync.finishedAt ?? sync.startedAt);
+
+  if (sync.status === "failed") {
+    const reason = firstReason(sync.errors);
+    return (
+      <div className="flex flex-col gap-1 px-5 pt-3 text-[0.75rem]">
+        <span>
+          <Pill tone="warn">Sync failed</Pill> <span className="text-[var(--muted)]">{when}</span>
+        </span>
+        {reason && <span className="text-[var(--muted)]">{reason}</span>}
+      </div>
+    );
+  }
+
+  const skipped = Array.isArray(sync.errors) ? sync.errors.length : 0;
+  return (
+    <p className="px-5 pt-3 text-[0.75rem] text-[var(--muted)]">
+      Last synced {when}
+      {sync.status === "partial" && (
+        <>
+          {" "}
+          <Pill tone="warn">{skipped} could not be read</Pill>
+        </>
+      )}
+    </p>
+  );
+}
+
+function firstReason(errors: unknown): string | null {
+  if (!Array.isArray(errors)) return null;
+  const first: unknown = errors[0];
+  return first !== null && typeof first === "object" && "reason" in first && typeof first.reason === "string"
+    ? first.reason
+    : null;
+}
+
+function SkillRow({ skill, selected }: { skill: CipSkill; selected: boolean }) {
   return (
     <Link
-      href={`/cost-intelligence/settings/skills/${skill.id}`}
+      href={`/cost-intelligence/settings/skills/${encodeURIComponent(skill.folderName)}`}
       aria-current={selected ? "page" : undefined}
       className={
         "block rounded-[var(--radius-row)] border-l-2 px-4 py-3 transition-colors " +
@@ -40,48 +100,47 @@ function SkillRow({ skill, selected }: { skill: Skill; selected: boolean }) {
       }
     >
       <p className="truncate text-[0.875rem] font-semibold">{skill.name}</p>
-      <p className="mt-1.5 font-mono text-[0.75rem]">{skill.live ?? "—"}</p>
+      <p className="mt-1.5 font-mono text-[0.75rem] text-[var(--muted)]">
+        v{skill.version} · {DAY.format(skill.lastModified)}
+      </p>
     </Link>
   );
 }
 
-function SkillDetail({ skill }: { skill: Skill }) {
-  const n = usedBy(skill.id);
-
+function SkillDetail({ skill }: { skill: CipSkill }) {
   return (
     <Card padding="p-0" className="min-h-0 overflow-y-auto">
-      <div className="px-6 pt-5">
+      <div className="flex flex-col gap-5 px-6 py-5">
         <div className="flex flex-wrap items-start justify-between gap-6">
           <div className="min-w-0">
             <h2 className="text-xl font-semibold">{skill.name}</h2>
-            <p className="mt-1 font-mono text-[0.75rem] text-[var(--muted)]">
-              Used by {n} workflow{n === 1 ? "" : "s"}
-            </p>
+            <p className="mt-1 font-mono text-[0.75rem] text-[var(--muted)]">{skill.folderName}</p>
           </div>
-          <p className="font-mono text-[0.75rem]">{skill.live ?? "—"}</p>
+          <Pill tone="muted">v{skill.version}</Pill>
         </div>
-        <VersionTrack skill={skill} />
+
+        <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 gap-y-2 text-[0.8125rem]">
+          <dt className="text-[var(--muted)]">Version</dt>
+          <dd>v{skill.version}</dd>
+          <dt className="text-[var(--muted)]">Last updated</dt>
+          <dd>{DAY.format(skill.lastModified)}</dd>
+          <dt className="text-[var(--muted)]">Last synced</dt>
+          <dd>{MOMENT.format(skill.lastSynced)}</dd>
+        </dl>
+
+        <div>
+          <span className="eyebrow text-[var(--muted)]">Description</span>
+          <p className="mt-2 text-[0.875rem] leading-relaxed">{skill.description}</p>
+        </div>
       </div>
     </Card>
   );
 }
 
-function VersionTrack({ skill }: { skill: Skill }) {
+function EmptyCatalog() {
   return (
-    <ol className="flex items-start overflow-x-auto py-6">
-      {skill.versions.map((v, i) => {
-        const live = v === skill.live;
-        return (
-          <Fragment key={v}>
-            {i > 0 && <li aria-hidden="true" className="mt-[8px] h-px min-w-8 flex-1 bg-[var(--neutral-200)]" />}
-            <li className="flex w-24 shrink-0 flex-col items-center gap-2">
-              <Node size={16} filled={live} color={live ? "var(--phb-teal-ink)" : "var(--neutral-400)"} />
-              <span className={"font-mono text-[0.75rem] " + (live ? "font-semibold" : "text-[var(--muted)]")}>{v}</span>
-              {live && <span className="eyebrow -mt-1 text-[var(--phb-teal-ink)]">Live</span>}
-            </li>
-          </Fragment>
-        );
-      })}
-    </ol>
+    <Card className="flex min-h-0 items-center justify-center">
+      <p className="text-[0.875rem] text-[var(--muted)]">No skills yet. Press Sync to read the skills folder.</p>
+    </Card>
   );
 }

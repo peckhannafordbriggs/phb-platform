@@ -206,6 +206,11 @@ export async function getLatestSkillSync() {
   return prisma.cipSkillSync.findFirst({ orderBy: { startedAt: "desc" } });
 }
 
+/** Every skill in the catalog, for the Skill catalog screen. */
+export async function listCatalogSkills() {
+  return prisma.cipSkill.findMany({ orderBy: { name: "asc" } });
+}
+
 // ---------------------------------------------------------------------------
 // Reading the folder
 // ---------------------------------------------------------------------------

@@ -4,7 +4,8 @@ Use this to turn what someone calls a part of the screen ("the launcher", "the
 ledger", "the filter") into the component and file that renders it.
 
 The screens are **real UI over placeholder data**, apart from the checkpoint, which is
-still grey placeholder bars. No backend yet: every data source is in
+still grey placeholder bars, and the **Skill catalog**, which reads `cip_skills` (see
+`lib/modules/cost-intelligence/skill-sync.ts`). Every other data source is in
 `lib/modules/cost-intelligence/placeholder.ts` (runs) or `placeholder-settings.ts`
 (Settings), marked `TODO(backend)`. The plan for making them real is `PLAN.md` beside
 this file.
@@ -54,6 +55,7 @@ app/(modules)/cost-intelligence/
   views/
     runs-view.tsx           RunsView
     skill-catalog-view.tsx  SkillCatalogView
+    skill-sync-button.tsx   SkillSyncButton (client) - the Sync button
     workflows-view.tsx      WorkflowsView
     access-view.tsx         AccessView
     usage-view.tsx          UsageView
@@ -66,6 +68,7 @@ lib/modules/cost-intelligence/
   constants.ts              module key and name
   types.ts                  runs: Run, RunActivity, LedgerEntry, RunStep, PinnedSkill, Option
                             settings: Skill, Workflow, Role, Permission, Person, Usage, Budget
+  skill-sync.ts             syncSkills (folder -> cip_skills), listCatalogSkills, getLatestSkillSync
   placeholder.ts            PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun, getPlaceholderActivity
   placeholder-settings.ts   PLACEHOLDER_SKILLS, _SETTINGS_WORKFLOWS, CIP_ROLES, CIP_PERMISSIONS, _PEOPLE, _USAGE, _BUDGET,
                             getPlaceholderSkill
@@ -108,14 +111,20 @@ All Settings pages are for module admins only, and follow the mockups in the
 
 ### Skill catalog · `/cost-intelligence/settings` and `settings/skills/[skillId]` · `SkillCatalogView` (1d)
 
+Real data from `cip_skills`, filled by a sync of the skills folder (`CIP_SKILLS_DIR`).
 The skills list on the left, the selected skill on the right. Picking a skill goes to
-its URL; `/settings` opens on the first skill. Unknown ids 404.
+its URL (`/settings/skills/{folder name}`); `/settings` opens on the first skill.
+Unknown folder names 404. No skills yet shows an empty state that points at Sync.
 
 | People call it | Where |
 |---|---|
-| the skills list | left `Card`: name and live version. The selected one is raised with a teal edge |
-| the skill header | top of the right `Card`: name, how many workflows use it, and the live version |
-| the version track | `VersionTrack`: a `Node` per published tag, the live one filled teal and marked **LIVE** |
+| the Sync button | `SkillSyncButton`, top right of the left `Card`. POSTs to `/api/modules/cost-intelligence/skills/sync`, shows the counts or the failure reason, then refreshes the page |
+| last synced | `SyncStatus` under the header: "Last synced …" (New York time), "Sync failed" with the reason, or "N could not be read" for a partial sync |
+| the skills list | left `Card`: name, version and last-updated date. The selected one is raised with a teal edge |
+| the skill detail | right `Card`: name, folder name, version, last updated, last synced, description |
+
+Last-updated dates come from CHANGELOG headings and are stored as midnight UTC, so they
+are formatted in UTC. Formatting them in New York time shows the day before.
 
 ### Workflows · `settings/workflows` · `WorkflowsView`
 
@@ -191,6 +200,7 @@ Icons come from **`lucide-react`**; do not hand-draw SVGs.
   placeholder run until the backend returns a real id.
 - Open run, and the Run page loading that run (404 for an unknown id).
 - Search.
+- Sync on the Skill catalog, which writes `cip_skills` and survives reload.
 - Settings, all local to the page and lost on reload: picking a workflow, Pause /
   Resume / Activate, Follow live / Pin, changing a person's role, the role matrix
   checkboxes, and the usage range. Picking a skill is a link, so it survives reload.
