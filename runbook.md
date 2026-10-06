@@ -8275,6 +8275,67 @@ same rows and formats its own axis; it is unaffected either way.
 
 ---
 
+## A boolean point's chart is empty, or its axis reads On / Off
+
+**Symptom (before 2026-10-06).** An enable, occupancy, fan-status or alarm
+point - `Occupied`, `System_Enable` on the office JACE - showed an empty
+trend under a y-axis reading `-0.01`, `0.00`, `0.01`, with `Latest —`,
+`Average —`, and `Distinct values 0 · Reads as a stuck sensor` beside it.
+The point was fine.
+
+**Cause.** `bas_readings` has three value columns and the collector fills
+one per row from the oBIX record type: `real`/`int` to `value_num`, `bool`
+to `value_bool`, anything else to `value_str`. Every Point Explorer query
+read `value_num`, so a boolean point arrived as rows with no value.
+
+**Fixed 2026-10-06.** The service reads the column the point's declared
+type names (`bas_points.data_type`, written by the collector at discovery)
+and the chart draws a boolean point as a stepped line between two labelled
+states. What you should now see for a boolean point:
+
+- a y-axis with exactly two labels, the point's state words, and no
+  numbers - "Occupied / Unoccupied", "Enabled / Disabled", "Alarm / Normal",
+  "On / Off", or "True / False" when nothing better is known;
+- a line that holds flat and jumps, never a slope between the two;
+- a tooltip and a Latest tile that say the word;
+- Average `—` (a state has no average), Range the states seen, Distinct
+  values 1 or 2 in the neutral tone;
+- the scope line reads `Occupied / Unoccupied` where a numeric point's
+  reads its unit.
+
+**The state words are wrong for a point.** They come from
+`booleanStates` in `lib/modules/bas/value-kind.ts`: occupancy by role or
+name, alarm by role or name, "enable" in the name, then any status or
+command role as On / Off, then True / False. Give the point a role under
+Settings → Points and the words follow; or add a line to the table.
+
+**A boolean point reads "Occupied 72% of readings" in the tooltip.** The
+range held more than the raw cap and the trend was bucketed (see the entry
+above this one). A bucket's line is the share of its readings that were
+true, and its band is the states seen in it. The axis still shows only the
+two states. Narrow the range for the raw stepped line.
+
+**An enum or string point (`OpState`, `Unit Status`) still shows an empty
+chart.** Expected. Three such points exist on live, their readings are in
+`value_str` as integer codes, and nothing is built for them yet - by
+decision, pending a look at the evidence. The service recognises them
+(`valueKind: "string"`) so the Distinct values tile no longer calls them a
+stuck sensor, and that is all.
+
+**The chart shows no y-axis at all.** Every sample in the window has no
+value (records with nothing in them). Recharts draws no ticks for an axis
+with no data, for any kind; the readings / null records tile says how many.
+Not a kind problem.
+
+**If it comes back.** `TrendChart` in `point-explorer.tsx` must take
+`states` and choose `stateAxis` and `stepAfter` from it; the service must
+build the four reading queries from `valueExpr`. `tests/bas-value-kinds.test.tsx`
+renders the real chart with a boolean payload and fails on a digit in the
+axis; `tests/bas-value-kinds-service.test.ts` fails through the database if
+`value_num` is read for a boolean point. `WHY-ITS-BUILT-THIS-WAY.md` § 63.
+
+---
+
 ## The trend chart says "Averaged to one point per …"
 
 **This is working correctly, and the sentence is the point.** The Point
