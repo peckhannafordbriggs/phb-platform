@@ -16,6 +16,7 @@
  */
 
 import type { PlausibilitySummary, PointPlausibility } from "./plausibility";
+import type { BooleanStates, ValueKind } from "./value-kind";
 
 /**
  * `roll_risk` from `bas_v_collection_health`, unchanged. The view is the only
@@ -551,6 +552,18 @@ export interface PointOption {
   pointRole: string | null;
   unit: string | null;
   siteName: string;
+  /**
+   * Which value column this point's readings live in, and so which axis the
+   * chart draws. From `bas_points.data_type`; for the selected point refined
+   * from the readings when the type is `unknown`. See lib/modules/bas/value-kind.ts.
+   */
+  valueKind: ValueKind;
+  /**
+   * A boolean point's two state words - what `true` and `false` are shown as
+   * on the axis, in the tooltip and on the Latest tile. `null` for every other
+   * kind.
+   */
+  states: BooleanStates | null;
 }
 
 /**
@@ -574,6 +587,13 @@ export interface TrendPoint {
   /**
    * The reading itself when the trend is raw; the bucket's AVERAGE when it has
    * been downsampled (see `TrendSampling`).
+   *
+   * A BOOLEAN point's reading travels as 1 (true) or 0 (false), so one series
+   * shape serves every kind and the break and bucket logic need no second
+   * copy. A bucketed boolean's `value` is then the share of readings that were
+   * true, and its `min`/`max` are 0 and 1 when the state changed inside the
+   * bucket. The chart turns the number back into the state word
+   * (`PointOption.states`); nothing else reads it as a quantity.
    */
   value: number | null;
   /** `true` only for a synthetic break. A real null-valued row is `false`. */

@@ -227,6 +227,8 @@ function payload(overrides: Partial<PointExplorer>): PointExplorer {
       pointRole: "zone_temp",
       unit: "fahrenheit",
       siteName: "PHB Spring Grove",
+      valueKind: "numeric",
+      states: null,
     },
     collectionIntervalS: 300,
     stationClockOffsetS: 0,
