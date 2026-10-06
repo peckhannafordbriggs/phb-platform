@@ -1,5 +1,10 @@
 import { Prisma } from "@/lib/generated/prisma/client";
-import { LOOKBACK_DAYS, MIN_READINGS, PLAUSIBILITY_THRESHOLDS } from "./plausibility";
+import {
+  LOOKBACK_DAYS,
+  MIN_READINGS,
+  PLAUSIBILITY_THRESHOLDS,
+  STATE_DATA_TYPES,
+} from "./plausibility";
 
 /**
  * The SQL half of the value-plausibility check. In a file of its own because
@@ -22,6 +27,18 @@ import { LOOKBACK_DAYS, MIN_READINGS, PLAUSIBILITY_THRESHOLDS } from "./plausibi
 export function checkedRoleSql(pr: Prisma.Sql): Prisma.Sql {
   const kinds = PLAUSIBILITY_THRESHOLDS.map((t) => t.measurement);
   return Prisma.sql`(${pr}.measurement IN (${Prisma.join(kinds)}) AND NOT ${pr}.is_setpoint)`;
+}
+
+/**
+ * The type half of the gate: a point whose declared type is a state - bool,
+ * str or enum - is never judged, whatever measurement role it carries. The
+ * list is STATE_DATA_TYPES, the same one the judge reads, so the two halves
+ * cannot drift; tests/bas-plausibility.test.ts walks the three types through
+ * both. Added 2026-10-06, after the role gate alone was found to let a
+ * misclassified boolean reach a temperature threshold.
+ */
+export function checkedTypeSql(p: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`(${p}.data_type NOT IN (${Prisma.join([...STATE_DATA_TYPES])}))`;
 }
 
 /**
@@ -67,7 +84,7 @@ export function plausibilityLateral(p: Prisma.Sql, pr: Prisma.Sql): Prisma.Sql {
         run.first_ts        AS pl_flat_since,
         hist.first_ts       AS pl_history_start,
         win.n               AS pl_window_readings
-      FROM (SELECT 1 WHERE ${p}.is_active AND ${checkedRoleSql(pr)}) AS checked
+      FROM (SELECT 1 WHERE ${p}.is_active AND ${checkedRoleSql(pr)} AND ${checkedTypeSql(p)}) AS checked
       LEFT JOIN LATERAL (
         SELECT r.ts, r.value_num, r.value_bool, r.value_str
           FROM bas_readings r

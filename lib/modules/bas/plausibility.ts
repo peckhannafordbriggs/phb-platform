@@ -247,6 +247,14 @@ export type PlausibilityState = "flat" | "moving" | "too_few_readings" | "not_ch
  *   setpoint        the role is a setpoint (bas_point_roles.is_setpoint).
  *   state           the role's measurement is status or mode: a status,
  *                   command or mode point.
+ *   state_type      the point's readings are states, not quantities:
+ *                   bas_points.data_type is bool, str or enum. Judged by
+ *                   type AFTER the role gates, so it is the reason only when
+ *                   a measurement role has been put on such a point - which
+ *                   is the one way a state point could otherwise have reached
+ *                   a threshold. A state can hold one value for days
+ *                   legitimately; no measurement threshold ever applies to
+ *                   it, whatever its role says. (2026-10-06)
  *   no_threshold    the role's measurement kind has no row in
  *                   PLAUSIBILITY_THRESHOLDS (the `unclassified` role has no
  *                   measurement at all).
@@ -256,6 +264,7 @@ export type NotCheckedReason =
   | "no_role"
   | "setpoint"
   | "state"
+  | "state_type"
   | "no_threshold";
 
 export const NOT_CHECKED_REASONS: readonly NotCheckedReason[] = [
@@ -263,11 +272,21 @@ export const NOT_CHECKED_REASONS: readonly NotCheckedReason[] = [
   "no_role",
   "setpoint",
   "state",
+  "state_type",
   "no_threshold",
 ];
 
 /** Measurement kinds that are state words rather than quantities. */
 export const STATE_MEASUREMENTS: readonly string[] = ["status", "mode"];
+
+/**
+ * Declared types whose readings are states rather than quantities, as the
+ * collector writes them to bas_points.data_type (CHECK-constrained; see the
+ * schema). `real` and `int` are quantities; `abstime` and `unknown` are left
+ * to the role gates, as before. Used by both halves of the gate -
+ * `checkedTypeSql` and the judge - and a test walks the three through both.
+ */
+export const STATE_DATA_TYPES: readonly string[] = ["bool", "str", "enum"];
 
 /** interval: records every N seconds. cov: records on change only. */
 export type TrendKind = "interval" | "cov";
@@ -352,6 +371,8 @@ export interface PlausibilityFacts {
 /** What the judge needs from the point, its role and its checkpoint, beside the facts. */
 export interface PlausibilityRow extends PlausibilityFacts {
   is_active: boolean;
+  /** bas_points.data_type: the type gate reads it after the role gates. */
+  data_type: string;
   point_role: string | null;
   role_is_setpoint: boolean | null;
   role_measurement: string | null;
@@ -411,6 +432,12 @@ export function judgePlausibility(row: PlausibilityRow): PointPlausibility {
   if (row.role_measurement !== null && STATE_MEASUREMENTS.includes(row.role_measurement)) {
     return notChecked("state");
   }
+  // The type gate, after the role gates: a boolean, string or enum point is
+  // never judged on a measurement threshold, whatever role it was given. It
+  // sits here rather than first so a state point with no role still reads
+  // "role not set" - the words that open the role picker - and so no verdict
+  // that existed before the gate changed its reason.
+  if (STATE_DATA_TYPES.includes(row.data_type)) return notChecked("state_type");
   const threshold = thresholdFor(row.role_measurement);
   if (threshold === null) return notChecked("no_threshold");
 
@@ -527,7 +554,7 @@ export interface PlausibilitySummary {
 }
 
 export function emptyNotChecked(): Record<NotCheckedReason, number> {
-  return { not_collected: 0, no_role: 0, setpoint: 0, state: 0, no_threshold: 0 };
+  return { not_collected: 0, no_role: 0, setpoint: 0, state: 0, state_type: 0, no_threshold: 0 };
 }
 
 /** A not-checked verdict with every fact null. For fixtures that build a SettingsPoint by hand. */

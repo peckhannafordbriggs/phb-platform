@@ -695,6 +695,7 @@ export async function getStationPoints(
         -- the role's kind and setpoint flag word the not-checked reason, the
         -- interval decides interval-versus-change-of-value, and the last
         -- successful pass bounds a change-of-value point's flat span.
+        p.data_type,
         pr.is_setpoint          AS role_is_setpoint,
         pr.measurement          AS role_measurement,
         p.collection_interval_s,

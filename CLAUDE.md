@@ -936,6 +936,20 @@ pass locally; removing either `env:` entry fails a named guard test.
 `infra/README.md` has the two command sequences and the click to confirm each;
 `runbook.md` → *Secrets set by hand in Key Vault*.
 
+**The plausibility gate has a type half (2026-10-06).** The role gate alone
+would have judged a boolean or enum point on a measurement threshold the
+moment somebody gave it a measurement role - a fan status misclassified as
+`zone_temp`, flagged after six hours of running. `bool`, `str` and `enum`
+(`bas_points.data_type`, `STATE_DATA_TYPES`) are now never judged whatever
+the role, with their own reason, `state_type`, worded *state point*; the
+SQL half is `checkedTypeSql`, the judge reads the same list, and a test
+walks all seven declared types through both. **It sits after the role
+gates**, so a state point with no role still reads *role not set* and the
+live run is unchanged before and after: 17 judged, 2 flat, 15 changing, the
+five bool and string points with identical reasons. Either half removed
+makes the agreement guard throw. `WHY-ITS-BUILT-THIS-WAY.md` § 55
+amendment; `docs/bas-plausibility-verification.md` → *The type gate*;
+`runbook.md` → *Collection Health says a value has stopped changing*.
 **The trend chart knows what kind of value it is drawing (2026-10-06).**
 `bas_readings` has three value columns and the collector fills one per row
 from the oBIX type; every Point Explorer query read `value_num`, so the two

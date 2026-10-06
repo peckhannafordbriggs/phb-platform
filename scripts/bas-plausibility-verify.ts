@@ -5,6 +5,7 @@ import {
   LOOKBACK_DAYS,
   MIN_READINGS,
   PLAUSIBILITY_THRESHOLDS,
+  STATE_DATA_TYPES,
   judgePlausibility,
   type PlausibilityRow,
   type PointPlausibility,
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
       p.niagara_history_name,
       p.unit,
       p.is_active,
+      p.data_type,
       p.point_role,
       pr.is_setpoint  AS role_is_setpoint,
       pr.is_command   AS role_is_command,
@@ -141,6 +143,9 @@ async function main(): Promise<void> {
         failures.push(`status point flagged: ${row.niagara_history_name}`);
       }
       if (row.point_role === null) failures.push(`point with no role flagged: ${row.niagara_history_name}`);
+      if (STATE_DATA_TYPES.includes(row.data_type)) {
+        failures.push(`state-typed point (${row.data_type}) flagged: ${row.niagara_history_name}`);
+      }
     }
   }
 

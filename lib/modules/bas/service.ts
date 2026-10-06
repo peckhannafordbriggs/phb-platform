@@ -1364,6 +1364,7 @@ async function loadPlausibilityRows(
       h.unit,
       p.is_visible AS visible,
       p.is_active,
+      p.data_type,
       p.point_role,
       pr.is_setpoint  AS role_is_setpoint,
       pr.measurement  AS role_measurement,
