@@ -283,6 +283,21 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     return `${actor} asked Building Automation "${question}"${suffix}`;
   },
 
+  // Counts rather than names: a sync can touch every skill, and the sync row
+  // in cip_skill_syncs holds the detail.
+  "cip.skills_synced": ({ actor, meta }) => {
+    const n = (key: string) => {
+      const v = meta[key];
+      return typeof v === "number" ? v : 0;
+    };
+    const skipped = n("skillsSkipped");
+    return (
+      `${actor} synced the Cost Intelligence skill catalog: ` +
+      `${n("skillsAdded")} added, ${n("skillsUpdated")} updated, ${n("skillsDeleted")} removed` +
+      (skipped > 0 ? `, ${skipped} could not be read` : "")
+    );
+  },
+
   "grant.admin_removed": ({ actor, target, module }) =>
     `${actor} removed ${target ?? "an employee"}'s administrator access for ${module}`,
 
@@ -515,6 +530,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.point_visibility_changed": "BAS point shown or hidden",
   "bas.point_label_changed": "BAS point labelled",
   "bas.question_asked": "BAS question asked",
+  "cip.skills_synced": "Cost Intelligence skills synced",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

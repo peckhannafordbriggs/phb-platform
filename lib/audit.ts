@@ -94,6 +94,12 @@ export type AuditAction =
    * secret, and the question is the person's own words.
    */
   | "bas.question_asked"
+  /**
+   * The Cost Intelligence skill catalog was synced from the skills folder.
+   * Carries the sync id, trigger and counts. One row per completed sync; a
+   * sync that failed changed nothing and is recorded only in cip_skill_syncs.
+   */
+  | "cip.skills_synced"
   | "position.created"
   | "position.updated"
   | "department.created"
