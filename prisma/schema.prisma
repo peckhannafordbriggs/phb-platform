@@ -69,6 +69,7 @@ model Employee {
   basCredentialsUpdated BasStationCredential[] @relation("BasCredentialUpdatedBy")
 
   syncsTriggered CipSkillSync[]
+  workflowsCreated CipWorkflow[]
 
   @@index([status])
   @@index([departmentId])
@@ -575,4 +576,33 @@ model CipSkillSync {
 
   @@index([startedAt(sort: Desc)])
   @@map("cip_skill_syncs")
+}
+
+/// A named, ordered list of skills that a run executes; built by PCEs in Settings
+model CipWorkflow {
+  id          BigInt    @id @default(autoincrement())
+  name        String
+  description String?
+  status      String    @default("draft")
+  createdById String?   @map("created_by_id") @db.Uuid
+  createdBy   Employee? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  steps CipWorkflowStep[]
+
+  @@map("cip_workflows")
+}
+
+/// One skill in a workflow, stored by folder name so a skill gone from the folder shows as missing instead of blocking sync
+model CipWorkflowStep {
+  id              BigInt      @id @default(autoincrement())
+  workflowId      BigInt      @map("workflow_id")
+  workflow        CipWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  position        Int
+  skillFolderName String      @map("skill_folder_name")
+
+  @@unique([workflowId, position])
+  @@unique([workflowId, skillFolderName])
+  @@map("cip_workflow_steps")
 }
