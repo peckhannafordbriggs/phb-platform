@@ -51,14 +51,14 @@ export type Workflow = {
   runs30d: number;
 };
 
-export type RoleId = "pce" | "cost-engineer" | "estimator" | "viewer";
+/** PCE is the module admin ("Can change settings" on the grant); everyone else with the grant is a Member. */
+export type RoleId = "pce" | "member";
 
 export type Role = { id: RoleId; name: string };
 
 /** One row of the role matrix. PCE always has every permission. */
 export type Permission = { label: string; roles: RoleId[] };
 
-export type Person = { id: string; name: string; email: string; role: RoleId; lastActive: string };
 
 export type UsageRange = "7d" | "30d" | "quarter";
 

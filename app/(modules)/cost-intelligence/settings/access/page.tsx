@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireModuleAdmin } from "@/lib/authz";
+import { listCipMembers } from "@/lib/modules/cost-intelligence/access";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { CipShell } from "../../cip-shell";
 import { NewRunActions } from "../../header-actions";
@@ -12,10 +13,12 @@ export default async function AccessPage() {
   const access = await requireModuleAdmin(COST_INTELLIGENCE_MODULE_KEY);
   if (!access.ok) notFound();
 
+  const members = await listCipMembers();
+
   return (
     <CipShell canAdminister actions={<NewRunActions canAdminister />}>
       <SettingsNav />
-      <AccessView />
+      <AccessView members={members} />
     </CipShell>
   );
 }

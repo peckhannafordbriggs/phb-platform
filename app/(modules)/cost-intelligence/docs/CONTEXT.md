@@ -68,10 +68,11 @@ app/(modules)/cost-intelligence/
 lib/modules/cost-intelligence/
   constants.ts              module key and name
   types.ts                  runs: Run, RunActivity, LedgerEntry, RunStep, PinnedSkill, Option
-                            settings: Skill, Workflow, Role, Permission, Person, Usage, Budget
+                            settings: Skill, Workflow, Role, RoleId, Permission, Usage, Budget
+  access.ts                 CIP_ROLES, CIP_PERMISSIONS, listCipMembers (who has the module, PCE or Member)
   skill-sync.ts             syncSkills (folder -> cip_skills), listCatalogSkills, getLatestSkillSync
   placeholder.ts            PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun, getPlaceholderActivity
-  placeholder-settings.ts   PLACEHOLDER_SKILLS, _SETTINGS_WORKFLOWS, CIP_ROLES, CIP_PERMISSIONS, _PEOPLE, _USAGE, _BUDGET,
+  placeholder-settings.ts   PLACEHOLDER_SKILLS, _SETTINGS_WORKFLOWS, _USAGE, _BUDGET,
                             getPlaceholderSkill
 ```
 
@@ -137,10 +138,15 @@ are formatted in UTC. Formatting them in New York time shows the day before.
 
 ### Access & roles · `settings/access` · `AccessView`
 
+Real data, read-only. A Cost Intelligence grant makes someone a **Member**; the grant's
+"Can change settings" flag makes them a **PCE**. Both are set by a platform admin in
+`/admin`, so this page has no write path. Data: `listCipMembers()` in
+`lib/modules/cost-intelligence/access.ts`.
+
 | People call it | Where |
 |---|---|
-| the people table | left `Card`: **Add person**, then Name (initials, name, email), Role (`Dropdown`) and Last active. The last PCE can only be PCE |
-| the role matrix | right `Card`, **What each role can do**: a permission per row, a role per column with its head count. PCE is fixed (grey ticks); the rest toggle |
+| the people table | left `Card`: **Manage in Admin** (links to `/admin`), then Name (initials, name, email), Role (PCE / Member pill) and Last active. Disabled employees are left out |
+| the role matrix | right `Card`, **What each role can do**: `CIP_PERMISSIONS` from `access.ts`, a permission per row, PCE and Member columns with head counts. Fixed in code, read-only |
 
 ### Usage & cost · `settings/usage` · `UsageView`
 
@@ -203,8 +209,9 @@ Icons come from **`lucide-react`**; do not hand-draw SVGs.
 - Search.
 - Sync on the Skill catalog, which writes `cip_skills` and survives reload.
 - Settings, all local to the page and lost on reload: picking a workflow, Pause /
-  Resume / Activate, Follow live / Pin, changing a person's role, the role matrix
-  checkboxes, and the usage range. Picking a skill is a link, so it survives reload.
+  Resume / Activate, Follow live / Pin, and the usage range. Picking a skill is a link,
+  so it survives reload.
+- Access & roles reads real grants. It has no controls; access changes happen in Admin.
 
 Every other button renders its label and has no handler. Wire each one in its own view
 as the backend for it lands, never inside `Button`.

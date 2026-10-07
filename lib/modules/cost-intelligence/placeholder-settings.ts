@@ -2,7 +2,7 @@
  * Placeholder data for the Settings screens until the backend exists. Replace each
  * export with its real source, then delete this file. TODO(backend).
  */
-import type { Budget, Permission, Person, Role, Skill, Usage, UsageRange, Workflow } from "./types";
+import type { Budget, Skill, Usage, UsageRange, Workflow } from "./types";
 
 export const PLACEHOLDER_SKILLS: Skill[] = [
   {
@@ -84,32 +84,6 @@ export const PLACEHOLDER_SETTINGS_WORKFLOWS: Workflow[] = [
     steps: [step("phb-estimate-qa", "Estimate QA", "main")],
     runs30d: 0,
   },
-];
-
-export const CIP_ROLES: Role[] = [
-  { id: "pce", name: "PCE" },
-  { id: "cost-engineer", name: "Cost Engineer" },
-  { id: "estimator", name: "Estimator" },
-  { id: "viewer", name: "Viewer" },
-];
-
-export const CIP_PERMISSIONS: Permission[] = [
-  { label: "View runs and outputs", roles: ["pce", "cost-engineer", "estimator", "viewer"] },
-  { label: "Start runs", roles: ["pce", "cost-engineer", "estimator"] },
-  { label: "Answer run decisions", roles: ["pce", "cost-engineer", "estimator"] },
-  { label: "Open JV-partner outputs", roles: ["pce", "cost-engineer"] },
-  { label: "Edit skills on Git main", roles: ["pce"] },
-  { label: "Publish skills and workflows", roles: ["pce"] },
-  { label: "Manage access and budget", roles: ["pce"] },
-];
-
-export const PLACEHOLDER_PEOPLE: Person[] = [
-  { id: "p1", name: "Sample PCE", email: "pce@sample.invalid", role: "pce", lastActive: "Now" },
-  { id: "p2", name: "Dana Whitfield", email: "dwhitfield@sample.invalid", role: "cost-engineer", lastActive: "10 min ago" },
-  { id: "p3", name: "Marcus Reyes", email: "mreyes@sample.invalid", role: "cost-engineer", lastActive: "Today" },
-  { id: "p4", name: "Priya Nair", email: "pnair@sample.invalid", role: "estimator", lastActive: "Yesterday" },
-  { id: "p5", name: "Tom Keller", email: "tkeller@sample.invalid", role: "estimator", lastActive: "Sep 24" },
-  { id: "p6", name: "Alana Brooks", email: "abrooks@sample.invalid", role: "viewer", lastActive: "Sep 19" },
 ];
 
 // A repeating daily shape, scaled so the days add up to the range's spend.
