@@ -49,7 +49,8 @@ app/(modules)/cost-intelligence/
     settings-nav.tsx     SettingsNav - the second tab bar inside Settings
     page.tsx             Skill catalog page
     skills/[skillId]/    Skill page
-    workflows/           Workflows page
+    workflows/           Workflows page (first workflow)
+    workflows/[workflowId]/  Workflow page
     access/              Access & roles page
     usage/               Usage & cost page
   views/
@@ -58,6 +59,7 @@ app/(modules)/cost-intelligence/
     skill-sync-button.tsx   SkillSyncButton (client) - the Sync button
     skill-list.tsx          SkillList (client) - the skills list; keeps the selected row in view
     workflows-view.tsx      WorkflowsView
+    workflow-editor.tsx     WorkflowList, WorkflowEditor (client) - the list, New workflow, and the editor
     access-view.tsx         AccessView
     usage-view.tsx          UsageView
     parts.tsx               RunHistory, RunDetail, RunLauncher, RunMonitor, Timeline, Checkpoint, Node
@@ -68,11 +70,12 @@ app/(modules)/cost-intelligence/
 lib/modules/cost-intelligence/
   constants.ts              module key and name
   types.ts                  runs: Run, RunActivity, LedgerEntry, RunStep, PinnedSkill, Option
-                            settings: Skill, Workflow, Role, RoleId, Permission, Usage, Budget
+                            settings: Skill, Role, RoleId, Permission, Usage, Budget
   access.ts                 CIP_ROLES, CIP_PERMISSIONS, listCipMembers (who has the module, PCE or Member)
   skill-sync.ts             syncSkills (folder -> cip_skills), listCatalogSkills, getLatestSkillSync
+  workflows.ts              listWorkflows, getWorkflow, create/update/delete, setWorkflowSteps (cip_workflows)
   placeholder.ts            PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun, getPlaceholderActivity
-  placeholder-settings.ts   PLACEHOLDER_SKILLS, _SETTINGS_WORKFLOWS, _USAGE, _BUDGET,
+  placeholder-settings.ts   PLACEHOLDER_SKILLS, _USAGE, _BUDGET,
                             getPlaceholderSkill
 ```
 
@@ -130,11 +133,18 @@ are formatted in UTC. Formatting them in New York time shows the day before.
 
 ### Workflows · `settings/workflows` · `WorkflowsView`
 
+Real data from `cip_workflows`. Every change saves at once and the page re-renders
+from the database, so there is no unsaved state. Writes go through the routes under
+`/api/modules/cost-intelligence/workflows`; rules live in `lib/modules/cost-intelligence/workflows.ts`.
+
 | People call it | Where |
 |---|---|
-| the workflows list | left `Card`: **New workflow**, then one compact row per workflow, name and status. The selected row is tinted in the module colour, like the skills list. Clicking one selects it |
-| the workflow header | right `Card`: name, status, description, runs in 30 days, **Pause / Resume / Activate workflow** |
-| the steps | **Steps · run in order**: numbered rows, each with a light `Segmented` **Follow live · vX** / **Pin vX** |
+| the workflows list | `WorkflowList`, left `Card`: **New workflow** (opens a name field, creates a Draft and opens it), then one compact row per workflow, name and status. Each workflow is its own URL, like skills |
+| the workflow header | right `Card`: name, status, description, last updated, pencil to edit name and description. **Activate** (Draft), **Pause** (Active), **Resume** (Paused); Activate is disabled with a reason when there are no steps or a skill is missing. **Delete** shows on Drafts only and asks once |
+| the steps | **Steps · run in order**: numbered rows with name, folder, version, and up / down / remove. A skill no longer in the catalog shows **Missing from catalog**. **Add a skill** lists catalog skills not already in the workflow |
+
+Status only moves Draft → Active ⇄ Paused. The last step of an Active or Paused
+workflow cannot be removed.
 
 ### Access & roles · `settings/access` · `AccessView`
 
@@ -183,7 +193,7 @@ page checks this itself with `requireModuleAdmin`.
 | `Button` | `ui/Button.tsx` | A button with no behaviour of its own. `variant`: `primary` (PHB red, `--phb-red-btn`) or `secondary` (white). Pass `onClick` for an action or `href` for navigation; also `disabled`, `fullWidth`, `type`. Icons go in `children` |
 | `Card` | `ui/Card.tsx` | The platform's `.card` surface. Change the padding with the `padding` prop (default `p-5`), never with a `p-*` in `className`: that one loses to the default |
 | `Pill` | `ui/Pill.tsx` | A small status label. `tone`: `ok` (teal), `draft` (purple), `muted` (grey), `warn` (orange). A tone is a state, never decoration |
-| `Segmented` | `ui/Segmented.tsx` | Mutually exclusive buttons in one strip. `options`, `value`, `onChange`, `label`; `tone` `dark` (date range) or `light` (Follow live / Pin) |
+| `Segmented` | `ui/Segmented.tsx` | Mutually exclusive buttons in one strip. `options`, `value`, `onChange`, `label`; `tone` `dark` (date range) or `light` |
 | `Dropdown` | `ui/Dropdown.tsx` | A custom select with a rounded list. `options`, `placeholder`, `label` (accessible name); pass `value` + `onChange` to control it. Closes on blur |
 | `FilterMenu` | `ui/FilterMenu.tsx` | A filter icon that opens a small option list; for a table header. `label`, `options`, `value`, `onChange`. Closes on blur |
 | `Label` | `ui/Label.tsx` | Small uppercase section label (`.eyebrow`) |
@@ -208,9 +218,9 @@ Icons come from **`lucide-react`**; do not hand-draw SVGs.
 - Open run, and the Run page loading that run (404 for an unknown id).
 - Search.
 - Sync on the Skill catalog, which writes `cip_skills` and survives reload.
-- Settings, all local to the page and lost on reload: picking a workflow, Pause /
-  Resume / Activate, Follow live / Pin, and the usage range. Picking a skill is a link,
-  so it survives reload.
+- Workflows: create, rename, steps, Activate / Pause / Resume and Delete draft all
+  write `cip_workflows` and survive reload. Picking a workflow or a skill is a link.
+- The usage range, local to the page and lost on reload.
 - Access & roles reads real grants. It has no controls; access changes happen in Admin.
 
 Every other button renders its label and has no handler. Wire each one in its own view

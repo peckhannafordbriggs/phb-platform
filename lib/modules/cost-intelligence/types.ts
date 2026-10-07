@@ -37,20 +37,6 @@ export type Skill = {
   versions: string[];
 };
 
-export type WorkflowStatus = "Active" | "Paused" | "Draft";
-
-/** One skill in a workflow. `live` follows the published tag; `pinned` stays on `version`. */
-export type WorkflowStep = { skillId: string; name: string; version: string; mode: "live" | "pinned" };
-
-export type Workflow = {
-  id: string;
-  name: string;
-  description: string;
-  status: WorkflowStatus;
-  steps: WorkflowStep[];
-  runs30d: number;
-};
-
 /** PCE is the module admin ("Can change settings" on the grant); everyone else with the grant is a Member. */
 export type RoleId = "pce" | "member";
 

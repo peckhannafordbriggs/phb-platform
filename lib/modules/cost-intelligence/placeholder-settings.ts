@@ -2,7 +2,7 @@
  * Placeholder data for the Settings screens until the backend exists. Replace each
  * export with its real source, then delete this file. TODO(backend).
  */
-import type { Budget, Skill, Usage, UsageRange, Workflow } from "./types";
+import type { Budget, Skill, Usage, UsageRange } from "./types";
 
 export const PLACEHOLDER_SKILLS: Skill[] = [
   {
@@ -40,51 +40,6 @@ export const PLACEHOLDER_SKILLS: Skill[] = [
 export function getPlaceholderSkill(id: string): Skill | undefined {
   return PLACEHOLDER_SKILLS.find((s) => s.id === id);
 }
-
-const step = (skillId: string, name: string, version: string) => ({ skillId, name, version, mode: "live" as const });
-
-export const PLACEHOLDER_SETTINGS_WORKFLOWS: Workflow[] = [
-  {
-    id: "kickoff-population",
-    name: "Bid kickoff → Estimate population",
-    description: "Runs kickoff, then populates the estimate from its outputs.",
-    status: "Active",
-    steps: [step("phb-bid-kickoff", "Bid kickoff", "v1.4.0"), step("phb-estimate-population", "Estimate population", "v2.3.1")],
-    runs30d: 38,
-  },
-  {
-    id: "bid-kickoff",
-    name: "Bid kickoff",
-    description: "Reads the bid documents and drafts the kickoff summary.",
-    status: "Active",
-    steps: [step("phb-bid-kickoff", "Bid kickoff", "v1.4.0")],
-    runs30d: 61,
-  },
-  {
-    id: "estimate-population",
-    name: "Estimate population",
-    description: "Populates the estimate from an existing kickoff.",
-    status: "Active",
-    steps: [step("phb-estimate-population", "Estimate population", "v2.3.1")],
-    runs30d: 44,
-  },
-  {
-    id: "jv-summary",
-    name: "JV partner summary",
-    description: "Summarises the estimate for a joint-venture partner.",
-    status: "Active",
-    steps: [step("phb-jv-summary", "JV partner summary", "v1.0.0")],
-    runs30d: 19,
-  },
-  {
-    id: "estimate-qa",
-    name: "Estimate QA",
-    description: "Checks a finished estimate before it goes out.",
-    status: "Draft",
-    steps: [step("phb-estimate-qa", "Estimate QA", "main")],
-    runs30d: 0,
-  },
-];
 
 // A repeating daily shape, scaled so the days add up to the range's spend.
 const SHAPE = [4, 10, 4, 10, 6, 7, 5, 8, 8, 7, 9, 6, 7, 1, 10, 5, 9, 7, 8, 6, 5, 9, 7, 9, 5, 10, 1, 7, 6, 9];
