@@ -298,6 +298,37 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     );
   },
 
+  "cip.workflow_created": ({ actor, meta }) =>
+    `${actor} created the Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
+
+  // Says what changed, because "updated" alone cannot tell a rename from an
+  // activation, and the activation is the one that changes what runs can use.
+  "cip.workflow_updated": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "(unnamed)";
+    const changes: string[] = [];
+    const previousName = stringField(meta, "previousName");
+    if (previousName !== null) changes.push(`renamed it from "${previousName}"`);
+    const status = stringField(meta, "status");
+    const previousStatus = stringField(meta, "previousStatus");
+    if (status !== null) changes.push(`changed it from ${previousStatus ?? "?"} to ${status}`);
+    if (meta.descriptionChanged === true) changes.push("edited its description");
+    return changes.length === 0
+      ? `${actor} updated the Cost Intelligence workflow "${name}"`
+      : `${actor} ${changes.join(", ")} (Cost Intelligence workflow "${name}")`;
+  },
+
+  "cip.workflow_steps_changed": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "(unnamed)";
+    const steps = Array.isArray(meta.steps) ? meta.steps.filter((s): s is string => typeof s === "string") : [];
+    const shown = steps.length > 6 ? `${steps.slice(0, 6).join(" → ")} → …` : steps.join(" → ");
+    return steps.length === 0
+      ? `${actor} removed every step from the Cost Intelligence workflow "${name}"`
+      : `${actor} set the steps of the Cost Intelligence workflow "${name}" to ${shown}`;
+  },
+
+  "cip.workflow_deleted": ({ actor, meta }) =>
+    `${actor} deleted the draft Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
+
   "grant.admin_removed": ({ actor, target, module }) =>
     `${actor} removed ${target ?? "an employee"}'s administrator access for ${module}`,
 
@@ -531,6 +562,10 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.point_label_changed": "BAS point labelled",
   "bas.question_asked": "BAS question asked",
   "cip.skills_synced": "Cost Intelligence skills synced",
+  "cip.workflow_created": "Cost Intelligence workflow created",
+  "cip.workflow_updated": "Cost Intelligence workflow updated",
+  "cip.workflow_steps_changed": "Cost Intelligence workflow steps changed",
+  "cip.workflow_deleted": "Cost Intelligence workflow deleted",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

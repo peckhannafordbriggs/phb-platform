@@ -100,6 +100,15 @@ export type AuditAction =
    * sync that failed changed nothing and is recorded only in cip_skill_syncs.
    */
   | "cip.skills_synced"
+  /**
+   * Cost Intelligence workflows, built by PCEs in Settings. Metadata carries the
+   * workflow id and name; updates carry what changed (previousName,
+   * previousStatus), step changes carry the old and new folder-name lists.
+   */
+  | "cip.workflow_created"
+  | "cip.workflow_updated"
+  | "cip.workflow_steps_changed"
+  | "cip.workflow_deleted"
   | "position.created"
   | "position.updated"
   | "department.created"
