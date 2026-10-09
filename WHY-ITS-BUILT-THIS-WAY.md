@@ -2206,6 +2206,87 @@ says it was cut*.
 
 ---
 
+## 65 · A follow-up carries its own context, and an answer from memory names its source
+
+**Decision.** The Analyze tab's follow-ups work by the browser sending the
+newest earlier turns of today's thread with the question - at most six,
+24 KB, each cut to question, interpretation, SQL, answer and a sample of up
+to twenty rows - and the server staying stateless about it. The model may
+answer a follow-up from those rows without a query, and when it does the
+result is its own kind, `from_prior`, rendered with the no-query label and a
+provenance panel naming the earlier question it read from. 2026-10-09.
+
+**Why the browser sends the context.** The thread already lives in the
+browser for a day (§ 64's successor, the thread); a server-side copy would
+be a second store of the same thing with a lifetime to reconcile, and
+nothing on the server needs it between requests. Sending it makes the
+request self-describing - the audit row records how many turns came with
+the question - and makes the caps enforceable in one place that cannot be
+bypassed: the route validates the shape, bounds every string, refuses an
+unknown key and refuses the set by count and by size, so a hand-made body
+can be no larger than the screen would send.
+
+**Why an earlier turn cannot be a way around the guard.** It never touches
+the database. The planner is shown it inside a data block with the rule
+that it is data; whatever SQL the model then writes goes through the same
+guard, the same read-only role and the same transaction as a first
+question. The test is a planner that obediently repeats a crafted turn's
+`DELETE FROM bas_orgs`, twice: the guard refuses both, nothing ran, the
+table is unchanged. The prompt is not load-bearing for safety and was not
+before.
+
+**Why these fields and these caps.** Question, interpretation and answer
+are a few hundred bytes and are what "those" refers to. The SQL lets a
+follow-up be a modification rather than a reinvention. The rows are the
+hard call: without any, "which of those was worst" needs a new query every
+time, which is honest but slow; with all of them a 200-row table is 10 KB
+a turn. Twenty rows is the size of the lists people say "those" about -
+points, gaps, runs - and a longer table goes as a flagged sample with the
+instruction to query rather than guess from it. Six turns and 24 KB is
+about six thousand tokens beside a schema block that is cached, so a
+follow-up costs roughly what a first question costs. Measured on
+2026-10-09 against the live model and the local database
+(`npm run bas:analyze:followup-latency`), two runs:
+
+| Question | Earlier turn sent | Result | Time |
+|---|---|---|---|
+| Points with no reading in 24 h | none | answered, 39 rows | 20.4 s |
+| "Which of those has gone the longest?" | yes, 4.3 KB, rows a sample (20 of 39) | answered: a NEW query, ranked | 32.5 s |
+| the same words, cold | none | clarify: "which points did you mean?" | 6.3 s |
+| Gap hours in 30 days, by point | none | answered, 10 rows | 15.2 s |
+| "Which of those had the most?" | yes, 2.4 KB, all 10 rows | **from_prior**, source named | 6.0 s |
+| the same words, cold | none | clarify | 6.8 s |
+| "How many points had any gap at all?" | yes, all 10 rows | **from_prior**, source named | 12.4 s |
+
+Two things the numbers show. The model follows the partial-sample rule
+without being pushed: over the 39-row result it wrote a new query, over
+the complete 10-row result it read from memory. And a follow-up answered
+from memory is the cheapest thing the tab does - one model call, no query,
+no summary - while a follow-up that queries costs a first question plus a
+larger plan call. The cold runs are the control: without the earlier turn
+the same words are unanswerable, and the model says so.
+
+**Why a from-memory answer is its own kind.** An answer with no query is
+exactly the case the no-query label exists for, and `databaseQueried` is
+false for it, so the label comes for free. But the label alone says only
+what did NOT happen. The source panel says what did: which earlier
+question's rows were read, where that turn sits in the thread, and whether
+the model had all of its rows or a sample - amber when a sample, because a
+"worst" picked from twenty of a hundred and thirty-seven rows is not the
+worst. The service refuses a from-memory plan that names a turn outside
+what was sent: the model cannot have read it.
+
+**What breaks if you undo it.** Send `priorTurns: []` for a first question
+and the thread test fails on the body byte for byte. Drop a cap and the
+route test or the thread test fails by name. Let a from-memory answer
+through without a source and the UI test fails on the panel's wording.
+Route the earlier SQL anywhere but the planner's data block and the
+obedient-model test fails on `bas_orgs`. `tests/bas-analyze-prompt.test.ts`,
+`tests/bas-analyze-service.test.ts`, `tests/bas-analyze-route.test.ts`,
+`tests/bas-analyze-thread.test.tsx`, `tests/bas-analyze-ui.test.tsx`.
+
+---
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

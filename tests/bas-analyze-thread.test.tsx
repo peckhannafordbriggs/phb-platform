@@ -34,11 +34,18 @@ import { Analyze } from "@/app/(modules)/bas/analyze";
 import {
   THREAD_VERSION,
   loadThread,
+  priorTurnOf,
+  priorTurnsFor,
   saveThread,
   threadDay,
   threadKey,
   type AnalyzeTurn,
 } from "@/app/(modules)/bas/analyze-thread";
+import {
+  PRIOR_ROWS_MAX,
+  PRIOR_TURNS_MAX,
+  PRIOR_TURNS_MAX_BYTES,
+} from "@/lib/modules/bas/analyze/types";
 import type { AnalyzeResult, Provenance } from "@/lib/modules/bas/analyze/types";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -348,5 +355,89 @@ describe("the thread on screen", () => {
     expect(turns[0]!.getAttribute("role") ?? turns[0]!.querySelector('[role="alert"]')).not.toBeNull();
     expect(turns[0]!.textContent).toContain("too fast?");
     expect(turns[1]!.textContent).toContain("After.");
+  });
+});
+
+describe("what a follow-up sends", () => {
+  const bigTurn = (id: string): AnalyzeTurn => {
+    const rows = Array.from({ length: 200 }, (_, i) => [`point-${i}`, i * 1.5, "x".repeat(300)]);
+    return {
+      id,
+      askedAt: NOW.toISOString(),
+      question: `question ${id}?`,
+      outcome: {
+        kind: "result",
+        result: {
+          ...(answered("A".repeat(3_000)) as Extract<AnalyzeResult, { kind: "answered" }>),
+          sql: "SELECT " + "c, ".repeat(900) + "1",
+          table: { columns: ["name", "value", "note"], rows, rowCount: 200, truncated: true, rowCap: 200 },
+        },
+      },
+    };
+  };
+
+  it("cuts a turn to its question, reading, SQL, answer and a flagged sample of rows", () => {
+    const prior = priorTurnOf(bigTurn("t"))!;
+    expect(prior.rows).toHaveLength(PRIOR_ROWS_MAX);
+    expect(prior.rowsArePartial).toBe(true);
+    expect(prior.rowCount).toBe(200);
+    expect((prior.rows[0]![2] as string).length).toBeLessThanOrEqual(120);
+    expect(prior.answer!.length).toBeLessThanOrEqual(1_200);
+    expect(prior.sql!.length).toBeLessThanOrEqual(4_000);
+    // A short, complete table is sent whole and said to be.
+    const small = priorTurnOf(turn("s", "small?", "Three."))!;
+    expect(small.rowsArePartial).toBe(false);
+    expect(small.rows).toEqual([[71.5]]);
+    // A failed request gives a follow-up nothing to refer to.
+    expect(
+      priorTurnOf({ id: "e", askedAt: NOW.toISOString(), question: "q", outcome: { kind: "error", message: "m" } }),
+    ).toBeNull();
+  });
+
+  it("holds the caps under an oversized thread, keeping the newest turns, contiguous", () => {
+    const thread = Array.from({ length: 12 }, (_, i) => bigTurn(`t${i}`));
+    const sent = priorTurnsFor(thread);
+    expect(sent.length).toBeLessThanOrEqual(PRIOR_TURNS_MAX);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(JSON.stringify(sent).length).toBeLessThanOrEqual(PRIOR_TURNS_MAX_BYTES);
+    // The newest N, in the order asked.
+    const ids = thread.slice(thread.length - sent.length).map((t) => t.id);
+    expect(sent.map((p) => p.id)).toEqual(ids);
+    expect(sent[sent.length - 1]!.id).toBe("t11");
+    // Small turns: the count cap is what stops it.
+    const many = Array.from({ length: 10 }, (_, i) => turn(`s${i}`, `q${i}?`, "a"));
+    expect(priorTurnsFor(many).map((p) => p.id)).toEqual(["s4", "s5", "s6", "s7", "s8", "s9"]);
+    expect(priorTurnsFor([])).toEqual([]);
+  });
+
+  it("the first question of a day sends the body the tab has always sent; a follow-up carries the turns; a new conversation sends none again", async () => {
+    answers = [
+      jsonResponse({ data: answered("First.") }),
+      jsonResponse({ data: answered("Second.") }),
+      jsonResponse({ data: answered("Fresh.") }),
+    ];
+    const host = await render();
+
+    await ask(host, "first question?");
+    const first = fetchMock.mock.calls.find((c) => (c[1] as RequestInit)?.method === "POST")!;
+    expect((first[1] as RequestInit).body).toBe(JSON.stringify({ question: "first question?" }));
+
+    await ask(host, "which of those?");
+    const posts = fetchMock.mock.calls.filter((c) => (c[1] as RequestInit)?.method === "POST");
+    const body = JSON.parse((posts[1]![1] as RequestInit).body as string) as {
+      question: string;
+      priorTurns: Array<{ question: string; answer: string }>;
+    };
+    expect(body.question).toBe("which of those?");
+    expect(body.priorTurns).toHaveLength(1);
+    expect(body.priorTurns[0]!.question).toBe("first question?");
+    expect(body.priorTurns[0]!.answer).toBe("First.");
+
+    const button = host.querySelector('[data-testid="bas-analyze-new-conversation"]') as HTMLButtonElement;
+    await act(async () => button.click());
+    await settle();
+    await ask(host, "fresh start?");
+    const after = fetchMock.mock.calls.filter((c) => (c[1] as RequestInit)?.method === "POST");
+    expect((after[2]![1] as RequestInit).body).toBe(JSON.stringify({ question: "fresh start?" }));
   });
 });
