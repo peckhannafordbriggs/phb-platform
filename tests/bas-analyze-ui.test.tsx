@@ -294,13 +294,13 @@ describe("the other sentences", () => {
     const cannot: AnalyzeResult = {
       kind: "cannot_answer",
       reason: "bas_equipment is empty.",
-      attempts: [{ sql: "SELECT 1", error: "permission denied" }],
+      attempts: [{ sql: "SELECT 1", error: "permission denied", ran: true }],
       retried: true,
     };
     const notConfigured: AnalyzeResult = { kind: "not_configured", missing: ["ANTHROPIC_API_KEY"] };
 
     expect(render(clarify)).toContain("One question first");
-    expect(render(clarify)).toContain("Nothing was queried");
+    expect(render(clarify)).toContain("No database query was run for this answer.");
     expect(render(cannot)).toContain("Could not answer");
     expect(render(cannot)).toContain("permission denied");
     // A FAILED answer shows each SQL that was tried beside its reason - the
@@ -309,5 +309,81 @@ describe("the other sentences", () => {
     expect(render(cannot)).toContain("a second was requested");
     expect(render(notConfigured)).toContain("ANTHROPIC_API_KEY");
     expect(render(notConfigured)).toContain("rest of Building Automation is unaffected");
+  });
+});
+
+describe("whether the database was consulted is said, plainly, and only when it was not", () => {
+  const LABEL = "No database query was run for this answer.";
+  const answered: AnalyzeResult = {
+    kind: "answered",
+    answer: "About 72.",
+    interpretation: "Average zone temperature last week.",
+    sql: "SELECT avg(value_num) FROM bas_readings",
+    table: { columns: ["avg"], rows: [[72]], rowCount: 1, truncated: false, rowCap: 200 },
+    provenance,
+    durationMs: 12,
+    retried: false,
+  };
+  const noData: AnalyzeResult = {
+    kind: "no_data",
+    reason: "no_rows",
+    explanation: "The query returned no rows.",
+    sql: "SELECT 1 WHERE false",
+    interpretation: "Nothing.",
+    table: { columns: ["x"], rows: [], rowCount: 0, truncated: false, rowCap: 200 },
+    provenance,
+    durationMs: 3,
+    retried: false,
+  };
+
+  it("a clarifying question: the label, in those words", () => {
+    const html = render({ kind: "clarify", question: "Which building?", interpretation: "Two match." });
+    expect(html).toContain(LABEL);
+    expect(html).toContain('data-testid="bas-analyze-no-query"');
+  });
+
+  it("a decline with no attempt at all: the label", () => {
+    const html = render({ kind: "cannot_answer", reason: "bas_equipment is empty.", attempts: [], retried: false });
+    expect(html).toContain(LABEL);
+  });
+
+  it("a failure whose every attempt stopped at the guard: the label, beside the SQL that was refused", () => {
+    const html = render({
+      kind: "cannot_answer",
+      reason: "The query for this question could not be run. What was tried is below.",
+      attempts: [
+        { sql: "DELETE FROM bas_orgs", error: "Only a SELECT is allowed.", ran: false },
+        { sql: "SELECT 1; SELECT 2", error: "One statement only.", ran: false },
+      ],
+      retried: true,
+    });
+    // The SQL is on screen and looks like a failed query. It is not one.
+    expect(html).toContain("DELETE FROM bas_orgs");
+    expect(html).toContain(LABEL);
+  });
+
+  it("a failure where an attempt reached the database: never the label", () => {
+    const html = render({
+      kind: "cannot_answer",
+      reason: "Two attempts at a query for this question could not be run.",
+      attempts: [
+        { sql: "DELETE FROM bas_orgs", error: "Only a SELECT is allowed.", ran: false },
+        { sql: "SELECT count(*) FROM employees", error: "permission denied", ran: true },
+      ],
+      retried: true,
+    });
+    expect(html).not.toContain(LABEL);
+    expect(html).not.toContain("bas-analyze-no-query");
+  });
+
+  it("not configured: the label, because nothing ran", () => {
+    expect(render({ kind: "not_configured", missing: ["ANTHROPIC_API_KEY"] })).toContain(LABEL);
+  });
+
+  it("an answer, and a no-data result, never carry it", () => {
+    expect(render(answered)).not.toContain(LABEL);
+    expect(render(answered)).not.toContain("bas-analyze-no-query");
+    expect(render(noData)).not.toContain(LABEL);
+    expect(render(noData)).not.toContain("bas-analyze-no-query");
   });
 });

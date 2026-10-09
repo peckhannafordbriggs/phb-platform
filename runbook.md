@@ -9285,6 +9285,27 @@ and one `bas.analyze.question` log line with the same. `/admin/audit` filters
 by action; the sentence reads *Jim Schwarz asked Building Automation "…" — no
 data matched*.
 
+**`queried` (2026-10-09)** in the same `metadata` and log line says whether
+ANY SQL reached the database. The `sql` field alone cannot: it is also
+recorded for an attempt the guard refused, which never ran. The screen
+decides its one label from the same function (`databaseQueried`): *No
+database query was run for this answer.* appears on a clarifying question, a
+decline, a not-configured result and a failure whose every attempt stopped
+short of the database (an unparseable plan, a guard refusal, an undeclared
+period), and never on a result whose SQL ran — including a failure the
+database itself refused or stopped for time, where the attempts list shows
+the SQL beside the database's words. If a *Could not answer* shows SQL and
+no label, the database saw that SQL.
+
+**Nothing else is stored.** One question per request, no conversation: the
+model is sent the question, the schema and at most the previous failed
+attempt from the same request. The browser keeps the last result in React
+state until the next question or a page close (no `localStorage`). The audit
+row is the only durable copy, and it holds the question, the SQL and the
+counts — **not** the model's paragraph and **not** the rows. An export of
+past questions can be built from `audit_events`; past answers cannot be
+reconstructed except by re-running the SQL against today's data.
+
 docs/BAS-B5.md: "The questions people actually ask will not be the ones either
 of us would predict, and that log is what tells you whether this is useful or
 a novelty." Read it after a month.

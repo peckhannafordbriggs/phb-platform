@@ -135,6 +135,15 @@ export interface Attempt {
   sql: string;
   /** What went wrong, in the database's or the guard's words. */
   error: string;
+  /**
+   * Whether this SQL REACHED THE DATABASE. False for everything that stopped
+   * short of it - the model's answer could not be parsed, the guard refused
+   * the SQL, the plan declared no period; true when the database received it
+   * and refused it, errored or stopped it for time. The screen's "No database
+   * query was run for this answer" is decided from this, so the two cannot be
+   * confused: a guard refusal looks like a failed query and is not one.
+   */
+  ran: boolean;
 }
 
 /**
@@ -221,5 +230,29 @@ export class PlannerError extends Error {
   ) {
     super(message);
     this.name = "PlannerError";
+  }
+}
+
+/**
+ * Whether any SQL for this result reached the database.
+ *
+ * `answered` and `no_data` carry the SQL that ran, so yes. `clarify` and
+ * `not_configured` never got that far. `cannot_answer` is the one that has to
+ * be looked at: its attempts may have stopped at the guard (not run) or been
+ * refused by the database (run). One function, used by the audit row and by
+ * the screen's label, so the two cannot disagree. Pure, and in this module
+ * rather than service.ts because the screen imports it: service.ts pulls in
+ * `pg`, which has no place in a browser bundle.
+ */
+export function databaseQueried(outcome: AnalyzeResult): boolean {
+  switch (outcome.kind) {
+    case "answered":
+    case "no_data":
+      return true;
+    case "cannot_answer":
+      return outcome.attempts.some((attempt) => attempt.ran);
+    case "clarify":
+    case "not_configured":
+      return false;
   }
 }

@@ -10,6 +10,7 @@ import {
   type Planner,
 } from "@/lib/modules/bas/analyze/service";
 import { QuestionRateLimiter } from "@/lib/modules/bas/analyze/rate-limit";
+import { databaseQueried } from "@/lib/modules/bas/analyze/types";
 import { resetSchemaContextCache } from "@/lib/modules/bas/analyze/schema-context";
 import type {
   AnalyzeResult,
@@ -91,7 +92,7 @@ function scriptedPlanner(
     planCalls: [] as Attempt[],
     summariseCalls: 0,
     async plan({ previous }: { previous: Attempt | null }) {
-      planner.planCalls.push(previous ?? { sql: "", error: "(first)" });
+      planner.planCalls.push(previous ?? { sql: "", error: "(first)", ran: false });
       if (typeof plans === "function") return plans(previous);
       const plan = plans[Math.min(call, plans.length - 1)]!;
       call += 1;
@@ -581,6 +582,7 @@ describe("saying I don't know", () => {
       interpretation: "Two sites match.",
     });
     expect(planner.summariseCalls).toBe(0);
+    expect(databaseQueried(result)).toBe(false);
   });
 
   it("passes a refusal to guess through as cannot_answer", async () => {
@@ -595,6 +597,7 @@ describe("saying I don't know", () => {
     expect(result.reason).toContain("bas_equipment is empty");
     expect(result.attempts).toEqual([]);
     expect(result.retried).toBe(false);
+    expect(databaseQueried(result)).toBe(false);
   });
 
   it("retries ONCE after the guard refuses, tells the planner why, and says it retried", async () => {
@@ -610,7 +613,7 @@ describe("saying I don't know", () => {
     if (result.kind !== "answered") return;
     expect(result.retried).toBe(true);
     expect(planner.planCalls).toHaveLength(2);
-    expect(planner.planCalls[1]).toMatchObject({ sql: "DELETE FROM bas_orgs" });
+    expect(planner.planCalls[1]).toMatchObject({ sql: "DELETE FROM bas_orgs", ran: false });
     expect(planner.planCalls[1]!.error).toContain("Only a SELECT");
   });
 
@@ -630,6 +633,48 @@ describe("saying I don't know", () => {
     expect(result.attempts[0]!.error).toContain("permission denied");
     expect(result.attempts[1]!.error).toContain("permission denied");
     expect(result.reason).toContain("Two attempts");
+    // The database received both and refused both: queries that RAN.
+    expect(result.attempts.map((a) => a.ran)).toEqual([true, true]);
+    expect(databaseQueried(result)).toBe(true);
+  });
+
+  it("a failure whose every attempt stopped at the guard is no query, and the audit row says so", async () => {
+    const planner = scriptedPlanner([
+      query("DELETE FROM bas_orgs"),
+      query("DROP TABLE bas_points"),
+    ]);
+
+    const result = await ask(planner, "ZZTEST guard-only question");
+
+    expect(result.kind).toBe("cannot_answer");
+    if (result.kind !== "cannot_answer") return;
+    expect(result.attempts).toHaveLength(2);
+    expect(result.attempts.map((a) => a.ran)).toEqual([false, false]);
+    expect(databaseQueried(result)).toBe(false);
+
+    const row = await testDb.auditEvent.findFirst({
+      where: { action: "bas.question_asked" },
+      orderBy: { occurredAt: "desc" },
+    });
+    expect(row).not.toBeNull();
+    const metadata = row!.metadata as { question: string; sql: string | null; queried: boolean };
+    expect(metadata.question).toBe("ZZTEST guard-only question");
+    // The SQL is recorded although it never ran - which is exactly why
+    // `queried` has to be recorded beside it.
+    expect(metadata.sql).toBe("DROP TABLE bas_points");
+    expect(metadata.queried).toBe(false);
+  });
+
+  it("an answered question's audit row says the database was queried", async () => {
+    const planner = scriptedPlanner([query(AVG_SQL())]);
+    const result = await ask(planner, "ZZTEST answered question");
+    expect(databaseQueried(result)).toBe(true);
+
+    const row = await testDb.auditEvent.findFirst({
+      where: { action: "bas.question_asked" },
+      orderBy: { occurredAt: "desc" },
+    });
+    expect((row!.metadata as { queried: boolean }).queried).toBe(true);
   });
 
   it("does not retry a timeout", async () => {
@@ -644,6 +689,7 @@ describe("saying I don't know", () => {
     if (result.kind !== "cannot_answer") return;
     expect(result.retried).toBe(false);
     expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]!.ran).toBe(true);
     expect(result.reason).toContain("took too long");
     expect(planner.planCalls).toHaveLength(1);
   });
@@ -664,6 +710,8 @@ describe("saying I don't know", () => {
     if (result.kind !== "cannot_answer") return;
     expect(result.reason).toContain("twice");
     expect(result.retried).toBe(true);
+    expect(result.attempts.every((a) => !a.ran)).toBe(true);
+    expect(databaseQueried(result)).toBe(false);
   });
 
   it("does not retry a refusal or an outage", async () => {

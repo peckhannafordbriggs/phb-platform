@@ -23,6 +23,7 @@ import {
   resultTone,
   type AnalyzeStatus,
 } from "./analyze-client";
+import { databaseQueried } from "@/lib/modules/bas/analyze/types";
 import { ApiError, formatTimestamp } from "./health-client";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
@@ -262,9 +263,7 @@ export function Result({ result, asked }: { result: AnalyzeResult; asked: string
             <p className="text-xs text-[var(--muted)]">
               How the question was read: {result.interpretation}
             </p>
-            <p className="text-xs text-[var(--muted)]">
-              Ask again with the detail filled in. Nothing was queried.
-            </p>
+            <p className="text-xs text-[var(--muted)]">Ask again with the detail filled in.</p>
           </>
         )}
 
@@ -331,6 +330,20 @@ export function Result({ result, asked }: { result: AnalyzeResult; asked: string
             <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
             <RowsTable table={result.table} />
           </>
+        )}
+
+        {/*
+          The single most important thing a skeptical reader can learn about a
+          result that is not an answer: whether the database was consulted at
+          all. Decided by `databaseQueried` - the same function the audit row
+          records `queried` from - so a guard refusal, which shows an SQL
+          beside an error and looks like a failed query, is still labelled as
+          no query. Never rendered on a result whose SQL ran.
+        */}
+        {!databaseQueried(result) && (
+          <p className="text-xs font-medium" data-testid="bas-analyze-no-query">
+            No database query was run for this answer.
+          </p>
         )}
       </div>
     </section>
