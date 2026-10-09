@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import type { Viewer } from "@/lib/authz";
 import { writeAuditEvent } from "@/lib/audit";
+import { databaseQueried } from "./types";
 import { prisma } from "@/lib/db";
 import { logger, logUnexpected } from "@/lib/logger";
 import { BAS_MODULE_KEY } from "../constants";
@@ -163,7 +164,7 @@ export async function analyzeQuestion(
             };
             return await record(result);
           }
-          attempts.push({ sql: "", error: error.message });
+          attempts.push({ sql: "", error: error.message, ran: false });
           continue;
         }
         throw error;
@@ -173,7 +174,7 @@ export async function analyzeQuestion(
 
       const guarded = guardSql(plan.sql);
       if (!guarded.ok) {
-        attempts.push({ sql: plan.sql, error: guarded.reason });
+        attempts.push({ sql: plan.sql, error: guarded.reason, ran: false });
         continue;
       }
 
@@ -191,6 +192,7 @@ export async function analyzeQuestion(
           error:
             "The SQL filters or buckets by time, but time_range was null. Declare the UTC " +
             "start and end the SQL covers, resolving now() and any interval to timestamps.",
+          ran: false,
         });
         continue;
       }
@@ -200,7 +202,9 @@ export async function analyzeQuestion(
         plan = { ...plan, sql: guarded.sql };
       } catch (error) {
         if (error instanceof QueryFailure) {
-          attempts.push({ sql: guarded.sql, error: describeQueryFailure(error) });
+          // The database received it: a refusal, an error or a timeout is
+          // still a query that ran.
+          attempts.push({ sql: guarded.sql, error: describeQueryFailure(error), ran: true });
           // A timeout is not a planning mistake to be retried into a second
           // fifteen-second wait; it is the answer.
           if (error.timedOut) break;
@@ -325,7 +329,8 @@ export async function analyzeQuestion(
         reason:
           "The platform could not read the tables it needs to check this answer. " +
           "Contact IT. (" + error.message + ")",
-        attempts: sqlForRecord === null ? [] : [{ sql: sqlForRecord, error: error.message }],
+        attempts:
+          sqlForRecord === null ? [] : [{ sql: sqlForRecord, error: error.message, ran: true }],
         retried: false,
       };
       return await record(result);
@@ -349,6 +354,10 @@ export async function analyzeQuestion(
       "sql" in outcome ? outcome.sql : sqlForRecord ?? lastAttemptSql(outcome);
     const rowCount =
       "table" in outcome ? outcome.table.rowCount : rowCountForRecord;
+    // Whether ANY SQL reached the database - the first thing a reader of a
+    // wrong answer needs to know, and the one the `sql` field alone cannot
+    // say, since it is also recorded for an attempt the guard refused.
+    const queried = databaseQueried(outcome);
 
     logger.info("bas.analyze.question", {
       employeeId: viewer.id,
@@ -358,6 +367,7 @@ export async function analyzeQuestion(
       count: rowCount ?? undefined,
       question,
       sql: sql ?? undefined,
+      queried,
     });
 
     try {
@@ -369,6 +379,7 @@ export async function analyzeQuestion(
           question,
           outcome: outcome.kind,
           sql,
+          queried,
           rowCount,
           durationMs,
           retried: "retried" in outcome ? outcome.retried : false,

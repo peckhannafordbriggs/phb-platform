@@ -656,7 +656,14 @@ describes 10 days of the 30 days asked about."* `npm run bas:analyze:verify`
 asks a building-specific 30-day average precisely because that is where the
 silence is dangerous, and fails the run on either fault.
 `docs/bas-b5-verification.md` is the record, results pasted verbatim.
-`WHY-ITS-BUILT-THIS-WAY.md` § 52; `runbook.md` → *Analyze*.
+`WHY-ITS-BUILT-THIS-WAY.md` § 52; `runbook.md` → *Analyze*. **Added
+2026-10-09:** every `Attempt` records `ran` (whether the SQL reached the
+database), `databaseQueried(result)` decides from it, and a result it is
+false for carries *No database query was run for this answer.* — a guard
+refusal shows SQL and is still no query; the audit row carries the same
+`queried`. There is no conversation: one question per request, the last
+result in React state only, the audit row the only durable copy and it
+holds no answer text.
 
 **Point Explorer takes a custom date range, in the building's zone, and
 averages long ranges out loud (2026-09-22).** *Custom* beside the three
