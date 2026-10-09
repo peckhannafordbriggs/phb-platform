@@ -129,6 +129,7 @@ building is not recorded.
 | **Custom date range** | Point Explorer takes two calendar dates or a year, resolved in the building's zone by PostgreSQL; over 10,000 readings the trend is bucketed with a min–max band and says so; real readings committed as fixtures | `feat/bas-custom-date-range` (2026-09-22) |
 | **Value plausibility** | Does the data mean anything: a run of identical readings past a per-kind threshold is flagged, by role, never by a bad-value list; a card on Collection Health and a *Value* column on the Points list; both known dead sensors flagged live, nothing else | `feat/bas-value-plausibility` (2026-09-28), landed from `feat/bas-value-plausibility-reland` (2026-10-01) under the quiet-UI rules |
 | **Value kinds on the chart** | The Point Explorer reads the column a point's readings live in, from `data_type`; a boolean point is a stepped line between two labelled states with no numeric axis; string points recognised and left alone | `feat/bas-chart-value-kinds` (2026-10-06) |
+| **Readings table and CSV** | A *Chart / Table* toggle on Point Explorer shows the raw rows behind the chart, newest first, paged in SQL, never bucketed; *Download CSV* streams every row in the range with an honest 500,000-row cap; nothing fetched until used | `feat/bas-readings-table` (2026-10-09) |
 
 ### Test count
 
@@ -363,6 +364,24 @@ a bucketed boolean reads as a share of readings. Numeric points are unchanged.
 look at the evidence. `lib/modules/bas/value-kind.ts`; `runbook.md` → *A
 boolean point's chart is empty, or its axis reads On / Off*;
 `WHY-ITS-BUILT-THIS-WAY` § 63.
+
+**The raw readings behind the chart, as a table and as a file (2026-10-09).**
+A *Chart / Table* toggle at the right of the trend panel's heading, and a
+*Download CSV* button beside it. The table is the stored rows for the same
+point over the same two instants the chart's response carries — newest first,
+200 a page, `count(*)` and a `LIMIT / OFFSET` slice in SQL — with the count in
+the heading and a pager under the rows. A boolean point's rows are its state
+words; a numeric row is the stored value whole with the unit symbol; a
+timestamp is the tooltip's format in the building's zone with the exact
+instant as its title. **It is never bucketed**: it is served by
+`lib/modules/bas/readings.ts`, a separate path that imports nothing from the
+chart's downsampler, and a test holds every page of the real `points_RoomT`
+fixture against the file while the chart draws averages. The CSV is every
+row in the range, streamed in keyset chunks, capped at 500,000 rows with the
+shortfall said out loud in the warning tone. **Nothing is fetched until the
+toggle or the button is used.** `runbook.md` → *The readings table and the
+chart disagree, or a CSV export says it was cut*; `WHY-ITS-BUILT-THIS-WAY`
+§ 64.
 
 ### Analyze — `/bas/analyze` (B5, 2026-09-21)
 

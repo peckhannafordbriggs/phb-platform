@@ -56,6 +56,12 @@ organisation. No viewer outside an org can be constructed.
 
 **What is asserted instead.** The queries compose `siteFilter(entitled, …)`,
 read from `basSiteScope`, rather than inventing a predicate. Source text.
+The readings table and CSV routes (2026-10-09, `lib/modules/bas/readings.ts`,
+`loadPoint`) are in the same position: one point, the same `siteFilter`
+over the same `basSiteScope`, and the same conflation - an unentitled point
+would be `point_not_found`, indistinguishable from a missing one. What
+`tests/bas-readings-table.test.ts` does provoke is the hidden, inactive and
+absent cases, and a viewer with no module grant on both routes.
 
 **What would make it real.** `bas_site_grant`, or any per-employee entitlement.
 The day `basSiteScope` returns a list, seed two orgs and assert the 404 on every

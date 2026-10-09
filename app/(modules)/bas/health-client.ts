@@ -29,6 +29,7 @@ import type {
   StationPointsList,
   TrendRange,
   TrendSampling,
+  PointReadingsPage,
 } from "@/lib/modules/bas/types";
 
 /**
@@ -1017,6 +1018,136 @@ export async function fetchPointExplorer(
   }
 
   return payload.data;
+}
+
+/**
+ * One page of the raw readings behind the chart. Called by the readings table
+ * when it is shown and by nothing else - the explorer's own fetch is
+ * unchanged, so a person who never opens the table never makes this request.
+ * `from` and `to` are the chart's `range.from` / `range.to`, passed back
+ * exactly.
+ */
+export async function fetchPointReadings(
+  options: { pointId: string; from: string; to: string; page: number },
+  signal?: AbortSignal,
+): Promise<PointReadingsPage> {
+  const params = new URLSearchParams();
+  params.set("point", options.pointId);
+  params.set("from", options.from);
+  params.set("to", options.to);
+  params.set("page", String(options.page));
+
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/point-readings?${params.toString()}`, {
+      signal,
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: PointReadingsPage; error?: { code?: string; message?: string } }
+    | null;
+
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+
+  if (payload?.data === undefined) {
+    throw new ApiError("unexpected", "The server returned nothing.");
+  }
+
+  return payload.data;
+}
+
+/** What a CSV download came back with: the file, and the truth about it. */
+export interface ReadingsCsvDownload {
+  blob: Blob;
+  filename: string;
+  /** Readings in the range. */
+  total: number;
+  /** Rows in the file. Less than `total` only when the cap bit. */
+  exported: number;
+  cap: number;
+}
+
+/**
+ * Every raw reading in the chart's range as a CSV file.
+ *
+ * A fetch rather than a plain link, because the response's headers are the
+ * only place the server can say "500,000 of 612,000" - a link would save the
+ * file and say nothing. The three counts are read off the headers and the
+ * caller decides what to tell the person; the file is handed back as a Blob
+ * for the caller to save. Nothing is requested until this is called.
+ */
+export async function downloadPointReadingsCsv(
+  options: { pointId: string; from: string; to: string },
+  signal?: AbortSignal,
+): Promise<ReadingsCsvDownload> {
+  const params = new URLSearchParams();
+  params.set("point", options.pointId);
+  params.set("from", options.from);
+  params.set("to", options.to);
+
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/point-readings/csv?${params.toString()}`, {
+      signal,
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: { code?: string; message?: string } }
+      | null;
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+
+  const count = (name: string): number => {
+    const value = Number(response.headers.get(name));
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  };
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "readings.csv";
+
+  return {
+    blob: await response.blob(),
+    filename,
+    total: count("X-PHB-Readings-Total"),
+    exported: count("X-PHB-Readings-Exported"),
+    cap: count("X-PHB-Readings-Cap"),
+  };
+}
+
+/**
+ * The sentence under the Download button when the cap bit, and nothing when
+ * it did not. Says what is in the file, what is not, and the one thing that
+ * gets the rest: a narrower range. Exported so the test can hold the wording.
+ */
+export function describeCappedExport(download: {
+  total: number;
+  exported: number;
+}): string | null {
+  if (download.exported >= download.total) return null;
+  const cut = download.total - download.exported;
+  return (
+    `Exported the newest ${formatCount(download.exported)} of ${formatCount(download.total)} readings. ` +
+    `${formatCount(cut)} older reading${cut === 1 ? " was" : "s were"} not included; ` +
+    `narrow the range to export ${cut === 1 ? "it" : "them"}.`
+  );
 }
 
 /**

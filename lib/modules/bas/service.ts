@@ -164,11 +164,11 @@ function effectiveSiteIds(
  * `view` is the alias of the view in the query; the query must also join
  * `bas_points p`, which every caller already does for `is_visible`.
  */
-function shownPointName(view: Prisma.Sql): Prisma.Sql {
+export function shownPointName(view: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`COALESCE(p.label, ${view}.point_name)`;
 }
 
-function siteFilter(siteIds: bigint[] | null, column: Prisma.Sql): Prisma.Sql {
+export function siteFilter(siteIds: bigint[] | null, column: Prisma.Sql): Prisma.Sql {
   if (siteIds === null) return Prisma.sql`TRUE`;
   if (siteIds.length === 0) return Prisma.sql`FALSE`;
   return Prisma.sql`${column} IN (${Prisma.join(siteIds)})`;
@@ -1491,6 +1491,15 @@ function toDataGapRow(row: GapRow): DataGapRow {
 // B4 - Point Explorer
 // ---------------------------------------------------------------------------
 
+/**
+ * The two refusals a point request can get, worded once. The readings table
+ * (readings.ts) refuses the same point with the same sentence as the chart, so
+ * a hidden point reads as hidden on both and nowhere as missing.
+ */
+export const POINT_NOT_AVAILABLE_MESSAGE = "That point is not available.";
+export const HIDDEN_POINT_MESSAGE =
+  "That point is hidden from Point Explorer. Show it again under Settings → Points.";
+
 /** Grafana's point picker is single-select, and so is this. See `getPointExplorer`. */
 export function parsePointId(value: string | null | undefined): bigint | null {
   if (value === undefined || value === null) return null;
@@ -1500,6 +1509,40 @@ export function parsePointId(value: string | null | undefined): bigint | null {
     throw new BasError("point_not_found", "That point is not available.");
   }
   return BigInt(trimmed);
+}
+
+/**
+ * Which value column a point's readings live in, over `[from, to)`.
+ *
+ * `data_type` is the collector's declaration from the record prototype and
+ * decides it outright. Only an undeclared type (`unknown`, the column's
+ * default) costs a query: a count of which columns the window populates, so
+ * the screen reads what is there rather than the numeric column it always
+ * read. On live every point is declared, so that branch runs for none of
+ * them. See value-kind.ts. Shared by the Point Explorer and the readings
+ * table (readings.ts), so the two cannot disagree about a point's kind.
+ */
+export async function resolveValueKind(
+  db: Prisma.TransactionClient,
+  dataType: string,
+  pointId: bigint,
+  from: Date,
+  to: Date,
+): Promise<ValueKind> {
+  const declared = dataType !== "unknown" && dataType !== "abstime";
+  if (declared) return valueKindOf(dataType, { num: 0, bool: 0, str: 0 });
+  const row = firstRow(
+    await db.$queryRaw<PopulatedRow[]>`
+      SELECT
+        count(value_num)::int AS num_rows,
+        count(value_bool)::int AS bool_rows,
+        count(value_str)::int AS str_rows
+      FROM bas_readings
+      WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
+    `,
+    "populated columns",
+  );
+  return valueKindOf(dataType, { num: row.num_rows, bool: row.bool_rows, str: row.str_rows });
 }
 
 /**
@@ -1523,7 +1566,7 @@ function breakThresholdMs(collectionIntervalS: number | null): number {
   return Math.max(fromInterval, MIN_BREAK_SECONDS) * 1000;
 }
 
-interface PointOptionRow {
+export interface PointOptionRow {
   point_id: bigint;
   point_name: string;
   point_role: string | null;
@@ -1766,9 +1809,7 @@ export async function getPointExplorer(
       `;
       throw new BasError(
         "point_not_found",
-        hidden.length > 0
-          ? "That point is hidden from Point Explorer. Show it again under Settings → Points."
-          : "That point is not available.",
+        hidden.length > 0 ? HIDDEN_POINT_MESSAGE : POINT_NOT_AVAILABLE_MESSAGE,
       );
     }
 
@@ -1868,25 +1909,7 @@ export async function getPointExplorer(
     // so the chart draws what is there rather than the numeric column it has
     // always read. On live every point is declared, so this branch runs for
     // none of them. See value-kind.ts.
-    const declared =
-      selectedPoint.data_type !== "unknown" && selectedPoint.data_type !== "abstime";
-    const populatedCounts = declared
-      ? { num: 0, bool: 0, str: 0 }
-      : await (async () => {
-            const row = firstRow(
-              await tx.$queryRaw<PopulatedRow[]>`
-                SELECT
-                  count(value_num)::int AS num_rows,
-                  count(value_bool)::int AS bool_rows,
-                  count(value_str)::int AS str_rows
-                FROM bas_readings
-                WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
-              `,
-              "populated columns",
-            );
-            return { num: row.num_rows, bool: row.bool_rows, str: row.str_rows };
-          })();
-    const valueKind = valueKindOf(selectedPoint.data_type, populatedCounts);
+    const valueKind = await resolveValueKind(tx, selectedPoint.data_type, pointId, from, to);
 
     // The reading, as a number, whatever column it lives in. A boolean travels
     // as 1 or 0 - NULL stays NULL through the cast - so the break logic, the
@@ -2271,7 +2294,7 @@ export function buildBucketedTrend(
  * the caller has refined it from the readings (the selected point); a boolean
  * point carries its two state words, chosen from role, flags and names.
  */
-function toPointOption(
+export function toPointOption(
   row: PointOptionRow,
   valueKind: ValueKind = valueKindFromDataType(row.data_type),
 ): PointOption {
