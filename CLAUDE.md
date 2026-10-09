@@ -663,7 +663,16 @@ false for carries *No database query was run for this answer.* — a guard
 refusal shows SQL and is still no query; the audit row carries the same
 `queried`. There is no conversation: one question per request, the last
 result in React state only, the audit row the only durable copy and it
-holds no answer text.
+holds no answer text. **Same day, later: the screen is a THREAD.** Turns
+in the order asked, the ask box at the bottom, older turns fold only their
+rows table (a native `<details>`); the day's thread lives in `localStorage`
+keyed by employee id and **America/New_York** calendar day
+(`app/(modules)/bas/analyze-thread.ts`), stale days discarded on load,
+*New conversation* clears it. Nothing on the server; the model is still
+sent one question per request - step 2 (prior turns to the planner) is not
+built, and the turn carries the whole `AnalyzeResult` so it can be.
+`runbook.md` → *The Analyze thread is gone, shows the wrong day, or will not
+take a second question*; `tests/bas-analyze-thread.test.tsx`.
 
 **Point Explorer takes a custom date range, in the building's zone, and
 averages long ranges out loud (2026-09-22).** *Custom* beside the three

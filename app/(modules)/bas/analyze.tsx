@@ -1,6 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  browserStorage,
+  clearThread,
+  loadThread,
+  newTurnId,
+  saveThread,
+  threadDay,
+  type AnalyzeTurn,
+} from "./analyze-thread";
 import type {
   AnalyzeResult,
   Provenance,
@@ -45,8 +54,17 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  *
  * There is no confidence score, on purpose. There is no chart, on purpose: a
  * question that wants a picture is answered with a link to the Point Explorer.
- * There is no history across sessions; the last result stays on screen until
- * the next question replaces it.
+ *
+ * THE SCREEN IS A THREAD (2026-10-09). Each question and what came back is a
+ * turn, in the order asked, newest at the bottom, with the ask box under
+ * them; a new question appends and earlier turns stay as they were. The
+ * thread lasts a calendar day in the company's zone and survives a reload
+ * within it, in the browser only - see analyze-thread.ts for the rules and
+ * the reasons. Every turn is rendered by the same `Result` as before; an
+ * older turn folds its rows table behind the one line it already carried,
+ * and nothing else about a result changes with its position. The model is
+ * still sent ONE question per request: nothing here hands an earlier turn to
+ * the planner. The turn shape is what a later step would read for that.
  */
 
 const EXAMPLES = [
@@ -56,14 +74,23 @@ const EXAMPLES = [
   "When did the collector last run, and did it succeed?",
 ];
 
-export function Analyze() {
+export function Analyze({
+  employeeId,
+  now = () => new Date(),
+}: {
+  employeeId: string;
+  /** Test seam: the clock the day boundary is read from. */
+  now?: () => Date;
+}) {
   const [status, setStatus] = useState<AnalyzeStatus | null>(null);
   const [question, setQuestion] = useState("");
-  const [asked, setAsked] = useState<string | null>(null);
-  const [result, setResult] = useState<AnalyzeResult | null>(null);
+  const [turns, setTurns] = useState<AnalyzeTurn[]>([]);
+  const [pending, setPending] = useState<{ id: string; question: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  /** The day the thread on screen belongs to. Null until read from storage. */
+  const [day, setDay] = useState<string | null>(null);
   const inFlight = useRef<AbortController | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -77,6 +104,53 @@ export function Analyze() {
     return () => controller.abort();
   }, []);
 
+  /**
+   * Today's thread, read after mount so the server-rendered page and the
+   * first client render agree (reading storage during render is a
+   * hydration mismatch). Any other day's thread for this employee is
+   * discarded by the read itself.
+   */
+  useEffect(() => {
+    const today = threadDay(now());
+    setTurns(loadThread(browserStorage(), employeeId, today));
+    setDay(today);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is a test seam, not a dependency
+  }, [employeeId]);
+
+  // Every change to the thread is written back, once the thread has been
+  // read. An empty thread is no key at all, not an empty record.
+  useEffect(() => {
+    if (day === null) return;
+    if (turns.length === 0) clearThread(browserStorage(), employeeId, day);
+    else saveThread(browserStorage(), employeeId, day, turns);
+  }, [turns, day, employeeId]);
+
+  // The newest turn - or the pending question - is brought into view.
+  useEffect(() => {
+    const el = endRef.current;
+    if (el !== null && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "end", behavior: "smooth" });
+    }
+  }, [turns.length, pending]);
+
+  const busy = pending !== null;
+
+  /**
+   * Append a resolved turn. If the day has rolled over since the thread was
+   * read - a question asked at 11:59 PM and answered at 12:01 AM - the new
+   * turn starts the new day's thread rather than being filed under
+   * yesterday's and discarded on the next load.
+   */
+  function append(turn: AnalyzeTurn): void {
+    const today = threadDay(now());
+    if (today !== day) {
+      setDay(today);
+      setTurns([turn]);
+    } else {
+      setTurns((prev) => [...prev, turn]);
+    }
+  }
+
   async function submit(text: string) {
     const trimmed = text.trim();
     if (trimmed.length < 3 || busy) return;
@@ -85,46 +159,104 @@ export function Analyze() {
     const controller = new AbortController();
     inFlight.current = controller;
 
-    setBusy(true);
-    setError(null);
-    setAsked(trimmed);
-    setResult(null);
+    const id = newTurnId();
+    const askedAt = now().toISOString();
+    setPending({ id, question: trimmed });
+    setQuestion("");
 
     try {
-      const answer = await askQuestion(trimmed, controller.signal);
-      setResult(answer);
+      const result = await askQuestion(trimmed, controller.signal);
+      append({ id, askedAt, question: trimmed, outcome: { kind: "result", result } });
     } catch (err) {
       if (isAbortError(err)) return;
-      if (err instanceof ApiError) {
-        setError(err.code === "rate_limited" ? rateLimitMessage() : err.message);
-      } else {
-        setError("Something went wrong. Try again.");
-      }
+      const message =
+        err instanceof ApiError
+          ? err.code === "rate_limited"
+            ? rateLimitMessage()
+            : err.message
+          : "Something went wrong. Try again.";
+      append({ id, askedAt, question: trimmed, outcome: { kind: "error", message } });
     } finally {
       if (inFlight.current === controller) {
         inFlight.current = null;
-        setBusy(false);
+        setPending(null);
       }
     }
   }
 
+  function startFresh(): void {
+    inFlight.current?.abort();
+    inFlight.current = null;
+    setPending(null);
+    setTurns([]);
+    if (day !== null) clearThread(browserStorage(), employeeId, day);
+  }
+
   const notConfigured = status !== null && !status.configured;
+  const empty = turns.length === 0 && pending === null;
 
   return (
     <div className="space-y-6">
-      <section className="card p-5">
+      {error !== null && (
+        <section className="card p-5" role="alert" style={TONE_STYLE.bad}>
+          <p className="text-sm" style={{ color: TONE_INK.bad }}>
+            {error}
+          </p>
+        </section>
+      )}
+
+      {/* ------------------------------------------------------ the thread */}
+      {!empty && (
+        <ol className="space-y-6" aria-label="Conversation" data-testid="bas-analyze-thread">
+          {turns.map((turn, index) => (
+            <li key={turn.id} data-testid="bas-analyze-turn">
+              {turn.outcome.kind === "result" ? (
+                <Result
+                  result={turn.outcome.result}
+                  asked={turn.question}
+                  // Only the newest turn shows its rows unfolded.
+                  compact={index < turns.length - 1}
+                />
+              ) : (
+                <ErrorTurn asked={turn.question} message={turn.outcome.message} />
+              )}
+            </li>
+          ))}
+          {pending !== null && (
+            <li data-testid="bas-analyze-pending">
+              <PendingTurn asked={pending.question} />
+            </li>
+          )}
+        </ol>
+      )}
+      <div ref={endRef} />
+
+      {/* ----------------------------------------------------- the ask box */}
+      <section className="card sticky bottom-4 z-10 p-5">
         <form
           onSubmit={(event) => {
             event.preventDefault();
             void submit(question);
           }}
         >
-          <label
-            htmlFor="bas-analyze-question"
-            className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
-          >
-            Ask a question
-          </label>
+          <div className="flex items-baseline justify-between gap-3">
+            <label
+              htmlFor="bas-analyze-question"
+              className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
+            >
+              Ask a question
+            </label>
+            {!empty && (
+              <button
+                type="button"
+                onClick={startFresh}
+                data-testid="bas-analyze-new-conversation"
+                className="rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)]"
+              >
+                New conversation
+              </button>
+            )}
+          </div>
           <textarea
             id="bas-analyze-question"
             name="question"
@@ -164,7 +296,7 @@ export function Analyze() {
           <NotConfigured missing={status.missing} />
         )}
 
-        {!notConfigured && result === null && !busy && !error && (
+        {!notConfigured && empty && !error && (
           <div className="mt-4">
             <p className="text-xs text-[var(--muted)]">Things people ask:</p>
             <ul className="mt-1.5 flex flex-wrap gap-2">
@@ -186,27 +318,35 @@ export function Analyze() {
           </div>
         )}
       </section>
-
-      {error !== null && (
-        <section className="card p-5" role="alert" style={TONE_STYLE.bad}>
-          <p className="text-sm" style={{ color: TONE_INK.bad }}>
-            {error}
-          </p>
-        </section>
-      )}
-
-      {busy && (
-        <section className="card p-5" aria-live="polite">
-          <p className="text-sm text-[var(--muted)]">
-            Working on “{asked}”. Usually under half a minute.
-          </p>
-        </section>
-      )}
-
-      {result !== null && asked !== null && (
-        <Result result={result} asked={asked} />
-      )}
     </div>
+  );
+}
+
+/** A question the server has not answered yet. The indicator is the button's own word. */
+function PendingTurn({ asked }: { asked: string }) {
+  return (
+    <section className="card overflow-hidden" aria-live="polite" aria-busy="true">
+      <header className="border-b border-[var(--border)] px-5 pb-3 pt-4">
+        <p className="text-xs text-[var(--muted)]">You asked</p>
+        <p className="mt-0.5 text-sm">{asked}</p>
+      </header>
+      <p className="animate-pulse px-5 py-4 text-sm text-[var(--muted)]">Working…</p>
+    </section>
+  );
+}
+
+/** A question the request itself failed on: no result to render, the message as before. */
+function ErrorTurn({ asked, message }: { asked: string; message: string }) {
+  return (
+    <section className="card overflow-hidden" role="alert">
+      <header className="border-b border-[var(--border)] px-5 pb-3 pt-4">
+        <p className="text-xs text-[var(--muted)]">You asked</p>
+        <p className="mt-0.5 text-sm">{asked}</p>
+      </header>
+      <p className="px-5 py-4 text-sm" style={{ ...TONE_STYLE.bad, color: TONE_INK.bad }}>
+        {message}
+      </p>
+    </section>
   );
 }
 
@@ -233,7 +373,20 @@ function NotConfigured({ missing }: { missing: string[] }) {
  * Exported for tests/bas-analyze-ui.test.tsx, which renders a `no_data` result
  * and an `answered` result whose value is 0 and asserts the markup differs.
  */
-export function Result({ result, asked }: { result: AnalyzeResult; asked: string }) {
+export function Result({
+  result,
+  asked,
+  compact = false,
+}: {
+  result: AnalyzeResult;
+  asked: string;
+  /**
+   * An older turn in the thread: the rows table is folded behind its own
+   * one-line label. Nothing else changes - the answer, the interpretation,
+   * the provenance panel and every warning render exactly as on the newest.
+   */
+  compact?: boolean;
+}) {
   const tone = resultTone(result);
 
   return (
@@ -310,7 +463,7 @@ export function Result({ result, asked }: { result: AnalyzeResult; asked: string
             {/* Always rendered: zero rows gets its own sentence, an all-NULL
                 row is shown AS the NULL row, so what the database returned is
                 never left to be inferred from an absence. */}
-            <RowsTable table={result.table} nullOnly={result.reason === "all_null"} />
+            <RowsTable table={result.table} nullOnly={result.reason === "all_null"} folded={compact} />
           </>
         )}
 
@@ -328,7 +481,7 @@ export function Result({ result, asked }: { result: AnalyzeResult; asked: string
               How the question was read: {result.interpretation}
             </p>
             <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
-            <RowsTable table={result.table} />
+            <RowsTable table={result.table} folded={compact} />
           </>
         )}
 
@@ -480,7 +633,16 @@ function Row({
   );
 }
 
-function RowsTable({ table, nullOnly = false }: { table: ResultTable; nullOnly?: boolean }) {
+function RowsTable({
+  table,
+  nullOnly = false,
+  folded = false,
+}: {
+  table: ResultTable;
+  nullOnly?: boolean;
+  /** Older turns: the table sits behind its label, a click away. */
+  folded?: boolean;
+}) {
   if (table.rowCount === 0) {
     return (
       <p className="text-xs text-[var(--muted)]">
@@ -489,13 +651,19 @@ function RowsTable({ table, nullOnly = false }: { table: ResultTable; nullOnly?:
     );
   }
 
+  const label = nullOnly
+    ? "The row the database returned - every cell is NULL"
+    : `Rows the database returned (${table.rowCount})`;
+
+  // A native <details>: the same line is the summary when folded, so the
+  // count stays on screen and the rows are one click away, with no state
+  // and no new words. The newest turn is a plain block, open as it always was.
+  const Wrapper = folded ? "details" : "div";
+  const Label = folded ? "summary" : "p";
+
   return (
-    <div>
-      <p className="text-xs font-medium">
-        {nullOnly
-          ? "The row the database returned - every cell is NULL"
-          : `Rows the database returned (${table.rowCount})`}
-      </p>
+    <Wrapper data-testid="bas-analyze-rows" data-folded={folded ? "true" : "false"}>
+      <Label className={"text-xs font-medium" + (folded ? " cursor-pointer" : "")}>{label}</Label>
       {/* The module's one scroll pattern: up to 200 rows, sticky header, count above. */}
       <div className="mt-1.5 max-h-72 overflow-auto rounded-md border border-[var(--border)]">
         <table className="w-full text-xs">
@@ -532,6 +700,6 @@ function RowsTable({ table, nullOnly = false }: { table: ResultTable; nullOnly?:
           Capped at {table.rowCap} rows. The query matched more; narrow it or aggregate.
         </p>
       )}
-    </div>
+    </Wrapper>
   );
 }
