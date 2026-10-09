@@ -9297,14 +9297,53 @@ database itself refused or stopped for time, where the attempts list shows
 the SQL beside the database's words. If a *Could not answer* shows SQL and
 no label, the database saw that SQL.
 
-**Nothing else is stored.** One question per request, no conversation: the
-model is sent the question, the schema and at most the previous failed
-attempt from the same request. The browser keeps the last result in React
-state until the next question or a page close (no `localStorage`). The audit
-row is the only durable copy, and it holds the question, the SQL and the
-counts — **not** the model's paragraph and **not** the rows. An export of
-past questions can be built from `audit_events`; past answers cannot be
-reconstructed except by re-running the SQL against today's data.
+**Nothing else is stored on the server.** One question per request, and
+the model is sent the question, the schema and at most the previous failed
+attempt from the same request — the thread on screen (next section) is not
+sent to it. The audit row is the only durable copy, and it holds the
+question, the SQL and the counts — **not** the model's paragraph and **not**
+the rows. An export of past questions can be built from `audit_events`;
+past answers cannot be reconstructed except by re-running the SQL against
+today's data. The browser keeps the day's thread in `localStorage` (next
+section); that copy is per browser, per person, and gone the next day.
+
+---
+
+## The Analyze thread is gone, shows the wrong day, or will not take a second question
+
+**The screen is a thread for one calendar day (2026-10-09).** Each question
+and what came back is a turn, oldest at the top, the ask box under them.
+Earlier turns stay exactly as they were rendered, except that an older
+turn's rows table is folded behind the line it already carried (*Rows the
+database returned (N)*) — click it to open. The newest turn is fully open.
+
+**Where it lives.** `localStorage`, under
+`phb.bas.analyze.thread:<employee id>:<YYYY-MM-DD>`. Nothing on the server
+changed: the audit row per question is still the durable record. Two people
+on one machine have two keys. The copy is per browser profile: a thread
+asked in Edge is not in Chrome.
+
+**The day is America/New_York**, the platform's one day boundary
+(`APP_TIME_ZONE`, `lib/activity/rollover.ts`), for the same reason Home's
+"last here" window uses it: midnight UTC is 7 or 8 PM in Cincinnati, and the
+browser's own zone would move the boundary with the laptop. On load, the
+day's thread is read and every other day's thread for that person is
+deleted — a stale thread is discarded, never shown. A question asked at
+11:59 PM and answered at 12:01 AM starts the new day's thread.
+
+| Symptom | Cause | What to do |
+|---|---|---|
+| Yesterday's questions are gone | By design: a thread lasts the calendar day | The audit log (*Analyze: reading the log of questions*) still has every question and its SQL |
+| The thread is gone after a reload, same day | A private window, cleared site data, or storage blocked: then a thread lasts as long as the page. Or a reload mid-answer: a pending question is not written, because showing a question with no answer after a reload would be worse | Ask again |
+| The oldest questions are missing after a reload, the newest are there | Storage refused the size (about 5 MB per site) and the oldest turns were dropped from the stored copy; the screen kept them until the reload | Narrow the questions that return large tables, or start a new conversation |
+| The ask box is disabled and the button reads *Working…* | A question is out. The pending turn is at the bottom of the thread. One question at a time, by design; the server takes 20–30 s | Wait; or *New conversation*, which cancels it |
+| *New conversation* | Clears the screen and the stored thread for today. No confirmation: nothing is lost that the audit log does not hold | — |
+
+**Not built, deliberately:** the model does not see earlier turns. Step 2
+of this work would hand prior turns to the planner; the turn shape
+(`AnalyzeTurn` in `app/(modules)/bas/analyze-thread.ts`) carries the full
+`AnalyzeResult`, so the question, interpretation and SQL of every earlier
+turn are already there to read.
 
 docs/BAS-B5.md: "The questions people actually ask will not be the ones either
 of us would predict, and that log is what tells you whether this is useful or

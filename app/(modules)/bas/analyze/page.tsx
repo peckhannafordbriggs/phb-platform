@@ -26,7 +26,9 @@ export default async function BasAnalyzePage() {
 
   return (
     <BasShell blurb={basTab("/bas/analyze").blurb} canAdminister={canAdminister}>
-      <Analyze />
+      {/* The employee id keys the day's thread in the browser, so two
+          people on one machine never see each other's questions. */}
+      <Analyze employeeId={access.viewer.id} />
     </BasShell>
   );
 }
