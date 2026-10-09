@@ -974,6 +974,32 @@ mutations run. `lib/modules/bas/value-kind.ts`;
 `WHY-ITS-BUILT-THIS-WAY.md` § 63; `runbook.md` → *A boolean point's chart
 is empty, or its axis reads On / Off*.
 
+**Point Explorer has a readings table and a CSV export (2026-10-09).** A
+*Chart / Table* toggle at the right of the trend panel's heading, and
+*Download CSV* beside it; `view=table` in the URL opens the table. The table
+is the STORED rows behind the chart - the same point over the very two
+instants the chart's response carries (`range.from` / `range.to`), newest
+first, 200 a page, `count(*)` and `LIMIT / OFFSET` in SQL - and it is
+**never bucketed**: `lib/modules/bas/readings.ts` is a separate path that
+imports nothing from `range.ts`, and `tests/bas-readings-raw.test.ts` walks
+every page of the real `points_RoomT` fixture against the file while the
+chart draws 1,600 averages of the same 7,600 readings. A boolean row is its
+state word, a numeric row is the stored value whole with the unit symbol, a
+timestamp is the tooltip's format in the building's zone with the exact
+microsecond instant as its title. The CSV (`/point-readings/csv`) is every
+row in the range, streamed in 10,000-row keyset chunks with the cursor as the
+printed timestamp (a Date keeps three fractional digits and skips rows),
+capped at **500,000 rows** - under Excel's sheet limit so a capped file
+cannot be cut a second time silently - and when the cap bites the response's
+three headers become a sentence under the heading saying what was exported
+and what was not. `true` / `false` and the unit NAME in the file, because
+the file is for tracing rows back to the database. A hidden point is refused
+with the chart's own sentence. **Nothing is fetched until the toggle or the
+button is used**; the explorer's response is unchanged. `status` is in the
+file (always empty on this path) and not on the screen. `runbook.md` → *The
+readings table and the chart disagree, or a CSV export says it was cut*;
+`WHY-ITS-BUILT-THIS-WAY.md` § 64.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

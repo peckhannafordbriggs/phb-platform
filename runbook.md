@@ -8385,16 +8385,95 @@ counted every 86,400 seconds drifts an hour off the calendar at each clock
 change and never comes back; sub-day buckets are `date_bin` from the range
 start. A tooltip on a bucket shows the average and "lowest – highest".
 
-**To see the raw readings**, narrow the range. Thirty-four days of a
-five-minute point fits under the cap; thirty-five does not. Drag-to-zoom does
-**not** re-fetch — it is a domain change over the same bucketed data — so a
-zoom into a bucketed chart is still bucketed and still says so.
+**To see the raw readings**, switch the panel to **Table** (the toggle at the
+right of the heading), or download the CSV — both are the stored rows and
+neither is ever bucketed; see the next section. Or narrow the range:
+thirty-four days of a five-minute point fits under the cap; thirty-five does
+not. Drag-to-zoom does **not** re-fetch — it is a domain change over the same
+bucketed data — so a zoom into a bucketed chart is still bucketed and still
+says so.
 
 **If the sentence is missing on a chart that is plainly thinned**, the
 `sampling` field of the payload is `raw` while `trend` is shorter than
 `stats.readings`. That cannot happen from the code as written (the decision
 and the query are two arms of one `if`), so look for a second code path
 building `trend`.
+
+---
+
+## The readings table and the chart disagree, or a CSV export says it was cut
+
+**The table is the audit trail for the chart.** The *Chart / Table* toggle at
+the right of the trend panel's heading swaps the chart for the raw readings
+behind it — the same point, the same range — newest first, 200 to a page,
+with the count in the heading (*Readings (9,012)*) and *First / Previous /
+Next / Last* under the rows. *Download CSV* beside the toggle saves every
+reading in the range as a file. Neither costs anything until used: the
+explorer's own response is unchanged, the table fetches only when it is
+shown (`/api/modules/bas/point-readings`), and the file only when the button
+is clicked (`/api/modules/bas/point-readings/csv`). `view=table` in the URL
+opens the table directly, so "look at the rows for this point" is a link.
+
+**The table is never bucketed.** When the chart reads *Averaged to one point
+per 30 minutes: 7,600 readings drawn as 1,600 averages*, the table reads
+*Readings (7,600)* and every row is a stored reading. The two come from
+different code: the chart decides raw-or-bucketed in `getPointExplorer`
+against the measured cap in `lib/modules/bas/range.ts`; the table and the
+CSV are `lib/modules/bas/readings.ts`, which imports nothing from `range.ts`
+and holds a test that fails the build if it ever does
+(`tests/bas-readings-raw.test.ts`, which also walks every page of the real
+`points_RoomT` fixture against the file it was loaded from). So:
+
+| Symptom | Cause | What to do |
+|---|---|---|
+| The table's count differs from the chart's *Readings* tile | They were measured at different instants: the table takes the chart's own `range.from` / `range.to` back, so this is only possible if the chart has refreshed since the table loaded. Switch the view and back | Nothing; it reconciles on the next poll |
+| A row's value is not the number in the chart's tooltip | The tooltip rounds to the unit's decimals plus one; the table shows the stored value whole (`72.02734375 °F`). The CSV holds the same whole value | Nothing. The table is right by definition — it is what is stored |
+| The table shows `—` in a row | A **null record**: the station logged an entry with no value in any column. The *Readings / null records* tile counts the same rows. It is in the CSV as an empty `value` | docs/08, *A null reading is not a missing reading* |
+| A boolean point's rows read *On* / *Off* and the CSV reads `true` / `false` | By design. The screen shows the point's state words (the same as its axis); the file shows the stored value, because the file is for tracing a row back to the database | Nothing |
+| The table's timestamp has no seconds | It is the chart tooltip's own format, so a row and a point match by eye. Hover a timestamp: the title is the exact stored instant, to the microsecond, which is also what the CSV carries | Use the CSV for sub-minute work |
+| *That point is hidden from Point Explorer* in place of the table | The same refusal as the chart, for the same point. A hidden point (`is_visible` false) is served to neither | *Settings → Points*, tick *Shown* |
+
+**"Exported the newest 500,000 of 612,345 readings. 112,345 older readings
+were not included; narrow the range to export them."** The export has a cap,
+and this is the cap being honest. The response carries three headers —
+`X-PHB-Readings-Total`, `X-PHB-Readings-Exported`, `X-PHB-Readings-Cap` —
+and the button reads them and says so, in the warning tone, when they
+differ; a complete export says nothing. The file holds the newest rows, the
+same end the chart keeps when it collects a folder to a cap. The cap is
+**500,000 rows** (`MAX_EXPORT_ROWS`, `lib/modules/bas/readings.ts`): a
+one-minute point for 347 days, a five-minute point for four and three-quarter
+years, well above any point held today (the largest is about 9,000); chosen
+so the file can never reach Excel's 1,048,576-row limit and be truncated a
+second time, silently, by the program most likely to open it; and about
+45 MB, which a browser holds as a Blob before saving. The server never holds
+the file: it is streamed in 10,000-row keyset chunks, one query each.
+Raising the cap is one constant and the comment beside it; the reasons above
+are what to re-check.
+
+**The CSV's columns** are `timestamp` (UTC, ISO 8601, six fractional digits,
+exactly as stored), `value` (the stored value: a number whole, `true` /
+`false`, or the string), `unit` (the stored unit name, `fahrenheit`, not the
+symbol), `point_name` (the shown name — a person's label if one is set),
+`niagara_history_name` (what to match in Workbench), `point_id`, `station`,
+`station_id`, and `status` (in the schema, always empty on this extraction
+path — see `BasReading.status` in `prisma/schema.prisma`). Records end in
+`\r\n`; a field holding a comma, a quote or a line break is quoted with its
+quotes doubled; no byte-order mark. `tests/bas-readings-table.test.ts` holds
+the file to the inserted rows byte for byte, including a label with a comma
+and a quote in it, a null record, and two readings inside one millisecond
+across a chunk boundary (the keyset cursor is the printed timestamp, never a
+JavaScript Date, which keeps three fractional digits and would skip rows).
+
+**A page is slow at hundreds of thousands of readings.** OFFSET paging walks
+the primary key `(point_id, ts)` to the offset, so the last page of a
+500,000-row range costs that walk. It is an index walk, not a scan, and was
+not measured as a problem; if it becomes one, the fix is keyset paging on the
+table route (the CSV already uses it), not a smaller page.
+
+**The export is logged**, one line per file (`bas.readings_exported`: who,
+which point, the range, the total and whether it was capped) and one per
+table page (`bas.point_readings`). Neither is an audit row: the chart's reads
+are not audited either, and this is the same data.
 
 ---
 

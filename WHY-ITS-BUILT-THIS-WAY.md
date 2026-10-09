@@ -2123,6 +2123,89 @@ values on the numeric thresholds and one fails. All four mutations were run.
 
 ---
 
+## 64 · The readings table is a second path, not a second view of the first one
+
+**Decision.** Point Explorer's trend panel has a *Chart / Table* toggle and
+a *Download CSV* button. The table is the stored rows behind the chart —
+same point, the same two instants the chart's response carries — newest
+first, 200 a page, paged in SQL; the CSV is every row in the range, streamed
+in keyset chunks, capped at 500,000 rows and saying so when the cap bites.
+Both are served by `lib/modules/bas/readings.ts`, which is not
+`getPointExplorer` and imports nothing from `range.ts`: no cap, no ladder,
+no `avg()`. Nothing runs until the toggle or the button is used. 2026-10-09.
+
+**Why a second path.** The chart's 10,000-reading cap is a measurement of
+what Recharts can draw and zoom under 400 ms (§ 53). It is a fact about SVG
+path points. A table does not draw a path and a file does not draw anything,
+so applying the cap to them would be applying a measurement to the thing it
+did not measure. The alternative — "reuse the explorer and page the trend" —
+would hand the table the bucketed series whenever the chart was bucketed,
+and the table exists for the moment the chart looks wrong. A table of the
+chart's averages is a second drawing of the same guess. The whole value of
+the thing is that it cannot agree with the chart by construction; it has to
+agree with the database.
+
+**Why instants and not dates.** The explorer resolves a calendar range in
+the building's zone, by PostgreSQL (§ 53), and its response carries the
+result as `range.from` / `range.to`. The table and the CSV take those two
+instants back exactly. Re-deriving the dates in a second place would be a
+second implementation of the zone rule to keep in step; taking the instants
+means "the same range the chart is showing" is true because it is literally
+the same two values. It also freezes a preset's trailing window between page
+1 and page 2, so paging a *last 7 days* table does not shift under a reading
+that arrived in between. The zone still travels, for display: a row's
+timestamp is the chart tooltip's own formatter in the chart's own zone, so a
+row and a point match by eye, and the exact instant is the cell's title.
+
+**Why the stored value and not the tooltip's.** The tooltip rounds to the
+unit's decimals plus one, because it is a label. The table shows
+`72.02734375 °F` — the float32 Niagara sent, whole, with the symbol through
+the one formatter — because it is evidence. The CSV goes one step further
+and writes `true` / `false` where the screen says *On* / *Off*, and the unit
+name where the screen shows the symbol: the file is for tracing a row back to
+the database, and a file that repeated the screen's display choices could not
+do that. A boolean point's rows on screen are its state words, the same words
+as its axis (§ 63), and never a digit.
+
+**Why the cap is honest, and why 500,000.** A silently truncated export is
+worse than no export: the person has a file, it looks complete, and the
+oldest readings — where the problem they are investigating usually is — are
+simply absent. So the server counts first, streams up to the cap, and sends
+three headers (`total`, `exported`, `cap`); the button fetches rather than
+links, precisely so it can read them, and turns a shortfall into a sentence
+in the warning tone with the one action that gets the rest. The number:
+under Excel's 1,048,576-row sheet limit with room to spare, so a capped file
+cannot be truncated a second time, quietly, by the program most likely to
+open it; about 45 MB, which a browser holds as a Blob; and one point at a
+one-minute cadence for 347 days, far past any point held today. The platform
+never holds the file — 10,000-row chunks, one query each, with the cursor as
+the printed timestamp rather than a Date, because a Date keeps three
+fractional digits and the column keeps six, and a truncated cursor skips
+rows.
+
+**Why `status` is in the file and not on the screen.** It is a real column
+and it is always NULL on this extraction path (`BasReading.status`). A file
+is for completeness, so it carries the column empty; a screen column that
+is always a dash is louder than the toggle, and the brief said nothing may
+be. Same reasoning for the seconds: the table's timestamp is the tooltip's
+format, and the exact instant is a hover away.
+
+**What breaks if you undo it.** Route the table through `getPointExplorer`
+and `tests/bas-readings-raw.test.ts` fails: over the real `points_RoomT`
+fixture with the chart's cap at 2,000 it asserts the table holds every one of
+the 7,600 raw readings, timestamp and value, while the chart holds 1,600
+averages, and that most of those averages are values no reading ever had.
+Import anything from `range.ts` into `readings.ts` and the same file's
+source test fails. Make the cursor a Date and the two-rows-in-one-millisecond
+test fails. Drop the headers or the sentence and the jsdom test fails on the
+exact wording. Fetch the table on page load and the "chart view makes no
+request" test fails. `tests/bas-readings-table.test.ts`,
+`tests/bas-readings-raw.test.ts`, `tests/bas-readings-table-ui.test.tsx`;
+`runbook.md` → *The readings table and the chart disagree, or a CSV export
+says it was cut*.
+
+---
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

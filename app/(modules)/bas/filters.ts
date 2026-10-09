@@ -40,6 +40,18 @@ export const PROJECT_PARAM = "project";
 export const STATION_PARAM = "station";
 
 /**
+ * Point Explorer's trend panel as a chart (absent) or as a table of the raw
+ * readings behind it (`view=table`). In the URL like every other choice on
+ * this module, so "look at the rows for this point over this range" is a link
+ * that can be pasted into a ticket - the audit use the table exists for.
+ * Preserved by `withFilter` and `withCascade` like any other parameter, and
+ * read by nothing on the server: the readings are fetched by the table itself,
+ * only once it is shown.
+ */
+export const VIEW_PARAM = "view";
+export const TABLE_VIEW = "table";
+
+/**
  * Where a Projects card goes: Point Explorer with the project set and no
  * point loaded.
  *

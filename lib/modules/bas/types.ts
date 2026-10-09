@@ -780,6 +780,57 @@ export interface PointExplorer {
   dataGaps: DataGapRow[];
 }
 
+// ------------------------------------------------- the readings table (B4)
+
+/**
+ * One stored reading, as stored.
+ *
+ * All three value columns travel, not the one the point's kind says it uses,
+ * because the table exists to show what the database holds: a `real` point
+ * with a stray `value_bool` row is a collector defect, and a payload that had
+ * already chosen a column would hide it. `ts` is text rather than a Date so
+ * the six fractional digits PostgreSQL stores survive the trip - a JavaScript
+ * Date keeps three - and the CSV and the table print the same instant.
+ */
+export interface ReadingRow {
+  /** ISO 8601, UTC, microseconds: `2026-09-11T14:05:03.412000Z`. */
+  ts: string;
+  valueNum: number | null;
+  valueBool: boolean | null;
+  valueStr: string | null;
+  /** Always null on the current extraction path. See `BasReading.status`. */
+  status: string | null;
+}
+
+/**
+ * One page of a point's readings over the chart's range, newest first.
+ *
+ * RAW, always. Nothing here passes through `MAX_RAW_TREND_POINTS` or the
+ * bucket ladder; `total` is `count(*)` over the range and `rows` is a LIMIT /
+ * OFFSET slice of it in SQL. A table that showed the chart's averaged series
+ * would be a second drawing of the same guess, and the table exists to check
+ * the drawing.
+ */
+export interface PointReadingsPage {
+  point: PointOption;
+  /** The station the point is read from, for the CSV's identifiers. */
+  stationId: string;
+  stationName: string;
+  niagaraHistoryName: string;
+  /** The IANA zone timestamps are shown in - the building's, as on the chart. */
+  timezone: string;
+  /** The instants asked for, `from` inclusive and `to` exclusive, as given. */
+  from: string;
+  to: string;
+  /** Readings in the range, over every page. */
+  total: number;
+  /** The page served. The one asked for, clamped to the last page. */
+  page: number;
+  pageSize: number;
+  pages: number;
+  rows: ReadingRow[];
+}
+
 // ---------------------------------------------------------------------------
 // Settings (B7.2) - the read-only hierarchy.
 // ---------------------------------------------------------------------------

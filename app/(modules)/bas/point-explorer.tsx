@@ -19,6 +19,7 @@ import type {
 import {
   ApiError,
   axisLabel,
+  describeCappedExport,
   describeClockOffset,
   describeDistinctValues,
   describeExtentNotices,
@@ -27,6 +28,7 @@ import {
   describeRange,
   describeSampling,
   distinctValuesTone,
+  downloadPointReadingsCsv,
   fetchPointExplorer,
   formatChartTick,
   formatCount,
@@ -36,12 +38,15 @@ import {
   type Tone,
 } from "./health-client";
 import { RangePicker } from "./range-picker";
+import { ReadingsTable } from "./readings-table";
 import {
   ALL_SITES,
   POINT_PARAM,
   PROJECT_PARAM,
   SITE_PARAM,
   STATION_PARAM,
+  TABLE_VIEW,
+  VIEW_PARAM,
   readFilters,
   withCascade,
   withFilter,
@@ -98,6 +103,9 @@ export function PointExplorer() {
   const [loading, setLoading] = useState(true);
 
   const { siteId, windowDays, range, pointId, projectId, stationId } = filters;
+  // The trend panel as the chart (default) or the raw readings behind it.
+  // In the URL like every other choice here; read by nothing on the server.
+  const view: TrendView = searchParams.get(VIEW_PARAM) === TABLE_VIEW ? "table" : "chart";
 
   const load = useCallback(
     async (
@@ -457,7 +465,12 @@ export function PointExplorer() {
 
           {/* ---------------------------------------------------- trend */}
 
-          <TrendPanel data={data} unit={unit} />
+          <TrendPanel
+            data={data}
+            unit={unit}
+            view={view}
+            onViewChange={(next) => setParam(VIEW_PARAM, next === "table" ? TABLE_VIEW : null)}
+          />
 
           {/* ----------------------------------------------------- gaps */}
 
@@ -510,30 +523,87 @@ function Panel({
   title,
   count,
   description,
+  actions,
   children,
 }: {
   title: string;
   /** Rows in a scrolling body, beside the title, so nobody scrolls to count. */
   count?: number;
   description?: string;
+  /** Small controls at the right of the heading: a toggle, a button. */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="card overflow-hidden">
-      <header className="px-5 pb-3 pt-4">
-        <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
-          {title}
-          {count !== undefined && (
-            <span className="font-normal text-[var(--muted)]"> ({formatCount(count)})</span>
+      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-5 pb-3 pt-4">
+        <div>
+          <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+            {title}
+            {count !== undefined && (
+              <span className="font-normal text-[var(--muted)]"> ({formatCount(count)})</span>
+            )}
+          </h2>
+          {description !== undefined && description.length > 0 && (
+            <p className="mt-1 text-xs text-[var(--muted)]">{description}</p>
           )}
-        </h2>
-        {description !== undefined && description.length > 0 && (
-          <p className="mt-1 text-xs text-[var(--muted)]">{description}</p>
-        )}
+        </div>
+        {actions !== undefined && <div className="flex items-center gap-2">{actions}</div>}
       </header>
       {children}
     </section>
   );
+}
+
+/** The trend panel's two faces. `chart` is the default and the URL's absent value. */
+export type TrendView = "chart" | "table";
+
+/** The Reset-zoom button's styling, shared by the view toggle and the download. */
+const SMALL_BUTTON =
+  "rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)] disabled:cursor-default disabled:opacity-40";
+
+/**
+ * Chart / Table. A pair of pressed-state buttons rather than a tab bar or a
+ * checkbox: two words, no sentence, and the pressed one says where you are.
+ */
+function ViewToggle({
+  view,
+  onChange,
+}: {
+  view: TrendView;
+  onChange: (view: TrendView) => void;
+}) {
+  const option = (value: TrendView, label: string) => (
+    <button
+      type="button"
+      aria-pressed={view === value}
+      onClick={() => onChange(value)}
+      className={SMALL_BUTTON + (view === value ? " bg-[var(--neutral-100)] font-medium" : "")}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div role="group" aria-label="Show as" className="flex items-center gap-1">
+      {option("chart", "Chart")}
+      {option("table", "Table")}
+    </div>
+  );
+}
+
+/**
+ * Save a fetched file through a temporary link. The one place the browser's
+ * download machinery is touched; the fetch itself is in health-client.ts.
+ */
+function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 /**
@@ -575,9 +645,14 @@ function Panel({
 export function TrendPanel({
   data,
   unit,
+  view = "chart",
+  onViewChange,
 }: {
   data: PointExplorerData;
   unit: string | null;
+  /** Chart (default) or the raw readings behind it. */
+  view?: TrendView;
+  onViewChange?: (view: TrendView) => void;
 }) {
   /**
    * The count and the longest are invisible from the chart; that the line stops
@@ -608,6 +683,69 @@ export function TrendPanel({
   const [zoom, setZoom] = useState<TrendZoom | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragTo, setDragTo] = useState<number | null>(null);
+
+  /**
+   * The table's total, lifted into the heading as "Readings (9,012)" - the
+   * module's count-in-the-heading rule. Known only once the table has
+   * fetched, which is only once it is shown.
+   */
+  const [tableTotal, setTableTotal] = useState<{ key: string; total: number } | null>(null);
+  const tableKey = `${data.selectedPoint?.pointId ?? ""}|${data.range.from}|${data.range.to}`;
+  const tableCount = tableTotal !== null && tableTotal.key === tableKey ? tableTotal.total : undefined;
+
+  /**
+   * Download CSV. Nothing is requested until the click; the response's
+   * headers say how many rows the file holds against how many the range
+   * holds, and when those differ the sentence below the heading says so, in
+   * the warning tone. A clean export says nothing - the file arriving is the
+   * message.
+   */
+  const [downloading, setDownloading] = useState(false);
+  const [downloadNote, setDownloadNote] = useState<
+    { tone: "warn" | "error"; text: string } | null
+  >(null);
+
+  async function downloadCsv(): Promise<void> {
+    if (data.selectedPoint === null || downloading) return;
+    setDownloading(true);
+    setDownloadNote(null);
+    try {
+      const download = await downloadPointReadingsCsv({
+        pointId: data.selectedPoint.pointId,
+        from: data.range.from,
+        to: data.range.to,
+      });
+      saveBlob(download.blob, download.filename);
+      const capped = describeCappedExport(download);
+      if (capped !== null) setDownloadNote({ tone: "warn", text: capped });
+    } catch (caught) {
+      setDownloadNote({
+        tone: "error",
+        text:
+          caught instanceof ApiError
+            ? `The download failed: ${caught.message}`
+            : "The download failed. Try again.",
+      });
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  const panelActions =
+    data.selectedPoint === null ? undefined : (
+      <>
+        <ViewToggle view={view} onChange={(next) => onViewChange?.(next)} />
+        <button
+          type="button"
+          onClick={() => void downloadCsv()}
+          disabled={downloading}
+          className={SMALL_BUTTON}
+          data-testid="bas-download-csv"
+        >
+          {downloading ? "Downloading…" : "Download CSV"}
+        </button>
+      </>
+    );
 
   function commitZoom(): void {
     if (dragFrom === null || dragTo === null || dragFrom === dragTo) {
@@ -651,8 +789,33 @@ export function TrendPanel({
   } as const;
 
   return (
-    <Panel title="Trend" description={gapSummary}>
-      {data.trend.length === 0 ? (
+    <Panel
+      title={view === "table" ? "Readings" : "Trend"}
+      count={view === "table" ? tableCount : undefined}
+      description={view === "table" ? undefined : gapSummary}
+      actions={panelActions}
+    >
+      {downloadNote !== null && (
+        <p
+          className={
+            "border-b px-4 py-2 text-xs" +
+            (downloadNote.tone === "error" ? " border-red-300 bg-red-50 text-red-900" : "")
+          }
+          style={downloadNote.tone === "warn" ? noticeStyle : undefined}
+          role={downloadNote.tone === "error" ? "alert" : "note"}
+          data-testid="bas-download-note"
+        >
+          {downloadNote.text}
+        </p>
+      )}
+      {view === "table" && data.selectedPoint !== null ? (
+        <ReadingsTable
+          point={data.selectedPoint}
+          range={data.range}
+          extent={data.pointExtent}
+          onTotal={(total) => setTableTotal({ key: tableKey, total })}
+        />
+      ) : data.trend.length === 0 ? (
         <p
           className="px-4 py-8 text-center text-sm text-[var(--muted)]"
           data-testid="bas-no-readings"
