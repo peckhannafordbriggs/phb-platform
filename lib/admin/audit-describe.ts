@@ -298,6 +298,19 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     );
   },
 
+  "cip.projects_synced": ({ actor, meta }) => {
+    const n = (key: string) => {
+      const v = meta[key];
+      return typeof v === "number" ? v : 0;
+    };
+    const skipped = n("projectsSkipped");
+    return (
+      `${actor} synced the Cost Intelligence projects: ` +
+      `${n("projectsAdded")} added, ${n("projectsUpdated")} updated, ${n("projectsRemoved")} removed` +
+      (skipped > 0 ? `, ${skipped} could not be read` : "")
+    );
+  },
+
   "cip.workflow_created": ({ actor, meta }) =>
     `${actor} created the Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
 
@@ -562,6 +575,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.point_label_changed": "BAS point labelled",
   "bas.question_asked": "BAS question asked",
   "cip.skills_synced": "Cost Intelligence skills synced",
+  "cip.projects_synced": "Cost Intelligence projects synced",
   "cip.workflow_created": "Cost Intelligence workflow created",
   "cip.workflow_updated": "Cost Intelligence workflow updated",
   "cip.workflow_steps_changed": "Cost Intelligence workflow steps changed",

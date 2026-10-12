@@ -2,7 +2,7 @@ import type { CipSkill, CipSkillSync } from "@/lib/generated/prisma/client";
 import { Card } from "../ui/Card";
 import { Pill } from "../ui/Pill";
 import { SkillList } from "./skill-list";
-import { SkillSyncButton } from "./skill-sync-button";
+import { SyncButton } from "./sync-button";
 
 /** CHANGELOG dates are stored as midnight UTC; formatting in UTC keeps them on the right day. */
 const DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
@@ -30,7 +30,7 @@ export function SkillCatalogView({
         <div className="shrink-0 border-b border-[var(--divider-soft)] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <span className="eyebrow whitespace-nowrap text-[var(--muted)]">Skills · {skills.length}</span>
-            <SkillSyncButton />
+            <SyncButton url="/api/modules/cost-intelligence/skills/sync" />
           </div>
           <SyncStatus sync={lastSync} />
         </div>

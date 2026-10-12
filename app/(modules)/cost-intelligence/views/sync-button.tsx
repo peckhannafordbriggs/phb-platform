@@ -6,12 +6,12 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "../ui/Button";
 
 /**
- * Runs a skill sync, then refreshes the page so the list and the status line
- * update. Only a request that never produced a sync row (409, network) shows a
+ * The Sync button on the Skill catalog and Projects pages. POSTs to `url`, then
+ * refreshes the page so the list and the status line update. Only a request that never produced a sync row (409, network) shows a
  * message here, floated under the button so the header never reflows; every
  * other outcome is in the status line.
  */
-export function SkillSyncButton() {
+export function SyncButton({ url }: { url: string }) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +20,7 @@ export function SkillSyncButton() {
     setSyncing(true);
     setError(null);
     try {
-      const response = await fetch("/api/modules/cost-intelligence/skills/sync", { method: "POST" });
+      const response = await fetch(url, { method: "POST" });
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: { message: string } } | null;
         setError(body?.error?.message ?? "Sync failed. Try again.");

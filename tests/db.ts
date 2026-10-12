@@ -22,6 +22,8 @@ export const testDb = new PrismaClient({
 const TABLES = [
   "cip_workflow_steps",
   "cip_workflows",
+  "cip_project_syncs",
+  "cip_projects",
   "cip_skill_syncs",
   "cip_skills",
   "audit_events",
