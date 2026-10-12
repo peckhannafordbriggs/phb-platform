@@ -75,6 +75,13 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * sends is checked and capped like any other body. A follow-up the model
  * answers from an earlier turn's rows comes back as `from_prior`, rendered
  * with the no-query label AND a panel naming the question it read from.
+ *
+ * IT READS LIKE A MESSAGING APP (2026-10-12), and that is the whole of that
+ * change: a question is a bubble on the right, what came back is plain text
+ * on the left, the evidence is an inset block under it, and the ask box is
+ * one rounded bar at the bottom. Every word, every figure, the folding, the
+ * day's storage and what a request carries are exactly as above. See
+ * `Result` for how a wrong answer still looks different from a right one.
  */
 
 const EXAMPLES = [
@@ -206,7 +213,7 @@ export function Analyze({
   const empty = turns.length === 0 && pending === null;
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto w-full max-w-4xl space-y-6">
       {error !== null && (
         <section className="card p-5" role="alert" style={TONE_STYLE.bad}>
           <p className="text-sm" style={{ color: TONE_INK.bad }}>
@@ -217,7 +224,7 @@ export function Analyze({
 
       {/* ------------------------------------------------------ the thread */}
       {!empty && (
-        <ol className="space-y-6" aria-label="Conversation" data-testid="bas-analyze-thread">
+        <ol className="space-y-8" aria-label="Conversation" data-testid="bas-analyze-thread">
           {turns.map((turn, index) => (
             <li key={turn.id} data-testid="bas-analyze-turn">
               {turn.outcome.kind === "result" ? (
@@ -246,93 +253,118 @@ export function Analyze({
       )}
       <div ref={endRef} />
 
-      {/* ----------------------------------------------------- the ask box */}
-      <section className="card sticky bottom-4 z-10 p-5">
+      {/* The examples sit where the thread will be, above the bar, so the
+          bar itself is only ever the field and its button. */}
+      {!notConfigured && empty && !error && (
+        <div>
+          <p className="text-xs text-[var(--muted)]">Things people ask:</p>
+          <ul className="mt-1.5 flex flex-wrap gap-2">
+            {EXAMPLES.map((example) => (
+              <li key={example}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuestion(example);
+                    void submit(example);
+                  }}
+                  className="rounded-full border border-[var(--border)] bg-[var(--neutral-0)] px-3 py-1 text-xs hover:bg-[var(--neutral-100)]"
+                >
+                  {example}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ----------------------------------------------------- the ask bar */}
+      <section className="sticky bottom-4 z-10">
         <form
           onSubmit={(event) => {
             event.preventDefault();
             void submit(question);
           }}
         >
-          <div className="flex items-baseline justify-between gap-3">
-            <label
-              htmlFor="bas-analyze-question"
-              className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
-            >
-              Ask a question
-            </label>
-            {!empty && (
+          {/* The label is for assistive technology; on screen the field's
+              own placeholder and the thread above it say what it is for. */}
+          <label htmlFor="bas-analyze-question" className="sr-only">
+            Ask a question
+          </label>
+          {/* One opaque surface holds the field, the button, the hint and
+              New conversation, so nothing in the thread scrolls up behind
+              any of them while the bar is stuck to the bottom. */}
+          <div className="rounded-[var(--radius-pane)] border border-[var(--border)] bg-[var(--neutral-0)] px-4 pb-2.5 pt-2 shadow-[var(--shadow-soft)] transition-shadow focus-within:ring-2 focus-within:ring-[var(--module-accent,var(--phb-cyan))]">
+            <div className="flex items-end gap-2">
+              <textarea
+                id="bas-analyze-question"
+                name="question"
+                rows={2}
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void submit(question);
+                  }
+                }}
+                disabled={notConfigured || busy}
+                placeholder="What was the average room temperature last week?"
+                maxLength={1000}
+                className="min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-relaxed placeholder:text-[var(--neutral-400)] focus:outline-none disabled:cursor-not-allowed disabled:text-[var(--muted)]"
+              />
               <button
-                type="button"
-                onClick={startFresh}
-                data-testid="bas-analyze-new-conversation"
-                className="rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)]"
+                type="submit"
+                disabled={notConfigured || busy || question.trim().length < 3}
+                className="mb-1 shrink-0 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-medium hover:bg-[var(--neutral-100)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                New conversation
+                {busy ? "Working…" : "Ask"}
               </button>
-            )}
-          </div>
-          <textarea
-            id="bas-analyze-question"
-            name="question"
-            rows={3}
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void submit(question);
-              }
-            }}
-            disabled={notConfigured || busy}
-            placeholder="What was the average room temperature last week?"
-            maxLength={1000}
-            className="mt-2 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[var(--module-accent,var(--phb-cyan))]"
-          />
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <button
-              type="submit"
-              disabled={notConfigured || busy || question.trim().length < 3}
-              className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-medium hover:bg-[var(--neutral-100)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {busy ? "Working…" : "Ask"}
-            </button>
-            <p className="text-xs text-[var(--muted)]">
-              Enter asks · Shift+Enter for a new line
-            </p>
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-[var(--muted)]">
+                Enter asks · Shift+Enter for a new line
+              </p>
+              {!empty && (
+                <button
+                  type="button"
+                  onClick={startFresh}
+                  data-testid="bas-analyze-new-conversation"
+                  className="rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)]"
+                >
+                  New conversation
+                </button>
+              )}
+            </div>
           </div>
         </form>
 
         {status === null && !error && (
-          <p className="mt-3 text-xs text-[var(--muted)]">Checking configuration…</p>
+          <p className="mt-3 px-1 text-xs text-[var(--muted)]">Checking configuration…</p>
         )}
 
         {notConfigured && (
           <NotConfigured missing={status.missing} />
         )}
-
-        {!notConfigured && empty && !error && (
-          <div className="mt-4">
-            <p className="text-xs text-[var(--muted)]">Things people ask:</p>
-            <ul className="mt-1.5 flex flex-wrap gap-2">
-              {EXAMPLES.map((example) => (
-                <li key={example}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQuestion(example);
-                      void submit(example);
-                    }}
-                    className="rounded-full border border-[var(--border)] px-3 py-1 text-xs hover:bg-[var(--neutral-100)]"
-                  >
-                    {example}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </section>
+    </div>
+  );
+}
+
+/**
+ * The question, as the person's own bubble: right-aligned and sized to its
+ * text, which is what says who is speaking. The words "You asked" are kept
+ * for a screen reader, which cannot see the alignment.
+ */
+function QuestionBubble({ children }: { children: string }) {
+  return (
+    <div className="flex justify-end">
+      <span className="sr-only">You asked</span>
+      <p
+        data-testid="bas-analyze-question"
+        className="max-w-[min(85%,40rem)] whitespace-pre-wrap break-words rounded-[var(--radius-pane)] rounded-br-[var(--radius-control)] bg-[var(--neutral-100)] px-4 py-2.5 text-sm leading-relaxed"
+      >
+        {children}
+      </p>
     </div>
   );
 }
@@ -346,28 +378,24 @@ function ordinalOf(turns: AnalyzeTurn[], id: string): number | null {
 /** A question the server has not answered yet. The indicator is the button's own word. */
 function PendingTurn({ asked }: { asked: string }) {
   return (
-    <section className="card overflow-hidden" aria-live="polite" aria-busy="true">
-      <header className="border-b border-[var(--border)] px-5 pb-3 pt-4">
-        <p className="text-xs text-[var(--muted)]">You asked</p>
-        <p className="mt-0.5 text-sm">{asked}</p>
-      </header>
-      <p className="animate-pulse px-5 py-4 text-sm text-[var(--muted)]">Working…</p>
-    </section>
+    <>
+      <QuestionBubble>{asked}</QuestionBubble>
+      <div className="mt-3" aria-live="polite" aria-busy="true">
+        <p className="animate-pulse text-sm text-[var(--muted)]">Working…</p>
+      </div>
+    </>
   );
 }
 
 /** A question the request itself failed on: no result to render, the message as before. */
 function ErrorTurn({ asked, message }: { asked: string; message: string }) {
   return (
-    <section className="card overflow-hidden" role="alert">
-      <header className="border-b border-[var(--border)] px-5 pb-3 pt-4">
-        <p className="text-xs text-[var(--muted)]">You asked</p>
-        <p className="mt-0.5 text-sm">{asked}</p>
-      </header>
-      <p className="px-5 py-4 text-sm" style={{ ...TONE_STYLE.bad, color: TONE_INK.bad }}>
+    <>
+      <QuestionBubble>{asked}</QuestionBubble>
+      <p className="mt-3 text-sm leading-relaxed" role="alert" style={{ color: TONE_INK.bad }}>
         {message}
       </p>
-    </section>
+    </>
   );
 }
 
@@ -413,14 +441,35 @@ export function Result({
 }) {
   const tone = resultTone(result);
 
+  /*
+    THE CHAT LOOK (2026-10-12). The question is a bubble on the right; what
+    came back is plain text on the left, on the page itself, with no card
+    around it. The heading a result carries is still rendered from its kind
+    - "No data matched", "Could not answer", "One question first", "Answer,
+    read from an earlier result" - in its tone's ink, because that heading is
+    how a wrong or partial answer looks different from a right one. The one
+    heading that says nothing the alignment does not, "Answer", is kept for
+    a screen reader and hidden from sight: the answer's own first sentence
+    is the headline.
+
+    Below the headline, everything that is evidence rather than answer - the
+    caveat, how the question was read, the provenance panel, the rows - is
+    one inset block, quieter than the answer. The footnote, not the headline.
+    Its content, order and folding are exactly what they were.
+  */
+  const plainAnswer = result.kind === "answered";
+
   return (
-    <section className="card overflow-hidden" aria-live="polite">
-      <header className="border-b px-5 pb-3 pt-4" style={{ ...TONE_STYLE[tone], borderBottomWidth: 1 }}>
-        <p className="text-xs text-[var(--muted)]">You asked</p>
-        <p className="mt-0.5 text-sm">{asked}</p>
+    <>
+      <QuestionBubble>{asked}</QuestionBubble>
+      <section className="mt-3" aria-live="polite">
         <h2
-          className="mt-3 font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
-          style={{ color: TONE_INK[tone] }}
+          className={
+            plainAnswer
+              ? "sr-only"
+              : "font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
+          }
+          style={plainAnswer ? undefined : { color: TONE_INK[tone] }}
         >
           {resultHeading(result)}
         </h2>
@@ -429,118 +478,149 @@ export function Result({
             The first query attempt was not usable and a second was requested. What was tried is shown below.
           </p>
         )}
-      </header>
 
-      <div className="space-y-5 px-5 py-4">
-        {result.kind === "not_configured" && <NotConfigured missing={result.missing} />}
+        {result.kind === "not_configured" && (
+          <>
+            <NotConfigured missing={result.missing} />
+            <div className="mt-4">
+              <NoQueryLabel result={result} />
+            </div>
+          </>
+        )}
 
         {result.kind === "clarify" && (
           <>
-            <p className="text-sm leading-relaxed">{result.question}</p>
-            <p className="text-xs text-[var(--muted)]">
-              How the question was read: {result.interpretation}
-            </p>
-            <p className="text-xs text-[var(--muted)]">Ask again with the detail filled in.</p>
+            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.question}</p>
+            <Footnote>
+              <p className="text-xs text-[var(--muted)]">
+                How the question was read: {result.interpretation}
+              </p>
+              <p className="text-xs text-[var(--muted)]">Ask again with the detail filled in.</p>
+              <NoQueryLabel result={result} />
+            </Footnote>
           </>
         )}
 
         {result.kind === "cannot_answer" && (
           <>
-            <p className="text-sm leading-relaxed">{result.reason}</p>
-            {result.attempts.length > 0 && (
-              <div>
-                <p className="text-xs font-medium">
-                  {result.attempts.length === 1 ? "What was tried" : "What was tried, in order"}
-                </p>
-                <ol className="mt-1.5 space-y-2">
-                  {result.attempts.map((attempt, i) => (
-                    <li key={i} className="rounded-md border border-[var(--border)] p-3">
-                      {/* A failed answer is the one place the SQL earns its
-                          space: what was tried is the diagnosis. A successful
-                          answer's SQL is recorded, not rendered (see the file
-                          header). */}
-                      {attempt.sql.length > 0 && (
-                        <pre className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--neutral-50,var(--surface))] p-3 text-[0.75rem] leading-relaxed">
-                          <code>{attempt.sql}</code>
-                        </pre>
-                      )}
-                      <p className="mt-1.5 text-xs" style={{ color: TONE_INK.warn }}>
-                        {attempt.error}
-                      </p>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            )}
+            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.reason}</p>
+            <Footnote>
+              {result.attempts.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium">
+                    {result.attempts.length === 1 ? "What was tried" : "What was tried, in order"}
+                  </p>
+                  <ol className="mt-1.5 space-y-2">
+                    {result.attempts.map((attempt, i) => (
+                      <li key={i} className="rounded-[var(--radius-row)] border border-[var(--border)] p-3">
+                        {/* A failed answer is the one place the SQL earns its
+                            space: what was tried is the diagnosis. A successful
+                            answer's SQL is recorded, not rendered (see the file
+                            header). */}
+                        {attempt.sql.length > 0 && (
+                          <pre className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--neutral-50,var(--surface))] p-3 text-[0.75rem] leading-relaxed">
+                            <code>{attempt.sql}</code>
+                          </pre>
+                        )}
+                        <p className="mt-1.5 text-xs" style={{ color: TONE_INK.warn }}>
+                          {attempt.error}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+              <NoQueryLabel result={result} />
+            </Footnote>
           </>
         )}
 
         {result.kind === "no_data" && (
           <>
-            <p className="text-sm leading-relaxed" style={{ color: TONE_INK.warn }}>
+            <p className="mt-2 text-[0.9375rem] leading-relaxed" style={{ color: TONE_INK.warn }}>
               {result.explanation}
             </p>
-            <p className="text-xs text-[var(--muted)]">
-              How the question was read: {result.interpretation}
-            </p>
-            <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
-            {/* Always rendered: zero rows gets its own sentence, an all-NULL
-                row is shown AS the NULL row, so what the database returned is
-                never left to be inferred from an absence. */}
-            <RowsTable table={result.table} nullOnly={result.reason === "all_null"} folded={compact} />
+            <Footnote>
+              <p className="text-xs text-[var(--muted)]">
+                How the question was read: {result.interpretation}
+              </p>
+              <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
+              {/* Always rendered: zero rows gets its own sentence, an all-NULL
+                  row is shown AS the NULL row, so what the database returned is
+                  never left to be inferred from an absence. */}
+              <RowsTable table={result.table} nullOnly={result.reason === "all_null"} folded={compact} />
+            </Footnote>
           </>
         )}
 
         {result.kind === "from_prior" && (
           <>
-            <div>
-              <p className="text-sm leading-relaxed">{result.answer}</p>
+            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.answer}</p>
+            <Footnote>
               {/* The same caveat as an answer over rows, pointed at where the rows are. */}
-              <p className="mt-1.5 text-xs text-[var(--muted)]">
+              <p className="text-xs text-[var(--muted)]">
                 The paragraph above is the model&apos;s reading of an earlier question&apos;s rows;
                 where they disagree, those rows are right.
               </p>
-            </div>
-            <p className="text-xs text-[var(--muted)]">
-              How the question was read: {result.interpretation}
-            </p>
-            <SourcePanel source={result.source} ordinal={sourceOrdinal} />
+              <p className="text-xs text-[var(--muted)]">
+                How the question was read: {result.interpretation}
+              </p>
+              <SourcePanel source={result.source} ordinal={sourceOrdinal} />
+              <NoQueryLabel result={result} />
+            </Footnote>
           </>
         )}
 
         {result.kind === "answered" && (
           <>
-            <div>
-              <p className="text-sm leading-relaxed">{result.answer}</p>
+            <p className="text-[0.9375rem] leading-relaxed">{result.answer}</p>
+            <Footnote>
               {/* Stays: it stops a number in the prose being trusted over the rows. */}
-              <p className="mt-1.5 text-xs text-[var(--muted)]">
+              <p className="text-xs text-[var(--muted)]">
                 The paragraph above is the model&apos;s reading of the rows below; where
                 they disagree, the rows are right.
               </p>
-            </div>
-            <p className="text-xs text-[var(--muted)]">
-              How the question was read: {result.interpretation}
-            </p>
-            <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
-            <RowsTable table={result.table} folded={compact} />
+              <p className="text-xs text-[var(--muted)]">
+                How the question was read: {result.interpretation}
+              </p>
+              <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
+              <RowsTable table={result.table} folded={compact} />
+            </Footnote>
           </>
         )}
 
-        {/*
-          The single most important thing a skeptical reader can learn about a
-          result that is not an answer: whether the database was consulted at
-          all. Decided by `databaseQueried` - the same function the audit row
-          records `queried` from - so a guard refusal, which shows an SQL
-          beside an error and looks like a failed query, is still labelled as
-          no query. Never rendered on a result whose SQL ran.
-        */}
-        {!databaseQueried(result) && (
-          <p className="text-xs font-medium" data-testid="bas-analyze-no-query">
-            No database query was run for this answer.
-          </p>
-        )}
-      </div>
-    </section>
+      </section>
+    </>
+  );
+}
+
+/**
+ * The evidence under an answer: inset behind a hairline rule, smaller and
+ * quieter than the sentence above it. One block, so every result's evidence
+ * is set the same way.
+ */
+function Footnote({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-4 ml-1 space-y-4 border-l-2 border-[var(--neutral-200)] pl-4">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The single most important thing a skeptical reader can learn about a
+ * result that is not an answer: whether the database was consulted at
+ * all. Decided by `databaseQueried` - the same function the audit row
+ * records `queried` from - so a guard refusal, which shows an SQL
+ * beside an error and looks like a failed query, is still labelled as
+ * no query. Never rendered on a result whose SQL ran.
+ */
+function NoQueryLabel({ result }: { result: AnalyzeResult }) {
+  if (databaseQueried(result)) return null;
+  return (
+    <p className="text-xs font-medium" data-testid="bas-analyze-no-query">
+      No database query was run for this answer.
+    </p>
   );
 }
 
@@ -559,13 +639,9 @@ function SourcePanel({
 }) {
   const rows = describeSourceRows(source);
   return (
-    <div className="rounded-md border border-[var(--border)]" data-testid="bas-analyze-source">
-      <div className="border-b border-[var(--border)] px-4 py-3">
-        <p className="font-display text-[0.75rem] font-semibold uppercase tracking-[0.07em]">
-          What was actually queried
-        </p>
-      </div>
-      <dl className="divide-y divide-[var(--border)] text-sm">
+    <div data-testid="bas-analyze-source">
+      <PanelHeading />
+      <dl className="divide-y divide-[var(--divider-soft)]">
         <Row label="Read from">{describeSource(source, ordinal)}</Row>
         <Row label="Rows" tone={rows.tone}>
           {rows.text}
@@ -593,14 +669,10 @@ function ProvenancePanel({
   const unclassified = describeUnclassified(provenance);
 
   return (
-    <div className="rounded-md border border-[var(--border)]">
-      <div className="border-b border-[var(--border)] px-4 py-3">
-        <p className="font-display text-[0.75rem] font-semibold uppercase tracking-[0.07em]">
-          What was actually queried
-        </p>
-      </div>
+    <div>
+      <PanelHeading />
 
-      <dl className="divide-y divide-[var(--border)] text-sm">
+      <dl className="divide-y divide-[var(--divider-soft)]">
         <Row label="Gaps in the period" tone={gTone}>
           {describeGaps(provenance)}
           {provenance.gaps !== null && provenance.gaps.items.length > 0 && (
@@ -686,6 +758,15 @@ function ProvenancePanel({
   );
 }
 
+/** The one heading both evidence panels carry, set as the footnote's eyebrow. */
+function PanelHeading() {
+  return (
+    <p className="font-display text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--muted)]">
+      What was actually queried
+    </p>
+  );
+}
+
 function Row({
   label,
   tone = "neutral",
@@ -696,9 +777,9 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-1 gap-1 px-4 py-3 sm:grid-cols-[10rem_1fr] sm:gap-4">
+    <div className="grid grid-cols-1 gap-1 py-2.5 sm:grid-cols-[9rem_1fr] sm:gap-4">
       <dt className="text-xs font-medium text-[var(--muted)]">{label}</dt>
-      <dd className="text-sm leading-relaxed" style={tone === "neutral" ? undefined : { color: TONE_INK[tone] }}>
+      <dd className="text-[0.8125rem] leading-relaxed" style={tone === "neutral" ? undefined : { color: TONE_INK[tone] }}>
         {children}
       </dd>
     </div>
