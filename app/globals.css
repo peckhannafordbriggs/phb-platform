@@ -64,6 +64,24 @@
   --phb-red-btn: #ea1712; /* white on it: 4.54 */
   --phb-gold-ring: #a38f00; /* on light: 3.07 */
 
+  /* --- the Analyze chat surfaces (2026-10-12) --------------------------
+     The thread sits in a purple panel and its cards are purple 13% toward
+     white. The ink tier was tuned to the page ground, where its lightest
+     members clear AA by a hair (4.56-4.65); on this tint they measure
+     3.87-3.94, and no tint of purple that is darker than the ground can
+     hold them. So the three are deepened IN PLACE inside the panel - same
+     hue, scaled to 4.64-4.65 on the tint - by the .analyze-panel rule
+     below, which redefines the ink variables for that subtree only. Every
+     other ink was measured on the tint and passes as it is: muted 6.78,
+     foreground 14.73, maroon 7.52. Measured with the WCAG 2 formula on the
+     rounded hex values. */
+  --phb-purple-tint: #eae4f1; /* purple 13% toward white */
+  --phb-purple-tint-line: #d6cce4; /* purple 25% toward white: row dividers on the tint */
+  --phb-cyan-tint: #e5f2f9; /* cyan 12% toward white: the New conversation chip */
+  --phb-orange-ink-deep: #8f5a07; /* 4.64 on the tint */
+  --phb-cyan-ink-deep: #1e6c95; /* 4.64 on the tint, 5.06 on --phb-cyan-tint, white on it 5.78 */
+  --phb-teal-ink-deep: #2a706a; /* 4.65 on the tint */
+
   /* --- neutrals, 266deg ---------------------------------------------- */
   --neutral-0: #faf8fb;
   --neutral-50: #f6f4f9;
@@ -209,6 +227,17 @@ body {
 
 .chrome :where(a, button, input, select, [tabindex]):focus-visible {
   outline-color: var(--phb-gold);
+}
+
+/* ---------------------------------------------------------------------------
+   The Analyze panel deepens three inks for its tinted cards. See the token
+   comment above: the values are the same hues, measured on the tint. Scoped
+   so nothing outside the panel changes, and tone.ts stays one mapping.
+   --------------------------------------------------------------------------- */
+.analyze-panel {
+  --phb-orange-ink: var(--phb-orange-ink-deep);
+  --phb-cyan-ink: var(--phb-cyan-ink-deep);
+  --phb-teal-ink: var(--phb-teal-ink-deep);
 }
 
 /* ---------------------------------------------------------------------------

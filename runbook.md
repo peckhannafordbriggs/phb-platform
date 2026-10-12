@@ -9329,6 +9329,12 @@ inset block under the answer. A plain answer has no heading; every other
 outcome — *No data matched*, *Could not answer*, *One question first*,
 *Answer, read from an earlier result* — still carries its heading in its
 colour. Nothing about what is shown, stored or sent changed with the look.
+Later the same day it took the brand colours: one purple panel under the
+tabs, gold question bubbles, purple-tinted answer and evidence cards, blue
+for what is pressable, and an Ask diamond. The chosen mock is
+`docs/design/analyze-chat-mockup.png`; the tokens and the contrast
+measurements that hold on the tinted cards are in `app/globals.css` under
+*the Analyze chat surfaces*.
 
 **Where it lives.** `sessionStorage` (since 2026-10-12; `localStorage`
 before), under `phb.bas.analyze.thread:<employee id>:<YYYY-MM-DD>`. Nothing
