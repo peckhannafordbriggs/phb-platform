@@ -9321,6 +9321,14 @@ Earlier turns stay exactly as they were rendered, except that an older
 turn's rows table is folded behind the line it already carried (*Rows the
 database returned (N)*) — click it to open. The newest turn is fully open.
 
+**Since 2026-10-12 it is set like a messaging app**: the question is the
+bubble on the right, the answer is the plain text on the left, and the
+evidence (*What was actually queried*, the rows, the no-query label) is the
+inset block under the answer. A plain answer has no heading; every other
+outcome — *No data matched*, *Could not answer*, *One question first*,
+*Answer, read from an earlier result* — still carries its heading in its
+colour. Nothing about what is shown, stored or sent changed with the look.
+
 **Where it lives.** `localStorage`, under
 `phb.bas.analyze.thread:<employee id>:<YYYY-MM-DD>`. Nothing on the server
 changed: the audit row per question is still the durable record. Two people

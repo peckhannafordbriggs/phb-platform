@@ -149,7 +149,7 @@ async function ask(host: HTMLElement, question: string): Promise<void> {
 }
 
 const askedTexts = (host: HTMLElement) =>
-  [...host.querySelectorAll('[data-testid="bas-analyze-turn"] header p:nth-child(2)')].map(
+  [...host.querySelectorAll('[data-testid="bas-analyze-turn"] [data-testid="bas-analyze-question"]')].map(
     (p) => p.textContent,
   );
 
