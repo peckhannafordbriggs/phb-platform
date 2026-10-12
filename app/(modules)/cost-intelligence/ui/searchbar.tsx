@@ -4,20 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Search, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
-import { PLACEHOLDER_RUNS } from "@/lib/modules/cost-intelligence/placeholder";
 import { PLACEHOLDER_SKILLS } from "@/lib/modules/cost-intelligence/placeholder-settings";
 
 type Result = { href: string; kind: string; label: string; detail: string };
 
-/** TODO(backend): replace with `GET /api/modules/cost-intelligence/search?q=`. Skills are admin only. */
+/**
+ * TODO(backend): replace with `GET /api/modules/cost-intelligence/search?q=` over real runs and
+ * cip_skills. Run results were placeholders and are left out until then. Skills are admin only.
+ */
 function search(query: string, canAdminister: boolean): Result[] {
   const all: Result[] = [
-    ...PLACEHOLDER_RUNS.map((r) => ({
-      href: `/cost-intelligence/runs/${r.id}`,
-      kind: "Run",
-      label: `${r.workflow} · ${r.project}`,
-      detail: r.status,
-    })),
     ...(canAdminister
       ? PLACEHOLDER_SKILLS.map((s) => ({ href: `/cost-intelligence/settings/skills/${s.id}`, kind: "Skill", label: s.name, detail: s.id }))
       : []),

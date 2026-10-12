@@ -13,3 +13,7 @@ Settings:
 - search: skill results still come from PLACEHOLDER_SKILLS, so they link to ids the real catalog 404s; point it at cip_skills
 - skill sync: SharePoint reader once Sites.Selected is granted (replace readSkillsFolder in skill-sync.ts), then the daily scheduled sync
 - project sync: Graph reader once Sites.Selected is granted (replace readProjectsFolder and listProjectFiles in project-sync.ts), then the daily scheduled sync
+
+Runs:
+- worker (cip-worker image, Agent SDK): claims queued runs, copies the project read-only, runs each step's skill, writes the ledger, checkpoints via ask_user, publishes to AI FILES as _revN. Until then runs stay Queued
+- search: run results were placeholders and are gone; add them back with real search

@@ -3,12 +3,10 @@
 Use this to turn what someone calls a part of the screen ("the launcher", "the
 ledger", "the filter") into the component and file that renders it.
 
-The screens are **real UI over placeholder data**, apart from the checkpoint, which is
-still grey placeholder bars, and the **Skill catalog**, which reads `cip_skills` (see
-`lib/modules/cost-intelligence/skill-sync.ts`). Every other data source is in
-`lib/modules/cost-intelligence/placeholder.ts` (runs) or `placeholder-settings.ts`
-(Settings), marked `TODO(backend)`. The plan for making them real is `PLAN.md` beside
-this file.
+Runs, Workflows, Projects, the Skill catalog and Access read and write the database.
+Only **Usage & cost** and the search bar's skill results still use placeholder data
+(`placeholder-settings.ts`, marked `TODO(backend)`). Runs are created and shown for real,
+but nothing executes them until the worker lands: a new run stays **Queued**.
 
 ## Where the design came from
 
@@ -28,7 +26,7 @@ people may refer to them by number:
 Runs (/cost-intelligence)
   ├─ New run  → /cost-intelligence?new=1   launcher appears above the cards
   │               Start run → /cost-intelligence/runs/{id}
-  ├─ click a row → RunDetail on the right
+  ├─ click a row → RunSummary on the right
   │               Open run → /cost-intelligence/runs/{id}
   └─ Run (/cost-intelligence/runs/{id})    the monitor; Back → /cost-intelligence
 ```
@@ -54,7 +52,7 @@ app/(modules)/cost-intelligence/
     access/              Access & roles page
     usage/               Usage & cost page
   views/
-    runs-view.tsx           RunsView
+    runs-view.tsx           RunsView, RunMonitor (client) - the Runs page and the Run page
     skill-catalog-view.tsx  SkillCatalogView
     side-list.tsx           SideList, SyncButton, SyncStatus (client) - the left list every Settings
                             page shares, the Sync button and the last-sync line
@@ -62,20 +60,18 @@ app/(modules)/cost-intelligence/
     projects-view.tsx       ProjectsView - list, detail and live file tree
     access-view.tsx         AccessView
     usage-view.tsx          UsageView
-    parts.tsx               RunHistory, RunDetail, RunLauncher, RunMonitor, Timeline, Checkpoint, Node
   ui/
-    Bar.tsx Button.tsx Card.tsx Dropdown.tsx FilterMenu.tsx Label.tsx
+    Button.tsx Card.tsx Dropdown.tsx FilterMenu.tsx Label.tsx
     Pill.tsx Segmented.tsx Table.tsx searchbar.tsx
 
 lib/modules/cost-intelligence/
   constants.ts              module key and name
-  types.ts                  runs: Run, RunActivity, LedgerEntry, RunStep, PinnedSkill, Option
-                            settings: Skill, Role, RoleId, Permission, Usage, Budget
+  types.ts                  settings: Skill, Role, RoleId, Permission, Usage, Budget
   access.ts                 CIP_ROLES, CIP_PERMISSIONS, listCipMembers (who has the module, PCE or Member)
   skill-sync.ts             syncSkills (folder -> cip_skills), listCatalogSkills, getLatestSkillSync
   workflows.ts              listWorkflows, getWorkflow, create/update/delete, setWorkflowSteps (cip_workflows)
   project-sync.ts           syncProjects (BID-DOC -> cip_projects, file info only), listProjects, readProjectFiles
-  placeholder.ts            PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun, getPlaceholderActivity
+  runs.ts                   createRun, cancelRun, answerCheckpoint, listRuns, getRun, listLaunchOptions (cip_runs)
   placeholder-settings.ts   PLACEHOLDER_SKILLS, _USAGE, _BUDGET,
                             getPlaceholderSkill
 ```
@@ -83,34 +79,39 @@ lib/modules/cost-intelligence/
 **Pages are guards only, and stay server components.** Each `page.tsx` checks access
 with `requireModuleAccess`, which reads the session through `next/headers` and so only
 works on the server. Never put `"use client"` on a page: put state and hooks in a view.
-`views/parts.tsx` and `views/runs-view.tsx` are client components.
+`views/runs-view.tsx` is a client component; the Runs page refreshes itself every few
+seconds while a run is active.
 
 ## Page by page
 
 ### Runs · `/cost-intelligence` · `RunsView` (1a)
 
-`RunsView` holds the selected run and the project filter, and reads `?new=1`.
+Real data from `cip_runs` (`lib/modules/cost-intelligence/runs.ts`). Any module member
+can start, answer and cancel runs.
 
 | People call it | Component | Notes |
 |---|---|---|
-| the launcher, the sentence, "Run X on Y" | `RunLauncher`, centred above the cards (max 48rem) | Only when the URL has `?new=1`. Workflow and project dropdowns; Start run is disabled until both are chosen, then goes to the run's page |
-| the project filter | `FilterMenu`, the filter icon beside the **Project** column header in `RunHistory` | "All projects", then one entry per project that has runs. The icon darkens while a filter is on |
-| the runs table, the runs list | `RunHistory`, a `Table` inside the left card | Columns: Project, Workflow, Status, Started. 8 per page. Clicking a row selects it |
-| the run panel, the right side | `RunDetail` | Id, status, project, workflow, started, and **Open run**. Shows the latest run until you pick one, or when the filter hides your pick; empty only when there are no runs |
+| the launcher, the sentence, "Run X on Y" | `RunLauncher`, centred above the cards (max 48rem) | Only when the URL has `?new=1`. Lists Active workflows with no missing skills, and every project; a project with a run going says "(run going)" and is refused with the reason. Start run creates the run and goes to its page |
+| the project filter | `FilterMenu`, the filter icon beside the **Project** column header | "All projects", then one entry per project that has runs |
+| the runs table, the runs list | a `Table` inside the left card | Columns: Project, Workflow, Status (a pill), Started. Newest first, 8 per page. Clicking a row selects it |
+| the run panel, the right side | `RunSummary` | Id, status, project, workflow, started, cost, and **Open run**. Shows the latest run until you pick one |
+
+Statuses: **Queued**, **Running**, **Waiting on you** (a checkpoint), **Completed**,
+**Failed**, **Cancelled**. One active run per project; the workflow's steps are copied
+onto the run when it starts, so editing a workflow never changes a run already going.
 
 ### Run · `/cost-intelligence/runs/[runId]` · `RunMonitor`
 
-The detailed view of one run. The page reads `runId` from `params`, looks up the run
-and its `RunActivity` (`getPlaceholderRun` / `getPlaceholderActivity` for now), and
-returns a 404 for an id that does not exist. A run with no activity renders empty
-states rather than failing.
+The detailed view of one run, from `getRun`; 404 for an unknown id. Refreshes itself
+every few seconds while the run is Queued or Running.
 
 | People call it | Where |
 |---|---|
-| the run header | full-width top `Card` in `RunMonitor`: id, status, project, workflow, started |
-| the ledger, the run log | left `Card` labelled **Run ledger**: one line per `LedgerEntry` (time, title, detail). A `Checkpoint` follows only when the run's status is "Waiting on you" |
-| the status rail | right `Card` labelled **Status**: `Timeline` over the seven `RunStep`s. Done steps dark, the current one in the module colour, pending ones muted |
-| pinned, versions, tokens, cost | right `Card` labelled **Pinned for this run**: each `PinnedSkill` (name, version), then Tokens and Estimated cost |
+| the run header | top `Card`: id, status pill, **Cancel run** while active, project, workflow, started (and by whom), finished, model, and the error if it failed |
+| the ledger, the run log | left `Card` **Run ledger**: one line per `cip_run_events` row, oldest first |
+| the checkpoint, the question | `CheckpointForm`, under the ledger while the run is Waiting on you: the skill's question, its options as radio buttons plus **Something else** (free text), and **Answer and resume**, which puts the run back in the queue |
+| the skills rail | right `Card` **Skills · run in order**: the copied steps, done / current / pending, with versions; then Tokens, Cost and the cap |
+| the outputs | right `Card` **Outputs · AI FILES**: files the run wrote |
 
 All Settings pages are for module admins only, and follow the mockups in the
 **CIP Directions** design file.
@@ -206,7 +207,6 @@ page checks this itself with `requireModuleAdmin`.
 
 | Component | File | What it is |
 |---|---|---|
-| `Bar` | `ui/Bar.tsx` | A grey rounded placeholder bar. Width and height as props |
 | `Button` | `ui/Button.tsx` | A button with no behaviour of its own. `variant`: `primary` (PHB red, `--phb-red-btn`) or `secondary` (white). Pass `onClick` for an action or `href` for navigation; also `disabled`, `fullWidth`, `type`. Icons go in `children` |
 | `Card` | `ui/Card.tsx` | The platform's `.card` surface. Change the padding with the `padding` prop (default `p-5`), never with a `p-*` in `className`: that one loses to the default |
 | `Pill` | `ui/Pill.tsx` | A small status label. `tone`: `ok` (teal), `draft` (purple), `muted` (grey), `warn` (orange). A tone is a state, never decoration |
@@ -215,14 +215,7 @@ page checks this itself with `requireModuleAdmin`.
 | `FilterMenu` | `ui/FilterMenu.tsx` | A filter icon that opens a small option list; for a table header. `label`, `options`, `value`, `onChange`. Closes on blur |
 | `Label` | `ui/Label.tsx` | Small uppercase section label (`.eyebrow`) |
 | `Table` | `ui/Table.tsx` | Equal-width columns. `headers` (text or any node, e.g. a heading with a `FilterMenu`), `rows` (cells are any React node), optional `pageSize` for Previous / Next paging, optional `onRowClick` + `selected` (indexes into the whole `rows` array, not the page) |
-| `SearchBar` | `ui/searchbar.tsx` | Live search over runs and (admins only) skills. `/` anywhere focuses it; arrows and Enter open a result, Escape closes. `search` reads placeholder data, marked `TODO(backend)` |
-| `Node` | `views/parts.tsx` | The diamond on timelines and the version track. Hollow by default; `filled` for a solid one |
-| `Timeline` | `views/parts.tsx` | The seven-step run timeline, from `steps` |
-| `Checkpoint` | `views/parts.tsx` | A paused-run question with options and Answer and resume (placeholder bars, button not wired) |
-| `RunHistory` | `views/parts.tsx` | The project filter and the runs table |
-| `RunDetail` | `views/parts.tsx` | The quick-look panel for one `Run`, with Open run |
-| `RunLauncher` | `views/parts.tsx` | "Run [workflow] on [project]" and Start run |
-| `RunMonitor` | `views/parts.tsx` | The whole Run page for one `Run` and its optional `RunActivity`: header, ledger, Status, Pinned |
+| `SearchBar` | `ui/searchbar.tsx` | Live search; for now only (admins only) placeholder skills, run results come back with real search. `/` anywhere focuses it; arrows and Enter open a result, Escape closes. Marked `TODO(backend)` |
 
 Icons come from **`lucide-react`**; do not hand-draw SVGs.
 
@@ -230,9 +223,8 @@ Icons come from **`lucide-react`**; do not hand-draw SVGs.
 
 - Selecting a run, the project filter, and Previous / Next on the runs table.
 - New run opening and closing the launcher; Back from a run page.
-- The launcher's dropdowns, and Start run going to a run page. It goes to the first
-  placeholder run until the backend returns a real id.
-- Open run, and the Run page loading that run (404 for an unknown id).
+- Start run, which creates a real queued run and goes to its page.
+- Open run, the Run page, Cancel run, and Answer and resume.
 - Search.
 - Sync on the Skill catalog, which writes `cip_skills` and survives reload.
 - Sync on Projects, which writes `cip_projects`; picking a project is a link and the
@@ -266,13 +258,10 @@ as the backend for it lands, never inside `Button`.
   would reveal the module to someone without access.
 - A run's page gets its data from the run id, never from the launcher. Start run
   creates the run and navigates to its id; the page looks it up.
-- Placeholder data lives only in `lib/modules/cost-intelligence/placeholder.ts` and
-  `placeholder-settings.ts`. Placeholder people use `@sample.invalid` addresses, like the
+- Placeholder data lives only in `placeholder-settings.ts`. Placeholder people use `@sample.invalid` addresses, like the
   dev seed, so none can be mistaken for a real employee.
 - Colours come from the platform tokens in `app/globals.css`. The module's colour is
   `var(--module-accent)` (teal); teal, orange and maroon also mean ok, warning and error,
   so never use them for decoration. Primary buttons are PHB red (`--phb-red-btn`).
 - Keep `ui/` components free of behaviour: handlers and data live in the view.
-- When a skeleton becomes real, keep the component names above and replace the `Bar`
-  placeholders inside them, so this file stays true.
 - **If you add, rename or move a component, update this file in the same change.**

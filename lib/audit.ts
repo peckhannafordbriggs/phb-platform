@@ -101,6 +101,9 @@ export type AuditAction =
    */
   | "cip.skills_synced"
   | "cip.projects_synced"
+  | "cip.run_started"
+  | "cip.run_cancelled"
+  | "cip.checkpoint_answered"
   /**
    * Cost Intelligence workflows, built by PCEs in Settings. Metadata carries the
    * workflow id and name; updates carry what changed (previousName,

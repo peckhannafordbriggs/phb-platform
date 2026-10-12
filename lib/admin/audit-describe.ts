@@ -311,6 +311,14 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     );
   },
 
+  "cip.run_started": ({ actor, meta }) =>
+    `${actor} started ${stringField(meta, "workflowName") ?? "a workflow"} on ${stringField(meta, "projectName") ?? "a project"} (run ${stringField(meta, "runId") ?? "?"})`,
+
+  "cip.run_cancelled": ({ actor, meta }) => `${actor} cancelled run ${stringField(meta, "runId") ?? "?"}`,
+
+  "cip.checkpoint_answered": ({ actor, meta }) =>
+    `${actor} answered a question on run ${stringField(meta, "runId") ?? "?"}`,
+
   "cip.workflow_created": ({ actor, meta }) =>
     `${actor} created the Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
 
@@ -576,6 +584,9 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.question_asked": "BAS question asked",
   "cip.skills_synced": "Cost Intelligence skills synced",
   "cip.projects_synced": "Cost Intelligence projects synced",
+  "cip.run_started": "Cost Intelligence run started",
+  "cip.run_cancelled": "Cost Intelligence run cancelled",
+  "cip.checkpoint_answered": "Cost Intelligence run question answered",
   "cip.workflow_created": "Cost Intelligence workflow created",
   "cip.workflow_updated": "Cost Intelligence workflow updated",
   "cip.workflow_steps_changed": "Cost Intelligence workflow steps changed",

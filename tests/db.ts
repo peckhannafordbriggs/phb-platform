@@ -20,6 +20,10 @@ export const testDb = new PrismaClient({
 // TRUNCATE does not fire row-level triggers, so the audit append-only trigger
 // does not block cleanup.
 const TABLES = [
+  "cip_run_transcripts",
+  "cip_run_checkpoints",
+  "cip_run_events",
+  "cip_runs",
   "cip_workflow_steps",
   "cip_workflows",
   "cip_project_syncs",

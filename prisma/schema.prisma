@@ -71,6 +71,8 @@ model Employee {
   syncsTriggered CipSkillSync[]
   workflowsCreated CipWorkflow[]
   projectSyncsTriggered CipProjectSync[]
+  runsStarted      CipRun[]
+  checkpointsAnswered CipRunCheckpoint[]
 
   @@index([status])
   @@index([departmentId])
@@ -591,6 +593,7 @@ model CipWorkflow {
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   steps CipWorkflowStep[]
+  runs  CipRun[]
 
   @@map("cip_workflows")
 }
@@ -621,6 +624,8 @@ model CipProject {
   lastSynced   DateTime  @map("last_synced") @db.Timestamptz(3)
   removedAt    DateTime? @map("removed_at") @db.Timestamptz(3)
 
+  runs CipRun[]
+
   @@map("cip_projects")
 }
 
@@ -641,4 +646,85 @@ model CipProjectSync {
 
   @@index([startedAt(sort: Desc)])
   @@map("cip_project_syncs")
+}
+
+/// One execution of a workflow against a project. Also the job queue: the worker claims `queued` runs
+model CipRun {
+  id            BigInt       @id @default(autoincrement())
+  workflowId    BigInt?      @map("workflow_id")
+  workflow      CipWorkflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  workflowName  String       @map("workflow_name")
+  projectId     BigInt       @map("project_id")
+  project       CipProject   @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  steps         Json
+  status        String       @default("queued")
+  currentStep   Int          @default(0) @map("current_step")
+  sessionId     String?      @map("session_id")
+  model         String
+  budgetUsd     Decimal      @map("budget_usd") @db.Decimal(10, 2)
+  costUsd       Decimal      @default(0) @map("cost_usd") @db.Decimal(12, 6)
+  inputTokens   BigInt       @default(0) @map("input_tokens")
+  outputTokens  BigInt       @default(0) @map("output_tokens")
+  error         String?
+  startedById   String?      @map("started_by_id") @db.Uuid
+  startedBy     Employee?    @relation(fields: [startedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  startedAt     DateTime?    @map("started_at") @db.Timestamptz(3)
+  heartbeatAt   DateTime?    @map("heartbeat_at") @db.Timestamptz(3)
+  finishedAt    DateTime?    @map("finished_at") @db.Timestamptz(3)
+
+  events      CipRunEvent[]
+  checkpoints CipRunCheckpoint[]
+  transcripts CipRunTranscript[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([status])
+  @@map("cip_runs")
+}
+
+/// The run ledger: append-only, one row per thing that happened, outputs included
+model CipRunEvent {
+  id      BigInt   @id @default(autoincrement())
+  runId   BigInt   @map("run_id")
+  run     CipRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  step    Int?
+  type    String
+  message String
+  data    Json     @default("{}")
+  at      DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([runId, id])
+  @@map("cip_run_events")
+}
+
+/// A question a skill asked a person mid-run; the run waits until it is answered
+model CipRunCheckpoint {
+  id           BigInt    @id @default(autoincrement())
+  runId        BigInt    @map("run_id")
+  run          CipRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  step         Int
+  question     String
+  options      Json      @default("[]")
+  answer       String?
+  answeredById String?   @map("answered_by_id") @db.Uuid
+  answeredBy   Employee? @relation(fields: [answeredById], references: [id], onDelete: SetNull)
+  askedAt      DateTime  @default(now()) @map("asked_at") @db.Timestamptz(3)
+  answeredAt   DateTime? @map("answered_at") @db.Timestamptz(3)
+
+  @@index([runId])
+  @@map("cip_run_checkpoints")
+}
+
+/// The Agent SDK session transcript, mirrored here so a paused run can resume in a fresh container
+model CipRunTranscript {
+  id        BigInt @id @default(autoincrement())
+  runId     BigInt @map("run_id")
+  run       CipRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  sessionId String @map("session_id")
+  subpath   String @default("")
+  entryUuid String? @map("entry_uuid")
+  entry     Json
+
+  @@index([runId, sessionId, subpath, id])
+  @@map("cip_run_transcripts")
 }
