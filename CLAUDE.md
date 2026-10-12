@@ -665,10 +665,12 @@ refusal shows SQL and is still no query; the audit row carries the same
 result in React state only, the audit row the only durable copy and it
 holds no answer text. **Same day, later: the screen is a THREAD.** Turns
 in the order asked, the ask box at the bottom, older turns fold only their
-rows table (a native `<details>`); the day's thread lives in `localStorage`
-keyed by employee id and **America/New_York** calendar day
-(`app/(modules)/bas/analyze-thread.ts`), stale days discarded on load,
-*New conversation* clears it. Nothing on the server.
+rows table (a native `<details>`); the day's thread lives in
+`sessionStorage` (since 2026-10-12; `localStorage` before) keyed by employee
+id and **America/New_York** calendar day
+(`app/(modules)/bas/analyze-thread.ts`), so it survives a reload of its tab
+and not the tab's closing, two tabs are two conversations, stale days are
+discarded on load, and *New conversation* clears it. Nothing on the server.
 `runbook.md` → *The Analyze thread is gone, shows the wrong day, or will not
 take a second question*; `tests/bas-analyze-thread.test.tsx`. **Step 2,
 same day: follow-ups.** A question sends the newest earlier turns that fit

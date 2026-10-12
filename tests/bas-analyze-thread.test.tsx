@@ -8,9 +8,15 @@ import { createRoot, type Root } from "react-dom/client";
  *
  *  - two turns render in the order asked, and only the older one's rows
  *    table is folded (a <details> behind the line it already carried);
- *  - a reload on the same day restores the thread from the browser, with no
- *    request to the server;
- *  - a thread dated yesterday is discarded on load, not shown;
+ *  - a reload of the same tab on the same day restores the thread from the
+ *    tab's session store, with no request to the server;
+ *  - a fresh session starts empty, even where the thread's old home
+ *    (localStorage, before 2026-10-12) still holds today's questions - and
+ *    that old copy is swept;
+ *  - a thread dated yesterday in a still-open tab is discarded on load, not
+ *    shown, and a tab left open past midnight starts the new day's thread
+ *    on its next question;
+ *  - two tabs are two stores, and neither touches the other;
  *  - "New conversation" clears the screen and the storage;
  *  - while a question is being worked on, the pending turn is in the thread,
  *    the ask box is disabled, and a second question cannot be sent.
@@ -33,6 +39,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { Analyze } from "@/app/(modules)/bas/analyze";
 import {
   THREAD_VERSION,
+  browserStorage,
+  clearThread,
+  forgetLocalThreads,
   loadThread,
   priorTurnOf,
   priorTurnsFor,
@@ -98,17 +107,33 @@ function turn(id: string, question: string, answer: string): AnalyzeTurn {
   };
 }
 
+/** A Storage of its own, the way each browser tab has one. */
+function memoryStorage(): Storage {
+  const items = new Map<string, string>();
+  return {
+    get length() {
+      return items.size;
+    },
+    key: (i) => [...items.keys()][i] ?? null,
+    getItem: (k) => items.get(k) ?? null,
+    setItem: (k, v) => void items.set(k, v),
+    removeItem: (k) => void items.delete(k),
+    clear: () => items.clear(),
+  };
+}
+
 // ------------------------------------------------------------------ render
 
 const roots: Array<{ root: Root; host: HTMLDivElement }> = [];
 
-async function render(now: Date = NOW): Promise<HTMLDivElement> {
+async function render(now: Date | (() => Date) = NOW): Promise<HTMLDivElement> {
+  const clock = typeof now === "function" ? now : () => now;
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   roots.push({ root, host });
   await act(async () => {
-    root.render(createElement(Analyze, { employeeId: EMPLOYEE, now: () => now }));
+    root.render(createElement(Analyze, { employeeId: EMPLOYEE, now: clock }));
   });
   await settle();
   return host;
@@ -159,6 +184,7 @@ let answers: Array<Response | (() => Promise<Response>)>;
 let posts: number;
 
 beforeEach(() => {
+  window.sessionStorage.clear();
   window.localStorage.clear();
   answers = [];
   posts = 0;
@@ -191,7 +217,7 @@ describe("the storage rules, without a screen", () => {
   });
 
   it("round-trips today's thread, discards the employee's other days, leaves other people alone", () => {
-    const storage = window.localStorage;
+    const storage = window.sessionStorage;
     saveThread(storage, EMPLOYEE, "2026-10-08", [turn("y", "yesterday?", "Y")]);
     saveThread(storage, EMPLOYEE, TODAY, [turn("t", "today?", "T")]);
     saveThread(storage, OTHER, "2026-10-08", [turn("o", "theirs?", "O")]);
@@ -203,7 +229,7 @@ describe("the storage rules, without a screen", () => {
   });
 
   it("treats a record that does not match its key, or does not parse, as absent", () => {
-    const storage = window.localStorage;
+    const storage = window.sessionStorage;
     storage.setItem(
       threadKey(EMPLOYEE, TODAY),
       JSON.stringify({ version: THREAD_VERSION, employeeId: OTHER, day: TODAY, turns: [turn("x", "q", "a")] }),
@@ -242,6 +268,46 @@ describe("the storage rules, without a screen", () => {
   });
 });
 
+describe("the store is the tab's, not the browser's", () => {
+  it("reads and writes the session store, and sweeps the old local copy rather than reading it", () => {
+    expect(browserStorage()).toBe(window.sessionStorage);
+    window.localStorage.setItem(
+      threadKey(EMPLOYEE, TODAY),
+      JSON.stringify({ version: THREAD_VERSION, employeeId: EMPLOYEE, day: TODAY, turns: [turn("x", "old home?", "a")] }),
+    );
+    window.localStorage.setItem(threadKey(OTHER, "2026-10-01"), "{}");
+    window.localStorage.setItem("phb.co.grouping", "off");
+    expect(forgetLocalThreads(window.localStorage)).toBe(2);
+    expect(window.localStorage.getItem(threadKey(EMPLOYEE, TODAY))).toBeNull();
+    expect(window.localStorage.getItem(threadKey(OTHER, "2026-10-01"))).toBeNull();
+    // Another feature's key is not ours to touch.
+    expect(window.localStorage.getItem("phb.co.grouping")).toBe("off");
+    expect(forgetLocalThreads(null)).toBe(0);
+  });
+
+  it("two tabs are two stores: each holds its own thread for the same person and day, and neither touches the other", () => {
+    const tabA = memoryStorage();
+    const tabB = memoryStorage();
+    saveThread(tabA, EMPLOYEE, TODAY, [turn("a1", "tab A?", "A")]);
+    saveThread(tabB, EMPLOYEE, TODAY, [turn("b1", "tab B?", "B"), turn("b2", "tab B again?", "BB")]);
+
+    expect(loadThread(tabA, EMPLOYEE, TODAY).map((t) => t.question)).toEqual(["tab A?"]);
+    expect(loadThread(tabB, EMPLOYEE, TODAY).map((t) => t.question)).toEqual(["tab B?", "tab B again?"]);
+
+    // New conversation in one tab leaves the other's thread where it was.
+    clearThread(tabA, EMPLOYEE, TODAY);
+    expect(loadThread(tabA, EMPLOYEE, TODAY)).toEqual([]);
+    expect(loadThread(tabB, EMPLOYEE, TODAY)).toHaveLength(2);
+
+    // A follow-up carries the turns of the tab it is asked in, and only those.
+    expect(priorTurnsFor(loadThread(tabB, EMPLOYEE, TODAY)).map((p) => p.question)).toEqual([
+      "tab B?",
+      "tab B again?",
+    ]);
+    expect(priorTurnsFor(loadThread(tabA, EMPLOYEE, TODAY))).toEqual([]);
+  });
+});
+
 describe("the thread on screen", () => {
   it("two turns, in the order asked, and only the older one folds its rows", async () => {
     answers = [jsonResponse({ data: answered("First answer.") }), jsonResponse({ data: answered("Second answer.") })];
@@ -275,7 +341,7 @@ describe("the thread on screen", () => {
     expect(thread.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("a reload on the same day restores the thread without asking the server again", async () => {
+  it("a reload of the same tab on the same day restores the thread without asking the server again", async () => {
     answers = [jsonResponse({ data: answered("Kept.") })];
     const first = await render();
     await ask(first, "will this survive?");
@@ -288,20 +354,54 @@ describe("the thread on screen", () => {
     expect(posts).toBe(1);
   });
 
-  it("a thread dated yesterday is discarded on load, not shown", async () => {
-    saveThread(window.localStorage, EMPLOYEE, "2026-10-08", [turn("y", "yesterday's question?", "Old.")]);
+  it("a fresh session starts empty, even where the thread's old home still holds today's questions", async () => {
+    // The browser has not been closed since before 2026-10-12: localStorage
+    // still carries today's thread. It is not read, and it is swept.
+    saveThread(window.localStorage, EMPLOYEE, TODAY, [turn("l", "from the old home?", "Old copy.")]);
+    const host = await render();
+    expect(host.querySelector('[data-testid="bas-analyze-thread"]')).toBeNull();
+    expect(host.textContent).not.toContain("from the old home?");
+    expect(host.textContent).toContain("Things people ask");
+    expect(window.localStorage.getItem(threadKey(EMPLOYEE, TODAY))).toBeNull();
+    expect(posts).toBe(0);
+  });
+
+  it("yesterday's thread in a still-open tab is discarded on load, not shown", async () => {
+    saveThread(window.sessionStorage, EMPLOYEE, "2026-10-08", [turn("y", "yesterday's question?", "Old.")]);
     const host = await render();
     expect(host.querySelector('[data-testid="bas-analyze-thread"]')).toBeNull();
     expect(host.textContent).not.toContain("yesterday's question?");
-    expect(window.localStorage.getItem(threadKey(EMPLOYEE, "2026-10-08"))).toBeNull();
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, "2026-10-08"))).toBeNull();
     expect(host.textContent).toContain("Things people ask");
+  });
+
+  it("a tab left open past midnight starts the new day's thread on its next question", async () => {
+    answers = [jsonResponse({ data: answered("Before.") }), jsonResponse({ data: answered("After.") })];
+    let clock = new Date("2026-10-10T03:58:00.000Z"); // 11:58 PM on the 9th in Cincinnati
+    const host = await render(() => clock);
+    await ask(host, "before midnight?");
+    expect(askedTexts(host)).toEqual(["before midnight?"]);
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, TODAY))).not.toBeNull();
+
+    clock = new Date("2026-10-10T04:01:00.000Z"); // 12:01 AM on the 10th
+    await ask(host, "after midnight?");
+    expect(askedTexts(host)).toEqual(["after midnight?"]);
+    expect(host.textContent).not.toContain("Before.");
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, "2026-10-10"))).not.toBeNull();
+
+    // The next load of the tab reads the new day and drops the old key.
+    await unmountAll();
+    const again = await render(() => clock);
+    expect(askedTexts(again)).toEqual(["after midnight?"]);
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, TODAY))).toBeNull();
+    expect(posts).toBe(2);
   });
 
   it("New conversation clears the screen and the storage, and the examples return", async () => {
     answers = [jsonResponse({ data: answered("Gone soon.") })];
     const host = await render();
     await ask(host, "clear me?");
-    expect(window.localStorage.getItem(threadKey(EMPLOYEE, TODAY))).not.toBeNull();
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, TODAY))).not.toBeNull();
 
     const button = host.querySelector('[data-testid="bas-analyze-new-conversation"]') as HTMLButtonElement;
     expect(button.textContent).toBe("New conversation");
@@ -309,7 +409,7 @@ describe("the thread on screen", () => {
     await settle();
 
     expect(host.querySelector('[data-testid="bas-analyze-thread"]')).toBeNull();
-    expect(window.localStorage.getItem(threadKey(EMPLOYEE, TODAY))).toBeNull();
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, TODAY))).toBeNull();
     expect(host.querySelector('[data-testid="bas-analyze-new-conversation"]')).toBeNull();
     expect(host.textContent).toContain("Things people ask");
   });

@@ -9308,8 +9308,9 @@ sent to it. The audit row is the only durable copy, and it holds the
 question, the SQL and the counts — **not** the model's paragraph and **not**
 the rows. An export of past questions can be built from `audit_events`;
 past answers cannot be reconstructed except by re-running the SQL against
-today's data. The browser keeps the day's thread in `localStorage` (next
-section); that copy is per browser, per person, and gone the next day.
+today's data. The browser keeps the day's thread in `sessionStorage` (next
+section); that copy is per tab, per person, and gone when the tab closes or
+the day ends.
 
 ---
 
@@ -9329,11 +9330,16 @@ outcome — *No data matched*, *Could not answer*, *One question first*,
 *Answer, read from an earlier result* — still carries its heading in its
 colour. Nothing about what is shown, stored or sent changed with the look.
 
-**Where it lives.** `localStorage`, under
-`phb.bas.analyze.thread:<employee id>:<YYYY-MM-DD>`. Nothing on the server
-changed: the audit row per question is still the durable record. Two people
-on one machine have two keys. The copy is per browser profile: a thread
-asked in Edge is not in Chrome.
+**Where it lives.** `sessionStorage` (since 2026-10-12; `localStorage`
+before), under `phb.bas.analyze.thread:<employee id>:<YYYY-MM-DD>`. Nothing
+on the server changed: the audit row per question is still the durable
+record. Two people on one machine have two keys. The copy is per **tab**: a
+reload of the same tab brings it back, closing the tab or the browser starts
+fresh, and two tabs on the Analyze page are two independent conversations
+that never see each other's questions - a follow-up carries only the turns
+of the tab it was asked in. The six-questions-a-minute limit is per person,
+so two tabs share it. Anything the old `localStorage` copy left behind is
+removed the first time the tab loads after the change.
 
 **The day is America/New_York**, the platform's one day boundary
 (`APP_TIME_ZONE`, `lib/activity/rollover.ts`), for the same reason Home's
@@ -9346,7 +9352,8 @@ deleted — a stale thread is discarded, never shown. A question asked at
 | Symptom | Cause | What to do |
 |---|---|---|
 | Yesterday's questions are gone | By design: a thread lasts the calendar day | The audit log (*Analyze: reading the log of questions*) still has every question and its SQL |
-| The thread is gone after a reload, same day | A private window, cleared site data, or storage blocked: then a thread lasts as long as the page. Or a reload mid-answer: a pending question is not written, because showing a question with no answer after a reload would be worse | Ask again |
+| The thread is gone after closing the tab, or in a new tab | By design since 2026-10-12: a thread lasts as long as its tab | Same; or keep the tab open and reload it instead |
+| The thread is gone after a reload, same day, same tab | A private window, cleared site data, or storage blocked: then a thread lasts as long as the page. Or a reload mid-answer: a pending question is not written, because showing a question with no answer after a reload would be worse | Ask again |
 | The oldest questions are missing after a reload, the newest are there | Storage refused the size (about 5 MB per site) and the oldest turns were dropped from the stored copy; the screen kept them until the reload | Narrow the questions that return large tables, or start a new conversation |
 | The ask box is disabled and the button reads *Working…* | A question is out. The pending turn is at the bottom of the thread. One question at a time, by design; the server takes 20–30 s | Wait; or *New conversation*, which cancels it |
 | *New conversation* | Clears the screen and the stored thread for today. No confirmation: nothing is lost that the audit log does not hold | — |
