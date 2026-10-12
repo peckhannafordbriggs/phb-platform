@@ -12,3 +12,4 @@ Settings:
 - skill catalog: show when main has unpublished changes, and a publish flow (acceptance checks against a fixture, then publish). Without it the PCE cannot tell a skill is behind its live tag or ship a new version from the platform
 - search: skill results still come from PLACEHOLDER_SKILLS, so they link to ids the real catalog 404s; point it at cip_skills
 - skill sync: SharePoint reader once Sites.Selected is granted (replace readSkillsFolder in skill-sync.ts), then the daily scheduled sync
+- project sync: Graph reader once Sites.Selected is granted (replace readProjectsFolder and listProjectFiles in project-sync.ts), then the daily scheduled sync

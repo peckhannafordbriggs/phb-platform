@@ -51,15 +51,19 @@ app/(modules)/cost-intelligence/
     skills/[skillId]/    Skill page
     workflows/           Workflows page (first workflow)
     workflows/[workflowId]/  Workflow page
+    projects/            Projects page (most recently changed project)
+    projects/[projectId]/  Project page
     access/              Access & roles page
     usage/               Usage & cost page
   views/
     runs-view.tsx           RunsView
     skill-catalog-view.tsx  SkillCatalogView
-    skill-sync-button.tsx   SkillSyncButton (client) - the Sync button
+    sync-button.tsx         SyncButton (client) - the Sync button on Skill catalog and Projects
     skill-list.tsx          SkillList (client) - the skills list; keeps the selected row in view
     workflows-view.tsx      WorkflowsView
     workflow-editor.tsx     WorkflowList, WorkflowEditor (client) - the list, New workflow, and the editor
+    projects-view.tsx       ProjectsView - list, detail and live file tree
+    project-list.tsx        ProjectList (client) - the filterable projects list
     access-view.tsx         AccessView
     usage-view.tsx          UsageView
     parts.tsx               RunHistory, RunDetail, RunLauncher, RunMonitor, Timeline, Checkpoint, Node
@@ -74,6 +78,7 @@ lib/modules/cost-intelligence/
   access.ts                 CIP_ROLES, CIP_PERMISSIONS, listCipMembers (who has the module, PCE or Member)
   skill-sync.ts             syncSkills (folder -> cip_skills), listCatalogSkills, getLatestSkillSync
   workflows.ts              listWorkflows, getWorkflow, create/update/delete, setWorkflowSteps (cip_workflows)
+  project-sync.ts           syncProjects (BID-DOC -> cip_projects, file info only), listProjects, readProjectFiles
   placeholder.ts            PLACEHOLDER_RUNS / _WORKFLOWS / _PROJECTS, getPlaceholderRun, getPlaceholderActivity
   placeholder-settings.ts   PLACEHOLDER_SKILLS, _USAGE, _BUDGET,
                             getPlaceholderSkill
@@ -123,7 +128,7 @@ Unknown folder names 404. No skills yet shows an empty state that points at Sync
 
 | People call it | Where |
 |---|---|
-| the Sync button | `SkillSyncButton`, top right of the left `Card`. POSTs to `/api/modules/cost-intelligence/skills/sync`, then refreshes the page. Only a 409 or network error shows a message, floated under the button so the header never reflows |
+| the Sync button | `SyncButton`, top right of the left `Card`. POSTs to `/api/modules/cost-intelligence/skills/sync`, then refreshes the page. Only a 409 or network error shows a message, floated under the button so the header never reflows |
 | last synced | `SyncStatus` under the header: "Last synced …" (New York time) with the added / updated / removed counts, "Sync failed" with the reason, or "N could not be read" for a partial sync |
 | the skills list | `SkillList`, left `Card`: one compact row per skill, name and version. The selected row is tinted in the module colour. Rows link with `scroll={false}` and the selected row scrolls back into view after the page re-renders |
 | the skill detail | right `Card`: name, folder name, version, last updated, last synced, description |
@@ -145,6 +150,22 @@ from the database, so there is no unsaved state. Writes go through the routes un
 
 Status only moves Draft → Active ⇄ Paused. The last step of an Active or Paused
 workflow cannot be removed.
+
+### Projects · `settings/projects` and `settings/projects/[projectId]` · `ProjectsView`
+
+Real data. Each direct subfolder of `CIP_PROJECTS_DIR` (the BID-DOC folder) is a
+project. Sync reads file names, sizes and dates only, never contents. Data:
+`lib/modules/cost-intelligence/project-sync.ts`.
+
+| People call it | Where |
+|---|---|
+| the projects list | `ProjectList`, left `Card`: **Sync** and the last-sync line, a filter box, then one compact row per project with the date it last changed. Newest change first. Each project is its own URL |
+| the project detail | right `Card`: name, path, files and size, last changed, AI FILES (count, or "Not created yet"), last synced, and the categories as pills |
+| the file tree | **Files · read live from the folder**: native `<details>` folders, folders first, sizes on files. Read from disk on every page load, capped at 5,000 entries. Shows a plain message when the folder can't be read (in Azure until Graph lands) |
+
+Categories are the project's top-level folders, plus **General** when files sit
+directly in it. A folder that disappears is marked removed (`removed_at`) and hidden,
+never deleted, because runs will point at projects; if it comes back it is restored.
 
 ### Access & roles · `settings/access` · `AccessView`
 
@@ -218,6 +239,8 @@ Icons come from **`lucide-react`**; do not hand-draw SVGs.
 - Open run, and the Run page loading that run (404 for an unknown id).
 - Search.
 - Sync on the Skill catalog, which writes `cip_skills` and survives reload.
+- Sync on Projects, which writes `cip_projects`; picking a project is a link and the
+  file tree is read live.
 - Workflows: create, rename, steps, Activate / Pause / Resume and Delete draft all
   write `cip_workflows` and survive reload. Picking a workflow or a skill is a link.
 - The usage range, local to the page and lost on reload.
