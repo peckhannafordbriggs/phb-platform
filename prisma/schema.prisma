@@ -70,6 +70,7 @@ model Employee {
 
   syncsTriggered CipSkillSync[]
   workflowsCreated CipWorkflow[]
+  projectSyncsTriggered CipProjectSync[]
 
   @@index([status])
   @@index([departmentId])
@@ -605,4 +606,39 @@ model CipWorkflowStep {
   @@unique([workflowId, position])
   @@unique([workflowId, skillFolderName])
   @@map("cip_workflow_steps")
+}
+
+/// A project folder in BID-DOC; metadata only, the files themselves are read at run time
+model CipProject {
+  id           BigInt    @id @default(autoincrement())
+  folderName   String    @unique @map("folder_name")
+  locationPath String    @map("location_path")
+  categories   String[]  @default([])
+  fileCount    Int       @map("file_count")
+  totalBytes   BigInt    @map("total_bytes")
+  lastModified DateTime? @map("last_modified") @db.Timestamptz(3)
+  aiFileCount  Int?      @map("ai_file_count")
+  lastSynced   DateTime  @map("last_synced") @db.Timestamptz(3)
+  removedAt    DateTime? @map("removed_at") @db.Timestamptz(3)
+
+  @@map("cip_projects")
+}
+
+/// A record of every project sync, manual or scheduled
+model CipProjectSync {
+  id              BigInt    @id @default(autoincrement())
+  trigger         String
+  triggeredById   String?   @map("triggered_by_id") @db.Uuid
+  triggeredBy     Employee? @relation(fields: [triggeredById], references: [id], onDelete: SetNull)
+  status          String    @default("running")
+  projectsSeen    Int       @default(0) @map("projects_seen")
+  projectsAdded   Int       @default(0) @map("projects_added")
+  projectsUpdated Int       @default(0) @map("projects_updated")
+  projectsRemoved Int       @default(0) @map("projects_removed")
+  startedAt       DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt      DateTime? @map("finished_at") @db.Timestamptz(3)
+  errors          Json      @default("[]")
+
+  @@index([startedAt(sort: Desc)])
+  @@map("cip_project_syncs")
 }
