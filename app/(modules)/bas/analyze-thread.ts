@@ -14,7 +14,7 @@ import { APP_TIME_ZONE, calendarDay } from "@/lib/activity/rollover";
 
 /**
  * The Analyze thread: what a day's questions look like in the browser, and
- * how they survive a reload.
+ * how they survive a reload of the tab.
  *
  * Pure. No DOM, no React: the component (analyze.tsx) hands this module a
  * `Storage` and a clock, and every rule here is proved in
@@ -38,12 +38,24 @@ import { APP_TIME_ZONE, calendarDay } from "@/lib/activity/rollover";
  * browser's own zone would move the boundary with the laptop. Two people on
  * one machine have two keys, because the employee id is in it.
  *
- * CLIENT-SIDE ONLY. `localStorage`, nothing on the server: the audit row
- * each question already writes is the durable record (runbook.md, *Analyze:
- * reading the log of questions*), and this is a convenience for the person
- * at the keyboard. It can be absent (a private window, cleared site data),
- * so every read and write is guarded and the screen works without it - a
- * thread then lasts as long as the page.
+ * CLIENT-SIDE ONLY, AND ONLY AS LONG AS THE TAB. `sessionStorage` since
+ * 2026-10-12 (`localStorage` before that), nothing on the server: the audit
+ * row each question already writes is the durable record (runbook.md,
+ * *Analyze: reading the log of questions*), and this is a convenience for
+ * the person at the keyboard. A reload of the same tab brings the thread
+ * back; closing the tab or the browser starts fresh; and two tabs are two
+ * independent conversations, because each tab has a session store of its
+ * own - nothing here or on the server ties them together, and a follow-up
+ * carries only the turns of the tab it was asked in. The day check still
+ * applies within a tab: one left open past midnight resets on its next
+ * load or its next question. Storage can be absent (a private window,
+ * blocked site data), so every read and write is guarded and the screen
+ * works without it - a thread then lasts as long as the page.
+ *
+ * `forgetLocalThreads` removes what the earlier `localStorage` copy left
+ * behind: those keys were cleaned up by the load that no longer reads them,
+ * so without it a few days of old threads would sit in every browser that
+ * used the tab before the change, read by nothing and deleted by nothing.
  *
  * A PENDING QUESTION IS NOT SAVED. Only turns that have resolved are
  * written, so a reload mid-answer loses the question from the thread (the
@@ -173,8 +185,38 @@ export function clearThread(storage: Storage | null, employeeId: string, day: st
   }
 }
 
-/** `window.localStorage`, or null where it throws or does not exist. */
+/** `window.sessionStorage`, or null where it throws or does not exist. */
 export function browserStorage(): Storage | null {
+  try {
+    if (typeof window === "undefined") return null;
+    return window.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove every thread key the pre-2026-10-12 `localStorage` copy left in
+ * this browser, for every employee: nothing reads them any more. Returns
+ * how many were removed. Safe to call where storage is absent.
+ */
+export function forgetLocalThreads(local: Storage | null): number {
+  if (local === null) return 0;
+  try {
+    const stale: string[] = [];
+    for (let i = 0; i < local.length; i += 1) {
+      const key = local.key(i);
+      if (key !== null && key.startsWith(`${THREAD_KEY_PREFIX}:`)) stale.push(key);
+    }
+    for (const key of stale) local.removeItem(key);
+    return stale.length;
+  } catch {
+    return 0;
+  }
+}
+
+/** `window.localStorage`, for `forgetLocalThreads` only; null where it throws or does not exist. */
+export function legacyLocalStorage(): Storage | null {
   try {
     if (typeof window === "undefined") return null;
     return window.localStorage ?? null;

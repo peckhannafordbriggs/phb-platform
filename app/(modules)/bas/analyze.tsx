@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   browserStorage,
   clearThread,
+  forgetLocalThreads,
+  legacyLocalStorage,
   loadThread,
   newTurnId,
   priorTurnsFor,
@@ -62,8 +64,8 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * turn, in the order asked, newest at the bottom, with the ask box under
  * them; a new question appends and earlier turns stay as they were. The
  * thread lasts a calendar day in the company's zone and survives a reload
- * within it, in the browser only - see analyze-thread.ts for the rules and
- * the reasons. Every turn is rendered by the same `Result` as before; an
+ * of the same tab within it - and no longer than the tab (sessionStorage,
+ * 2026-10-12) - see analyze-thread.ts for the rules and the reasons. Every turn is rendered by the same `Result` as before; an
  * older turn folds its rows table behind the one line it already carried,
  * and nothing else about a result changes with its position.
  *
@@ -131,6 +133,8 @@ export function Analyze({
     const today = threadDay(now());
     setTurns(loadThread(browserStorage(), employeeId, today));
     setDay(today);
+    // What the thread's earlier home left behind; nothing reads it now.
+    forgetLocalThreads(legacyLocalStorage());
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is a test seam, not a dependency
   }, [employeeId]);
 
