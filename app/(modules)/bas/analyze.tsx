@@ -233,7 +233,7 @@ export function Analyze({
       and the ask bar, content-width, with the bar kept at its foot. Nothing
       outside it - header, intro, tabs, ground - changes.
     */
-    <div className="analyze-panel mx-auto flex w-full max-w-[60rem] min-h-[70vh] flex-col gap-6 rounded-[36px] bg-[var(--phb-purple)] p-4 shadow-[var(--shadow-soft)] sm:p-7">
+    <div className="analyze-panel mx-auto flex w-full max-w-[75rem] min-h-[70vh] flex-col gap-6 rounded-[36px] bg-[var(--phb-purple)] p-4 shadow-[var(--shadow-soft)] sm:w-[94%] sm:p-7">
       {error !== null && (
         <section className="rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4" role="alert">
           <p className="text-sm" style={{ color: TONE_INK.bad }}>
@@ -273,12 +273,14 @@ export function Analyze({
       )}
       <div ref={endRef} />
 
-      {/* The examples sit where the thread will be, above the bar, so the
-          bar itself is only ever the field and its button. */}
+      {/* The examples sit where the thread will be, centred in the empty
+          panel above the bar, so the bar itself is only ever the field and
+          its button. Only the empty panel is laid out this way: once a
+          conversation starts the thread flows from the top as before. */}
       {!notConfigured && empty && !error && (
-        <div>
+        <div className="flex flex-1 flex-col items-center justify-center text-center">
           <p className="text-xs text-[var(--chrome-muted)]">Things people ask:</p>
-          <ul className="mt-1.5 flex flex-wrap gap-2">
+          <ul className="mt-1.5 flex flex-wrap justify-center gap-2">
             {EXAMPLES.map((example) => (
               <li key={example}>
                 <button
