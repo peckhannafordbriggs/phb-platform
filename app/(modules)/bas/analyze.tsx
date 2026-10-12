@@ -84,6 +84,17 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * one rounded bar at the bottom. Every word, every figure, the folding, the
  * day's storage and what a request carries are exactly as above. See
  * `Result` for how a wrong answer still looks different from a right one.
+ *
+ * IN THE BRAND COLOURS (later the same day; docs/design/analyze-chat-mockup.png
+ * is the chosen mock). Everything under the tab bar sits in ONE purple panel;
+ * a question is a gold bubble; the answer and the evidence are cards tinted
+ * from the panel's purple; blue carries what is pressable or navigational -
+ * the evidence label, the rows expand link, the New conversation chip and
+ * the Ask button, which is now a diamond echoing the mark. Every colour is
+ * a token from app/globals.css, and the three ink values that only just
+ * clear AA on the page ground are deepened on the tinted cards by the
+ * `.analyze-panel` rule there, in place, so tone.ts is untouched. Maroon
+ * appears only where it always has: a failed request and the config error.
  */
 
 const EXAMPLES = [
@@ -217,9 +228,14 @@ export function Analyze({
   const empty = turns.length === 0 && pending === null;
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6">
+    /*
+      The one coloured area on the page: a purple panel holding the thread
+      and the ask bar, content-width, with the bar kept at its foot. Nothing
+      outside it - header, intro, tabs, ground - changes.
+    */
+    <div className="analyze-panel mx-auto flex w-full max-w-[60rem] min-h-[70vh] flex-col gap-6 rounded-[36px] bg-[var(--phb-purple)] p-4 shadow-[var(--shadow-soft)] sm:p-7">
       {error !== null && (
-        <section className="card p-5" role="alert" style={TONE_STYLE.bad}>
+        <section className="rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4" role="alert">
           <p className="text-sm" style={{ color: TONE_INK.bad }}>
             {error}
           </p>
@@ -261,7 +277,7 @@ export function Analyze({
           bar itself is only ever the field and its button. */}
       {!notConfigured && empty && !error && (
         <div>
-          <p className="text-xs text-[var(--muted)]">Things people ask:</p>
+          <p className="text-xs text-[var(--chrome-muted)]">Things people ask:</p>
           <ul className="mt-1.5 flex flex-wrap gap-2">
             {EXAMPLES.map((example) => (
               <li key={example}>
@@ -271,7 +287,7 @@ export function Analyze({
                     setQuestion(example);
                     void submit(example);
                   }}
-                  className="rounded-full border border-[var(--border)] bg-[var(--neutral-0)] px-3 py-1 text-xs hover:bg-[var(--neutral-100)]"
+                  className="rounded-full bg-[var(--phb-purple-tint)] px-3 py-1 text-xs hover:bg-[var(--neutral-0)]"
                 >
                   {example}
                 </button>
@@ -282,22 +298,24 @@ export function Analyze({
       )}
 
       {/* ----------------------------------------------------- the ask bar */}
-      <section className="sticky bottom-4 z-10">
+      <section className="sticky bottom-4 z-10 mt-auto">
         <form
           onSubmit={(event) => {
             event.preventDefault();
             void submit(question);
           }}
+          className="flex items-center gap-3"
         >
           {/* The label is for assistive technology; on screen the field's
               own placeholder and the thread above it say what it is for. */}
           <label htmlFor="bas-analyze-question" className="sr-only">
             Ask a question
           </label>
-          {/* One opaque surface holds the field, the button, the hint and
-              New conversation, so nothing in the thread scrolls up behind
-              any of them while the bar is stuck to the bottom. */}
-          <div className="rounded-[var(--radius-pane)] border border-[var(--border)] bg-[var(--neutral-0)] px-4 pb-2.5 pt-2 shadow-[var(--shadow-soft)] transition-shadow focus-within:ring-2 focus-within:ring-[var(--module-accent,var(--phb-cyan))]">
+          {/* One opaque capsule holds the field, the hint and New
+              conversation, so nothing in the thread scrolls up behind any
+              of them while the bar is stuck to the bottom. The Ask diamond
+              sits beside it, on the panel. */}
+          <div className="min-w-0 flex-1 rounded-[28px] bg-white px-5 pb-3 pt-2.5 shadow-[var(--shadow-soft)] transition-shadow focus-within:ring-2 focus-within:ring-[var(--module-accent,var(--phb-cyan))]">
             <div className="flex items-end gap-2">
               <textarea
                 id="bas-analyze-question"
@@ -314,17 +332,10 @@ export function Analyze({
                 disabled={notConfigured || busy}
                 placeholder="What was the average room temperature last week?"
                 maxLength={1000}
-                className="min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-relaxed placeholder:text-[var(--neutral-400)] focus:outline-none disabled:cursor-not-allowed disabled:text-[var(--muted)]"
+                className="min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-relaxed placeholder:text-[var(--neutral-500)] focus:outline-none disabled:cursor-not-allowed disabled:text-[var(--muted)]"
               />
-              <button
-                type="submit"
-                disabled={notConfigured || busy || question.trim().length < 3}
-                className="mb-1 shrink-0 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-medium hover:bg-[var(--neutral-100)] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {busy ? "Working…" : "Ask"}
-              </button>
             </div>
-            <div className="mt-1.5 flex flex-wrap items-center justify-between gap-3">
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
               <p className="text-xs text-[var(--muted)]">
                 Enter asks · Shift+Enter for a new line
               </p>
@@ -333,17 +344,40 @@ export function Analyze({
                   type="button"
                   onClick={startFresh}
                   data-testid="bas-analyze-new-conversation"
-                  className="rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)]"
+                  className="rounded-full bg-[var(--phb-cyan-tint)] px-3 py-1 text-[0.75rem] font-medium text-[var(--phb-cyan-ink)] hover:bg-[var(--neutral-0)]"
                 >
                   New conversation
                 </button>
               )}
             </div>
           </div>
+          {/* The Ask diamond: the mark's shape, in the module's blue. The
+              button is the 72px square (the hit area); the rotated square
+              inside it is the picture, and the word stays upright because
+              only the picture is rotated. Same disabled and working rules as
+              before - the word changes, the shape does not. */}
+          <button
+            type="submit"
+            disabled={notConfigured || busy || question.trim().length < 3}
+            className="relative flex h-[4.5rem] w-[4.5rem] shrink-0 items-center justify-center rounded-[16px] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <span
+              aria-hidden="true"
+              className="absolute h-[52px] w-[52px] rotate-45 rounded-[16px] bg-[var(--phb-cyan-ink)] shadow-[var(--shadow-soft)]"
+            />
+            <span
+              className={
+                "relative font-display font-semibold text-white " +
+                (busy ? "text-[0.625rem]" : "text-sm")
+              }
+            >
+              {busy ? "Working…" : "Ask"}
+            </span>
+          </button>
         </form>
 
         {status === null && !error && (
-          <p className="mt-3 px-1 text-xs text-[var(--muted)]">Checking configuration…</p>
+          <p className="mt-3 px-1 text-xs text-[var(--chrome-muted)]">Checking configuration…</p>
         )}
 
         {notConfigured && (
@@ -365,7 +399,7 @@ function QuestionBubble({ children }: { children: string }) {
       <span className="sr-only">You asked</span>
       <p
         data-testid="bas-analyze-question"
-        className="max-w-[min(85%,40rem)] whitespace-pre-wrap break-words rounded-[var(--radius-pane)] rounded-br-[var(--radius-control)] bg-[var(--neutral-100)] px-4 py-2.5 text-sm leading-relaxed"
+        className="max-w-[min(85%,40rem)] whitespace-pre-wrap break-words rounded-[24px] rounded-br-[8px] bg-[var(--phb-gold)] px-4 py-2.5 text-sm font-medium leading-relaxed text-[var(--foreground)]"
       >
         {children}
       </p>
@@ -385,7 +419,7 @@ function PendingTurn({ asked }: { asked: string }) {
     <>
       <QuestionBubble>{asked}</QuestionBubble>
       <div className="mt-3" aria-live="polite" aria-busy="true">
-        <p className="animate-pulse text-sm text-[var(--muted)]">Working…</p>
+        <p className="animate-pulse text-sm text-[var(--chrome-muted)]">Working…</p>
       </div>
     </>
   );
@@ -396,7 +430,11 @@ function ErrorTurn({ asked, message }: { asked: string; message: string }) {
   return (
     <>
       <QuestionBubble>{asked}</QuestionBubble>
-      <p className="mt-3 text-sm leading-relaxed" role="alert" style={{ color: TONE_INK.bad }}>
+      <p
+        className="mt-3 rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4 text-sm leading-relaxed"
+        role="alert"
+        style={{ color: TONE_INK.bad }}
+      >
         {message}
       </p>
     </>
@@ -474,28 +512,48 @@ export function Result({
     <>
       <QuestionBubble>{asked}</QuestionBubble>
       <section className="mt-3" aria-live="polite">
-        <h2
-          className={
-            plainAnswer
-              ? "sr-only"
-              : "font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
-          }
-          style={plainAnswer ? undefined : { color: TONE_INK[tone] }}
-        >
-          {resultHeading(result)}
-        </h2>
+        {/* The answer card: the heading (where one is shown) and the one
+            paragraph that is the answer. Everything else is the evidence
+            card below it. */}
+        <div className="rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4">
+          <h2
+            className={
+              plainAnswer
+                ? "sr-only"
+                : "font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
+            }
+            style={plainAnswer ? undefined : { color: TONE_INK[tone] }}
+          >
+            {resultHeading(result)}
+          </h2>
+          {result.kind === "not_configured" && <NotConfigured missing={result.missing} />}
+          {result.kind === "clarify" && (
+            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.question}</p>
+          )}
+          {result.kind === "cannot_answer" && (
+            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.reason}</p>
+          )}
+          {result.kind === "no_data" && (
+            <p className="mt-2 text-[0.9375rem] leading-relaxed" style={{ color: TONE_INK.warn }}>
+              {result.explanation}
+            </p>
+          )}
+          {result.kind === "from_prior" && (
+            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.answer}</p>
+          )}
+          {result.kind === "answered" && (
+            <p className="text-[0.9375rem] leading-relaxed">{result.answer}</p>
+          )}
+        </div>
+
         {result.kind === "not_configured" && (
-          <>
-            <NotConfigured missing={result.missing} />
-            <div className="mt-4">
-              <NoQueryLabel result={result} />
-            </div>
-          </>
+          <Footnote>
+            <NoQueryLabel result={result} />
+          </Footnote>
         )}
 
         {result.kind === "clarify" && (
           <>
-            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.question}</p>
             <Footnote>
               <p className="text-xs text-[var(--muted)]">Ask again with the detail filled in.</p>
               <NoQueryLabel result={result} />
@@ -505,7 +563,6 @@ export function Result({
 
         {result.kind === "cannot_answer" && (
           <>
-            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.reason}</p>
             <Footnote>
               {result.attempts.length > 0 && (
                 <div>
@@ -514,7 +571,7 @@ export function Result({
                   </p>
                   <ol className="mt-1.5 space-y-2">
                     {result.attempts.map((attempt, i) => (
-                      <li key={i} className="rounded-[var(--radius-row)] border border-[var(--border)] p-3">
+                      <li key={i} className="rounded-[var(--radius-row)] border border-[var(--phb-purple-tint-line)] p-3">
                         {/* A failed answer is the one place the SQL earns its
                             space: what was tried is the diagnosis. A successful
                             answer's SQL is recorded, not rendered (see the file
@@ -539,9 +596,6 @@ export function Result({
 
         {result.kind === "no_data" && (
           <>
-            <p className="mt-2 text-[0.9375rem] leading-relaxed" style={{ color: TONE_INK.warn }}>
-              {result.explanation}
-            </p>
             <Footnote>
               <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
               {/* Always rendered: zero rows gets its own sentence, an all-NULL
@@ -554,7 +608,6 @@ export function Result({
 
         {result.kind === "from_prior" && (
           <>
-            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.answer}</p>
             <Footnote>
               <SourcePanel source={result.source} ordinal={sourceOrdinal} />
               <NoQueryLabel result={result} />
@@ -564,7 +617,6 @@ export function Result({
 
         {result.kind === "answered" && (
           <>
-            <p className="text-[0.9375rem] leading-relaxed">{result.answer}</p>
             <Footnote>
               <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
               <RowsTable table={result.table} folded={compact} />
@@ -578,13 +630,13 @@ export function Result({
 }
 
 /**
- * The evidence under an answer: inset behind a hairline rule, smaller and
- * quieter than the sentence above it. One block, so every result's evidence
- * is set the same way.
+ * The evidence under an answer: its own tinted card, inset from the left
+ * and smaller than the sentence above it. One block, so every result's
+ * evidence is set the same way.
  */
 function Footnote({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mt-4 ml-1 space-y-4 border-l-2 border-[var(--neutral-200)] pl-4">
+    <div className="mt-3 ml-4 space-y-4 rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4">
       {children}
     </div>
   );
@@ -624,7 +676,7 @@ function SourcePanel({
   return (
     <div data-testid="bas-analyze-source">
       <PanelHeading />
-      <dl className="divide-y divide-[var(--divider-soft)]">
+      <dl className="divide-y divide-[var(--phb-purple-tint-line)]">
         <Row label="Read from">{describeSource(source, ordinal)}</Row>
         <Row label="Rows" tone={rows.tone}>
           {rows.text}
@@ -655,7 +707,7 @@ function ProvenancePanel({
     <div>
       <PanelHeading />
 
-      <dl className="divide-y divide-[var(--divider-soft)]">
+      <dl className="divide-y divide-[var(--phb-purple-tint-line)]">
         <Row label="Gaps in the period" tone={gTone}>
           {describeGaps(provenance)}
           {provenance.gaps !== null && provenance.gaps.items.length > 0 && (
@@ -744,7 +796,7 @@ function ProvenancePanel({
 /** The one heading both evidence panels carry, set as the footnote's eyebrow. */
 function PanelHeading() {
   return (
-    <p className="font-display text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--muted)]">
+    <p className="font-display text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--phb-cyan-ink)]">
       What was actually queried
     </p>
   );
@@ -799,12 +851,18 @@ function RowsTable({
 
   return (
     <Wrapper data-testid="bas-analyze-rows" data-folded={folded ? "true" : "false"}>
-      <Label className={"text-xs font-medium" + (folded ? " cursor-pointer" : "")}>{label}</Label>
+      <Label
+        className={
+          "text-xs font-medium" + (folded ? " cursor-pointer text-[var(--phb-cyan-ink)]" : "")
+        }
+      >
+        {label}
+      </Label>
       {/* The module's one scroll pattern: up to 200 rows, sticky header, count above. */}
-      <div className="mt-1.5 max-h-72 overflow-auto rounded-md border border-[var(--border)]">
+      <div className="mt-1.5 max-h-72 overflow-auto rounded-md border border-[var(--phb-purple-tint-line)]">
         <table className="w-full text-xs">
           <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
-            <tr className="border-b border-[var(--border)] text-left">
+            <tr className="border-b border-[var(--phb-purple-tint-line)] text-left">
               {table.columns.map((column, i) => (
                 <th key={`${column}-${i}`} className="px-3 py-2 font-medium">
                   {column}
@@ -814,7 +872,7 @@ function RowsTable({
           </thead>
           <tbody>
             {table.rows.map((row, r) => (
-              <tr key={r} className="border-b border-[var(--border)] last:border-b-0">
+              <tr key={r} className="border-b border-[var(--phb-purple-tint-line)] last:border-b-0">
                 {row.map((cell, c) => (
                   <td
                     key={c}
