@@ -547,9 +547,14 @@ describe("the sentences that stop a number being misread stayed", () => {
     expect(client).toContain("not because the equipment was off");
   });
 
-  it("keeps the rows-are-right line on an Analyze answer", async () => {
+  it("the Analyze answer's three meta lines are gone, by decision on 2026-10-12", async () => {
+    // The rows-are-right caveat used to be the one sentence this file kept
+    // on an Analyze answer. It was removed with the interpretation line and
+    // the retry note: the answer is followed directly by the evidence panel.
     const analyze = await source("app/(modules)/bas/analyze.tsx");
-    expect(analyze).toMatch(/where\s+they disagree, the rows are right/);
+    expect(analyze).not.toMatch(/where\s+they disagree, (the|those) rows are right/);
+    expect(analyze).not.toContain("How the question was read");
+    expect(analyze).not.toContain("a second was requested");
   });
 });
 

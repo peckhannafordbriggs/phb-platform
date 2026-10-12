@@ -143,8 +143,24 @@ describe("provenance is on screen for every result that ran", () => {
     }
   });
 
-  it("labels the model's paragraph as the model's", () => {
-    expect(render(zero)).toContain("the model&#x27;s reading of the rows below");
+  it("no longer labels the model's paragraph, reads back the plan, or notes a retry - removed 2026-10-12", () => {
+    for (const html of [render(zero), render(noData), render({ ...zero, retried: true })]) {
+      expect(html).not.toContain("reading of the rows");
+      expect(html).not.toContain("rows are right");
+      expect(html).not.toContain("How the question was read");
+      expect(html).not.toContain(zero.interpretation);
+      expect(html).not.toContain("a second was requested");
+    }
+  });
+
+  it("puts nothing between the answer paragraph and the evidence panel", () => {
+    const html = render(zero);
+    const from = html.indexOf(zero.answer) + zero.answer.length;
+    const to = html.indexOf("What was actually queried");
+    expect(from).toBeGreaterThan(zero.answer.length - 1);
+    expect(to).toBeGreaterThan(from);
+    // Markup only in between: no words, no figures.
+    expect(html.slice(from, to).replace(/<[^>]+>/g, "").trim()).toBe("");
   });
 
   it("renders a coverage shortfall as its own amber row on an answered result", () => {
@@ -162,9 +178,9 @@ describe("provenance is on screen for every result that ran", () => {
     expect(render(zero)).not.toContain(">Coverage<");
   });
 
-  it("says when a retry happened", () => {
-    expect(render({ ...zero, retried: true })).toContain("a second was requested");
-    expect(render(zero)).not.toContain("a second was requested");
+  it("a retry is in the payload and never on screen", () => {
+    expect(render({ ...zero, retried: true })).not.toContain("a second was requested");
+    expect(render({ ...zero, retried: true })).not.toContain("retried");
   });
 });
 
@@ -306,7 +322,7 @@ describe("the other sentences", () => {
     // A FAILED answer shows each SQL that was tried beside its reason - the
     // one place the SQL is rendered. Decision of 2026-09-21, both halves.
     expect(render(cannot)).toContain("SELECT 1");
-    expect(render(cannot)).toContain("a second was requested");
+    expect(render(cannot)).not.toContain("a second was requested");
     expect(render(notConfigured)).toContain("ANTHROPIC_API_KEY");
     expect(render(notConfigured)).toContain("rest of Building Automation is unaffected");
   });
