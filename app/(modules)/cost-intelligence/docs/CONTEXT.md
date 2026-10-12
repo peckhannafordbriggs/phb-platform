@@ -49,21 +49,17 @@ app/(modules)/cost-intelligence/
     settings-nav.tsx     SettingsNav - the second tab bar inside Settings
     page.tsx             Skill catalog page
     skills/[skillId]/    Skill page
-    workflows/           Workflows page (first workflow)
-    workflows/[workflowId]/  Workflow page
-    projects/            Projects page (most recently changed project)
-    projects/[projectId]/  Project page
+    workflows/[[...workflowId]]/  Workflows page; no id shows the first workflow
+    projects/[[...projectId]]/    Projects page; no id shows the most recently changed project
     access/              Access & roles page
     usage/               Usage & cost page
   views/
     runs-view.tsx           RunsView
     skill-catalog-view.tsx  SkillCatalogView
-    sync-button.tsx         SyncButton (client) - the Sync button on Skill catalog and Projects
-    skill-list.tsx          SkillList (client) - the skills list; keeps the selected row in view
-    workflows-view.tsx      WorkflowsView
-    workflow-editor.tsx     WorkflowList, WorkflowEditor (client) - the list, New workflow, and the editor
+    side-list.tsx           SideList, SyncButton, SyncStatus (client) - the left list every Settings
+                            page shares, the Sync button and the last-sync line
+    workflows-view.tsx      WorkflowsView (client) - the list, New workflow, and the editor
     projects-view.tsx       ProjectsView - list, detail and live file tree
-    project-list.tsx        ProjectList (client) - the filterable projects list
     access-view.tsx         AccessView
     usage-view.tsx          UsageView
     parts.tsx               RunHistory, RunDetail, RunLauncher, RunMonitor, Timeline, Checkpoint, Node
@@ -128,9 +124,9 @@ Unknown folder names 404. No skills yet shows an empty state that points at Sync
 
 | People call it | Where |
 |---|---|
-| the Sync button | `SyncButton`, top right of the left `Card`. POSTs to `/api/modules/cost-intelligence/skills/sync`, then refreshes the page. Only a 409 or network error shows a message, floated under the button so the header never reflows |
+| the Sync button | `SyncButton`, top right of the left `Card`. POSTs to `/api/modules/cost-intelligence/sync/skills` (one route serves `sync/skills` and `sync/projects`), then refreshes the page. Only a 409 or network error shows a message, floated under the button so the header never reflows |
 | last synced | `SyncStatus` under the header: "Last synced …" (New York time) with the added / updated / removed counts, "Sync failed" with the reason, or "N could not be read" for a partial sync |
-| the skills list | `SkillList`, left `Card`: one compact row per skill, name and version. The selected row is tinted in the module colour. Rows link with `scroll={false}` and the selected row scrolls back into view after the page re-renders |
+| the skills list | `SideList`, left `Card`: one compact row per skill, name and version. The selected row is tinted in the module colour. Rows link with `scroll={false}` and the selected row scrolls back into view after the page re-renders |
 | the skill detail | right `Card`: name, folder name, version, last updated, last synced, description |
 
 Last-updated dates come from CHANGELOG headings and are stored as midnight UTC, so they
@@ -159,7 +155,7 @@ project. Sync reads file names, sizes and dates only, never contents. Data:
 
 | People call it | Where |
 |---|---|
-| the projects list | `ProjectList`, left `Card`: **Sync** and the last-sync line, a filter box, then one compact row per project with the date it last changed. Newest change first. Each project is its own URL |
+| the projects list | `SideList` with a filter, left `Card`: **Sync** and the last-sync line, a filter box, then one compact row per project with the date it last changed. Newest change first. Each project is its own URL |
 | the project detail | right `Card`: name, path, files and size, last changed, AI FILES (count, or "Not created yet"), last synced, and the categories as pills |
 | the file tree | **Files · read live from the folder**: native `<details>` folders, folders first, sizes on files. Read from disk on every page load, capped at 5,000 entries. Shows a plain message when the folder can't be read (in Azure until Graph lands) |
 

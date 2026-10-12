@@ -10,14 +10,16 @@ import { WorkflowsView } from "../../../views/workflows-view";
 
 export const dynamic = "force-dynamic";
 
-export default async function WorkflowPage({ params }: { params: Promise<{ workflowId: string }> }) {
+/** /settings/workflows shows the first workflow; /settings/workflows/<id> shows that one. */
+export default async function WorkflowsPage({ params }: { params: Promise<{ workflowId?: string[] }> }) {
   const access = await requireModuleAdmin(COST_INTELLIGENCE_MODULE_KEY);
   if (!access.ok) notFound();
 
   const { workflowId } = await params;
+  if (workflowId !== undefined && workflowId.length > 1) notFound();
   const [workflows, skills] = await Promise.all([listWorkflows(), listCatalogSkills()]);
-  const selected = workflows.find((w) => w.id === workflowId);
-  if (!selected) notFound();
+  const selected = workflowId ? workflows.find((w) => w.id === workflowId[0]) : (workflows[0] ?? null);
+  if (selected === undefined) notFound();
 
   return (
     <CipShell canAdminister actions={<NewRunActions canAdminister />}>

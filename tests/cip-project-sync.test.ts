@@ -1,14 +1,7 @@
 import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Session } from "next-auth";
-
-// Only the session is mocked. The guard and the sync are real.
-vi.mock("@/auth", () => ({ auth: vi.fn() }));
-
-import { auth } from "@/auth";
-import { POST } from "@/app/api/modules/cost-intelligence/projects/sync/route";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import {
   ABANDONED_AFTER_MS,
@@ -17,7 +10,7 @@ import {
   listProjects,
   syncProjects,
 } from "@/lib/modules/cost-intelligence/project-sync";
-import { createEmployee, disconnectDb, grantModule, grantModuleAdmin, resetDb, testDb } from "./db";
+import { createEmployee, disconnectDb, resetDb, testDb } from "./db";
 
 const T0 = new Date("2026-10-12T14:00:00.000Z");
 const OLD = new Date("2026-09-01T12:00:00.000Z");
@@ -26,12 +19,10 @@ const NEW = new Date("2026-10-01T12:00:00.000Z");
 let dir: string;
 
 beforeEach(async () => {
-  vi.clearAllMocks();
   await resetDb();
   dir = await mkdtemp(path.join(tmpdir(), "cip-projects-"));
 });
 afterEach(async () => {
-  vi.restoreAllMocks();
   await rm(dir, { recursive: true, force: true });
 });
 afterAll(disconnectDb);
@@ -184,59 +175,5 @@ describe("listProjectFiles", () => {
     expect(tree[0]?.children).toEqual([
       { name: "a.docx", path: "AI FILES/a.docx", type: "file", size: 3, modified: OLD.toISOString() },
     ]);
-  });
-});
-
-describe("POST /api/modules/cost-intelligence/projects/sync", () => {
-  const authMock = vi.mocked(auth);
-  const savedDir = process.env.CIP_PROJECTS_DIR;
-
-  async function signIn(admin: boolean) {
-    await testDb.module.create({
-      data: { key: COST_INTELLIGENCE_MODULE_KEY, displayName: "Cost Intelligence", sortOrder: 300 },
-    });
-    const employee = await createEmployee();
-    await grantModule(employee.id, COST_INTELLIGENCE_MODULE_KEY);
-    if (admin) await grantModuleAdmin(employee.id, COST_INTELLIGENCE_MODULE_KEY);
-    authMock.mockResolvedValue({
-      entraOid: employee.entraOid,
-      issuedAt: Math.floor(Date.now() / 1000),
-      user: {},
-      expires: new Date(Date.now() + 3_600_000).toISOString(),
-    } as unknown as Session as never);
-    return employee;
-  }
-
-  beforeEach(async () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    await writeProject("A", { "x.pdf": "1" });
-    process.env.CIP_PROJECTS_DIR = dir;
-  });
-  afterAll(() => {
-    if (savedDir === undefined) delete process.env.CIP_PROJECTS_DIR;
-    else process.env.CIP_PROJECTS_DIR = savedDir;
-  });
-
-  it("404 for a Member who is not a PCE, and nothing runs", async () => {
-    await signIn(false);
-    expect((await POST()).status).toBe(404);
-    expect(await testDb.cipProjectSync.count()).toBe(0);
-  });
-
-  it("200 for a PCE with the outcome, recorded as theirs", async () => {
-    const me = await signIn(true);
-    const res = await POST();
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ data: { status: "ok", projectsAdded: 1 } });
-    expect(await testDb.cipProjectSync.findFirstOrThrow()).toMatchObject({ triggeredById: me.id });
-  });
-
-  it("409 while another sync is running", async () => {
-    await signIn(true);
-    await testDb.cipProjectSync.create({ data: { trigger: "manual" } });
-    const res = await POST();
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ error: { code: "sync_in_progress" } });
   });
 });

@@ -1,8 +1,7 @@
 import type { CipSkill, CipSkillSync } from "@/lib/generated/prisma/client";
 import { Card } from "../ui/Card";
 import { Pill } from "../ui/Pill";
-import { SkillList } from "./skill-list";
-import { SyncButton } from "./sync-button";
+import { SideList, SyncButton, SyncStatus } from "./side-list";
 
 /** CHANGELOG dates are stored as midnight UTC; formatting in UTC keeps them on the right day. */
 const DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
@@ -30,62 +29,34 @@ export function SkillCatalogView({
         <div className="shrink-0 border-b border-[var(--divider-soft)] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <span className="eyebrow whitespace-nowrap text-[var(--muted)]">Skills · {skills.length}</span>
-            <SyncButton url="/api/modules/cost-intelligence/skills/sync" />
+            <SyncButton url="/api/modules/cost-intelligence/sync/skills" />
           </div>
-          <SyncStatus sync={lastSync} />
+          <SyncStatus
+            sync={
+              lastSync && {
+                ...lastSync,
+                added: lastSync.skillsAdded,
+                updated: lastSync.skillsUpdated,
+                removed: lastSync.skillsDeleted,
+              }
+            }
+          />
         </div>
-        <SkillList
-          skills={skills.map(({ folderName, name, version }) => ({ folderName, name, version }))}
+        <SideList
+          items={skills.map((s) => ({
+            id: s.folderName,
+            href: `/cost-intelligence/settings/skills/${encodeURIComponent(s.folderName)}`,
+            label: s.name,
+            meta: `v${s.version}`,
+            mono: true,
+          }))}
           selected={selected?.folderName ?? null}
+          empty="No skills yet. Press Sync to read the skills folder."
         />
       </Card>
       {selected ? <SkillDetail skill={selected} /> : <EmptyCatalog />}
     </div>
   );
-}
-
-function SyncStatus({ sync }: { sync: CipSkillSync | null }) {
-  if (sync === null) {
-    return <p className="mt-2 text-[0.75rem] text-[var(--muted)]">Never synced.</p>;
-  }
-  if (sync.status === "running") {
-    return <p className="mt-2 text-[0.75rem] text-[var(--muted)]">Sync in progress…</p>;
-  }
-
-  const when = MOMENT.format(sync.finishedAt ?? sync.startedAt);
-
-  if (sync.status === "failed") {
-    const reason = firstReason(sync.errors);
-    return (
-      <div className="mt-2 flex flex-col gap-1 text-[0.75rem]">
-        <span>
-          <Pill tone="warn">Sync failed</Pill> <span className="text-[var(--muted)]">{when}</span>
-        </span>
-        {reason && <span className="text-[var(--muted)]">{reason}</span>}
-      </div>
-    );
-  }
-
-  const skipped = Array.isArray(sync.errors) ? sync.errors.length : 0;
-  return (
-    <p className="mt-2 text-[0.75rem] text-[var(--muted)]">
-      Last synced {when} · {sync.skillsAdded} added, {sync.skillsUpdated} updated, {sync.skillsDeleted} removed
-      {sync.status === "partial" && (
-        <>
-          {" "}
-          <Pill tone="warn">{skipped} could not be read</Pill>
-        </>
-      )}
-    </p>
-  );
-}
-
-function firstReason(errors: unknown): string | null {
-  if (!Array.isArray(errors)) return null;
-  const first: unknown = errors[0];
-  return first !== null && typeof first === "object" && "reason" in first && typeof first.reason === "string"
-    ? first.reason
-    : null;
 }
 
 function SkillDetail({ skill }: { skill: CipSkill }) {

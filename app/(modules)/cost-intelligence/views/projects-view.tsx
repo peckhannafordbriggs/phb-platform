@@ -3,8 +3,7 @@ import type { CipProject, CipProjectSync } from "@/lib/generated/prisma/client";
 import type { ProjectFileNode, readProjectFiles } from "@/lib/modules/cost-intelligence/project-sync";
 import { Card } from "../ui/Card";
 import { Pill } from "../ui/Pill";
-import { ProjectList } from "./project-list";
-import { SyncButton } from "./sync-button";
+import { SideList, SyncButton, SyncStatus } from "./side-list";
 
 const MOMENT = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -15,6 +14,7 @@ const MOMENT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York",
 });
 const DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/New_York" });
+const SHORT_DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" });
 
 /** 1.2 GB, 340 MB, 12 KB. */
 export function formatBytes(bytes: number | bigint): string {
@@ -46,13 +46,29 @@ export function ProjectsView({
         <div className="shrink-0 border-b border-[var(--divider-soft)] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <span className="eyebrow whitespace-nowrap text-[var(--muted)]">Projects · {projects.length}</span>
-            <SyncButton url="/api/modules/cost-intelligence/projects/sync" />
+            <SyncButton url="/api/modules/cost-intelligence/sync/projects" />
           </div>
-          <SyncStatus sync={lastSync} />
+          <SyncStatus
+            sync={
+              lastSync && {
+                ...lastSync,
+                added: lastSync.projectsAdded,
+                updated: lastSync.projectsUpdated,
+                removed: lastSync.projectsRemoved,
+              }
+            }
+          />
         </div>
-        <ProjectList
-          projects={projects.map(({ id, folderName, lastModified }) => ({ id: id.toString(), folderName, lastModified }))}
+        <SideList
+          items={projects.map((p) => ({
+            id: p.id.toString(),
+            href: `/cost-intelligence/settings/projects/${p.id}`,
+            label: p.folderName,
+            meta: p.lastModified ? SHORT_DAY.format(p.lastModified) : "Empty",
+          }))}
           selected={selected?.id.toString() ?? null}
+          empty="No projects yet. Press Sync to read the BID-DOC folder."
+          filterLabel="Filter projects"
         />
       </Card>
       {selected ? (
@@ -63,41 +79,6 @@ export function ProjectsView({
         </Card>
       )}
     </div>
-  );
-}
-
-function SyncStatus({ sync }: { sync: CipProjectSync | null }) {
-  if (sync === null) return <p className="mt-2 text-[0.75rem] text-[var(--muted)]">Never synced.</p>;
-  if (sync.status === "running") return <p className="mt-2 text-[0.75rem] text-[var(--muted)]">Sync in progress…</p>;
-
-  const when = MOMENT.format(sync.finishedAt ?? sync.startedAt);
-  if (sync.status === "failed") {
-    const first: unknown = Array.isArray(sync.errors) ? sync.errors[0] : null;
-    const reason =
-      first !== null && typeof first === "object" && "reason" in first && typeof first.reason === "string"
-        ? first.reason
-        : null;
-    return (
-      <div className="mt-2 flex flex-col gap-1 text-[0.75rem]">
-        <span>
-          <Pill tone="warn">Sync failed</Pill> <span className="text-[var(--muted)]">{when}</span>
-        </span>
-        {reason && <span className="text-[var(--muted)]">{reason}</span>}
-      </div>
-    );
-  }
-
-  const skipped = Array.isArray(sync.errors) ? sync.errors.length : 0;
-  return (
-    <p className="mt-2 text-[0.75rem] text-[var(--muted)]">
-      Last synced {when} · {sync.projectsAdded} added, {sync.projectsUpdated} updated, {sync.projectsRemoved} removed
-      {sync.status === "partial" && (
-        <>
-          {" "}
-          <Pill tone="warn">{skipped} could not be read</Pill>
-        </>
-      )}
-    </p>
   );
 }
 
