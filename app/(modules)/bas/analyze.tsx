@@ -436,8 +436,8 @@ export function Result({
   asked: string;
   /**
    * An older turn in the thread: the rows table is folded behind its own
-   * one-line label. Nothing else changes - the answer, the interpretation,
-   * the provenance panel and every warning render exactly as on the newest.
+   * one-line label. Nothing else changes - the answer, the provenance
+   * panel and every warning render exactly as on the newest.
    */
   compact?: boolean;
   /** For a from-memory answer: where its source turn sits in the thread, if it still does. */
@@ -457,9 +457,16 @@ export function Result({
     is the headline.
 
     Below the headline, everything that is evidence rather than answer - the
-    caveat, how the question was read, the provenance panel, the rows - is
-    one inset block, quieter than the answer. The footnote, not the headline.
-    Its content, order and folding are exactly what they were.
+    provenance panel, the rows, the no-query label - is one inset block,
+    quieter than the answer. The footnote, not the headline.
+
+    THREE LINES OF META TEXT WERE REMOVED ON 2026-10-12, by decision: the
+    plan's interpretation ("How the question was read"), the caveat that the
+    paragraph is the model's reading of the rows and the rows win where they
+    disagree, and the note that a first attempt was retried. Nothing was
+    relocated: the answer paragraph is followed directly by "What was
+    actually queried". The interpretation and `retried` are still in the
+    payload and the audit row; the screen no longer shows them.
   */
   const plainAnswer = result.kind === "answered";
 
@@ -477,12 +484,6 @@ export function Result({
         >
           {resultHeading(result)}
         </h2>
-        {"retried" in result && result.retried && (
-          <p className="mt-1 text-xs text-[var(--muted)]">
-            The first query attempt was not usable and a second was requested. What was tried is shown below.
-          </p>
-        )}
-
         {result.kind === "not_configured" && (
           <>
             <NotConfigured missing={result.missing} />
@@ -496,9 +497,6 @@ export function Result({
           <>
             <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.question}</p>
             <Footnote>
-              <p className="text-xs text-[var(--muted)]">
-                How the question was read: {result.interpretation}
-              </p>
               <p className="text-xs text-[var(--muted)]">Ask again with the detail filled in.</p>
               <NoQueryLabel result={result} />
             </Footnote>
@@ -545,9 +543,6 @@ export function Result({
               {result.explanation}
             </p>
             <Footnote>
-              <p className="text-xs text-[var(--muted)]">
-                How the question was read: {result.interpretation}
-              </p>
               <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
               {/* Always rendered: zero rows gets its own sentence, an all-NULL
                   row is shown AS the NULL row, so what the database returned is
@@ -561,14 +556,6 @@ export function Result({
           <>
             <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.answer}</p>
             <Footnote>
-              {/* The same caveat as an answer over rows, pointed at where the rows are. */}
-              <p className="text-xs text-[var(--muted)]">
-                The paragraph above is the model&apos;s reading of an earlier question&apos;s rows;
-                where they disagree, those rows are right.
-              </p>
-              <p className="text-xs text-[var(--muted)]">
-                How the question was read: {result.interpretation}
-              </p>
               <SourcePanel source={result.source} ordinal={sourceOrdinal} />
               <NoQueryLabel result={result} />
             </Footnote>
@@ -579,14 +566,6 @@ export function Result({
           <>
             <p className="text-[0.9375rem] leading-relaxed">{result.answer}</p>
             <Footnote>
-              {/* Stays: it stops a number in the prose being trusted over the rows. */}
-              <p className="text-xs text-[var(--muted)]">
-                The paragraph above is the model&apos;s reading of the rows below; where
-                they disagree, the rows are right.
-              </p>
-              <p className="text-xs text-[var(--muted)]">
-                How the question was read: {result.interpretation}
-              </p>
               <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
               <RowsTable table={result.table} folded={compact} />
             </Footnote>
