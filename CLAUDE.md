@@ -668,11 +668,21 @@ in the order asked, the ask box at the bottom, older turns fold only their
 rows table (a native `<details>`); the day's thread lives in `localStorage`
 keyed by employee id and **America/New_York** calendar day
 (`app/(modules)/bas/analyze-thread.ts`), stale days discarded on load,
-*New conversation* clears it. Nothing on the server; the model is still
-sent one question per request - step 2 (prior turns to the planner) is not
-built, and the turn carries the whole `AnalyzeResult` so it can be.
+*New conversation* clears it. Nothing on the server.
 `runbook.md` → *The Analyze thread is gone, shows the wrong day, or will not
-take a second question*; `tests/bas-analyze-thread.test.tsx`.
+take a second question*; `tests/bas-analyze-thread.test.tsx`. **Step 2,
+same day: follow-ups.** A question sends the newest earlier turns that fit
+(**6 turns, 24 KB**; question, interpretation, SQL, answer, up to 20 rows
+flagged partial when they are a sample) as `priorTurns`, capped and
+validated again by the route and shown to the model only as data - the SQL
+guard is the enforcement, proved by a planner that obediently repeats a
+crafted turn's DELETE. A follow-up either runs a new query (renders as
+today) or comes back `from_prior`: the no-query label AND a panel naming
+the earlier question it read from, amber when the model had only a sample.
+A from-memory plan naming a turn that was not sent is refused as unusable.
+The first question of a day, or after clearing, sends no `priorTurns` key.
+`WHY-ITS-BUILT-THIS-WAY.md` § 65; `runbook.md` → *Follow-ups* under the
+thread section; `npm run bas:analyze:followup-latency`.
 
 **Point Explorer takes a custom date range, in the building's zone, and
 averages long ranges out loud (2026-09-22).** *Custom* beside the three

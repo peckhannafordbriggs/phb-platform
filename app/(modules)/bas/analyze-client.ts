@@ -1,5 +1,6 @@
 import type {
   AnalyzeResult,
+  PriorTurn,
   Provenance,
   ResultTable,
 } from "@/lib/modules/bas/analyze/types";
@@ -63,9 +64,16 @@ export async function fetchAnalyzeStatus(signal?: AbortSignal): Promise<AnalyzeS
   return unwrap<AnalyzeStatus>(response);
 }
 
+/**
+ * One question, and for a follow-up the earlier turns it may refer to.
+ * `priorTurns` is OMITTED from the body when empty, not sent as `[]`: the
+ * first question of a day, or the first after "New conversation", is then
+ * the same request the tab sent before follow-ups existed, byte for byte.
+ */
 export async function askQuestion(
   question: string,
   signal?: AbortSignal,
+  priorTurns: PriorTurn[] = [],
 ): Promise<AnalyzeResult> {
   throwIfAborted(signal);
   let response: Response;
@@ -73,7 +81,7 @@ export async function askQuestion(
     response = await fetch(BASE, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(priorTurns.length === 0 ? { question } : { question, priorTurns }),
       signal,
       cache: "no-store",
     });
@@ -114,6 +122,8 @@ export function resultHeading(result: AnalyzeResult): string {
       return "No data matched";
     case "answered":
       return "Answer";
+    case "from_prior":
+      return "Answer, read from an earlier result";
     case "clarify":
       return "One question first";
     case "cannot_answer":
@@ -130,6 +140,8 @@ export function resultTone(result: AnalyzeResult): Tone {
       return "warn";
     case "answered":
       return "neutral";
+    case "from_prior":
+      return "neutral";
     case "clarify":
       return "neutral";
     case "cannot_answer":
@@ -137,6 +149,39 @@ export function resultTone(result: AnalyzeResult): Tone {
     case "not_configured":
       return "neutral";
   }
+}
+
+/**
+ * Which earlier question a from-memory answer was read from, for the
+ * provenance panel. The ordinal is the turn's place in today's thread when
+ * the screen can find it; the question is always quoted, so the source is
+ * named even when the thread has since been cleared.
+ */
+export function describeSource(
+  source: Extract<AnalyzeResult, { kind: "from_prior" }>["source"],
+  ordinal: number | null,
+): string {
+  const which = ordinal === null ? "an earlier question" : `question ${ordinal} of today's thread`;
+  return `Read from the results of ${which}: “${source.question}”.`;
+}
+
+/** The rows the model had for a from-memory answer, said plainly - and in amber when they were a sample. */
+export function describeSourceRows(
+  source: Extract<AnalyzeResult, { kind: "from_prior" }>["source"],
+): { text: string; tone: "neutral" | "warn" } {
+  if (source.rowCount === null) {
+    return { text: "That question returned no rows; the model read its answer text only.", tone: "warn" };
+  }
+  if (source.rowsWerePartial) {
+    return {
+      text: `Only a sample of that question's ${source.rowCount} rows was available to the model. Ask the question afresh for a figure over all of them.`,
+      tone: "warn",
+    };
+  }
+  return {
+    text: `All ${source.rowCount} row${source.rowCount === 1 ? "" : "s"} of that question's result were available to the model.`,
+    tone: "neutral",
+  };
 }
 
 /**

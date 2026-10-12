@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import type { Viewer } from "@/lib/authz";
 import { writeAuditEvent } from "@/lib/audit";
-import { databaseQueried } from "./types";
+import { databaseQueried, type PriorTurn } from "./types";
 import { prisma } from "@/lib/db";
 import { logger, logUnexpected } from "@/lib/logger";
 import { BAS_MODULE_KEY } from "../constants";
@@ -64,6 +64,12 @@ export interface Planner {
     nowUtc: string;
     /** On a retry: what the first attempt produced and why it was unusable. */
     previous: Attempt | null;
+    /**
+     * Today's earlier turns, as the browser sent them and the route checked
+     * them. Empty for a first question. Shown to the model as data; never
+     * acted on by the platform.
+     */
+    priorTurns: PriorTurn[];
   }): Promise<Plan>;
 
   summarise(input: {
@@ -98,6 +104,14 @@ export async function analyzeQuestion(
   viewer: Viewer,
   rawQuestion: string,
   deps: AnalyzeDeps,
+  /**
+   * Today's earlier turns, for a follow-up. The route has capped and
+   * validated them; the service passes them to the planner as data and
+   * otherwise never reads a field of them except to name the source of a
+   * from-memory answer. Absent for a first question, which then runs
+   * exactly as before this parameter existed.
+   */
+  priorTurns: PriorTurn[] = [],
 ): Promise<AnalyzeResult> {
   const question = rawQuestion.trim();
   const started = Date.now();
@@ -150,7 +164,7 @@ export async function analyzeQuestion(
       const previous = attempts[attempts.length - 1] ?? null;
 
       try {
-        plan = await deps.planner.plan({ question, schema, nowUtc, previous });
+        plan = await deps.planner.plan({ question, schema, nowUtc, previous, priorTurns });
       } catch (error) {
         if (error instanceof PlannerError) {
           // A refusal or an outage is not something a retry fixes; an
@@ -168,6 +182,27 @@ export async function analyzeQuestion(
           continue;
         }
         throw error;
+      }
+
+      if (plan.kind === "from_prior") {
+        // The source must be one of the turns THIS request carried. An index
+        // outside them is an unusable plan - the model named a turn it was
+        // not shown - and gets the one retry an unparseable answer gets.
+        const source = priorTurns[plan.sourceTurn];
+        if (source === undefined || plan.answer.length === 0) {
+          attempts.push({
+            sql: "",
+            error:
+              `A from_prior answer named earlier question ${plan.sourceTurn + 1}, ` +
+              `but ${priorTurns.length === 0 ? "no earlier questions were given" : `only ${priorTurns.length} were given`}` +
+              `${plan.answer.length === 0 ? ", and the answer was empty" : ""}. ` +
+              "Write a query, or name one of the earlier questions given.",
+            ran: false,
+          });
+          plan = null;
+          continue;
+        }
+        break;
       }
 
       if (plan.kind !== "query") break;
@@ -235,6 +270,26 @@ export async function analyzeQuestion(
 
     if (plan.kind === "cannot_answer") {
       result = { kind: "cannot_answer", reason: plan.reason, attempts, retried };
+      return await record(result);
+    }
+
+    if (plan.kind === "from_prior") {
+      // Validated in the loop: the source exists among what was sent.
+      const source = priorTurns[plan.sourceTurn]!;
+      result = {
+        kind: "from_prior",
+        answer: plan.answer,
+        interpretation: plan.interpretation,
+        source: {
+          id: source.id,
+          question: source.question,
+          kind: source.kind,
+          rowsWerePartial: source.rowsArePartial,
+          rowCount: source.rowCount,
+        },
+        durationMs: Date.now() - started,
+        retried,
+      };
       return await record(result);
     }
 
@@ -368,6 +423,12 @@ export async function analyzeQuestion(
       question,
       sql: sql ?? undefined,
       queried,
+      reason:
+        outcome.kind === "from_prior"
+          ? `from_prior source="${outcome.source.question}" priorTurns=${priorTurns.length}`
+          : priorTurns.length > 0
+            ? `priorTurns=${priorTurns.length}`
+            : undefined,
     });
 
     try {
@@ -380,6 +441,9 @@ export async function analyzeQuestion(
           outcome: outcome.kind,
           sql,
           queried,
+          /** How many earlier turns the browser sent, and for a from-memory answer, which one it read from. */
+          priorTurns: priorTurns.length,
+          sourceQuestion: outcome.kind === "from_prior" ? outcome.source.question : null,
           rowCount,
           durationMs,
           retried: "retried" in outcome ? outcome.retried : false,

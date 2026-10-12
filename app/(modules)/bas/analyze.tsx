@@ -6,6 +6,7 @@ import {
   clearThread,
   loadThread,
   newTurnId,
+  priorTurnsFor,
   saveThread,
   threadDay,
   type AnalyzeTurn,
@@ -21,6 +22,8 @@ import {
   describeGaps,
   describeRowCount,
   describeScope,
+  describeSource,
+  describeSourceRows,
   describeTimeRange,
   describeUnclassified,
   describeUnknownHorizon,
@@ -62,9 +65,16 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * within it, in the browser only - see analyze-thread.ts for the rules and
  * the reasons. Every turn is rendered by the same `Result` as before; an
  * older turn folds its rows table behind the one line it already carried,
- * and nothing else about a result changes with its position. The model is
- * still sent ONE question per request: nothing here hands an earlier turn to
- * the planner. The turn shape is what a later step would read for that.
+ * and nothing else about a result changes with its position.
+ *
+ * A FOLLOW-UP CARRIES THE EARLIER TURNS (2026-10-09, step 2). The request
+ * for a question sends `priorTurnsFor(turns)` - the newest turns that fit
+ * the caps, cut down to question, interpretation, SQL, answer and a sample
+ * of rows (analyze-thread.ts) - and nothing when the thread is empty. The
+ * server is stateless about it: the thread is the browser's, and what it
+ * sends is checked and capped like any other body. A follow-up the model
+ * answers from an earlier turn's rows comes back as `from_prior`, rendered
+ * with the no-query label AND a panel naming the question it read from.
  */
 
 const EXAMPLES = [
@@ -165,7 +175,7 @@ export function Analyze({
     setQuestion("");
 
     try {
-      const result = await askQuestion(trimmed, controller.signal);
+      const result = await askQuestion(trimmed, controller.signal, priorTurnsFor(turns));
       append({ id, askedAt, question: trimmed, outcome: { kind: "result", result } });
     } catch (err) {
       if (isAbortError(err)) return;
@@ -216,6 +226,11 @@ export function Analyze({
                   asked={turn.question}
                   // Only the newest turn shows its rows unfolded.
                   compact={index < turns.length - 1}
+                  sourceOrdinal={
+                    turn.outcome.result.kind === "from_prior"
+                      ? ordinalOf(turns, turn.outcome.result.source.id)
+                      : null
+                  }
                 />
               ) : (
                 <ErrorTurn asked={turn.question} message={turn.outcome.message} />
@@ -322,6 +337,12 @@ export function Analyze({
   );
 }
 
+/** Where a turn sits in today's thread, 1-based, or null when it is no longer there. */
+function ordinalOf(turns: AnalyzeTurn[], id: string): number | null {
+  const index = turns.findIndex((turn) => turn.id === id);
+  return index === -1 ? null : index + 1;
+}
+
 /** A question the server has not answered yet. The indicator is the button's own word. */
 function PendingTurn({ asked }: { asked: string }) {
   return (
@@ -377,6 +398,7 @@ export function Result({
   result,
   asked,
   compact = false,
+  sourceOrdinal = null,
 }: {
   result: AnalyzeResult;
   asked: string;
@@ -386,6 +408,8 @@ export function Result({
    * the provenance panel and every warning render exactly as on the newest.
    */
   compact?: boolean;
+  /** For a from-memory answer: where its source turn sits in the thread, if it still does. */
+  sourceOrdinal?: number | null;
 }) {
   const tone = resultTone(result);
 
@@ -467,6 +491,23 @@ export function Result({
           </>
         )}
 
+        {result.kind === "from_prior" && (
+          <>
+            <div>
+              <p className="text-sm leading-relaxed">{result.answer}</p>
+              {/* The same caveat as an answer over rows, pointed at where the rows are. */}
+              <p className="mt-1.5 text-xs text-[var(--muted)]">
+                The paragraph above is the model&apos;s reading of an earlier question&apos;s rows;
+                where they disagree, those rows are right.
+              </p>
+            </div>
+            <p className="text-xs text-[var(--muted)]">
+              How the question was read: {result.interpretation}
+            </p>
+            <SourcePanel source={result.source} ordinal={sourceOrdinal} />
+          </>
+        )}
+
         {result.kind === "answered" && (
           <>
             <div>
@@ -500,6 +541,37 @@ export function Result({
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * The provenance panel of a from-memory answer: the same heading as every
+ * other result's, because the question it answers is the same - what was
+ * actually queried - and the answer here is "nothing new, and here is what
+ * it was read from instead". Always rendered, never collapsible.
+ */
+function SourcePanel({
+  source,
+  ordinal,
+}: {
+  source: Extract<AnalyzeResult, { kind: "from_prior" }>["source"];
+  ordinal: number | null;
+}) {
+  const rows = describeSourceRows(source);
+  return (
+    <div className="rounded-md border border-[var(--border)]" data-testid="bas-analyze-source">
+      <div className="border-b border-[var(--border)] px-4 py-3">
+        <p className="font-display text-[0.75rem] font-semibold uppercase tracking-[0.07em]">
+          What was actually queried
+        </p>
+      </div>
+      <dl className="divide-y divide-[var(--border)] text-sm">
+        <Row label="Read from">{describeSource(source, ordinal)}</Row>
+        <Row label="Rows" tone={rows.tone}>
+          {rows.text}
+        </Row>
+      </dl>
+    </div>
   );
 }
 

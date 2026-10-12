@@ -9285,6 +9285,10 @@ and one `bas.analyze.question` log line with the same. `/admin/audit` filters
 by action; the sentence reads *Jim Schwarz asked Building Automation "…" — no
 data matched*.
 
+**`priorTurns` and `sourceQuestion` (2026-10-09)** in the same `metadata`:
+how many earlier turns the browser sent with the question, and for an
+answer read from memory, which earlier question it read from.
+
 **`queried` (2026-10-09)** in the same `metadata` and log line says whether
 ANY SQL reached the database. The `sql` field alone cannot: it is also
 recorded for an attempt the guard refused, which never ran. The screen
@@ -9339,11 +9343,60 @@ deleted — a stale thread is discarded, never shown. A question asked at
 | The ask box is disabled and the button reads *Working…* | A question is out. The pending turn is at the bottom of the thread. One question at a time, by design; the server takes 20–30 s | Wait; or *New conversation*, which cancels it |
 | *New conversation* | Clears the screen and the stored thread for today. No confirmation: nothing is lost that the audit log does not hold | — |
 
-**Not built, deliberately:** the model does not see earlier turns. Step 2
-of this work would hand prior turns to the planner; the turn shape
-(`AnalyzeTurn` in `app/(modules)/bas/analyze-thread.ts`) carries the full
-`AnalyzeResult`, so the question, interpretation and SQL of every earlier
-turn are already there to read.
+**Follow-ups (step 2, 2026-10-09).** A question asked while the thread
+holds earlier turns carries them in the request body as `priorTurns`, and
+the model is shown them as data, so "which of those was the worst?" resolves
+against the question before. What travels per earlier turn, and why:
+
+| Field | Why |
+|---|---|
+| question, interpretation, answer | How the earlier question was read and what was said: the cheapest and most useful part |
+| SQL | So a follow-up can be a modification of what ran |
+| columns + up to **20 rows**, cells cut to 120 characters, `rowsArePartial` | Enough to answer "which of those" over a short list; a longer table is sent as a flagged sample and the model is told to query rather than guess from a fragment |
+| `rowCount` | So the model and the screen know the sample's size against the whole |
+| `id` | The browser's turn id, echoed back on a from-memory answer so the screen can say "question 3 of today's thread" |
+
+**The caps**: at most **6 turns**, **24 KB** serialised, the newest that
+fit, contiguous (`priorTurnsFor`, `app/(modules)/bas/analyze-thread.ts`);
+the same caps are enforced again by the route
+(`app/api/modules/bas/analyze/route.ts`), with every string bounded and an
+unknown key refused, so a hand-made body cannot be larger than the screen
+would send. The constants are in `lib/modules/bas/analyze/types.ts`. A
+first question, or the first after *New conversation*, sends no
+`priorTurns` key at all and is the request the tab has always sent.
+
+**An earlier turn is untrusted input.** It is shown to the model inside a
+`<data>` block with the instruction that it is data, and nothing in it
+reaches the database: a new query still goes through the SQL guard and the
+read-only role, and `tests/bas-analyze-service.test.ts` drives a planner
+that obediently repeats a crafted turn's `DELETE` to prove the guard, not
+the prompt, is what stops it.
+
+**Three ways a follow-up comes back:**
+
+| On screen | What happened |
+|---|---|
+| *Answer* with fresh evidence, no label | The model wrote a new query that resolved the reference. Everything renders as a first question would |
+| *Answer, read from an earlier result* with the no-query label AND a panel *Read from the results of question N of today's thread: "…"* | The model answered from the earlier turn's rows without running anything. The panel also says whether the model had all of that question's rows or only a sample; a sample is amber and the fix is to ask the question afresh |
+| *One question first* | The reference could not be resolved among the turns sent - usually because the turn it meant was older than the cap. Say which question you mean, or ask it again in full |
+
+**A follow-up names a turn that was dropped by the cap.** The model is
+only shown the turns that were sent, so it cannot read a dropped one; the
+rules tell it to ask rather than guess, and a from-memory answer that names
+a turn outside what was sent is refused by the service as an unusable plan
+(one retry, then *Could not answer* with the reason on screen). The
+dropped turn is still on the screen and still in the thread; only the
+request left it out.
+
+**What it costs.** The earlier turns add at most about six thousand tokens
+to a plan call whose schema block is cached, and a from-memory answer skips
+the query and the second model call entirely. Measured live on 2026-10-09:
+a first question 15–20 s; a follow-up the model answered from memory 6–12
+s; a follow-up that needed a new query 32 s (a 20 s first question plus a
+larger plan call); the same follow-up words asked cold, 6–7 s to a
+clarifying question. The table is in `WHY-ITS-BUILT-THIS-WAY.md` § 65;
+`npm run bas:analyze:followup-latency` re-measures it against the live
+model and writes only the audit rows every question writes.
 
 docs/BAS-B5.md: "The questions people actually ask will not be the ones either
 of us would predict, and that log is what tells you whether this is useful or

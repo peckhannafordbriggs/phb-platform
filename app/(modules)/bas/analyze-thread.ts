@@ -1,4 +1,15 @@
-import type { AnalyzeResult } from "@/lib/modules/bas/analyze/types";
+import {
+  PRIOR_CELL_MAX_CHARS,
+  PRIOR_COLUMNS_MAX,
+  PRIOR_ROWS_MAX,
+  PRIOR_SQL_MAX_CHARS,
+  PRIOR_TEXT_MAX_CHARS,
+  PRIOR_TURNS_MAX,
+  PRIOR_TURNS_MAX_BYTES,
+  type AnalyzeResult,
+  type Cell,
+  type PriorTurn,
+} from "@/lib/modules/bas/analyze/types";
 import { APP_TIME_ZONE, calendarDay } from "@/lib/activity/rollover";
 
 /**
@@ -14,8 +25,8 @@ import { APP_TIME_ZONE, calendarDay } from "@/lib/activity/rollover";
  * later step that hands prior turns to the planner can read a turn's
  * question, interpretation and SQL straight off it - every `answered` and
  * `no_data` result already carries both - without this file changing shape.
- * That later step is NOT built here: nothing in this module or the component
- * sends a previous turn anywhere. A request is still one question.
+ * That later step is `priorTurnsFor` below (2026-10-09): the turns a
+ * follow-up carries, cut down to what the planner needs and capped.
  *
  * THE THREAD LIVES FOR A CALENDAR DAY, IN THE COMPANY'S ZONE. The key is the
  * employee id and the day; on load, the day's thread is read and every other
@@ -181,4 +192,108 @@ export function newTurnId(): string {
     // Fall through.
   }
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// ----------------------------------------------------- what a follow-up sends
+
+const clip = (text: string, max: number): string =>
+  text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+
+const clipCell = (cell: Cell): Cell =>
+  typeof cell === "string" ? clip(cell, PRIOR_CELL_MAX_CHARS) : cell;
+
+/**
+ * One turn as the planner should see it, or null for a turn that gives a
+ * follow-up nothing to refer to (a failed request, a not-configured result).
+ * See `PriorTurn` for what each field is for and why the rows are a sample.
+ */
+export function priorTurnOf(turn: AnalyzeTurn): PriorTurn | null {
+  if (turn.outcome.kind !== "result") return null;
+  const result = turn.outcome.result;
+  const base = { id: turn.id, question: clip(turn.question, 1_000) };
+  switch (result.kind) {
+    case "answered":
+    case "no_data": {
+      const columns = result.table.columns.slice(0, PRIOR_COLUMNS_MAX).map((c) => clip(c, 64));
+      const rows = result.table.rows
+        .slice(0, PRIOR_ROWS_MAX)
+        .map((row) => row.slice(0, PRIOR_COLUMNS_MAX).map(clipCell));
+      return {
+        ...base,
+        kind: result.kind,
+        interpretation: clip(result.interpretation, PRIOR_TEXT_MAX_CHARS),
+        sql: clip(result.sql, PRIOR_SQL_MAX_CHARS),
+        answer: clip(result.kind === "answered" ? result.answer : result.explanation, PRIOR_TEXT_MAX_CHARS),
+        columns,
+        rows,
+        rowCount: result.table.rowCount,
+        rowsArePartial:
+          result.table.truncated ||
+          rows.length < result.table.rowCount ||
+          result.table.columns.length > PRIOR_COLUMNS_MAX,
+      };
+    }
+    case "clarify":
+      return {
+        ...base,
+        kind: "clarify",
+        interpretation: clip(result.interpretation, PRIOR_TEXT_MAX_CHARS),
+        sql: null,
+        answer: clip(result.question, PRIOR_TEXT_MAX_CHARS),
+        columns: [],
+        rows: [],
+        rowCount: null,
+        rowsArePartial: false,
+      };
+    case "cannot_answer":
+      return {
+        ...base,
+        kind: "cannot_answer",
+        interpretation: null,
+        sql: null,
+        answer: clip(result.reason, PRIOR_TEXT_MAX_CHARS),
+        columns: [],
+        rows: [],
+        rowCount: null,
+        rowsArePartial: false,
+      };
+    case "from_prior":
+      return {
+        ...base,
+        kind: "from_prior",
+        interpretation: clip(result.interpretation, PRIOR_TEXT_MAX_CHARS),
+        sql: null,
+        answer: clip(result.answer, PRIOR_TEXT_MAX_CHARS),
+        columns: [],
+        rows: [],
+        rowCount: null,
+        rowsArePartial: false,
+      };
+    case "not_configured":
+      return null;
+  }
+}
+
+/**
+ * The earlier turns a follow-up carries: the NEWEST that fit, in the order
+ * asked. Walks back from the latest turn, adding while the count stays
+ * within PRIOR_TURNS_MAX and the serialised size within
+ * PRIOR_TURNS_MAX_BYTES; the first turn that would not fit stops the walk,
+ * so what is sent is always a contiguous recent stretch and never a recent
+ * turn missing with an older one present. An empty thread sends nothing -
+ * the first question of a day, or after "New conversation", is the request
+ * the tab has always sent.
+ */
+export function priorTurnsFor(turns: AnalyzeTurn[]): PriorTurn[] {
+  const chosen: PriorTurn[] = [];
+  let bytes = 2; // the array's own brackets
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    const prior = priorTurnOf(turns[i]!);
+    if (prior === null) continue;
+    const size = JSON.stringify(prior).length + (chosen.length === 0 ? 0 : 1);
+    if (chosen.length >= PRIOR_TURNS_MAX || bytes + size > PRIOR_TURNS_MAX_BYTES) break;
+    chosen.unshift(prior);
+    bytes += size;
+  }
+  return chosen;
 }

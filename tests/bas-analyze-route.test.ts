@@ -150,6 +150,50 @@ describe("validation", () => {
   });
 });
 
+describe("earlier turns in the body are capped and shaped", () => {
+  const turn = (over: Record<string, unknown> = {}) => ({
+    id: "t1",
+    question: "What is stale?",
+    kind: "answered",
+    interpretation: "Stale points.",
+    sql: "SELECT 1",
+    answer: "Three.",
+    columns: ["name"],
+    rows: [["A"]],
+    rowCount: 1,
+    rowsArePartial: false,
+    ...over,
+  });
+
+  it("accepts a well-formed set, and the first question's body with no priorTurns at all", async () => {
+    await granted();
+    // Not configured in this test's env, so a valid body answers 200 not_configured
+    // AFTER validation - which is the point: it got past the schema.
+    expect((await post({ question: "Which of those?", priorTurns: [turn()] })).status).toBe(200);
+    expect((await post({ question: "What is stale?" })).status).toBe(200);
+  });
+
+  it("refuses more than the cap, an oversized set, too many rows, and an unknown key", async () => {
+    await granted();
+    const seven = Array.from({ length: 7 }, (_, i) => turn({ id: `t${i}` }));
+    expect((await post({ question: "Which of those?", priorTurns: seven })).status).toBe(422);
+
+    const big = Array.from({ length: 6 }, (_, i) =>
+      turn({ id: `t${i}`, sql: "S".repeat(4_000), answer: "A".repeat(1_200) }),
+    );
+    expect(JSON.stringify(big).length).toBeGreaterThan(24_000);
+    expect((await post({ question: "Which of those?", priorTurns: big })).status).toBe(422);
+
+    const rows = Array.from({ length: 21 }, () => ["x"]);
+    expect((await post({ question: "Which of those?", priorTurns: [turn({ rows })] })).status).toBe(422);
+    expect((await post({ question: "Which of those?", priorTurns: [turn({ extra: 1 })] })).status).toBe(422);
+    expect((await post({ question: "Which of those?", priorTurns: [turn({ kind: "evil" })] })).status).toBe(422);
+    expect((await post({ question: "Which of those?", priorTurns: [turn({ sql: "S".repeat(4_001) })] })).status).toBe(422);
+    expect((await post({ question: "Which of those?", priorTurns: "not an array" })).status).toBe(422);
+    expect((await post({ question: "Which of those?", priorTurns: [turn()], other: true })).status).toBe(422);
+  });
+});
+
 describe("rate limiting", () => {
   it("returns 429 once the per-employee window is full, before any model call", async () => {
     const employeeId = await granted();

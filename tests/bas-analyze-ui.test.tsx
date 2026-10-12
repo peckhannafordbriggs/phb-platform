@@ -387,3 +387,66 @@ describe("whether the database was consulted is said, plainly, and only when it 
     expect(render(noData)).not.toContain("bas-analyze-no-query");
   });
 });
+
+describe("an answer read from an earlier result says so, twice", () => {
+  const fromPrior: AnalyzeResult = {
+    kind: "from_prior",
+    answer: "The lab's zone sensor is the worst: no reading since 24 August.",
+    interpretation: "Read the stale-points rows from the question before.",
+    source: {
+      id: "turn-1",
+      question: "Which points are stale?",
+      kind: "answered",
+      rowsWerePartial: false,
+      rowCount: 3,
+    },
+    durationMs: 900,
+    retried: false,
+  };
+
+  it("carries the no-query label AND names the question it read from, with its place in the thread", () => {
+    const html = renderToStaticMarkup(
+      createElement(Result, { result: fromPrior, asked: "which was worst?", sourceOrdinal: 2 }),
+    );
+    expect(html).toContain("No database query was run for this answer.");
+    expect(html).toContain("Answer, read from an earlier result");
+    expect(html).toContain('data-testid="bas-analyze-source"');
+    expect(html).toContain("What was actually queried");
+    expect(html).toContain(
+      "Read from the results of question 2 of today&#x27;s thread: “Which points are stale?”.",
+    );
+    expect(html).toContain("All 3 rows of that question&#x27;s result were available to the model.");
+    // No rows table and no fresh provenance: there is none to show.
+    expect(html).not.toContain("Rows the database returned");
+    expect(html).not.toContain("Gaps in the period");
+  });
+
+  it("names the question even when its turn is no longer in the thread, and says when the rows were a sample", () => {
+    const sampled: AnalyzeResult = {
+      ...fromPrior,
+      source: { ...fromPrior.source, rowsWerePartial: true, rowCount: 137 },
+    };
+    const html = renderToStaticMarkup(
+      createElement(Result, { result: sampled, asked: "which was worst?", sourceOrdinal: null }),
+    );
+    expect(html).toContain("Read from the results of an earlier question: “Which points are stale?”.");
+    expect(html).toContain("Only a sample of that question&#x27;s 137 rows was available to the model.");
+  });
+
+  it("an answer that ran a query never carries the source panel", () => {
+    const answered: AnalyzeResult = {
+      kind: "answered",
+      answer: "About 72.",
+      interpretation: "x",
+      sql: "SELECT 1",
+      table: { columns: ["avg"], rows: [[72]], rowCount: 1, truncated: false, rowCap: 200 },
+      provenance,
+      durationMs: 12,
+      retried: false,
+    };
+    const html = renderToStaticMarkup(createElement(Result, { result: answered, asked: "q" }));
+    expect(html).not.toContain("bas-analyze-source");
+    expect(html).not.toContain("Read from the results");
+    expect(html).not.toContain("No database query was run");
+  });
+});

@@ -21,6 +21,7 @@
     "bas:oracle": "tsx scripts/bas-health-oracle.ts",
     "bas:analyze:role": "tsx scripts/setup-bas-analyze-role.ts",
     "bas:analyze:verify": "tsx scripts/bas-analyze-verify.ts",
+    "bas:analyze:followup-latency": "tsx scripts/bas-analyze-followup-latency.ts",
     "bas:plausibility:verify": "tsx scripts/bas-plausibility-verify.ts",
     "db:verify:prod": "tsx scripts/verify-prod-database.ts"
   },
