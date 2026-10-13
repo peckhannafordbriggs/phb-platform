@@ -494,10 +494,13 @@ export function explainNoData(
   range: Provenance["timeRange"],
   provenance: Provenance,
 ): string {
+  // Worded for the person at the keyboard (docs/11-analyze-voice.md), with
+  // the one property that matters kept in the same words: it is not an
+  // answer of zero.
   const lead =
     reason === "no_rows"
-      ? "The query returned no rows. That is not an answer of zero: no data matched."
-      : "The query returned a row with nothing in it - an aggregate over no readings. That is not an answer of zero: no data matched.";
+      ? "Nothing in the data matched this question. That is not an answer of zero: there is no reading to answer it with."
+      : "The query came back empty - an average over no readings. That is not an answer of zero: there is no reading to answer it with.";
 
   const notes: string[] = [];
   const coverage = provenance.coverage;
@@ -539,7 +542,7 @@ export function explainNoData(
 
   if (provenance.unclassifiedExcluded > 0) {
     notes.push(
-      `${provenance.unclassifiedExcluded} points have no role and were outside a search by what a point measures.`,
+      `${provenance.unclassifiedExcluded} points have no role assigned yet, so a search by what a point measures could not include them.`,
     );
   }
 
@@ -549,9 +552,9 @@ export function explainNoData(
 function plannerFailureReason(error: PlannerError): string {
   switch (error.code) {
     case "refused":
-      return "The model declined to write a query for this question.";
+      return "The answer service declined to write a query for this question.";
     case "unparseable":
-      return "The model did not produce a usable plan, twice.";
+      return "The answer service could not produce a usable query for this question, twice.";
     case "unavailable":
       // The planner's own message names which of the failure modes it was -
       // key rejected, rate limited, unreachable, an HTTP status. Rendering a

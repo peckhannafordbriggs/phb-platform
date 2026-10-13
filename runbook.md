@@ -9145,6 +9145,40 @@ once with the key from a one-off script and print the error.
 
 ---
 
+## An Analyze answer reads wrong: too technical, a cause stated as fact, or old data passed off as current
+
+**Symptom.** An answer paragraph that a construction worker could not
+follow, a "broken damper" the rows never showed, an ISO timestamp, a
+column name, or a reading from weeks ago described as the room's
+temperature now.
+
+**Cause.** The wording of every sentence Analyze shows a person is
+governed by `docs/11-analyze-voice.md` (adopted 2026-10-13) and
+implemented as rules in two prompts in
+`lib/modules/bas/analyze/planner.ts`: `SUMMARY_RULES` for the answer
+paragraph, and the *Voice of what the person reads* section of
+`SYSTEM_RULES` for clarifying questions and reasons for declining. The
+platform's own sentences (`explainNoData`, `plannerFailureReason` in
+`service.ts`) were reworded to the same voice. A prompt is a lever and
+not a guarantee: the model can still slip, and nothing in the platform
+rewrites what it says.
+
+**What is enforced.** `tests/bas-analyze-prompt.test.ts` fails the build
+if the summariser is no longer told to answer first, to keep facts and
+possible causes apart, never to present a possible cause as a confirmed
+diagnosis, never to suggest changing settings or bypassing controls, and
+to give old data with its age. What is NOT enforced is the model's
+compliance on a given day; the evidence panel under every answer is the
+exact record and is unchanged by any of this.
+
+**Fix.** For a wording fault that repeats, tighten the rule in the prompt
+and re-run `npm run bas:analyze:verify` with the spec's ten questions
+(section 12 of the doc); paste the answers into the record rather than
+paraphrasing them. Never fix wording by editing the rows, the SQL guard
+or the provenance.
+
+---
+
 ## Analyze answers "permission denied" for every question
 
 **Symptom.** *Could not answer*, two attempts shown, each ending

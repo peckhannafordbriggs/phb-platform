@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SUMMARY_RULES, planUserMessage, summaryUserMessage } from "@/lib/modules/bas/analyze/planner";
+import { SUMMARY_RULES, SYSTEM_RULES, planUserMessage, summaryUserMessage } from "@/lib/modules/bas/analyze/planner";
 import type { PriorTurn, Provenance } from "@/lib/modules/bas/analyze/types";
 
 /**
@@ -111,6 +111,59 @@ describe("the summary call", () => {
     expect(SUMMARY_RULES).toContain("State only numbers that appear in the rows");
     expect(SUMMARY_RULES).toContain("period_not_fully_covered");
     expect(SUMMARY_RULES).toContain("with N hours of the period unrecorded");
+  });
+
+  /**
+   * docs/11-analyze-voice.md (2026-10-13). Section 6 is the one to be
+   * paranoid about: the summariser must be TOLD never to present a possible
+   * cause as a confirmed diagnosis, in those words, and the other sections
+   * must be there beside it. The old four-sentence cap and the no-bullets
+   * rule are gone on purpose - a ten-room answer needs a list.
+   */
+  it("carries the voice guideline: answer first, facts apart from causes, no diagnosis without evidence, old data with its age", () => {
+    for (const phrase of [
+      "experienced controls engineer",
+      "The first sentence answers the question",
+      "Match the detail to the question",
+      "what to check next",
+      "no long wall of text",
+      'each line starting with "- "',
+      "Keep the engineering detail that helps someone act",
+      "commanded versus actual values",
+      "a problem the rows confirm, a possible problem the rows suggest, a possible cause that needs checking, or something the rows cannot determine",
+      "The readings don't confirm the cause yet",
+      "Never present a possible cause as a confirmed diagnosis",
+      "Never name a broken part the rows have not shown to be broken",
+      "An unusual reading is not automatically a fault",
+      "Never suggest changing equipment settings, overriding a setpoint or bypassing a safety or control",
+      "Never pass an old reading off as the current condition",
+      "Missing data is not equipment failure",
+      "no bold or other markdown",
+      "give both numbers and let the reader see the difference",
+      "Never compute the gap yourself unless a difference column is in the rows",
+    ]) {
+      expect(SUMMARY_RULES, phrase).toContain(phrase);
+    }
+    expect(SUMMARY_RULES).not.toContain("at most four short sentences");
+    expect(SUMMARY_RULES).not.toContain("no bullet points");
+  });
+
+  it("the planner's messages take the same voice: plain words, no role codes, no UTC ranges, no diagnosis", () => {
+    const section = SYSTEM_RULES.slice(SYSTEM_RULES.indexOf("# Voice of what the person reads"));
+    expect(section.length).toBeGreaterThan(100);
+    for (const phrase of [
+      'say "room temperature", not zone_temp',
+      "no UTC or ISO ranges",
+      "no column, table or id names",
+      "Never present a possible cause as a confirmed diagnosis",
+      "how old the newest data is",
+      "no bold or other markdown",
+      "When a known limit of the collected data affects the choice being offered",
+    ]) {
+      expect(section, phrase).toContain(phrase);
+    }
+    // The record keeps its precision; only what the person reads changes.
+    expect(section).toContain('The "interpretation" field is for the record and keeps its precise UTC range');
   });
 
   it("names the building's zone with a worked conversion, and renders the range and the span in it beside the UTC values", () => {
