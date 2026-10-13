@@ -9495,10 +9495,13 @@ inset block under the answer. A plain answer has no heading; every other
 outcome — *No data matched*, *Could not answer*, *One question first*,
 *Answer, read from an earlier result* — still carries its heading in its
 colour. Nothing about what is shown, stored or sent changed with the look.
-Later the same day it took the brand colours: one purple panel under the
-tabs, gold question bubbles, purple-tinted answer and evidence cards, blue
-for what is pressable, and an Ask diamond. The chosen mock is
-`docs/design/analyze-chat-mockup.png`; the tokens and the contrast
+Later the same day it took the brand colours: one panel under the tabs,
+gold question bubbles, tinted answer and evidence cards, an accent for
+what is pressable, and an Ask diamond. The chosen mock is
+`docs/design/analyze-chat-mockup.png`, drawn in purple with blue accents;
+that same day the panel was recoloured to `--phb-teal` - the rightmost
+stripe of the brand bar under the sidebar logo - with purple as the
+accent, including the Analyze tab's underline. The tokens and the contrast
 measurements that hold on the tinted cards are in `app/globals.css` under
 *the Analyze chat surfaces*.
 

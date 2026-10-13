@@ -19,6 +19,13 @@ export interface BasTab {
   /** One line under the heading, so a tab says what it is for before it loads. */
   blurb: string;
   /**
+   * The active underline's colour when it is not the module's own. The
+   * Analyze panel is teal with purple as its accent (2026-10-13), and its
+   * tab carries the same accent so the two agree; every other tab keeps the
+   * module's cyan.
+   */
+  accent?: string;
+  /**
    * Needs the BAS grant's `is_module_admin` flag, not just the grant (B7.2).
    *
    * This hides the tab. It does not protect it - `visibleBasTabs` is a
@@ -54,6 +61,7 @@ export const BAS_TABS: readonly BasTab[] = [
   {
     href: "/bas/analyze",
     label: "Analyze",
+    accent: "var(--phb-purple)",
     // The one thing the screen cannot show until a question has been asked:
     // that an answer comes with what was queried, and that a gap in the data
     // is reported beside it rather than averaged away.

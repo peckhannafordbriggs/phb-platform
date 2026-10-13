@@ -96,15 +96,17 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * thread's. The page itself has nothing left to scroll on this tab.
  *
  * IN THE BRAND COLOURS (later the same day; docs/design/analyze-chat-mockup.png
- * is the chosen mock). Everything under the tab bar sits in ONE purple panel;
- * a question is a gold bubble; the answer and the evidence are cards tinted
- * from the panel's purple; blue carries what is pressable or navigational -
- * the evidence label, the rows expand link, the New conversation chip and
- * the Ask button, which is now a diamond echoing the mark. Every colour is
- * a token from app/globals.css, and the three ink values that only just
- * clear AA on the page ground are deepened on the tinted cards by the
- * `.analyze-panel` rule there, in place, so tone.ts is untouched. Maroon
- * appears only where it always has: a failed request and the config error.
+ * is the chosen mock, recoloured once more that day). Everything under the
+ * tab bar sits in ONE panel of --phb-teal, the rightmost stripe of the brand
+ * bar under the sidebar logo; a question is a gold bubble; the answer and the
+ * evidence are cards tinted from the panel's teal; purple carries what is
+ * pressable or navigational - the evidence label, the rows expand link, the
+ * New conversation chip, the Analyze tab's underline and the Ask button,
+ * which is a diamond echoing the mark. Every colour is a token from
+ * app/globals.css, and the two ink values that sit at the AA line on the
+ * tint are deepened on the cards by the `.analyze-panel` rule there, in
+ * place, so tone.ts is untouched. Maroon appears only where it always has:
+ * a failed request and the config error.
  */
 
 const EXAMPLES = [
@@ -271,10 +273,10 @@ export function Analyze({
     */
     <div
       ref={panelRef}
-      className="analyze-panel mx-auto flex h-[calc(100dvh-var(--analyze-top,0px)-2rem)] min-h-[24rem] w-full max-w-[75rem] flex-col gap-4 overflow-hidden rounded-[36px] bg-[var(--phb-purple)] p-4 shadow-[var(--shadow-soft)] sm:w-[94%] sm:p-7"
+      className="analyze-panel mx-auto flex h-[calc(100dvh-var(--analyze-top,0px)-2rem)] min-h-[24rem] w-full max-w-[75rem] flex-col gap-4 overflow-hidden rounded-[36px] bg-[var(--phb-teal)] p-4 shadow-[var(--shadow-soft)] sm:w-[94%] sm:p-7"
     >
       {error !== null && (
-        <section className="shrink-0 rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4" role="alert">
+        <section className="shrink-0 rounded-[24px] bg-[var(--phb-teal-tint)] px-5 py-4" role="alert">
           <p className="text-sm" style={{ color: TONE_INK.bad }}>
             {error}
           </p>
@@ -330,7 +332,7 @@ export function Analyze({
           conversation starts the thread flows from the top as before. */}
       {!notConfigured && empty && !error && (
         <div className="flex h-full min-h-full flex-col items-center justify-center text-center">
-          <p className="text-xs text-[var(--chrome-muted)]">Things people ask:</p>
+          <p className="text-xs text-[var(--neutral-800)]">Things people ask:</p>
           <ul className="mt-1.5 flex flex-wrap justify-center gap-2">
             {EXAMPLES.map((example) => (
               <li key={example}>
@@ -340,7 +342,7 @@ export function Analyze({
                     setQuestion(example);
                     void submit(example);
                   }}
-                  className="rounded-full bg-[var(--phb-purple-tint)] px-3 py-1 text-xs hover:bg-[var(--neutral-0)]"
+                  className="rounded-full bg-[var(--phb-teal-tint)] px-3 py-1 text-xs hover:bg-[var(--neutral-0)]"
                 >
                   {example}
                 </button>
@@ -369,7 +371,7 @@ export function Analyze({
               the Ask diamond sits beside it, on the panel. The bar is a
               flex child under the scrolling region, so the thread can never
               run under it. */}
-          <div className="min-w-0 flex-1 rounded-[28px] bg-white px-5 pb-3 pt-2.5 shadow-[var(--shadow-soft)] transition-shadow focus-within:ring-2 focus-within:ring-[var(--module-accent,var(--phb-cyan))]">
+          <div className="min-w-0 flex-1 rounded-[28px] bg-white px-5 pb-3 pt-2.5 shadow-[var(--shadow-soft)] transition-shadow focus-within:ring-2 focus-within:ring-[var(--phb-purple)]">
             <div className="flex items-end gap-2">
               <textarea
                 id="bas-analyze-question"
@@ -398,14 +400,14 @@ export function Analyze({
                   type="button"
                   onClick={startFresh}
                   data-testid="bas-analyze-new-conversation"
-                  className="rounded-full bg-[var(--phb-cyan-tint)] px-3 py-1 text-[0.75rem] font-medium text-[var(--phb-cyan-ink)] hover:bg-[var(--neutral-0)]"
+                  className="rounded-full bg-[var(--phb-purple-tint)] px-3 py-1 text-[0.75rem] font-medium text-[var(--phb-purple)] hover:bg-[var(--neutral-0)]"
                 >
                   New conversation
                 </button>
               )}
             </div>
           </div>
-          {/* The Ask diamond: the mark's shape, in the module's blue. The
+          {/* The Ask diamond: the mark's shape, in brand purple. The
               button is the 72px square (the hit area); the rotated square
               inside it is the picture, and the word stays upright because
               only the picture is rotated. Same disabled and working rules as
@@ -417,7 +419,7 @@ export function Analyze({
           >
             <span
               aria-hidden="true"
-              className="absolute h-[52px] w-[52px] rotate-45 rounded-[16px] bg-[var(--phb-cyan-ink)] shadow-[var(--shadow-soft)]"
+              className="absolute h-[52px] w-[52px] rotate-45 rounded-[16px] bg-[var(--phb-purple)] shadow-[var(--shadow-soft)]"
             />
             <span
               className={
@@ -431,7 +433,7 @@ export function Analyze({
         </form>
 
         {status === null && !error && (
-          <p className="mt-3 px-1 text-xs text-[var(--chrome-muted)]">Checking configuration…</p>
+          <p className="mt-3 px-1 text-xs text-[var(--neutral-800)]">Checking configuration…</p>
         )}
 
         {notConfigured && (
@@ -473,7 +475,7 @@ function PendingTurn({ asked }: { asked: string }) {
     <>
       <QuestionBubble>{asked}</QuestionBubble>
       <div className="mt-3" aria-live="polite" aria-busy="true">
-        <p className="animate-pulse text-sm text-[var(--chrome-muted)]">Working…</p>
+        <p className="animate-pulse text-sm text-[var(--neutral-800)]">Working…</p>
       </div>
     </>
   );
@@ -485,7 +487,7 @@ function ErrorTurn({ asked, message }: { asked: string; message: string }) {
     <>
       <QuestionBubble>{asked}</QuestionBubble>
       <p
-        className="mt-3 rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4 text-sm leading-relaxed"
+        className="mt-3 rounded-[24px] bg-[var(--phb-teal-tint)] px-5 py-4 text-sm leading-relaxed"
         role="alert"
         style={{ color: TONE_INK.bad }}
       >
@@ -569,7 +571,7 @@ export function Result({
         {/* The answer card: the heading (where one is shown) and the one
             paragraph that is the answer. Everything else is the evidence
             card below it. */}
-        <div className="rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4">
+        <div className="rounded-[24px] bg-[var(--phb-teal-tint)] px-5 py-4">
           <h2
             className={
               plainAnswer
@@ -625,7 +627,7 @@ export function Result({
                   </p>
                   <ol className="mt-1.5 space-y-2">
                     {result.attempts.map((attempt, i) => (
-                      <li key={i} className="rounded-[var(--radius-row)] border border-[var(--phb-purple-tint-line)] p-3">
+                      <li key={i} className="rounded-[var(--radius-row)] border border-[var(--phb-teal-tint-line)] p-3">
                         {/* A failed answer is the one place the SQL earns its
                             space: what was tried is the diagnosis. A successful
                             answer's SQL is recorded, not rendered (see the file
@@ -743,7 +745,7 @@ export function AnswerText({ text: raw, className }: { text: string; className?:
  */
 function Footnote({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mt-3 ml-4 space-y-4 rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4">
+    <div className="mt-3 ml-4 space-y-4 rounded-[24px] bg-[var(--phb-teal-tint)] px-5 py-4">
       {children}
     </div>
   );
@@ -783,7 +785,7 @@ function SourcePanel({
   return (
     <div data-testid="bas-analyze-source">
       <PanelHeading />
-      <dl className="divide-y divide-[var(--phb-purple-tint-line)]">
+      <dl className="divide-y divide-[var(--phb-teal-tint-line)]">
         <Row label="Read from">{describeSource(source, ordinal)}</Row>
         <Row label="Rows" tone={rows.tone}>
           {rows.text}
@@ -814,7 +816,7 @@ function ProvenancePanel({
     <div>
       <PanelHeading />
 
-      <dl className="divide-y divide-[var(--phb-purple-tint-line)]">
+      <dl className="divide-y divide-[var(--phb-teal-tint-line)]">
         <Row label="Gaps in the period" tone={gTone}>
           {describeGaps(provenance)}
           {provenance.gaps !== null && provenance.gaps.items.length > 0 && (
@@ -903,7 +905,7 @@ function ProvenancePanel({
 /** The one heading both evidence panels carry, set as the footnote's eyebrow. */
 function PanelHeading() {
   return (
-    <p className="font-display text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--phb-cyan-ink)]">
+    <p className="font-display text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--phb-purple)]">
       What was actually queried
     </p>
   );
@@ -960,16 +962,16 @@ function RowsTable({
     <Wrapper data-testid="bas-analyze-rows" data-folded={folded ? "true" : "false"}>
       <Label
         className={
-          "text-xs font-medium" + (folded ? " cursor-pointer text-[var(--phb-cyan-ink)]" : "")
+          "text-xs font-medium" + (folded ? " cursor-pointer text-[var(--phb-purple)]" : "")
         }
       >
         {label}
       </Label>
       {/* The module's one scroll pattern: up to 200 rows, sticky header, count above. */}
-      <div className="mt-1.5 max-h-72 overflow-auto rounded-md border border-[var(--phb-purple-tint-line)]">
+      <div className="mt-1.5 max-h-72 overflow-auto rounded-md border border-[var(--phb-teal-tint-line)]">
         <table className="w-full text-xs">
           <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
-            <tr className="border-b border-[var(--phb-purple-tint-line)] text-left">
+            <tr className="border-b border-[var(--phb-teal-tint-line)] text-left">
               {table.columns.map((column, i) => (
                 <th key={`${column}-${i}`} className="px-3 py-2 font-medium">
                   {column}
@@ -979,7 +981,7 @@ function RowsTable({
           </thead>
           <tbody>
             {table.rows.map((row, r) => (
-              <tr key={r} className="border-b border-[var(--phb-purple-tint-line)] last:border-b-0">
+              <tr key={r} className="border-b border-[var(--phb-teal-tint-line)] last:border-b-0">
                 {row.map((cell, c) => (
                   <td
                     key={c}
