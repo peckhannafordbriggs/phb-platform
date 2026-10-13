@@ -43,7 +43,7 @@ const TIME = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digi
 
 const money = (usd: number) => `$${usd.toFixed(2)}`;
 
-function StatusPill({ status }: { status: RunStatus }) {
+export function StatusPill({ status }: { status: RunStatus }) {
   return <Pill tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</Pill>;
 }
 

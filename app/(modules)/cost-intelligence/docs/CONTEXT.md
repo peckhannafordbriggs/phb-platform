@@ -3,8 +3,8 @@
 Use this to turn what someone calls a part of the screen ("the launcher", "the
 ledger", "the filter") into the component and file that renders it.
 
-Runs, Workflows, Projects, the Skill catalog and Access read and write the database.
-Only **Usage & cost** and the search bar's skill results still use placeholder data
+Runs, Workflows, Projects, the Skill catalog, Access and Usage & cost read and write the
+database. Only the search bar's skill results still use placeholder data
 (`placeholder-settings.ts`, marked `TODO(backend)`). Runs are executed by the worker
 (`npm run cip:worker`, see `lib/modules/cost-intelligence/worker.ts`); with no worker
 running, a new run stays **Queued**.
@@ -60,14 +60,14 @@ app/(modules)/cost-intelligence/
     workflows-view.tsx      WorkflowsView (client) - the list, New workflow, and the editor
     projects-view.tsx       ProjectsView - list, detail and live file tree
     access-view.tsx         AccessView
-    usage-view.tsx          UsageView
+    usage-view.tsx          UsageView (client) - range, stats, spend per day, breakdowns, top runs
   ui/
     Button.tsx Card.tsx Dropdown.tsx FilterMenu.tsx Label.tsx
     Pill.tsx Segmented.tsx Table.tsx searchbar.tsx
 
 lib/modules/cost-intelligence/
   constants.ts              module key and name
-  types.ts                  settings: Skill, Role, RoleId, Permission, Usage, Budget
+  types.ts                  settings: Skill, Role, RoleId, Permission
   access.ts                 CIP_ROLES, CIP_PERMISSIONS, listCipMembers (who has the module, PCE or Member)
   skill-sync.ts             syncSkills (folder -> cip_skills), listCatalogSkills, getLatestSkillSync
   workflows.ts              listWorkflows, getWorkflow, create/update/delete, setWorkflowSteps (cip_workflows)
@@ -76,8 +76,9 @@ lib/modules/cost-intelligence/
   worker.ts                 workOnce: claims a queued run, runs each step with the Agent SDK on a copy of the
                             project, ask_user checkpoints, publishes ./out to AI FILES as _revN
                             (scripts/cip-worker.ts, Dockerfile.cip-worker)
-  placeholder-settings.ts   PLACEHOLDER_SKILLS, _USAGE, _BUDGET,
-                            getPlaceholderSkill
+  usage.ts                  getUsage(range): spend from the worker's step_cost events, by day, skill,
+                            project and workflow, plus the top runs
+  placeholder-settings.ts   PLACEHOLDER_SKILLS (search bar only)
 ```
 
 **Pages are guards only, and stay server components.** Each `page.tsx` checks access
@@ -182,10 +183,17 @@ Real data, read-only. A Cost Intelligence grant makes someone a **Member**; the 
 
 ### Usage & cost · `settings/usage` · `UsageView`
 
-A dark `Segmented` 7 days / 30 days / Quarter, four stats (Runs, Tokens, Spend, Average
-per run, totalled from the per-skill rows), **Spend per day** bars (hover for the
-amount), the month's budget with a tick at the alert level and **Change budget**, and
-**By skill** with a spend bar, runs, tokens, spend and per run.
+PCE only. Real data from `getUsage` (`lib/modules/cost-intelligence/usage.ts`), which
+sums the worker's `step_cost` events. A step counts on the day it last spent (New York
+time). There is no budget here: the hard limit is the Anthropic Console spend limit.
+
+| People call it | Where |
+|---|---|
+| the date range | dark `Segmented` 7 days / 30 days / 90 days; sets `?range=` and the page reloads the data |
+| the stats | Spend, Runs, Average per run, Tokens (all for the range) and **<Month> so far** (the calendar month, whatever the range) |
+| the spend chart | **Spend per day**, one bar per day of the range, hover for the amount |
+| the breakdown | light `Segmented` By skill / By project / By workflow over one table: runs, tokens, spend, per run, with a spend bar |
+| the top runs | **Most expensive runs**, a `Table` of the 10 costliest runs in the range; a row opens the run |
 
 ## The chrome
 
@@ -237,7 +245,7 @@ Icons come from **`lucide-react`**; do not hand-draw SVGs.
   file tree is read live.
 - Workflows: create, rename, steps, Activate / Pause / Resume and Delete draft all
   write `cip_workflows` and survive reload. Picking a workflow or a skill is a link.
-- The usage range, local to the page and lost on reload.
+- Usage & cost: the range is in the URL; the breakdown choice is local to the page.
 - Access & roles reads real grants. It has no controls; access changes happen in Admin.
 
 Every other button renders its label and has no handler. Wire each one in its own view

@@ -1,129 +1,157 @@
 "use client";
 
-import { useState } from "react";
-import { PLACEHOLDER_BUDGET, PLACEHOLDER_USAGE } from "@/lib/modules/cost-intelligence/placeholder-settings";
-import type { UsageRange } from "@/lib/modules/cost-intelligence/types";
-import { Button } from "../ui/Button";
+import { useRouter } from "next/navigation";
+import { useState, useTransition } from "react";
+import type { Usage, UsageRange, UsageRow } from "@/lib/modules/cost-intelligence/usage";
 import { Card } from "../ui/Card";
 import { Label } from "../ui/Label";
 import { Segmented } from "../ui/Segmented";
+import { Table } from "../ui/Table";
+import { StatusPill } from "./runs-view";
 
 const RANGES: { value: UsageRange; label: string }[] = [
   { value: "7d", label: "7 days" },
   { value: "30d", label: "30 days" },
-  { value: "quarter", label: "Quarter" },
+  { value: "90d", label: "90 days" },
 ];
 
-const dollars = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
-const cents = (n: number) => `$${n.toFixed(2)}`;
-const millions = (n: number) => `${(n / 1_000_000).toFixed(1)}M`;
+type Breakdown = "bySkill" | "byProject" | "byWorkflow";
+const BREAKDOWNS: { value: Breakdown; label: string }[] = [
+  { value: "bySkill", label: "By skill" },
+  { value: "byProject", label: "By project" },
+  { value: "byWorkflow", label: "By workflow" },
+];
 
-/** Anthropic spend for Cost Intelligence runs. */
-export function UsageView() {
-  const [range, setRange] = useState<UsageRange>("30d");
-  const { days, bySkill } = PLACEHOLDER_USAGE[range];
-  const runs = bySkill.reduce((a, s) => a + s.runs, 0);
-  const tokens = bySkill.reduce((a, s) => a + s.tokens, 0);
-  const spend = bySkill.reduce((a, s) => a + s.spend, 0);
-  const peak = Math.max(...days.map((d) => d.spend), 1);
-  const topSpend = Math.max(...bySkill.map((s) => s.spend), 1);
-  const budget = PLACEHOLDER_BUDGET;
-  const used = budget.spent / budget.limit;
+const money = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+const tokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`);
+const WHEN = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" });
+
+/** Claude spend for Cost Intelligence runs, from what the worker recorded. */
+export function UsageView({ usage }: { usage: Usage }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [breakdown, setBreakdown] = useState<Breakdown>("bySkill");
+  const { totals, days } = usage;
+  const peak = Math.max(...days.map((d) => d.spend), 0);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className={"flex flex-col gap-5 " + (pending ? "opacity-60" : "")}>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Segmented label="Date range" options={RANGES} value={range} onChange={setRange} />
-        <span className="text-[0.8125rem] text-[var(--muted)]">Anthropic API usage for Cost Intelligence runs</span>
+        <Segmented
+          label="Date range"
+          options={RANGES}
+          value={usage.range}
+          onChange={(range) => startTransition(() => router.push(`?range=${range}`))}
+        />
+        <span className="text-[0.8125rem] text-[var(--muted)]">
+          Claude spend recorded by runs. The hard limit is the Anthropic Console spend limit.
+        </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-5 lg:grid-cols-4">
-        <Stat label="Runs" value={runs.toLocaleString("en-US")} />
-        <Stat label="Tokens" value={millions(tokens)} />
-        <Stat label="Spend" value={dollars(spend)} />
-        <Stat label="Average per run" value={cents(spend / Math.max(runs, 1))} />
+      <div className="grid grid-cols-2 gap-5 lg:grid-cols-5">
+        <Stat label="Spend" value={money(totals.spend)} />
+        <Stat label="Runs" value={totals.runs.toLocaleString("en-US")} />
+        <Stat label="Average per run" value={money(totals.spend / Math.max(totals.runs, 1))} />
+        <Stat label="Tokens" value={tokens(totals.tokens)} />
+        <Stat label={`${usage.thisMonth.label} so far`} value={money(usage.thisMonth.spend)} />
       </div>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
-        <Card>
-          <div className="flex items-baseline justify-between">
-            <Label>Spend per day</Label>
-            <span className="text-[0.75rem] text-[var(--muted)]">Hover a bar for the amount</span>
-          </div>
+      <Card>
+        <div className="flex items-baseline justify-between">
+          <Label>Spend per day</Label>
+          <span className="text-[0.75rem] text-[var(--muted)]">Hover a bar for the amount</span>
+        </div>
+        {peak === 0 ? (
+          <p className="py-14 text-center text-[0.8125rem] text-[var(--muted)]">No spend in this range.</p>
+        ) : (
           <div className="flex h-44 items-end gap-[3px]">
             {days.map((d) => (
               <div
                 key={d.date}
-                title={`${d.date}: ${dollars(d.spend)}`}
+                title={`${d.label}: ${money(d.spend)}`}
                 className="flex-1 rounded-t-sm opacity-80 hover:opacity-100"
-                style={{ height: `${(d.spend / peak) * 100}%`, minHeight: 2, background: "var(--module-accent)" }}
+                style={{
+                  height: `${(d.spend / peak) * 100}%`,
+                  minHeight: 2,
+                  background: d.spend > 0 ? "var(--module-accent)" : "var(--neutral-100)",
+                }}
               />
             ))}
           </div>
-          <div className="mt-2 flex justify-between text-[0.75rem] text-[var(--muted)]">
-            <span>{days[0]?.date}</span>
-            <span>Today</span>
-          </div>
-        </Card>
-
-        <Card className="flex flex-col">
-          <Label>{budget.month} budget</Label>
-          <p className="text-2xl font-semibold">
-            {dollars(budget.spent)}{" "}
-            <span className="text-[0.8125rem] font-normal text-[var(--muted)]">of {dollars(budget.limit)}</span>
-          </p>
-          <div className="relative mt-4 h-2 rounded-full bg-[var(--neutral-100)]">
-            <div
-              className="h-full rounded-full"
-              style={{ width: `${Math.min(used, 1) * 100}%`, background: "var(--module-accent)" }}
-            />
-            <span
-              aria-hidden="true"
-              className="absolute -top-1 h-4 w-0.5 rounded bg-[var(--neutral-700)]"
-              style={{ left: `${budget.alertAt * 100}%` }}
-            />
-          </div>
-          <p className="mt-3 text-[0.8125rem] text-[var(--muted)]">
-            {Math.round(used * 100)}% used. You get an alert at {Math.round(budget.alertAt * 100)}%. Runs are not stopped
-            at the limit.
-          </p>
-          <div className="mt-auto pt-5">
-            <Button>Change budget</Button>
-          </div>
-        </Card>
-      </div>
+        )}
+        <div className="mt-2 flex justify-between text-[0.75rem] text-[var(--muted)]">
+          <span>{days[0]?.label}</span>
+          <span>Today</span>
+        </div>
+      </Card>
 
       <Card padding="p-0">
-        <div className="grid grid-cols-[minmax(0,1fr)_5rem_6rem_6rem_5rem] gap-4 border-b border-[var(--divider-soft)] px-5 py-3">
-          <span className="eyebrow text-[var(--muted)]">By skill</span>
-          {["Runs", "Tokens", "Spend", "Per run"].map((h) => (
-            <span key={h} className="eyebrow text-right text-[var(--muted)]">
-              {h}
-            </span>
-          ))}
+        <div className="border-b border-[var(--divider-soft)] px-5 py-3">
+          <Segmented label="Breakdown" tone="light" options={BREAKDOWNS} value={breakdown} onChange={setBreakdown} />
         </div>
-        {bySkill.map((s) => (
-          <div
-            key={s.skill}
-            className="grid grid-cols-[minmax(0,1fr)_5rem_6rem_6rem_5rem] items-center gap-4 border-b border-[var(--divider-soft)] px-5 py-3 text-[0.8125rem] last:border-b-0"
-          >
-            <span className="flex min-w-0 items-center gap-4">
-              <span className="truncate font-mono text-[0.75rem]">{s.skill}</span>
-              <span className="hidden h-1.5 w-40 shrink-0 rounded-full bg-[var(--neutral-100)] sm:block">
-                <span
-                  className="block h-full rounded-full"
-                  style={{ width: `${(s.spend / topSpend) * 100}%`, background: "var(--module-accent)" }}
-                />
-              </span>
-            </span>
-            <span className="text-right tabular-nums">{s.runs}</span>
-            <span className="text-right tabular-nums">{millions(s.tokens)}</span>
-            <span className="text-right font-semibold tabular-nums">{dollars(s.spend)}</span>
-            <span className="text-right tabular-nums text-[var(--muted)]">{cents(s.spend / Math.max(s.runs, 1))}</span>
-          </div>
-        ))}
+        <BreakdownTable rows={usage[breakdown]} />
+      </Card>
+
+      <Card>
+        <Label>Most expensive runs</Label>
+        {usage.topRuns.length === 0 ? (
+          <p className="py-6 text-center text-[0.8125rem] text-[var(--muted)]">No runs in this range.</p>
+        ) : (
+          <Table
+            headers={["Run", "Workflow", "Project", "Status", "Started", "Spend"]}
+            rows={usage.topRuns.map((r) => [
+              <span key="id" className="font-mono text-[0.75rem]">{`#${r.id}`}</span>,
+              <span key="w" className="truncate">{r.workflowName}</span>,
+              <span key="p" className="truncate">{r.projectName}</span>,
+              <StatusPill key="s" status={r.status} />,
+              WHEN.format(r.createdAt),
+              <span key="c" className="font-semibold tabular-nums">{money(r.spend)}</span>,
+            ])}
+            onRowClick={(i) => router.push(`/cost-intelligence/runs/${usage.topRuns[i]!.id}`)}
+          />
+        )}
       </Card>
     </div>
+  );
+}
+
+const COLUMNS = "grid-cols-[minmax(0,1fr)_4rem_5rem_6rem_5rem]";
+
+function BreakdownTable({ rows }: { rows: UsageRow[] }) {
+  if (rows.length === 0) {
+    return <p className="px-5 py-6 text-center text-[0.8125rem] text-[var(--muted)]">No runs in this range.</p>;
+  }
+  const top = Math.max(...rows.map((r) => r.spend), 0.01);
+  return (
+    <>
+      <div className={`grid ${COLUMNS} gap-4 border-b border-[var(--divider-soft)] px-5 py-3`}>
+        {["Name", "Runs", "Tokens", "Spend", "Per run"].map((h, i) => (
+          <span key={h} className={"eyebrow text-[var(--muted)] " + (i > 0 ? "text-right" : "")}>
+            {h}
+          </span>
+        ))}
+      </div>
+      {rows.map((r) => (
+        <div
+          key={r.label}
+          className={`grid ${COLUMNS} items-center gap-4 border-b border-[var(--divider-soft)] px-5 py-3 text-[0.8125rem] last:border-b-0`}
+        >
+          <span className="flex min-w-0 items-center gap-4">
+            <span className="truncate">{r.label}</span>
+            <span className="hidden h-1.5 w-40 shrink-0 rounded-full bg-[var(--neutral-100)] sm:block">
+              <span
+                className="block h-full rounded-full"
+                style={{ width: `${(r.spend / top) * 100}%`, background: "var(--module-accent)" }}
+              />
+            </span>
+          </span>
+          <span className="text-right tabular-nums">{r.runs}</span>
+          <span className="text-right tabular-nums">{tokens(r.tokens)}</span>
+          <span className="text-right font-semibold tabular-nums">{money(r.spend)}</span>
+          <span className="text-right tabular-nums text-[var(--muted)]">{money(r.spend / Math.max(r.runs, 1))}</span>
+        </div>
+      ))}
+    </>
   );
 }
 
