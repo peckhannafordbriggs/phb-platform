@@ -78,6 +78,8 @@ export interface Planner {
     sql: string;
     table: ResultTable;
     provenance: Provenance;
+    /** The same clock the plan call saw: the worked timezone example is drawn from it. */
+    nowUtc: string;
   }): Promise<string>;
 }
 
@@ -356,6 +358,7 @@ export async function analyzeQuestion(
         sql: plan.sql,
         table,
         provenance,
+        nowUtc,
       });
     } catch (error) {
       // The rows are on screen either way. A failed summary is said, not hidden.

@@ -269,6 +269,20 @@ export function describeLastHere(
   return `on ${date} at ${time}`;
 }
 
+/**
+ * An instant in plain words in a zone, with no relation to now: "29 September
+ * at 12:50 PM". The same two locale calls `describeLastHere` makes, without
+ * the weekday and the relative words - the absolute form, for a date that
+ * may be months old. The Analyze answer (lib/modules/bas/analyze/planner.ts)
+ * uses it to show the model the shape it must write dates in and a worked
+ * conversion into the building's zone.
+ */
+export function plainDateTime(at: Date, zone: string = APP_TIME_ZONE): string {
+  const date = at.toLocaleDateString("en-GB", { timeZone: zone, day: "numeric", month: "long" });
+  const time = at.toLocaleTimeString("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
+  return `${date} at ${time}`;
+}
+
 /** The `YYYY-MM-DD` before a `YYYY-MM-DD`. Pure date arithmetic; no zone involved. */
 export function previousCalendarDay(day: string): string {
   const [y, m, d] = day.split("-").map(Number) as [number, number, number];

@@ -9047,6 +9047,28 @@ Confirm with `npm run bas:analyze:verify -- "how many stations are there"`.
 
 ---
 
+## Analyze says "The model service answered 400" for every question
+
+**Symptom.** Every question answers *Could not answer — The model service
+answered 400. Nothing was queried.* in about a second, and
+`npm run bas:analyze:verify` prints the same line for each question.
+
+**Cause.** Anthropic refused the request before reading it. On 2026-10-13
+the body was `invalid_request_error: Your credit balance is too low to
+access the Anthropic API`: the Console organisation behind
+`ANTHROPIC_API_KEY` had used up its prepaid credit. The planner keeps only
+the status, so the screen cannot say which 400 it was; the request body was
+the one that had worked the day before.
+
+**Fix.** Add credit, or raise the limit, in the Anthropic Console under
+*Plans & Billing* for the organisation that owns the key. Nothing in the
+platform changes. Confirm with the same verify command. A 400 with a
+different body — an unknown model id after a rename, a parameter the API
+stopped accepting — needs the body read: call `client.messages.create`
+once with the key from a one-off script and print the error.
+
+---
+
 ## Analyze answers "permission denied" for every question
 
 **Symptom.** *Could not answer*, two attempts shown, each ending

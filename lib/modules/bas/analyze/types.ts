@@ -40,6 +40,12 @@ export interface ProvenancePoint {
   name: string;
   site: string;
   station: string;
+  /**
+   * The site's IANA timezone (bas_sites.timezone), so the answer can give
+   * dates in the building's own zone. Optional only so older fixtures still
+   * type-check; the provenance lookup always fills it.
+   */
+  timezone?: string;
   /** False when the collector is not fetching this point. */
   collected: boolean;
 }
