@@ -569,3 +569,115 @@ describe("the image ships public/", () => {
     expect(lines).not.toContain("**/public");
   });
 });
+
+describe("the two deploy paths cannot diverge on the image or the port", () => {
+  /**
+   * Two things write the container app and each owns half of it. The deploy
+   * workflow runs `az containerapp update --image`, which sets the image and
+   * keeps everything else from the running revision; a template deployment
+   * sets everything else and - because a deployment replaces the whole
+   * resource - the image too. `containerImage` used to default to the public
+   * placeholder and the parameters file never set it, so a routine template
+   * redeploy on 2026-10-13 put the placeholder back: revision 0000053, a
+   * hello-world listening on :80 under probes for :3000, ActivationFailed.
+   * Every port setting on that revision was 3000 and correct; the image was
+   * the drift. Nothing local can run a deployment, so this reads the files.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const PLACEHOLDER = "mcr.microsoft.com/k8se/quickstart";
+
+  it("requires containerImage - no default, so a forgotten image fails at validation", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    expect(bicep).toMatch(/^param containerImage string\s*$/m);
+    expect(bicep).not.toMatch(/^param containerImage string\s*=/m);
+  });
+
+  it("names the placeholder image only in comments, never as a value", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const codeLines = bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"));
+    expect(codeLines.join("\n")).not.toContain(PLACEHOLDER);
+    expect(bicep).toContain(PLACEHOLDER); // the comment that says why it is gone
+  });
+
+  it("keeps containerImage out of the example parameters, where it would go stale", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, unknown>;
+    };
+    expect(Object.keys(example.parameters)).not.toContain("containerImage");
+    expect(JSON.stringify(example.parameters)).not.toContain(PLACEHOLDER);
+  });
+
+  it("agrees with the Dockerfile on the port: PORT, EXPOSE and containerPort are one number", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const dockerfile = await readFile("Dockerfile");
+    const runtime = dockerfile.slice(dockerfile.lastIndexOf("FROM "));
+
+    const containerPort = bicep.match(/^param containerPort int = (\d+)\s*$/m)?.[1];
+    const envPort = runtime.match(/\bPORT=(\d+)/)?.[1];
+    const exposed = runtime.match(/^EXPOSE (\d+)\s*$/m)?.[1];
+
+    expect(containerPort).toBeDefined();
+    expect(envPort).toBe(containerPort);
+    expect(exposed).toBe(containerPort);
+  });
+
+  it("feeds the ingress target port and both probes from containerPort, and sets no PORT env of its own", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const app = bicep.slice(bicep.indexOf("resource containerApp "));
+
+    expect(app).toMatch(/targetPort:\s*containerPort\b/);
+    const probePorts = app.match(/httpGet:\s*\{[^}]*port:\s*(\w+)/g) ?? [];
+    expect(probePorts).toHaveLength(2);
+    for (const probe of probePorts) {
+      expect(probe).toMatch(/port:\s*containerPort\b/);
+    }
+    // The image decides where the process listens (Dockerfile ENV PORT). A
+    // PORT or HOSTNAME entry here would be carried forward by the workflow
+    // path and the Dockerfile would stop being the one place it is decided.
+    expect(app).not.toMatch(/name:\s*'PORT'/);
+    expect(app).not.toMatch(/name:\s*'HOSTNAME'/);
+  });
+
+  it("probes the same path the workflow and CI verify against", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const workflow = await readFile(".github/workflows/deploy.yml");
+    const ci = await readFile(".github/workflows/ci.yml");
+
+    const probePaths = [...bicep.matchAll(/httpGet:\s*\{\s*path:\s*'([^']+)'/g)].map((m) => m[1]);
+    expect(probePaths).toEqual(["/api/health", "/api/health"]);
+    expect(workflow).toContain('"https://$URL/api/health"');
+    // CI boots the image with no port mapping and curls the Dockerfile's port.
+    const dockerfile = await readFile("Dockerfile");
+    const envPort = dockerfile.match(/\bPORT=(\d+)/)?.[1];
+    expect(ci).toContain(`http://localhost:${envPort}/api/health`);
+  });
+
+  it("lets the workflow set the image and nothing else that shapes a revision", async () => {
+    const workflow = await readFile(".github/workflows/deploy.yml");
+    const deploy = workflow
+      .split("az containerapp update")[1]
+      ?.split("- name:")[0];
+    expect(deploy).toBeDefined();
+    expect(deploy).toContain("--image");
+    // Anything else here would be a second source of truth for a setting the
+    // template owns, and the two would drift the other way.
+    for (const flag of [
+      "--target-port",
+      "--set-env-vars",
+      "--env-vars",
+      "--replace-env-vars",
+      "--cpu",
+      "--memory",
+      "--min-replicas",
+      "--max-replicas",
+      "--secrets",
+    ]) {
+      expect(deploy, flag).not.toContain(flag);
+    }
+  });
+});

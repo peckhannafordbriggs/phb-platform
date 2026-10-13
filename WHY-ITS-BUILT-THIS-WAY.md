@@ -2287,6 +2287,54 @@ obedient-model test fails on `bas_orgs`. `tests/bas-analyze-prompt.test.ts`,
 
 ---
 
+## 66 · The template is told which image to keep, because two writers each own half of the container app
+
+**Decision.** `containerImage` in `infra/main.bicep` has no default. Every
+template deployment reads the image the app is running and passes it on the
+command line; only the very first deployment, when the registry is empty,
+passes the public placeholder, explicitly. The parameters file never holds the
+image, and the template sets no `PORT` env entry - the Dockerfile's `PORT` and
+`EXPOSE` are the one place the port is decided, and `containerPort` must equal
+them.
+
+**Why.** Two things write the container app. The deploy workflow runs `az
+containerapp update --image`: it sets the image and keeps every other setting
+from the running revision. A template deployment sets every other setting from
+the file and - because a deployment replaces the whole resource - the image
+too. Each path owns half, and neither looks at the other's half. The template
+used to default the image to `mcr.microsoft.com/k8se/quickstart:latest` for
+the first-deployment bootstrap, the parameters file never overrode it, and the
+default was harmless for as long as nobody ran a template deployment after CI
+had pushed a real image. On 2026-10-13 somebody did, to turn two Key Vault
+flags on, and it produced revision `0000053`: a hello-world listening on
+`:80` under probes for `:3000`, `ActivationFailed`. The incident was reported
+as a port disagreement, and every port on the revision was 3000 and right;
+the image was the drift. The same comparison found the mirror case: the
+readiness-probe tuning of 30 September had never reached production, because
+the workflow never applies the template's probes.
+
+A required parameter was chosen over the template reading the running image
+from an `existing` resource reference. The lookup would be automatic, but it
+needs a conditional `existing` resource for the first deployment and depends
+on ARM evaluating only the taken branch of `if()`, and neither can be
+verified without running a deployment. A missing required parameter fails at
+validation before anything is created, which is testable from the file, and
+the cost is one `az containerapp show` before each deployment.
+
+**What breaks if you undo it.** Give the parameter a default and the next
+routine redeploy puts that image into production silently - the deployment
+reports success and the revision fails activation. Put the image in the
+parameters file and it goes stale on the next merge, which is the same
+failure one step removed. Add a `PORT` env entry to the template and the
+workflow path carries it forward, so the Dockerfile and the template can
+disagree with nothing to notice. `tests/deploy-guards.test.ts` → *the two
+deploy paths cannot diverge on the image or the port* holds all of it: the
+mutations were run, and restoring the default or changing the Dockerfile's
+port each fails by name. `runbook.md` → *A template deployment fails
+activation*.
+
+---
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
