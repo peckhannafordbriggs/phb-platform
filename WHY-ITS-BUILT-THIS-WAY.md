@@ -2335,6 +2335,50 @@ activation*.
 
 ---
 
+## 67 · Analyze speaks like a controls engineer on a job site, and the rule it must never break is the one about causes
+
+On 2026-10-13 the team issued a voice guideline for Analyze and it was
+adopted verbatim as `docs/11-analyze-voice.md`. The readers are
+construction workers, site engineers, controls engineers, technicians,
+maintenance teams and project managers, and the test is whether the first
+can follow an answer that the rest still find useful.
+
+**What changed.** The summariser's rules (`SUMMARY_RULES`,
+`lib/modules/bas/analyze/planner.ts`) gained the spec's shape: answer
+first, then caveats; problem-identification framing when the rows support
+it; engineering detail kept and implementation detail dropped; plain words
+with the HVAC terms kept; old data given with its age; next steps only
+when they follow from the rows, and never a suggestion to change settings
+or bypass a control. The four-sentence cap and the no-bullets rule went,
+because a multi-equipment answer needs a short list to be scannable, and
+the answer renderer now shows paragraph breaks and `- ` bullets - nothing
+else. The planner's messages (clarifying questions, reasons for declining)
+and the platform's own no-data and cannot-answer sentences took the same
+voice.
+
+**What did not change.** The query, the guard, the read-only role, the
+provenance, the evidence panel, the no-query label, the gap warnings, the
+audit row, every cap. The voice is a layer over the same facts, and the
+plain-language rules of § 65's successor (2026-10-13, earlier the same day)
+stay underneath it.
+
+**The rule that is paranoid on purpose.** Section 6 of the spec: a
+possible cause is never presented as a confirmed diagnosis. A model that
+says "Room 107 has a broken damper" from a temperature reading has
+invented a fact, and on a job site an invented fact sends someone to the
+wrong part of the building. So the summariser is told to label each
+statement as confirmed, suggested, possible or undeterminable, to word a
+cause as "could be caused by … the readings don't confirm the cause yet",
+and never to name a broken part the rows have not shown; the prompt test
+fails the build if that instruction is missing. What the test cannot do
+is make the model obey; the evidence panel is what lets a reader check.
+
+**What breaks if you undo it.** Drop the section-6 rule and the answers
+drift toward diagnoses nobody measured. Drop the age-of-data rule and a
+reading from 29 September becomes "the room is 73 °F" in November. Put the
+four-sentence cap back and the ten-room answer becomes a wall of text or
+loses rooms.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

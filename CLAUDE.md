@@ -684,7 +684,17 @@ the earlier question it read from, amber when the model had only a sample.
 A from-memory plan naming a turn that was not sent is refused as unusable.
 The first question of a day, or after clearing, sends no `priorTurns` key.
 `WHY-ITS-BUILT-THIS-WAY.md` § 65; `runbook.md` → *Follow-ups* under the
-thread section; `npm run bas:analyze:followup-latency`.
+thread section; `npm run bas:analyze:followup-latency`. **Every sentence
+Analyze shows a person follows `docs/11-analyze-voice.md` (2026-10-13)**:
+answer first, then caveats; problems named when the rows support them;
+possible causes worded as possible and never as a diagnosis; old data
+given with its age; plain words with the HVAC terms kept; short lists
+allowed in the answer text and rendered as such. The rules live in the
+summariser and planner prompts, the platform-written no-data and
+cannot-answer sentences were reworded to match, and
+`tests/bas-analyze-prompt.test.ts` holds the prompts to the spec's
+section 6. The evidence panel, the no-query label, the gap warnings and
+every guard are unchanged. `WHY-ITS-BUILT-THIS-WAY.md` § 67.
 
 **Point Explorer takes a custom date range, in the building's zone, and
 averages long ranges out loud (2026-09-22).** *Custom* beside the three
@@ -1151,6 +1161,7 @@ either anywhere else — point at them.
 | `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon, headroom |
 | `docs/09-bas-what-is-built.md` | BAS: what exists, and which of the two repos owns each piece |
 | `docs/10-adding-a-module.md` | **Read before adding a module.** The five pieces, Cost Intelligence as the worked example, and the rule that a module row reaches production only by migration |
+| `docs/11-analyze-voice.md` | **The canonical spec for every sentence Analyze shows a person** — answers, clarifying questions, no-data and error text. The team's voice guideline, verbatim, adopted 2026-10-13; the summariser and planner rules in `lib/modules/bas/analyze/planner.ts` implement it |
 | `docs/12-ai-layer-inventory.md` | **Phase 12: what the change-order engine reads, writes and decides.** The input to every later part |
 | `docs/DESIGN-BRIEF.md` | The redesign brief as issued, plus what the build actually chose where the two differ |
 | `docs/phase-1-verification.md` | Manual verification record |

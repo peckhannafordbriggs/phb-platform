@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   browserStorage,
   clearThread,
@@ -593,10 +593,10 @@ export function Result({
             </p>
           )}
           {result.kind === "from_prior" && (
-            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.answer}</p>
+            <AnswerText text={result.answer} className="mt-2 text-[0.9375rem] leading-relaxed" />
           )}
           {result.kind === "answered" && (
-            <p className="text-[0.9375rem] leading-relaxed">{result.answer}</p>
+            <AnswerText text={result.answer} className="text-[0.9375rem] leading-relaxed" />
           )}
         </div>
 
@@ -680,6 +680,57 @@ export function Result({
 
       </section>
     </>
+  );
+}
+
+/**
+ * The answer text as the model wrote it: a blank line separates paragraphs,
+ * a run of lines starting with "- " is a short list, a single line break
+ * stays a line break. Nothing else is interpreted - no headings, no
+ * emphasis, no links - so the text is still the text. This is the whole of
+ * the support docs/11-analyze-voice.md asks for so that an answer about
+ * several rooms or pieces of equipment can be scanned (2026-10-13). An
+ * answer with no line breaks renders exactly as it did: one paragraph.
+ * The model is told to write no bold; when it does anyway, the "**" markers
+ * are dropped rather than shown, because a reader should never see markup.
+ *
+ * Exported for tests/bas-analyze-ui.test.tsx.
+ */
+export function AnswerText({ text: raw, className }: { text: string; className?: string }) {
+  // Bold the model was told not to write is dropped, never shown as markup.
+  const text = raw.replace(/\*\*/g, "");
+  const blocks = text
+    .split(/\n[ \t]*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+  if (blocks.length <= 1 && !text.includes("\n")) {
+    return <p className={className}>{text}</p>;
+  }
+  return (
+    <div className={["space-y-2", className].filter(Boolean).join(" ")}>
+      {blocks.map((block, i) => {
+        const lines = block.split("\n").map((line) => line.trim());
+        if (lines.every((line) => /^[-•*]\s+/.test(line))) {
+          return (
+            <ul key={i} className="list-disc space-y-1 pl-5">
+              {lines.map((line, j) => (
+                <li key={j}>{line.replace(/^[-•*]\s+/, "")}</li>
+              ))}
+            </ul>
+          );
+        }
+        return (
+          <p key={i}>
+            {lines.map((line, j) => (
+              <Fragment key={j}>
+                {j > 0 && <br />}
+                {line}
+              </Fragment>
+            ))}
+          </p>
+        );
+      })}
+    </div>
   );
 }
 

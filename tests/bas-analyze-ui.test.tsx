@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Result } from "@/app/(modules)/bas/analyze";
+import { AnswerText, Result } from "@/app/(modules)/bas/analyze";
 import {
   askQuestion,
   cellText,
@@ -401,6 +401,38 @@ describe("whether the database was consulted is said, plainly, and only when it 
     expect(render(answered)).not.toContain("bas-analyze-no-query");
     expect(render(noData)).not.toContain(LABEL);
     expect(render(noData)).not.toContain("bas-analyze-no-query");
+  });
+});
+
+describe("the answer text shows paragraph breaks and short lists, and nothing else (docs/11, 2026-10-13)", () => {
+  const listed =
+    "Three rooms are warmer than their setpoints.\n\n- Room 107: 78 °F (set to 72 °F)\n- Room 130: 77 °F (set to 72 °F)\n\nThese rooms may not be cooling properly.\nCheck the dampers.";
+
+  it("a one-paragraph answer renders as one paragraph, exactly as before", () => {
+    const html = renderToStaticMarkup(createElement(AnswerText, { text: zero.answer, className: "x" }));
+    expect(html).toBe(`<p class="x">${zero.answer}</p>`);
+    expect(render(zero)).toContain(`<p class="text-[0.9375rem] leading-relaxed">${zero.answer}</p>`);
+  });
+
+  it("blank lines make paragraphs, lines starting with a dash make a list, a single break stays a break", () => {
+    const html = renderToStaticMarkup(createElement(AnswerText, { text: listed }));
+    expect(html).toContain("<p>Three rooms are warmer than their setpoints.</p>");
+    expect(html).toContain("<ul");
+    expect(html).toContain("<li>Room 107: 78 °F (set to 72 °F)</li>");
+    expect(html).toContain("<li>Room 130: 77 °F (set to 72 °F)</li>");
+    expect((html.match(/<li>/g) ?? []).length).toBe(2);
+    expect(html).toContain("<p>These rooms may not be cooling properly.<br/>Check the dampers.</p>");
+    // Nothing else is markup: no headings, no emphasis, no links.
+    expect(html).not.toMatch(/<(h[1-6]|strong|em|a)\b/);
+    // Bold the model was told not to write is dropped, not shown.
+    const bold = renderToStaticMarkup(createElement(AnswerText, { text: "**Short answer:** 73 °F." }));
+    expect(bold).toBe("<p>Short answer: 73 °F.</p>");
+  });
+
+  it("the listed answer renders inside an answered result, with the evidence panel still under it", () => {
+    const html = render({ ...zero, answer: listed });
+    expect(html).toContain("<li>Room 107: 78 °F (set to 72 °F)</li>");
+    expect(html.indexOf("<ul")).toBeLessThan(html.indexOf("What was actually queried"));
   });
 });
 
