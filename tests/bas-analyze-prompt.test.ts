@@ -139,6 +139,8 @@ describe("the summary call", () => {
       "Never pass an old reading off as the current condition",
       "Missing data is not equipment failure",
       "no bold or other markdown",
+      "give both numbers and let the reader see the difference",
+      "Never compute the gap yourself unless a difference column is in the rows",
     ]) {
       expect(SUMMARY_RULES, phrase).toContain(phrase);
     }
@@ -156,6 +158,7 @@ describe("the summary call", () => {
       "Never present a possible cause as a confirmed diagnosis",
       "how old the newest data is",
       "no bold or other markdown",
+      "When a known limit of the collected data affects the choice being offered",
     ]) {
       expect(section, phrase).toContain(phrase);
     }

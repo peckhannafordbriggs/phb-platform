@@ -434,6 +434,24 @@ describe("the answer text shows paragraph breaks and short lists, and nothing el
     expect(html).toContain("<li>Room 107: 78 °F (set to 72 °F)</li>");
     expect(html.indexOf("<ul")).toBeLessThan(html.indexOf("What was actually queried"));
   });
+
+  it("a clarifying question and a reason for declining render their lists too", () => {
+    const clarify = render({
+      kind: "clarify",
+      question: "Which rooms?\n\n- The one at Spring Grove\n- The ten at Steel Place",
+      interpretation: "x",
+    });
+    expect(clarify).toContain("<li>The one at Spring Grove</li>");
+    expect(clarify).toContain("One question first");
+    const cannot = render({
+      kind: "cannot_answer",
+      reason: "I can't check that.\n\n- No damper feedback is collected\n- Nothing at Spring Grove",
+      attempts: [],
+      retried: false,
+    });
+    expect(cannot).toContain("<li>No damper feedback is collected</li>");
+    expect(cannot).toContain("No database query was run for this answer.");
+  });
 });
 
 describe("an answer read from an earlier result says so, twice", () => {

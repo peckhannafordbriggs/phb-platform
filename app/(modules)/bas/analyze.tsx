@@ -582,10 +582,10 @@ export function Result({
           </h2>
           {result.kind === "not_configured" && <NotConfigured missing={result.missing} />}
           {result.kind === "clarify" && (
-            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.question}</p>
+            <AnswerText text={result.question} className="mt-2 text-[0.9375rem] leading-relaxed" />
           )}
           {result.kind === "cannot_answer" && (
-            <p className="mt-2 text-[0.9375rem] leading-relaxed">{result.reason}</p>
+            <AnswerText text={result.reason} className="mt-2 text-[0.9375rem] leading-relaxed" />
           )}
           {result.kind === "no_data" && (
             <p className="mt-2 text-[0.9375rem] leading-relaxed" style={{ color: TONE_INK.warn }}>
@@ -689,8 +689,10 @@ export function Result({
  * stays a line break. Nothing else is interpreted - no headings, no
  * emphasis, no links - so the text is still the text. This is the whole of
  * the support docs/11-analyze-voice.md asks for so that an answer about
- * several rooms or pieces of equipment can be scanned (2026-10-13). An
- * answer with no line breaks renders exactly as it did: one paragraph.
+ * several rooms or pieces of equipment can be scanned (2026-10-13). A
+ * clarifying question and a reason for declining go through it too, since
+ * the planner writes them in the same voice with the same lists. A text
+ * with no line breaks renders exactly as it did: one paragraph.
  * The model is told to write no bold; when it does anyway, the "**" markers
  * are dropped rather than shown, because a reader should never see markup.
  *
