@@ -145,10 +145,11 @@ function Tabs({
                     : "border-transparent text-[var(--muted)] hover:border-[var(--neutral-300)] hover:text-[var(--foreground)]")
                 }
                 // The active tab's underline is the module's own colour, the
-                // same cyan as its diamond in the sidebar and its header rule.
+                // same cyan as its diamond in the sidebar and its header rule -
+                // unless the tab names its own accent (Analyze: purple).
                 style={
                   isActive
-                    ? { borderColor: "var(--module-accent, var(--phb-cyan))" }
+                    ? { borderColor: tab.accent ?? "var(--module-accent, var(--phb-cyan))" }
                     : undefined
                 }
               >
