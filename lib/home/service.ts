@@ -290,11 +290,12 @@ async function basCardFor(
   const card = {
     key: BAS_MODULE_KEY,
     displayName: registered?.displayName ?? "Building Automation",
-    // Collection Health's own route, not the module root: the module opens on
-    // the Projects tab since 2026-09-30, and this card's figure and action are
-    // Collection Health's, so the link goes where the words say.
-    href: `/${BAS_MODULE_KEY}/health`,
-    action: "Open collection health",
+    // Point Explorer, not the module root and no longer Collection Health
+    // (2026-10-13, by decision): the card's figure stays Collection Health's
+    // - the at-risk headline and the newest reading's age - but the link goes
+    // to the screen people open to look at the data, and the label says so.
+    href: `/${BAS_MODULE_KEY}/points`,
+    action: "Open point explorer",
   };
 
   try {

@@ -815,7 +815,8 @@ shows one line of checks where two cards used to be*.
 labelled *Projects* on screen and `dashboard` in code (component, route, types
 - renamed on screen the same day, files left alone, runbook says so);
 Collection Health moved to `/bas/health` and is the one deep link that changed
-(Home's card and its *new data gaps* line point there). One card per row of
+(Home's *new data gaps* line points there; Home's card itself opens Point
+Explorer since 2026-10-13, its figure still Collection Health's). One card per row of
 `bas_projects`, never hardcoded: name, the Home tile's health line via the same
 `basFigure`, newest-reading age, *N buildings · N JACEs*. **The per-project
 at-risk number is the one predicate scoped to the project** — per-state counts
