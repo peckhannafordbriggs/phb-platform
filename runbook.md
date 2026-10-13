@@ -2512,6 +2512,78 @@ old revision while the new one was still failing.
 
 ---
 
+## A template deployment fails activation, and the console log says `Listening on :80...`
+
+**Symptom.** `az deployment group create` with `infra/main.bicep` reports the
+deployment failed on the container app, or succeeds and the new revision sits at
+`ActivationFailed` while the site keeps serving the previous one. The system log
+shows the readiness probe getting *connection refused* on `:3000`; the console log
+shows the container starting cleanly and printing `Listening on :80...`. Every port
+setting on the revision - ingress `targetPort`, both probes - reads 3000 and is
+correct. The workflow's revisions, built from the same template, were all healthy.
+
+**Cause.** The revision is not running the platform. It is running
+`mcr.microsoft.com/k8se/quickstart:latest`, the public placeholder from the first
+deployment: a hello-world that listens on `:80` and prints that line (Next prints
+`Ready in …`, never `Listening on`). `containerImage` defaulted to the placeholder,
+`main.parameters.json` never set it, and a template deployment replaces the whole
+container app - image included - so every routine template redeploy after the first
+real CI deploy put the placeholder back. It had not happened before because no
+template deployment had been run since CI first pushed a real image; on 2026-10-13
+one was, to turn the two Key Vault flags on, and produced revision `0000053`.
+Confirm with:
+
+```bash
+az containerapp revision show -n <app> -g <rg> --revision <app>--<nnnn> \
+  --query "{image:properties.template.containers[0].image, state:properties.runningState}"
+```
+
+The placeholder is the image; `phbplatprod….azurecr.io/phb-platform:<sha>` is what a
+healthy revision reads.
+
+**Why the two paths disagree.** Each writes half of the container app. The deploy
+workflow runs `az containerapp update --image`: it sets the image and keeps env vars,
+probes, scale and secrets from the running revision. A template deployment sets all of
+those from `main.bicep` and the image from its parameter. Neither path alone produces
+a revision that is both current and complete unless the template is told the running
+image - which is now the rule: **`containerImage` has no default and is required**,
+read from the app before every deployment. The command is under *Deploy* in
+`infra/README.md`; a deployment that forgets it fails at parameter validation before
+anything is created, and `tests/deploy-guards.test.ts` → *the two deploy paths cannot
+diverge on the image or the port* fails the build if a default comes back, if the
+Dockerfile's `PORT` and `EXPOSE` stop matching `containerPort`, if the template grows a
+`PORT` env entry, or if the workflow starts setting anything besides `--image`.
+
+**Fix, now.** Any of these produces a healthy revision from the failed one's
+configuration, new Key Vault references and all:
+
+- Merge to `main`. The workflow's `az containerapp update --image` starts from the
+  app's current template (the failed revision's, with the new secrets and probes) and
+  swaps in a real image. This is the normal path and needs nothing by hand.
+- Or run that update yourself with the last healthy revision's image, read with the
+  `revision show` query above against the healthy revision's name.
+- Or redeploy the template with `containerImage` set to that image.
+
+The failed revision can be left: with `latestRevision: true` traffic stays on the last
+ready revision, and `az containerapp revision deactivate` tidies it once a healthy
+one exists.
+
+**What else the 2026-10-13 comparison found**, revision `0000052` (workflow) against
+`0000053` (template), so a repeat does not report it as new:
+
+- The only env difference was the three new entries the template was deployed to
+  add: `ANTHROPIC_API_KEY`, `BAS_CREDENTIAL_KEY` (both `secretRef`) and
+  `BAS_CREDENTIAL_KEY_VERSION`. No hand-set variable existed on `0000052` for the
+  template to wipe. `BAS_ASK_DATABASE_URL` was on neither, as documented.
+- **The readiness-probe tuning of 2026-09-30 had never reached production.**
+  `0000052` carried `initialDelaySeconds: 5` / `periodSeconds: 10`; the template has
+  said 1 / 2 since 30 September. The workflow preserves the running revision's probes,
+  so a probe, env or scale change in `main.bicep` reaches production only through a
+  template deployment. `0000053` was the first revision with the tuned values.
+- CPU, memory, scale bounds and the liveness probe matched.
+
+---
+
 ## A static file 404s in production and works locally
 
 **Symptom.** `/phb-logo.png` (or anything else in `public/`) returns 404 from the
@@ -3089,6 +3161,10 @@ healthy across a cold start — measure with a timed request instead.
 `initialDelaySeconds` went from 5 to 1 and `periodSeconds` from 10 to 2 on
 2026-09-30: the gate between "listening" and "served" was 8 to 12 of the
 30 s, and `/api/health` touches nothing, so probing every 2 s costs nothing.
+**It reached production on 2026-10-13, not on the 30th**: the deploy workflow
+keeps the running revision's probes, so the change sat in the template until the
+next template deployment carried it - see *A template deployment fails
+activation* for why the two paths each own half of the app.
 The remaining 16 s of scheduling and sidecars belongs to the Consumption
 platform; a Dedicated workload profile or `minReplicas: 1` are the only
 things that remove it, and the cost of the latter is in *Keeping one replica

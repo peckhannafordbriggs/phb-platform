@@ -7,7 +7,8 @@
 //     --subscription <subscription-id> \
 //     --resource-group <resource-group> \
 //     --template-file infra/main.bicep \
-//     --parameters @infra/main.parameters.json
+//     --parameters @infra/main.parameters.json \
+//     --parameters containerImage="$IMAGE"   # the image the app runs NOW; see containerImage
 //
 // Nothing in this file assumes anything about PH+B. Every value that identifies
 // an organisation, a region, a person or an environment is a parameter without a
@@ -52,10 +53,37 @@ param tags object = {}
 // Container image
 // ---------------------------------------------------------------------------
 
-@description('Image the container app runs. On the very first deployment the registry is empty, so this defaults to a public placeholder; CI replaces it with the real image on every deploy.')
-param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
+// NO DEFAULT, deliberately. Two things write this container app and each owns
+// half of it: the deploy workflow (`az containerapp update --image`) sets the
+// image and keeps everything else from the running revision, while a template
+// deployment sets everything else and - because a deployment replaces the
+// whole resource - the image too. This used to default to the public
+// placeholder `mcr.microsoft.com/k8se/quickstart:latest`, and the parameters
+// file never set it, so every routine template deployment after the first real
+// deploy silently put the placeholder back. On 2026-10-13 that produced
+// revision 0000053: a hello-world listening on :80 under probes for :3000,
+// ActivationFailed, with the console log reading "Listening on :80..." - the
+// placeholder's own line; Next prints "Ready in", never that. Making it
+// required means a deployment that forgets it fails at parameter validation,
+// before anything is created. Read the running image first:
+//
+//   az containerapp show -n <app> -g <rg> \
+//     --query properties.template.containers[0].image -o tsv
+//
+// Only the very first deployment, when the registry is empty, passes the
+// placeholder - explicitly, on the command line. infra/README.md has both
+// commands; runbook.md -> "A template deployment fails activation".
+@description('Image the container app runs. Required. Pass the image the app is running now (read it with `az containerapp show`), or the public placeholder on the very first deployment only.')
+param containerImage string
 
-@description('Port the application listens on. Matches the Dockerfile.')
+// The image's own default. The Dockerfile sets PORT=3000 and EXPOSE 3000, the
+// template does NOT set a PORT environment variable, and this one parameter
+// feeds the ingress target port and both probes - so the image decides where
+// the process listens and the template decides where the platform looks, and
+// tests/deploy-guards.test.ts holds the two numbers equal. Do not add a PORT
+// env entry below: the workflow path would carry it forward and the Dockerfile
+// would stop being the single place the port is decided.
+@description('Port the application listens on. Must equal PORT and EXPOSE in the Dockerfile; a test asserts it.')
 param containerPort int = 3000
 
 @description('CPU cores per replica. 0.5 with 1Gi is the smallest Container Apps combination that is not memory starved for a Node server.')

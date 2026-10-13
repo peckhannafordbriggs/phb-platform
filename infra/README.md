@@ -30,16 +30,42 @@ az bicep lint --file infra/main.bicep
 cp infra/main.parameters.example.json infra/main.parameters.json
 # fill it in, then:
 
+# The image the app is running NOW. A template deployment replaces the whole
+# container app, image included, so it has to be told which image to keep.
+IMAGE="$(az containerapp show -n <app> -g <resource-group> \
+  --query properties.template.containers[0].image -o tsv)"
+
 az deployment group create \
   --subscription <subscription-id> \
   --resource-group <resource-group> \
   --template-file infra/main.bicep \
   --parameters @infra/main.parameters.json \
+  --parameters containerImage="$IMAGE" \
   --parameters postgresAdminPassword="$PGPASSWORD" authSecret="$(npx auth secret --raw)"
 ```
 
 The two `@secure()` parameters are passed on the command line and never written to a
 file. Azure does not log the value of a secure parameter.
+
+**`containerImage` is required and is never in the parameters file.** Two things write
+the container app, and each owns half of it. The deploy workflow runs
+`az containerapp update --image`, which sets the image and keeps every other setting
+from the running revision - env vars, probes, scale, secrets. A template deployment is
+the other way round: it sets every other setting from `main.bicep` and, because a
+deployment replaces the whole resource, the image too. So a template deployment has to
+carry the running image forward, and the parameter used to default to the public
+placeholder instead. The parameters file never set it, and on 2026-10-13 a routine
+redeploy (turning the two Key Vault flags on) put the placeholder back: revision
+`0000053`, a hello-world listening on `:80` under probes for `:3000`, `ActivationFailed`.
+Forgetting the parameter now fails at validation before anything is created, and
+`tests/deploy-guards.test.ts` fails the build if a default comes back. See
+*A template deployment fails activation* in `runbook.md`.
+
+The corollary matters in the other direction too: **a change to env vars, probes or
+scale in `main.bicep` reaches production only through a template deployment.** The
+workflow never applies it. The readiness-probe tuning of 2026-09-30 sat in the template
+for two weeks while every CI revision kept the old values, until that same redeploy
+carried it.
 
 **`Contributor` on the resource group is NOT sufficient.** Verified against a real
 subscription, not inferred from the role name. Two things in this template are outside
@@ -184,9 +210,13 @@ container has, and if that key is wrong the collector can no longer read it.
 The container app needs an image and its secrets before it can start, and its own URL
 before Auth.js can build a callback. So the first pass is not a single command:
 
-1. Deploy with `containerImage` left at its default. It points at a public placeholder
-   image, so the app comes up before the registry has anything in it.
-2. Take `containerAppUrl` from the outputs, and redeploy with `authUrl` set to it.
+1. Deploy with `containerImage=mcr.microsoft.com/k8se/quickstart:latest`, passed
+   explicitly on the command line. That public placeholder lets the app resource exist
+   before the registry has anything in it. It listens on `:80`, not `:3000`, so its
+   revision never passes the probes - expected on this one pass and a fault on any
+   other. This is the only time the placeholder is ever passed.
+2. Take `containerAppUrl` from the outputs, and redeploy with `authUrl` set to it (still
+   the placeholder image: nothing else exists yet).
 3. Give IT the `ssoRedirectUri` output and the `managedIdentityClientId` output — the
    redirect URI goes on the SSO app registration, and the federated credential is bound
    to that identity. Neither can be requested before this deployment exists.
@@ -195,4 +225,6 @@ before Auth.js can build a callback. So the first pass is not a single command:
 6. Set the two hand-set secrets as above - `BAS-CREDENTIAL-KEY` from the collector's
    `.env`, `ANTHROPIC-API-KEY` from the Anthropic Console - then redeploy with
    `basCredentialKeyInKeyVault=true` and `anthropicApiKeyInKeyVault=true`. Nothing
-   before this step needs either.
+   before this step needs either. From here on every redeploy passes the **running**
+   image, read with the `az containerapp show` line under *Deploy* - step 4 has put a
+   real one there, and the placeholder must never come back.

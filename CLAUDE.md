@@ -964,6 +964,27 @@ pass locally; removing either `env:` entry fails a named guard test.
 `infra/README.md` has the two command sequences and the click to confirm each;
 `runbook.md` → *Secrets set by hand in Key Vault*.
 
+**A template deployment must be told which image to keep (2026-10-13).** The
+first template deployment since CI pushed a real image - run to turn the two
+Key Vault flags on - produced revision `0000053`, `ActivationFailed`: a
+hello-world on `:80` under probes for `:3000`. Reported as a port
+disagreement; every port on the revision was 3000 and right. The image was
+the drift: `containerImage` defaulted to the public placeholder, the
+parameters file never set it, and a deployment replaces the whole app. Two
+writers each own half of the container app - the workflow's `az containerapp
+update --image` sets the image and keeps the rest; the template sets the rest
+and the image too - and the same comparison found the readiness-probe tuning
+of 30 September had never reached production for the mirror reason. Now
+**`containerImage` is required, read from the running app before every
+deployment** (`infra/README.md` → *Deploy*), the placeholder is passed
+explicitly on the very first deployment only, the template sets no `PORT`
+entry and the Dockerfile is the one place the port is decided.
+`tests/deploy-guards.test.ts` → *the two deploy paths cannot diverge on the
+image or the port* holds it, mutations run. The secrets did sync; the fix
+for the live app is the next merge to `main`, or the same update by hand.
+`WHY-ITS-BUILT-THIS-WAY.md` § 66; `runbook.md` → *A template deployment
+fails activation*.
+
 **The plausibility gate has a type half (2026-10-06).** The role gate alone
 would have judged a boolean or enum point on a measurement threshold the
 moment somebody gave it a measurement role - a fan status misclassified as
