@@ -129,15 +129,17 @@ failure it prevents destroys data held nowhere else while the cost of a larger d
 recoverable. The budget carries notification contacts only and no action group, so no
 spending threshold can stop the server.
 
-## Two secrets are set by hand, not by the template
+## Three secrets are set by hand, not by the template
 
-Two secrets are issued elsewhere and pasted into the vault once, by a person:
-the Anthropic API key (next heading) and the BAS credential key (the heading
-after it). The template knows their names only - `ANTHROPIC-API-KEY` and
-`BAS-CREDENTIAL-KEY` - and references each from the container app behind a
-boolean parameter. Both are read under the managed identity's existing **Key
-Vault Secrets User** grant on the vault; no new role assignment is needed, and
-`tests/deploy-guards.test.ts` asserts that from the template's grants.
+Three secrets are issued elsewhere and pasted into the vault once, by a person:
+the Anthropic API key (next heading), the BAS credential key (the heading
+after it) and the Analyze database URL (the heading after that). The template
+knows their names only - `ANTHROPIC-API-KEY`, `BAS-CREDENTIAL-KEY` and
+`BAS-ASK-DATABASE-URL` - and references each from the container app behind a
+boolean parameter. All three are read under the managed identity's existing
+**Key Vault Secrets User** grant on the vault; no new role assignment is
+needed, and `tests/deploy-guards.test.ts` asserts that from the template's
+grants.
 
 ## The Anthropic API key is set by hand, not by the template
 
@@ -205,6 +207,41 @@ login → the login panel shows the username and *password set* rather than
 password to make a red panel go green - that re-encrypts it under whatever key the
 container has, and if that key is wrong the collector can no longer read it.
 
+## The Analyze database URL is the bas_analyze role on this server
+
+`BAS_ASK_DATABASE_URL` is the connection URL the Analyze tab's SQL runs through:
+a separate, read-only PostgreSQL role, `bas_analyze`, on the **same** server and
+database as the platform. It is not `DATABASE_URL`, which can write. The role is
+created by `scripts/setup-bas-analyze-role.sql`, run as the server administrator
+with a password you choose at run time (the file's header has the exact command,
+including how to do it from the portal's Cloud Shell when you are off the office
+network), and the URL is then built by hand and pasted into the vault once.
+
+```powershell
+# 1. Create or rotate the role on the Azure database (see the script's header;
+#    it prompts for nothing itself - you pass the password as -v pw=...). It
+#    prints the URL shape at the end and the password nowhere.
+
+# 2. Same vault as above. Set the secret from the URL you built:
+#      postgresql://bas_analyze:<password>@<server>.postgres.database.azure.com:5432/phb_platform?sslmode=require
+#    Read-Host keeps it out of the command line and the shell history.
+az keyvault secret set --vault-name <vault-name> --name BAS-ASK-DATABASE-URL --value (Read-Host "BAS_ASK_DATABASE_URL for the bas_analyze role")
+
+# 3. Confirm it exists WITHOUT printing it.
+az keyvault secret show --vault-name <vault-name> --name BAS-ASK-DATABASE-URL --query "{enabled:attributes.enabled, updated:attributes.updated}"
+
+# 4. Set basAskDatabaseUrlInKeyVault to true in infra/main.parameters.json and
+#    redeploy - with the RUNNING image, as under *Deploy*.
+```
+
+To confirm it works on the deployed site: `/bas/analyze` shows the *Things people
+ask* chips instead of *Analyze is not configured on this server*, and one real
+question - "When did the collector last run, and did it succeed?" - comes back as
+an answer with its evidence panel. A *permission denied* answer means the role
+is missing a grant: `runbook.md` → *Analyze answers "permission denied" for every
+question*. To rotate, run the script again with a new password, set the secret
+again, and create a new revision.
+
 ## First deployment ordering
 
 The container app needs an image and its secrets before it can start, and its own URL
@@ -222,9 +259,11 @@ before Auth.js can build a callback. So the first pass is not a single command:
    to that identity. Neither can be requested before this deployment exists.
 4. Push to `main`. CI builds the real image, runs migrations, and deploys it.
 5. Run the production seed **once**, by hand. See `runbook.md`.
-6. Set the two hand-set secrets as above - `BAS-CREDENTIAL-KEY` from the collector's
-   `.env`, `ANTHROPIC-API-KEY` from the Anthropic Console - then redeploy with
-   `basCredentialKeyInKeyVault=true` and `anthropicApiKeyInKeyVault=true`. Nothing
-   before this step needs either. From here on every redeploy passes the **running**
-   image, read with the `az containerapp show` line under *Deploy* - step 4 has put a
-   real one there, and the placeholder must never come back.
+6. Set the three hand-set secrets as above - `BAS-CREDENTIAL-KEY` from the collector's
+   `.env`, `ANTHROPIC-API-KEY` from the Anthropic Console, `BAS-ASK-DATABASE-URL` from
+   the `bas_analyze` role the script creates - then redeploy with
+   `basCredentialKeyInKeyVault=true`, `anthropicApiKeyInKeyVault=true` and
+   `basAskDatabaseUrlInKeyVault=true`. Nothing before this step needs any of them.
+   From here on every redeploy passes the **running** image, read with the
+   `az containerapp show` line under *Deploy* - step 4 has put a real one there, and
+   the placeholder must never come back.
