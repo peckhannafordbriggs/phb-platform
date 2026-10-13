@@ -8194,3 +8194,129 @@ again.* — HTTP 429, `rate_limited`.
 **Cause.** Six questions a minute per employee, in memory, per process. A
 refused attempt is not counted. It is checked before any token is spent and
 before the pool is touched. A new revision starts with an empty window.
+
+---
+
+# Cost Intelligence runs
+
+A run is one workflow against one project. The web app only queues it
+(`cip_runs.status = 'queued'`); the **worker** does the work
+(`lib/modules/cost-intelligence/worker.ts`, started by `npm run cip:worker` or the
+`cip-worker` image from `Dockerfile.cip-worker`). Every run works on a copy of the
+project and only ever adds files to the project's `AI FILES` folder.
+
+## A Cost Intelligence run stays Queued
+
+**Symptom.** New run works and the run page says **Queued**, and nothing in the
+ledger moves past *Queued ... on ...*.
+
+**Cause.** No worker is running. The web app never executes runs itself.
+
+**Fix.** Start one, from the repo root:
+
+```powershell
+npm run cip:worker
+```
+
+It needs `DATABASE_URL`, `ANTHROPIC_API_KEY`, `CIP_SKILLS_DIR` and
+`CIP_PROJECTS_DIR` in `.env.local`, and stops with a sentence naming whichever is
+missing. It picks up the oldest queued run within five seconds.
+
+Or in Docker Desktop, which also gives the agent Python, openpyxl and pdftotext
+without installing them on Windows:
+
+```powershell
+docker compose -f docker-compose.cip-worker.yml up --build
+```
+
+The first build takes several minutes. Nothing appears in Docker Desktop until
+this has been run once; the app never starts the worker itself. The Compose file
+reads `.env.local`, mounts the OneDrive `BID-DOC` and `PHB-CIS-skills` folders
+from `%USERPROFILE%`, and rewrites `localhost` in `DATABASE_URL` to
+`host.docker.internal`. If the worker then logs `no pg_hba.conf entry for host
+"…"`, local Postgres is refusing connections from Docker: add a line to
+`pg_hba.conf` (`host all all <that address>/32 scram-sha-256`) and restart the
+PostgreSQL service.
+
+---
+
+## A run failed with "The worker stopped while running this"
+
+**Symptom.** The run is **Failed** with that error.
+
+**Cause.** The run was **Running** and its worker sent no heartbeat for ten
+minutes: the process was killed, the machine slept, or the container was
+recycled mid-run. The next worker to start marks it failed rather than guessing
+how far it got.
+
+**Fix.** Start the run again. Files it had already published stay in
+`AI FILES`; the new run writes the next `_revN` beside them, never over them.
+
+---
+
+## A run failed with "Stopped at the $5.00 cost cap"
+
+**Symptom.** The run is **Failed** with that error, and its cost is just over $5.
+
+**Cause.** The Agent SDK's `maxBudgetUsd`. Every run is capped
+(`RUN_BUDGET_USD` in `lib/modules/cost-intelligence/runs.ts`), across all of its
+steps, so a skill that loops cannot spend without limit.
+
+**Fix.** Look at the ledger for what it was doing. A skill that legitimately
+needs more is a decision to raise the cap in code, not a retry.
+
+---
+
+## A run waits on a question and nobody sees it
+
+**Symptom.** The run is **Waiting on you**.
+
+**Cause.** A skill called `ask_user`. The worker recorded the question
+(`cip_run_checkpoints`), published what the step had written so far, and moved
+on; the conversation is kept in `cip_run_transcripts`.
+
+**Fix.** Open the run and answer under the ledger. Answering puts it back in the
+queue and any worker resumes the same conversation, in a fresh copy of the
+project with the earlier files now in `AI FILES`. Cancel run drops the question.
+
+---
+
+## Write and Bash are denied
+
+**Symptom.** A run asks something like "I can't write the files: Write and Bash
+are being denied ... Claude Code is running in don't-ask mode", usually after it
+resumed from a question.
+
+**Cause.** Workers before the fix ran the agent with `permissionMode: "dontAsk"`.
+On Windows that refused Write and Bash once a run resumed, even though both were
+allowed. A likely trigger: the workspace sat under TEMP's 8.3 short name
+(`C:/Users/KRACHA~1/...`), which Claude Code did not match against its working
+directory.
+
+The worker now uses the long path and `bypassPermissions`. Claude Code refuses
+that mode as root, so the worker must not run as root (the Docker image runs as
+`node`). The limits are the fixed tool list (no web, no MCP servers from the
+machine) and the workspace being a copy. Bash is still a real shell: on a
+developer machine it can read and write outside the workspace, and the platform
+rules only ask it not to. Run real jobs in the Docker image, where only the
+mounted folders exist.
+
+**Fix.** Restart the worker (`npm run cip:worker`) on the current code. Do not
+cancel the run: answer its question with "Restore write and shell permission
+for ./out, then I will continue". It resumes the same conversation with the new
+settings.
+
+---
+
+## A run failed with "Credit balance is too low"
+
+**Symptom.** The run is **Failed** with "Claude Code returned an error result:
+Credit balance is too low".
+
+**Cause.** The Anthropic Console organization behind `ANTHROPIC_API_KEY` is out
+of prepaid credit. Nothing is wrong with the run.
+
+**Fix.** Add credit in the Console (Billing), and set a monthly spend limit there
+as the hard stop above the $5 per-run cap. The failed run cannot resume; start a
+new one. Files it already published stay in `AI FILES`.
+

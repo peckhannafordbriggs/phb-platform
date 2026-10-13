@@ -454,6 +454,9 @@ function CheckpointForm({
       <Button type="submit" variant="primary" className="mt-4" disabled={saving || refreshing || answer.trim().length === 0}>
         {saving || refreshing ? "Resuming…" : "Answer and resume"}
       </Button>
+      <p className="mt-2 text-[0.75rem] text-[var(--muted)]">
+        Answering restarts the agent, which costs money. To end the run instead, use Cancel run.
+      </p>
     </form>
   );
 }

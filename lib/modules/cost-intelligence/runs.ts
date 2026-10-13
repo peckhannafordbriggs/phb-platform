@@ -245,7 +245,8 @@ export async function getRun(rawId: string): Promise<RunDetail | null> {
     include: {
       project: { select: { folderName: true } },
       startedBy: { select: { firstName: true, lastName: true, email: true } },
-      events: { orderBy: { id: "asc" } },
+      // step_cost rows are the worker's cost bookkeeping, not ledger lines.
+      events: { where: { type: { not: "step_cost" } }, orderBy: { id: "asc" } },
       checkpoints: { where: { answeredAt: null }, take: 1 },
     },
   });

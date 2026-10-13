@@ -5,8 +5,9 @@ ledger", "the filter") into the component and file that renders it.
 
 Runs, Workflows, Projects, the Skill catalog and Access read and write the database.
 Only **Usage & cost** and the search bar's skill results still use placeholder data
-(`placeholder-settings.ts`, marked `TODO(backend)`). Runs are created and shown for real,
-but nothing executes them until the worker lands: a new run stays **Queued**.
+(`placeholder-settings.ts`, marked `TODO(backend)`). Runs are executed by the worker
+(`npm run cip:worker`, see `lib/modules/cost-intelligence/worker.ts`); with no worker
+running, a new run stays **Queued**.
 
 ## Where the design came from
 
@@ -72,6 +73,9 @@ lib/modules/cost-intelligence/
   workflows.ts              listWorkflows, getWorkflow, create/update/delete, setWorkflowSteps (cip_workflows)
   project-sync.ts           syncProjects (BID-DOC -> cip_projects, file info only), listProjects, readProjectFiles
   runs.ts                   createRun, cancelRun, answerCheckpoint, listRuns, getRun, listLaunchOptions (cip_runs)
+  worker.ts                 workOnce: claims a queued run, runs each step with the Agent SDK on a copy of the
+                            project, ask_user checkpoints, publishes ./out to AI FILES as _revN
+                            (scripts/cip-worker.ts, Dockerfile.cip-worker)
   placeholder-settings.ts   PLACEHOLDER_SKILLS, _USAGE, _BUDGET,
                             getPlaceholderSkill
 ```
@@ -225,6 +229,8 @@ Icons come from **`lucide-react`**; do not hand-draw SVGs.
 - New run opening and closing the launcher; Back from a run page.
 - Start run, which creates a real queued run and goes to its page.
 - Open run, the Run page, Cancel run, and Answer and resume.
+- Runs execute when the worker is running: the ledger, steps, cost and outputs fill in
+  live, and a skill's question appears under the ledger.
 - Search.
 - Sync on the Skill catalog, which writes `cip_skills` and survives reload.
 - Sync on Projects, which writes `cip_projects`; picking a project is a link and the

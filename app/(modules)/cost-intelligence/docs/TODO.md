@@ -15,5 +15,9 @@ Settings:
 - project sync: Graph reader once Sites.Selected is granted (replace readProjectsFolder and listProjectFiles in project-sync.ts), then the daily scheduled sync
 
 Runs:
-- worker (cip-worker image, Agent SDK): claims queued runs, copies the project read-only, runs each step's skill, writes the ledger, checkpoints via ask_user, publishes to AI FILES as _revN. Until then runs stay Queued
+- worker in Azure: Container Apps Job resource in infra/main.bicep (KEDA Postgres scaler on queued cip_runs, --once), image build in deploy.yml, ANTHROPIC_API_KEY in Key Vault. Needs the platform owner's sign-off
+- worker files: Graph download of the project and upload to AI FILES once Sites.Selected is granted (buildWorkspace, publishOutputs)
+- LibreOffice in Dockerfile.cip-worker when phb-state-form is piloted
+- pilot skill: run pursuit-intake end to end and adjust it where it assumes Cowork (device_bash, connected folders)
+- usage page: real spend from cip_runs.cost_usd
 - search: run results were placeholders and are gone; add them back with real search

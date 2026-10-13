@@ -1,0 +1,33 @@
+# The Cost Intelligence run worker, locally in Docker Desktop.
+#
+#   docker compose -f docker-compose.cip-worker.yml up --build
+#
+# Ctrl+C stops it (after the run in hand reaches a stopping point). Add -d to run
+# it in the background; it then shows in Docker Desktop as cip-worker.
+#
+# Settings come from .env.local (ANTHROPIC_API_KEY, DATABASE_URL). The worker
+# rewrites localhost in DATABASE_URL to host.docker.internal, because inside a
+# container localhost is the container. The two folders are your OneDrive copies;
+# change the paths below if yours live elsewhere.
+
+services:
+  cip-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.cip-worker
+    image: cip-worker
+    container_name: cip-worker
+    env_file: .env.local
+    environment:
+      CIP_IN_DOCKER: "1"
+      CIP_PROJECTS_DIR: /data/bid-doc
+      CIP_SKILLS_DIR: /data/skills
+      CIP_WORKSPACE_DIR: /tmp/cip-runs
+    volumes:
+      # Read-write only so outputs can be published into each project's AI FILES.
+      - "${USERPROFILE}/OneDrive - Peck Hannaford + Briggs/CIP/BID-DOC:/data/bid-doc"
+      - "${USERPROFILE}/OneDrive - Peck Hannaford + Briggs/CIP/PHB-CIS-skills:/data/skills:ro"
+    extra_hosts:
+      # Docker Desktop provides this already; this makes it work on Linux engines too.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
