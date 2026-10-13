@@ -2626,11 +2626,12 @@ server had no such file.
 
 ---
 
-## Secrets set by hand in Key Vault: the Anthropic API key and the BAS credential key
+## Secrets set by hand in Key Vault: the Anthropic API key, the BAS credential key and the Analyze database URL
 
-Two secrets reach the container app this way as of 2026-10-01: the Anthropic
-API key (this section) and the BAS credential key (the subsection after it,
-*The BAS credential key, the same way*). The command sequence for both is in
+Three secrets reach the container app this way: the Anthropic API key (this
+section) and the BAS credential key (*The BAS credential key, the same way*)
+since 2026-10-01, and the Analyze database URL (*The Analyze database URL,
+the same way*) since 2026-10-13. The command sequences are in
 `infra/README.md`.
 
 The Anthropic key is the first secret the template does not write. `DATABASE-URL` and
@@ -2676,12 +2677,40 @@ serving, not before.
 
 **What reads it.** The Analyze tab (B5, built 2026-09-21), through
 `readAnalyzeEnv` in `lib/modules/bas/analyze/env.ts`, which imports the name
-from `lib/env.ts`. The tab also needs `BAS_ASK_DATABASE_URL`, the URL of the
-`bas_analyze` role on the Azure server, and **that is not wired into the
-template yet**: with only the key set, `/bas/analyze` still says *not
-configured* and names `BAS_ASK_DATABASE_URL`. Creating the role is `npm run
-bas:analyze:role` against the Azure database - *Analyze says it is not
-configured*. The Phase 12 Part D engine calls are not built.
+from `lib/env.ts`. The tab also needs `BAS_ASK_DATABASE_URL`, the third
+hand-set secret (below); with only the key set, `/bas/analyze` still says
+*not configured* and names `BAS_ASK_DATABASE_URL`. The Phase 12 Part D
+engine calls are not built.
+
+### The Analyze database URL, the same way
+
+`BAS-ASK-DATABASE-URL` is the third secret set by hand (2026-10-13): the
+connection URL of the `bas_analyze` role on the production server, referenced
+as `BAS_ASK_DATABASE_URL` on the container app when
+`basAskDatabaseUrlInKeyVault` is true, under the same identity and the same
+**Key Vault Secrets User** grant, so no new role assignment is needed. It is
+**not** `DATABASE_URL`: that connection can write, this one can only SELECT
+an allowlist of `bas_*` objects.
+
+**The role comes first.** `scripts/setup-bas-analyze-role.sql`, run as the
+server administrator with `-v pw=<a password you choose>`; the file's header
+has the exact command, the `read -s` pattern that keeps the password out of
+the shell history, and the Cloud Shell route with its temporary firewall
+rule. It is the psql form of `npm run bas:analyze:role` - the same allowlist,
+copied from `lib/modules/bas/analyze/role.ts`, and
+`tests/bas-analyze-role-sql.test.ts` fails the build if the copy drifts. Then
+the URL is built by hand, `postgresql://bas_analyze:<password>@<server>:5432/phb_platform?sslmode=require`,
+set as the secret, and the flag turned on with the **running** image passed.
+
+**Symptom: the deployed tab says not configured and names
+`BAS_ASK_DATABASE_URL`.** The flag is still false, or the deployment that
+turned it on has not rolled out. **Symptom: every question is
+`permission denied`.** The role on the server is behind the allowlist -
+*Analyze answers "permission denied" for every question*. **Symptom: the
+tab says the model service could not be reached, or the database could not
+be reached.** The URL in the vault has a wrong host, password or
+`sslmode`; set the secret again and create a new revision. **Rotating**: run
+the script again with a new password, set the secret again, new revision.
 
 ### The BAS credential key, the same way
 
@@ -3097,8 +3126,9 @@ configured on this server*. Every other BAS screen works. Locally both work.
 from Key Vault by reference, each behind a boolean parameter - but the two
 secret VALUES are set in the vault by hand and the parameters default to
 false, so a deployment that has not had those steps done still shows exactly
-this. `BAS_ASK_DATABASE_URL` is **not** wired at all, so the Analyze half of
-the symptom outlives the other even once both secrets are in. Both features
+this. `BAS_ASK_DATABASE_URL` is wired the same way since 2026-10-13
+(`basAskDatabaseUrlInKeyVault`), so the Analyze half of the symptom needs
+that third secret and flag as well. Both features
 read their variables lazily and say which one is missing, which is why the
 rest of the module is unaffected. The steps are *Secrets set by hand in Key
 Vault* and `infra/README.md`. Before 2026-10-01 none of the three was in the
@@ -3114,10 +3144,12 @@ re-entered through Settings once a different key is set (each save re-encrypts
 under the current key and stamps its version; *Station credentials, and the
 one secret that lives in two places* has the rotation steps). A key that
 matches nowhere leaves the rows undecryptable and collection stops. For
-Analyze: the key from the Anthropic Console, and `npm run bas:analyze:role`
-against the Azure database with `DATABASE_URL` set to the production admin
-URL, which prints the `BAS_ASK_DATABASE_URL` once - *Analyze says it is not
-configured*.
+Analyze: the key from the Anthropic Console, and the `bas_analyze` role on
+the Azure database - `scripts/setup-bas-analyze-role.sql` from any psql
+(the Cloud Shell included), or `npm run bas:analyze:role` with
+`DATABASE_URL` set to the production admin URL - then the URL as
+`BAS-ASK-DATABASE-URL` in the vault: *The Analyze database URL, the same
+way*.
 
 ---
 
@@ -9097,7 +9129,9 @@ npm run bas:analyze:role
 ```
 
 which creates or rotates the `bas_analyze` role on `DATABASE_URL`, proves the
-refusals, and prints the URL once. Paste it as `BAS_ASK_DATABASE_URL`. The
+refusals, and prints the URL once - or, where only psql is to hand (the Azure
+portal's Cloud Shell), `scripts/setup-bas-analyze-role.sql`, the same role in
+SQL with the command in its header. Paste it as `BAS_ASK_DATABASE_URL`. The
 password is shown once and written nowhere by the script; re-running rotates
 it. Neither variable is in `infra/main.bicep` yet — production wiring is a
 separate step.

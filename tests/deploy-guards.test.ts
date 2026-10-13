@@ -317,8 +317,8 @@ describe("the BAS credential key reaches the container only by Key Vault referen
     expect(bicep).toMatch(
       /var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'/,
     );
-    // Both hand-set secrets are read under that same identity.
-    for (const secret of ["anthropic-api-key", "bas-credential-key"]) {
+    // All three hand-set secrets are read under that same identity.
+    for (const secret of ["anthropic-api-key", "bas-credential-key", "bas-ask-database-url"]) {
       expect(bicep).toMatch(
         new RegExp(`name:\\s*'${secret}'[\\s\\S]{0,160}identity:\\s*identity\\.id`),
       );
@@ -332,6 +332,7 @@ describe("the BAS credential key reaches the container only by Key Vault referen
     expect(env.ANTHROPIC_API_KEY_VAR).toBe("ANTHROPIC_API_KEY");
     expect(env.BAS_CREDENTIAL_KEY_VAR).toBe("BAS_CREDENTIAL_KEY");
     expect(env.BAS_CREDENTIAL_KEY_VERSION_VAR).toBe("BAS_CREDENTIAL_KEY_VERSION");
+    expect(env.BAS_ASK_DATABASE_URL_VAR).toBe("BAS_ASK_DATABASE_URL");
     // The readers import the name; a literal in either would be a second
     // place a rename has to reach. Comments may mention it; code may not.
     const strip = (source: string) =>
@@ -341,9 +342,10 @@ describe("the BAS credential key reaches the container only by Key Vault referen
     expect(credentials).not.toMatch(/process\.env\.BAS_CREDENTIAL_KEY/);
     const analyze = strip(await readSource("lib/modules/bas/analyze/env.ts"));
     expect(analyze).not.toMatch(/["'`]ANTHROPIC_API_KEY["'`]/);
+    expect(analyze).not.toMatch(/["'`]BAS_ASK_DATABASE_URL["'`]/);
     // And the bicep spells the same names, so the three cannot drift.
     const bicep = await readBicep();
-    for (const name of [env.ANTHROPIC_API_KEY_VAR, env.BAS_CREDENTIAL_KEY_VAR, env.BAS_CREDENTIAL_KEY_VERSION_VAR]) {
+    for (const name of [env.ANTHROPIC_API_KEY_VAR, env.BAS_CREDENTIAL_KEY_VAR, env.BAS_CREDENTIAL_KEY_VERSION_VAR, env.BAS_ASK_DATABASE_URL_VAR]) {
       expect(bicep).toContain(`name: '${name}'`);
     }
   });
@@ -375,7 +377,49 @@ describe("the BAS credential key reaches the container only by Key Vault referen
     ) as { parameters: Record<string, { value: unknown }> };
     expect(example.parameters.anthropicApiKeyInKeyVault?.value).toBe(false);
     expect(example.parameters.basCredentialKeyInKeyVault?.value).toBe(false);
+    expect(example.parameters.basAskDatabaseUrlInKeyVault?.value).toBe(false);
     expect(example.parameters.basCredentialKeyVersion?.value).toBe("1");
+  });
+});
+
+describe("the Analyze database URL reaches the container only by Key Vault reference (2026-10-13)", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+  it("is an environment variable backed by a secretRef, never a plain value", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(
+      /name:\s*'BAS_ASK_DATABASE_URL'[\s\S]{0,80}secretRef:\s*'bas-ask-database-url'/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'BAS_ASK_DATABASE_URL'[\s\S]{0,80}value:/);
+    expect(bicep).toMatch(/var basAskDatabaseUrlSecretName = 'BAS-ASK-DATABASE-URL'/);
+    expect(bicep).toMatch(
+      /name:\s*'bas-ask-database-url'\s*keyVaultUrl:\s*'\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{basAskDatabaseUrlSecretName\}'\s*identity:\s*identity\.id/,
+    );
+  });
+
+  it("is behind a boolean that defaults to false, and is never a template parameter or written by the template", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(/param basAskDatabaseUrlInKeyVault bool = false/);
+    // The URL carries the role's password. Nothing carries it as a parameter,
+    // secure or otherwise, and the template never writes the secret.
+    expect(bicep).not.toMatch(/param \w*[aA]skDatabaseUrl\w* string/);
+    expect(bicep).not.toMatch(/@secure\(\)\s*param \w*[aA]skDatabaseUrl/);
+    expect(bicep).not.toMatch(
+      /vaults\/secrets@[\d-]+'\s*=\s*\{[\s\S]{0,120}name:\s*'BAS-ASK-DATABASE-URL'/,
+    );
+    // Both the secret entry and the env entry are inside the same conditional,
+    // so the flag off leaves no dangling reference.
+    expect(bicep).toMatch(/\.\.\.\(basAskDatabaseUrlInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'bas-ask-database-url'/);
+    expect(bicep).toMatch(/\.\.\.\(basAskDatabaseUrlInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'BAS_ASK_DATABASE_URL'/);
+  });
+
+  it("is not DATABASE_URL: the platform's own connection stays its own secret", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(/name:\s*'DATABASE_URL'[\s\S]{0,80}secretRef:\s*'database-url'/);
+    expect(bicep).not.toMatch(/name:\s*'BAS_ASK_DATABASE_URL'[\s\S]{0,80}secretRef:\s*'database-url'/);
   });
 });
 

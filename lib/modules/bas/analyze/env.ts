@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { ANTHROPIC_API_KEY_VAR } from "@/lib/env";
+import { ANTHROPIC_API_KEY_VAR, BAS_ASK_DATABASE_URL_VAR } from "@/lib/env";
 
 /**
  * The two variables the Analyze tab needs, read LAZILY - exactly like
  * `readGraphEnv` in lib/env.ts and `BAS_CREDENTIAL_KEY` in credentials.ts.
  *
- * The API key's NAME is decided in lib/env.ts and imported here, so this file
- * and the Key Vault wiring in infra/main.bicep cannot drift apart - the
+ * Both NAMES are decided in lib/env.ts and imported here, so this file and
+ * the Key Vault wiring in infra/main.bicep cannot drift apart - the
  * deploy-guard test reads all three.
  *
  * Neither is part of the boot schema. The platform starts and every other BAS
@@ -21,7 +21,7 @@ import { ANTHROPIC_API_KEY_VAR } from "@/lib/env";
  */
 
 export { ANTHROPIC_API_KEY_VAR };
-export const ASK_DATABASE_URL_VAR = "BAS_ASK_DATABASE_URL";
+export const ASK_DATABASE_URL_VAR = BAS_ASK_DATABASE_URL_VAR;
 
 /** `.env.example` ships `VAR=""`; blank is absent, not malformed. */
 const blankAsAbsent = <T extends z.ZodType>(inner: T) =>

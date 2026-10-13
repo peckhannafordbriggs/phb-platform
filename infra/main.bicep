@@ -177,6 +177,9 @@ param basCredentialKeyInKeyVault bool = false
 @description('BAS_CREDENTIAL_KEY_VERSION: the integer stamped on a credential row when a password is saved, so a key rotation does not need a flag day. Not a secret - a plain value. 1 is the version the key on the office PC carries and the default in the code; change it only when introducing a new key, together with the secret above.')
 param basCredentialKeyVersion string = '1'
 
+@description('Set to true once the Analyze database URL exists in Key Vault as BAS-ASK-DATABASE-URL - the connection URL of the bas_analyze role on THIS server (scripts/setup-bas-analyze-role.sql creates the role and the operator chooses its password at run time), placed in the vault by hand, never as a template parameter. Read by the container app as BAS_ASK_DATABASE_URL; absent, the Analyze tab says it is not configured and nothing else changes. Same conditional as the two secrets above, for the same reason.')
+param basAskDatabaseUrlInKeyVault bool = false
+
 // ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
@@ -438,6 +441,12 @@ var anthropicApiKeySecretName = 'ANTHROPIC-API-KEY'
 // by hand, never on a deploy's command line. The template knows the name only.
 var basCredentialKeySecretName = 'BAS-CREDENTIAL-KEY'
 
+// The Analyze database URL is the third of the same shape: the bas_analyze
+// role's connection URL on this server, built by the operator after running
+// scripts/setup-bas-analyze-role.sql, pasted into the vault once, never on a
+// deploy's command line. The template knows the name only.
+var basAskDatabaseUrlSecretName = 'BAS-ASK-DATABASE-URL'
+
 // ---------------------------------------------------------------------------
 // Container Apps
 // ---------------------------------------------------------------------------
@@ -517,6 +526,15 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               {
                 name: 'bas-credential-key'
                 keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${basCredentialKeySecretName}'
+                identity: identity.id
+              }
+            ]
+          : [])
+        ...(basAskDatabaseUrlInKeyVault
+          ? [
+              {
+                name: 'bas-ask-database-url'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${basAskDatabaseUrlSecretName}'
                 identity: identity.id
               }
             ]
@@ -620,6 +638,19 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                   {
                     name: 'BAS_CREDENTIAL_KEY_VERSION'
                     value: basCredentialKeyVersion
+                  }
+                ]
+              : [])
+            // Read lazily by readAnalyzeEnv in lib/modules/bas/analyze/env.ts,
+            // beside the Anthropic key: the Analyze tab needs both and says
+            // which is missing. By reference, like the others - never a plain
+            // value, and never DATABASE_URL: this is the read-only bas_analyze
+            // role, not the platform's own connection.
+            ...(basAskDatabaseUrlInKeyVault
+              ? [
+                  {
+                    name: 'BAS_ASK_DATABASE_URL'
+                    secretRef: 'bas-ask-database-url'
                   }
                 ]
               : [])

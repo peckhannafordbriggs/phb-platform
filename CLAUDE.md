@@ -967,9 +967,13 @@ on the vault covers both, so no new role assignment is needed. **The BAS key is
 copied, not generated**: every stored credential was encrypted on the office
 PC under the collector's key, and a vault value that differs by one byte turns
 them all into unreadable ciphertext. No secret value is anywhere in the
-repository. **Still not wired: `BAS_ASK_DATABASE_URL`**, so the deployed Analyze
-tab stays *not configured* until the `bas_analyze` role exists on the Azure
-server and that URL is delivered the same way. `az bicep build` and `lint`
+repository. **`BAS_ASK_DATABASE_URL` is wired the same way since 2026-10-13**
+(`BAS-ASK-DATABASE-URL`, `basAskDatabaseUrlInKeyVault`), and
+`scripts/setup-bas-analyze-role.sql` is the psql form of the `bas_analyze`
+role for the Azure server - the same allowlist as `role.ts`, held to it by
+`tests/bas-analyze-role-sql.test.ts`, runnable from the portal's Cloud Shell.
+The deployed Analyze tab stays *not configured* until the role exists there,
+the URL is in the vault and the flag is on. `az bicep build` and `lint`
 pass locally; removing either `env:` entry fails a named guard test.
 `infra/README.md` has the two command sequences and the click to confirm each;
 `runbook.md` → *Secrets set by hand in Key Vault*.

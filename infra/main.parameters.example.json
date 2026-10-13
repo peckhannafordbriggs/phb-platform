@@ -93,6 +93,9 @@
     "basCredentialKeyInKeyVault": {
       "value": false
     },
+    "basAskDatabaseUrlInKeyVault": {
+      "value": false
+    },
     "basCredentialKeyVersion": {
       "value": "1"
     },

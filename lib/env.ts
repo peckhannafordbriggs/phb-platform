@@ -203,10 +203,10 @@ export function readMailboxAddress(): string | null {
 const anthropicApiKeySchema = blankAsAbsent(z.string().trim().min(1).optional());
 
 /**
- * THE NAMES of the two secrets that reach the container app from Key Vault by
- * reference and nowhere else, decided here and imported everywhere else that
- * reads them (lib/modules/bas/analyze/env.ts, lib/modules/bas/credentials.ts).
- * infra/main.bicep spells the same two names in its `env:` list, and
+ * THE NAMES of the three secrets that reach the container app from Key Vault
+ * by reference and nowhere else, decided here and imported everywhere else
+ * that reads them (lib/modules/bas/analyze/env.ts, lib/modules/bas/credentials.ts).
+ * infra/main.bicep spells the same names in its `env:` list, and
  * tests/deploy-guards.test.ts holds the three to each other: a rename in one
  * place that misses another fails the build rather than the deployment.
  *
@@ -219,6 +219,8 @@ const anthropicApiKeySchema = blankAsAbsent(z.string().trim().min(1).optional())
 export const ANTHROPIC_API_KEY_VAR = "ANTHROPIC_API_KEY";
 export const BAS_CREDENTIAL_KEY_VAR = "BAS_CREDENTIAL_KEY";
 export const BAS_CREDENTIAL_KEY_VERSION_VAR = "BAS_CREDENTIAL_KEY_VERSION";
+/** The bas_analyze role's URL (2026-10-13): the third secret by reference, same shape. */
+export const BAS_ASK_DATABASE_URL_VAR = "BAS_ASK_DATABASE_URL";
 
 export function readAnthropicApiKey(): string | null {
   const result = anthropicApiKeySchema.safeParse(process.env[ANTHROPIC_API_KEY_VAR]);
