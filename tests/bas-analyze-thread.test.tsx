@@ -37,6 +37,7 @@ import { createRoot, type Root } from "react-dom/client";
  */
 
 import { Analyze } from "@/app/(modules)/bas/analyze";
+import { NEAR_BOTTOM_PX, isNearBottom, scrollToBottom } from "@/app/(modules)/bas/analyze-scroll";
 import {
   THREAD_VERSION,
   browserStorage,
@@ -455,6 +456,85 @@ describe("the thread on screen", () => {
     expect(turns[0]!.getAttribute("role") ?? turns[0]!.querySelector('[role="alert"]')).not.toBeNull();
     expect(turns[0]!.textContent).toContain("too fast?");
     expect(turns[1]!.textContent).toContain("After.");
+  });
+});
+
+describe("the thread scrolls inside the panel (2026-10-13)", () => {
+  it("near the end is within the slack of the end, and a region with no overflow is at its end", () => {
+    const region = { clientHeight: 500, scrollHeight: 2000 };
+    expect(isNearBottom({ ...region, scrollTop: 1500 })).toBe(true);
+    expect(isNearBottom({ ...region, scrollTop: 1500 - NEAR_BOTTOM_PX })).toBe(true);
+    expect(isNearBottom({ ...region, scrollTop: 1500 - NEAR_BOTTOM_PX - 1 })).toBe(false);
+    expect(isNearBottom({ ...region, scrollTop: 0 })).toBe(false);
+    expect(isNearBottom({ scrollTop: 0, clientHeight: 500, scrollHeight: 300 })).toBe(true);
+    expect(isNearBottom({ scrollTop: 0, clientHeight: 0, scrollHeight: 0 })).toBe(true);
+    expect(isNearBottom({ ...region, scrollTop: 1000 }, 500)).toBe(true);
+  });
+
+  it("scrolls to the end with a jump from the top and a slide from anywhere else, and without scrollTo at all", () => {
+    const calls: ScrollToOptions[] = [];
+    const el = { scrollTop: 0, scrollHeight: 2000, scrollTo: (o: ScrollToOptions) => void calls.push(o) };
+    scrollToBottom(el as unknown as HTMLElement);
+    el.scrollTop = 900;
+    scrollToBottom(el as unknown as HTMLElement);
+    expect(calls).toEqual([
+      { top: 2000, behavior: "auto" },
+      { top: 2000, behavior: "smooth" },
+    ]);
+    const bare = { scrollTop: 10, scrollHeight: 700 };
+    scrollToBottom(bare as unknown as HTMLElement);
+    expect(bare.scrollTop).toBe(700);
+  });
+
+  /**
+   * jsdom lays nothing out, so the region's metrics are set by hand and the
+   * scroll event is dispatched by hand; what is asserted is the decision -
+   * a new turn follows a reader who was at the end and leaves one who had
+   * scrolled up where they were.
+   */
+  async function regionWith(host: HTMLElement, scrollTop: number) {
+    const el = host.querySelector('[data-testid="bas-analyze-scroll"]') as HTMLDivElement;
+    Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => 2000 });
+    Object.defineProperty(el, "clientHeight", { configurable: true, get: () => 500 });
+    Object.defineProperty(el, "scrollTop", { configurable: true, get: () => scrollTop, set: () => {} });
+    const scrollTo = vi.fn();
+    (el as unknown as { scrollTo: unknown }).scrollTo = scrollTo;
+    await act(async () => {
+      el.dispatchEvent(new Event("scroll"));
+    });
+    return scrollTo;
+  }
+
+  it("a new question and its answer scroll the thread to its end when the reader was at the end", async () => {
+    answers = [jsonResponse({ data: answered("First.") }), jsonResponse({ data: answered("Second.") })];
+    const host = await render();
+    await ask(host, "first?");
+    const scrollTo = await regionWith(host, 1500);
+    await ask(host, "second?");
+    // Once for the pending question, once for the answer that replaced it.
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 2000, behavior: "smooth" });
+  });
+
+  it("leaves a reader who scrolled up where they are when a new turn arrives", async () => {
+    answers = [jsonResponse({ data: answered("First.") }), jsonResponse({ data: answered("Second.") })];
+    const host = await render();
+    await ask(host, "first?");
+    const scrollTo = await regionWith(host, 200);
+    await ask(host, "second?");
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(askedTexts(host)).toEqual(["first?", "second?"]);
+  });
+
+  it("the ask bar is a sibling below the scrolling region, never inside it", async () => {
+    answers = [jsonResponse({ data: answered("A.") })];
+    const host = await render();
+    await ask(host, "question?");
+    const region = host.querySelector('[data-testid="bas-analyze-scroll"]')!;
+    const form = host.querySelector("form")!;
+    expect(region.contains(form)).toBe(false);
+    expect(region.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(region.querySelector('[data-testid="bas-analyze-thread"]')).not.toBeNull();
   });
 });
 

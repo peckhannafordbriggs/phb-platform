@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   browserStorage,
   clearThread,
@@ -39,6 +39,7 @@ import {
 } from "./analyze-client";
 import { databaseQueried } from "@/lib/modules/bas/analyze/types";
 import { ApiError, formatTimestamp } from "./health-client";
+import { isNearBottom, metricsOf, scrollToBottom } from "./analyze-scroll";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /**
@@ -85,6 +86,15 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * day's storage and what a request carries are exactly as above. See
  * `Result` for how a wrong answer still looks different from a right one.
  *
+ * THE THREAD SCROLLS INSIDE THE PANEL (2026-10-13). The panel takes the
+ * viewport below the module header and tabs and no more; the thread is the
+ * one scrolling region inside it, and the ask bar sits under that region,
+ * always visible and never over it. A new question or answer scrolls the
+ * thread to its end only when the person was already near the end - see
+ * analyze-scroll.ts for the rule and the slack. A rows table keeps its own
+ * inner scroll box, which is the one place a scrollbar sits inside the
+ * thread's. The page itself has nothing left to scroll on this tab.
+ *
  * IN THE BRAND COLOURS (later the same day; docs/design/analyze-chat-mockup.png
  * is the chosen mock). Everything under the tab bar sits in ONE purple panel;
  * a question is a gold bubble; the answer and the evidence are cards tinted
@@ -120,7 +130,10 @@ export function Analyze({
   /** The day the thread on screen belongs to. Null until read from storage. */
   const [day, setDay] = useState<string | null>(null);
   const inFlight = useRef<AbortController | null>(null);
-  const endRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** Whether the person is at (or near) the end of the thread; read when a turn arrives. */
+  const stickToEnd = useRef(true);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -157,12 +170,35 @@ export function Analyze({
     else saveThread(browserStorage(), employeeId, day, turns);
   }, [turns, day, employeeId]);
 
-  // The newest turn - or the pending question - is brought into view.
+  /**
+   * The panel's height is the viewport below its own top edge, less the
+   * shell's bottom padding, so the page does not scroll on this tab and the
+   * thread scrolls inside the panel instead. The top edge depends on how
+   * the module blurb wraps, so it is measured rather than assumed, once on
+   * mount and again on every resize, and handed to the stylesheet as a
+   * custom property. Before the first measurement the property is unset
+   * and the panel is briefly too tall, which the layout effect fixes before
+   * paint.
+   */
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    const measure = () => {
+      const top = panel.getBoundingClientRect().top + window.scrollY;
+      panel.style.setProperty("--analyze-top", `${Math.max(0, Math.round(top))}px`);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  // The newest turn - or the pending question - is brought into view, but
+  // only for a person who was already at the end of the thread. Someone
+  // reading an older answer keeps their place.
   useEffect(() => {
-    const el = endRef.current;
-    if (el !== null && typeof el.scrollIntoView === "function") {
-      el.scrollIntoView({ block: "end", behavior: "smooth" });
-    }
+    const el = scrollRef.current;
+    if (el === null || !stickToEnd.current) return;
+    scrollToBottom(el);
   }, [turns.length, pending]);
 
   const busy = pending !== null;
@@ -233,18 +269,34 @@ export function Analyze({
       and the ask bar, content-width, with the bar kept at its foot. Nothing
       outside it - header, intro, tabs, ground - changes.
     */
-    <div className="analyze-panel mx-auto flex w-full max-w-[75rem] min-h-[70vh] flex-col gap-6 rounded-[36px] bg-[var(--phb-purple)] p-4 shadow-[var(--shadow-soft)] sm:w-[94%] sm:p-7">
+    <div
+      ref={panelRef}
+      className="analyze-panel mx-auto flex h-[calc(100dvh-var(--analyze-top,0px)-2rem)] min-h-[24rem] w-full max-w-[75rem] flex-col gap-4 overflow-hidden rounded-[36px] bg-[var(--phb-purple)] p-4 shadow-[var(--shadow-soft)] sm:w-[94%] sm:p-7"
+    >
       {error !== null && (
-        <section className="rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4" role="alert">
+        <section className="shrink-0 rounded-[24px] bg-[var(--phb-purple-tint)] px-5 py-4" role="alert">
           <p className="text-sm" style={{ color: TONE_INK.bad }}>
             {error}
           </p>
         </section>
       )}
 
-      {/* ------------------------------------------------------ the thread */}
+      {/* ------------------------------------------ the scrolling region
+          The thread, or the empty state, and nothing else: the ask bar is
+          the next flex child, below it, so the region ends above the bar
+          and nothing is ever hidden under it. The negative right margin
+          and matching padding put the scrollbar in the panel's own padding
+          rather than against the cards. */}
+      <div
+        ref={scrollRef}
+        data-testid="bas-analyze-scroll"
+        onScroll={(event) => {
+          stickToEnd.current = isNearBottom(metricsOf(event.currentTarget));
+        }}
+        className="analyze-scroll -mr-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-3"
+      >
       {!empty && (
-        <ol className="space-y-8" aria-label="Conversation" data-testid="bas-analyze-thread">
+        <ol className="space-y-8 pb-2" aria-label="Conversation" data-testid="bas-analyze-thread">
           {turns.map((turn, index) => (
             <li key={turn.id} data-testid="bas-analyze-turn">
               {turn.outcome.kind === "result" ? (
@@ -271,14 +323,13 @@ export function Analyze({
           )}
         </ol>
       )}
-      <div ref={endRef} />
 
       {/* The examples sit where the thread will be, centred in the empty
           panel above the bar, so the bar itself is only ever the field and
           its button. Only the empty panel is laid out this way: once a
           conversation starts the thread flows from the top as before. */}
       {!notConfigured && empty && !error && (
-        <div className="flex flex-1 flex-col items-center justify-center text-center">
+        <div className="flex h-full min-h-full flex-col items-center justify-center text-center">
           <p className="text-xs text-[var(--chrome-muted)]">Things people ask:</p>
           <ul className="mt-1.5 flex flex-wrap justify-center gap-2">
             {EXAMPLES.map((example) => (
@@ -298,9 +349,10 @@ export function Analyze({
           </ul>
         </div>
       )}
+      </div>
 
       {/* ----------------------------------------------------- the ask bar */}
-      <section className="sticky bottom-4 z-10 mt-auto">
+      <section className="shrink-0">
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -313,10 +365,10 @@ export function Analyze({
           <label htmlFor="bas-analyze-question" className="sr-only">
             Ask a question
           </label>
-          {/* One opaque capsule holds the field, the hint and New
-              conversation, so nothing in the thread scrolls up behind any
-              of them while the bar is stuck to the bottom. The Ask diamond
-              sits beside it, on the panel. */}
+          {/* One capsule holds the field, the hint and New conversation;
+              the Ask diamond sits beside it, on the panel. The bar is a
+              flex child under the scrolling region, so the thread can never
+              run under it. */}
           <div className="min-w-0 flex-1 rounded-[28px] bg-white px-5 pb-3 pt-2.5 shadow-[var(--shadow-soft)] transition-shadow focus-within:ring-2 focus-within:ring-[var(--module-accent,var(--phb-cyan))]">
             <div className="flex items-end gap-2">
               <textarea

@@ -240,6 +240,25 @@ body {
   --phb-teal-ink: var(--phb-teal-ink-deep);
 }
 
+/* The thread scrolls inside the panel (2026-10-13). Its bar is thin and a
+   light tint on the purple, not the platform default drawn across it.
+   Firefox and recent Chrome read the two properties; older WebKit reads the
+   pseudo-elements, which say the same thing. */
+.analyze-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--neutral-0) 40%, transparent) transparent;
+}
+.analyze-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.analyze-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.analyze-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--neutral-0) 40%, transparent);
+  border-radius: 999px;
+}
+
 /* ---------------------------------------------------------------------------
    The eyebrow: condensed uppercase with wide tracking.
    Echoes the logo's lettering without imitating it. Used for section labels in
