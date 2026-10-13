@@ -174,6 +174,7 @@ interface PointRow {
   name: string;
   site: string;
   station: string;
+  timezone: string;
   is_active: boolean;
 }
 
@@ -186,6 +187,7 @@ async function lookupPoints(
     `SELECT p.point_id::text AS point_id,
             ${POINT_NAME_SQL} AS name,
             s.name AS site,
+            s.timezone AS timezone,
             COALESCE(st.display_name, st.niagara_station_name) AS station,
             p.is_active
        FROM bas_points p
@@ -201,6 +203,7 @@ async function lookupPoints(
     name: row.name,
     site: row.site,
     station: row.station,
+    timezone: row.timezone,
     collected: row.is_active,
   }));
 }
