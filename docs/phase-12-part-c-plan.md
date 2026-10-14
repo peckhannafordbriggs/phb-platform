@@ -150,7 +150,7 @@ drive a developer can already reach.
 |---|---|
 | URL construction for the real path names | **done** — `tests/test_graph_url_shapes.py`, 7 cases, no network |
 | Conformance harness | **done** — `tests/store_conformance.py`, 15/15 against `LocalFileStore` |
-| Run it against a real drive | **blocked on a token**, not on a permission |
+| Run it against a real drive | **half run, 2026-10-14** — the write side, as a signed-in person; the read side needs a token from a different client. See *Step 5 ran, half of it* below |
 
 What the conformance harness targets, matching the four `GRAPH-TODO`s:
 `append_bytes` (read-modify-write, Graph has no append), `create_exclusive` (the
@@ -202,6 +202,147 @@ Three things, none of which is a lock:
 
 ---
 
+## Step 5 ran, half of it (2026-10-14)
+
+The token the Azure CLI already holds for a signed-in developer reaches Graph,
+and the AI Sandbox library is a drive a developer can already write to, so the
+harness was pointed at a scratch folder there (`/M Sheth Sandbox/
+conformance-scratch`, deleted afterwards). No application identity, nothing
+granted by anyone, nothing near `CO Managment Process`.
+
+```
+  ok   makedirs                                        ok   listdir  (9 entries)
+  FAIL content transfer is pre-authenticated           ok   rglob    5 folders, 1.22s
+  FAIL write_text / read_text round-trip               FAIL large write (upload session)
+  FAIL write_bytes / read_bytes round-trip             ok   remove
+  ok   size / mtime / is_file / is_dir                 ok   sentinel filenames still refused
+  FAIL append_bytes                                    ok   Bid Tracker unreachable
+  ok   create_exclusive on a free path
+  ok   create_exclusive on a taken path  (FileExistsError - a real 409)
+  FAIL copy settles before the next read
+  FAIL move
+                                                       9/16 operations behaved
+```
+
+**Every failure is one cause, and it is not the store.** Graph answers
+`GET …/content` with a `302` to a `sharepoint.com` download URL, and that URL
+has to arrive pre-authenticated (`tempauth=…`) because the client cannot carry
+the Graph bearer across the hop. For a token whose *client* SharePoint refuses
+— and the Azure CLI's first-party app is one; the same token gets
+`invalid_request` from the SharePoint REST API directly — Graph omits the
+pre-auth, omits `@microsoft.graph.downloadUrl` from the item altogether, and the
+upload session's URL is refused the same way (`401 FORBIDDEN` on the PUT). Every
+metadata call and every small `PUT` succeeded, and the `copy` and `move`
+destinations were present and the right size when listed; only reading them
+back failed. The harness now checks this first and says it once
+(`content transfer is pre-authenticated for this token`), instead of reporting
+six store defects.
+
+What the half-run did settle, on a real SharePoint library:
+
+- `conflictBehavior=fail` on an existing item really is a 409, and the store
+  raises `FileExistsError` for it. The harness used to accept *any* exception
+  there — a run whose every request was a 400 passed the check — and now
+  accepts only that one.
+- Path addressing with the real folder names works end to end: the spaces, the
+  misspelling, five levels deep. `rglob` over five nested folders took 1.22 s.
+- `size` reports the written byte count (2048 of 2048) for a small file.
+
+What it did not: byte round-trips, append, the upload session path, and whether
+a copy is *settled* rather than merely present. Those are the read side, and
+they need a token from a client SharePoint accepts. Two ways to get one, either
+of which finishes step 5 in about a minute:
+
+1. A developer pastes a token from the Graph Explorer's *Access token* tab
+   (sign in, consent `Files.ReadWrite.All`), `CO_GRAPH_TOKEN=…`, and re-runs
+   the same command. Dies in an hour; fine for a run.
+2. Vitis ticks *Allow public client flows* on `phb-co-engine` — the app already
+   carries admin consent for delegated `Files.ReadWrite.All` — and the engine
+   can obtain its own delegated token by device code, repeatably. **Not yet
+   built** in `co_graph_auth.py`, and not worth building until (2) is granted.
+
+## Step 7: the grant is consented, and the site half is not verifiable from here (2026-10-14)
+
+Read live from Entra as a signed-in developer, not from anyone's say-so:
+
+| | observed |
+|---|---|
+| App registration `phb-co-engine` | exists, created 2026-10-13, client id `85ca496d-3af9-4c3a-aa11-a6b7fd51105d`, single tenant |
+| `Sites.Selected` (application) | requested **and consented** — an `appRoleAssignment` on the service principal dated 2026-10-13 13:49 UTC |
+| `Files.ReadWrite.All` + `User.Read` (delegated) | consented for all users |
+| Credentials | **none** — no secret, no certificate, no federated identity credential |
+| Public client flows | off, no redirect URIs — so no device-code sign-in either |
+| Owners | none |
+| The site grant (the second step) | **cannot be read by this account**: `GET /sites/{id}/permissions` is `accessDenied`, and the SharePoint REST API refuses the CLI's token outright |
+
+One indirect observation: the site's hidden *User Information List* holds 33
+principals and **none** is `i:0i.t|ms.sp.ext|85ca496d-…`, the form a
+`Sites.Selected` grant registers on the site. That is consistent with the grant
+not having been made; it is not proof, and it is not written up as proof.
+
+**Nothing can authenticate as the engine app today.** With no credential of any
+kind, the definitive check — a request as the app — is impossible, and a
+developer with no directory role and no ownership cannot add one. So "verify the
+grant landed" reduces to one of three things somebody else does, cheapest first:
+
+1. **Vitis reads it back**, one command, and sends the output:
+   `Get-PnPAzureADAppSitePermission -Site https://peckhannafordbriggs.sharepoint.com/sites/AISandbox`
+   (or `GET /sites/{siteId}/permissions` as an account with `Sites.FullControl.All`).
+   If the app is absent, the grant command from Request 4 is the fix, with
+   `-Permissions Write`.
+2. **A federated identity credential on `phb-co-engine` for the engine
+   repository's GitHub Actions**, the same mechanism the platform's deploy job
+   uses (`runbook.md` → Request 3a, including the trap that the subject must be
+   read off a run rather than built from the wizard). Then a workflow runs
+   `tests/probe_site_grant.py` as the app and the 403-vs-200 is observed rather
+   than reported. No secret, nothing expires, and it is the shape production
+   will use anyway.
+3. A client secret on the app for local development only. Permitted by
+   prohibition 7's wording, and still the wrong answer here: the request to
+   Vitis said *no client secret, please*, and nobody in the company owns the
+   registration to rotate it.
+
+`phb-co-engine/tests/probe_site_grant.py` is the instrument for whichever
+arrives. It decodes the token's claims to say *which* identity was probed, and
+a signed-in person's 200 is reported as proving nothing about the application —
+verified live: as a developer it reads *reachable as a person, which proves
+nothing about the application*, exit 0, and the write probe created and removed
+a folder under the scratch path. The 403 branches are tested offline
+(`test_site_grant_probe.py`) and have not been seen live, because no app token
+exists to see them with.
+
+**Identifiers the next run needs**, read from Graph on 2026-10-14:
+
+```
+site id   peckhannafordbriggs.sharepoint.com,7abfad4b-146d-4d07-928b-225ce24a7feb,96084a5d-a324-4fbe-bb1e-5d27a69d3d48
+drive id  b!S62_em0UB02SiyJc4kp_611KCJYko75Pux5dJ6adPUh2meyF7kbNS7bA44dg1_Yg   (library "Documents")
+app id    85ca496d-3af9-4c3a-aa11-a6b7fd51105d                                   (phb-co-engine)
+```
+
+The engine takes these as `--drive-id` / `CO_GRAPH_DRIVE_ID` and
+`--live-path` (drive-relative, e.g. `/<copy folder>/Change Order Intake`);
+there is no config file. The managed-identity path adds
+`CO_GRAPH_MANAGED_IDENTITY_CLIENT_ID`, which is the *identity's* client id, not
+the app's, and does not exist until the container is deployed.
+
+### Where the copy should live
+
+Recommendation: **a second site**, not a sibling folder in AI Sandbox.
+
+`Sites.Selected` is granted per site. A copy in a sibling folder of the same
+library means the app holds Write on the site that contains the live
+`CO Managment Process` — the container is then kept off the live tree by
+configuration (`--live-path`) rather than by incapacity, which is the weaker of
+the two and the opposite of how every other guard in this project is built. A
+copy site gives the app Write on a site that holds *no* live folder, and the
+flow-trigger check (bucket 3) needs a copy *site* anyway, because the flow that
+watches the copy must not be one of the eleven. The cost is one site, created
+by whoever can create team sites here, and the Request 4 grant re-done on it —
+which, on the evidence above, has not been done on AI Sandbox either.
+
+If a sibling folder is chosen anyway, name it so no path under it can be
+mistaken for the live one, and record the decision here.
+
 ## Sequence
 
 1. ~~Dockerfile and requirements~~ — done
@@ -209,17 +350,23 @@ Three things, none of which is a lock:
    inference, and the differ defect
 3. ~~Write up the timezone finding~~ — done, above
 4. ~~`--store` seam~~ — done
-5. **Exercise `GraphFileStore` against a substitute drive** — needs a delegated
-   token. `CO_GRAPH_TOKEN=<token> python tests/store_conformance.py --store graph
-   --drive-id <id> --root "/conformance-scratch"`. Expect findings; Part B's own
-   warning is that every external system in this project produced defects that
-   mocked transports agreed with.
-6. Define Part E equivalence for the judgment steps, in writing, first
-7. When `Sites.Selected` lands: re-run 5 against the real library, then the
-   byte-identical comparison and the flow-trigger check
+5. **Exercise `GraphFileStore` against a substitute drive** — **half done,
+   2026-10-14**: the write side, as a signed-in person, against a scratch folder
+   in the AI Sandbox library. The read side needs a token from a client
+   SharePoint accepts (above). `CO_GRAPH_TOKEN=<token> python
+   tests/store_conformance.py --store graph --drive-id <id> --root
+   "/<scratch>"`; from Git Bash set `MSYS_NO_PATHCONV=1`, or the shell rewrites
+   the root into a Windows path and every request is a 400.
+6. Define Part E equivalence for the judgment steps, in writing, first — not
+   started
+7. `Sites.Selected` is consented (2026-10-13); **the site grant is not verified
+   and no credential exists to verify it with** (above). When one of the three
+   routes lands: `probe_site_grant.py` as the app, then re-run 5 against the
+   copy, then the byte-identical comparison and the flow-trigger check
 
-Steps 1–4 are complete without anybody granting anything. Step 5 needs a token,
-not a permission. Only step 7 needs Vitis.
+Steps 1–4 are complete without anybody granting anything. Step 5 needs a token
+from the right client, not a permission. Step 7 needs Vitis twice more: a way to
+authenticate as the app, and the site grant read back or made.
 
 ---
 

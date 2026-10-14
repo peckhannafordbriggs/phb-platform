@@ -2241,6 +2241,73 @@ against a OneDrive copy costs nothing and needs nobody; finding them for the fir
 time against the real library, after a tenant-wide permission grant, wastes the
 grant and the week.
 
+**Request 4 status, read live from Entra on 2026-10-14.** `phb-co-engine`
+exists (client id `85ca496d-3af9-4c3a-aa11-a6b7fd51105d`), `Sites.Selected`
+is consented, delegated `Files.ReadWrite.All` is consented for all users, and
+the app has **no credential, no federated identity credential, no public-client
+flow and no owners**. The site grant — the second step the request warns about
+— could not be read: a non-admin gets `accessDenied` on
+`GET /sites/{id}/permissions`, and the site's own principal list carries no
+entry for the app. Three ways to close it, in `docs/phase-12-part-c-plan.md` →
+*Step 7*; the cheapest is Vitis running
+`Get-PnPAzureADAppSitePermission -Site https://peckhannafordbriggs.sharepoint.com/sites/AISandbox`
+and sending the output.
+
+## The engine cannot reach the library (Phase 12 Part C)
+
+The engine's Graph path is exercised by two scripts in `phb-co-engine`:
+`tests/store_conformance.py --store graph` (every file operation, against a
+scratch folder) and `tests/probe_site_grant.py` (can this identity open this
+site and drive). Both print what they saw; neither writes outside a path
+containing `scratch` or `conformance`.
+
+### Every Graph request from the engine's identity is 403
+
+**Symptom.** `probe_site_grant.py` reports `403` on the site, the drive and the
+listing, and the token's `roles` line shows `Sites.Selected`.
+
+**Cause.** `Sites.Selected` grants access to **no** site on its own. Admin
+consent is done; the per-site grant (the second step) is missing. This is not
+a consent problem, and asking for consent again changes nothing.
+
+**Fix.** An admin grants the app on the one site:
+`Grant-PnPAzureADAppSitePermission -AppId <client id> -DisplayName phb-co-engine -Site <site url> -Permissions Write`,
+or `POST /sites/{siteId}/permissions`. Re-run the probe; it should read
+`reachable as the application: the site grant is present`. If the `roles` line
+is empty instead, consent itself is missing — the first step, Request 4.
+
+### The conformance harness reads 401 from `sharepoint.com` on every content read
+
+**Symptom.** `makedirs`, `size`, `listdir`, `create_exclusive` and every small
+write pass; every `read_text` / `read_bytes`, `append`, `copy`, `move` and the
+large write fail with `401` — from a `sharepoint.com` URL, not from
+`graph.microsoft.com`. The first check,
+`content transfer is pre-authenticated for this token`, fails and names this.
+
+**Cause.** Graph serves file content by redirecting to SharePoint with a
+pre-authenticated URL. For a token whose *client* SharePoint refuses — the
+Azure CLI's (`az account get-access-token`) is one — Graph issues the redirect
+with no pre-auth, omits `@microsoft.graph.downloadUrl` from the item, and the
+upload session URL is refused the same way. The store is not at fault.
+
+**Fix.** A token from a client SharePoint accepts: paste one from the Graph
+Explorer's *Access token* tab into `CO_GRAPH_TOKEN`, or, once *Allow public
+client flows* is on for `phb-co-engine`, a device-code sign-in through the
+engine app. Nothing in the store needs changing for this.
+
+### Every request is 400 and the URL contains `C%3A`
+
+**Symptom.** The harness's `root` line reads `C:/Program Files/Git/...` when a
+drive-relative path such as `/scratch` was given, and every request is `400`.
+
+**Cause.** Git Bash on Windows rewrites an argument that starts with `/` into a
+Windows path before Python sees it.
+
+**Fix.** `MSYS_NO_PATHCONV=1` in front of the command, or run it from
+PowerShell. (Until 2026-10-14 the `create_exclusive on a taken path` check
+reported **ok** in this state, because it accepted any exception as the 409;
+it now accepts only `FileExistsError`.)
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not
