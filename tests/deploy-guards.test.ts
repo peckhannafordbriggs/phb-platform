@@ -197,8 +197,9 @@ describe("production refuses a Graph client secret", () => {
 describe("the production send gate is open, by decision", () => {
   /**
    * PHB_ALLOW_SEND was pinned to 'false' by the template from the first
-   * deployment until 2026-10-14, when the platform owner opened it after a
-   * supervised test send on 2026-09-29. The template now pins 'true' so a
+   * deployment until 2026-10-14, when the platform owner had it opened - before
+   * any production send had been verified; docs/phase-9-verification.md § 6
+   * records the check. The template now pins 'true' so a
    * template deployment cannot silently close the gate again (the deploy
    * workflow's `az containerapp update --image` keeps env vars; a template
    * deployment replaces them - see "A template deployment must be told which

@@ -17,7 +17,7 @@ Nothing in Phase 9 sent a message.
 |---|---|
 | Verified live | Conversation grouping over the whole mailbox; grouped-vs-flat equivalence; grouping cost; concurrent-edit detection; platform-write propagation |
 | **Not run** | The four sync directions that need a person acting in Outlook |
-| **Not run, deliberately** | The send direction — it needs `PHB_ALLOW_SEND=true` |
+| **Not run, deliberately** | The send direction — it needed `PHB_ALLOW_SEND=true`, which production did not have until 2026-10-14. Re-checked against the mailbox and the production logs on 2026-10-14: still not run — § 6 |
 | **Not run, prohibited** | The flow-filing direction — flows must not be triggered or modified |
 
 The four Outlook-driven rows below are unfilled because nobody drove them, not
@@ -188,7 +188,7 @@ would reopen it.
 | draft edited in the platform → updated in Outlook | — | not run (Outlook side) |
 | message moved in Outlook → reflected in the platform | — | not run |
 | message deleted in Outlook → reflected in the platform | — | not run |
-| draft sent from the platform → in Sent Items in Outlook | — | **not run**: needs `PHB_ALLOW_SEND=true` |
+| draft sent from the platform → in Sent Items in Outlook | — | **not run** from production as of 2026-10-14 — checked, not assumed; § 6. The one platform send on record is Phase 6's, 2026-08-19, from development |
 | message filed by a flow → reflected in the platform | — | **not run**: flows must not be triggered |
 
 To fill the first four:
@@ -248,4 +248,70 @@ throttle on a shared production mailbox is not a reasonable thing to do:
 - [ ] Edit the same `ZZTEST` draft in Outlook and in the platform, and confirm
       the conflict banner appears and offers the reload.
 - [ ] Fill the four Outlook rows in the latency table with `watch`.
-- [ ] Leave `PHB_ALLOW_SEND` at `false`.
+- [ ] Leave `PHB_ALLOW_SEND` at `false` **in development**. Production has been
+      `true` since 2026-10-14 (`runbook.md` → *The send gate is open,
+      deliberately*).
+- [ ] Fill the send row from production: one draft, `ZZTEST` subject, addressed
+      to the operator's own address and nobody else, sent from the deployed
+      platform by the operator. Record the `sentDateTime` Exchange stamps on the
+      Sent Items copy and the `mail.sent` audit row at `/admin/audit`. Until
+      then the row stays as § 6 leaves it.
+
+---
+
+## 6. The send row, re-checked on 2026-10-14
+
+**Why this section exists.** The production send gate was opened on 2026-10-14 on
+the strength of a test send the platform owner recalled from 29 September: a
+`ZZTEST` draft sent to themselves from the deployed platform, which arrived and
+appeared in Sent Items. The owner asked for the exact timestamp to be read from
+the mailbox rather than taken from memory. This section is what that check found.
+Observed facts first; what is inferred from them is marked as such.
+
+**What was searched, and what was there.** All times are UTC; subtract four hours
+for Cincinnati.
+
+| Source | Looked for | Found |
+|---|---|---|
+| `changeorder@` Sent Items, whole folder | any `ZZTEST` subject; anything 27 Sep – 2 Oct | 10 messages in the folder, all change-order traffic. No `ZZTEST` subject at any date. Nothing dated 27 Sep – 1 Oct; one message on 2 Oct, a `[CCHMC RFI 250] New CO logged` notice at 16:05:32 |
+| `changeorder@`, every folder | any `ZZTEST` subject | three, all from August: the two `ZZTEST phase 8 reply source` messages of 26 Aug, and `ZZTEST [CCHMC RFI 229] test — edited 18:01:22`, sent 2026-08-19 **18:17:45** from `changeorder@` to the operator, body *Edited by the platform at 2026-08-19T18:01:22.396Z* — the Phase 6 send, from development, now filed in a project folder |
+| `changeorder@`, every folder | everything 28 Sep – 30 Sep | two items. **`TEST `** — sent 2026-09-28 **17:51:29** as `changeorder@`, to Karthik, cc the operator, body *This is a test email for the Live Platform. Please ignore … Thanks, Mahi Sheth*; not a draft; **not in Sent Items**, in a folder the connector could not resolve by id. **`Test email`** — an unsent draft, no recipients, 2026-09-30 14:40:36, same folder |
+| the operator's own mailbox, every folder | any `ZZTEST`; anything from `changeorder@` since 1 Sep; the `TEST ` message | no `ZZTEST` after 26 Aug; nothing from `changeorder@` since 1 Sep; no copy of `TEST ` although it was cc'd there. (Search-index results; a deleted or purged copy would read the same) |
+| production console logs, 14 Sep 13:03 → 14 Oct, 3,152 lines | every `mail.*` event | exactly two: `mail.send_blocked` / `sendDraft` / *PHB_ALLOW_SEND is not true* at 2026-09-28 **17:00:50** and at 2026-10-02 **16:05:28**. Nothing else |
+| Azure activity log, 26 Sep → 2 Oct | any write to the container app | none between 26 Sep and 1 Oct 18:15; every write on 1–2 Oct is the CI deploy principal, whose `az containerapp update --image` keeps env vars |
+
+A successful send writes an audit row (`mail.sent`), not a log line, so silence
+in the logs alone would prove nothing. The gate value does: it was `false` on
+both sides of 29 September with no write to the app in between, and the service
+refuses before any Graph call when it is.
+
+**What this says (observed).** No send from the deployed platform has ever
+succeeded, on 29 September or any other day in the log window. The platform
+refused the two sends that were attempted. No `ZZTEST` message was sent from the
+mailbox after 26 August. The only platform send that exists in the mailbox is the
+Phase 6 one of 19 August, made from development under the `ZZTEST` fence.
+
+**What probably happened (inferred, from timing only).** On 28 September the
+platform refused a send at 17:00:50; the *PHB Internal Platform now Live*
+announcement went to staff at 17:14; and at 17:51 `TEST ` left the mailbox as
+`changeorder@`, signed by the operator. Its subject would fail the development
+fence and production had just refused, so it was sent from another client —
+most likely Outlook, where the operator has Full Access to the mailbox. On
+2 October the platform refused again at 16:05:28, and four seconds later a real
+change-order notice left the mailbox: someone tried the platform for a real send
+and finished in Outlook. The 29 September memory most likely refers to the
+28 September `TEST ` message, which was not a platform send and was not `ZZTEST`.
+
+**The one check that would overturn this.** `/admin/audit` on production,
+filtered to action `mail.sent`. That row is the only durable record of a platform
+send, and this check could not reach the production database. If a `mail.sent`
+row exists for 29 September, this section is wrong and the row above should be
+filled from it; if none exists, the first production send is still ahead and
+should be the supervised `ZZTEST` one described in § 5.
+
+**What this changes.** Nothing about the gate's mechanics: it is open in
+production by the owner's decision, and every send is still one human sending one
+draft they have read. What it changes is the record — the gate was opened before,
+not after, the first verified production send — and that is written in
+`runbook.md` → *The send gate is open, deliberately* so the next person does not
+inherit a verification that did not happen.

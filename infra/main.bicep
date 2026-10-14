@@ -588,14 +588,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
             // CLAUDE.md prohibition 1 still holds: nothing in this system
             // sends automatically. This gate was 'false' from the first
-            // deployment until 2026-10-14, when the platform owner opened it
-            // after a supervised test send on 2026-09-29 (a ZZTEST draft to the
-            // operator's own address, which arrived and appeared in Sent
-            // Items). It is 'true' here so a template deployment does not
+            // deployment until 2026-10-14, when the platform owner had it
+            // opened. It is 'true' here so a template deployment does not
             // close it again; every send is still one human, one draft, one
             // deliberate action. Exactly the lowercase string - 'TRUE' and
             // 'True' leave the gate shut. tests/deploy-guards.test.ts holds
-            // this value. To close it in an emergency, see runbook.md ->
+            // this value. Note that no send from the deployed platform had
+            // succeeded when it was opened (docs/phase-9-verification.md § 6).
+            // To close it in an emergency, see runbook.md ->
             // "The send gate is open, deliberately".
             {
               name: 'PHB_ALLOW_SEND'

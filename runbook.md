@@ -2318,13 +2318,24 @@ sign in.
 
 **4. The send gate is open, deliberately.** `PHB_ALLOW_SEND` must be exactly `true`
 in production. It was `false` from the first deployment until **2026-10-14**, when
-the platform owner opened it: a supervised test send had been verified on
-**2026-09-29** — a `ZZTEST` draft sent from the platform to the operator's own
-address, which arrived and appeared in `changeorder@` Sent Items. The gate was set
-on the running app with `az containerapp update --set-env-vars` (revision
-`0000062`) and the template default was changed to `true` in the same change, so a
-later template deployment does not close it again. `tests/deploy-guards.test.ts`
-asserts the template; this asserts the running app.
+the platform owner had it opened. The gate was set on the running app with
+`az containerapp update --set-env-vars` (revision `0000062`) and the template
+default was changed to `true` in the same change, so a later template deployment
+does not close it again. `tests/deploy-guards.test.ts` asserts the template; this
+asserts the running app.
+
+**The reason given, and what the record shows.** The owner's reason was a test
+send they recalled from 29 September — a `ZZTEST` draft sent to themselves from
+the deployed platform. Checked the same day against the mailbox, the production
+console logs and the Azure activity log: **no send from the deployed platform has
+ever succeeded.** The platform refused the two sends attempted from production
+(28 September 17:00 UTC and 2 October 16:05 UTC, both `mail.send_blocked`), no
+`ZZTEST` message left the mailbox after 26 August, and the only platform send on
+record is Phase 6's, from development on 2026-08-19. The full table is in
+`docs/phase-9-verification.md` § 6. So the gate was opened **before** the first
+verified production send, not after it. The first one should be a `ZZTEST` draft
+to the operator's own address, sent from the deployed platform, with the Sent
+Items timestamp and the `mail.sent` audit row written into that section.
 
 Prohibition 1 is unchanged. The gate decides whether a human's deliberate send is
 allowed; nothing sends on its own, and one human still sends one draft they have

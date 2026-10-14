@@ -118,9 +118,13 @@ test mailbox. Two guards, both enforced inside the mail service, not in route ha
 
 - **`PHB_ALLOW_SEND`** — must be `true` for any send. Absent or `false` throws, before
   any network call. **Stays `false` in development except during a deliberate,
-  supervised send test.** Production has been `true` since 2026-10-14, after the
-  test send of 2026-09-29; the template pins it and `runbook.md` → *The send gate
-  is open, deliberately* has the date, the reason and the emergency close.
+  supervised send test.** Production has been `true` since 2026-10-14 by the
+  owner's decision; the template pins it and `runbook.md` → *The send gate is
+  open, deliberately* has the date, the reason and the emergency close. **No send
+  from the deployed platform had succeeded when it was opened** — the recalled
+  29 September test send was checked against the mailbox and the production logs
+  and was not a platform send (`docs/phase-9-verification.md` § 6). The first
+  production send is still to be done and recorded.
 - **`ZZTEST` convention** — when `NODE_ENV !== 'production'`, write operations are
   permitted only on messages whose subject begins with `ZZTEST`. The subject is read
   from Exchange, never taken from the caller.
