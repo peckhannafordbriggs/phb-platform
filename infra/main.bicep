@@ -586,12 +586,20 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'BOOTSTRAP_ADMIN_EMAIL'
               value: bootstrapAdminEmails
             }
-            // CLAUDE.md prohibition 1. Nothing in this system sends
-            // automatically, and this stays false until a human has verified an
-            // end-to-end send.
+            // CLAUDE.md prohibition 1 still holds: nothing in this system
+            // sends automatically. This gate was 'false' from the first
+            // deployment until 2026-10-14, when the platform owner opened it
+            // after a supervised test send on 2026-09-29 (a ZZTEST draft to the
+            // operator's own address, which arrived and appeared in Sent
+            // Items). It is 'true' here so a template deployment does not
+            // close it again; every send is still one human, one draft, one
+            // deliberate action. Exactly the lowercase string - 'TRUE' and
+            // 'True' leave the gate shut. tests/deploy-guards.test.ts holds
+            // this value. To close it in an emergency, see runbook.md ->
+            // "The send gate is open, deliberately".
             {
               name: 'PHB_ALLOW_SEND'
-              value: 'false'
+              value: 'true'
             }
             {
               name: 'GRAPH_CLIENT_ID'

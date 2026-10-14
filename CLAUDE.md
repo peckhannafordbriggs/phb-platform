@@ -117,7 +117,10 @@ Development runs against the **live** `changeorder@phb1899.com` mailbox. There i
 test mailbox. Two guards, both enforced inside the mail service, not in route handlers:
 
 - **`PHB_ALLOW_SEND`** — must be `true` for any send. Absent or `false` throws, before
-  any network call. **Stays `false` except during a deliberate, supervised send test.**
+  any network call. **Stays `false` in development except during a deliberate,
+  supervised send test.** Production has been `true` since 2026-10-14, after the
+  test send of 2026-09-29; the template pins it and `runbook.md` → *The send gate
+  is open, deliberately* has the date, the reason and the emergency close.
 - **`ZZTEST` convention** — when `NODE_ENV !== 'production'`, write operations are
   permitted only on messages whose subject begins with `ZZTEST`. The subject is read
   from Exchange, never taken from the caller.
@@ -187,8 +190,8 @@ template, each being expensive or impossible to correct later:
   while the database was still empty (`npm run db:verify:prod`)
 - the container app carries all four bootstrap addresses — a wrong value here
   means zero admins and no UI path back
-- `PHB_ALLOW_SEND` is `false`, and `GRAPH_CLIENT_SECRET` is **absent** rather
-  than blank
+- `PHB_ALLOW_SEND` is `false` (opened to `true` on 2026-10-14, see *Development
+  safety* above), and `GRAPH_CLIENT_SECRET` is **absent** rather than blank
 - the server reports `autoGrow: Enabled` and `state: Ready`, no auto-stop
   property exists on the resource type at all, and the budget carries contacts
   with no action group
