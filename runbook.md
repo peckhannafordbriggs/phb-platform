@@ -641,6 +641,12 @@ second half of that.
 the live `changeorder@phb1899.com` mailbox and there is no test mailbox. A send
 cannot be undone; everything else can.
 
+**In production the gate is open since 2026-10-14**, so `mail_send_disabled` there
+is a fault, not the design: the variable has been closed by hand or by a template
+deployment from before that date. The check, the reason and the date are under
+*Verify the deployment before migrating* → *4. The send gate is open,
+deliberately*.
+
 ---
 
 ## How draft editing preserves the message
@@ -2310,14 +2316,48 @@ Read the addresses one at a time against the intended list. A missing address is
 lockout; a typo is a lockout that looks like a working deployment until somebody tries to
 sign in.
 
-**4. The send gate is closed.** `PHB_ALLOW_SEND` must be `false` — sending has not been
-verified in the deployed environment, and `false` is what the template pins.
-`tests/deploy-guards.test.ts` asserts the template; this asserts the running app.
+**4. The send gate is open, deliberately.** `PHB_ALLOW_SEND` must be exactly `true`
+in production. It was `false` from the first deployment until **2026-10-14**, when
+the platform owner opened it: a supervised test send had been verified on
+**2026-09-29** — a `ZZTEST` draft sent from the platform to the operator's own
+address, which arrived and appeared in `changeorder@` Sent Items. The gate was set
+on the running app with `az containerapp update --set-env-vars` (revision
+`0000062`) and the template default was changed to `true` in the same change, so a
+later template deployment does not close it again. `tests/deploy-guards.test.ts`
+asserts the template; this asserts the running app.
+
+Prohibition 1 is unchanged. The gate decides whether a human's deliberate send is
+allowed; nothing sends on its own, and one human still sends one draft they have
+read. What changed is that the deployed platform is now a real sending client for
+`changeorder@phb1899.com`, exactly as Outlook is.
 
 ```bash
 az containerapp show --name <app> --resource-group <resource-group> \
   --query "properties.template.containers[0].env[?name=='PHB_ALLOW_SEND'].value" -o tsv
 ```
+
+If this reads `false` after 2026-10-14, somebody closed it by hand or deployed a
+template from before that date; the deploy workflow cannot do it, because
+`az containerapp update --image` keeps every env var. Production returns
+`mail_send_disabled` on every send until it is `true` again — see *Nothing sends,
+and that is correct*.
+
+**To close the gate in an emergency** (one command, takes effect on the next
+revision, about a minute):
+
+```bash
+az containerapp update --name <app> --resource-group <resource-group> \
+  --set-env-vars PHB_ALLOW_SEND=false --output none
+```
+
+Then change the value in `infra/main.bicep` and the expectation in
+`tests/deploy-guards.test.ts` through a pull request, or the next template
+deployment reopens it. Never `--replace-env-vars`: that drops every other
+variable, the three Key Vault references included.
+
+**Development is unchanged.** `.env.local` keeps `PHB_ALLOW_SEND=false`; the
+reasons under *Nothing sends, and that is correct* and in the variable table above
+still apply to every machine that is not the container app.
 
 Also confirm `GRAPH_CLIENT_SECRET` is absent entirely, not empty:
 

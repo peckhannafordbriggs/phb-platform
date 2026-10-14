@@ -191,9 +191,33 @@ describe("production refuses a Graph client secret", () => {
 
     // The container app must not define this environment variable at all.
     expect(bicep).not.toMatch(/name:\s*'GRAPH_CLIENT_SECRET'/);
-    expect(bicep).toContain("PHB_ALLOW_SEND");
-    // The send gate ships closed.
-    expect(bicep).toMatch(/name:\s*'PHB_ALLOW_SEND'[\s\S]{0,80}value:\s*'false'/);
+  });
+});
+
+describe("the production send gate is open, by decision", () => {
+  /**
+   * PHB_ALLOW_SEND was pinned to 'false' by the template from the first
+   * deployment until 2026-10-14, when the platform owner opened it after a
+   * supervised test send on 2026-09-29. The template now pins 'true' so a
+   * template deployment cannot silently close the gate again (the deploy
+   * workflow's `az containerapp update --image` keeps env vars; a template
+   * deployment replaces them - see "A template deployment must be told which
+   * image to keep" in CLAUDE.md). Prohibition 1 is unchanged: the gate decides
+   * whether a human's deliberate send is allowed, never whether anything sends
+   * on its own.
+   */
+  it("is pinned to exactly the lowercase string 'true' in the template", async () => {
+    const bicep = await import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+    // Present as a plain value - never a secretRef, never absent. Absent reads
+    // as closed, which is the silent failure the pin exists to prevent.
+    expect(bicep).toMatch(/name:\s*'PHB_ALLOW_SEND'[\s\S]{0,80}value:\s*'true'/);
+    // The gate compares with === "true": 'TRUE', 'True' and '1' all leave it
+    // shut (runbook.md -> "Nothing sends, and that is correct"). A case slip in
+    // the template would close production sending with no error anywhere.
+    expect(bicep).not.toMatch(/name:\s*'PHB_ALLOW_SEND'[\s\S]{0,80}value:\s*'(TRUE|True|1|yes|false)'/);
   });
 });
 

@@ -387,7 +387,10 @@ table; a library rewrite regenerates internal IDs and the flow silently stops re
 Read it through the Graph workbook API only.
 
 **`PHB_ALLOW_SEND` gates every send.** It must be `false` outside production. It exists
-because development runs against the live mailbox — there is no test mailbox.
+because development runs against the live mailbox — there is no test mailbox. In
+production it has been `true` since 2026-10-14, pinned by the template; the date, the
+reason and the one-command emergency close are in `runbook.md` → *The send gate is
+open, deliberately*.
 
 **One outstanding oddity, harmless.** On 26 August, CO Intake 3 logged ten successful runs
 but one message reached Sent Items. Possibly a per-vendor fan-out, possibly retries.
