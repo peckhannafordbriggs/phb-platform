@@ -68,13 +68,18 @@ Only these. Everything else above you can do without talking to anyone.
 
 `GRAPH_MANAGED_IDENTITY_CLIENT_ID` is **Azure only**. Leave it empty locally.
 
-`ANTHROPIC_API_KEY` is neither generated nor IT's: it comes from the company
-Anthropic Console, and the platform owner holds it. It is **optional** - blank
-disables BAS Ask (B5) and the Phase 12 Part D engine calls and nothing else, and
-as of 2026-09-17 neither is built, so nothing reads it yet. The name is the
-Anthropic SDK's default and is decided in one place, `readAnthropicApiKey` in
-`lib/env.ts`; do not introduce a second one. In Azure it is a Key Vault
-reference - see *The Anthropic API key in Azure* below.
+`ANTHROPIC_API_KEY` and `CO_ANTHROPIC_API_KEY` are neither generated nor IT's:
+each comes from the company Anthropic Console, and the platform owner holds
+them. **They are two different keys, one per module** (since 2026-10-16).
+`ANTHROPIC_API_KEY` is BAS Analyze's - blank disables the Analyze tab and
+nothing else. `CO_ANTHROPIC_API_KEY` is Change Orders' - blank disables the
+Phase 12 Part D engine calls and nothing else, and as of 2026-10-16 Part D is
+not built, so nothing reads it yet. Both names are decided in `lib/env.ts`
+(`ANTHROPIC_API_KEY_VAR`, `CO_ANTHROPIC_API_KEY_VAR`); do not introduce a
+third, and never make one fall back to the other - the first name is the
+Anthropic SDK's default, which is exactly why the second is not it
+(`tests/anthropic-key-per-module.test.ts`). In Azure each is a Key Vault
+reference - see *Secrets set by hand in Key Vault* below.
 
 **Wording that gets a useful answer**, because "send me the client secret" gets
 the Secret ID about half the time:
@@ -1401,7 +1406,8 @@ broken auth callback. **Do not remove the `-p`.**
 |---|---|---|---|
 | SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local sign-in only. Production authenticates with the managed identity — see *Production sign-in authenticates with the managed identity*. **Cannot affect production**, which refuses to boot with it set |
 | Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only. **Cannot affect production** |
-| Anthropic API key | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** Revocable in the Anthropic Console, and a revoked key fails as `401 authentication_error` on the next call | The Analyze tab (B5). The platform boots and everything else runs without it |
+| Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** Revocable in the Anthropic Console, and a revoked key fails as `401 authentication_error` on the next call | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
+| Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** A second, separately issued key, revocable on its own in the Anthropic Console | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
 | BAS credential key | Key Vault `BAS-CREDENTIAL-KEY` → `BAS_CREDENTIAL_KEY` on the container app; the collector's `.env` on the office PC; `.env.local` locally | **Does not expire.** Rotated only on purpose - *Station credentials, and the one secret that lives in two places* | Storing and decrypting Niagara station logins in Settings; the collector, wherever it runs. A value that differs from the collector's makes every stored login unreadable |
 
 > **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
@@ -2668,11 +2674,12 @@ server had no such file.
 
 ## Secrets set by hand in Key Vault: the Anthropic API key, the BAS credential key and the Analyze database URL
 
-Three secrets reach the container app this way: the Anthropic API key (this
+Four secrets reach the container app this way: the Anthropic API key (this
 section) and the BAS credential key (*The BAS credential key, the same way*)
-since 2026-10-01, and the Analyze database URL (*The Analyze database URL,
-the same way*) since 2026-10-13. The command sequences are in
-`infra/README.md`.
+since 2026-10-01, the Analyze database URL (*The Analyze database URL,
+the same way*) since 2026-10-13, and the Change Orders module's own Anthropic
+key (*The Change Orders Anthropic key, the same way*) since 2026-10-16. The
+command sequences are in `infra/README.md`.
 
 The Anthropic key is the first secret the template does not write. `DATABASE-URL` and
 `AUTH-SECRET` are generated at deploy time and passed on every deploy;
@@ -2751,6 +2758,44 @@ tab says the model service could not be reached, or the database could not
 be reached.** The URL in the vault has a wrong host, password or
 `sslmode`; set the secret again and create a new revision. **Rotating**: run
 the script again with a new password, set the secret again, new revision.
+
+### The Change Orders Anthropic key, the same way
+
+`CO-ANTHROPIC-API-KEY` is the fourth secret set by hand (2026-10-16): the
+Change Orders module's **own** Anthropic API key, referenced as
+`CO_ANTHROPIC_API_KEY` on the container app when `coAnthropicApiKeyInKeyVault`
+is true, under the same identity and the same **Key Vault Secrets User**
+grant, so no new role assignment is needed. It is a **different key** from
+`ANTHROPIC-API-KEY`, issued separately in the Anthropic Console, so the
+change-order pipeline and BAS Analyze are billed, rate-limited and revoked
+independently: a BAS key that runs out of credit must not stop a change-order
+draft, and the reverse. Nothing reads it until Phase 12 Part D is built; the
+reader it will come through is `readChangeOrderAnthropicEnv` in
+`lib/modules/change-orders/anthropic-env.ts`, and the name is decided in
+`lib/env.ts`.
+
+**Why it is not the same key under a second name.** `ANTHROPIC_API_KEY` is
+the Anthropic SDK's default variable: a client built without `apiKey` reads it
+on its own, in both the TypeScript SDK and the Python one the engine would
+use. A change-order call site written the lazy way would therefore run on the
+BAS key with no error anywhere. So the CO reader never falls back to the BAS
+variable, every client under either module passes its key explicitly, and
+`tests/anthropic-key-per-module.test.ts` fails the build on a reader that
+falls back or a `new Anthropic(` that omits `apiKey`. The Python side has no
+such test: when Part D builds the engine's client, it must pass
+`api_key=os.environ["CO_ANTHROPIC_API_KEY"]` explicitly, because
+`anthropic.Anthropic()` alone reads the BAS variable.
+
+**Symptom: a change-order model call says it is not configured and names
+`CO_ANTHROPIC_API_KEY`, in production.** The flag is still false, or the
+deployment that turned it on has not rolled out. Check `az containerapp show
+… --query "properties.template.containers[0].env[].name"` for the variable.
+Setting `ANTHROPIC_API_KEY` does not help, by design. **Symptom: Analyze
+works and a change-order call fails `401 authentication_error`, or the
+reverse.** One key was revoked or ran out of credit and the other did not;
+that is the separation working. Fix the one named, in the Anthropic Console.
+**Rotating**: set the secret again with the new key, then create a new
+revision; the BAS key is untouched.
 
 ### The BAS credential key, the same way
 

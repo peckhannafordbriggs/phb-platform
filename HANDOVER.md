@@ -307,7 +307,11 @@ app from Key Vault by reference as of 2026-10-01 (`BAS-CREDENTIAL-KEY`,
 set in the vault by hand and nothing in the repository can tell you whether that has
 been done: if the station-login panel or the Analyze tab says it is not configured in
 production, it has not. `infra/README.md` has the steps; the Analyze tab also needs
-`BAS_ASK_DATABASE_URL`, which is not wired yet. All of it is in `runbook.md` → *Moving
+`BAS_ASK_DATABASE_URL`, which is not wired yet. Change Orders has its **own** Anthropic
+key since 2026-10-16, `CO_ANTHROPIC_API_KEY` (`CO-ANTHROPIC-API-KEY`,
+`coAnthropicApiKeyInKeyVault`), wired the same way and read by nothing until Phase 12
+Part D; it is a different key from the BAS one on purpose, and neither falls back to
+the other. All of it is in `runbook.md` → *Moving
 the BAS data to the Azure database* and the sections after it, and *Secrets set by hand
 in Key Vault*.
 

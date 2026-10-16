@@ -2379,6 +2379,42 @@ reading from 29 September becomes "the room is 73 °F" in November. Put the
 four-sentence cap back and the ten-room answer becomes a wall of text or
 loses rooms.
 
+## 68 · Two modules, two Anthropic keys, and the one that is not the SDK's default name
+
+**Decision.** BAS Analyze reads `ANTHROPIC_API_KEY`; Change Orders reads
+`CO_ANTHROPIC_API_KEY`, a second key issued separately in the Anthropic
+Console (2026-10-16). Both names are decided in `lib/env.ts`, each module
+has its own lazy reader (`readAnalyzeEnv`, `readChangeOrderAnthropicEnv`),
+neither falls back to the other, and in Azure each is its own Key Vault
+secret behind its own boolean (`CO-ANTHROPIC-API-KEY`,
+`coAnthropicApiKeyInKeyVault`), the same shape as § 62. Nothing in the
+change-order code calls the API yet - Phase 12 Part D will - so the change
+is the door and the wiring, not a call site.
+
+**Why two keys.** One key is one bill, one rate limit and one revocation.
+A BAS key that runs out of prepaid credit (it has, `runbook.md` → *Analyze
+says "The model service answered 400" for every question*) would stop a
+change-order draft; revoking a key leaked from one module would take the other down
+with it. The change-order pipeline is the thing PH+B runs daily and the
+Analyze tab is a convenience, and they should not share a failure.
+
+**Why the CO name is not the SDK's default.** `ANTHROPIC_API_KEY` is what
+`new Anthropic()` and `anthropic.Anthropic()` read when given no key. If the
+change-order variable were that name, the separation would be gone; if the
+change-order *client* were built without an explicit key, it would silently
+run on the BAS variable with no error anywhere - the one failure in this
+design that makes no noise. So the CO reader never falls back, every
+`new Anthropic(` under either module must pass `apiKey`, and
+`tests/anthropic-key-per-module.test.ts` walks both module trees to hold
+both rules on files that do not exist yet.
+
+**What breaks if you undo it.** Alias `CO_ANTHROPIC_API_KEY` to the
+`anthropic-api-key` secretRef in the bicep and the deployment is clean and
+the pipeline bills to BAS; a deploy-guard test fails by name. Add `??
+env.ANTHROPIC_API_KEY` to the CO reader and the blank-beside-a-real-BAS-key
+test fails. Build a change-order client as `new Anthropic({ timeout })` and
+the source-text test names the file.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

@@ -183,32 +183,43 @@ export function readMailboxAddress(): string | null {
 }
 
 /**
- * The Anthropic API key, read lazily - the same shape as the Graph
- * configuration above and for the same reason. It is one feature's credential
- * (BAS Ask, B5; and the Phase 12 Part D engine calls), and a missing key
- * disables that feature and nothing else. The platform must boot without it.
+ * The Anthropic API keys, read lazily - the same shape as the Graph
+ * configuration above and for the same reason. Each is one module's
+ * credential, a missing key disables that module's model calls and nothing
+ * else, and the platform must boot without either.
  *
- * The variable name is the Anthropic SDK's own default: `new Anthropic()` in
- * this repository and `anthropic.Anthropic()` in the engine (phb-co-engine,
- * Python) both read `ANTHROPIC_API_KEY` unprompted, so one name serves both
- * repositories and there is no second name to keep in step. Neither the B5 nor
- * the Phase 12 spec names the variable; this function is where the name is
- * decided, and anything that calls the API should take the key from here rather
- * than reading process.env itself.
+ * There are TWO, one per module, since 2026-10-16:
  *
- * In Azure it arrives from Key Vault `ANTHROPIC-API-KEY` by secret reference
- * (infra/main.bicep, `anthropicApiKeyInKeyVault`); locally from `.env.local`.
- * The value is never logged, never persisted, and never returned to a client.
+ * - `ANTHROPIC_API_KEY` is BAS Analyze's (B5). The name is the Anthropic
+ *   SDK's own default - `new Anthropic()` reads it unprompted - which is
+ *   exactly why the second key must NOT share it.
+ * - `CO_ANTHROPIC_API_KEY` is Change Orders' (Phase 12 Part D, not yet
+ *   built). A separate key so the two modules are billed, rate-limited and
+ *   revoked independently: a BAS key that runs out of credit must not stop a
+ *   change-order draft, and the reverse. Because the SDK falls back to
+ *   `ANTHROPIC_API_KEY` whenever a client is constructed without `apiKey`,
+ *   any change-order client MUST pass the key explicitly, and
+ *   tests/anthropic-key-per-module.test.ts fails the build on one that does
+ *   not. The reader never falls back to the BAS key: absent is absent.
+ *
+ * Neither spec names its variable; these functions are where the names are
+ * decided, and anything that calls the API takes its key from here rather than
+ * reading process.env itself. In Azure each arrives from Key Vault by secret
+ * reference (`ANTHROPIC-API-KEY` / `CO-ANTHROPIC-API-KEY`, behind
+ * `anthropicApiKeyInKeyVault` / `coAnthropicApiKeyInKeyVault` in
+ * infra/main.bicep); locally from `.env.local`. The values are never logged,
+ * never persisted, and never returned to a client.
  */
 const anthropicApiKeySchema = blankAsAbsent(z.string().trim().min(1).optional());
 
 /**
- * THE NAMES of the three secrets that reach the container app from Key Vault
- * by reference and nowhere else, decided here and imported everywhere else
- * that reads them (lib/modules/bas/analyze/env.ts, lib/modules/bas/credentials.ts).
- * infra/main.bicep spells the same names in its `env:` list, and
- * tests/deploy-guards.test.ts holds the three to each other: a rename in one
- * place that misses another fails the build rather than the deployment.
+ * THE NAMES of the secrets that reach the container app from Key Vault by
+ * reference and nowhere else, decided here and imported everywhere else that
+ * reads them (lib/modules/bas/analyze/env.ts, lib/modules/bas/credentials.ts,
+ * lib/modules/change-orders/anthropic-env.ts). infra/main.bicep spells the
+ * same names in its `env:` list, and tests/deploy-guards.test.ts holds them
+ * to each other: a rename in one place that misses another fails the build
+ * rather than the deployment.
  *
  * BAS_CREDENTIAL_KEY_VERSION rides with the key. It is NOT a secret - a small
  * integer stamped on each credential row at encryption time so a rotation
@@ -217,12 +228,26 @@ const anthropicApiKeySchema = blankAsAbsent(z.string().trim().min(1).optional())
  * a password is saved.
  */
 export const ANTHROPIC_API_KEY_VAR = "ANTHROPIC_API_KEY";
+/** Change Orders' own key (2026-10-16). Never the SDK default name - see above. */
+export const CO_ANTHROPIC_API_KEY_VAR = "CO_ANTHROPIC_API_KEY";
 export const BAS_CREDENTIAL_KEY_VAR = "BAS_CREDENTIAL_KEY";
 export const BAS_CREDENTIAL_KEY_VERSION_VAR = "BAS_CREDENTIAL_KEY_VERSION";
 /** The bas_analyze role's URL (2026-10-13): the third secret by reference, same shape. */
 export const BAS_ASK_DATABASE_URL_VAR = "BAS_ASK_DATABASE_URL";
 
+/** BAS Analyze's key. The tab itself reads it through `readAnalyzeEnv`. */
 export function readAnthropicApiKey(): string | null {
   const result = anthropicApiKeySchema.safeParse(process.env[ANTHROPIC_API_KEY_VAR]);
+  return result.success && result.data ? result.data : null;
+}
+
+/**
+ * Change Orders' key. Reads `CO_ANTHROPIC_API_KEY` and nothing else - in
+ * particular it does NOT fall back to `ANTHROPIC_API_KEY`, because a fallback
+ * would silently bill the change-order pipeline to the BAS key the moment the
+ * CO one was missing, which is the sharing this variable exists to end.
+ */
+export function readChangeOrderAnthropicApiKey(): string | null {
+  const result = anthropicApiKeySchema.safeParse(process.env[CO_ANTHROPIC_API_KEY_VAR]);
   return result.success && result.data ? result.data : null;
 }

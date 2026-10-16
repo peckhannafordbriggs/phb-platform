@@ -341,8 +341,8 @@ describe("the BAS credential key reaches the container only by Key Vault referen
     expect(bicep).toMatch(
       /var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'/,
     );
-    // All three hand-set secrets are read under that same identity.
-    for (const secret of ["anthropic-api-key", "bas-credential-key", "bas-ask-database-url"]) {
+    // All four hand-set secrets are read under that same identity.
+    for (const secret of ["anthropic-api-key", "co-anthropic-api-key", "bas-credential-key", "bas-ask-database-url"]) {
       expect(bicep).toMatch(
         new RegExp(`name:\\s*'${secret}'[\\s\\S]{0,160}identity:\\s*identity\\.id`),
       );
@@ -354,6 +354,7 @@ describe("the BAS credential key reaches the container only by Key Vault referen
   it("spells each variable's name in lib/env.ts and nowhere else in the readers", async () => {
     const env = await import("@/lib/env");
     expect(env.ANTHROPIC_API_KEY_VAR).toBe("ANTHROPIC_API_KEY");
+    expect(env.CO_ANTHROPIC_API_KEY_VAR).toBe("CO_ANTHROPIC_API_KEY");
     expect(env.BAS_CREDENTIAL_KEY_VAR).toBe("BAS_CREDENTIAL_KEY");
     expect(env.BAS_CREDENTIAL_KEY_VERSION_VAR).toBe("BAS_CREDENTIAL_KEY_VERSION");
     expect(env.BAS_ASK_DATABASE_URL_VAR).toBe("BAS_ASK_DATABASE_URL");
@@ -367,9 +368,12 @@ describe("the BAS credential key reaches the container only by Key Vault referen
     const analyze = strip(await readSource("lib/modules/bas/analyze/env.ts"));
     expect(analyze).not.toMatch(/["'`]ANTHROPIC_API_KEY["'`]/);
     expect(analyze).not.toMatch(/["'`]BAS_ASK_DATABASE_URL["'`]/);
-    // And the bicep spells the same names, so the three cannot drift.
+    const changeOrders = strip(await readSource("lib/modules/change-orders/anthropic-env.ts"));
+    expect(changeOrders).not.toMatch(/["'`]CO_ANTHROPIC_API_KEY["'`]/);
+    expect(changeOrders).not.toMatch(/process\.env\.CO_ANTHROPIC_API_KEY/);
+    // And the bicep spells the same names, so the readers cannot drift from it.
     const bicep = await readBicep();
-    for (const name of [env.ANTHROPIC_API_KEY_VAR, env.BAS_CREDENTIAL_KEY_VAR, env.BAS_CREDENTIAL_KEY_VERSION_VAR, env.BAS_ASK_DATABASE_URL_VAR]) {
+    for (const name of [env.ANTHROPIC_API_KEY_VAR, env.CO_ANTHROPIC_API_KEY_VAR, env.BAS_CREDENTIAL_KEY_VAR, env.BAS_CREDENTIAL_KEY_VERSION_VAR, env.BAS_ASK_DATABASE_URL_VAR]) {
       expect(bicep).toContain(`name: '${name}'`);
     }
   });
@@ -400,6 +404,7 @@ describe("the BAS credential key reaches the container only by Key Vault referen
       await readSource("infra/main.parameters.example.json"),
     ) as { parameters: Record<string, { value: unknown }> };
     expect(example.parameters.anthropicApiKeyInKeyVault?.value).toBe(false);
+    expect(example.parameters.coAnthropicApiKeyInKeyVault?.value).toBe(false);
     expect(example.parameters.basCredentialKeyInKeyVault?.value).toBe(false);
     expect(example.parameters.basAskDatabaseUrlInKeyVault?.value).toBe(false);
     expect(example.parameters.basCredentialKeyVersion?.value).toBe("1");
@@ -444,6 +449,79 @@ describe("the Analyze database URL reaches the container only by Key Vault refer
     const bicep = await readBicep();
     expect(bicep).toMatch(/name:\s*'DATABASE_URL'[\s\S]{0,80}secretRef:\s*'database-url'/);
     expect(bicep).not.toMatch(/name:\s*'BAS_ASK_DATABASE_URL'[\s\S]{0,80}secretRef:\s*'database-url'/);
+  });
+});
+
+/**
+ * The Change Orders module's own Anthropic key (2026-10-16), the fourth
+ * hand-set secret. A DIFFERENT key from ANTHROPIC_API_KEY, not an alias: the
+ * two modules are billed, rate-limited and revoked independently. The
+ * per-module separation itself is tests/anthropic-key-per-module.test.ts;
+ * this block is the Key Vault wiring, the same shape as the three above.
+ */
+describe("the Change Orders Anthropic key reaches the container only by Key Vault reference (2026-10-16)", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+  it("is an environment variable backed by its own secretRef, never a plain value", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(
+      /name:\s*'CO_ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'co-anthropic-api-key'/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'CO_ANTHROPIC_API_KEY'[\s\S]{0,80}value:/);
+    expect(bicep).toMatch(/var coAnthropicApiKeySecretName = 'CO-ANTHROPIC-API-KEY'/);
+    expect(bicep).toMatch(
+      /name:\s*'co-anthropic-api-key'\s*keyVaultUrl:\s*'\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{coAnthropicApiKeySecretName\}'\s*identity:\s*identity\.id/,
+    );
+  });
+
+  it("is behind its own boolean that defaults to false, and is never a template parameter or written by the template", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(/param coAnthropicApiKeyInKeyVault bool = false/);
+    expect(bicep).not.toMatch(/param \w*[aA]nthropic\w* string/);
+    expect(bicep).not.toMatch(
+      /vaults\/secrets@[\d-]+'\s*=\s*\{[\s\S]{0,120}name:\s*'CO-ANTHROPIC-API-KEY'/,
+    );
+    // Both the secret entry and the env entry are inside the same conditional,
+    // so the flag off leaves no dangling reference.
+    expect(bicep).toMatch(/\.\.\.\(coAnthropicApiKeyInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'co-anthropic-api-key'/);
+    expect(bicep).toMatch(/\.\.\.\(coAnthropicApiKeyInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'CO_ANTHROPIC_API_KEY'/);
+  });
+
+  it("is not the BAS key: neither variable resolves to the other's secret", async () => {
+    const bicep = await readBicep();
+    // The mutation this is for: wiring CO_ANTHROPIC_API_KEY to the existing
+    // 'anthropic-api-key' secretRef would deploy cleanly and bill the
+    // change-order pipeline to the BAS key.
+    expect(bicep).not.toMatch(/name:\s*'CO_ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'anthropic-api-key'/);
+    expect(bicep).not.toMatch(/name:\s*'ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'co-anthropic-api-key'/);
+    // And the two flags are independent: the BAS entries do not depend on the
+    // CO flag or the reverse.
+    expect(bicep).not.toMatch(/\.\.\.\(anthropicApiKeyInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'(co-anthropic-api-key|CO_ANTHROPIC_API_KEY)'/);
+    expect(bicep).not.toMatch(/\.\.\.\(coAnthropicApiKeyInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'(anthropic-api-key|ANTHROPIC_API_KEY)'/);
+  });
+
+  it("is read lazily by the app, never falling back to the BAS key", async () => {
+    const { readChangeOrderAnthropicApiKey, readAnthropicApiKey } = await import("@/lib/env");
+    const before = process.env.CO_ANTHROPIC_API_KEY;
+    const beforeBas = process.env.ANTHROPIC_API_KEY;
+    try {
+      delete process.env.CO_ANTHROPIC_API_KEY;
+      process.env.ANTHROPIC_API_KEY = "bas-key-never-used";
+      expect(readChangeOrderAnthropicApiKey()).toBeNull();
+      process.env.CO_ANTHROPIC_API_KEY = "   ";
+      expect(readChangeOrderAnthropicApiKey()).toBeNull();
+      process.env.CO_ANTHROPIC_API_KEY = " co-key-never-used ";
+      expect(readChangeOrderAnthropicApiKey()).toBe("co-key-never-used");
+      expect(readAnthropicApiKey()).toBe("bas-key-never-used");
+    } finally {
+      if (before === undefined) delete process.env.CO_ANTHROPIC_API_KEY;
+      else process.env.CO_ANTHROPIC_API_KEY = before;
+      if (beforeBas === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = beforeBas;
+    }
   });
 });
 
