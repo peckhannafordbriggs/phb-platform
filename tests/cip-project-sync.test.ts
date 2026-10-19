@@ -1,4 +1,3 @@
-import { localStore } from "@/lib/modules/cost-intelligence/folder-store";
 import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,9 +5,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import {
   ABANDONED_AFTER_MS,
+  FILE_TREE_LIMIT,
   ProjectSyncInProgressError,
-  listProjectFiles,
   listProjects,
+  readProjectFiles,
   syncProjects,
 } from "@/lib/modules/cost-intelligence/project-sync";
 import { createEmployee, disconnectDb, resetDb, testDb } from "./db";
@@ -156,25 +156,47 @@ describe("listProjects", () => {
   });
 });
 
-describe("listProjectFiles", () => {
-  it("lists folders before files, by name, with sizes, and skips Office lock files", async () => {
-    const root = await writeProject("Job", {
+describe("the stored file tree", () => {
+  it("is saved by the sync: folders before files, by name, with sizes, without Office lock files", async () => {
+    await writeProject("Job", {
       "b.pdf": "12",
       "ESTIMATE/z.xlsx": "1",
       "AI FILES/a.docx": "123",
       "~$b.pdf": "x",
     });
+    await run();
 
-    const { tree, truncated } = await listProjectFiles(localStore(path.dirname(root)), path.basename(root));
-
-    expect(truncated).toBe(false);
-    expect(tree.map((n) => [n.name, n.type])).toEqual([
+    const files = await readProjectFiles((await row("Job")).id);
+    if ("error" in files) throw new Error(files.error);
+    expect(files.truncated).toBe(false);
+    expect(files.tree.map((n) => [n.name, n.type])).toEqual([
       ["AI FILES", "dir"],
       ["ESTIMATE", "dir"],
       ["b.pdf", "file"],
     ]);
-    expect(tree[0]?.children).toEqual([
+    expect(files.tree[0]?.children).toEqual([
       { name: "a.docx", path: "AI FILES/a.docx", type: "file", size: 3, modified: OLD.toISOString() },
     ]);
+  });
+
+  it("counts everything but keeps only the first FILE_TREE_LIMIT entries, and is left out of the list", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < FILE_TREE_LIMIT + 5; i += 1) files[`docs/f${String(i).padStart(5, "0")}.txt`] = "x";
+    await writeProject("Big", files);
+    await run();
+
+    expect((await row("Big")).fileCount).toBe(FILE_TREE_LIMIT + 5);
+    const stored = await readProjectFiles((await row("Big")).id);
+    if ("error" in stored) throw new Error(stored.error);
+    expect(stored.truncated).toBe(true);
+    expect(stored.tree[0]?.children).toHaveLength(FILE_TREE_LIMIT - 1);
+    expect(Object.keys((await listProjects())[0]!)).not.toContain("fileTree");
+  });
+
+  it("says to sync when a project has no stored tree yet", async () => {
+    const p = await testDb.cipProject.create({
+      data: { folderName: "Old", locationPath: "x", fileCount: 0, totalBytes: 0n, lastSynced: T0 },
+    });
+    expect(await readProjectFiles(p.id)).toEqual({ error: expect.stringMatching(/Press Sync/) });
   });
 });

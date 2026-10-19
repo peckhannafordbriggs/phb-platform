@@ -19,7 +19,7 @@ export default async function ProjectsPage({ params }: { params: Promise<{ proje
   const [projects, lastSync] = await Promise.all([listProjects(), getLatestProjectSync()]);
   const selected = projectId ? projects.find((p) => p.id.toString() === projectId[0]) : (projects[0] ?? null);
   if (selected === undefined) notFound();
-  const files = selected ? await readProjectFiles(selected.folderName) : null;
+  const files = selected ? await readProjectFiles(selected.id) : null;
 
   return (
     <CipShell canAdminister actions={<NewRunActions canAdminister />}>

@@ -36,6 +36,29 @@ export interface FolderStore {
 
 const join = (...parts: string[]) => parts.filter(Boolean).join("/");
 
+/**
+ * Runs at most `n` tasks at once; the rest wait their turn. Shared across a
+ * whole sync so SharePoint sees a steady handful of requests, not a burst.
+ * Hold it only around a single request, never across a recursive walk.
+ */
+export function limiter(n: number) {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async function run<T>(task: () => Promise<T>): Promise<T> {
+    if (active >= n) await new Promise<void>((resolve) => waiting.push(resolve));
+    active += 1;
+    try {
+      return await task();
+    } finally {
+      active -= 1;
+      waiting.shift()?.();
+    }
+  };
+}
+
+/** Requests to SharePoint in flight at once, per sync or download. */
+export const GRAPH_PARALLEL = 8;
+
 // ---------------------------------------------------------------------------
 // Local folder
 // ---------------------------------------------------------------------------
@@ -77,8 +100,6 @@ const GRAPH = "https://graph.microsoft.com/v1.0";
 const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
 const SELECT = "$select=id,name,folder,file,size,webUrl,fileSystemInfo,lastModifiedDateTime";
 const RETRIES = 4;
-/** Files fetched at once by `download`. Graph throttles well above this. */
-const PARALLEL = 6;
 
 export type GraphFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -198,27 +219,23 @@ export function sharePointStore(
     },
 
     async download(rel, dest, skip) {
-      // Walk first, then fetch the files a few at a time.
-      const files: { id: string; to: string }[] = [];
-      const pending: [string, string][] = [[rel, dest]];
-      while (pending.length > 0) {
-        const [from, to] = pending.pop()!;
+      // Folders are listed and files fetched in parallel, a few requests at a time.
+      const limit = limiter(GRAPH_PARALLEL);
+      async function copy(from: string, to: string): Promise<void> {
         await mkdir(to, { recursive: true });
-        for (const child of await children(from)) {
-          if (skip.test(child.name)) continue;
-          const target = path.join(to, child.name);
-          if (child.folder !== undefined) pending.push([join(from, child.name), target]);
-          else files.push({ id: child.id, to: target });
-        }
-      }
-      for (let i = 0; i < files.length; i += PARALLEL) {
+        const entries = await limit(() => children(from));
         await Promise.all(
-          files.slice(i, i + PARALLEL).map(async (f) => {
-            const response = await fetchFile(f.id);
-            await writeFile(f.to, Buffer.from(await response.arrayBuffer()));
-          }),
+          entries
+            .filter((child) => !skip.test(child.name))
+            .map(async (child) => {
+              const target = path.join(to, child.name);
+              if (child.folder !== undefined) return copy(join(from, child.name), target);
+              const body = await limit(async () => Buffer.from(await (await fetchFile(child.id)).arrayBuffer()));
+              await writeFile(target, body);
+            }),
         );
       }
+      await copy(rel, dest);
     },
   };
 }

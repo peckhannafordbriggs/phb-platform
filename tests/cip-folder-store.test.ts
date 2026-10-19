@@ -128,3 +128,32 @@ describe("sharePointStore", () => {
     await expect(store.list("")).rejects.toThrow(/403.*no grant on this folder/);
   });
 });
+
+describe("limiter", () => {
+  it("never runs more than n tasks at once, and runs them all", async () => {
+    const { limiter } = await import("@/lib/modules/cost-intelligence/folder-store");
+    const limit = limiter(3);
+    let active = 0;
+    let peak = 0;
+    const done = await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        limit(async () => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          active -= 1;
+          return i;
+        }),
+      ),
+    );
+    expect(done).toEqual([...Array(12).keys()]);
+    expect(peak).toBe(3);
+  });
+
+  it("keeps going after a task fails", async () => {
+    const { limiter } = await import("@/lib/modules/cost-intelligence/folder-store");
+    const limit = limiter(1);
+    await expect(limit(async () => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
+    expect(await limit(async () => "next")).toBe("next");
+  });
+});

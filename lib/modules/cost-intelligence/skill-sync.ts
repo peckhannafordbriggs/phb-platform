@@ -2,7 +2,7 @@ import { writeAuditEvent } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { COST_INTELLIGENCE_MODULE_KEY } from "./constants";
-import { localStore, skillsStore, type FolderStore } from "./folder-store";
+import { GRAPH_PARALLEL, limiter, localStore, skillsStore, type FolderStore } from "./folder-store";
 
 /**
  * Skill catalog sync: read the skills folder, then make `cip_skills` match it.
@@ -219,36 +219,41 @@ const IGNORED = /^(?:~\$.*|\.DS_Store|Thumbs\.db|desktop\.ini|__pycache__|\.git)
 async function readSkillsFolder(store: FolderStore): Promise<{ skills: FolderSkill[]; errors: FolderError[] }> {
   const skills: FolderSkill[] = [];
   const errors: FolderError[] = [];
+  const limit = limiter(GRAPH_PARALLEL);
+  const folders = (await store.list("")).filter((e) => e.folder && !IGNORED.test(e.name));
 
-  for (const entry of await store.list("")) {
-    if (!entry.folder || IGNORED.test(entry.name)) continue;
-    const folderName = entry.name;
-    const locationPath = entry.location;
-
-    try {
-      const skillMd = await store.read(`${folderName}/SKILL.md`);
-      if (skillMd === null) continue;
-      const front = parseFrontmatter(skillMd);
-      if ("reason" in front) {
-        errors.push({ folderName, reason: front.reason });
-        continue;
+  // Every skill at once, a few requests in flight; SKILL.md and CHANGELOG.md are read together.
+  await Promise.all(
+    folders.map(async (entry) => {
+      const folderName = entry.name;
+      try {
+        const [skillMd, changelog] = await Promise.all([
+          limit(() => store.read(`${folderName}/SKILL.md`)),
+          limit(() => store.read(`${folderName}/CHANGELOG.md`)),
+        ]);
+        if (skillMd === null) return;
+        const front = parseFrontmatter(skillMd);
+        if ("reason" in front) {
+          errors.push({ folderName, reason: front.reason });
+          return;
+        }
+        const { entries, newest } = parseChangelog(changelog ?? "");
+        skills.push({
+          folderName,
+          locationPath: entry.location,
+          name: front.name,
+          description: front.description,
+          version: Math.max(entries, 1),
+          lastModified: newest ?? (await newestFileTime(store, folderName, limit)),
+        });
+      } catch (error) {
+        errors.push({ folderName, reason: errorText(error) });
       }
-      const changelog = await store.read(`${folderName}/CHANGELOG.md`);
-      const { entries, newest } = parseChangelog(changelog ?? "");
-      skills.push({
-        folderName,
-        locationPath,
-        name: front.name,
-        description: front.description,
-        version: Math.max(entries, 1),
-        lastModified: newest ?? (await newestFileTime(store, folderName)),
-      });
-    } catch (error) {
-      errors.push({ folderName, reason: errorText(error) });
-    }
-  }
+    }),
+  );
 
   skills.sort((a, b) => a.folderName.localeCompare(b.folderName));
+  errors.sort((a, b) => a.folderName.localeCompare(b.folderName));
   return { skills, errors };
 }
 
@@ -350,15 +355,13 @@ function utcDate(year: number, month: number, day: number): Date {
   return date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : new Date(NaN);
 }
 
-/** Newest file time in a folder, for a skill with no dated CHANGELOG. */
-async function newestFileTime(store: FolderStore, rel: string): Promise<Date> {
-  let newest = 0;
-  for (const entry of await store.list(rel)) {
-    if (IGNORED.test(entry.name)) continue;
-    if (entry.folder) newest = Math.max(newest, (await newestFileTime(store, `${rel}/${entry.name}`)).getTime());
-    else newest = Math.max(newest, entry.modified.getTime());
-  }
-  return new Date(newest);
+/** Newest file time in a folder, for a skill with no dated CHANGELOG. Subfolders in parallel. */
+async function newestFileTime(store: FolderStore, rel: string, limit: ReturnType<typeof limiter>): Promise<Date> {
+  const entries = (await limit(() => store.list(rel))).filter((e) => !IGNORED.test(e.name));
+  const times = await Promise.all(
+    entries.map(async (e) => (e.folder ? (await newestFileTime(store, `${rel}/${e.name}`, limit)).getTime() : e.modified.getTime())),
+  );
+  return new Date(Math.max(0, ...times));
 }
 
 function errorText(error: unknown): string {

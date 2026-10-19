@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import { Button } from "../ui/Button";
+import { LinkPending } from "../ui/LinkPending";
 import { Pill } from "../ui/Pill";
 
 /**
@@ -87,16 +88,18 @@ export function SideList({
                   }
                 >
                   <span className="truncate">{item.label}</span>
-                  {item.badge ??
-                    (item.meta && (
-                      <span
-                        className={
-                          "shrink-0 text-[0.6875rem] text-[var(--muted)] " + (item.mono ? "font-mono" : "")
-                        }
-                      >
-                        {item.meta}
-                      </span>
-                    ))}
+                  <LinkPending>
+                    {item.badge ??
+                      (item.meta && (
+                        <span
+                          className={
+                            "shrink-0 text-[0.6875rem] text-[var(--muted)] " + (item.mono ? "font-mono" : "")
+                          }
+                        >
+                          {item.meta}
+                        </span>
+                      ))}
+                  </LinkPending>
                 </Link>
               </li>
             );
@@ -109,6 +112,8 @@ export function SideList({
 
 /**
  * Runs a sync, then refreshes the page so the list and the status line update.
+ * Says "Syncing…" until the refreshed page is on screen, not just until the
+ * request returns.
  * Only a request that never produced a sync row (409, network) shows a message
  * here, floated under the button so the header never reflows; every other
  * outcome is in the status line.
@@ -116,7 +121,9 @@ export function SideList({
 export function SyncButton({ url }: { url: string }) {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
+  const [refreshing, startRefresh] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const busy = syncing || refreshing;
 
   async function sync() {
     setSyncing(true);
@@ -127,7 +134,7 @@ export function SyncButton({ url }: { url: string }) {
         const body = (await response.json().catch(() => null)) as { error?: { message: string } } | null;
         setError(body?.error?.message ?? "Sync failed. Try again.");
       }
-      router.refresh();
+      startRefresh(() => router.refresh());
     } catch {
       setError("Could not reach the server. Try again.");
     } finally {
@@ -137,9 +144,9 @@ export function SyncButton({ url }: { url: string }) {
 
   return (
     <div className="relative shrink-0">
-      <Button onClick={sync} disabled={syncing}>
-        <RefreshCw size={14} aria-hidden="true" className={syncing ? "animate-spin" : undefined} />
-        {syncing ? "Syncing…" : "Sync"}
+      <Button onClick={sync} disabled={busy}>
+        <RefreshCw size={14} aria-hidden="true" className={busy ? "animate-spin" : undefined} />
+        {busy ? "Syncing…" : "Sync"}
       </Button>
       {error && (
         <p role="alert" className="absolute right-0 top-full z-10 mt-1 w-56 rounded-md bg-white p-2 text-[0.75rem] shadow-md">

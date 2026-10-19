@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LinkPending } from "./ui/LinkPending";
 
 export type Tab = { href: string; label: string; prefixes?: string[] };
 
@@ -31,7 +32,7 @@ export function CipNav({
                 href={t.href}
                 aria-current={active ? "page" : undefined}
                 className={
-                  "inline-block border-b-2 px-3 py-2 text-[0.8125rem] transition-colors " +
+                  "inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-[0.8125rem] transition-colors " +
                   (active
                     ? "font-medium text-[var(--foreground)]"
                     : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]")
@@ -39,6 +40,7 @@ export function CipNav({
                 style={active ? { borderColor: "var(--module-accent)" } : undefined}
               >
                 {t.label}
+                <LinkPending />
               </Link>
             </li>
           );

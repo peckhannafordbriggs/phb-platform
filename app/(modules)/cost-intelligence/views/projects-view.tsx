@@ -1,6 +1,6 @@
 import { ChevronRight, FileText, Folder } from "lucide-react";
-import type { CipProject, CipProjectSync } from "@/lib/generated/prisma/client";
-import type { ProjectFileNode, readProjectFiles } from "@/lib/modules/cost-intelligence/project-sync";
+import type { CipProjectSync } from "@/lib/generated/prisma/client";
+import type { ProjectFileNode, ProjectListItem, readProjectFiles } from "@/lib/modules/cost-intelligence/project-sync";
 import { Card } from "../ui/Card";
 import { Pill } from "../ui/Pill";
 import { SideList, SyncButton, SyncStatus } from "./side-list";
@@ -28,15 +28,15 @@ export function formatBytes(bytes: number | bigint): string {
 
 export type ProjectFiles = Awaited<ReturnType<typeof readProjectFiles>>;
 
-/** Projects on the left; the selected one, with its live file tree, on the right. */
+/** Projects on the left; the selected one, with its file tree as of the last sync, on the right. */
 export function ProjectsView({
   projects,
   selected,
   files,
   lastSync,
 }: {
-  projects: CipProject[];
-  selected: CipProject | null;
+  projects: ProjectListItem[];
+  selected: ProjectListItem | null;
   files: ProjectFiles | null;
   lastSync: CipProjectSync | null;
 }) {
@@ -82,7 +82,7 @@ export function ProjectsView({
   );
 }
 
-function ProjectDetail({ project, files }: { project: CipProject; files: ProjectFiles | null }) {
+function ProjectDetail({ project, files }: { project: ProjectListItem; files: ProjectFiles | null }) {
   return (
     <Card padding="p-0" className="min-h-0 overflow-y-auto">
       <div className="flex flex-col gap-5 px-6 py-5">
@@ -124,7 +124,7 @@ function ProjectDetail({ project, files }: { project: CipProject; files: Project
         </div>
 
         <div>
-          <span className="eyebrow text-[var(--muted)]">Files · read live from the folder</span>
+          <span className="eyebrow text-[var(--muted)]">Files · as of the last sync</span>
           <div className="mt-2 rounded-[var(--radius-row)] border border-[var(--border)] bg-white px-2 py-2 text-[0.8125rem]">
             <FileTree files={files} />
           </div>

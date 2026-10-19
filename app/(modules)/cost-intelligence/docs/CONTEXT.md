@@ -64,6 +64,8 @@ app/(modules)/cost-intelligence/
   ui/
     Button.tsx Card.tsx Dropdown.tsx FilterMenu.tsx Label.tsx
     Pill.tsx Segmented.tsx Table.tsx searchbar.tsx
+    LinkPending.tsx         inside a <Link>: a small spinner while its page loads (side list rows,
+                            tabs, link buttons); the current page stays on screen
 
 lib/modules/cost-intelligence/
   constants.ts              module key and name
@@ -78,7 +80,8 @@ lib/modules/cost-intelligence/
                             (scripts/cip-worker.ts, Dockerfile.cip-worker)
   folder-store.ts           FolderStore: list / read / download, READ-ONLY. sharePointStore (Graph, CIP app:
                             secret locally, managed identity in prod) or localStore; skillsStore(),
-                            projectsStore() pick SharePoint when CIP_SHAREPOINT_* is set
+                            projectsStore() pick SharePoint when CIP_SHAREPOINT_* is set; limiter(n) caps
+                            requests in flight (GRAPH_PARALLEL = 8)
   usage.ts                  getUsage(range): spend from the worker's step_cost events, by day, skill,
                             project and workflow, plus the top runs
   placeholder-settings.ts   PLACEHOLDER_SKILLS (search bar only)
@@ -161,8 +164,9 @@ workflow cannot be removed.
 ### Projects · `settings/projects` and `settings/projects/[projectId]` · `ProjectsView`
 
 Real data. Each direct subfolder of BID-DOC is a project: SharePoint
-(`CIP_SHAREPOINT_PROJECTS_FOLDER`) or, locally, `CIP_PROJECTS_DIR`. The file tree is
-read from the same place when a project opens. Sync reads file names, sizes and dates only, never contents. Data:
+(`CIP_SHAREPOINT_PROJECTS_FOLDER`) or, locally, `CIP_PROJECTS_DIR`. Sync walks every folder
+(in parallel, 8 SharePoint requests at a time) and saves each project's file tree in
+`cip_projects.file_tree`; opening a project reads that, never SharePoint. Sync reads file names, sizes and dates only, never contents. Data:
 `lib/modules/cost-intelligence/project-sync.ts`.
 
 | People call it | Where |

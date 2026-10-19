@@ -623,6 +623,8 @@ model CipProject {
   aiFileCount  Int?      @map("ai_file_count")
   lastSynced   DateTime  @map("last_synced") @db.Timestamptz(3)
   removedAt    DateTime? @map("removed_at") @db.Timestamptz(3)
+  /// The file tree as of the last sync: { tree, truncated }. Null until the next sync.
+  fileTree     Json?     @map("file_tree")
 
   runs CipRun[]
 

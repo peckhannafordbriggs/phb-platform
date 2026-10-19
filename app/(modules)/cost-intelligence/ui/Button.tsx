@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LinkPending } from "./LinkPending";
 
 type Variant = "primary" | "secondary";
 
@@ -35,6 +36,7 @@ export function Button({
     return (
       <Link href={href} className={classes}>
         {children}
+        <LinkPending />
       </Link>
     );
   }

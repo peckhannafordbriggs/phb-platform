@@ -2,15 +2,16 @@ import { writeAuditEvent } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { COST_INTELLIGENCE_MODULE_KEY } from "./constants";
-import { localStore, projectsStore, type FolderStore } from "./folder-store";
+import { GRAPH_PARALLEL, limiter, localStore, projectsStore, type FolderStore } from "./folder-store";
 
 /**
  * Project sync: list the BID-DOC folder, then make `cip_projects` match it.
  *
  * Metadata only. Every direct subfolder of BID-DOC is a project: the SharePoint
  * folder (CIP_SHAREPOINT_PROJECTS_FOLDER), or CIP_PROJECTS_DIR locally. The
- * sync reads file names, sizes and dates, never contents (BID-DOC is ~24 GB).
- * Runs read the documents themselves.
+ * sync reads file names, sizes and dates, never contents (BID-DOC is ~24 GB),
+ * and keeps each project's file tree so the Projects page never has to walk the
+ * folder again. Runs read the documents themselves.
  */
 
 /** The category for files that sit directly in the project folder. */
@@ -26,6 +27,7 @@ type FolderProject = {
   totalBytes: bigint;
   lastModified: Date | null;
   aiFileCount: number | null;
+  fileTree: ProjectFiles;
 };
 
 type FolderError = { folderName: string; reason: string };
@@ -155,7 +157,7 @@ async function saveProjects(
 
       for (const project of projects) {
         const row = existing.get(project.folderName);
-        const data = { ...project, lastSynced: now, removedAt: null };
+        const data = { ...project, fileTree: project.fileTree as unknown as Prisma.InputJsonValue, lastSynced: now, removedAt: null };
         if (row === undefined || row.removedAt !== null) {
           // New, or a removed folder that came back.
           await tx.cipProject.upsert({ where: { folderName: project.folderName }, create: data, update: data });
@@ -166,7 +168,8 @@ async function saveProjects(
           row.totalBytes !== project.totalBytes ||
           row.aiFileCount !== project.aiFileCount ||
           row.lastModified?.getTime() !== project.lastModified?.getTime() ||
-          row.categories.join("\n") !== project.categories.join("\n")
+          row.categories.join("\n") !== project.categories.join("\n") ||
+          sameJson(row.fileTree, project.fileTree) === false
         ) {
           await tx.cipProject.update({ where: { id: row.id }, data });
           projectsUpdated += 1;
@@ -221,13 +224,16 @@ export async function getLatestProjectSync() {
   return prisma.cipProjectSync.findFirst({ orderBy: { startedAt: "desc" } });
 }
 
-/** Every project still in the folder, most recently changed first. */
+/** Every project still in the folder, most recently changed first. Without the file trees, which can be large. */
 export async function listProjects() {
   return prisma.cipProject.findMany({
     where: { removedAt: null },
     orderBy: [{ lastModified: { sort: "desc", nulls: "last" } }, { folderName: "asc" }],
+    omit: { fileTree: true },
   });
 }
+
+export type ProjectListItem = Awaited<ReturnType<typeof listProjects>>[number];
 
 // ---------------------------------------------------------------------------
 // Reading the folder
@@ -241,85 +247,91 @@ async function readProjectsFolder(store: FolderStore): Promise<{ projects: Folde
   const errors: FolderError[] = [];
   const folders = (await store.list("")).filter((e) => e.folder && !IGNORED.test(e.name));
 
-  // A few projects at a time: SharePoint answers one folder per request.
-  for (let i = 0; i < folders.length; i += PROJECTS_AT_ONCE) {
-    await Promise.all(
-      folders.slice(i, i + PROJECTS_AT_ONCE).map(async (entry) => {
-        try {
-          projects.push({ folderName: entry.name, locationPath: entry.location, ...(await summarizeProject(store, entry.name)) });
-        } catch (error) {
-          errors.push({ folderName: entry.name, reason: errorText(error) });
-        }
-      }),
-    );
-  }
+  // Every project at once, with one limit on requests in flight across all of them.
+  const limit = limiter(GRAPH_PARALLEL);
+  await Promise.all(
+    folders.map(async (entry) => {
+      try {
+        projects.push({ folderName: entry.name, locationPath: entry.location, ...(await summarizeProject(store, entry.name, limit)) });
+      } catch (error) {
+        errors.push({ folderName: entry.name, reason: errorText(error) });
+      }
+    }),
+  );
 
   projects.sort((a, b) => a.folderName.localeCompare(b.folderName));
   errors.sort((a, b) => a.folderName.localeCompare(b.folderName));
   return { projects, errors };
 }
 
-const PROJECTS_AT_ONCE = 4;
+type Limit = ReturnType<typeof limiter>;
 
 /**
- * Counts for one project. Categories are its top-level folders, plus
- * "General" when files sit directly in it. Archive folders are counted like
- * any other: the numbers say what is really there.
+ * Counts and the file tree for one project, from one walk. Categories are its
+ * top-level folders, plus "General" when files sit directly in it. Archive
+ * folders are counted like any other: the numbers say what is really there.
  */
-async function summarizeProject(store: FolderStore, root: string): Promise<Omit<FolderProject, "folderName" | "locationPath">> {
-  const categories: string[] = [];
+async function summarizeProject(
+  store: FolderStore,
+  root: string,
+  limit: Limit,
+): Promise<Omit<FolderProject, "folderName" | "locationPath">> {
+  const tree = await readTree(store, root, "", limit);
+
   let fileCount = 0;
   let totalBytes = 0n;
   let newest = 0;
   let aiFileCount: number | null = null;
-  let looseFiles = false;
-
-  for (const entry of await store.list(root)) {
-    if (IGNORED.test(entry.name)) continue;
-    if (entry.folder) {
-      const sub = await walk(store, `${root}/${entry.name}`);
-      categories.push(entry.name);
-      fileCount += sub.files;
-      totalBytes += sub.bytes;
-      newest = Math.max(newest, sub.newest);
-      if (AI_FILES.test(entry.name)) aiFileCount = (aiFileCount ?? 0) + sub.files;
-    } else {
-      looseFiles = true;
+  const pending = [...tree];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (node.type === "dir") pending.push(...(node.children ?? []));
+    else {
       fileCount += 1;
-      totalBytes += BigInt(entry.size);
-      newest = Math.max(newest, entry.modified.getTime());
+      totalBytes += BigInt(node.size ?? 0);
+      newest = Math.max(newest, node.modified ? Date.parse(node.modified) : 0);
     }
   }
+  for (const node of tree) {
+    if (node.type === "dir" && AI_FILES.test(node.name)) aiFileCount = (aiFileCount ?? 0) + countTreeFiles(node.children ?? []);
+  }
 
-  categories.sort((a, b) => a.localeCompare(b));
-  if (looseFiles) categories.push(GENERAL_CATEGORY);
-  return { categories, fileCount, totalBytes, lastModified: newest > 0 ? new Date(newest) : null, aiFileCount };
+  const categories = tree.filter((n) => n.type === "dir").map((n) => n.name);
+  if (tree.some((n) => n.type === "file")) categories.push(GENERAL_CATEGORY);
+
+  return {
+    categories,
+    fileCount,
+    totalBytes,
+    lastModified: newest > 0 ? new Date(newest) : null,
+    aiFileCount,
+    fileTree: capTree(tree),
+  };
 }
 
-/** Files, bytes and newest modified time under a folder. Iterative, so deep trees can't overflow the stack. */
-async function walk(store: FolderStore, dir: string): Promise<{ files: number; bytes: bigint; newest: number }> {
-  let files = 0;
-  let bytes = 0n;
-  let newest = 0;
-  const pending = [dir];
+/** One folder's tree. Subfolders are read in parallel; `limit` caps the requests in flight. */
+async function readTree(store: FolderStore, dir: string, rel: string, limit: Limit): Promise<ProjectFileNode[]> {
+  const entries = (await limit(() => store.list(dir)))
+    .filter((e) => !IGNORED.test(e.name))
+    .sort((a, b) => Number(b.folder) - Number(a.folder) || a.name.localeCompare(b.name));
 
-  while (pending.length > 0) {
-    const current = pending.pop()!;
-    for (const entry of await store.list(current)) {
-      if (IGNORED.test(entry.name)) continue;
-      if (entry.folder) pending.push(`${current}/${entry.name}`);
-      else {
-        files += 1;
-        bytes += BigInt(entry.size);
-        newest = Math.max(newest, entry.modified.getTime());
+  return Promise.all(
+    entries.map(async (entry): Promise<ProjectFileNode> => {
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (!entry.folder) {
+        return { name: entry.name, path: relPath, type: "file", size: entry.size, modified: entry.modified.toISOString() };
       }
-    }
-  }
-  return { files, bytes, newest };
+      return { name: entry.name, path: relPath, type: "dir", children: await readTree(store, `${dir}/${entry.name}`, relPath, limit) };
+    }),
+  );
+}
+
+function countTreeFiles(nodes: ProjectFileNode[]): number {
+  return nodes.reduce((n, node) => n + (node.type === "file" ? 1 : countTreeFiles(node.children ?? [])), 0);
 }
 
 // ---------------------------------------------------------------------------
-// The live file tree on the Projects page
+// The file tree on the Projects page
 // ---------------------------------------------------------------------------
 
 export type ProjectFileNode = {
@@ -332,57 +344,47 @@ export type ProjectFileNode = {
   children?: ProjectFileNode[];
 };
 
+export type ProjectFiles = { tree: ProjectFileNode[]; truncated: boolean };
+
 /** A big project still renders; the rest is cut and the page says so. */
 export const FILE_TREE_LIMIT = 5000;
 
-/**
- * The project's files, read from the folder when the page opens, so it is never
- * stale. Folders first, then files, each by name. Stops after FILE_TREE_LIMIT
- * entries; `truncated` says it did.
- */
-export async function listProjectFiles(
-  store: FolderStore,
-  folderName: string,
-): Promise<{ tree: ProjectFileNode[]; truncated: boolean }> {
+/** The first FILE_TREE_LIMIT entries in display order (folders first, then files, by name). */
+function capTree(tree: ProjectFileNode[]): ProjectFiles {
   let seen = 0;
   let truncated = false;
-
-  async function read(dir: string, rel: string): Promise<ProjectFileNode[]> {
-    const entries = (await store.list(dir))
-      .filter((e) => !IGNORED.test(e.name))
-      .sort((a, b) => Number(b.folder) - Number(a.folder) || a.name.localeCompare(b.name));
-
-    const nodes: ProjectFileNode[] = [];
-    for (const entry of entries) {
+  function cut(nodes: ProjectFileNode[]): ProjectFileNode[] {
+    const out: ProjectFileNode[] = [];
+    for (const node of nodes) {
       if (seen >= FILE_TREE_LIMIT) {
         truncated = true;
         break;
       }
       seen += 1;
-      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.folder) {
-        nodes.push({ name: entry.name, path: relPath, type: "dir", children: await read(`${dir}/${entry.name}`, relPath) });
-      } else {
-        nodes.push({ name: entry.name, path: relPath, type: "file", size: entry.size, modified: entry.modified.toISOString() });
-      }
+      out.push(node.type === "dir" ? { ...node, children: cut(node.children ?? []) } : node);
     }
-    return nodes;
+    return out;
   }
-
-  return { tree: await read(folderName, ""), truncated };
+  return { tree: cut(tree), truncated };
 }
 
-/** The file tree, or a plain reason it could not be read. */
-export async function readProjectFiles(
-  folderName: string,
-): Promise<{ tree: ProjectFileNode[]; truncated: boolean } | { error: string }> {
-  const choice = projectsStore();
-  if (!choice.ok) return { error: choice.message };
-  try {
-    return await listProjectFiles(choice.store, folderName);
-  } catch (error) {
-    return { error: `The folder could not be read: ${errorText(error)}` };
-  }
+/** The project's file tree as of the last sync, or a plain reason there is none. */
+export async function readProjectFiles(projectId: bigint): Promise<ProjectFiles | { error: string }> {
+  const row = await prisma.cipProject.findUnique({ where: { id: projectId }, select: { fileTree: true } });
+  const files = row?.fileTree as ProjectFiles | null | undefined;
+  if (!files || !Array.isArray(files.tree)) return { error: "No file list yet. Press Sync to read this project's files." };
+  return files;
+}
+
+/** Equal as data. Postgres jsonb reorders object keys, so plain JSON.stringify would not do. */
+function sameJson(a: unknown, b: unknown): boolean {
+  const canon = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canon)
+      : v !== null && typeof v === "object"
+        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon((v as Record<string, unknown>)[k])]))
+        : v;
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
 }
 
 function errorText(error: unknown): string {
