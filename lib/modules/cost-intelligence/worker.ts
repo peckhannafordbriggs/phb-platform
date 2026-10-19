@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -12,7 +12,7 @@ import {
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/lib/generated/prisma/client";
-import { projectsStore, skillsStore, type FolderStore } from "./folder-store";
+import { AI_FILES, FileExistsError, isNotFound, projectsStore, skillsStore, type FolderStore } from "./folder-store";
 import type { RunStepSnapshot } from "./runs";
 
 /**
@@ -34,15 +34,10 @@ import type { RunStepSnapshot } from "./runs";
  */
 
 export type WorkerConfig = {
-  /** BID-DOC, read-only: one folder per project, matched by the project's folder name. */
+  /** BID-DOC: one folder per project. Read, and written only in `<project>/AI FILES`. */
   projects: FolderStore;
   /** PHB-CIS-skills, read-only: one folder per skill. */
   skills: FolderStore;
-  /**
-   * The local BID-DOC copy whose `<project>/AI FILES` receives the outputs.
-   * SharePoint is read-only for now, so outputs are written here.
-   */
-  outputsDir: string;
   /** Where run workspaces are built. Deleted when a run finishes. */
   workspaceDir: string;
   /** Where projects and skills come from, for the startup log. */
@@ -54,17 +49,12 @@ export function workerConfigFromEnv(): WorkerConfig {
   const skills = skillsStore();
   if (!projects.ok) throw new Error(projects.message);
   if (!skills.ok) throw new Error(skills.message);
-  const outputsDir = process.env.CIP_PROJECTS_DIR?.trim();
-  if (!outputsDir) {
-    throw new Error("Set CIP_PROJECTS_DIR: run outputs are written to <project>/AI FILES there (see .env.example).");
-  }
   if (!process.env.ANTHROPIC_API_KEY?.trim()) {
     throw new Error("Set ANTHROPIC_API_KEY for the worker (see .env.example).");
   }
   return {
     projects: projects.store,
     skills: skills.store,
-    outputsDir,
     workspaceDir: process.env.CIP_WORKSPACE_DIR?.trim() || path.join(os.tmpdir(), "cip-runs"),
     sources: { projects: projects.source, skills: skills.source },
   };
@@ -76,7 +66,6 @@ const HEARTBEAT_EVERY_MS = 15_000;
 const CANCEL_CHECK_EVERY_MS = 5_000;
 /** One ledger line stays readable; the full text is in the transcript. */
 const LEDGER_TEXT_MAX = 1500;
-const AI_FILES = "AI FILES";
 
 /** OS litter, Office lock files, caches and archives. Never copied into a run. */
 const SKIP = /^(?:~\$.*|\.DS_Store|Thumbs\.db|desktop\.ini|__pycache__|\.git|(?:\+\+ ?)?archive|_ARCHIVE-DO-NOT-READ)$/i;
@@ -204,8 +193,6 @@ async function processRun(runId: bigint, config: WorkerConfig, runAgent: RunAgen
   // Claude Code does not match against its working directory.
   await mkdir(config.workspaceDir, { recursive: true });
   const workspace = path.join(await realpath(config.workspaceDir), `run-${runId}`);
-  // Outputs only: the project itself is read from config.projects.
-  const projectDir = path.join(config.outputsDir, run.project.folderName);
 
   let current = run.currentStep;
   let sessionId = run.sessionId;
@@ -230,7 +217,7 @@ async function processRun(runId: bigint, config: WorkerConfig, runAgent: RunAgen
 
     // Published at a question too: the workspace is rebuilt on resume, maybe in
     // another container, and the published files come back in ./project/AI FILES.
-    const published = await publishOutputs(path.join(workspace, "out"), projectDir);
+    const published = await publishOutputs(path.join(workspace, "out"), config.projects, run.project.folderName);
     for (const file of published) await event(runId, current, "output", `${AI_FILES}/${file}`);
     if (outcome.kind === "asked") {
       await rm(workspace, { recursive: true, force: true });
@@ -520,11 +507,8 @@ export async function buildWorkspace(workspace: string, config: WorkerConfig, pr
   await rm(workspace, { recursive: true, force: true });
   const filter = (source: string) => !SKIP.test(path.basename(source));
   const projectCopy = path.join(workspace, "project");
+  // Includes AI FILES, so outputs published earlier (a previous step, or before a question) come back.
   await config.projects.download(project, projectCopy, SKIP);
-  // Outputs published so far (an earlier step, or before a question) live in the
-  // local AI FILES, not in the read-only source, so they are laid over the copy.
-  const published = path.join(config.outputsDir, project, AI_FILES);
-  if (await exists(published)) await cp(published, path.join(projectCopy, AI_FILES), { recursive: true, filter });
   await config.skills.download("", path.join(workspace, "skills-repo"), SKIP);
   await cp(path.join(workspace, "skills-repo", skill), path.join(workspace, ".claude", "skills", skill), { recursive: true, filter });
   await mkdir(path.join(workspace, "out"), { recursive: true });
@@ -532,19 +516,45 @@ export async function buildWorkspace(workspace: string, config: WorkerConfig, pr
 }
 
 /**
- * Copy every file in `outDir` into `<project>/AI FILES/`, creating it if needed.
- * A taken name gets the next free `_revN`. Never overwrites. Returns the names used.
+ * Create every file in `outDir` in `<project>/AI FILES/` (made if needed),
+ * keeping subfolders. A taken name gets the next free `_revN`; nothing is ever
+ * replaced. Returns the names used, relative to AI FILES.
  */
-export async function publishOutputs(outDir: string, projectDir: string): Promise<string[]> {
+export async function publishOutputs(outDir: string, projects: FolderStore, project: string): Promise<string[]> {
   const files = await listFiles(outDir);
-  if (files.length === 0) return [];
-  const target = path.join(projectDir, AI_FILES);
+  const taken = new Map<string, Set<string>>(); // folder under AI FILES -> names in it, lower case
   const published: string[] = [];
+
   for (const rel of files) {
-    const dest = await freeName(path.join(target, rel));
-    await mkdir(path.dirname(dest), { recursive: true });
-    await cp(path.join(outDir, rel), dest, { errorOnExist: true, force: false });
-    published.push(path.relative(target, dest).split(path.sep).join("/"));
+    const parts = rel.split(path.sep);
+    const name = parts.pop()!;
+    const folder = parts.join("/");
+    const dir = [project, AI_FILES, folder].filter(Boolean).join("/");
+    if (!taken.has(folder)) {
+      const names = await projects.list(dir).then(
+        (entries) => entries.map((e) => e.name.toLowerCase()),
+        (error: unknown) => {
+          if (isNotFound(error)) return [];
+          throw error;
+        },
+      );
+      taken.set(folder, new Set(names));
+    }
+    const names = taken.get(folder)!;
+    const data = await readFile(path.join(outDir, rel));
+
+    // Someone may add the same name between the listing and the upload: then take the next one.
+    for (let attempt = 0; ; attempt += 1) {
+      const free = freeName(name, names);
+      names.add(free.toLowerCase());
+      try {
+        await projects.write(`${dir}/${free}`, data);
+        published.push(folder ? `${folder}/${free}` : free);
+        break;
+      } catch (error) {
+        if (!(error instanceof FileExistsError) || attempt >= 20) throw error;
+      }
+    }
   }
   return published;
 }
@@ -561,24 +571,17 @@ async function listFiles(dir: string, rel = ""): Promise<string[]> {
   return out.sort();
 }
 
-/** `name.ext`, or `name_revN.ext` with the first free N above any _revN already in the name. */
-export async function freeName(file: string): Promise<string> {
-  if (!(await exists(file))) return file;
-  const ext = path.extname(file);
-  const base = file.slice(0, file.length - ext.length);
+/** `name.ext`, or `name_revN.ext` with the first N not in `taken` (lower-case names), above any _revN already in the name. */
+export function freeName(name: string, taken: Set<string>): string {
+  if (!taken.has(name.toLowerCase())) return name;
+  const ext = path.extname(name);
+  const base = name.slice(0, name.length - ext.length);
   const match = /^(.*)_rev(\d+)$/.exec(base);
   const stem = match ? match[1]! : base;
   for (let n = match ? Number(match[2]) + 1 : 1; ; n += 1) {
     const candidate = `${stem}_rev${n}${ext}`;
-    if (!(await exists(candidate))) return candidate;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
   }
-}
-
-async function exists(file: string): Promise<boolean> {
-  return stat(file).then(
-    () => true,
-    () => false,
-  );
 }
 
 function clip(text: string, max = LEDGER_TEXT_MAX): string {

@@ -157,3 +157,49 @@ describe("limiter", () => {
     expect(await limit(async () => "next")).toBe("next");
   });
 });
+
+describe("write", () => {
+  it("only creates files inside a project's AI FILES, locally", async () => {
+    const { localStore, FileExistsError } = await import("@/lib/modules/cost-intelligence/folder-store");
+    dest = await mkdtemp(path.join(tmpdir(), "cip-write-"));
+    const { mkdir: mk } = await import("node:fs/promises");
+    await mk(path.join(dest, "Job"));
+    const store = localStore(dest);
+
+    await store.write("Job/AI FILES/sub/a.txt", Buffer.from("1"));
+    expect(await readFile(path.join(dest, "Job", "AI FILES", "sub", "a.txt"), "utf8")).toBe("1");
+    await expect(store.write("Job/AI FILES/sub/a.txt", Buffer.from("2"))).rejects.toBeInstanceOf(FileExistsError);
+    expect(await readFile(path.join(dest, "Job", "AI FILES", "sub", "a.txt"), "utf8")).toBe("1");
+
+    for (const bad of ["Job/ESTIMATE/a.txt", "Job/a.txt", "AI FILES/a.txt", "Job/AI FILES/../ESTIMATE/a.txt", "Job/AI FILES/./a.txt", "Job/AI FILES", "Job//AI FILES/a.txt", "Job/AI FILES/a\\..\\b.txt"]) {
+      await expect(store.write(bad, Buffer.from("x"))).rejects.toThrow(/Refused to write outside/);
+    }
+    await expect(store.write("Nope/AI FILES/a.txt", Buffer.from("x"))).rejects.toThrow(); // project must exist
+  });
+
+  it("creates AI FILES folders then uploads with fail-on-conflict, on SharePoint", async () => {
+    const { sharePointStore, FileExistsError } = await import("@/lib/modules/cost-intelligence/folder-store");
+    const calls: { method: string; url: string; body?: string }[] = [];
+    let uploads = 0;
+    const store = sharePointStore("ids:d/root", token, async (url, init) => {
+      const method = init?.method ?? "GET";
+      calls.push({ method, url: decodeURIComponent(url), body: typeof init?.body === "string" ? init.body : undefined });
+      if (method === "POST") return new Response("{}", { status: url.includes("/root:/Job:/") ? 201 : 409 });
+      uploads += 1;
+      return new Response("{}", { status: uploads === 1 ? 201 : 409 });
+    });
+
+    await store.write("Job/AI FILES/claude/r.md", Buffer.from("x"));
+    await expect(store.write("Job/AI FILES/claude/r.md", Buffer.from("y"))).rejects.toBeInstanceOf(FileExistsError);
+    await expect(store.write("Job/ESTIMATE/e.xlsx", Buffer.from("z"))).rejects.toThrow(/Refused/);
+
+    expect(calls.filter((c) => c.method === "POST").map((c) => [c.url.replace(/^.*\/items\/root/, ""), JSON.parse(c.body!).name])).toEqual([
+      [":/Job:/children", "AI FILES"],
+      [":/Job/AI FILES:/children", "claude"],
+    ]);
+    const puts = calls.filter((c) => c.method === "PUT");
+    expect(puts).toHaveLength(2);
+    expect(puts[0]!.url).toContain("/items/root:/Job/AI FILES/claude/r.md:/content?@microsoft.graph.conflictBehavior=fail");
+    expect(calls.some((c) => c.url.includes("ESTIMATE"))).toBe(false);
+  });
+});

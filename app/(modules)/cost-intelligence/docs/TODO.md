@@ -15,7 +15,7 @@ Settings:
 
 Runs:
 - worker in Azure: Container Apps Job resource in infra/main.bicep (KEDA Postgres scaler on queued cip_runs, --once), image build in deploy.yml, ANTHROPIC_API_KEY in Key Vault. Needs the platform owner's sign-off
-- worker files: the project and skills are downloaded from SharePoint; outputs still go to the local CIP_PROJECTS_DIR. Next: upload to AI FILES in SharePoint (publishOutputs), which needs write
+- worker files: done. Projects and skills are downloaded from SharePoint and outputs are created in <project>/AI FILES there (_revN, never replaced)
 - fix docker for tools
 - search: run results were placeholders and are gone; add them back with real search
 - add a optional text field for new run 

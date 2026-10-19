@@ -78,7 +78,8 @@ lib/modules/cost-intelligence/
   worker.ts                 workOnce: claims a queued run, runs each step with the Agent SDK on a copy of the
                             project, ask_user checkpoints, publishes ./out to AI FILES as _revN
                             (scripts/cip-worker.ts, Dockerfile.cip-worker)
-  folder-store.ts           FolderStore: list / read / download, READ-ONLY. sharePointStore (Graph, CIP app:
+  folder-store.ts           FolderStore: list / read / download, and write, which only creates new files
+                            in <project>/AI FILES (assertAiFilesPath; never replaces; no delete or move). sharePointStore (Graph, CIP app:
                             secret locally, managed identity in prod) or localStore; skillsStore(),
                             projectsStore() pick SharePoint when CIP_SHAREPOINT_* is set; limiter(n) caps
                             requests in flight (GRAPH_PARALLEL = 8)

@@ -5,8 +5,11 @@ import { createManagedIdentityAssertionProvider } from "@/lib/azure/managed-iden
 
 /**
  * Where skills and projects are read from: a local folder (the OneDrive copy,
- * for development) or a SharePoint folder through Microsoft Graph. READ-ONLY:
- * nothing here writes to either.
+ * for development) or a SharePoint folder through Microsoft Graph.
+ *
+ * The one write is `write`, and it only ever creates a new file under
+ * `<project>/AI FILES/`: any other path is refused here, before a request is
+ * made, and an existing file is never replaced. There is no delete or move.
  *
  * Paths are relative to the store's root, with forward slashes ("" is the root).
  *
@@ -32,7 +35,38 @@ export interface FolderStore {
   read(rel: string): Promise<string | null>;
   /** Copy a folder and everything under it to `dest` on disk, leaving out names that match `skip`. */
   download(rel: string, dest: string, skip: RegExp): Promise<void>;
+  /**
+   * Create a new file at `<project>/AI FILES/...`, making the folders it needs.
+   * Refuses any other path; throws FileExistsError rather than replace a file.
+   */
+  write(rel: string, data: Buffer): Promise<void>;
 }
+
+/** The name the worker gives the outputs folder in each project. */
+export const AI_FILES = "AI FILES";
+
+/** The file was already there; nothing was written. */
+export class FileExistsError extends Error {
+  constructor(readonly rel: string) {
+    super(`${rel} already exists; it was not replaced.`);
+    this.name = "FileExistsError";
+  }
+}
+
+/** Throws unless `rel` is a file path inside a project's AI FILES folder. */
+export function assertAiFilesPath(rel: string): string[] {
+  const parts = rel.split("/");
+  const valid =
+    parts.length >= 3 &&
+    parts.every((p) => p.length > 0 && p !== "." && p !== ".." && !p.includes("\\")) &&
+    parts[1]!.toLowerCase() === AI_FILES.toLowerCase();
+  if (!valid) throw new Error(`Refused to write outside a project's ${AI_FILES} folder: ${rel}`);
+  return parts;
+}
+
+/** True for "no such folder" from either store. */
+export const isNotFound = (error: unknown) =>
+  (error as NodeJS.ErrnoException)?.code === "ENOENT" || (error instanceof SharePointError && error.status === 404);
 
 const join = (...parts: string[]) => parts.filter(Boolean).join("/");
 
@@ -89,6 +123,17 @@ export function localStore(root: string): FolderStore {
     async download(rel, dest, skip) {
       await cp(full(rel), dest, { recursive: true, filter: (source) => !skip.test(path.basename(source)) });
     },
+    async write(rel, data) {
+      const parts = assertAiFilesPath(rel);
+      await stat(full(parts[0]!)); // the project folder must already exist
+      await mkdir(path.dirname(full(rel)), { recursive: true });
+      try {
+        await writeFile(full(rel), data, { flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new FileExistsError(rel);
+        throw error;
+      }
+    },
   };
 }
 
@@ -134,11 +179,17 @@ export function sharePointStore(
   fetchImpl: GraphFetch = fetch,
 ): FolderStore {
   let root: Promise<{ driveId: string; itemId: string }> | null = null;
+  /** Folders already made (or found) by `write`, so each is asked about once. */
+  const made = new Set<string>();
 
-  async function call(url: string): Promise<Response> {
+  async function call(url: string, init: { method?: string; body?: Buffer | string; type?: string } = {}): Promise<Response> {
     for (let attempt = 1; ; attempt += 1) {
+      const headers: Record<string, string> = { Authorization: `Bearer ${await getToken()}` };
+      if (init.type) headers["Content-Type"] = init.type;
       const response = await fetchImpl(url.startsWith("http") ? url : `${GRAPH}${url}`, {
-        headers: { Authorization: `Bearer ${await getToken()}` },
+        method: init.method ?? "GET",
+        headers,
+        body: init.body as BodyInit | undefined,
       });
       const retry = response.status === 429 || response.status === 503 || response.status === 504;
       if (!retry || attempt >= RETRIES) return response;
@@ -236,6 +287,30 @@ export function sharePointStore(
         );
       }
       await copy(rel, dest);
+    },
+
+    async write(rel, data) {
+      const parts = assertAiFilesPath(rel);
+      // Create AI FILES and any subfolder; "fail" leaves an existing one alone (409).
+      // The project folder (parts[0]) is never created: it has to be there already.
+      for (let i = 1; i < parts.length - 1; i += 1) {
+        const parent = parts.slice(0, i).join("/");
+        if (made.has(`${parent}/${parts[i]}`.toLowerCase())) continue;
+        const response = await call(`${await item(parent)}/children`, {
+          method: "POST",
+          type: "application/json",
+          body: JSON.stringify({ name: parts[i], folder: {}, "@microsoft.graph.conflictBehavior": "fail" }),
+        });
+        if (!response.ok && response.status !== 409) throw await graphError(response);
+        made.add(`${parent}/${parts[i]}`.toLowerCase());
+      }
+      const response = await call(`${await item(rel)}/content?@microsoft.graph.conflictBehavior=fail`, {
+        method: "PUT",
+        type: "application/octet-stream",
+        body: data,
+      });
+      if (response.status === 409) throw new FileExistsError(rel);
+      if (!response.ok) throw await graphError(response);
     },
   };
 }

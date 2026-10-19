@@ -8326,6 +8326,24 @@ back to the local folders.
 
 ---
 
+## A run failed with "Refused to write outside a project's AI FILES folder"
+
+**Symptom.** A run fails while publishing, with that message and a path.
+
+**Cause.** The worker only ever creates files in `<project>/AI FILES/`
+(`assertAiFilesPath` in `lib/modules/cost-intelligence/folder-store.ts`). The
+SharePoint grant covers all of BID-DOC, so this check is what keeps writes there.
+A path with `..`, `.`, a backslash or an empty part is refused too. Nothing was
+written.
+
+**Fix.** A bug, not a setting: find what built the path (`publishOutputs` in
+`worker.ts`). Do not widen the check.
+
+If the publish fails with "SharePoint answered 403" instead, the CIP app has read
+but not write on BID-DOC; the grant's role has to be write.
+
+---
+
 ## A run failed with "Credit balance is too low"
 
 **Symptom.** The run is **Failed** with "Claude Code returned an error result:

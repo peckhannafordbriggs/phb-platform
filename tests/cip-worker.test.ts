@@ -8,12 +8,13 @@ import {
   STALE_AFTER_MS,
   failStaleRuns,
   freeName,
+  publishOutputs,
   runSessionStore,
   workOnce,
   type RunAgent,
   type WorkerConfig,
 } from "@/lib/modules/cost-intelligence/worker";
-import { localStore } from "@/lib/modules/cost-intelligence/folder-store";
+import { localStore, type FolderStore } from "@/lib/modules/cost-intelligence/folder-store";
 import { createEmployee, disconnectDb, resetDb, testDb } from "./db";
 
 let root: string;
@@ -90,7 +91,7 @@ beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "cip-worker-"));
   const bidDoc = path.join(root, "bid-doc");
   skillsDir = path.join(root, "skills");
-  config = { projects: localStore(bidDoc), skills: localStore(skillsDir), outputsDir: bidDoc, workspaceDir: path.join(root, "ws") };
+  config = { projects: localStore(bidDoc), skills: localStore(skillsDir), workspaceDir: path.join(root, "ws") };
   projectDir = path.join(bidDoc, "Job");
   await mkdir(path.join(projectDir, "Specs"), { recursive: true });
   await writeFile(path.join(projectDir, "Specs", "spec.pdf"), "original");
@@ -284,13 +285,39 @@ describe("runSessionStore", () => {
 });
 
 describe("freeName", () => {
-  it("keeps a free name, else bumps or adds _revN", async () => {
-    const dir = path.join(root, "names");
-    await mkdir(dir);
-    await writeFile(path.join(dir, "a.docx"), "");
-    await writeFile(path.join(dir, "b_rev3.xlsx"), "");
-    expect(path.basename(await freeName(path.join(dir, "new.pdf")))).toBe("new.pdf");
-    expect(path.basename(await freeName(path.join(dir, "a.docx")))).toBe("a_rev1.docx");
-    expect(path.basename(await freeName(path.join(dir, "b_rev3.xlsx")))).toBe("b_rev4.xlsx");
+  it("keeps a free name, else bumps or adds _revN, ignoring case like SharePoint", () => {
+    const taken = new Set(["a.docx", "b_rev3.xlsx", "c.pdf", "c_rev1.pdf"]);
+    expect(freeName("new.pdf", taken)).toBe("new.pdf");
+    expect(freeName("A.docx", taken)).toBe("A_rev1.docx");
+    expect(freeName("b_rev3.xlsx", taken)).toBe("b_rev4.xlsx");
+    expect(freeName("c.pdf", taken)).toBe("c_rev2.pdf");
+  });
+});
+
+describe("publishOutputs", () => {
+  it("writes only into the project's AI FILES, keeps subfolders, and takes the next name when one appears meanwhile", async () => {
+    const out = path.join(root, "out");
+    await mkdir(path.join(out, "claude"), { recursive: true });
+    await writeFile(path.join(out, "Brief.docx"), "new");
+    await writeFile(path.join(out, "claude", "report.md"), "r");
+
+    // A store whose first write finds the name taken, as if someone saved it after the listing.
+    const store = localStore(path.join(root, "bid-doc"));
+    let raced = false;
+    const racy: FolderStore = {
+      ...store,
+      write: async (rel, data) => {
+        if (!raced && rel.endsWith("/Brief.docx")) {
+          raced = true;
+          await store.write(rel, Buffer.from("someone else"));
+        }
+        return store.write(rel, data);
+      },
+    };
+
+    expect(await publishOutputs(out, racy, "Job")).toEqual(["Brief_rev1.docx", "claude/report.md"]);
+    expect(await readFile(path.join(projectDir, "AI FILES", "Brief.docx"), "utf8")).toBe("someone else");
+    expect(await readFile(path.join(projectDir, "AI FILES", "Brief_rev1.docx"), "utf8")).toBe("new");
+    expect(await readFile(path.join(projectDir, "AI FILES", "claude", "report.md"), "utf8")).toBe("r");
   });
 });
