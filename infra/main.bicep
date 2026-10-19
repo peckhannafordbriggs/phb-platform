@@ -141,6 +141,31 @@ param graphTenantId string = ''
 param coMailbox string = ''
 
 // ---------------------------------------------------------------------------
+// Cost Intelligence
+// ---------------------------------------------------------------------------
+
+@description('Create the Cost Intelligence run worker job. Off until the ANTHROPIC-API-KEY-CIP secret exists in the vault - the job cannot be created without it. See runbook.md, "Cost Intelligence worker in Azure".')
+param enableCipWorker bool = false
+
+@description('Worker image. Left at the placeholder on a first deployment; the deploy workflow sets the real one.')
+param cipWorkerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
+
+@description('Tenant ID of the CIP app registration (SharePoint access). Not a secret.')
+param cipAppTenantId string = ''
+
+@description('Client ID of the CIP app registration. Production signs in as it with the managed identity and a federated credential; no secret.')
+param cipAppClientId string = ''
+
+@description('SharePoint skills folder, as ids:<driveId>/<itemId>.')
+param cipSharePointSkillsFolder string = ''
+
+@description('SharePoint BID-DOC folder, as ids:<driveId>/<itemId>.')
+param cipSharePointProjectsFolder string = ''
+
+@description('Model the skills run on. Empty means the default in lib/modules/cost-intelligence/runs.ts.')
+param cipRunModel string = ''
+
+// ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
 
@@ -523,6 +548,24 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'CO_MAILBOX'
               value: coMailbox
             }
+            // Cost Intelligence: skill sync, project sync and the file tree read
+            // SharePoint as the CIP app. No secret: the managed identity above.
+            {
+              name: 'PHB_PLATFORM_CIP_APP_TENANT_ID'
+              value: cipAppTenantId
+            }
+            {
+              name: 'PHB_PLATFORM_CIP_APP_CLIENT_ID'
+              value: cipAppClientId
+            }
+            {
+              name: 'CIP_SHAREPOINT_SKILLS_FOLDER'
+              value: cipSharePointSkillsFolder
+            }
+            {
+              name: 'CIP_SHAREPOINT_PROJECTS_FOLDER'
+              value: cipSharePointProjectsFolder
+            }
           ]
           probes: [
             {
@@ -557,6 +600,147 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   // The app cannot start until it may pull its image and read its secrets.
   // Without these, a first deployment fails on a race that looks like a
   // permissions bug.
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// Cost Intelligence run worker
+//
+// A Container Apps Job, not an app: it runs only while there is work. Every
+// 15 seconds the scaler counts queued runs (and running ones whose worker
+// stopped sending heartbeats) and starts one execution per run; each one runs
+// `cip-worker.ts --once` - claims one run with FOR UPDATE SKIP LOCKED, works on
+// it until it finishes or waits on a question, and exits. No retry: a failed
+// run stays Failed and says why.
+//
+// ANTHROPIC-API-KEY-CIP is created in the vault by hand, never through a
+// parameter, so the key is in no deployment history. It is Cost Intelligence's
+// own key, separate from the platform's ANTHROPIC-API-KEY, so its spend shows
+// on its own and it can be revoked alone. The job cannot be created until it
+// exists, hence enableCipWorker.
+// ---------------------------------------------------------------------------
+
+resource cipWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableCipWorker) {
+  name: '${baseName}-cip-worker'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Event'
+      // One run, including the agent's work, gets an hour.
+      replicaTimeout: 3600
+      replicaRetryLimit: 0
+      eventTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+        scale: {
+          minExecutions: 0
+          maxExecutions: 3
+          pollingInterval: 15
+          rules: [
+            {
+              name: 'cip-runs-to-work-on'
+              type: 'postgresql'
+              metadata: {
+                query: 'SELECT count(*) FROM cip_runs WHERE status = \'queued\' OR (status = \'running\' AND heartbeat_at < now() - interval \'10 minutes\')'
+                targetQueryValue: '1'
+              }
+              auth: [
+                {
+                  secretRef: 'database-url'
+                  triggerParameter: 'connection'
+                }
+              ]
+            }
+          ]
+        }
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
+          identity: identity.id
+        }
+        {
+          name: 'anthropic-api-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/ANTHROPIC-API-KEY-CIP'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'cip-worker'
+          image: cipWorkerImage
+          command: [
+            'npx'
+            'tsx'
+            'scripts/cip-worker.ts'
+            '--once'
+          ]
+          resources: {
+            cpu: json('2.0')
+            memory: '4Gi'
+          }
+          env: [
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'database-url'
+            }
+            {
+              name: 'ANTHROPIC_API_KEY'
+              secretRef: 'anthropic-api-key'
+            }
+            {
+              name: 'NODE_ENV'
+              value: 'production'
+            }
+            {
+              name: 'GRAPH_MANAGED_IDENTITY_CLIENT_ID'
+              value: identity.properties.clientId
+            }
+            {
+              name: 'PHB_PLATFORM_CIP_APP_TENANT_ID'
+              value: cipAppTenantId
+            }
+            {
+              name: 'PHB_PLATFORM_CIP_APP_CLIENT_ID'
+              value: cipAppClientId
+            }
+            {
+              name: 'CIP_SHAREPOINT_SKILLS_FOLDER'
+              value: cipSharePointSkillsFolder
+            }
+            {
+              name: 'CIP_SHAREPOINT_PROJECTS_FOLDER'
+              value: cipSharePointProjectsFolder
+            }
+            {
+              name: 'CIP_RUN_MODEL'
+              value: cipRunModel
+            }
+          ]
+        }
+      ]
+    }
+  }
   dependsOn: [
     acrPull
     keyVaultRead
@@ -612,5 +796,7 @@ output databaseName string = database.name
 output managedIdentityName string = identity.name
 output managedIdentityClientId string = identity.properties.clientId
 output managedIdentityPrincipalId string = identity.properties.principalId
+// Set as the AZURE_CIP_WORKER_JOB repository variable so deploys update its image.
+output cipWorkerJobName string = enableCipWorker ? cipWorkerJob.name : ''
 // The redirect URI IT has to add to the SSO app registration in Part B.
 output ssoRedirectUri string = 'https://${containerApp.properties.configuration.ingress.fqdn}/api/auth/callback/microsoft-entra-id'

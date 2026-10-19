@@ -8319,10 +8319,12 @@ it was granted. 403: no grant on that folder, or the role is missing. 404: the
 `CIP_SHAREPOINT_*_FOLDER` value points at something else, or the app cannot see it.
 "Set PHB_PLATFORM_CIP_APP_..." means the app settings are missing.
 
-**Fix.** Run `npm run cip:graph:probe` with the same folders; it says which of
-consent, grant and role fails. Copy the `ids:<driveId>/<itemId>` line it prints into
-`CIP_SHAREPOINT_SKILLS_FOLDER` / `CIP_SHAREPOINT_PROJECTS_FOLDER`. Empty both to go
-back to the local folders.
+**Fix.** Look the folder up as the CIP app in Graph Explorer:
+`GET https://graph.microsoft.com/v1.0/shares/u!<base64url of the folder URL>/driveItem`.
+403 there means the grant (or its role) is missing on that folder; fix it in the
+app's folder grants. If it opens, `parentReference.driveId` and `id` are the two
+halves of `ids:<driveId>/<itemId>`: put that in `CIP_SHAREPOINT_SKILLS_FOLDER` /
+`CIP_SHAREPOINT_PROJECTS_FOLDER`. Empty both to go back to the local folders.
 
 ---
 
@@ -8341,6 +8343,38 @@ written.
 
 If the publish fails with "SharePoint answered 403" instead, the CIP app has read
 but not write on BID-DOC; the grant's role has to be write.
+
+---
+
+## Cost Intelligence worker in Azure
+
+**What it is.** A Container Apps Job, `<baseName>-cip-worker` (`cipWorkerJob` in
+`infra/main.bicep`). Every 15 s it counts queued runs (and running ones whose
+heartbeat stopped) and starts one execution per run, up to 3 at once; each runs
+`cip-worker.ts --once` and exits. It reads projects and skills from SharePoint and
+creates outputs only in `<project>/AI FILES`. It costs nothing while idle.
+
+**Turning it on, once, in this order.**
+
+1. Create the Key Vault secret `ANTHROPIC-API-KEY-CIP` by hand, in the Portal
+   (Key Vault Secrets Officer on the vault). It is Cost Intelligence's own key,
+   not the platform's `ANTHROPIC-API-KEY`. Never pass it as a parameter: it would
+   be in the deployment history.
+2. Check the CIP app registration has a federated credential for the platform's
+   user-assigned identity (`managedIdentityClientId` output).
+3. In `infra/main.parameters.json` set `enableCipWorker: true`, `cipAppTenantId`,
+   `cipAppClientId` and the two `cipSharePoint*Folder` values (`ids:<driveId>/<itemId>`). Keep `containerImage` and `cipWorkerImage` at the
+   images now running, or a redeploy puts the placeholder back.
+4. `az deployment group what-if ...` (see `infra/README.md`), review, then `create`.
+5. Set the repository variable `AZURE_CIP_WORKER_JOB` to the `cipWorkerJobName`
+   output. From the next push to `main`, `deploy.yml` builds `cip-worker:<sha>` and
+   points the job at it. Until it is set those steps are skipped.
+
+**Runs stay Queued in production.** `az containerapp job execution list --name
+<job> -g <rg>` shows whether executions start. None: the scale rule cannot reach
+the database (the secret, or the firewall's Azure-services rule). Executions that
+fail at once: `az containerapp job logs show`; a missing ANTHROPIC_API_KEY or CIP
+setting is named in the first lines.
 
 ---
 

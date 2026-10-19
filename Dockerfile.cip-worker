@@ -9,8 +9,9 @@
 #
 #   docker compose -f docker-compose.cip-worker.yml up --build
 #
-# BID-DOC is mounted read-write only because finished outputs are published
-# into each project's AI FILES folder; runs work on a copy of the project.
+# In Azure there are no mounts: projects and skills are read from SharePoint and
+# outputs created in <project>/AI FILES there (lib/modules/cost-intelligence/
+# folder-store.ts). Runs always work on a copy of the project.
 #
 # LibreOffice is left out (about 600 MB). Only phb-state-form needs it; add
 # `libreoffice-calc-nogui` to the apt line when that skill is piloted.
@@ -43,5 +44,6 @@ ENV NODE_ENV=production \
 
 USER node
 
-# Polls for queued runs. A Container Apps Job runs it with --once instead.
+# Polls for queued runs. The Container Apps Job (infra/main.bicep, cipWorkerJob)
+# runs it with --once: one run per execution, then exit.
 CMD ["npx", "tsx", "scripts/cip-worker.ts"]

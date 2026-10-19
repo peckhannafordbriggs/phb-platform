@@ -75,6 +75,9 @@ delete process.env.GRAPH_CLIENT_ID;
 delete process.env.GRAPH_CLIENT_SECRET;
 delete process.env.GRAPH_TENANT_ID;
 delete process.env.GRAPH_MANAGED_IDENTITY_CLIENT_ID;
+// Cost Intelligence reads SharePoint when these are set; tests use local folders.
+delete process.env.CIP_SHAREPOINT_SKILLS_FOLDER;
+delete process.env.CIP_SHAREPOINT_PROJECTS_FOLDER;
 
 // The send gate must be off unless a test turns it on.
 process.env.PHB_ALLOW_SEND = "false";

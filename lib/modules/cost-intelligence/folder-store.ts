@@ -170,7 +170,7 @@ export class SharePointError extends Error {
 }
 
 /**
- * `folder` is what the probe prints, `ids:<driveId>/<itemId>`, or the folder's
+ * `folder` is `ids:<driveId>/<itemId>`, or the folder's
  * URL as the browser shows it (resolved through /shares).
  */
 export function sharePointStore(
