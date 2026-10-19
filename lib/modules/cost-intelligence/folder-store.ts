@@ -1,0 +1,301 @@
+import { cp, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { ClientAssertionCredential, ClientSecretCredential, type TokenCredential } from "@azure/identity";
+import { createManagedIdentityAssertionProvider } from "@/lib/azure/managed-identity-assertion";
+
+/**
+ * Where skills and projects are read from: a local folder (the OneDrive copy,
+ * for development) or a SharePoint folder through Microsoft Graph. READ-ONLY:
+ * nothing here writes to either.
+ *
+ * Paths are relative to the store's root, with forward slashes ("" is the root).
+ *
+ * SharePoint uses the CIP app registration, whose granular permissions
+ * (Files.SelectedOperations.Selected) are granted on the two folders only. It
+ * authenticates with a client secret locally and, in production, with the
+ * platform's managed identity through a federated credential, never a secret.
+ */
+
+export type StoreEntry = {
+  name: string;
+  folder: boolean;
+  size: number;
+  modified: Date;
+  /** For people: a disk path or a SharePoint URL. */
+  location: string;
+};
+
+export interface FolderStore {
+  /** The entries directly in a folder. Throws if the folder can't be read. */
+  list(rel: string): Promise<StoreEntry[]>;
+  /** A text file's contents, or null when there is no such file. */
+  read(rel: string): Promise<string | null>;
+  /** Copy a folder and everything under it to `dest` on disk, leaving out names that match `skip`. */
+  download(rel: string, dest: string, skip: RegExp): Promise<void>;
+}
+
+const join = (...parts: string[]) => parts.filter(Boolean).join("/");
+
+// ---------------------------------------------------------------------------
+// Local folder
+// ---------------------------------------------------------------------------
+
+export function localStore(root: string): FolderStore {
+  const full = (rel: string) => path.join(root, ...rel.split("/").filter(Boolean));
+  return {
+    async list(rel) {
+      const dir = full(rel);
+      const entries = await readdir(dir, { withFileTypes: true });
+      const out: StoreEntry[] = [];
+      for (const e of entries) {
+        if (!e.isDirectory() && !e.isFile()) continue;
+        const location = path.join(dir, e.name);
+        const info = await stat(location);
+        out.push({ name: e.name, folder: e.isDirectory(), size: e.isFile() ? info.size : 0, modified: info.mtime, location });
+      }
+      return out;
+    },
+    async read(rel) {
+      try {
+        return await readFile(full(rel), "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+    },
+    async download(rel, dest, skip) {
+      await cp(full(rel), dest, { recursive: true, filter: (source) => !skip.test(path.basename(source)) });
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// SharePoint through Microsoft Graph
+// ---------------------------------------------------------------------------
+
+const GRAPH = "https://graph.microsoft.com/v1.0";
+const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
+const SELECT = "$select=id,name,folder,file,size,webUrl,fileSystemInfo,lastModifiedDateTime";
+const RETRIES = 4;
+/** Files fetched at once by `download`. Graph throttles well above this. */
+const PARALLEL = 6;
+
+export type GraphFetch = (url: string, init?: RequestInit) => Promise<Response>;
+
+type GraphItem = {
+  id: string;
+  name: string;
+  folder?: unknown;
+  size?: number;
+  webUrl?: string;
+  fileSystemInfo?: { lastModifiedDateTime?: string };
+  lastModifiedDateTime?: string;
+  parentReference?: { driveId?: string };
+};
+
+export class SharePointError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "SharePointError";
+  }
+}
+
+/**
+ * `folder` is what the probe prints, `ids:<driveId>/<itemId>`, or the folder's
+ * URL as the browser shows it (resolved through /shares).
+ */
+export function sharePointStore(
+  folder: string,
+  getToken: () => Promise<string>,
+  fetchImpl: GraphFetch = fetch,
+): FolderStore {
+  let root: Promise<{ driveId: string; itemId: string }> | null = null;
+
+  async function call(url: string): Promise<Response> {
+    for (let attempt = 1; ; attempt += 1) {
+      const response = await fetchImpl(url.startsWith("http") ? url : `${GRAPH}${url}`, {
+        headers: { Authorization: `Bearer ${await getToken()}` },
+      });
+      const retry = response.status === 429 || response.status === 503 || response.status === 504;
+      if (!retry || attempt >= RETRIES) return response;
+      const header = Number(response.headers.get("retry-after") ?? Number.NaN);
+      const wait = Number.isFinite(header) ? header : 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 30) * 1000));
+    }
+  }
+
+  async function json<T>(url: string): Promise<T> {
+    const response = await call(url);
+    if (!response.ok) throw await graphError(response);
+    return (await response.json()) as T;
+  }
+
+  function resolveRoot() {
+    root ??= (async () => {
+      if (folder.startsWith("ids:")) {
+        const [driveId, itemId] = folder.slice(4).split("/");
+        if (!driveId || !itemId) throw new SharePointError("The folder must look like ids:<driveId>/<itemId>.", 0);
+        return { driveId, itemId };
+      }
+      const share = `u!${Buffer.from(encodeURI(folder), "utf8").toString("base64url")}`;
+      const item = await json<GraphItem>(`/shares/${share}/driveItem?$select=id,parentReference`);
+      const driveId = item.parentReference?.driveId;
+      if (!driveId) throw new SharePointError("SharePoint returned the folder without a drive id.", 0);
+      return { driveId, itemId: item.id };
+    })().catch((error: unknown) => {
+      root = null; // let the next call try again
+      throw error;
+    });
+    return root;
+  }
+
+  /** The Graph address of the item at `rel` under the root. */
+  async function item(rel: string): Promise<string> {
+    const { driveId, itemId } = await resolveRoot();
+    const parts = rel.split("/").filter(Boolean).map(encodeURIComponent);
+    return parts.length === 0 ? `/drives/${driveId}/items/${itemId}` : `/drives/${driveId}/items/${itemId}:/${parts.join("/")}:`;
+  }
+
+  async function children(rel: string): Promise<GraphItem[]> {
+    const out: GraphItem[] = [];
+    let url: string | null = `${await item(rel)}/children?${SELECT}&$top=200`;
+    while (url) {
+      const page: { value: GraphItem[]; "@odata.nextLink"?: string } = await json(url);
+      out.push(...page.value);
+      url = page["@odata.nextLink"] ?? null;
+    }
+    return out;
+  }
+
+  const entry = (g: GraphItem): StoreEntry => ({
+    name: g.name,
+    folder: g.folder !== undefined,
+    size: g.folder !== undefined ? 0 : (g.size ?? 0),
+    modified: new Date(g.fileSystemInfo?.lastModifiedDateTime ?? g.lastModifiedDateTime ?? 0),
+    location: g.webUrl ?? g.name,
+  });
+
+  async function fetchFile(id: string): Promise<Response> {
+    const { driveId } = await resolveRoot();
+    const response = await call(`/drives/${driveId}/items/${id}/content`);
+    if (!response.ok) throw await graphError(response);
+    return response;
+  }
+
+  return {
+    async list(rel) {
+      return (await children(rel)).map(entry);
+    },
+
+    async read(rel) {
+      const response = await call(`${await item(rel)}/content`);
+      if (response.status === 404) return null;
+      if (!response.ok) throw await graphError(response);
+      return response.text();
+    },
+
+    async download(rel, dest, skip) {
+      // Walk first, then fetch the files a few at a time.
+      const files: { id: string; to: string }[] = [];
+      const pending: [string, string][] = [[rel, dest]];
+      while (pending.length > 0) {
+        const [from, to] = pending.pop()!;
+        await mkdir(to, { recursive: true });
+        for (const child of await children(from)) {
+          if (skip.test(child.name)) continue;
+          const target = path.join(to, child.name);
+          if (child.folder !== undefined) pending.push([join(from, child.name), target]);
+          else files.push({ id: child.id, to: target });
+        }
+      }
+      for (let i = 0; i < files.length; i += PARALLEL) {
+        await Promise.all(
+          files.slice(i, i + PARALLEL).map(async (f) => {
+            const response = await fetchFile(f.id);
+            await writeFile(f.to, Buffer.from(await response.arrayBuffer()));
+          }),
+        );
+      }
+    },
+  };
+}
+
+async function graphError(response: Response): Promise<SharePointError> {
+  const text = await response.text().catch(() => "");
+  let detail = text.slice(0, 200);
+  try {
+    const err = (JSON.parse(text) as { error?: { code?: string; message?: string } }).error;
+    if (err) detail = `${err.code ?? "error"}: ${err.message ?? ""}`;
+  } catch {
+    /* keep the raw text */
+  }
+  const hint =
+    response.status === 403
+      ? " The CIP app has no grant on this folder."
+      : response.status === 404
+        ? " Not found, or not visible to the CIP app."
+        : "";
+  return new SharePointError(`SharePoint answered ${response.status} (${detail}).${hint}`, response.status);
+}
+
+/** The CIP app's credential: a secret locally, the managed identity in production. */
+function cipCredential(): TokenCredential {
+  const tenantId = process.env.PHB_PLATFORM_CIP_APP_TENANT_ID?.trim();
+  const clientId = process.env.PHB_PLATFORM_CIP_APP_CLIENT_ID?.trim();
+  const secret = process.env.PHB_PLATFORM_CIP_APP_SECRET?.trim();
+  if (!tenantId || !clientId) {
+    throw new SharePointError("Set PHB_PLATFORM_CIP_APP_TENANT_ID and PHB_PLATFORM_CIP_APP_CLIENT_ID (see .env.example).", 0);
+  }
+  if (process.env.NODE_ENV === "production") {
+    if (secret) {
+      throw new SharePointError("PHB_PLATFORM_CIP_APP_SECRET must not be set in production; it uses the managed identity.", 0);
+    }
+    const assertion = createManagedIdentityAssertionProvider({
+      managedIdentityClientId: process.env.GRAPH_MANAGED_IDENTITY_CLIENT_ID?.trim() || null,
+    });
+    return new ClientAssertionCredential(tenantId, clientId, assertion);
+  }
+  if (!secret) throw new SharePointError("Set PHB_PLATFORM_CIP_APP_SECRET for SharePoint access outside production.", 0);
+  return new ClientSecretCredential(tenantId, clientId, secret);
+}
+
+let tokenSource: (() => Promise<string>) | null = null;
+
+/** One credential per process; @azure/identity caches the token itself. */
+function cipToken(): () => Promise<string> {
+  if (tokenSource) return tokenSource;
+  const credential = cipCredential();
+  tokenSource = async () => {
+    const result = await credential.getToken(GRAPH_SCOPE);
+    if (!result) throw new SharePointError("Entra returned no token for the CIP app.", 0);
+    return result.token;
+  };
+  return tokenSource;
+}
+
+// ---------------------------------------------------------------------------
+// Which store to use
+// ---------------------------------------------------------------------------
+
+export type StoreChoice = { ok: true; store: FolderStore; source: string } | { ok: false; message: string };
+
+/** SharePoint when its folder is set, else the local folder, else a plain reason. */
+function choose(sharePointVar: string, localVar: string, what: string): StoreChoice {
+  const folder = process.env[sharePointVar]?.trim();
+  if (folder) {
+    try {
+      return { ok: true, store: sharePointStore(folder, cipToken()), source: `SharePoint (${sharePointVar})` };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const dir = process.env[localVar]?.trim();
+  if (dir) return { ok: true, store: localStore(dir), source: dir };
+  return { ok: false, message: `Set ${sharePointVar} (SharePoint) or ${localVar} (a local folder) for the ${what}.` };
+}
+
+export const skillsStore = () => choose("CIP_SHAREPOINT_SKILLS_FOLDER", "CIP_SKILLS_DIR", "skills folder");
+export const projectsStore = () => choose("CIP_SHAREPOINT_PROJECTS_FOLDER", "CIP_PROJECTS_DIR", "BID-DOC folder");
