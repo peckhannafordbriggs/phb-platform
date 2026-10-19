@@ -6,7 +6,8 @@ import "./load-env";
  *   npm run cip:worker            keep polling for queued runs (local)
  *   npm run cip:worker -- --once  work on at most one run, then exit (a Container Apps Job execution)
  *
- * Needs DATABASE_URL, ANTHROPIC_API_KEY, CIP_PROJECTS_DIR and CIP_SKILLS_DIR.
+ * Needs DATABASE_URL, ANTHROPIC_API_KEY and CIP_PROJECTS_DIR (where outputs go). Projects
+ * and skills come from SharePoint when CIP_SHAREPOINT_* is set, else the local folders.
  * In Docker (docker-compose.cip-worker.yml sets CIP_IN_DOCKER), a localhost
  * database is reached as host.docker.internal.
  * Stops cleanly on Ctrl+C / SIGTERM once the run in hand reaches a stopping
@@ -37,8 +38,9 @@ async function main() {
   // Imported after the line above: the database client reads DATABASE_URL when it loads.
   const { workOnce, workerConfigFromEnv } = await import("../lib/modules/cost-intelligence/worker");
   const config = workerConfigFromEnv();
-  console.log(`[cip-worker] projects: ${config.projectsDir}`);
-  console.log(`[cip-worker] skills:   ${config.skillsDir}`);
+  console.log(`[cip-worker] projects: ${config.sources?.projects} (read-only)`);
+  console.log(`[cip-worker] skills:   ${config.sources?.skills} (read-only)`);
+  console.log(`[cip-worker] outputs:  ${config.outputsDir}/<project>/AI FILES`);
   console.log(`[cip-worker] ${once ? "one run, then exit" : `polling every ${POLL_MS / 1000}s`}`);
 
   while (!stopping) {

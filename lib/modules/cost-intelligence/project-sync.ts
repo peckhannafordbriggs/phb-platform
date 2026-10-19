@@ -1,17 +1,16 @@
-import { readdir, stat } from "node:fs/promises";
-import path from "node:path";
 import { writeAuditEvent } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { COST_INTELLIGENCE_MODULE_KEY } from "./constants";
+import { localStore, projectsStore, type FolderStore } from "./folder-store";
 
 /**
  * Project sync: list the BID-DOC folder, then make `cip_projects` match it.
  *
- * Metadata only. Every direct subfolder of CIP_PROJECTS_DIR is a project; the
+ * Metadata only. Every direct subfolder of BID-DOC is a project: the SharePoint
+ * folder (CIP_SHAREPOINT_PROJECTS_FOLDER), or CIP_PROJECTS_DIR locally. The
  * sync reads file names, sizes and dates, never contents (BID-DOC is ~24 GB).
- * Runs read the documents themselves. When SharePoint access lands, only
- * `readProjectsFolder` and `listProjectFiles` change.
+ * Runs read the documents themselves.
  */
 
 /** The category for files that sit directly in the project folder. */
@@ -67,7 +66,7 @@ export const ABANDONED_AFTER_MS = 10 * 60 * 1000;
 export async function syncProjects(options: {
   trigger: "manual" | "scheduled";
   triggeredById: string | null;
-  /** Defaults to CIP_PROJECTS_DIR. */
+  /** A local folder instead of the configured one (tests). */
   dir?: string;
   now?: () => Date;
 }): Promise<ProjectSyncOutcome> {
@@ -110,14 +109,14 @@ export async function syncProjects(options: {
   };
 
   try {
-    const dir = options.dir ?? process.env.CIP_PROJECTS_DIR?.trim();
-    if (!dir) return await fail("CIP_PROJECTS_DIR is not set. Point it at the BID-DOC folder in .env.local.");
+    const choice = options.dir ? { ok: true as const, store: localStore(options.dir), source: options.dir } : projectsStore();
+    if (!choice.ok) return await fail(choice.message);
 
     let read: { projects: FolderProject[]; errors: FolderError[] };
     try {
-      read = await readProjectsFolder(dir);
+      read = await readProjectsFolder(choice.store);
     } catch (error) {
-      return await fail(`Could not read the projects folder at ${dir}: ${errorText(error)}`);
+      return await fail(`Could not read the projects folder (${choice.source}): ${errorText(error)}`);
     }
 
     const { projects, errors } = read;
@@ -125,7 +124,7 @@ export async function syncProjects(options: {
       return await fail(
         errors.length > 0
           ? `None of the ${errors.length} project folder(s) could be read. Nothing was changed.`
-          : "The projects folder holds no project folders. Check CIP_PROJECTS_DIR. Nothing was changed.",
+          : "The projects folder holds no project folders. Check the configured folder. Nothing was changed.",
         errors,
       );
     }
@@ -237,30 +236,37 @@ export async function listProjects() {
 /** OS litter, Office lock files and caches. Never counted. */
 const IGNORED = /^(?:~\$.*|\.DS_Store|Thumbs\.db|desktop\.ini|__pycache__|\.git)$/i;
 
-async function readProjectsFolder(dir: string): Promise<{ projects: FolderProject[]; errors: FolderError[] }> {
+async function readProjectsFolder(store: FolderStore): Promise<{ projects: FolderProject[]; errors: FolderError[] }> {
   const projects: FolderProject[] = [];
   const errors: FolderError[] = [];
+  const folders = (await store.list("")).filter((e) => e.folder && !IGNORED.test(e.name));
 
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || IGNORED.test(entry.name)) continue;
-    const locationPath = path.join(dir, entry.name);
-    try {
-      projects.push({ folderName: entry.name, locationPath, ...(await summarizeProject(locationPath)) });
-    } catch (error) {
-      errors.push({ folderName: entry.name, reason: errorText(error) });
-    }
+  // A few projects at a time: SharePoint answers one folder per request.
+  for (let i = 0; i < folders.length; i += PROJECTS_AT_ONCE) {
+    await Promise.all(
+      folders.slice(i, i + PROJECTS_AT_ONCE).map(async (entry) => {
+        try {
+          projects.push({ folderName: entry.name, locationPath: entry.location, ...(await summarizeProject(store, entry.name)) });
+        } catch (error) {
+          errors.push({ folderName: entry.name, reason: errorText(error) });
+        }
+      }),
+    );
   }
 
   projects.sort((a, b) => a.folderName.localeCompare(b.folderName));
+  errors.sort((a, b) => a.folderName.localeCompare(b.folderName));
   return { projects, errors };
 }
+
+const PROJECTS_AT_ONCE = 4;
 
 /**
  * Counts for one project. Categories are its top-level folders, plus
  * "General" when files sit directly in it. Archive folders are counted like
  * any other: the numbers say what is really there.
  */
-async function summarizeProject(root: string): Promise<Omit<FolderProject, "folderName" | "locationPath">> {
+async function summarizeProject(store: FolderStore, root: string): Promise<Omit<FolderProject, "folderName" | "locationPath">> {
   const categories: string[] = [];
   let fileCount = 0;
   let totalBytes = 0n;
@@ -268,22 +274,20 @@ async function summarizeProject(root: string): Promise<Omit<FolderProject, "fold
   let aiFileCount: number | null = null;
   let looseFiles = false;
 
-  for (const entry of await readdir(root, { withFileTypes: true })) {
+  for (const entry of await store.list(root)) {
     if (IGNORED.test(entry.name)) continue;
-    const full = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      const sub = await walk(full);
+    if (entry.folder) {
+      const sub = await walk(store, `${root}/${entry.name}`);
       categories.push(entry.name);
       fileCount += sub.files;
       totalBytes += sub.bytes;
       newest = Math.max(newest, sub.newest);
       if (AI_FILES.test(entry.name)) aiFileCount = (aiFileCount ?? 0) + sub.files;
-    } else if (entry.isFile()) {
-      const info = await stat(full);
+    } else {
       looseFiles = true;
       fileCount += 1;
-      totalBytes += BigInt(info.size);
-      newest = Math.max(newest, info.mtimeMs);
+      totalBytes += BigInt(entry.size);
+      newest = Math.max(newest, entry.modified.getTime());
     }
   }
 
@@ -293,7 +297,7 @@ async function summarizeProject(root: string): Promise<Omit<FolderProject, "fold
 }
 
 /** Files, bytes and newest modified time under a folder. Iterative, so deep trees can't overflow the stack. */
-async function walk(dir: string): Promise<{ files: number; bytes: bigint; newest: number }> {
+async function walk(store: FolderStore, dir: string): Promise<{ files: number; bytes: bigint; newest: number }> {
   let files = 0;
   let bytes = 0n;
   let newest = 0;
@@ -301,15 +305,14 @@ async function walk(dir: string): Promise<{ files: number; bytes: bigint; newest
 
   while (pending.length > 0) {
     const current = pending.pop()!;
-    const entries = (await readdir(current, { withFileTypes: true })).filter((e) => !IGNORED.test(e.name));
-    for (const entry of entries) if (entry.isDirectory()) pending.push(path.join(current, entry.name));
-    const infos = await Promise.all(
-      entries.filter((e) => e.isFile()).map((e) => stat(path.join(current, e.name))),
-    );
-    for (const info of infos) {
-      files += 1;
-      bytes += BigInt(info.size);
-      newest = Math.max(newest, info.mtimeMs);
+    for (const entry of await store.list(current)) {
+      if (IGNORED.test(entry.name)) continue;
+      if (entry.folder) pending.push(`${current}/${entry.name}`);
+      else {
+        files += 1;
+        bytes += BigInt(entry.size);
+        newest = Math.max(newest, entry.modified.getTime());
+      }
     }
   }
   return { files, bytes, newest };
@@ -333,20 +336,21 @@ export type ProjectFileNode = {
 export const FILE_TREE_LIMIT = 5000;
 
 /**
- * The project's files, read from disk when the page opens, so it is never
+ * The project's files, read from the folder when the page opens, so it is never
  * stale. Folders first, then files, each by name. Stops after FILE_TREE_LIMIT
  * entries; `truncated` says it did.
  */
 export async function listProjectFiles(
-  locationPath: string,
+  store: FolderStore,
+  folderName: string,
 ): Promise<{ tree: ProjectFileNode[]; truncated: boolean }> {
   let seen = 0;
   let truncated = false;
 
   async function read(dir: string, rel: string): Promise<ProjectFileNode[]> {
-    const entries = (await readdir(dir, { withFileTypes: true }))
-      .filter((e) => !IGNORED.test(e.name) && (e.isDirectory() || e.isFile()))
-      .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+    const entries = (await store.list(dir))
+      .filter((e) => !IGNORED.test(e.name))
+      .sort((a, b) => Number(b.folder) - Number(a.folder) || a.name.localeCompare(b.name));
 
     const nodes: ProjectFileNode[] = [];
     for (const entry of entries) {
@@ -355,29 +359,29 @@ export async function listProjectFiles(
         break;
       }
       seen += 1;
-      const full = path.join(dir, entry.name);
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        nodes.push({ name: entry.name, path: relPath, type: "dir", children: await read(full, relPath) });
+      if (entry.folder) {
+        nodes.push({ name: entry.name, path: relPath, type: "dir", children: await read(`${dir}/${entry.name}`, relPath) });
       } else {
-        const info = await stat(full);
-        nodes.push({ name: entry.name, path: relPath, type: "file", size: info.size, modified: info.mtime.toISOString() });
+        nodes.push({ name: entry.name, path: relPath, type: "file", size: entry.size, modified: entry.modified.toISOString() });
       }
     }
     return nodes;
   }
 
-  return { tree: await read(locationPath, ""), truncated };
+  return { tree: await read(folderName, ""), truncated };
 }
 
-/** The file tree, or a plain reason it could not be read (on a server without the folder, for one). */
+/** The file tree, or a plain reason it could not be read. */
 export async function readProjectFiles(
-  locationPath: string,
+  folderName: string,
 ): Promise<{ tree: ProjectFileNode[]; truncated: boolean } | { error: string }> {
+  const choice = projectsStore();
+  if (!choice.ok) return { error: choice.message };
   try {
-    return await listProjectFiles(locationPath);
+    return await listProjectFiles(choice.store, folderName);
   } catch (error) {
-    return { error: `The folder could not be read from here: ${errorText(error)}` };
+    return { error: `The folder could not be read: ${errorText(error)}` };
   }
 }
 

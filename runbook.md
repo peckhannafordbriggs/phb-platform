@@ -8308,6 +8308,24 @@ settings.
 
 ---
 
+## SharePoint: sync or a run says "SharePoint answered 403" or "404"
+
+**Symptom.** Skill or project sync fails, the Projects file tree shows an error, or a
+run fails while copying the project, with "SharePoint answered 403 ..." or "404 ...".
+
+**Cause.** Skills and projects are read through the CIP app registration
+(`lib/modules/cost-intelligence/folder-store.ts`), which can only see the two folders
+it was granted. 403: no grant on that folder, or the role is missing. 404: the
+`CIP_SHAREPOINT_*_FOLDER` value points at something else, or the app cannot see it.
+"Set PHB_PLATFORM_CIP_APP_..." means the app settings are missing.
+
+**Fix.** Run `npm run cip:graph:probe` with the same folders; it says which of
+consent, grant and role fails. Copy the `ids:<driveId>/<itemId>` line it prints into
+`CIP_SHAREPOINT_SKILLS_FOLDER` / `CIP_SHAREPOINT_PROJECTS_FOLDER`. Empty both to go
+back to the local folders.
+
+---
+
 ## A run failed with "Credit balance is too low"
 
 **Symptom.** The run is **Failed** with "Claude Code returned an error result:

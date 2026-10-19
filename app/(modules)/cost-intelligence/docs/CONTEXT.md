@@ -76,6 +76,9 @@ lib/modules/cost-intelligence/
   worker.ts                 workOnce: claims a queued run, runs each step with the Agent SDK on a copy of the
                             project, ask_user checkpoints, publishes ./out to AI FILES as _revN
                             (scripts/cip-worker.ts, Dockerfile.cip-worker)
+  folder-store.ts           FolderStore: list / read / download, READ-ONLY. sharePointStore (Graph, CIP app:
+                            secret locally, managed identity in prod) or localStore; skillsStore(),
+                            projectsStore() pick SharePoint when CIP_SHAREPOINT_* is set
   usage.ts                  getUsage(range): spend from the worker's step_cost events, by day, skill,
                             project and workflow, plus the top runs
   placeholder-settings.ts   PLACEHOLDER_SKILLS (search bar only)
@@ -124,7 +127,8 @@ All Settings pages are for module admins only, and follow the mockups in the
 
 ### Skill catalog · `/cost-intelligence/settings` and `settings/skills/[skillId]` · `SkillCatalogView` (1d)
 
-Real data from `cip_skills`, filled by a sync of the skills folder (`CIP_SKILLS_DIR`).
+Real data from `cip_skills`, filled by a sync of the skills folder: SharePoint
+(`CIP_SHAREPOINT_SKILLS_FOLDER`) or, locally, `CIP_SKILLS_DIR`.
 The skills list on the left, the selected skill on the right. Picking a skill goes to
 its URL (`/settings/skills/{folder name}`); `/settings` opens on the first skill.
 Unknown folder names 404. No skills yet shows an empty state that points at Sync.
@@ -156,8 +160,9 @@ workflow cannot be removed.
 
 ### Projects · `settings/projects` and `settings/projects/[projectId]` · `ProjectsView`
 
-Real data. Each direct subfolder of `CIP_PROJECTS_DIR` (the BID-DOC folder) is a
-project. Sync reads file names, sizes and dates only, never contents. Data:
+Real data. Each direct subfolder of BID-DOC is a project: SharePoint
+(`CIP_SHAREPOINT_PROJECTS_FOLDER`) or, locally, `CIP_PROJECTS_DIR`. The file tree is
+read from the same place when a project opens. Sync reads file names, sizes and dates only, never contents. Data:
 `lib/modules/cost-intelligence/project-sync.ts`.
 
 | People call it | Where |

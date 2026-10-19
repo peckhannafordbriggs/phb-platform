@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/lib/generated/prisma/client";
+import { projectsStore, skillsStore, type FolderStore } from "./folder-store";
 import type { RunStepSnapshot } from "./runs";
 
 /**
@@ -33,27 +34,39 @@ import type { RunStepSnapshot } from "./runs";
  */
 
 export type WorkerConfig = {
-  /** BID-DOC: one folder per project, matched by the project's folder name. */
-  projectsDir: string;
-  /** PHB-CIS-skills: one folder per skill. */
-  skillsDir: string;
+  /** BID-DOC, read-only: one folder per project, matched by the project's folder name. */
+  projects: FolderStore;
+  /** PHB-CIS-skills, read-only: one folder per skill. */
+  skills: FolderStore;
+  /**
+   * The local BID-DOC copy whose `<project>/AI FILES` receives the outputs.
+   * SharePoint is read-only for now, so outputs are written here.
+   */
+  outputsDir: string;
   /** Where run workspaces are built. Deleted when a run finishes. */
   workspaceDir: string;
+  /** Where projects and skills come from, for the startup log. */
+  sources?: { projects: string; skills: string };
 };
 
 export function workerConfigFromEnv(): WorkerConfig {
-  const projectsDir = process.env.CIP_PROJECTS_DIR?.trim();
-  const skillsDir = process.env.CIP_SKILLS_DIR?.trim();
-  if (!projectsDir || !skillsDir) {
-    throw new Error("Set CIP_PROJECTS_DIR and CIP_SKILLS_DIR for the worker (see .env.example).");
+  const projects = projectsStore();
+  const skills = skillsStore();
+  if (!projects.ok) throw new Error(projects.message);
+  if (!skills.ok) throw new Error(skills.message);
+  const outputsDir = process.env.CIP_PROJECTS_DIR?.trim();
+  if (!outputsDir) {
+    throw new Error("Set CIP_PROJECTS_DIR: run outputs are written to <project>/AI FILES there (see .env.example).");
   }
   if (!process.env.ANTHROPIC_API_KEY?.trim()) {
     throw new Error("Set ANTHROPIC_API_KEY for the worker (see .env.example).");
   }
   return {
-    projectsDir,
-    skillsDir,
+    projects: projects.store,
+    skills: skills.store,
+    outputsDir,
     workspaceDir: process.env.CIP_WORKSPACE_DIR?.trim() || path.join(os.tmpdir(), "cip-runs"),
+    sources: { projects: projects.source, skills: skills.source },
   };
 }
 
@@ -191,7 +204,8 @@ async function processRun(runId: bigint, config: WorkerConfig, runAgent: RunAgen
   // Claude Code does not match against its working directory.
   await mkdir(config.workspaceDir, { recursive: true });
   const workspace = path.join(await realpath(config.workspaceDir), `run-${runId}`);
-  const projectDir = path.join(config.projectsDir, run.project.folderName);
+  // Outputs only: the project itself is read from config.projects.
+  const projectDir = path.join(config.outputsDir, run.project.folderName);
 
   let current = run.currentStep;
   let sessionId = run.sessionId;
@@ -205,7 +219,7 @@ async function processRun(runId: bigint, config: WorkerConfig, runAgent: RunAgen
     }
     if (!resumeWith) await event(runId, current, "step_started", `Step ${current + 1} of ${steps.length}: ${step.name}`);
 
-    await buildWorkspace(workspace, projectDir, config.skillsDir, step.folderName);
+    await buildWorkspace(workspace, config, run.project.folderName, step.folderName);
 
     const outcome = await runStep({ runId, step, current, workspace, sessionId, resumeWith, model: run.model, runAgent });
     if (outcome.kind === "cancelled") break;
@@ -502,12 +516,17 @@ async function finish(runId: bigint, status: "succeeded" | "failed", error: stri
 // ---------------------------------------------------------------------------
 
 /** project/ (a copy), skills-repo/, .claude/skills/<skill>/ and an empty out/. */
-export async function buildWorkspace(workspace: string, projectDir: string, skillsDir: string, skill: string) {
+export async function buildWorkspace(workspace: string, config: WorkerConfig, project: string, skill: string) {
   await rm(workspace, { recursive: true, force: true });
   const filter = (source: string) => !SKIP.test(path.basename(source));
-  await cp(projectDir, path.join(workspace, "project"), { recursive: true, filter });
-  await cp(skillsDir, path.join(workspace, "skills-repo"), { recursive: true, filter });
-  await cp(path.join(skillsDir, skill), path.join(workspace, ".claude", "skills", skill), { recursive: true, filter });
+  const projectCopy = path.join(workspace, "project");
+  await config.projects.download(project, projectCopy, SKIP);
+  // Outputs published so far (an earlier step, or before a question) live in the
+  // local AI FILES, not in the read-only source, so they are laid over the copy.
+  const published = path.join(config.outputsDir, project, AI_FILES);
+  if (await exists(published)) await cp(published, path.join(projectCopy, AI_FILES), { recursive: true, filter });
+  await config.skills.download("", path.join(workspace, "skills-repo"), SKIP);
+  await cp(path.join(workspace, "skills-repo", skill), path.join(workspace, ".claude", "skills", skill), { recursive: true, filter });
   await mkdir(path.join(workspace, "out"), { recursive: true });
   await mkdir(path.join(workspace, "tmp"), { recursive: true });
 }

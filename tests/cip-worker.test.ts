@@ -13,12 +13,14 @@ import {
   type RunAgent,
   type WorkerConfig,
 } from "@/lib/modules/cost-intelligence/worker";
+import { localStore } from "@/lib/modules/cost-intelligence/folder-store";
 import { createEmployee, disconnectDb, resetDb, testDb } from "./db";
 
 let root: string;
 let config: WorkerConfig;
 let actor: string;
 let projectDir: string;
+let skillsDir: string;
 
 /** What one fake agent turn does, given the workspace it was started in. */
 type Script = (cwd: string, options: Options) => Promise<void>;
@@ -86,15 +88,17 @@ beforeEach(async () => {
   await resetDb();
   actor = (await createEmployee()).id;
   root = await mkdtemp(path.join(tmpdir(), "cip-worker-"));
-  config = { projectsDir: path.join(root, "bid-doc"), skillsDir: path.join(root, "skills"), workspaceDir: path.join(root, "ws") };
-  projectDir = path.join(config.projectsDir, "Job");
+  const bidDoc = path.join(root, "bid-doc");
+  skillsDir = path.join(root, "skills");
+  config = { projects: localStore(bidDoc), skills: localStore(skillsDir), outputsDir: bidDoc, workspaceDir: path.join(root, "ws") };
+  projectDir = path.join(bidDoc, "Job");
   await mkdir(path.join(projectDir, "Specs"), { recursive: true });
   await writeFile(path.join(projectDir, "Specs", "spec.pdf"), "original");
   await mkdir(path.join(projectDir, "ESTIMATE", "Archive"), { recursive: true });
   await writeFile(path.join(projectDir, "ESTIMATE", "Archive", "old.xlsx"), "old");
   for (const skill of ["phb-a", "phb-b", "_shared"]) {
-    await mkdir(path.join(config.skillsDir, skill), { recursive: true });
-    await writeFile(path.join(config.skillsDir, skill, skill === "_shared" ? "glossary.md" : "SKILL.md"), `# ${skill}`);
+    await mkdir(path.join(skillsDir, skill), { recursive: true });
+    await writeFile(path.join(skillsDir, skill, skill === "_shared" ? "glossary.md" : "SKILL.md"), `# ${skill}`);
   }
 });
 afterEach(() => rm(root, { recursive: true, force: true }));

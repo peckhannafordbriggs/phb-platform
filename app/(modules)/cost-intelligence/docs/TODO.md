@@ -11,12 +11,11 @@ Settings:
 - remove placeholders
 - skill catalog: show when main has unpublished changes, and a publish flow (acceptance checks against a fixture, then publish). Without it the PCE cannot tell a skill is behind its live tag or ship a new version from the platform
 - search: skill results still come from PLACEHOLDER_SKILLS, so they link to ids the real catalog 404s; point it at cip_skills
-- skill sync: SharePoint reader once Sites.Selected is granted (replace readSkillsFolder in skill-sync.ts), then the daily scheduled sync
-- project sync: Graph reader once Sites.Selected is granted (replace readProjectsFolder and listProjectFiles in project-sync.ts), then the daily scheduled sync
+- skill and project sync read SharePoint (folder-store.ts). Next: daily scheduled sync; measure project sync time on the full BID-DOC (one Graph request per folder)
 
 Runs:
 - worker in Azure: Container Apps Job resource in infra/main.bicep (KEDA Postgres scaler on queued cip_runs, --once), image build in deploy.yml, ANTHROPIC_API_KEY in Key Vault. Needs the platform owner's sign-off
-- worker files: Graph download of the project and upload to AI FILES once Sites.Selected is granted (buildWorkspace, publishOutputs)
+- worker files: the project and skills are downloaded from SharePoint; outputs still go to the local CIP_PROJECTS_DIR. Next: upload to AI FILES in SharePoint (publishOutputs), which needs write
 - fix docker for tools
 - search: run results were placeholders and are gone; add them back with real search
 - add a optional text field for new run 

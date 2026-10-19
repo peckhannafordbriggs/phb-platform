@@ -1,16 +1,14 @@
-import { readdir, readFile, stat } from "node:fs/promises";
-import path from "node:path";
 import { writeAuditEvent } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { COST_INTELLIGENCE_MODULE_KEY } from "./constants";
+import { localStore, skillsStore, type FolderStore } from "./folder-store";
 
 /**
  * Skill catalog sync: read the skills folder, then make `cip_skills` match it.
  *
- * The folder is CIP_SKILLS_DIR (the OneDrive copy for now). A skill is any
- * direct subfolder holding a SKILL.md. When SharePoint access lands, only
- * `readSkillsFolder` changes.
+ * The folder is the SharePoint skills folder (CIP_SHAREPOINT_SKILLS_FOLDER), or
+ * CIP_SKILLS_DIR locally. A skill is any direct subfolder holding a SKILL.md.
  */
 
 type FolderSkill = {
@@ -58,7 +56,7 @@ export const ABANDONED_AFTER_MS = 10 * 60 * 1000;
 export async function syncSkills(options: {
   trigger: "manual" | "scheduled";
   triggeredById: string | null;
-  /** Defaults to CIP_SKILLS_DIR. */
+  /** A local folder instead of the configured one (tests). */
   dir?: string;
   now?: () => Date;
 }): Promise<SkillSyncOutcome> {
@@ -101,14 +99,14 @@ export async function syncSkills(options: {
   };
 
   try {
-    const dir = options.dir ?? process.env.CIP_SKILLS_DIR?.trim();
-    if (!dir) return await fail("CIP_SKILLS_DIR is not set. Point it at the skills folder in .env.local.");
+    const choice = options.dir ? { ok: true as const, store: localStore(options.dir), source: options.dir } : skillsStore();
+    if (!choice.ok) return await fail(choice.message);
 
     let read: { skills: FolderSkill[]; errors: FolderError[] };
     try {
-      read = await readSkillsFolder(dir);
+      read = await readSkillsFolder(choice.store);
     } catch (error) {
-      return await fail(`Could not read the skills folder at ${dir}: ${errorText(error)}`);
+      return await fail(`Could not read the skills folder (${choice.source}): ${errorText(error)}`);
     }
 
     const { skills, errors } = read;
@@ -116,7 +114,7 @@ export async function syncSkills(options: {
       return await fail(
         errors.length > 0
           ? `None of the ${errors.length} skill folder(s) could be read. Nothing was changed.`
-          : "The skills folder holds no skills. Check CIP_SKILLS_DIR. Nothing was changed.",
+          : "The skills folder holds no skills. Check the configured folder. Nothing was changed.",
         errors,
       );
     }
@@ -218,25 +216,24 @@ export async function listCatalogSkills() {
 /** OS litter, Office lock files and caches. Never part of a skill. */
 const IGNORED = /^(?:~\$.*|\.DS_Store|Thumbs\.db|desktop\.ini|__pycache__|\.git)$/i;
 
-async function readSkillsFolder(dir: string): Promise<{ skills: FolderSkill[]; errors: FolderError[] }> {
+async function readSkillsFolder(store: FolderStore): Promise<{ skills: FolderSkill[]; errors: FolderError[] }> {
   const skills: FolderSkill[] = [];
   const errors: FolderError[] = [];
 
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || IGNORED.test(entry.name)) continue;
+  for (const entry of await store.list("")) {
+    if (!entry.folder || IGNORED.test(entry.name)) continue;
     const folderName = entry.name;
-    const locationPath = path.join(dir, folderName);
-
-    const skillMd = await readOptional(path.join(locationPath, "SKILL.md"));
-    if (skillMd === null) continue;
+    const locationPath = entry.location;
 
     try {
+      const skillMd = await store.read(`${folderName}/SKILL.md`);
+      if (skillMd === null) continue;
       const front = parseFrontmatter(skillMd);
       if ("reason" in front) {
         errors.push({ folderName, reason: front.reason });
         continue;
       }
-      const changelog = await readOptional(path.join(locationPath, "CHANGELOG.md"));
+      const changelog = await store.read(`${folderName}/CHANGELOG.md`);
       const { entries, newest } = parseChangelog(changelog ?? "");
       skills.push({
         folderName,
@@ -244,7 +241,7 @@ async function readSkillsFolder(dir: string): Promise<{ skills: FolderSkill[]; e
         name: front.name,
         description: front.description,
         version: Math.max(entries, 1),
-        lastModified: newest ?? (await newestFileTime(locationPath)),
+        lastModified: newest ?? (await newestFileTime(store, folderName)),
       });
     } catch (error) {
       errors.push({ folderName, reason: errorText(error) });
@@ -353,23 +350,13 @@ function utcDate(year: number, month: number, day: number): Date {
   return date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : new Date(NaN);
 }
 
-async function readOptional(file: string): Promise<string | null> {
-  try {
-    return await readFile(file, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
 /** Newest file time in a folder, for a skill with no dated CHANGELOG. */
-async function newestFileTime(dir: string): Promise<Date> {
+async function newestFileTime(store: FolderStore, rel: string): Promise<Date> {
   let newest = 0;
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
+  for (const entry of await store.list(rel)) {
     if (IGNORED.test(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) newest = Math.max(newest, (await newestFileTime(full)).getTime());
-    else if (entry.isFile()) newest = Math.max(newest, (await stat(full)).mtimeMs);
+    if (entry.folder) newest = Math.max(newest, (await newestFileTime(store, `${rel}/${entry.name}`)).getTime());
+    else newest = Math.max(newest, entry.modified.getTime());
   }
   return new Date(newest);
 }

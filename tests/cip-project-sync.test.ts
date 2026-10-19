@@ -1,3 +1,4 @@
+import { localStore } from "@/lib/modules/cost-intelligence/folder-store";
 import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -164,7 +165,7 @@ describe("listProjectFiles", () => {
       "~$b.pdf": "x",
     });
 
-    const { tree, truncated } = await listProjectFiles(root);
+    const { tree, truncated } = await listProjectFiles(localStore(path.dirname(root)), path.basename(root));
 
     expect(truncated).toBe(false);
     expect(tree.map((n) => [n.name, n.type])).toEqual([
