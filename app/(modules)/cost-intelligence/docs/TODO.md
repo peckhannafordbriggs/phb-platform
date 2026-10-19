@@ -28,3 +28,5 @@ Runs:
 - change ledger to show less commands and replace with human readable logs
 - cache prompts and project history 
 - edit skills
+- allow model selection
+- add feature to tailor responses & work based on resume

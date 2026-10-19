@@ -26,8 +26,10 @@ export function CipShell({
 
   return (
     // Exactly one screen tall: the header stays put and only the content below it scrolls.
+    // No focus outline anywhere in the module (the platform's gold ring), by choice.
+    // This drops the keyboard focus indicator inside Cost Intelligence.
     <div
-      className="dashboard-ground -mx-8 -my-8 flex h-dvh flex-col"
+      className="dashboard-ground -mx-8 -my-8 flex h-dvh flex-col [&_:focus-visible]:outline-none!"
       style={moduleAccentStyle(COST_INTELLIGENCE_MODULE_KEY)}
     >
       <div className="relative mx-auto w-full max-w-[88rem] shrink-0 px-8 pt-8">

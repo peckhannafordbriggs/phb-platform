@@ -97,6 +97,7 @@ can start, answer and cancel runs.
 | People call it | Component | Notes |
 |---|---|---|
 | the launcher, the sentence, "Run X on Y" | `RunLauncher`, centred above the cards (max 48rem) | Only when the URL has `?new=1`. Lists Active workflows with no missing skills, and every project; a project with a run going says "(run going)" and is refused with the reason. Start run creates the run and goes to its page |
+| the note bar, attach files | `RunNotes`, under the launcher sentence | **Mockup only:** the paperclip does nothing and the note is not sent with the run (`TODO(backend)`) |
 | the project filter | `FilterMenu`, the filter icon beside the **Project** column header | "All projects", then one entry per project that has runs |
 | the runs table, the runs list | a `Table` inside the left card | Columns: Project, Workflow, Status (a pill), Started. Newest first, 8 per page. Clicking a row selects it |
 | the run panel, the right side | `RunSummary` | Id, status, project, workflow, started, cost, and **Open run**. Shows the latest run until you pick one |

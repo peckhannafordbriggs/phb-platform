@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { ArrowUpRight, FileText, X } from "lucide-react";
+import { ArrowUpRight, FileText, MessageSquare, Paperclip, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { LaunchOption, RunDetail, RunListItem, RunStatus } from "@/lib/modules/cost-intelligence/runs";
 import { Button } from "../ui/Button";
@@ -175,6 +175,35 @@ function RunSummary({ run }: { run: RunListItem | null }) {
 }
 
 /** "Run [workflow] on [project]". Busy projects are listed but refused, with the reason. */
+/**
+ * MOCKUP: attach files and leave a note for the run. Nothing is uploaded or
+ * sent with the run yet; the note stays in the browser. TODO(backend).
+ */
+function RunNotes() {
+  const [note, setNote] = useState("");
+  return (
+    <div className="mt-3 flex h-9 items-center gap-2 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-2 focus-within:border-[var(--module-accent)]">
+      <button
+        type="button"
+        aria-label="Attach files"
+        title="Attach files"
+        className="rounded p-1 text-[var(--muted)] hover:bg-[var(--neutral-50)] hover:text-[var(--foreground)]"
+      >
+        <Paperclip size={14} aria-hidden="true" />
+      </button>
+      <MessageSquare size={14} aria-hidden="true" className="shrink-0 text-[var(--muted)]" />
+      <input
+        type="text"
+        aria-label="Note for this run"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Add a note or instructions for this run (optional)"
+        className="min-w-0 flex-1 bg-transparent text-[0.8125rem] text-[var(--foreground)] outline-none placeholder:text-[var(--muted)]"
+      />
+    </div>
+  );
+}
+
 function RunLauncher({ options }: { options: { workflows: LaunchOption[]; projects: LaunchOption[] } }) {
   const router = useRouter();
   const [workflow, setWorkflow] = useState("");
@@ -228,6 +257,7 @@ function RunLauncher({ options }: { options: { workflows: LaunchOption[]; projec
           {busy ? "Starting…" : "Start run"}
         </Button>
       </div>
+      <RunNotes />
       {error && (
         <p role="alert" className="mt-3 text-[0.75rem] text-[var(--phb-orange-ink)]">
           {error}
