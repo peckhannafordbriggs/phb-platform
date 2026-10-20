@@ -100,6 +100,22 @@
       "value": "1"
     },
 
+    "enableCipWorker": {
+      "value": false
+    },
+    "cipAppTenantId": {
+      "value": "<CIP app registration tenant id>"
+    },
+    "cipAppClientId": {
+      "value": "<CIP app registration client id>"
+    },
+    "cipSharePointSkillsFolder": {
+      "value": "ids:<driveId>/<itemId>"
+    },
+    "cipSharePointProjectsFolder": {
+      "value": "ids:<driveId>/<itemId>"
+    },
+
     "enableBudget": {
       "value": false
     },

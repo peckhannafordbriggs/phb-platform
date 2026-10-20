@@ -364,6 +364,73 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     return `${actor} asked Building Automation "${question}"${suffix}`;
   },
 
+  // Counts rather than names: a sync can touch every skill, and the sync row
+  // in cip_skill_syncs holds the detail.
+  "cip.skills_synced": ({ actor, meta }) => {
+    const n = (key: string) => {
+      const v = meta[key];
+      return typeof v === "number" ? v : 0;
+    };
+    const skipped = n("skillsSkipped");
+    return (
+      `${actor} synced the Cost Intelligence skill catalog: ` +
+      `${n("skillsAdded")} added, ${n("skillsUpdated")} updated, ${n("skillsDeleted")} removed` +
+      (skipped > 0 ? `, ${skipped} could not be read` : "")
+    );
+  },
+
+  "cip.projects_synced": ({ actor, meta }) => {
+    const n = (key: string) => {
+      const v = meta[key];
+      return typeof v === "number" ? v : 0;
+    };
+    const skipped = n("projectsSkipped");
+    return (
+      `${actor} synced the Cost Intelligence projects: ` +
+      `${n("projectsAdded")} added, ${n("projectsUpdated")} updated, ${n("projectsRemoved")} removed` +
+      (skipped > 0 ? `, ${skipped} could not be read` : "")
+    );
+  },
+
+  "cip.run_started": ({ actor, meta }) =>
+    `${actor} started ${stringField(meta, "workflowName") ?? "a workflow"} on ${stringField(meta, "projectName") ?? "a project"} (run ${stringField(meta, "runId") ?? "?"})`,
+
+  "cip.run_cancelled": ({ actor, meta }) => `${actor} cancelled run ${stringField(meta, "runId") ?? "?"}`,
+
+  "cip.checkpoint_answered": ({ actor, meta }) =>
+    `${actor} answered a question on run ${stringField(meta, "runId") ?? "?"}`,
+
+  "cip.workflow_created": ({ actor, meta }) =>
+    `${actor} created the Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
+
+  // Says what changed, because "updated" alone cannot tell a rename from an
+  // activation, and the activation is the one that changes what runs can use.
+  "cip.workflow_updated": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "(unnamed)";
+    const changes: string[] = [];
+    const previousName = stringField(meta, "previousName");
+    if (previousName !== null) changes.push(`renamed it from "${previousName}"`);
+    const status = stringField(meta, "status");
+    const previousStatus = stringField(meta, "previousStatus");
+    if (status !== null) changes.push(`changed it from ${previousStatus ?? "?"} to ${status}`);
+    if (meta.descriptionChanged === true) changes.push("edited its description");
+    return changes.length === 0
+      ? `${actor} updated the Cost Intelligence workflow "${name}"`
+      : `${actor} ${changes.join(", ")} (Cost Intelligence workflow "${name}")`;
+  },
+
+  "cip.workflow_steps_changed": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "(unnamed)";
+    const steps = Array.isArray(meta.steps) ? meta.steps.filter((s): s is string => typeof s === "string") : [];
+    const shown = steps.length > 6 ? `${steps.slice(0, 6).join(" → ")} → …` : steps.join(" → ");
+    return steps.length === 0
+      ? `${actor} removed every step from the Cost Intelligence workflow "${name}"`
+      : `${actor} set the steps of the Cost Intelligence workflow "${name}" to ${shown}`;
+  },
+
+  "cip.workflow_deleted": ({ actor, meta }) =>
+    `${actor} deleted the draft Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
+
   "grant.admin_removed": ({ actor, target, module }) =>
     `${actor} removed ${target ?? "an employee"}'s administrator access for ${module}`,
 
@@ -602,6 +669,15 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.equipment_updated": "BAS equipment updated",
   "bas.equipment_deleted": "BAS equipment deleted",
   "bas.question_asked": "BAS question asked",
+  "cip.skills_synced": "Cost Intelligence skills synced",
+  "cip.projects_synced": "Cost Intelligence projects synced",
+  "cip.run_started": "Cost Intelligence run started",
+  "cip.run_cancelled": "Cost Intelligence run cancelled",
+  "cip.checkpoint_answered": "Cost Intelligence run question answered",
+  "cip.workflow_created": "Cost Intelligence workflow created",
+  "cip.workflow_updated": "Cost Intelligence workflow updated",
+  "cip.workflow_steps_changed": "Cost Intelligence workflow steps changed",
+  "cip.workflow_deleted": "Cost Intelligence workflow deleted",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

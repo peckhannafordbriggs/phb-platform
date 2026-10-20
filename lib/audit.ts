@@ -126,6 +126,25 @@ export type AuditAction =
    * secret, and the question is the person's own words.
    */
   | "bas.question_asked"
+  /**
+   * The Cost Intelligence skill catalog was synced from the skills folder.
+   * Carries the sync id, trigger and counts. One row per completed sync; a
+   * sync that failed changed nothing and is recorded only in cip_skill_syncs.
+   */
+  | "cip.skills_synced"
+  | "cip.projects_synced"
+  | "cip.run_started"
+  | "cip.run_cancelled"
+  | "cip.checkpoint_answered"
+  /**
+   * Cost Intelligence workflows, built by PCEs in Settings. Metadata carries the
+   * workflow id and name; updates carry what changed (previousName,
+   * previousStatus), step changes carry the old and new folder-name lists.
+   */
+  | "cip.workflow_created"
+  | "cip.workflow_updated"
+  | "cip.workflow_steps_changed"
+  | "cip.workflow_deleted"
   | "position.created"
   | "position.updated"
   | "department.created"

@@ -37,6 +37,8 @@ jobs:
     #   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
     #   AZURE_RESOURCE_GROUP, AZURE_CONTAINER_APP, AZURE_REGISTRY,
     #   AZURE_POSTGRES_SERVER
+    # and, once the Cost Intelligence worker job exists, AZURE_CIP_WORKER_JOB
+    # (the cipWorkerJobName output). Empty means the worker steps are skipped.
     if: >-
       vars.AZURE_CLIENT_ID != '' &&
       vars.AZURE_TENANT_ID != '' &&
@@ -63,6 +65,17 @@ jobs:
             --registry "${{ vars.AZURE_REGISTRY }}" \
             --image "phb-platform:${{ github.sha }}" \
             --file Dockerfile \
+            .
+
+      # Built before the migrations, so a worker that does not build stops the
+      # deploy while nothing has changed yet.
+      - name: Build and push the Cost Intelligence worker image
+        if: vars.AZURE_CIP_WORKER_JOB != ''
+        run: |
+          az acr build \
+            --registry "${{ vars.AZURE_REGISTRY }}" \
+            --image "cip-worker:${{ github.sha }}" \
+            --file Dockerfile.cip-worker \
             .
 
       # ---------------------------------------------------------------------
@@ -153,6 +166,17 @@ jobs:
           echo "The new revision never returned 200 from /api/health."
           echo "See 'A deploy fails' in runbook.md."
           exit 1
+
+      # Only after the web app answers: a run already going finishes on the image
+      # it started with; the next execution starts on this one.
+      - name: Deploy the Cost Intelligence worker image
+        if: vars.AZURE_CIP_WORKER_JOB != ''
+        run: |
+          az containerapp job update \
+            --name "${{ vars.AZURE_CIP_WORKER_JOB }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ vars.AZURE_REGISTRY }}.azurecr.io/cip-worker:${{ github.sha }}" \
+            --output none
 
       # NOTE: the production seed is NOT run here. It runs once, by hand, on the
       # first deploy - see runbook.md. It is idempotent, but running it on

@@ -9645,3 +9645,199 @@ again.* — HTTP 429, `rate_limited`.
 **Cause.** Six questions a minute per employee, in memory, per process. A
 refused attempt is not counted. It is checked before any token is spent and
 before the pool is touched. A new revision starts with an empty window.
+
+---
+
+# Cost Intelligence runs
+
+A run is one workflow against one project. The web app only queues it
+(`cip_runs.status = 'queued'`); the **worker** does the work
+(`lib/modules/cost-intelligence/worker.ts`, started by `npm run cip:worker` or the
+`cip-worker` image from `Dockerfile.cip-worker`). Every run works on a copy of the
+project and only ever adds files to the project's `AI FILES` folder.
+
+## A Cost Intelligence run stays Queued
+
+**Symptom.** New run works and the run page says **Queued**, and nothing in the
+ledger moves past *Queued ... on ...*.
+
+**Cause.** No worker is running. The web app never executes runs itself.
+
+**Fix.** Start one, from the repo root:
+
+```powershell
+npm run cip:worker
+```
+
+It needs `DATABASE_URL`, `ANTHROPIC_API_KEY`, `CIP_SKILLS_DIR` and
+`CIP_PROJECTS_DIR` in `.env.local`, and stops with a sentence naming whichever is
+missing. It picks up the oldest queued run within five seconds.
+
+Or in Docker Desktop, which also gives the agent Python, openpyxl and pdftotext
+without installing them on Windows:
+
+```powershell
+docker compose -f docker-compose.cip-worker.yml up --build
+```
+
+The first build takes several minutes. Nothing appears in Docker Desktop until
+this has been run once; the app never starts the worker itself. The Compose file
+reads `.env.local`, mounts the OneDrive `BID-DOC` and `PHB-CIS-skills` folders
+from `%USERPROFILE%`, and rewrites `localhost` in `DATABASE_URL` to
+`host.docker.internal`. If the worker then logs `no pg_hba.conf entry for host
+"…"`, local Postgres is refusing connections from Docker: add a line to
+`pg_hba.conf` (`host all all <that address>/32 scram-sha-256`) and restart the
+PostgreSQL service.
+
+---
+
+## A run failed with "The worker stopped while running this"
+
+**Symptom.** The run is **Failed** with that error.
+
+**Cause.** The run was **Running** and its worker sent no heartbeat for ten
+minutes: the process was killed, the machine slept, or the container was
+recycled mid-run. The next worker to start marks it failed rather than guessing
+how far it got.
+
+**Fix.** Start the run again. Files it had already published stay in
+`AI FILES`; the new run writes the next `_revN` beside them, never over them.
+
+---
+
+## A run failed with "Stopped at the $5.00 cost cap"
+
+**Symptom.** The run is **Failed** with that error, and its cost is just over $5.
+
+**Cause.** The Agent SDK's `maxBudgetUsd`. Every run is capped
+(`RUN_BUDGET_USD` in `lib/modules/cost-intelligence/runs.ts`), across all of its
+steps, so a skill that loops cannot spend without limit.
+
+**Fix.** Look at the ledger for what it was doing. A skill that legitimately
+needs more is a decision to raise the cap in code, not a retry.
+
+---
+
+## A run waits on a question and nobody sees it
+
+**Symptom.** The run is **Waiting on you**.
+
+**Cause.** A skill called `ask_user`. The worker recorded the question
+(`cip_run_checkpoints`), published what the step had written so far, and moved
+on; the conversation is kept in `cip_run_transcripts`.
+
+**Fix.** Open the run and answer under the ledger. Answering puts it back in the
+queue and any worker resumes the same conversation, in a fresh copy of the
+project with the earlier files now in `AI FILES`. Cancel run drops the question.
+
+---
+
+## Write and Bash are denied
+
+**Symptom.** A run asks something like "I can't write the files: Write and Bash
+are being denied ... Claude Code is running in don't-ask mode", usually after it
+resumed from a question.
+
+**Cause.** Workers before the fix ran the agent with `permissionMode: "dontAsk"`.
+On Windows that refused Write and Bash once a run resumed, even though both were
+allowed. A likely trigger: the workspace sat under TEMP's 8.3 short name
+(`C:/Users/KRACHA~1/...`), which Claude Code did not match against its working
+directory.
+
+The worker now uses the long path and `bypassPermissions`. Claude Code refuses
+that mode as root, so the worker must not run as root (the Docker image runs as
+`node`). The limits are the fixed tool list (no web, no MCP servers from the
+machine) and the workspace being a copy. Bash is still a real shell: on a
+developer machine it can read and write outside the workspace, and the platform
+rules only ask it not to. Run real jobs in the Docker image, where only the
+mounted folders exist.
+
+**Fix.** Restart the worker (`npm run cip:worker`) on the current code. Do not
+cancel the run: answer its question with "Restore write and shell permission
+for ./out, then I will continue". It resumes the same conversation with the new
+settings.
+
+---
+
+## SharePoint: sync or a run says "SharePoint answered 403" or "404"
+
+**Symptom.** Skill or project sync fails, the Projects file tree shows an error, or a
+run fails while copying the project, with "SharePoint answered 403 ..." or "404 ...".
+
+**Cause.** Skills and projects are read through the CIP app registration
+(`lib/modules/cost-intelligence/folder-store.ts`), which can only see the two folders
+it was granted. 403: no grant on that folder, or the role is missing. 404: the
+`CIP_SHAREPOINT_*_FOLDER` value points at something else, or the app cannot see it.
+"Set PHB_PLATFORM_CIP_APP_..." means the app settings are missing.
+
+**Fix.** Look the folder up as the CIP app in Graph Explorer:
+`GET https://graph.microsoft.com/v1.0/shares/u!<base64url of the folder URL>/driveItem`.
+403 there means the grant (or its role) is missing on that folder; fix it in the
+app's folder grants. If it opens, `parentReference.driveId` and `id` are the two
+halves of `ids:<driveId>/<itemId>`: put that in `CIP_SHAREPOINT_SKILLS_FOLDER` /
+`CIP_SHAREPOINT_PROJECTS_FOLDER`. Empty both to go back to the local folders.
+
+---
+
+## A run failed with "Refused to write outside a project's AI FILES folder"
+
+**Symptom.** A run fails while publishing, with that message and a path.
+
+**Cause.** The worker only ever creates files in `<project>/AI FILES/`
+(`assertAiFilesPath` in `lib/modules/cost-intelligence/folder-store.ts`). The
+SharePoint grant covers all of BID-DOC, so this check is what keeps writes there.
+A path with `..`, `.`, a backslash or an empty part is refused too. Nothing was
+written.
+
+**Fix.** A bug, not a setting: find what built the path (`publishOutputs` in
+`worker.ts`). Do not widen the check.
+
+If the publish fails with "SharePoint answered 403" instead, the CIP app has read
+but not write on BID-DOC; the grant's role has to be write.
+
+---
+
+## Cost Intelligence worker in Azure
+
+**What it is.** A Container Apps Job, `<baseName>-cip-worker` (`cipWorkerJob` in
+`infra/main.bicep`). Every 15 s it counts queued runs (and running ones whose
+heartbeat stopped) and starts one execution per run, up to 3 at once; each runs
+`cip-worker.ts --once` and exits. It reads projects and skills from SharePoint and
+creates outputs only in `<project>/AI FILES`. It costs nothing while idle.
+
+**Turning it on, once, in this order.**
+
+1. Create the Key Vault secret `ANTHROPIC-API-KEY-CIP` by hand, in the Portal
+   (Key Vault Secrets Officer on the vault). It is Cost Intelligence's own key,
+   not the platform's `ANTHROPIC-API-KEY`. Never pass it as a parameter: it would
+   be in the deployment history.
+2. Check the CIP app registration has a federated credential for the platform's
+   user-assigned identity (`managedIdentityClientId` output).
+3. In `infra/main.parameters.json` set `enableCipWorker: true`, `cipAppTenantId`,
+   `cipAppClientId` and the two `cipSharePoint*Folder` values (`ids:<driveId>/<itemId>`). Set `containerImage` and `cipWorkerImage` to the
+   images now running (on first enable, `cipWorkerImage` is the image you built with `az acr build`). It has no default.
+4. `az deployment group what-if ...` (see `infra/README.md`), review, then `create`.
+5. Set the repository variable `AZURE_CIP_WORKER_JOB` to the `cipWorkerJobName`
+   output. From the next push to `main`, `deploy.yml` builds `cip-worker:<sha>` and
+   points the job at it. Until it is set those steps are skipped.
+
+**Runs stay Queued in production.** `az containerapp job execution list --name
+<job> -g <rg>` shows whether executions start. None: the scale rule cannot reach
+the database (the secret, or the firewall's Azure-services rule). Executions that
+fail at once: `az containerapp job logs show`; a missing ANTHROPIC_API_KEY or CIP
+setting is named in the first lines.
+
+---
+
+## A run failed with "Credit balance is too low"
+
+**Symptom.** The run is **Failed** with "Claude Code returned an error result:
+Credit balance is too low".
+
+**Cause.** The Anthropic Console organization behind `ANTHROPIC_API_KEY` is out
+of prepaid credit. Nothing is wrong with the run.
+
+**Fix.** Add credit in the Console (Billing), and set a monthly spend limit there
+as the hard stop above the $5 per-run cap. The failed run cannot resume; start a
+new one. Files it already published stay in `AI FILES`.
+

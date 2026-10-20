@@ -191,6 +191,8 @@ describe("production refuses a Graph client secret", () => {
 
     // The container app must not define this environment variable at all.
     expect(bicep).not.toMatch(/name:\s*'GRAPH_CLIENT_SECRET'/);
+    // Nor the CIP app's: it signs in with the managed identity too.
+    expect(bicep).not.toMatch(/PHB_PLATFORM_CIP_APP_SECRET/);
   });
 });
 

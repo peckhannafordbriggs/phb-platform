@@ -100,6 +100,8 @@ az deployment group what-if   --subscription <subscription-id>   --resource-grou
 - User-assigned managed identity, with `AcrPull` on the registry and
   `Key Vault Secrets User` on the vault
 - Optionally a resource-group budget (`enableBudget`, off by default)
+- Optionally the Cost Intelligence run worker, a Container Apps Job (`enableCipWorker`,
+  off by default; see `runbook.md`, "Cost Intelligence worker in Azure")
 
 ## Four things that are deliberate
 

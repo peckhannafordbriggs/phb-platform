@@ -1,0 +1,49 @@
+# Cost Intelligence run worker image (scripts/cip-worker.ts).
+#
+# Separate from the web image on purpose: it carries the tools the skills run
+# (Python + openpyxl, poppler's pdftotext, the Node docx/pptx libraries), which
+# the web app never needs. See lib/modules/cost-intelligence/worker.ts.
+#
+# Locally, use docker-compose.cip-worker.yml (it reads .env.local correctly and
+# mounts the OneDrive folders):
+#
+#   docker compose -f docker-compose.cip-worker.yml up --build
+#
+# In Azure there are no mounts: projects and skills are read from SharePoint and
+# outputs created in <project>/AI FILES there (lib/modules/cost-intelligence/
+# folder-store.ts). Runs always work on a copy of the project.
+#
+# LibreOffice is left out (about 600 MB). Only phb-state-form needs it; add
+# `libreoffice-calc-nogui` to the apt line when that skill is piloted.
+
+FROM node:24-bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pip poppler-utils ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip3 install --no-cache-dir --break-system-packages openpyxl reportlab pypdf Pillow \
+ && npm install -g docx pptxgenjs
+
+# Lets the skills' .js generators `require("docx")` from anywhere.
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+WORKDIR /app
+
+# Same order as the web Dockerfile: postinstall runs `prisma generate`, which
+# needs the schema and config before `npm ci`.
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+RUN npm ci
+
+COPY . .
+RUN npx prisma generate && chown -R node:node /app
+
+ENV NODE_ENV=production \
+    CIP_WORKSPACE_DIR=/tmp/cip-runs
+
+USER node
+
+# Polls for queued runs. The Container Apps Job (infra/main.bicep, cipWorkerJob)
+# runs it with --once: one run per execution, then exit.
+CMD ["npx", "tsx", "scripts/cip-worker.ts"]

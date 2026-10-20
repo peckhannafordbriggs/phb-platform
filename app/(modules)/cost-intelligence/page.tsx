@@ -1,21 +1,24 @@
 import { notFound } from "next/navigation";
-import { ModulePlaceholder } from "@/components/module-placeholder";
-import { requireModuleAccess } from "@/lib/authz";
-import {
-  COST_INTELLIGENCE_MODULE_KEY,
-  COST_INTELLIGENCE_MODULE_NAME,
-} from "@/lib/modules/cost-intelligence/constants";
+import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
+import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
+import { listLaunchOptions, listRuns } from "@/lib/modules/cost-intelligence/runs";
+import { CipShell } from "./cip-shell";
+import { NewRunActions } from "./header-actions";
+import { RunsView } from "./views/runs-view";
 
 export const dynamic = "force-dynamic";
 
-export default async function CostIntelligencePage() {
+export default async function RunsPage({ searchParams }: { searchParams: Promise<{ new?: string }> }) {
   const access = await requireModuleAccess(COST_INTELLIGENCE_MODULE_KEY);
   if (!access.ok) notFound();
+  const canAdminister = await hasModuleAdmin(access.viewer.id, COST_INTELLIGENCE_MODULE_KEY);
+  const launcherOpen = (await searchParams).new !== undefined;
+
+  const [runs, options] = await Promise.all([listRuns(), launcherOpen ? listLaunchOptions() : null]);
 
   return (
-    <ModulePlaceholder
-      moduleKey={COST_INTELLIGENCE_MODULE_KEY}
-      title={COST_INTELLIGENCE_MODULE_NAME}
-    />
+    <CipShell canAdminister={canAdminister} actions={<NewRunActions launcherOpen={launcherOpen} canAdminister={canAdminister} />}>
+      <RunsView runs={runs} options={options} />
+    </CipShell>
   );
 }
