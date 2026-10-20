@@ -1,15 +1,24 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyLoginGate } from "@/lib/auth/signin";
 import { moduleAccent } from "@/lib/module-accent";
 import {
   createEmployee,
+  grantModule,
   resetDb,
+  seedBasModule,
   seedChangeOrdersModule,
   testDb,
 } from "./db";
+import { getHomeData } from "@/lib/home/service";
+import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
+
+// The Home service reaches next-auth through lib/authz; the activity test
+// mocks the same two modules for the same reason.
+vi.mock("@/auth", () => ({ auth: vi.fn() }));
+vi.mock("next/headers", () => ({ headers: vi.fn() }));
 import { TEST_ALLOWED_DOMAIN, TEST_TENANT_ID } from "./constants";
 
 /**
@@ -395,5 +404,34 @@ describe("the watermark", () => {
      */
     expect(rule).toContain("phb-logo-mark.png");
     expect(rule).not.toContain("phb-logo.png\"");
+  });
+});
+
+describe("the Building Automation card", () => {
+  /**
+   * The card's figure is Collection Health's - the at-risk headline and the
+   * newest reading's age - and its link opens Point Explorer (2026-10-13, by
+   * decision; it opened Collection Health before). The label says where the
+   * link goes, which is the one thing a card's action must do.
+   */
+  it("opens Point Explorer, and says so", async () => {
+    await seedBasModule();
+    const employee = await createEmployee({ entraOid: "oid-home-bas" });
+    await grantModule(employee.id, BAS_MODULE_KEY);
+    const data = await getHomeData({
+      id: employee.id,
+      email: employee.email,
+      firstName: employee.firstName,
+      lastName: employee.lastName,
+      profileCompleted: true,
+      isPlatformAdmin: false,
+    });
+    const card = data.modules.find((m) => m.key === BAS_MODULE_KEY);
+    expect(card).toBeDefined();
+    expect(card!.href).toBe("/bas/points");
+    expect(card!.action).toBe("Open point explorer");
+    // The label names the destination: no card may say one screen and open another.
+    expect(card!.href).not.toContain("health");
+    expect(card!.action.toLowerCase()).not.toContain("collection health");
   });
 });

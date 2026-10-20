@@ -46,6 +46,9 @@ import {
   seedChangeOrdersModule,
   testDb,
 } from "./db";
+import { notCheckedPlausibility } from "@/lib/modules/bas/plausibility";
+
+const NOT_CHECKED_FIXTURE = notCheckedPlausibility("no_role");
 
 /**
  * The Points level of the Settings tree (B8.2): every point on a station, with
@@ -424,14 +427,17 @@ describe("the screen says so when the list falls short", () => {
     niagaraDisplayName: null,
     pointRole: null,
     roleName: null,
+    equipmentId: null,
     equipmentName: null,
     unit: null,
+    suggestion: null,
     horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
     collected: true,
     inactiveReason: null,
     completeness: "complete",
     lastRecordAt: null,
     visible: true,
+    plausibility: NOT_CHECKED_FIXTURE,
   });
 
   function render(list: StationPointsList, expectedTotal: number): string {
@@ -442,6 +448,7 @@ describe("the screen says so when the list falls short", () => {
     const html = render(
       {
         stationId: "1",
+        siteId: "1",
         points: [point("A"), point("B"), point("C")],
         pointsAccountedFor: { rendered: 3, inDatabase: 4 },
       },
@@ -458,6 +465,7 @@ describe("the screen says so when the list falls short", () => {
     const html = render(
       {
         stationId: "1",
+        siteId: "1",
         points: [point("A"), point("B")],
         pointsAccountedFor: { rendered: 2, inDatabase: 2 },
       },
@@ -472,6 +480,7 @@ describe("the screen says so when the list falls short", () => {
     const html = render(
       {
         stationId: "1",
+        siteId: "1",
         points: [point("A"), point("B")],
         pointsAccountedFor: { rendered: 2, inDatabase: 2 },
       },

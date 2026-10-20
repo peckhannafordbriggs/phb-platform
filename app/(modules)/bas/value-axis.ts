@@ -18,59 +18,15 @@
  * tests/bas-chart-axis.test.tsx and WHY-ITS-BUILT-THIS-WAY.md § 50.
  */
 
-export type UnitKind = "temperature" | "percentage" | "pressure" | "other";
+import { unitKind, withUnit, type UnitKind } from "@/lib/modules/bas/units";
+import { stateWord, type BooleanStates } from "@/lib/modules/bas/value-kind";
 
 /**
- * Unit names as `bas_points.unit` carries them - Niagara's own unit-database
- * names, lower case, plus the common written forms. Matched after
- * normalisation (trimmed, lower-cased, spaces collapsed), never by substring:
- * "percent" must not match "percent of full scale" by accident, and a unit that
- * is not here gets the default rather than a guess.
- *
- * Add a unit by adding its name to the right list. Nothing else changes.
+ * The unit names and their symbols live in lib/modules/bas/units.ts, because
+ * the Analyze context on the server needs the same symbol the chart shows.
+ * Re-exported so the axis test keeps importing them from here.
  */
-const UNIT_NAMES: Record<Exclude<UnitKind, "other">, readonly string[]> = {
-  temperature: [
-    "fahrenheit",
-    "celsius",
-    "centigrade",
-    "kelvin",
-    "degrees fahrenheit",
-    "degrees celsius",
-    "°f",
-    "°c",
-    "degf",
-    "degc",
-    "deg f",
-    "deg c",
-    "f",
-    "c",
-    "k",
-  ],
-  percentage: ["percent", "percentage", "%", "pct"],
-  pressure: [
-    "inches of water",
-    "inch of water",
-    "inches water column",
-    "in wc",
-    "in. w.c.",
-    "inwc",
-    "inh2o",
-    "in h2o",
-    "pounds per square inch",
-    "psi",
-    "psig",
-    "pascal",
-    "pascals",
-    "pa",
-    "kilopascal",
-    "kilopascals",
-    "kpa",
-    "bar",
-    "millibar",
-    "mbar",
-  ],
-};
+export { unitKind, type UnitKind };
 
 /**
  * Decimals on an AXIS label, by the kind of quantity. The tooltip shows one
@@ -89,20 +45,6 @@ const AXIS_DECIMALS: Record<UnitKind, number> = {
   other: 2,
 };
 
-function normaliseUnit(unit: string): string {
-  return unit.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-export function unitKind(unit: string | null): UnitKind {
-  if (unit === null) return "other";
-  const name = normaliseUnit(unit);
-  if (name.length === 0) return "other";
-  for (const kind of Object.keys(UNIT_NAMES) as Array<keyof typeof UNIT_NAMES>) {
-    if (UNIT_NAMES[kind].includes(name)) return kind;
-  }
-  return "other";
-}
-
 export function axisDecimals(unit: string | null): number {
   return AXIS_DECIMALS[unitKind(unit)];
 }
@@ -116,14 +58,13 @@ export function formatAxisTick(value: number, decimals: number): string {
   return value.toFixed(decimals);
 }
 
-/** The tooltip's reading: one more decimal than the axis, with the unit. */
+/** The tooltip's reading: one more decimal than the axis, with the unit's symbol. */
 export function formatTooltipValue(
   value: number | null,
   unit: string | null,
 ): string {
   if (value === null) return "—";
-  const rendered = value.toFixed(tooltipDecimals(unit));
-  return unit === null ? rendered : `${rendered} ${unit}`;
+  return withUnit(value.toFixed(tooltipDecimals(unit)), unit);
 }
 
 /**
@@ -274,4 +215,77 @@ export function valueAxis(
     labels,
     width: axisGutterWidth(labels, options.fontSize ?? 11),
   };
+}
+
+// ------------------------------------------------------------ boolean points
+
+/**
+ * How far the plot extends past the two states, as a fraction of the gap
+ * between them. Without it the stepped line sits on the plot's top and bottom
+ * edges, where it merges with the frame and the x-axis.
+ */
+export const STATE_AXIS_PADDING = 0.15;
+
+/**
+ * The y-axis of a BOOLEAN point: two ticks, two words, nothing between.
+ *
+ * A boolean reading travels as 1 or 0 (see `TrendPoint.value`), so the ticks
+ * are at exactly those values and the labels are the point's state words -
+ * "Occupied" / "Unoccupied", "On" / "Off". The domain is padded on both sides
+ * so the line has somewhere to be; it is NOT the tick range, which is why this
+ * is a separate function from `valueAxis` rather than a parameter on it. The
+ * grid draws one line per tick, so no 0.2 / 0.4 / 0.6 gridline can appear:
+ * there is no tick there to draw one from.
+ *
+ * `decimals` is 0 and unused by the formatter - a state has no decimals - and
+ * is on the object so the two axis shapes stay interchangeable.
+ */
+export function stateAxis(
+  states: BooleanStates,
+  options: { fontSize?: number } = {},
+): ValueAxis {
+  const labels = [states.off, states.on];
+  return {
+    ticks: [0, 1],
+    domain: [-STATE_AXIS_PADDING, 1 + STATE_AXIS_PADDING],
+    decimals: 0,
+    labels,
+    width: axisGutterWidth(labels, options.fontSize ?? 11),
+  };
+}
+
+/** A state tick's label: the word, never the number behind it. */
+export function formatStateTick(value: number, states: BooleanStates): string {
+  return stateWord(value, states) ?? "";
+}
+
+/**
+ * The tooltip's reading for a boolean point.
+ *
+ * A raw sample is exactly 0 or 1 and reads as its state word. A bucketed
+ * sample's `value` is the share of readings in the bucket that were true, so
+ * it reads as that share with the state word beside it - "On 72% of readings"
+ * - rather than as a decimal, and never as a third state. The band a bucket
+ * carries is [min, max]: both states when the point changed inside the
+ * bucket, one word when it did not.
+ */
+export function formatStateTooltip(
+  value: number | null,
+  states: BooleanStates,
+): string {
+  if (value === null) return "—";
+  const word = stateWord(value, states);
+  if (word !== null) return word;
+  return `${states.on} ${Math.round(value * 100)}% of readings`;
+}
+
+export function formatStateBand(
+  low: number,
+  high: number,
+  states: BooleanStates,
+): string {
+  const lowWord = stateWord(low, states);
+  const highWord = stateWord(high, states);
+  if (lowWord === null || highWord === null) return "—";
+  return lowWord === highWord ? lowWord : `${lowWord} – ${highWord}`;
 }

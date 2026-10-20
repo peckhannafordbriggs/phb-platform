@@ -303,11 +303,11 @@ describe("decimals follow the unit, not a hardcoded fahrenheit", () => {
 describe("the tooltip shows one more decimal than the axis", () => {
   it("for every kind of unit", () => {
     expect(tooltipDecimals("fahrenheit")).toBe(axisDecimals("fahrenheit") + 1);
-    expect(formatTooltipValue(71.91999816894531, "fahrenheit")).toBe("71.92 fahrenheit");
-    expect(formatTooltipValue(33.33000183105469, "percent")).toBe("33.3 percent");
-    expect(formatTooltipValue(1.2300000190734863, "inches of water")).toBe(
-      "1.230 inches of water",
-    );
+    // With the unit's symbol, not its stored name (2026-09-29): the stored
+    // value is "fahrenheit", and nothing here changes that.
+    expect(formatTooltipValue(71.91999816894531, "fahrenheit")).toBe("71.92 °F");
+    expect(formatTooltipValue(33.33000183105469, "percent")).toBe("33.3%");
+    expect(formatTooltipValue(1.2300000190734863, "inches of water")).toBe("1.230 inWC");
     expect(formatTooltipValue(71.91999816894531, null)).toBe("71.920");
     expect(formatTooltipValue(null, "fahrenheit")).toBe("—");
   });
@@ -323,7 +323,7 @@ describe("the tooltip shows one more decimal than the axis", () => {
 
     const item = host.querySelector(".recharts-tooltip-item-value");
     if (item === null) throw new Error("the tooltip did not render");
-    expect(item.textContent).toBe("71.92 fahrenheit");
+    expect(item.textContent).toBe("71.92 °F");
     expect(host.querySelector(".recharts-tooltip-item-name")?.textContent).toBe(
       "reading",
     );

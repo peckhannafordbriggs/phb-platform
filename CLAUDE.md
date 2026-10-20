@@ -117,7 +117,10 @@ Development runs against the **live** `changeorder@phb1899.com` mailbox. There i
 test mailbox. Two guards, both enforced inside the mail service, not in route handlers:
 
 - **`PHB_ALLOW_SEND`** — must be `true` for any send. Absent or `false` throws, before
-  any network call. **Stays `false` except during a deliberate, supervised send test.**
+  any network call. **Stays `false` in development except during a deliberate,
+  supervised send test.** Production has been `true` since 2026-10-14, after the
+  test send of 2026-09-29; the template pins it and `runbook.md` → *The send gate
+  is open, deliberately* has the date, the reason and the emergency close.
 - **`ZZTEST` convention** — when `NODE_ENV !== 'production'`, write operations are
   permitted only on messages whose subject begins with `ZZTEST`. The subject is read
   from Exchange, never taken from the caller.
@@ -187,8 +190,8 @@ template, each being expensive or impossible to correct later:
   while the database was still empty (`npm run db:verify:prod`)
 - the container app carries all four bootstrap addresses — a wrong value here
   means zero admins and no UI path back
-- `PHB_ALLOW_SEND` is `false`, and `GRAPH_CLIENT_SECRET` is **absent** rather
-  than blank
+- `PHB_ALLOW_SEND` is `false` (opened to `true` on 2026-10-14, see *Development
+  safety* above), and `GRAPH_CLIENT_SECRET` is **absent** rather than blank
 - the server reports `autoGrow: Enabled` and `state: Ready`, no auto-stop
   property exists on the resource type at all, and the budget carries contacts
   with no action group
@@ -656,7 +659,45 @@ describes 10 days of the 30 days asked about."* `npm run bas:analyze:verify`
 asks a building-specific 30-day average precisely because that is where the
 silence is dangerous, and fails the run on either fault.
 `docs/bas-b5-verification.md` is the record, results pasted verbatim.
-`WHY-ITS-BUILT-THIS-WAY.md` § 52; `runbook.md` → *Analyze*.
+`WHY-ITS-BUILT-THIS-WAY.md` § 52; `runbook.md` → *Analyze*. **Added
+2026-10-09:** every `Attempt` records `ran` (whether the SQL reached the
+database), `databaseQueried(result)` decides from it, and a result it is
+false for carries *No database query was run for this answer.* — a guard
+refusal shows SQL and is still no query; the audit row carries the same
+`queried`. There is no conversation: one question per request, the last
+result in React state only, the audit row the only durable copy and it
+holds no answer text. **Same day, later: the screen is a THREAD.** Turns
+in the order asked, the ask box at the bottom, older turns fold only their
+rows table (a native `<details>`); the day's thread lives in
+`sessionStorage` (since 2026-10-12; `localStorage` before) keyed by employee
+id and **America/New_York** calendar day
+(`app/(modules)/bas/analyze-thread.ts`), so it survives a reload of its tab
+and not the tab's closing, two tabs are two conversations, stale days are
+discarded on load, and *New conversation* clears it. Nothing on the server.
+`runbook.md` → *The Analyze thread is gone, shows the wrong day, or will not
+take a second question*; `tests/bas-analyze-thread.test.tsx`. **Step 2,
+same day: follow-ups.** A question sends the newest earlier turns that fit
+(**6 turns, 24 KB**; question, interpretation, SQL, answer, up to 20 rows
+flagged partial when they are a sample) as `priorTurns`, capped and
+validated again by the route and shown to the model only as data - the SQL
+guard is the enforcement, proved by a planner that obediently repeats a
+crafted turn's DELETE. A follow-up either runs a new query (renders as
+today) or comes back `from_prior`: the no-query label AND a panel naming
+the earlier question it read from, amber when the model had only a sample.
+A from-memory plan naming a turn that was not sent is refused as unusable.
+The first question of a day, or after clearing, sends no `priorTurns` key.
+`WHY-ITS-BUILT-THIS-WAY.md` § 65; `runbook.md` → *Follow-ups* under the
+thread section; `npm run bas:analyze:followup-latency`. **Every sentence
+Analyze shows a person follows `docs/11-analyze-voice.md` (2026-10-13)**:
+answer first, then caveats; problems named when the rows support them;
+possible causes worded as possible and never as a diagnosis; old data
+given with its age; plain words with the HVAC terms kept; short lists
+allowed in the answer text and rendered as such. The rules live in the
+summariser and planner prompts, the platform-written no-data and
+cannot-answer sentences were reworded to match, and
+`tests/bas-analyze-prompt.test.ts` holds the prompts to the spec's
+section 6. The evidence panel, the no-query label, the gap warnings and
+every guard are unchanged. `WHY-ITS-BUILT-THIS-WAY.md` § 67.
 
 **Point Explorer takes a custom date range, in the building's zone, and
 averages long ranges out loud (2026-09-22).** *Custom* beside the three
@@ -728,9 +769,303 @@ label only after. `discover` still never writes `label`:
 27/27. The "six hidden points" were answered from the audit log: every hide
 was the B8.3 checkbox on 18 September, and one point is hidden today;
 nothing else in either repository writes `is_visible`. Roles, equipment and
-bulk actions are B8.5. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` → *A
+bulk actions were B8.5, below. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` → *A
 point has one name in Point Explorer and another in Settings*, and *Who hid
 it, and when* under *A point's label or hidden state disappeared*.
+
+**The BAS data migration to Azure is scripted and tested, not run
+(2026-09-29).** `scripts/bas-migrate-to-azure/` — `export.sql` from the office
+PC, `import.sql` into Azure in ONE transaction, `check.sql` after — moves the
+fourteen `bas_*` tables once. The import writes every row as `bas_migrate_tmp`,
+a role that exists only inside its transaction with INSERT on `bas_*`, UPDATE
+on their sequences and SELECT on two columns of `employees`, so it is
+**incapable** of touching the platform's tables rather than careful not to;
+every non-`bas_*` table is fingerprinted before and after as well. It refuses a
+target with any `bas_*` data (so a second run stops, verified), a schema
+mismatch, and a credential row whose `updated_by` email has no employee in the
+target — the one FK that leaves the family, carried as an email and resolved
+there. Sequences are set past the highest id and checked. Tested against a
+throwaway cluster as a non-superuser administrator, with the live 87,100
+readings, and `tests/bas-migration-scripts.test.ts` drives the real files
+through psql. `scripts/setup-bas-collector-role.sql` is the collector's role for
+Azure, written from the live grants (nothing in either repo created it before).
+**The container app had no `BAS_CREDENTIAL_KEY` and no `ANTHROPIC_API_KEY`** —
+fixed in the template on 2026-10-01 (two entries down). `runbook.md` → *Moving
+the BAS data to the Azure database* and the two sections after it;
+`WHY-ITS-BUILT-THIS-WAY.md` § 57.
+
+**The BAS screens are quiet when fine and loud when broken (2026-09-30).**
+Display and wording only; no query, figure or predicate changed. The two
+always-rendered check cards on Collection Health collapse to one line —
+*Checks: station counts match · no vanished points* — when both pass, and a
+failing check is its full card, in its tone, **above** the hero. The check
+runs in both states: `evaluateChecks` is the one place either verdict is
+decided, and *pass* is stricter than *green* (a filtered zero with vanished
+points elsewhere fails). The Home tile leads with the state — *No points at
+risk*, or *3 points at risk* in a maroon **mark on** the cyan fill, never a
+recoloured fill — over the newest reading's age; headroom is Collection
+Health's alone. Units are symbols everywhere (°F, %, inWC) from ONE formatter,
+`lib/modules/bas/units.ts`, driven by the unit column and leaving the stored
+value untouched. Every table in the module scrolls in the same seven-row box
+with the count in its heading. About a dozen sentences of meta-commentary
+went; the test for each was whether it stops a **number** being misread
+(stays) or explains the **UI** (goes). `tests/bas-quiet-ui.test.tsx` drives
+every quieted element into its failure state and asserts the loud wording
+survived. `WHY-ITS-BUILT-THIS-WAY.md` § 58; `runbook.md` → *Collection Health
+shows one line of checks where two cards used to be*.
+
+**The BAS module opens on a Projects tab (2026-09-30).** New first tab at `/bas`,
+labelled *Projects* on screen and `dashboard` in code (component, route, types
+- renamed on screen the same day, files left alone, runbook says so);
+Collection Health moved to `/bas/health` and is the one deep link that changed
+(Home's *new data gaps* line points there; Home's card itself opens Point
+Explorer since 2026-10-13, its figure still Collection Health's). One card per row of
+`bas_projects`, never hardcoded: name, the Home tile's health line via the same
+`basFigure`, newest-reading age, *N buildings · N JACEs*. **The per-project
+at-risk number is the one predicate scoped to the project** — per-state counts
+over the view, `atRiskCount` over `AT_RISK_ROLL_RISKS`, hidden points in — and
+`tests/bas-at-risk-predicate.test.ts` now holds the card to Collection Health
+filtered to that project; two mutations (a private not-ok count; a dropped
+state) failed there and **only** there, because the dashboard's own fixture has
+no not-full point to tell them apart with. No active point → counts and no
+health line, never an invented one. A project with no building is a card and not
+a link: the cascade 404s it. A card opens Point Explorer with the project set and
+**nothing loaded** — `?point=none` (`NO_POINT`), the first value that can say so;
+absent `point` still means the picker's first. `projectsInDatabase` is the
+joinless guard beside the cards. `runbook.md` → *The BAS module opens on
+Projects*; `WHY-ITS-BUILT-THIS-WAY.md` § 59.
+
+**The cards are filled in brand colours that mean nothing (same day).**
+Home's `.card--filled`, one of six fills (`DECORATIVE_CARD_FILLS`, token
+references, no red and no maroon) by **creation order** of `project_id`, so a
+new project takes the next colour and nobody else's moves. All text full
+white: Home's 85% white measures under AA on the ink fills. The at-risk mark
+gained a white edge (`.card-mark`) because maroon against every fill is under
+2:1 and 1.03 on purple. Colour-blind reading: the boxed words, never the hue.
+Mutation run: colour from the at-risk count fails two tests by name.
+`WHY-ITS-BUILT-THIS-WAY.md` § 60; `runbook.md` → *The cards are coloured, and
+what the colour means*.
+
+**B8.5 complete — roles and equipment through the UI, with suggestions
+(2026-10-01).** The Points list gained a **role picker** (the 91-role
+vocabulary in four groups from the flags it already carries: measurements,
+setpoints, commands, statuses, plus the vocabulary's own `unclassified` for
+"reviewed, not mappable"), an **equipment picker** with **create equipment
+inline** (name, type, optional parent, optional notes - the office VAVs carry
+their rooms there) and an equipment panel where a parent can be set after
+creation, a **selection with bulk assign** (all shown / none; role and/or
+equipment on the selection in one action, confirmed with the count), and
+**suggestions** from name patterns that are **never written by anything but
+a click**. The single-point PATCH is the same strict one-field schema
+(`{ role }` or `{ equipmentId }`, unknown keys 422); `POST
+/settings/points/bulk` is **all-or-nothing in one transaction** - one bad id
+or equipment on another building refuses the whole selection with the count
+and writes nothing - and is the one place a role and an equipment travel
+together, because accepting a suggestion is one human action on both. One
+audit row per point per field, previous and new value, `viaBulk` and
+`selectionSize` on the row. **A role is not cosmetic**: the setpoint and
+command/status pair views, the unclassified tile, the Analyze catalogue and
+the value-plausibility check (next entry; it was not on main when B8.5 was
+built, which is why that PR said no such check existed) judge a point by it.
+`tests/bas-point-classification.test.ts` asserts a role brings a point into
+the pair views and clearing it takes it out, and
+`tests/bas-plausibility.test.ts` that a point with no role is *not checked,
+role not set* and a setpoint is never flagged; the tile reads live, the
+catalogue's five-minute cache is dropped on every classification write, and
+the Projects cards read nothing role-derived.
+**The acceptance test** (`tests/bas-office-classification.test.ts`) seeds
+the office JACE's real 32 names and reproduces the 17 September SQL
+classification - 20 roles, one RTU, ten VAVs under it with their rooms in
+notes, two labels - **through the routes the UI calls**, using "Apply all"
+for 17 points and one bulk request for the 16 RTU points, and asserts the end
+state row for row against `tests/fixtures/bas-office-classification.json`,
+read from live. The lab's `Temp1`-`Temp3` carry no suggestion and end as
+unclassified as they began. Mutations run: auto-applying suggestions with a
+loosened "Temp" pattern fails the canon test; a bulk path that wrote the
+whole station fails by point id; dropping `.strict()` from the role PATCH
+fails at both the schema and the route. `station_unassigned` is unreachable
+while `bas_stations.site_id` is NOT NULL and is recorded in
+`docs/testing-blind-spots.md`. `WHY-ITS-BUILT-THIS-WAY.md` § 61;
+`runbook.md` → *A point's role or equipment is wrong, or a suggestion looks
+wrong*, *Bulk assign refused the whole selection*, *Equipment cannot be
+created or deleted*.
+**The value-plausibility check (built 2026-09-28, LANDED 2026-10-01).** It
+sat unmerged on `feat/bas-value-plausibility` for ten days while main moved
+under it, and these notes said it was deployed when it was not; the B8.5
+work on 1 October, looking only at main, then wrote that no role-keyed check
+existed. It exists now. Every check before it asked whether data was
+arriving; none asked whether it meant anything, and two dead sensors sat
+green for a month - `points_RoomT` at exactly -40 since 24 August, `VAV-8
+104-105_ZoneTemperature` at exactly 70.5 for its whole history. One check:
+a run of identical readings longer than a threshold for the point's KIND of
+measurement, from `lib/modules/bas/plausibility.ts`. **No list of bad
+values** - the evidence is the flatness, not the number. **The role decides
+who is judged**: `is_setpoint` and a `measurement` of `status` or `mode`
+exclude a point, no role means *not checked, role not set* and never a
+guess, and the SQL that selects judged points is generated from the same
+threshold table the TypeScript applies, with a test walking all 91
+vocabulary roles through both. Thresholds are per kind (pressure 3 h,
+temperature 6 h, electrical 24 h, outputs and accumulators 7 days), each
+with its reason in the table and printed on the card, each defended against
+the longest healthy run measured in live history; plus at least 12 readings.
+A change-of-value trend is measured from its last record to the collector's
+last successful pass, never to now(). **Under the quiet-UI rules it is the
+third check**: `evaluateChecks` decides it beside completeness and vanished
+points; when nothing is flagged it is one phrase on the *Checks:* line,
+*values still changing (17 judged)* - or *no values judged (no roles set)*,
+because a check that judged nothing is not reassurance - and when something
+is, the full card, amber, above the hero, with its finding sentences intact
+and hidden points listed and said. On the Points list it is a *Value*
+column, in `settings-points.tsx` where the list now lives; *Not checked ·
+role not set* is a label for the row's role picker, so the words are the
+door. Values print through the unit-symbol formatter (°F, inH₂O). Never
+deactivates, never edits a reading, never a confirmed fault, never removed
+from a figure. **Computed on every page load, not stored: 6.5 ms** for 17
+judged points, four index probes per healthy point; revisit at 200 ms.
+**Acceptance re-run on 1 October against the frozen 29 September database**
+- both faults flagged, nothing else, no setpoint or status point, Temp1-3
+*not checked, role not set* - via `npm run bas:plausibility:verify`;
+`docs/bas-plausibility-verification.md` is the record, both runs, with the
+mutations re-run. `WHY-ITS-BUILT-THIS-WAY.md` § 55; `runbook.md` →
+*Collection Health says a value has stopped changing*.
+
+**Cost Intelligence and Knowledge Base are registered by migration
+(2026-10-01).** Their rows were in `prisma/seed.ts` only, from PR #25 on
+23 September. The seed runs on every fresh database and never on production
+— once, by hand, on 9 September, before either row existed — so the deployed
+platform had both pages and neither row: nothing to grant, nothing in any
+sidebar. Verified by querying the production `modules` table on 24 September
+(`bas` and `change-orders` only). One migration,
+`20261001120000_register_cost_intelligence_and_knowledge_base`, inserts both
+with the seed's values and `ON CONFLICT (key) DO NOTHING`; they land `active`,
+because that is what every other database holds, a row with no grants is
+invisible, and no admin screen could un-hide them later. The seed lines stay.
+**A module row reaches production by migration, never by seed**, and
+`tests/module-registry.test.ts` fails the build for any directory under
+`app/(modules)/` whose key is in no migration — it also drives the real
+migration file against a seed-populated database (nothing changes) and an
+empty one (both appear). `docs/10-adding-a-module.md` is the walkthrough,
+written for a new developer and an agent alike; `runbook.md` → *A module
+works locally but is missing from production*.
+**Two secrets reach the container app from Key Vault by reference (built
+2026-09-17, LANDED and extended 2026-10-01).** `feat/anthropic-api-key-keyvault`
+was the second branch found built, verified and never merged. Re-applied onto
+main and extended to the BAS credential key the identical way: each is a
+Key Vault secret in the vault's naming style (`ANTHROPIC-API-KEY`,
+`BAS-CREDENTIAL-KEY`), **never a template parameter and never written by the
+template** - a person sets the value once with `az keyvault secret set` -
+referenced from the container app as `ANTHROPIC_API_KEY` and
+`BAS_CREDENTIAL_KEY` behind `anthropicApiKeyInKeyVault` and
+`basCredentialKeyInKeyVault` (default false, because Container Apps resolves
+every reference at revision creation and a missing secret fails the whole
+deployment). `BAS_CREDENTIAL_KEY_VERSION` rides beside the key as a **plain**
+value from `basCredentialKeyVersion` (default `"1"`): it is not a secret,
+decryption never reads it, `currentKeyVersion` stamps it on a row when a
+password is saved. **The names are decided in `lib/env.ts`** -
+`ANTHROPIC_API_KEY_VAR`, `BAS_CREDENTIAL_KEY_VAR`,
+`BAS_CREDENTIAL_KEY_VERSION_VAR` - and imported by the two readers; the
+deploy-guard tests hold the readers, `lib/env.ts` and the bicep to each other,
+assert each variable is a `secretRef` and never a `value:`, and assert from
+the template's own grants that the one **Key Vault Secrets User** assignment
+on the vault covers both, so no new role assignment is needed. **The BAS key is
+copied, not generated**: every stored credential was encrypted on the office
+PC under the collector's key, and a vault value that differs by one byte turns
+them all into unreadable ciphertext. No secret value is anywhere in the
+repository. **`BAS_ASK_DATABASE_URL` is wired the same way since 2026-10-13**
+(`BAS-ASK-DATABASE-URL`, `basAskDatabaseUrlInKeyVault`), and
+`scripts/setup-bas-analyze-role.sql` is the psql form of the `bas_analyze`
+role for the Azure server - the same allowlist as `role.ts`, held to it by
+`tests/bas-analyze-role-sql.test.ts`, runnable from the portal's Cloud Shell.
+The deployed Analyze tab stays *not configured* until the role exists there,
+the URL is in the vault and the flag is on. `az bicep build` and `lint`
+pass locally; removing either `env:` entry fails a named guard test.
+`infra/README.md` has the two command sequences and the click to confirm each;
+`runbook.md` → *Secrets set by hand in Key Vault*.
+
+**A template deployment must be told which image to keep (2026-10-13).** The
+first template deployment since CI pushed a real image - run to turn the two
+Key Vault flags on - produced revision `0000053`, `ActivationFailed`: a
+hello-world on `:80` under probes for `:3000`. Reported as a port
+disagreement; every port on the revision was 3000 and right. The image was
+the drift: `containerImage` defaulted to the public placeholder, the
+parameters file never set it, and a deployment replaces the whole app. Two
+writers each own half of the container app - the workflow's `az containerapp
+update --image` sets the image and keeps the rest; the template sets the rest
+and the image too - and the same comparison found the readiness-probe tuning
+of 30 September had never reached production for the mirror reason. Now
+**`containerImage` is required, read from the running app before every
+deployment** (`infra/README.md` → *Deploy*), the placeholder is passed
+explicitly on the very first deployment only, the template sets no `PORT`
+entry and the Dockerfile is the one place the port is decided.
+`tests/deploy-guards.test.ts` → *the two deploy paths cannot diverge on the
+image or the port* holds it, mutations run. The secrets did sync; the fix
+for the live app is the next merge to `main`, or the same update by hand.
+`WHY-ITS-BUILT-THIS-WAY.md` § 66; `runbook.md` → *A template deployment
+fails activation*.
+
+**The plausibility gate has a type half (2026-10-06).** The role gate alone
+would have judged a boolean or enum point on a measurement threshold the
+moment somebody gave it a measurement role - a fan status misclassified as
+`zone_temp`, flagged after six hours of running. `bool`, `str` and `enum`
+(`bas_points.data_type`, `STATE_DATA_TYPES`) are now never judged whatever
+the role, with their own reason, `state_type`, worded *state point*; the
+SQL half is `checkedTypeSql`, the judge reads the same list, and a test
+walks all seven declared types through both. **It sits after the role
+gates**, so a state point with no role still reads *role not set* and the
+live run is unchanged before and after: 17 judged, 2 flat, 15 changing, the
+five bool and string points with identical reasons. Either half removed
+makes the agreement guard throw. `WHY-ITS-BUILT-THIS-WAY.md` § 55
+amendment; `docs/bas-plausibility-verification.md` → *The type gate*;
+`runbook.md` → *Collection Health says a value has stopped changing*.
+**The trend chart knows what kind of value it is drawing (2026-10-06).**
+`bas_readings` has three value columns and the collector fills one per row
+from the oBIX type; every Point Explorer query read `value_num`, so the two
+visible boolean points (`Occupied`, `System_Enable`) rendered as an empty
+plot under an axis of `-0.01 / 0.00 / 0.01` with *Distinct values 0 · Reads
+as a stuck sensor* beside it. Now the service picks the column from
+`bas_points.data_type` - the collector's declaration from the record
+prototype, which agrees with the populated column on all 39 live points;
+`unknown` falls back to the readings, and a declared type is never overruled
+by them - and carries `valueKind` and, for a boolean, two `states` words to
+the browser. A boolean point is a **stepped line** between **two labelled
+states** (occupancy → Occupied/Unoccupied, alarm → Alarm/Normal, "enable" →
+Enabled/Disabled, any status or command role → On/Off, else True/False), the
+axis is those two words and nothing else, the tooltip and Latest tile say
+the word, Average is `—`, Range is the states seen, and the distinct-values
+tile is not judged. The reading travels as 1/0 so breaks, bucketing, custom
+ranges and zoom are one code path; a bucketed boolean reads *"Occupied 72%
+of readings"*. Numeric points are unchanged. **String points (three on
+live, enum codes in `value_str`) are recognised and otherwise untouched, by
+decision.** No chart shows two units: one point at a time, since B4. Four
+mutations run. `lib/modules/bas/value-kind.ts`;
+`WHY-ITS-BUILT-THIS-WAY.md` § 63; `runbook.md` → *A boolean point's chart
+is empty, or its axis reads On / Off*.
+
+**Point Explorer has a readings table and a CSV export (2026-10-09).** A
+*Chart / Table* toggle at the right of the trend panel's heading, and
+*Download CSV* beside it; `view=table` in the URL opens the table. The table
+is the STORED rows behind the chart - the same point over the very two
+instants the chart's response carries (`range.from` / `range.to`), newest
+first, 200 a page, `count(*)` and `LIMIT / OFFSET` in SQL - and it is
+**never bucketed**: `lib/modules/bas/readings.ts` is a separate path that
+imports nothing from `range.ts`, and `tests/bas-readings-raw.test.ts` walks
+every page of the real `points_RoomT` fixture against the file while the
+chart draws 1,600 averages of the same 7,600 readings. A boolean row is its
+state word, a numeric row is the stored value whole with the unit symbol, a
+timestamp is the tooltip's format in the building's zone with the exact
+microsecond instant as its title. The CSV (`/point-readings/csv`) is every
+row in the range, streamed in 10,000-row keyset chunks with the cursor as the
+printed timestamp (a Date keeps three fractional digits and skips rows),
+capped at **500,000 rows** - under Excel's sheet limit so a capped file
+cannot be cut a second time silently - and when the cap bites the response's
+three headers become a sentence under the heading saying what was exported
+and what was not. `true` / `false` and the unit NAME in the file, because
+the file is for tracing rows back to the database. A hidden point is refused
+with the chart's own sentence. **Nothing is fetched until the toggle or the
+button is used**; the explorer's response is unchanged. `status` is in the
+file (always empty on this path) and not on the screen. `runbook.md` → *The
+readings table and the chart disagree, or a CSV export says it was cut*;
+`WHY-ITS-BUILT-THIS-WAY.md` § 64.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
@@ -764,6 +1099,26 @@ Documentation is `chore/`. There is no `docs/` prefix.
 
 **An agent stops at the push.** Create the branch, commit, push, and report the
 branch name — the human opens the pull request.
+
+**`main` is protected by a repository ruleset** — pull request required, no
+force-push, no deletion — and the ruleset is authoritative. Where this file and
+the ruleset disagree, the ruleset wins and this file is what is out of date.
+
+**The owner holds bypass rights, and they are for emergencies.** A broken
+`main`, a revert that cannot wait. Not for routine work, not for a change that
+seems too small to be worth a PR, and never on an agent's own judgment.
+
+The trap is that **bypassing does not fail**. A direct push to `main` prints
+
+```
+remote: - Changes must be made through a pull request.
+```
+
+and then **succeeds**, which reads like a warning and is not — it is the
+protection being overridden. On 2026-09-22 an agent pushed documentation to
+`main` that way, having acted on a "commit straight to `main`" rule that
+predated the ruleset. Nothing looked wrong at the time. If you see that line,
+say so plainly instead of treating the exit code as permission.
 
 **Use judgment without asking** on reversible, conventional, low-risk, internal choices.
 
@@ -813,6 +1168,8 @@ either anywhere else — point at them.
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
 | `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon, headroom |
 | `docs/09-bas-what-is-built.md` | BAS: what exists, and which of the two repos owns each piece |
+| `docs/10-adding-a-module.md` | **Read before adding a module.** The five pieces, Cost Intelligence as the worked example, and the rule that a module row reaches production only by migration |
+| `docs/11-analyze-voice.md` | **The canonical spec for every sentence Analyze shows a person** — answers, clarifying questions, no-data and error text. The team's voice guideline, verbatim, adopted 2026-10-13; the summariser and planner rules in `lib/modules/bas/analyze/planner.ts` implement it |
 | `docs/12-ai-layer-inventory.md` | **Phase 12: what the change-order engine reads, writes and decides.** The input to every later part |
 | `docs/DESIGN-BRIEF.md` | The redesign brief as issued, plus what the build actually chose where the two differ |
 | `docs/phase-1-verification.md` | Manual verification record |
@@ -820,4 +1177,5 @@ either anywhere else — point at them.
 | `docs/phase-9-verification.md` | Grouping, conflicts, and the latency that decides Part B |
 | `docs/phase-11-verification.md` | Evidence the platform has not disturbed the automation |
 | `docs/phase-12-part-b-verification.md` | The file-access extraction: what was measured, and what is still unproven |
+| `docs/bas-plausibility-verification.md` | **The value-plausibility check against live data:** both dead sensors flagged, nothing else, the thresholds defended by the longest healthy runs, the cost measured, four mutations |
 | `docs/phase-12-part-c-plan.md` | **Part C: what `Sites.Selected` actually blocks**, what it does not, and what has already been settled by measurement |

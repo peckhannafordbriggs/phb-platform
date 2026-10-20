@@ -107,6 +107,14 @@ status        'active'
 The sidebar and the admin grant matrix pick it up automatically. No UI changes needed
 in either.
 
+**The row goes in two places: `prisma/seed.ts` AND a migration with
+`ON CONFLICT (key) DO NOTHING`.** The seed reaches every fresh database and never
+production; the migration is the only thing that reaches production. Same values in
+both. Two modules shipped with the seed line only in September 2026 and existed
+everywhere except the deployed platform. `docs/10-adding-a-module.md` is the
+walkthrough, and `tests/module-registry.test.ts` fails the build for a module page
+with no migration.
+
 **2. An API namespace.** `app/api/modules/yourmodule/*`. Every route in it goes through
 the existing guard with `moduleKey: 'yourmodule'`. Nothing else is required to make
 access control work.

@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import type { Viewer } from "@/lib/authz";
 import { writeAuditEvent } from "@/lib/audit";
+import { databaseQueried, type PriorTurn } from "./types";
 import { prisma } from "@/lib/db";
 import { logger, logUnexpected } from "@/lib/logger";
 import { BAS_MODULE_KEY } from "../constants";
@@ -63,6 +64,12 @@ export interface Planner {
     nowUtc: string;
     /** On a retry: what the first attempt produced and why it was unusable. */
     previous: Attempt | null;
+    /**
+     * Today's earlier turns, as the browser sent them and the route checked
+     * them. Empty for a first question. Shown to the model as data; never
+     * acted on by the platform.
+     */
+    priorTurns: PriorTurn[];
   }): Promise<Plan>;
 
   summarise(input: {
@@ -71,6 +78,8 @@ export interface Planner {
     sql: string;
     table: ResultTable;
     provenance: Provenance;
+    /** The same clock the plan call saw: the worked timezone example is drawn from it. */
+    nowUtc: string;
   }): Promise<string>;
 }
 
@@ -97,6 +106,14 @@ export async function analyzeQuestion(
   viewer: Viewer,
   rawQuestion: string,
   deps: AnalyzeDeps,
+  /**
+   * Today's earlier turns, for a follow-up. The route has capped and
+   * validated them; the service passes them to the planner as data and
+   * otherwise never reads a field of them except to name the source of a
+   * from-memory answer. Absent for a first question, which then runs
+   * exactly as before this parameter existed.
+   */
+  priorTurns: PriorTurn[] = [],
 ): Promise<AnalyzeResult> {
   const question = rawQuestion.trim();
   const started = Date.now();
@@ -149,7 +166,7 @@ export async function analyzeQuestion(
       const previous = attempts[attempts.length - 1] ?? null;
 
       try {
-        plan = await deps.planner.plan({ question, schema, nowUtc, previous });
+        plan = await deps.planner.plan({ question, schema, nowUtc, previous, priorTurns });
       } catch (error) {
         if (error instanceof PlannerError) {
           // A refusal or an outage is not something a retry fixes; an
@@ -163,17 +180,38 @@ export async function analyzeQuestion(
             };
             return await record(result);
           }
-          attempts.push({ sql: "", error: error.message });
+          attempts.push({ sql: "", error: error.message, ran: false });
           continue;
         }
         throw error;
+      }
+
+      if (plan.kind === "from_prior") {
+        // The source must be one of the turns THIS request carried. An index
+        // outside them is an unusable plan - the model named a turn it was
+        // not shown - and gets the one retry an unparseable answer gets.
+        const source = priorTurns[plan.sourceTurn];
+        if (source === undefined || plan.answer.length === 0) {
+          attempts.push({
+            sql: "",
+            error:
+              `A from_prior answer named earlier question ${plan.sourceTurn + 1}, ` +
+              `but ${priorTurns.length === 0 ? "no earlier questions were given" : `only ${priorTurns.length} were given`}` +
+              `${plan.answer.length === 0 ? ", and the answer was empty" : ""}. ` +
+              "Write a query, or name one of the earlier questions given.",
+            ran: false,
+          });
+          plan = null;
+          continue;
+        }
+        break;
       }
 
       if (plan.kind !== "query") break;
 
       const guarded = guardSql(plan.sql);
       if (!guarded.ok) {
-        attempts.push({ sql: plan.sql, error: guarded.reason });
+        attempts.push({ sql: plan.sql, error: guarded.reason, ran: false });
         continue;
       }
 
@@ -191,6 +229,7 @@ export async function analyzeQuestion(
           error:
             "The SQL filters or buckets by time, but time_range was null. Declare the UTC " +
             "start and end the SQL covers, resolving now() and any interval to timestamps.",
+          ran: false,
         });
         continue;
       }
@@ -200,7 +239,9 @@ export async function analyzeQuestion(
         plan = { ...plan, sql: guarded.sql };
       } catch (error) {
         if (error instanceof QueryFailure) {
-          attempts.push({ sql: guarded.sql, error: describeQueryFailure(error) });
+          // The database received it: a refusal, an error or a timeout is
+          // still a query that ran.
+          attempts.push({ sql: guarded.sql, error: describeQueryFailure(error), ran: true });
           // A timeout is not a planning mistake to be retried into a second
           // fifteen-second wait; it is the answer.
           if (error.timedOut) break;
@@ -231,6 +272,26 @@ export async function analyzeQuestion(
 
     if (plan.kind === "cannot_answer") {
       result = { kind: "cannot_answer", reason: plan.reason, attempts, retried };
+      return await record(result);
+    }
+
+    if (plan.kind === "from_prior") {
+      // Validated in the loop: the source exists among what was sent.
+      const source = priorTurns[plan.sourceTurn]!;
+      result = {
+        kind: "from_prior",
+        answer: plan.answer,
+        interpretation: plan.interpretation,
+        source: {
+          id: source.id,
+          question: source.question,
+          kind: source.kind,
+          rowsWerePartial: source.rowsArePartial,
+          rowCount: source.rowCount,
+        },
+        durationMs: Date.now() - started,
+        retried,
+      };
       return await record(result);
     }
 
@@ -297,6 +358,7 @@ export async function analyzeQuestion(
         sql: plan.sql,
         table,
         provenance,
+        nowUtc,
       });
     } catch (error) {
       // The rows are on screen either way. A failed summary is said, not hidden.
@@ -325,7 +387,8 @@ export async function analyzeQuestion(
         reason:
           "The platform could not read the tables it needs to check this answer. " +
           "Contact IT. (" + error.message + ")",
-        attempts: sqlForRecord === null ? [] : [{ sql: sqlForRecord, error: error.message }],
+        attempts:
+          sqlForRecord === null ? [] : [{ sql: sqlForRecord, error: error.message, ran: true }],
         retried: false,
       };
       return await record(result);
@@ -349,6 +412,10 @@ export async function analyzeQuestion(
       "sql" in outcome ? outcome.sql : sqlForRecord ?? lastAttemptSql(outcome);
     const rowCount =
       "table" in outcome ? outcome.table.rowCount : rowCountForRecord;
+    // Whether ANY SQL reached the database - the first thing a reader of a
+    // wrong answer needs to know, and the one the `sql` field alone cannot
+    // say, since it is also recorded for an attempt the guard refused.
+    const queried = databaseQueried(outcome);
 
     logger.info("bas.analyze.question", {
       employeeId: viewer.id,
@@ -358,6 +425,13 @@ export async function analyzeQuestion(
       count: rowCount ?? undefined,
       question,
       sql: sql ?? undefined,
+      queried,
+      reason:
+        outcome.kind === "from_prior"
+          ? `from_prior source="${outcome.source.question}" priorTurns=${priorTurns.length}`
+          : priorTurns.length > 0
+            ? `priorTurns=${priorTurns.length}`
+            : undefined,
     });
 
     try {
@@ -369,6 +443,10 @@ export async function analyzeQuestion(
           question,
           outcome: outcome.kind,
           sql,
+          queried,
+          /** How many earlier turns the browser sent, and for a from-memory answer, which one it read from. */
+          priorTurns: priorTurns.length,
+          sourceQuestion: outcome.kind === "from_prior" ? outcome.source.question : null,
           rowCount,
           durationMs,
           retried: "retried" in outcome ? outcome.retried : false,
@@ -416,10 +494,13 @@ export function explainNoData(
   range: Provenance["timeRange"],
   provenance: Provenance,
 ): string {
+  // Worded for the person at the keyboard (docs/11-analyze-voice.md), with
+  // the one property that matters kept in the same words: it is not an
+  // answer of zero.
   const lead =
     reason === "no_rows"
-      ? "The query returned no rows. That is not an answer of zero: no data matched."
-      : "The query returned a row with nothing in it - an aggregate over no readings. That is not an answer of zero: no data matched.";
+      ? "Nothing in the data matched this question. That is not an answer of zero: there is no reading to answer it with."
+      : "The query came back empty - an average over no readings. That is not an answer of zero: there is no reading to answer it with.";
 
   const notes: string[] = [];
   const coverage = provenance.coverage;
@@ -461,7 +542,7 @@ export function explainNoData(
 
   if (provenance.unclassifiedExcluded > 0) {
     notes.push(
-      `${provenance.unclassifiedExcluded} points have no role and were outside a search by what a point measures.`,
+      `${provenance.unclassifiedExcluded} points have no role assigned yet, so a search by what a point measures could not include them.`,
     );
   }
 
@@ -471,9 +552,9 @@ export function explainNoData(
 function plannerFailureReason(error: PlannerError): string {
   switch (error.code) {
     case "refused":
-      return "The model declined to write a query for this question.";
+      return "The answer service declined to write a query for this question.";
     case "unparseable":
-      return "The model did not produce a usable plan, twice.";
+      return "The answer service could not produce a usable query for this question, twice.";
     case "unavailable":
       // The planner's own message names which of the failure modes it was -
       // key rejected, rate limited, unreachable, an HTTP status. Rendering a

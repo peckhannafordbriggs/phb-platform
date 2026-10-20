@@ -515,6 +515,12 @@ buildings; it missed a sensor frozen at 64.5 with σ = 0.08. Distinct-value coun
 is unit-independent — a live sensor produces many values, a dead one produces a
 handful.
 
+Since 28 September 2026 the same judgement is made for the whole estate
+without anyone opening a point: Collection Health's *Values that have stopped
+changing* card flags a run of identical readings longer than a per-kind
+threshold, by role, and the Points list carries the verdict per point.
+`lib/modules/bas/plausibility.ts`; `WHY-ITS-BUILT-THIS-WAY.md` § 55.
+
 ### Ask
 
 *This section is the original design. What was built (2026-09-21) is the

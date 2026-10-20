@@ -5,10 +5,10 @@ import { moduleAccent } from "@/lib/module-accent";
 import { greetingFor } from "@/lib/activity/rollover";
 import {
   getHomeData,
-  type Figure,
   type HomeModuleCard,
   type LastHere,
 } from "@/lib/home/service";
+import { FigureBlock } from "./figure-block";
 
 export const dynamic = "force-dynamic";
 
@@ -33,8 +33,11 @@ export const dynamic = "force-dynamic";
  * Building Automation, from lib/module-accent.ts - which is safe here because
  * neither is a semantic tone: this palette says ok/warn/bad in teal, orange and
  * maroon, and `--danger` is deliberately maroon rather than red. The rule that
- * keeps it safe is that NO state colour appears on these cards; state is said in
- * words. See .card--filled in app/globals.css for the measured contrast.
+ * keeps it safe is that the FILL never carries a state colour: a state is said
+ * in words, and a fault is marked in maroon ON the fill (FigureBlock's alarm
+ * mark), never by recolouring the fill itself. Decorative and semantic stay
+ * disjoint sets - cyan is never a state, maroon is never decoration. See
+ * .card--filled in app/globals.css for the measured contrast.
  */
 export default async function HomePage() {
   const access = await requireAuthenticated();
@@ -173,32 +176,6 @@ function ModuleCard({ card, index }: { card: HomeModuleCard; index: number }) {
         </p>
       </div>
     </Link>
-  );
-}
-
-function FigureBlock({ figure }: { figure: Figure }) {
-  if (figure.state === "unavailable") {
-    return (
-      <div className="mt-5 flex-1">
-        {/*
-          No number at all, rather than a zero. "0 drafts" and "we could not ask
-          Exchange" are opposite claims and must never render the same - this is
-          the same rule the BAS tiles follow for a null reading.
-        */}
-        <p className="font-display text-2xl font-semibold leading-tight text-white/85">
-          {figure.status}
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="mt-5 flex-1">
-      <p className="font-display text-5xl font-semibold leading-none tracking-tight">
-        {figure.value}
-      </p>
-      <p className="mt-3 text-sm text-white/85">{figure.status}</p>
-    </div>
   );
 }
 

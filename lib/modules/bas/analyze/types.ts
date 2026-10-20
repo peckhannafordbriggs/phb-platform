@@ -40,6 +40,12 @@ export interface ProvenancePoint {
   name: string;
   site: string;
   station: string;
+  /**
+   * The site's IANA timezone (bas_sites.timezone), so the answer can give
+   * dates in the building's own zone. Optional only so older fixtures still
+   * type-check; the provenance lookup always fills it.
+   */
+  timezone?: string;
   /** False when the collector is not fetching this point. */
   collected: boolean;
 }
@@ -131,10 +137,79 @@ export interface Provenance {
   coverageShortfall: string | null;
 }
 
+/**
+ * What the browser sends of an earlier turn, so a follow-up can be read
+ * against it. UNTRUSTED INPUT, like the question: the route caps and
+ * validates every field, the planner is shown it only inside <data> blocks,
+ * and nothing in it reaches the database - a new query still goes through
+ * the guard, and `sql` here is an example the model may read, never a
+ * statement the platform runs.
+ *
+ * Lean by design, because every answer already costs two model calls:
+ *   question, interpretation, answer   how the earlier question was read and
+ *                                      what was said - the cheapest and most
+ *                                      useful part
+ *   sql                                what ran, so a follow-up can be a
+ *                                      modification of it
+ *   columns + rows                     a SAMPLE of what came back, at most
+ *                                      PRIOR_ROWS_MAX rows, cells shortened -
+ *                                      enough to answer "which of those was
+ *                                      worst" when the list was short, and
+ *                                      flagged `rowsArePartial` when it was
+ *                                      not, so the model is told to query
+ *                                      rather than guess from a fragment
+ *
+ * `id` is the browser's own turn id, echoed back on a from-memory answer so
+ * the screen can say which turn was the source by its place in the thread.
+ */
+export interface PriorTurn {
+  id: string;
+  question: string;
+  kind: "answered" | "no_data" | "clarify" | "cannot_answer" | "from_prior";
+  interpretation: string | null;
+  sql: string | null;
+  /** The model's paragraph, the clarifying question, or the reason for declining. */
+  answer: string | null;
+  columns: string[];
+  rows: Cell[][];
+  /** Rows the earlier query returned in all. Null when nothing ran. */
+  rowCount: number | null;
+  /** `rows` is not the whole result: a sample of a longer table, or a capped one. */
+  rowsArePartial: boolean;
+}
+
+/**
+ * The caps, enforced in the browser when the turns are chosen and again by
+ * the route when they arrive. Six turns: a day's follow-ups rarely reach
+ * further back, and each is at most a few KB. Twenty rows: the lists a
+ * person says "those" about - points, gaps, runs - are usually shorter, and
+ * a longer one is sent as a flagged sample. 24 KB in all: about six thousand
+ * tokens beside a schema block that is cached, so a follow-up costs little
+ * more than a first question. The answer paragraph and the interpretation
+ * are capped at the size the planner is asked to produce; the SQL at what a
+ * reasonable SELECT runs to.
+ */
+export const PRIOR_TURNS_MAX = 6;
+export const PRIOR_ROWS_MAX = 20;
+export const PRIOR_COLUMNS_MAX = 12;
+export const PRIOR_CELL_MAX_CHARS = 120;
+export const PRIOR_TEXT_MAX_CHARS = 1_200;
+export const PRIOR_SQL_MAX_CHARS = 4_000;
+export const PRIOR_TURNS_MAX_BYTES = 24_000;
+
 export interface Attempt {
   sql: string;
   /** What went wrong, in the database's or the guard's words. */
   error: string;
+  /**
+   * Whether this SQL REACHED THE DATABASE. False for everything that stopped
+   * short of it - the model's answer could not be parsed, the guard refused
+   * the SQL, the plan declared no period; true when the database received it
+   * and refused it, errored or stopped it for time. The screen's "No database
+   * query was run for this answer" is decided from this, so the two cannot be
+   * confused: a guard refusal looks like a failed query and is not one.
+   */
+  ran: boolean;
 }
 
 /**
@@ -152,6 +227,31 @@ export type AnalyzeResult =
   | { kind: "not_configured"; missing: string[] }
   /** The planner needs a decision from the person before it can write SQL. */
   | { kind: "clarify"; question: string; interpretation: string }
+  /**
+   * A follow-up answered from an EARLIER turn's results, with no new query.
+   * "Which of those was the worst?" when the rows of the question before
+   * already hold the answer. The source is named - the earlier question,
+   * verbatim, and the browser's id for that turn - because an answer from
+   * memory that does not say where the memory came from is the bug this
+   * tab exists to prevent. `databaseQueried` is false for it, so the screen
+   * carries the no-query label as well.
+   */
+  | {
+      kind: "from_prior";
+      answer: string;
+      interpretation: string;
+      source: {
+        /** The browser's turn id, as it was sent. */
+        id: string;
+        question: string;
+        kind: PriorTurn["kind"];
+        /** The rows the model had were a sample or a capped table. Said on screen. */
+        rowsWerePartial: boolean;
+        rowCount: number | null;
+      };
+      durationMs: number;
+      retried: boolean;
+    }
   /**
    * The planner could not write valid SQL, the SQL was refused by the guard or
    * the database, or the model declined. `attempts` is every SQL that was tried,
@@ -211,7 +311,13 @@ export type Plan =
       interpretation: string;
     }
   | { kind: "clarify"; question: string; interpretation: string }
-  | { kind: "cannot_answer"; reason: string };
+  | { kind: "cannot_answer"; reason: string }
+  /**
+   * Answer from the prior turn at `sourceTurn` (0-based, into the prior
+   * turns as given to the planner) without running anything. The service
+   * refuses an index outside what was sent, as an unusable plan.
+   */
+  | { kind: "from_prior"; sourceTurn: number; answer: string; interpretation: string };
 
 /** Thrown by a planner when the model is unusable: refusal, no parse, transport. */
 export class PlannerError extends Error {
@@ -221,5 +327,30 @@ export class PlannerError extends Error {
   ) {
     super(message);
     this.name = "PlannerError";
+  }
+}
+
+/**
+ * Whether any SQL for this result reached the database.
+ *
+ * `answered` and `no_data` carry the SQL that ran, so yes. `clarify` and
+ * `not_configured` never got that far. `cannot_answer` is the one that has to
+ * be looked at: its attempts may have stopped at the guard (not run) or been
+ * refused by the database (run). One function, used by the audit row and by
+ * the screen's label, so the two cannot disagree. Pure, and in this module
+ * rather than service.ts because the screen imports it: service.ts pulls in
+ * `pg`, which has no place in a browser bundle.
+ */
+export function databaseQueried(outcome: AnalyzeResult): boolean {
+  switch (outcome.kind) {
+    case "answered":
+    case "no_data":
+      return true;
+    case "cannot_answer":
+      return outcome.attempts.some((attempt) => attempt.ran);
+    case "clarify":
+    case "not_configured":
+    case "from_prior":
+      return false;
   }
 }

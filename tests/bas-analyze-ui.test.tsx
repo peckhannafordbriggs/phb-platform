@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Result } from "@/app/(modules)/bas/analyze";
+import { AnswerText, Result } from "@/app/(modules)/bas/analyze";
 import {
   askQuestion,
   cellText,
@@ -143,8 +143,24 @@ describe("provenance is on screen for every result that ran", () => {
     }
   });
 
-  it("labels the model's paragraph as the model's", () => {
-    expect(render(zero)).toContain("the model&#x27;s reading of the rows below");
+  it("no longer labels the model's paragraph, reads back the plan, or notes a retry - removed 2026-10-12", () => {
+    for (const html of [render(zero), render(noData), render({ ...zero, retried: true })]) {
+      expect(html).not.toContain("reading of the rows");
+      expect(html).not.toContain("rows are right");
+      expect(html).not.toContain("How the question was read");
+      expect(html).not.toContain(zero.interpretation);
+      expect(html).not.toContain("a second was requested");
+    }
+  });
+
+  it("puts nothing between the answer paragraph and the evidence panel", () => {
+    const html = render(zero);
+    const from = html.indexOf(zero.answer) + zero.answer.length;
+    const to = html.indexOf("What was actually queried");
+    expect(from).toBeGreaterThan(zero.answer.length - 1);
+    expect(to).toBeGreaterThan(from);
+    // Markup only in between: no words, no figures.
+    expect(html.slice(from, to).replace(/<[^>]+>/g, "").trim()).toBe("");
   });
 
   it("renders a coverage shortfall as its own amber row on an answered result", () => {
@@ -162,9 +178,9 @@ describe("provenance is on screen for every result that ran", () => {
     expect(render(zero)).not.toContain(">Coverage<");
   });
 
-  it("says when a retry happened", () => {
-    expect(render({ ...zero, retried: true })).toContain("a second was requested");
-    expect(render(zero)).not.toContain("a second was requested");
+  it("a retry is in the payload and never on screen", () => {
+    expect(render({ ...zero, retried: true })).not.toContain("a second was requested");
+    expect(render({ ...zero, retried: true })).not.toContain("retried");
   });
 });
 
@@ -294,20 +310,209 @@ describe("the other sentences", () => {
     const cannot: AnalyzeResult = {
       kind: "cannot_answer",
       reason: "bas_equipment is empty.",
-      attempts: [{ sql: "SELECT 1", error: "permission denied" }],
+      attempts: [{ sql: "SELECT 1", error: "permission denied", ran: true }],
       retried: true,
     };
     const notConfigured: AnalyzeResult = { kind: "not_configured", missing: ["ANTHROPIC_API_KEY"] };
 
     expect(render(clarify)).toContain("One question first");
-    expect(render(clarify)).toContain("Nothing was queried");
+    expect(render(clarify)).toContain("No database query was run for this answer.");
     expect(render(cannot)).toContain("Could not answer");
     expect(render(cannot)).toContain("permission denied");
     // A FAILED answer shows each SQL that was tried beside its reason - the
     // one place the SQL is rendered. Decision of 2026-09-21, both halves.
     expect(render(cannot)).toContain("SELECT 1");
-    expect(render(cannot)).toContain("a second was requested");
+    expect(render(cannot)).not.toContain("a second was requested");
     expect(render(notConfigured)).toContain("ANTHROPIC_API_KEY");
     expect(render(notConfigured)).toContain("rest of Building Automation is unaffected");
+  });
+});
+
+describe("whether the database was consulted is said, plainly, and only when it was not", () => {
+  const LABEL = "No database query was run for this answer.";
+  const answered: AnalyzeResult = {
+    kind: "answered",
+    answer: "About 72.",
+    interpretation: "Average zone temperature last week.",
+    sql: "SELECT avg(value_num) FROM bas_readings",
+    table: { columns: ["avg"], rows: [[72]], rowCount: 1, truncated: false, rowCap: 200 },
+    provenance,
+    durationMs: 12,
+    retried: false,
+  };
+  const noData: AnalyzeResult = {
+    kind: "no_data",
+    reason: "no_rows",
+    explanation: "The query returned no rows.",
+    sql: "SELECT 1 WHERE false",
+    interpretation: "Nothing.",
+    table: { columns: ["x"], rows: [], rowCount: 0, truncated: false, rowCap: 200 },
+    provenance,
+    durationMs: 3,
+    retried: false,
+  };
+
+  it("a clarifying question: the label, in those words", () => {
+    const html = render({ kind: "clarify", question: "Which building?", interpretation: "Two match." });
+    expect(html).toContain(LABEL);
+    expect(html).toContain('data-testid="bas-analyze-no-query"');
+  });
+
+  it("a decline with no attempt at all: the label", () => {
+    const html = render({ kind: "cannot_answer", reason: "bas_equipment is empty.", attempts: [], retried: false });
+    expect(html).toContain(LABEL);
+  });
+
+  it("a failure whose every attempt stopped at the guard: the label, beside the SQL that was refused", () => {
+    const html = render({
+      kind: "cannot_answer",
+      reason: "The query for this question could not be run. What was tried is below.",
+      attempts: [
+        { sql: "DELETE FROM bas_orgs", error: "Only a SELECT is allowed.", ran: false },
+        { sql: "SELECT 1; SELECT 2", error: "One statement only.", ran: false },
+      ],
+      retried: true,
+    });
+    // The SQL is on screen and looks like a failed query. It is not one.
+    expect(html).toContain("DELETE FROM bas_orgs");
+    expect(html).toContain(LABEL);
+  });
+
+  it("a failure where an attempt reached the database: never the label", () => {
+    const html = render({
+      kind: "cannot_answer",
+      reason: "Two attempts at a query for this question could not be run.",
+      attempts: [
+        { sql: "DELETE FROM bas_orgs", error: "Only a SELECT is allowed.", ran: false },
+        { sql: "SELECT count(*) FROM employees", error: "permission denied", ran: true },
+      ],
+      retried: true,
+    });
+    expect(html).not.toContain(LABEL);
+    expect(html).not.toContain("bas-analyze-no-query");
+  });
+
+  it("not configured: the label, because nothing ran", () => {
+    expect(render({ kind: "not_configured", missing: ["ANTHROPIC_API_KEY"] })).toContain(LABEL);
+  });
+
+  it("an answer, and a no-data result, never carry it", () => {
+    expect(render(answered)).not.toContain(LABEL);
+    expect(render(answered)).not.toContain("bas-analyze-no-query");
+    expect(render(noData)).not.toContain(LABEL);
+    expect(render(noData)).not.toContain("bas-analyze-no-query");
+  });
+});
+
+describe("the answer text shows paragraph breaks and short lists, and nothing else (docs/11, 2026-10-13)", () => {
+  const listed =
+    "Three rooms are warmer than their setpoints.\n\n- Room 107: 78 °F (set to 72 °F)\n- Room 130: 77 °F (set to 72 °F)\n\nThese rooms may not be cooling properly.\nCheck the dampers.";
+
+  it("a one-paragraph answer renders as one paragraph, exactly as before", () => {
+    const html = renderToStaticMarkup(createElement(AnswerText, { text: zero.answer, className: "x" }));
+    expect(html).toBe(`<p class="x">${zero.answer}</p>`);
+    expect(render(zero)).toContain(`<p class="text-[0.9375rem] leading-relaxed">${zero.answer}</p>`);
+  });
+
+  it("blank lines make paragraphs, lines starting with a dash make a list, a single break stays a break", () => {
+    const html = renderToStaticMarkup(createElement(AnswerText, { text: listed }));
+    expect(html).toContain("<p>Three rooms are warmer than their setpoints.</p>");
+    expect(html).toContain("<ul");
+    expect(html).toContain("<li>Room 107: 78 °F (set to 72 °F)</li>");
+    expect(html).toContain("<li>Room 130: 77 °F (set to 72 °F)</li>");
+    expect((html.match(/<li>/g) ?? []).length).toBe(2);
+    expect(html).toContain("<p>These rooms may not be cooling properly.<br/>Check the dampers.</p>");
+    // Nothing else is markup: no headings, no emphasis, no links.
+    expect(html).not.toMatch(/<(h[1-6]|strong|em|a)\b/);
+    // Bold the model was told not to write is dropped, not shown.
+    const bold = renderToStaticMarkup(createElement(AnswerText, { text: "**Short answer:** 73 °F." }));
+    expect(bold).toBe("<p>Short answer: 73 °F.</p>");
+  });
+
+  it("the listed answer renders inside an answered result, with the evidence panel still under it", () => {
+    const html = render({ ...zero, answer: listed });
+    expect(html).toContain("<li>Room 107: 78 °F (set to 72 °F)</li>");
+    expect(html.indexOf("<ul")).toBeLessThan(html.indexOf("What was actually queried"));
+  });
+
+  it("a clarifying question and a reason for declining render their lists too", () => {
+    const clarify = render({
+      kind: "clarify",
+      question: "Which rooms?\n\n- The one at Spring Grove\n- The ten at Steel Place",
+      interpretation: "x",
+    });
+    expect(clarify).toContain("<li>The one at Spring Grove</li>");
+    expect(clarify).toContain("One question first");
+    const cannot = render({
+      kind: "cannot_answer",
+      reason: "I can't check that.\n\n- No damper feedback is collected\n- Nothing at Spring Grove",
+      attempts: [],
+      retried: false,
+    });
+    expect(cannot).toContain("<li>No damper feedback is collected</li>");
+    expect(cannot).toContain("No database query was run for this answer.");
+  });
+});
+
+describe("an answer read from an earlier result says so, twice", () => {
+  const fromPrior: AnalyzeResult = {
+    kind: "from_prior",
+    answer: "The lab's zone sensor is the worst: no reading since 24 August.",
+    interpretation: "Read the stale-points rows from the question before.",
+    source: {
+      id: "turn-1",
+      question: "Which points are stale?",
+      kind: "answered",
+      rowsWerePartial: false,
+      rowCount: 3,
+    },
+    durationMs: 900,
+    retried: false,
+  };
+
+  it("carries the no-query label AND names the question it read from, with its place in the thread", () => {
+    const html = renderToStaticMarkup(
+      createElement(Result, { result: fromPrior, asked: "which was worst?", sourceOrdinal: 2 }),
+    );
+    expect(html).toContain("No database query was run for this answer.");
+    expect(html).toContain("Answer, read from an earlier result");
+    expect(html).toContain('data-testid="bas-analyze-source"');
+    expect(html).toContain("What was actually queried");
+    expect(html).toContain(
+      "Read from the results of question 2 of today&#x27;s thread: “Which points are stale?”.",
+    );
+    expect(html).toContain("All 3 rows of that question&#x27;s result were available to the model.");
+    // No rows table and no fresh provenance: there is none to show.
+    expect(html).not.toContain("Rows the database returned");
+    expect(html).not.toContain("Gaps in the period");
+  });
+
+  it("names the question even when its turn is no longer in the thread, and says when the rows were a sample", () => {
+    const sampled: AnalyzeResult = {
+      ...fromPrior,
+      source: { ...fromPrior.source, rowsWerePartial: true, rowCount: 137 },
+    };
+    const html = renderToStaticMarkup(
+      createElement(Result, { result: sampled, asked: "which was worst?", sourceOrdinal: null }),
+    );
+    expect(html).toContain("Read from the results of an earlier question: “Which points are stale?”.");
+    expect(html).toContain("Only a sample of that question&#x27;s 137 rows was available to the model.");
+  });
+
+  it("an answer that ran a query never carries the source panel", () => {
+    const answered: AnalyzeResult = {
+      kind: "answered",
+      answer: "About 72.",
+      interpretation: "x",
+      sql: "SELECT 1",
+      table: { columns: ["avg"], rows: [[72]], rowCount: 1, truncated: false, rowCap: 200 },
+      provenance,
+      durationMs: 12,
+      retried: false,
+    };
+    const html = renderToStaticMarkup(createElement(Result, { result: answered, asked: "q" }));
+    expect(html).not.toContain("bas-analyze-source");
+    expect(html).not.toContain("Read from the results");
+    expect(html).not.toContain("No database query was run");
   });
 });

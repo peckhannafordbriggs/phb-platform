@@ -1,6 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  browserStorage,
+  clearThread,
+  forgetLocalThreads,
+  legacyLocalStorage,
+  loadThread,
+  newTurnId,
+  priorTurnsFor,
+  saveThread,
+  threadDay,
+  type AnalyzeTurn,
+} from "./analyze-thread";
 import type {
   AnalyzeResult,
   Provenance,
@@ -12,6 +24,8 @@ import {
   describeGaps,
   describeRowCount,
   describeScope,
+  describeSource,
+  describeSourceRows,
   describeTimeRange,
   describeUnclassified,
   describeUnknownHorizon,
@@ -23,7 +37,9 @@ import {
   resultTone,
   type AnalyzeStatus,
 } from "./analyze-client";
+import { databaseQueried } from "@/lib/modules/bas/analyze/types";
 import { ApiError, formatTimestamp } from "./health-client";
+import { isNearBottom, metricsOf, scrollToBottom } from "./analyze-scroll";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /**
@@ -44,8 +60,53 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  *
  * There is no confidence score, on purpose. There is no chart, on purpose: a
  * question that wants a picture is answered with a link to the Point Explorer.
- * There is no history across sessions; the last result stays on screen until
- * the next question replaces it.
+ *
+ * THE SCREEN IS A THREAD (2026-10-09). Each question and what came back is a
+ * turn, in the order asked, newest at the bottom, with the ask box under
+ * them; a new question appends and earlier turns stay as they were. The
+ * thread lasts a calendar day in the company's zone and survives a reload
+ * of the same tab within it - and no longer than the tab (sessionStorage,
+ * 2026-10-12) - see analyze-thread.ts for the rules and the reasons. Every turn is rendered by the same `Result` as before; an
+ * older turn folds its rows table behind the one line it already carried,
+ * and nothing else about a result changes with its position.
+ *
+ * A FOLLOW-UP CARRIES THE EARLIER TURNS (2026-10-09, step 2). The request
+ * for a question sends `priorTurnsFor(turns)` - the newest turns that fit
+ * the caps, cut down to question, interpretation, SQL, answer and a sample
+ * of rows (analyze-thread.ts) - and nothing when the thread is empty. The
+ * server is stateless about it: the thread is the browser's, and what it
+ * sends is checked and capped like any other body. A follow-up the model
+ * answers from an earlier turn's rows comes back as `from_prior`, rendered
+ * with the no-query label AND a panel naming the question it read from.
+ *
+ * IT READS LIKE A MESSAGING APP (2026-10-12), and that is the whole of that
+ * change: a question is a bubble on the right, what came back is plain text
+ * on the left, the evidence is an inset block under it, and the ask box is
+ * one rounded bar at the bottom. Every word, every figure, the folding, the
+ * day's storage and what a request carries are exactly as above. See
+ * `Result` for how a wrong answer still looks different from a right one.
+ *
+ * THE THREAD SCROLLS INSIDE THE PANEL (2026-10-13). The panel takes the
+ * viewport below the module header and tabs and no more; the thread is the
+ * one scrolling region inside it, and the ask bar sits under that region,
+ * always visible and never over it. A new question or answer scrolls the
+ * thread to its end only when the person was already near the end - see
+ * analyze-scroll.ts for the rule and the slack. A rows table keeps its own
+ * inner scroll box, which is the one place a scrollbar sits inside the
+ * thread's. The page itself has nothing left to scroll on this tab.
+ *
+ * IN THE BRAND COLOURS (later the same day; docs/design/analyze-chat-mockup.png
+ * is the chosen mock, recoloured once more that day). Everything under the
+ * tab bar sits in ONE panel of --phb-teal, the rightmost stripe of the brand
+ * bar under the sidebar logo; a question is a gold bubble; the answer and the
+ * evidence are cards tinted from the panel's teal; purple carries what is
+ * pressable or navigational - the evidence label, the rows expand link, the
+ * New conversation chip, the Analyze tab's underline and the Ask button,
+ * which is a diamond echoing the mark. Every colour is a token from
+ * app/globals.css, and the two ink values that sit at the AA line on the
+ * tint are deepened on the cards by the `.analyze-panel` rule there, in
+ * place, so tone.ts is untouched. Maroon appears only where it always has:
+ * a failed request and the config error.
  */
 
 const EXAMPLES = [
@@ -55,14 +116,26 @@ const EXAMPLES = [
   "When did the collector last run, and did it succeed?",
 ];
 
-export function Analyze() {
+export function Analyze({
+  employeeId,
+  now = () => new Date(),
+}: {
+  employeeId: string;
+  /** Test seam: the clock the day boundary is read from. */
+  now?: () => Date;
+}) {
   const [status, setStatus] = useState<AnalyzeStatus | null>(null);
   const [question, setQuestion] = useState("");
-  const [asked, setAsked] = useState<string | null>(null);
-  const [result, setResult] = useState<AnalyzeResult | null>(null);
+  const [turns, setTurns] = useState<AnalyzeTurn[]>([]);
+  const [pending, setPending] = useState<{ id: string; question: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  /** The day the thread on screen belongs to. Null until read from storage. */
+  const [day, setDay] = useState<string | null>(null);
   const inFlight = useRef<AbortController | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** Whether the person is at (or near) the end of the thread; read when a turn arrives. */
+  const stickToEnd = useRef(true);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -76,6 +149,78 @@ export function Analyze() {
     return () => controller.abort();
   }, []);
 
+  /**
+   * Today's thread, read after mount so the server-rendered page and the
+   * first client render agree (reading storage during render is a
+   * hydration mismatch). Any other day's thread for this employee is
+   * discarded by the read itself.
+   */
+  useEffect(() => {
+    const today = threadDay(now());
+    setTurns(loadThread(browserStorage(), employeeId, today));
+    setDay(today);
+    // What the thread's earlier home left behind; nothing reads it now.
+    forgetLocalThreads(legacyLocalStorage());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is a test seam, not a dependency
+  }, [employeeId]);
+
+  // Every change to the thread is written back, once the thread has been
+  // read. An empty thread is no key at all, not an empty record.
+  useEffect(() => {
+    if (day === null) return;
+    if (turns.length === 0) clearThread(browserStorage(), employeeId, day);
+    else saveThread(browserStorage(), employeeId, day, turns);
+  }, [turns, day, employeeId]);
+
+  /**
+   * The panel's height is the viewport below its own top edge, less the
+   * shell's bottom padding, so the page does not scroll on this tab and the
+   * thread scrolls inside the panel instead. The top edge depends on how
+   * the module blurb wraps, so it is measured rather than assumed, once on
+   * mount and again on every resize, and handed to the stylesheet as a
+   * custom property. Before the first measurement the property is unset
+   * and the panel is briefly too tall, which the layout effect fixes before
+   * paint.
+   */
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    const measure = () => {
+      const top = panel.getBoundingClientRect().top + window.scrollY;
+      panel.style.setProperty("--analyze-top", `${Math.max(0, Math.round(top))}px`);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  // The newest turn - or the pending question - is brought into view, but
+  // only for a person who was already at the end of the thread. Someone
+  // reading an older answer keeps their place.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el === null || !stickToEnd.current) return;
+    scrollToBottom(el);
+  }, [turns.length, pending]);
+
+  const busy = pending !== null;
+
+  /**
+   * Append a resolved turn. If the day has rolled over since the thread was
+   * read - a question asked at 11:59 PM and answered at 12:01 AM - the new
+   * turn starts the new day's thread rather than being filed under
+   * yesterday's and discarded on the next load.
+   */
+  function append(turn: AnalyzeTurn): void {
+    const today = threadDay(now());
+    if (today !== day) {
+      setDay(today);
+      setTurns([turn]);
+    } else {
+      setTurns((prev) => [...prev, turn]);
+    }
+  }
+
   async function submit(text: string) {
     const trimmed = text.trim();
     if (trimmed.length < 3 || busy) return;
@@ -84,130 +229,271 @@ export function Analyze() {
     const controller = new AbortController();
     inFlight.current = controller;
 
-    setBusy(true);
-    setError(null);
-    setAsked(trimmed);
-    setResult(null);
+    const id = newTurnId();
+    const askedAt = now().toISOString();
+    setPending({ id, question: trimmed });
+    setQuestion("");
 
     try {
-      const answer = await askQuestion(trimmed, controller.signal);
-      setResult(answer);
+      const result = await askQuestion(trimmed, controller.signal, priorTurnsFor(turns));
+      append({ id, askedAt, question: trimmed, outcome: { kind: "result", result } });
     } catch (err) {
       if (isAbortError(err)) return;
-      if (err instanceof ApiError) {
-        setError(err.code === "rate_limited" ? rateLimitMessage() : err.message);
-      } else {
-        setError("Something went wrong. Try again.");
-      }
+      const message =
+        err instanceof ApiError
+          ? err.code === "rate_limited"
+            ? rateLimitMessage()
+            : err.message
+          : "Something went wrong. Try again.";
+      append({ id, askedAt, question: trimmed, outcome: { kind: "error", message } });
     } finally {
       if (inFlight.current === controller) {
         inFlight.current = null;
-        setBusy(false);
+        setPending(null);
       }
     }
   }
 
+  function startFresh(): void {
+    inFlight.current?.abort();
+    inFlight.current = null;
+    setPending(null);
+    setTurns([]);
+    if (day !== null) clearThread(browserStorage(), employeeId, day);
+  }
+
   const notConfigured = status !== null && !status.configured;
+  const empty = turns.length === 0 && pending === null;
 
   return (
-    <div className="space-y-6">
-      <section className="card p-5">
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit(question);
-          }}
-        >
-          <label
-            htmlFor="bas-analyze-question"
-            className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
-          >
-            Ask a question
-          </label>
-          <textarea
-            id="bas-analyze-question"
-            name="question"
-            rows={3}
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void submit(question);
-              }
-            }}
-            disabled={notConfigured || busy}
-            placeholder="What was the average room temperature last week?"
-            maxLength={1000}
-            className="mt-2 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[var(--module-accent,var(--phb-cyan))]"
-          />
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <button
-              type="submit"
-              disabled={notConfigured || busy || question.trim().length < 3}
-              className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-medium hover:bg-[var(--neutral-100)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {busy ? "Working…" : "Ask"}
-            </button>
-            <p className="text-xs text-[var(--muted)]">
-              Read-only. The question becomes one database query; the answer shows which
-              points and period it covered. Enter asks; Shift+Enter is a new line.
-            </p>
-          </div>
-        </form>
-
-        {status === null && !error && (
-          <p className="mt-3 text-xs text-[var(--muted)]">Checking configuration…</p>
-        )}
-
-        {notConfigured && (
-          <NotConfigured missing={status.missing} />
-        )}
-
-        {!notConfigured && result === null && !busy && !error && (
-          <div className="mt-4">
-            <p className="text-xs text-[var(--muted)]">Things people ask:</p>
-            <ul className="mt-1.5 flex flex-wrap gap-2">
-              {EXAMPLES.map((example) => (
-                <li key={example}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQuestion(example);
-                      void submit(example);
-                    }}
-                    className="rounded-full border border-[var(--border)] px-3 py-1 text-xs hover:bg-[var(--neutral-100)]"
-                  >
-                    {example}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </section>
-
+    /*
+      The one coloured area on the page: a purple panel holding the thread
+      and the ask bar, content-width, with the bar kept at its foot. Nothing
+      outside it - header, intro, tabs, ground - changes.
+    */
+    <div
+      ref={panelRef}
+      className="analyze-panel mx-auto flex h-[calc(100dvh-var(--analyze-top,0px)-2rem)] min-h-[24rem] w-full max-w-[75rem] flex-col gap-4 overflow-hidden rounded-[36px] bg-[var(--phb-teal)] p-4 shadow-[var(--shadow-soft)] sm:w-[94%] sm:p-7"
+    >
       {error !== null && (
-        <section className="card p-5" role="alert" style={TONE_STYLE.bad}>
+        <section className="shrink-0 rounded-[24px] bg-[var(--phb-teal-tint)] px-5 py-4" role="alert">
           <p className="text-sm" style={{ color: TONE_INK.bad }}>
             {error}
           </p>
         </section>
       )}
 
-      {busy && (
-        <section className="card p-5" aria-live="polite">
-          <p className="text-sm text-[var(--muted)]">
-            Working on “{asked}”. Writing the query, running it read-only, then
-            checking the period for gaps. Usually under half a minute.
-          </p>
-        </section>
+      {/* ------------------------------------------ the scrolling region
+          The thread, or the empty state, and nothing else: the ask bar is
+          the next flex child, below it, so the region ends above the bar
+          and nothing is ever hidden under it. The negative right margin
+          and matching padding put the scrollbar in the panel's own padding
+          rather than against the cards. */}
+      <div
+        ref={scrollRef}
+        data-testid="bas-analyze-scroll"
+        onScroll={(event) => {
+          stickToEnd.current = isNearBottom(metricsOf(event.currentTarget));
+        }}
+        className="analyze-scroll -mr-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-3"
+      >
+      {!empty && (
+        <ol className="space-y-8 pb-2" aria-label="Conversation" data-testid="bas-analyze-thread">
+          {turns.map((turn, index) => (
+            <li key={turn.id} data-testid="bas-analyze-turn">
+              {turn.outcome.kind === "result" ? (
+                <Result
+                  result={turn.outcome.result}
+                  asked={turn.question}
+                  // Only the newest turn shows its rows unfolded.
+                  compact={index < turns.length - 1}
+                  sourceOrdinal={
+                    turn.outcome.result.kind === "from_prior"
+                      ? ordinalOf(turns, turn.outcome.result.source.id)
+                      : null
+                  }
+                />
+              ) : (
+                <ErrorTurn asked={turn.question} message={turn.outcome.message} />
+              )}
+            </li>
+          ))}
+          {pending !== null && (
+            <li data-testid="bas-analyze-pending">
+              <PendingTurn asked={pending.question} />
+            </li>
+          )}
+        </ol>
       )}
 
-      {result !== null && asked !== null && (
-        <Result result={result} asked={asked} />
+      {/* The examples sit where the thread will be, centred in the empty
+          panel above the bar, so the bar itself is only ever the field and
+          its button. Only the empty panel is laid out this way: once a
+          conversation starts the thread flows from the top as before. */}
+      {!notConfigured && empty && !error && (
+        <div className="flex h-full min-h-full flex-col items-center justify-center text-center">
+          <p className="text-xs text-[var(--neutral-800)]">Things people ask:</p>
+          <ul className="mt-1.5 flex flex-wrap justify-center gap-2">
+            {EXAMPLES.map((example) => (
+              <li key={example}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuestion(example);
+                    void submit(example);
+                  }}
+                  className="rounded-full bg-[var(--phb-teal-tint)] px-3 py-1 text-xs hover:bg-[var(--neutral-0)]"
+                >
+                  {example}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
+      </div>
+
+      {/* ----------------------------------------------------- the ask bar */}
+      <section className="shrink-0">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit(question);
+          }}
+          className="flex items-center gap-3"
+        >
+          {/* The label is for assistive technology; on screen the field's
+              own placeholder and the thread above it say what it is for. */}
+          <label htmlFor="bas-analyze-question" className="sr-only">
+            Ask a question
+          </label>
+          {/* One capsule holds the field, the hint and New conversation;
+              the Ask diamond sits beside it, on the panel. The bar is a
+              flex child under the scrolling region, so the thread can never
+              run under it. */}
+          <div className="min-w-0 flex-1 rounded-[28px] bg-white px-5 pb-3 pt-2.5 shadow-[var(--shadow-soft)] transition-shadow focus-within:ring-2 focus-within:ring-[var(--phb-purple)]">
+            <div className="flex items-end gap-2">
+              <textarea
+                id="bas-analyze-question"
+                name="question"
+                rows={2}
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void submit(question);
+                  }
+                }}
+                disabled={notConfigured || busy}
+                placeholder="What was the average room temperature last week?"
+                maxLength={1000}
+                className="min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-relaxed placeholder:text-[var(--neutral-500)] focus:outline-none disabled:cursor-not-allowed disabled:text-[var(--muted)]"
+              />
+            </div>
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-[var(--muted)]">
+                Enter asks · Shift+Enter for a new line
+              </p>
+              {!empty && (
+                <button
+                  type="button"
+                  onClick={startFresh}
+                  data-testid="bas-analyze-new-conversation"
+                  className="rounded-full bg-[var(--phb-purple-tint)] px-3 py-1 text-[0.75rem] font-medium text-[var(--phb-purple)] hover:bg-[var(--neutral-0)]"
+                >
+                  New conversation
+                </button>
+              )}
+            </div>
+          </div>
+          {/* The Ask diamond: the mark's shape, in brand purple. The
+              button is the 72px square (the hit area); the rotated square
+              inside it is the picture, and the word stays upright because
+              only the picture is rotated. Same disabled and working rules as
+              before - the word changes, the shape does not. */}
+          <button
+            type="submit"
+            disabled={notConfigured || busy || question.trim().length < 3}
+            className="relative flex h-[4.5rem] w-[4.5rem] shrink-0 items-center justify-center rounded-[16px] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <span
+              aria-hidden="true"
+              className="absolute h-[52px] w-[52px] rotate-45 rounded-[16px] bg-[var(--phb-purple)] shadow-[var(--shadow-soft)]"
+            />
+            <span
+              className={
+                "relative font-display font-semibold text-white " +
+                (busy ? "text-[0.625rem]" : "text-sm")
+              }
+            >
+              {busy ? "Working…" : "Ask"}
+            </span>
+          </button>
+        </form>
+
+        {status === null && !error && (
+          <p className="mt-3 px-1 text-xs text-[var(--neutral-800)]">Checking configuration…</p>
+        )}
+
+        {notConfigured && (
+          <NotConfigured missing={status.missing} />
+        )}
+      </section>
     </div>
+  );
+}
+
+/**
+ * The question, as the person's own bubble: right-aligned and sized to its
+ * text, which is what says who is speaking. The words "You asked" are kept
+ * for a screen reader, which cannot see the alignment.
+ */
+function QuestionBubble({ children }: { children: string }) {
+  return (
+    <div className="flex justify-end">
+      <span className="sr-only">You asked</span>
+      <p
+        data-testid="bas-analyze-question"
+        className="max-w-[min(85%,40rem)] whitespace-pre-wrap break-words rounded-[24px] rounded-br-[8px] bg-[var(--phb-gold)] px-4 py-2.5 text-sm font-medium leading-relaxed text-[var(--foreground)]"
+      >
+        {children}
+      </p>
+    </div>
+  );
+}
+
+/** Where a turn sits in today's thread, 1-based, or null when it is no longer there. */
+function ordinalOf(turns: AnalyzeTurn[], id: string): number | null {
+  const index = turns.findIndex((turn) => turn.id === id);
+  return index === -1 ? null : index + 1;
+}
+
+/** A question the server has not answered yet. The indicator is the button's own word. */
+function PendingTurn({ asked }: { asked: string }) {
+  return (
+    <>
+      <QuestionBubble>{asked}</QuestionBubble>
+      <div className="mt-3" aria-live="polite" aria-busy="true">
+        <p className="animate-pulse text-sm text-[var(--neutral-800)]">Working…</p>
+      </div>
+    </>
+  );
+}
+
+/** A question the request itself failed on: no result to render, the message as before. */
+function ErrorTurn({ asked, message }: { asked: string; message: string }) {
+  return (
+    <>
+      <QuestionBubble>{asked}</QuestionBubble>
+      <p
+        className="mt-3 rounded-[24px] bg-[var(--phb-teal-tint)] px-5 py-4 text-sm leading-relaxed"
+        role="alert"
+        style={{ color: TONE_INK.bad }}
+      >
+        {message}
+      </p>
+    </>
   );
 }
 
@@ -234,107 +520,278 @@ function NotConfigured({ missing }: { missing: string[] }) {
  * Exported for tests/bas-analyze-ui.test.tsx, which renders a `no_data` result
  * and an `answered` result whose value is 0 and asserts the markup differs.
  */
-export function Result({ result, asked }: { result: AnalyzeResult; asked: string }) {
+export function Result({
+  result,
+  asked,
+  compact = false,
+  sourceOrdinal = null,
+}: {
+  result: AnalyzeResult;
+  asked: string;
+  /**
+   * An older turn in the thread: the rows table is folded behind its own
+   * one-line label. Nothing else changes - the answer, the provenance
+   * panel and every warning render exactly as on the newest.
+   */
+  compact?: boolean;
+  /** For a from-memory answer: where its source turn sits in the thread, if it still does. */
+  sourceOrdinal?: number | null;
+}) {
   const tone = resultTone(result);
 
-  return (
-    <section className="card overflow-hidden" aria-live="polite">
-      <header className="border-b px-5 pb-3 pt-4" style={{ ...TONE_STYLE[tone], borderBottomWidth: 1 }}>
-        <p className="text-xs text-[var(--muted)]">You asked</p>
-        <p className="mt-0.5 text-sm">{asked}</p>
-        <h2
-          className="mt-3 font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
-          style={{ color: TONE_INK[tone] }}
-        >
-          {resultHeading(result)}
-        </h2>
-        {"retried" in result && result.retried && (
-          <p className="mt-1 text-xs text-[var(--muted)]">
-            The first query attempt was not usable and a second was requested. What was tried is shown below.
-          </p>
-        )}
-      </header>
+  /*
+    THE CHAT LOOK (2026-10-12). The question is a bubble on the right; what
+    came back is plain text on the left, on the page itself, with no card
+    around it. The heading a result carries is still rendered from its kind
+    - "No data matched", "Could not answer", "One question first", "Answer,
+    read from an earlier result" - in its tone's ink, because that heading is
+    how a wrong or partial answer looks different from a right one. The one
+    heading that says nothing the alignment does not, "Answer", is kept for
+    a screen reader and hidden from sight: the answer's own first sentence
+    is the headline.
 
-      <div className="space-y-5 px-5 py-4">
-        {result.kind === "not_configured" && <NotConfigured missing={result.missing} />}
+    Below the headline, everything that is evidence rather than answer - the
+    provenance panel, the rows, the no-query label - is one inset block,
+    quieter than the answer. The footnote, not the headline.
+
+    THREE LINES OF META TEXT WERE REMOVED ON 2026-10-12, by decision: the
+    plan's interpretation ("How the question was read"), the caveat that the
+    paragraph is the model's reading of the rows and the rows win where they
+    disagree, and the note that a first attempt was retried. Nothing was
+    relocated: the answer paragraph is followed directly by "What was
+    actually queried". The interpretation and `retried` are still in the
+    payload and the audit row; the screen no longer shows them.
+  */
+  const plainAnswer = result.kind === "answered";
+
+  return (
+    <>
+      <QuestionBubble>{asked}</QuestionBubble>
+      <section className="mt-3" aria-live="polite">
+        {/* The answer card: the heading (where one is shown) and the one
+            paragraph that is the answer. Everything else is the evidence
+            card below it. */}
+        <div className="rounded-[24px] bg-[var(--phb-teal-tint)] px-5 py-4">
+          <h2
+            className={
+              plainAnswer
+                ? "sr-only"
+                : "font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]"
+            }
+            style={plainAnswer ? undefined : { color: TONE_INK[tone] }}
+          >
+            {resultHeading(result)}
+          </h2>
+          {result.kind === "not_configured" && <NotConfigured missing={result.missing} />}
+          {result.kind === "clarify" && (
+            <AnswerText text={result.question} className="mt-2 text-[0.9375rem] leading-relaxed" />
+          )}
+          {result.kind === "cannot_answer" && (
+            <AnswerText text={result.reason} className="mt-2 text-[0.9375rem] leading-relaxed" />
+          )}
+          {result.kind === "no_data" && (
+            <p className="mt-2 text-[0.9375rem] leading-relaxed" style={{ color: TONE_INK.warn }}>
+              {result.explanation}
+            </p>
+          )}
+          {result.kind === "from_prior" && (
+            <AnswerText text={result.answer} className="mt-2 text-[0.9375rem] leading-relaxed" />
+          )}
+          {result.kind === "answered" && (
+            <AnswerText text={result.answer} className="text-[0.9375rem] leading-relaxed" />
+          )}
+        </div>
+
+        {result.kind === "not_configured" && (
+          <Footnote>
+            <NoQueryLabel result={result} />
+          </Footnote>
+        )}
 
         {result.kind === "clarify" && (
           <>
-            <p className="text-sm leading-relaxed">{result.question}</p>
-            <p className="text-xs text-[var(--muted)]">
-              How the question was read: {result.interpretation}
-            </p>
-            <p className="text-xs text-[var(--muted)]">
-              Ask again with the detail filled in. Nothing was queried.
-            </p>
+            <Footnote>
+              <p className="text-xs text-[var(--muted)]">Ask again with the detail filled in.</p>
+              <NoQueryLabel result={result} />
+            </Footnote>
           </>
         )}
 
         {result.kind === "cannot_answer" && (
           <>
-            <p className="text-sm leading-relaxed">{result.reason}</p>
-            {result.attempts.length > 0 && (
-              <div>
-                <p className="text-xs font-medium">
-                  {result.attempts.length === 1 ? "What was tried" : "What was tried, in order"}
-                </p>
-                <ol className="mt-1.5 space-y-2">
-                  {result.attempts.map((attempt, i) => (
-                    <li key={i} className="rounded-md border border-[var(--border)] p-3">
-                      {/* A failed answer is the one place the SQL earns its
-                          space: what was tried is the diagnosis. A successful
-                          answer's SQL is recorded, not rendered (see the file
-                          header). */}
-                      {attempt.sql.length > 0 && (
-                        <pre className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--neutral-50,var(--surface))] p-3 text-[0.75rem] leading-relaxed">
-                          <code>{attempt.sql}</code>
-                        </pre>
-                      )}
-                      <p className="mt-1.5 text-xs" style={{ color: TONE_INK.warn }}>
-                        {attempt.error}
-                      </p>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            )}
+            <Footnote>
+              {result.attempts.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium">
+                    {result.attempts.length === 1 ? "What was tried" : "What was tried, in order"}
+                  </p>
+                  <ol className="mt-1.5 space-y-2">
+                    {result.attempts.map((attempt, i) => (
+                      <li key={i} className="rounded-[var(--radius-row)] border border-[var(--phb-teal-tint-line)] p-3">
+                        {/* A failed answer is the one place the SQL earns its
+                            space: what was tried is the diagnosis. A successful
+                            answer's SQL is recorded, not rendered (see the file
+                            header). */}
+                        {attempt.sql.length > 0 && (
+                          <pre className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--neutral-50,var(--surface))] p-3 text-[0.75rem] leading-relaxed">
+                            <code>{attempt.sql}</code>
+                          </pre>
+                        )}
+                        <p className="mt-1.5 text-xs" style={{ color: TONE_INK.warn }}>
+                          {attempt.error}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+              <NoQueryLabel result={result} />
+            </Footnote>
           </>
         )}
 
         {result.kind === "no_data" && (
           <>
-            <p className="text-sm leading-relaxed" style={{ color: TONE_INK.warn }}>
-              {result.explanation}
-            </p>
-            <p className="text-xs text-[var(--muted)]">
-              How the question was read: {result.interpretation}
-            </p>
-            <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
-            {/* Always rendered: zero rows gets its own sentence, an all-NULL
-                row is shown AS the NULL row, so what the database returned is
-                never left to be inferred from an absence. */}
-            <RowsTable table={result.table} nullOnly={result.reason === "all_null"} />
+            <Footnote>
+              <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
+              {/* Always rendered: zero rows gets its own sentence, an all-NULL
+                  row is shown AS the NULL row, so what the database returned is
+                  never left to be inferred from an absence. */}
+              <RowsTable table={result.table} nullOnly={result.reason === "all_null"} folded={compact} />
+            </Footnote>
+          </>
+        )}
+
+        {result.kind === "from_prior" && (
+          <>
+            <Footnote>
+              <SourcePanel source={result.source} ordinal={sourceOrdinal} />
+              <NoQueryLabel result={result} />
+            </Footnote>
           </>
         )}
 
         {result.kind === "answered" && (
           <>
-            <div>
-              <p className="text-sm leading-relaxed">{result.answer}</p>
-              <p className="mt-1.5 text-xs text-[var(--muted)]">
-                The paragraph above is the model&apos;s reading of the rows below. The rows
-                are what the database returned. Where they disagree, the rows are right.
-              </p>
-            </div>
-            <p className="text-xs text-[var(--muted)]">
-              How the question was read: {result.interpretation}
-            </p>
-            <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
-            <RowsTable table={result.table} />
+            <Footnote>
+              <ProvenancePanel provenance={result.provenance} table={result.table} durationMs={result.durationMs} />
+              <RowsTable table={result.table} folded={compact} />
+            </Footnote>
           </>
         )}
-      </div>
-    </section>
+
+      </section>
+    </>
+  );
+}
+
+/**
+ * The answer text as the model wrote it: a blank line separates paragraphs,
+ * a run of lines starting with "- " is a short list, a single line break
+ * stays a line break. Nothing else is interpreted - no headings, no
+ * emphasis, no links - so the text is still the text. This is the whole of
+ * the support docs/11-analyze-voice.md asks for so that an answer about
+ * several rooms or pieces of equipment can be scanned (2026-10-13). A
+ * clarifying question and a reason for declining go through it too, since
+ * the planner writes them in the same voice with the same lists. A text
+ * with no line breaks renders exactly as it did: one paragraph.
+ * The model is told to write no bold; when it does anyway, the "**" markers
+ * are dropped rather than shown, because a reader should never see markup.
+ *
+ * Exported for tests/bas-analyze-ui.test.tsx.
+ */
+export function AnswerText({ text: raw, className }: { text: string; className?: string }) {
+  // Bold the model was told not to write is dropped, never shown as markup.
+  const text = raw.replace(/\*\*/g, "");
+  const blocks = text
+    .split(/\n[ \t]*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+  if (blocks.length <= 1 && !text.includes("\n")) {
+    return <p className={className}>{text}</p>;
+  }
+  return (
+    <div className={["space-y-2", className].filter(Boolean).join(" ")}>
+      {blocks.map((block, i) => {
+        const lines = block.split("\n").map((line) => line.trim());
+        if (lines.every((line) => /^[-•*]\s+/.test(line))) {
+          return (
+            <ul key={i} className="list-disc space-y-1 pl-5">
+              {lines.map((line, j) => (
+                <li key={j}>{line.replace(/^[-•*]\s+/, "")}</li>
+              ))}
+            </ul>
+          );
+        }
+        return (
+          <p key={i}>
+            {lines.map((line, j) => (
+              <Fragment key={j}>
+                {j > 0 && <br />}
+                {line}
+              </Fragment>
+            ))}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The evidence under an answer: its own tinted card, inset from the left
+ * and smaller than the sentence above it. One block, so every result's
+ * evidence is set the same way.
+ */
+function Footnote({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-3 ml-4 space-y-4 rounded-[24px] bg-[var(--phb-teal-tint)] px-5 py-4">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The single most important thing a skeptical reader can learn about a
+ * result that is not an answer: whether the database was consulted at
+ * all. Decided by `databaseQueried` - the same function the audit row
+ * records `queried` from - so a guard refusal, which shows an SQL
+ * beside an error and looks like a failed query, is still labelled as
+ * no query. Never rendered on a result whose SQL ran.
+ */
+function NoQueryLabel({ result }: { result: AnalyzeResult }) {
+  if (databaseQueried(result)) return null;
+  return (
+    <p className="text-xs font-medium" data-testid="bas-analyze-no-query">
+      No database query was run for this answer.
+    </p>
+  );
+}
+
+/**
+ * The provenance panel of a from-memory answer: the same heading as every
+ * other result's, because the question it answers is the same - what was
+ * actually queried - and the answer here is "nothing new, and here is what
+ * it was read from instead". Always rendered, never collapsible.
+ */
+function SourcePanel({
+  source,
+  ordinal,
+}: {
+  source: Extract<AnalyzeResult, { kind: "from_prior" }>["source"];
+  ordinal: number | null;
+}) {
+  const rows = describeSourceRows(source);
+  return (
+    <div data-testid="bas-analyze-source">
+      <PanelHeading />
+      <dl className="divide-y divide-[var(--phb-teal-tint-line)]">
+        <Row label="Read from">{describeSource(source, ordinal)}</Row>
+        <Row label="Rows" tone={rows.tone}>
+          {rows.text}
+        </Row>
+      </dl>
+    </div>
   );
 }
 
@@ -356,14 +813,10 @@ function ProvenancePanel({
   const unclassified = describeUnclassified(provenance);
 
   return (
-    <div className="rounded-md border border-[var(--border)]">
-      <div className="border-b border-[var(--border)] px-4 py-3">
-        <p className="font-display text-[0.75rem] font-semibold uppercase tracking-[0.07em]">
-          What was actually queried
-        </p>
-      </div>
+    <div>
+      <PanelHeading />
 
-      <dl className="divide-y divide-[var(--border)] text-sm">
+      <dl className="divide-y divide-[var(--phb-teal-tint-line)]">
         <Row label="Gaps in the period" tone={gTone}>
           {describeGaps(provenance)}
           {provenance.gaps !== null && provenance.gaps.items.length > 0 && (
@@ -442,10 +895,19 @@ function ProvenancePanel({
 
         <Row label="Rows">
           {describeRowCount(table)}
-          <span className="text-[var(--muted)]"> · {(durationMs / 1000).toFixed(1)} s end to end</span>
+          <span className="text-[var(--muted)]"> · {(durationMs / 1000).toFixed(1)} s</span>
         </Row>
       </dl>
     </div>
+  );
+}
+
+/** The one heading both evidence panels carry, set as the footnote's eyebrow. */
+function PanelHeading() {
+  return (
+    <p className="font-display text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-[var(--phb-purple)]">
+      What was actually queried
+    </p>
   );
 }
 
@@ -459,16 +921,25 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-1 gap-1 px-4 py-3 sm:grid-cols-[10rem_1fr] sm:gap-4">
+    <div className="grid grid-cols-1 gap-1 py-2.5 sm:grid-cols-[9rem_1fr] sm:gap-4">
       <dt className="text-xs font-medium text-[var(--muted)]">{label}</dt>
-      <dd className="text-sm leading-relaxed" style={tone === "neutral" ? undefined : { color: TONE_INK[tone] }}>
+      <dd className="text-[0.8125rem] leading-relaxed" style={tone === "neutral" ? undefined : { color: TONE_INK[tone] }}>
         {children}
       </dd>
     </div>
   );
 }
 
-function RowsTable({ table, nullOnly = false }: { table: ResultTable; nullOnly?: boolean }) {
+function RowsTable({
+  table,
+  nullOnly = false,
+  folded = false,
+}: {
+  table: ResultTable;
+  nullOnly?: boolean;
+  /** Older turns: the table sits behind its label, a click away. */
+  folded?: boolean;
+}) {
   if (table.rowCount === 0) {
     return (
       <p className="text-xs text-[var(--muted)]">
@@ -477,15 +948,30 @@ function RowsTable({ table, nullOnly = false }: { table: ResultTable; nullOnly?:
     );
   }
 
+  const label = nullOnly
+    ? "The row the database returned - every cell is NULL"
+    : `Rows the database returned (${table.rowCount})`;
+
+  // A native <details>: the same line is the summary when folded, so the
+  // count stays on screen and the rows are one click away, with no state
+  // and no new words. The newest turn is a plain block, open as it always was.
+  const Wrapper = folded ? "details" : "div";
+  const Label = folded ? "summary" : "p";
+
   return (
-    <div>
-      <p className="text-xs font-medium">
-        {nullOnly ? "The row the database returned - every cell is NULL" : "Rows the database returned"}
-      </p>
-      <div className="mt-1.5 overflow-x-auto rounded-md border border-[var(--border)]">
+    <Wrapper data-testid="bas-analyze-rows" data-folded={folded ? "true" : "false"}>
+      <Label
+        className={
+          "text-xs font-medium" + (folded ? " cursor-pointer text-[var(--phb-purple)]" : "")
+        }
+      >
+        {label}
+      </Label>
+      {/* The module's one scroll pattern: up to 200 rows, sticky header, count above. */}
+      <div className="mt-1.5 max-h-72 overflow-auto rounded-md border border-[var(--phb-teal-tint-line)]">
         <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-[var(--border)] bg-[var(--neutral-50,var(--surface))] text-left">
+          <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
+            <tr className="border-b border-[var(--phb-teal-tint-line)] text-left">
               {table.columns.map((column, i) => (
                 <th key={`${column}-${i}`} className="px-3 py-2 font-medium">
                   {column}
@@ -495,7 +981,7 @@ function RowsTable({ table, nullOnly = false }: { table: ResultTable; nullOnly?:
           </thead>
           <tbody>
             {table.rows.map((row, r) => (
-              <tr key={r} className="border-b border-[var(--border)] last:border-b-0">
+              <tr key={r} className="border-b border-[var(--phb-teal-tint-line)] last:border-b-0">
                 {row.map((cell, c) => (
                   <td
                     key={c}
@@ -517,6 +1003,6 @@ function RowsTable({ table, nullOnly = false }: { table: ResultTable; nullOnly?:
           Capped at {table.rowCap} rows. The query matched more; narrow it or aggregate.
         </p>
       )}
-    </div>
+    </Wrapper>
   );
 }

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { BasError } from "./errors";
 import type {
+  BasDashboard,
   CollectionHealth,
   Completeness,
   DataGapRow,
@@ -34,6 +35,20 @@ import {
   yearsBetween,
 } from "./range";
 import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk, toHorizonState } from "./types";
+import {
+  emptyNotChecked,
+  judgePlausibility,
+  type FlatPoint,
+  type PlausibilityRow,
+  type PlausibilitySummary,
+} from "./plausibility";
+import { plausibilityLateral } from "./plausibility-sql";
+import {
+  booleanStates,
+  valueKindFromDataType,
+  valueKindOf,
+  type ValueKind,
+} from "./value-kind";
 
 /**
  * "This row is at risk", for SQL, generated from the one TypeScript list so
@@ -149,11 +164,11 @@ function effectiveSiteIds(
  * `view` is the alias of the view in the query; the query must also join
  * `bas_points p`, which every caller already does for `is_visible`.
  */
-function shownPointName(view: Prisma.Sql): Prisma.Sql {
+export function shownPointName(view: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`COALESCE(p.label, ${view}.point_name)`;
 }
 
-function siteFilter(siteIds: bigint[] | null, column: Prisma.Sql): Prisma.Sql {
+export function siteFilter(siteIds: bigint[] | null, column: Prisma.Sql): Prisma.Sql {
   if (siteIds === null) return Prisma.sql`TRUE`;
   if (siteIds.length === 0) return Prisma.sql`FALSE`;
   return Prisma.sql`${column} IN (${Prisma.join(siteIds)})`;
@@ -551,6 +566,16 @@ interface VanishedRow {
   last_record_ts: Date | null;
 }
 
+/** One active point with everything the plausibility judge needs, plus its names for the card. */
+interface PlausibilityQueryRow extends PlausibilityRow {
+  point_id: bigint;
+  point_name: string;
+  site_name: string;
+  station_name: string;
+  unit: string | null;
+  visible: boolean;
+}
+
 interface RunRow {
   run_id: bigint;
   started_at: Date;
@@ -797,6 +822,13 @@ export async function getCollectionHealth(
       ORDER BY h.last_record_ts DESC NULLS LAST, ${shownPointName(Prisma.sql`h`)}, h.point_id
     `;
 
+    // --- values that have stopped changing (2026-09-28) ---------------------
+
+    // Every active point in scope, hidden or not, with the flat facts computed
+    // for the ones the role says to check. Judged in TypeScript below; see
+    // lib/modules/bas/plausibility.ts for the rules and the measured cost.
+    const plausibilityRows = await loadPlausibilityRows(tx, healthSitesH);
+
     // --- collector runs -----------------------------------------------------
 
     // The LEFT JOIN and the `IS NULL` arm are Grafana's, and they matter: a run
@@ -942,14 +974,25 @@ export async function getCollectionHealth(
         )
       : null;
 
+    // The stuck-value count without the filter, by the same rule: the rows
+    // are judged by the same function as the in-scope list. Skipped, like
+    // the totals above, when nothing is filtered.
+    const unfilteredFlat = selection.filtered
+      ? summarisePlausibility(
+          await loadPlausibilityRows(tx, siteFilter(entitled, Prisma.sql`h.site_id`)),
+        ).flat.length
+      : null;
+
     return {
       observedAt,
       selection,
       unfiltered,
+      unfilteredFlat,
       totals,
       readingTotals,
       points,
       vanished,
+      plausibilityRows,
       runs,
       newestRun,
       runRecords,
@@ -1011,6 +1054,8 @@ export async function getCollectionHealth(
 
   const { selection } = result;
 
+  const plausibility = summarisePlausibility(result.plausibilityRows);
+
   const health: CollectionHealth = {
     windowDays,
 
@@ -1044,6 +1089,7 @@ export async function getCollectionHealth(
             activePoints: result.unfiltered.active_points,
             pointsAtRisk: result.unfiltered.points_at_risk,
             pointsNoLongerReported: result.unfiltered.points_no_longer_reported,
+            pointsFlat: result.unfilteredFlat ?? 0,
           },
 
     observedAt: result.observedAt.toISOString(),
@@ -1056,12 +1102,14 @@ export async function getCollectionHealth(
       hiddenPoints: result.totals.hidden_points,
       hiddenPointsAtRisk,
       pointsNoLongerReported: result.totals.points_no_longer_reported,
+      pointsFlat: plausibility.flat.length,
       pointsIncomplete: completenessCounts.incomplete,
       completenessCounts,
       minutesSinceNewestReading: result.readingTotals.minutes_since,
     },
     points,
     vanished: result.vanished.map(toVanishedPoint),
+    plausibility,
     runs: result.runs.map(toIngestRunRow),
     newestRunAt: iso(result.newestRun),
     runRecords: result.runRecords.map(toRunRecordPoint),
@@ -1080,6 +1128,176 @@ export async function getCollectionHealth(
   });
 
   return health;
+}
+
+// ============================================================== dashboard
+
+interface DashboardRow {
+  project_id: bigint;
+  name: string;
+  org_name: string;
+  buildings: number;
+  stations: number;
+  active_points: number;
+  risk_ok: number;
+  risk_at_risk: number;
+  risk_data_lost: number;
+  risk_buffer_not_full: number;
+  risk_roll_horizon_unknown: number;
+  risk_never_collected: number;
+  minutes_since: number | null;
+}
+
+/**
+ * Which projects this employee may see, as SQL over `bas_projects pr`.
+ *
+ * The entitlement is per SITE (`basSiteScope`), so once it is a list a project
+ * is visible when any of its buildings is. `null` - everyone, today - is every
+ * project, INCLUDING one with no buildings yet: a project somebody has just
+ * created in Settings has to get a card, or the Projects tab would read "no
+ * projects" over a Settings screen that lists one.
+ */
+function projectScope(entitled: bigint[] | null): Prisma.Sql {
+  if (entitled === null) return Prisma.sql`TRUE`;
+  if (entitled.length === 0) return Prisma.sql`FALSE`;
+  return Prisma.sql`EXISTS (
+    SELECT 1 FROM bas_sites es
+    WHERE es.project_id = pr.project_id AND es.site_id IN (${Prisma.join(entitled)})
+  )`;
+}
+
+/**
+ * The Projects tab: one card per project. (`dashboard` in code, *Projects* on screen.)
+ *
+ * Each card's at-risk figure is the Collection Health tile's, scoped to the
+ * project: the same six per-state counts over `bas_v_collection_health`,
+ * filtered on `is_active` alone (hidden points count, as everywhere), summed
+ * in TypeScript by `atRiskCount` over the one list. Nothing here decides
+ * at-risk-ness on its own - four private definitions of it were found and
+ * unified in September, and a fifth on a new screen would be the regression.
+ * tests/bas-at-risk-predicate.test.ts holds a card to
+ * `getCollectionHealth(viewer, { projectId })` for the same project.
+ *
+ * The newest-reading age is the Collection Health "Since newest reading"
+ * query, project-scoped - `now() - max(ts)` over the readings the project's
+ * points hold - so the card and that tile cannot disagree about it either.
+ *
+ * Building and JACE counts are correlated subqueries with no reference to
+ * points or readings, and `projectsInDatabase` is a joinless `count(*)` over
+ * the same scope: if the card join ever drops or doubles a project, the screen
+ * can tell. One transaction, one `now()`, like every other read here.
+ */
+export async function getDashboard(viewer: Viewer): Promise<BasDashboard> {
+  const scope = await basSiteScope(viewer);
+  const entitled = scope.entitled;
+
+  const result = await prisma.$transaction(async (tx) => {
+    const observedAt = firstRow(
+      await tx.$queryRaw<Array<{ now: Date }>>`SELECT now() AS now`,
+      "now()",
+    ).now;
+
+    const rows = await tx.$queryRaw<DashboardRow[]>`
+      SELECT
+        pr.project_id,
+        pr.name,
+        o.name AS org_name,
+        -- Counted on their own, so a project with buildings and no points
+        -- still says how many buildings it has.
+        (SELECT count(*) FROM bas_sites s
+          WHERE s.project_id = pr.project_id
+            AND ${siteFilter(entitled, Prisma.sql`s.site_id`)})::int AS buildings,
+        (SELECT count(*) FROM bas_stations st
+          JOIN bas_sites s ON s.site_id = st.site_id
+          WHERE s.project_id = pr.project_id
+            AND ${siteFilter(entitled, Prisma.sql`s.site_id`)})::int AS stations,
+        -- THE RISK RULE, as on Collection Health: every FILTER is on is_active
+        -- alone. is_visible appears nowhere. A hidden point is still collected
+        -- and can still lose data, so it is in the card's figure.
+        count(*) FILTER (WHERE h.is_active)::int AS active_points,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'ok')::int AS risk_ok,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'at_risk')::int AS risk_at_risk,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'data_lost')::int AS risk_data_lost,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'buffer_not_full')::int
+          AS risk_buffer_not_full,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'roll_horizon_unknown')::int
+          AS risk_roll_horizon_unknown,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'never_collected')::int
+          AS risk_never_collected,
+        -- Collection Health's "Since newest reading", scoped to the project.
+        (SELECT (EXTRACT(EPOCH FROM (now() - max(r.ts))) / 60.0)::float8
+           FROM bas_readings r
+           JOIN bas_points rp USING (point_id)
+           JOIN bas_stations rst USING (station_id)
+           JOIN bas_sites rs ON rs.site_id = rst.site_id
+          WHERE rs.project_id = pr.project_id
+            AND ${siteFilter(entitled, Prisma.sql`rs.site_id`)}) AS minutes_since
+      FROM bas_projects pr
+      JOIN bas_orgs o ON o.org_id = pr.org_id
+      -- LEFT, twice: a project with no buildings, or buildings with no
+      -- points, is still a project and still gets a card.
+      LEFT JOIN bas_sites ps
+        ON ps.project_id = pr.project_id
+       AND ${siteFilter(entitled, Prisma.sql`ps.site_id`)}
+      LEFT JOIN bas_v_collection_health h ON h.site_id = ps.site_id
+      WHERE ${projectScope(entitled)}
+      GROUP BY pr.project_id, pr.name, o.name
+      ORDER BY o.name, pr.name
+    `;
+
+    // No joins. The guard against the query above.
+    const inDatabase = firstRow(
+      await tx.$queryRaw<Array<{ n: number }>>`
+        SELECT count(*)::int AS n FROM bas_projects pr WHERE ${projectScope(entitled)}
+      `,
+      "project count",
+    ).n;
+
+    return { observedAt, rows, inDatabase };
+  });
+
+  const dashboard: BasDashboard = {
+    observedAt: result.observedAt.toISOString(),
+    projects: result.rows.map((row) => {
+      const riskCounts: Record<RollRisk, number> = {
+        ok: row.risk_ok,
+        at_risk: row.risk_at_risk,
+        data_lost: row.risk_data_lost,
+        buffer_not_full: row.risk_buffer_not_full,
+        roll_horizon_unknown: row.risk_roll_horizon_unknown,
+        never_collected: row.risk_never_collected,
+      };
+      return {
+        projectId: row.project_id.toString(),
+        name: row.name,
+        orgName: row.org_name,
+        buildings: row.buildings,
+        stations: row.stations,
+        health:
+          row.active_points === 0
+            ? null
+            : {
+                activePoints: row.active_points,
+                // By the one list. See AT_RISK_ROLL_RISKS.
+                pointsAtRisk: atRiskCount(riskCounts),
+                riskCounts,
+                minutesSinceNewestReading: row.minutes_since,
+              },
+      };
+    }),
+    projectsInDatabase: result.inDatabase,
+  };
+
+  logger.info("bas.dashboard", {
+    employeeId: scope.employeeId,
+    moduleKey: "bas",
+    count: dashboard.projects.length,
+    outcome: dashboard.projects.some((p) => (p.health?.pointsAtRisk ?? 0) > 0)
+      ? "at_risk"
+      : "ok",
+  });
+
+  return dashboard;
 }
 
 export function clampWindowDays(requested: number | undefined): number {
@@ -1125,6 +1343,103 @@ function toPointHealthRow(row: PointRow): PointHealthRow {
     heldCount: row.held_count,
     visible: row.visible,
   };
+}
+
+/**
+ * Every ACTIVE point matching `where` (a filter over the view aliased `h`),
+ * with the plausibility facts computed for the ones the role says to check.
+ * Hidden points included: a flagged point is listed whether or not somebody
+ * hid it from the browsing screens.
+ */
+async function loadPlausibilityRows(
+  tx: Prisma.TransactionClient,
+  where: Prisma.Sql,
+): Promise<PlausibilityQueryRow[]> {
+  return tx.$queryRaw<PlausibilityQueryRow[]>`
+    SELECT
+      h.point_id,
+      ${shownPointName(Prisma.sql`h`)} AS point_name,
+      h.site_name,
+      COALESCE(st.display_name, st.niagara_station_name) AS station_name,
+      h.unit,
+      p.is_visible AS visible,
+      p.is_active,
+      p.data_type,
+      p.point_role,
+      pr.is_setpoint  AS role_is_setpoint,
+      pr.measurement  AS role_measurement,
+      p.collection_interval_s,
+      c.last_run_at,
+      c.last_status,
+      pl.*
+    FROM bas_v_collection_health h
+    JOIN bas_points p USING (point_id)
+    JOIN bas_stations st ON st.station_id = h.station_id
+    -- LEFT: a point with no role has no role row, and "no role" is one of the
+    -- answers this list exists to give.
+    LEFT JOIN bas_point_roles pr ON pr.point_role = p.point_role
+    LEFT JOIN bas_sync_checkpoints c ON c.point_id = p.point_id
+    ${plausibilityLateral(Prisma.sql`p`, Prisma.sql`pr`)}
+    WHERE h.is_active AND ${where}
+    ORDER BY ${shownPointName(Prisma.sql`h`)}, h.point_id
+  `;
+}
+
+/**
+ * Judges every row and counts the outcomes. The flagged list is worst first -
+ * longest flat - then by name, so the card reads top-down in order of how
+ * long nobody has looked.
+ */
+function summarisePlausibility(rows: PlausibilityQueryRow[]): PlausibilitySummary {
+  const summary: PlausibilitySummary = {
+    checked: 0,
+    moving: 0,
+    tooFewReadings: 0,
+    notChecked: emptyNotChecked(),
+    flat: [],
+  };
+
+  for (const row of rows) {
+    const plausibility = judgePlausibility(row);
+    switch (plausibility.state) {
+      case "not_checked":
+        // The judge always sets a reason on this state; the `?? "no_threshold"`
+        // is for the type, not the data.
+        summary.notChecked[plausibility.notCheckedReason ?? "no_threshold"] += 1;
+        break;
+      case "too_few_readings":
+        summary.checked += 1;
+        summary.tooFewReadings += 1;
+        break;
+      case "moving":
+        summary.checked += 1;
+        summary.moving += 1;
+        break;
+      case "flat": {
+        summary.checked += 1;
+        const point: FlatPoint = {
+          pointId: row.point_id.toString(),
+          pointName: row.point_name,
+          siteName: row.site_name,
+          stationName: row.station_name,
+          unit: row.unit,
+          visible: row.visible,
+          plausibility,
+        };
+        summary.flat.push(point);
+        break;
+      }
+    }
+  }
+
+  summary.flat.sort(
+    (a, b) =>
+      (b.plausibility.flatHours ?? 0) - (a.plausibility.flatHours ?? 0) ||
+      a.pointName.localeCompare(b.pointName) ||
+      a.pointId.localeCompare(b.pointId),
+  );
+
+  return summary;
 }
 
 function toVanishedPoint(row: VanishedRow): VanishedPoint {
@@ -1176,6 +1491,15 @@ function toDataGapRow(row: GapRow): DataGapRow {
 // B4 - Point Explorer
 // ---------------------------------------------------------------------------
 
+/**
+ * The two refusals a point request can get, worded once. The readings table
+ * (readings.ts) refuses the same point with the same sentence as the chart, so
+ * a hidden point reads as hidden on both and nowhere as missing.
+ */
+export const POINT_NOT_AVAILABLE_MESSAGE = "That point is not available.";
+export const HIDDEN_POINT_MESSAGE =
+  "That point is hidden from Point Explorer. Show it again under Settings → Points.";
+
 /** Grafana's point picker is single-select, and so is this. See `getPointExplorer`. */
 export function parsePointId(value: string | null | undefined): bigint | null {
   if (value === undefined || value === null) return null;
@@ -1185,6 +1509,40 @@ export function parsePointId(value: string | null | undefined): bigint | null {
     throw new BasError("point_not_found", "That point is not available.");
   }
   return BigInt(trimmed);
+}
+
+/**
+ * Which value column a point's readings live in, over `[from, to)`.
+ *
+ * `data_type` is the collector's declaration from the record prototype and
+ * decides it outright. Only an undeclared type (`unknown`, the column's
+ * default) costs a query: a count of which columns the window populates, so
+ * the screen reads what is there rather than the numeric column it always
+ * read. On live every point is declared, so that branch runs for none of
+ * them. See value-kind.ts. Shared by the Point Explorer and the readings
+ * table (readings.ts), so the two cannot disagree about a point's kind.
+ */
+export async function resolveValueKind(
+  db: Prisma.TransactionClient,
+  dataType: string,
+  pointId: bigint,
+  from: Date,
+  to: Date,
+): Promise<ValueKind> {
+  const declared = dataType !== "unknown" && dataType !== "abstime";
+  if (declared) return valueKindOf(dataType, { num: 0, bool: 0, str: 0 });
+  const row = firstRow(
+    await db.$queryRaw<PopulatedRow[]>`
+      SELECT
+        count(value_num)::int AS num_rows,
+        count(value_bool)::int AS bool_rows,
+        count(value_str)::int AS str_rows
+      FROM bas_readings
+      WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
+    `,
+    "populated columns",
+  );
+  return valueKindOf(dataType, { num: row.num_rows, bool: row.bool_rows, str: row.str_rows });
 }
 
 /**
@@ -1208,7 +1566,7 @@ function breakThresholdMs(collectionIntervalS: number | null): number {
   return Math.max(fromInterval, MIN_BREAK_SECONDS) * 1000;
 }
 
-interface PointOptionRow {
+export interface PointOptionRow {
   point_id: bigint;
   point_name: string;
   point_role: string | null;
@@ -1219,6 +1577,23 @@ interface PointOptionRow {
   site_timezone: string;
   clock_offset_s: number | null;
   clock_measured_at: Date | null;
+  /**
+   * Which value column the readings live in, as the collector declared it
+   * from the oBIX record prototype. Decides the chart's axis - see
+   * value-kind.ts - and the two role flags and the raw history name are what
+   * a boolean point's state words are chosen from.
+   */
+  data_type: string;
+  is_status: boolean;
+  is_command: boolean;
+  niagara_history_name: string;
+}
+
+/** How many rows in the window populate each value column. */
+interface PopulatedRow {
+  num_rows: number;
+  bool_rows: number;
+  str_rows: number;
 }
 
 interface PointStatsRow {
@@ -1281,6 +1656,15 @@ export interface PointExplorerOptions extends BasSelectionRequest {
   /** Absent means "the first point the picker would offer". */
   pointId?: bigint | null;
   /**
+   * `false`: load NO point. The cascade is resolved and the picker's lists
+   * come back, `selectedPoint` is null, and no point query runs. This is how
+   * a Projects card arrives (`?point=none`): with the project set and the
+   * person still to choose, rather than with whichever point sorts first
+   * drawn as if they had asked for it. `pointId` is ignored when this is
+   * false. Default true, so every existing caller is unchanged.
+   */
+  selectPoint?: boolean;
+  /**
    * A custom calendar range. When present it wins over `windowDays`, which
    * then only says which preset button would be pressed if the person went
    * back to one.
@@ -1325,7 +1709,8 @@ export async function getPointExplorer(
   options: PointExplorerOptions = {},
 ): Promise<PointExplorer> {
   const windowDays = clampWindowDays(options.windowDays);
-  const requestedPointId = options.pointId ?? null;
+  const selectPoint = options.selectPoint !== false;
+  const requestedPointId = selectPoint ? (options.pointId ?? null) : null;
   const customRange = options.range ?? null;
   const maxRaw = options.maxRawTrendPoints ?? MAX_RAW_TREND_POINTS;
   const maxBuckets = options.maxTrendBuckets ?? MAX_TREND_BUCKETS;
@@ -1381,7 +1766,8 @@ export async function getPointExplorer(
              v.point_role, v.unit, v.site_name,
              v.collection_interval_s,
              s.timezone AS site_timezone,
-             st.clock_offset_s, st.clock_measured_at
+             st.clock_offset_s, st.clock_measured_at,
+             v.data_type, v.is_status, v.is_command, v.niagara_history_name
       FROM bas_v_point v
       -- B8.3: a hidden point leaves this picker, and only this. It is still
       -- collected, still in every Collection Health figure, and still in the
@@ -1398,8 +1784,11 @@ export async function getPointExplorer(
       ORDER BY v.site_name, ${shownPointName(Prisma.sql`v`)}, v.point_id
     `;
 
-    const selectedPoint =
-      requestedPointId === null
+    // No point at all when the caller said so; otherwise the requested point,
+    // or the first the picker offers.
+    const selectedPoint = !selectPoint
+      ? null
+      : requestedPointId === null
         ? (pointRows[0] ?? null)
         : (pointRows.find((row) => row.point_id === requestedPointId) ?? null);
 
@@ -1420,9 +1809,7 @@ export async function getPointExplorer(
       `;
       throw new BasError(
         "point_not_found",
-        hidden.length > 0
-          ? "That point is hidden from Point Explorer. Show it again under Settings → Points."
-          : "That point is not available.",
+        hidden.length > 0 ? HIDDEN_POINT_MESSAGE : POINT_NOT_AVAILABLE_MESSAGE,
       );
     }
 
@@ -1432,6 +1819,7 @@ export async function getPointExplorer(
         selection,
         pointRows,
         selectedPoint: null,
+        valueKind: null as ValueKind | null,
         range: null as RangeRow | null,
         calendar: null as CalendarRow | null,
         stats: null,
@@ -1513,6 +1901,27 @@ export async function getPointExplorer(
       "calendar",
     );
 
+    // --- which value column this point's readings live in -------------------
+    //
+    // `data_type` is the collector's declaration from the record prototype and
+    // decides it outright. Only an undeclared type (`unknown`, the column's
+    // default) costs a query: a count of which columns the window populates,
+    // so the chart draws what is there rather than the numeric column it has
+    // always read. On live every point is declared, so this branch runs for
+    // none of them. See value-kind.ts.
+    const valueKind = await resolveValueKind(tx, selectedPoint.data_type, pointId, from, to);
+
+    // The reading, as a number, whatever column it lives in. A boolean travels
+    // as 1 or 0 - NULL stays NULL through the cast - so the break logic, the
+    // bucketing and the series shape are the same for every kind, and the
+    // chart alone turns it back into a state word. A string point reads the
+    // numeric column as it always has: nothing is built for it yet, by
+    // decision, and its readings stay null on the chart.
+    const valueExpr =
+      valueKind === "boolean"
+        ? Prisma.sql`(value_bool::int)::float8`
+        : Prisma.sql`value_num`;
+
     // Grafana runs panels 2, 3, 4 and 5 as four queries over the same rows.
     // One pass, the same five numbers - and the count decides below whether
     // the trend is drawn raw or bucketed.
@@ -1523,10 +1932,10 @@ export async function getPointExplorer(
           count(*) FILTER (
             WHERE value_num IS NULL AND value_bool IS NULL AND value_str IS NULL
           )::int AS null_records,
-          count(DISTINCT value_num)::int AS distinct_values,
-          round(avg(value_num)::numeric, 2)::float8 AS average,
-          round(min(value_num)::numeric, 2)::float8 AS minimum,
-          round(max(value_num)::numeric, 2)::float8 AS maximum
+          count(DISTINCT ${valueExpr})::int AS distinct_values,
+          round(avg(${valueExpr})::numeric, 2)::float8 AS average,
+          round(min(${valueExpr})::numeric, 2)::float8 AS minimum,
+          round(max(${valueExpr})::numeric, 2)::float8 AS maximum
         FROM bas_readings
         WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
       `,
@@ -1539,9 +1948,9 @@ export async function getPointExplorer(
     const latest =
       (
         await tx.$queryRaw<LatestRow[]>`
-          SELECT value_num, ts
+          SELECT ${valueExpr} AS value_num, ts
           FROM bas_readings
-          WHERE point_id = ${pointId} AND value_num IS NOT NULL
+          WHERE point_id = ${pointId} AND ${valueExpr} IS NOT NULL
           ORDER BY ts DESC
           LIMIT 1
         `
@@ -1570,7 +1979,7 @@ export async function getPointExplorer(
 
     if (stats.readings <= maxRaw) {
       trend = await tx.$queryRaw<TrendRow[]>`
-        SELECT ts, value_num
+        SELECT ts, ${valueExpr} AS value_num
         FROM bas_readings
         WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
         ORDER BY ts
@@ -1593,9 +2002,9 @@ export async function getPointExplorer(
       buckets = await tx.$queryRaw<BucketRow[]>`
         SELECT
           ${bucketExpr} AS ts,
-          avg(value_num)::float8 AS average,
-          min(value_num)::float8 AS minimum,
-          max(value_num)::float8 AS maximum,
+          avg(${valueExpr})::float8 AS average,
+          min(${valueExpr})::float8 AS minimum,
+          max(${valueExpr})::float8 AS maximum,
           count(*)::int AS readings
         FROM bas_readings
         WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
@@ -1629,6 +2038,7 @@ export async function getPointExplorer(
       selection,
       pointRows,
       selectedPoint,
+      valueKind: valueKind as ValueKind | null,
       range,
       calendar,
       stats,
@@ -1720,9 +2130,11 @@ export async function getPointExplorer(
       filtered: result.selection.filtered,
       label: describeSelection(result.selection),
     },
-    points: result.pointRows.map(toPointOption),
+    points: result.pointRows.map((row) => toPointOption(row)),
     selectedPoint:
-      result.selectedPoint === null ? null : toPointOption(result.selectedPoint),
+      result.selectedPoint === null
+        ? null
+        : toPointOption(result.selectedPoint, result.valueKind ?? undefined),
     collectionIntervalS: intervalS,
     stationClockOffsetS: result.selectedPoint?.clock_offset_s ?? null,
     stationClockMeasuredAt: iso(result.selectedPoint?.clock_measured_at ?? null),
@@ -1877,12 +2289,30 @@ export function buildBucketedTrend(
   return { trend, gaps };
 }
 
-function toPointOption(row: PointOptionRow): PointOption {
+/**
+ * A picker row as the screen sees it. The kind is the declared type unless
+ * the caller has refined it from the readings (the selected point); a boolean
+ * point carries its two state words, chosen from role, flags and names.
+ */
+export function toPointOption(
+  row: PointOptionRow,
+  valueKind: ValueKind = valueKindFromDataType(row.data_type),
+): PointOption {
   return {
     pointId: row.point_id.toString(),
     pointName: row.point_name,
     pointRole: row.point_role,
     unit: row.unit,
     siteName: row.site_name,
+    valueKind,
+    states:
+      valueKind === "boolean"
+        ? booleanStates({
+            role: row.point_role,
+            isStatus: row.is_status,
+            isCommand: row.is_command,
+            names: [row.point_name, row.niagara_history_name],
+          })
+        : null,
   };
 }

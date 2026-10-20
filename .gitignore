@@ -159,3 +159,7 @@ ds-bundle/
 .design-sync/compiled.css
 .design-sync/fonts/
 .design-sync/
+
+# The BAS migration export (scripts/bas-migrate-to-azure/export.sql): 87,000
+# readings and the credentials ciphertext. Never committed.
+bas-migration-data/

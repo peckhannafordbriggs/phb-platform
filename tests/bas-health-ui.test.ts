@@ -734,7 +734,7 @@ describe("hiding a point narrows the table and nothing else", () => {
   it("says both when a filter and a hide each remove a problem", () => {
     const warning = describeHiddenRisk({
       totals: { pointsAtRisk: 1, hiddenPointsAtRisk: 1 },
-      unfiltered: { activePoints: 9, pointsAtRisk: 2, pointsNoLongerReported: 0 },
+      unfiltered: { activePoints: 9, pointsAtRisk: 2, pointsNoLongerReported: 0, pointsFlat: 0 },
       scope: { filtered: true, label: "Liberty Center" },
     });
     expect(warning).toContain("1 more point is at risk outside Liberty Center.");

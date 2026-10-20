@@ -32,7 +32,8 @@ SSO success → gate checks pass
   → employee row exists?
       no  → create: entra_oid, email, names from token claims,
              zero grants, profile_completed = false
-      yes → update last_login_at
+      yes → update last_login_at, email; stamp entra_oid if null;
+             names from token claims while profile_completed = false
   → profile_completed?
       no  → redirect to /onboarding (only reachable route besides sign-out)
       yes → continue
@@ -58,7 +59,16 @@ authenticated.
 - **Email:** from the token, displayed **read-only**. Never user-editable. A
   user-entered email that disagrees with the authenticated identity is unresolvable.
 - **First / last name:** prefilled from token claims, editable. Directory display
-  names are often formatted badly or use legal names.
+  names are often formatted badly or use legal names. Until the profile is
+  completed, every sign-in re-stamps both from the token - a seeded row's
+  placeholder ("Platform Administrator") and a half-onboarded row's stale name
+  are nobody's own words. After completion the employee's version stands and
+  the token never overwrites it. There is no admin route for names, on purpose.
+  What an admin can do is ask for the profile to be completed again (the
+  employee's page, *Ask to complete profile again*): the profile flag is
+  cleared and the session ended, so the next click goes to sign-in, the
+  sign-in re-stamps the name, and the form opens prefilled correctly. Audited
+  as `employee.profile_reset`. Refused for a disabled employee.
 - **Position:** required, dropdown from the `positions` table, with "Other" revealing
   a free-text field that flags the row for admin cleanup.
 - **Department:** required, dropdown from the `departments` table.

@@ -234,8 +234,9 @@ is `docs/DESIGN-BRIEF.md` and the token comments in `app/globals.css`.
 
 ### BAS — working, on synthetic data
 
-Fourteen tables, six views, the collector running, four tabs — Collection Health, Point
-Explorer, Analyze, and a Settings tab behind a module-admin permission — four scoped
+Fourteen tables, six views, the collector running, five tabs — a Projects tab of
+cards, Point Explorer, Analyze, Collection Health, and a Settings tab behind a module-admin
+permission — four scoped
 database accounts, nightly backups with a tested restore.
 
 **Analyze (B5, 2026-09-21)** is a question box: the model writes one read-only `SELECT`,
@@ -295,6 +296,21 @@ Two traps worth carrying out of it:
   lack permission to see deleted vaults. That reads exactly like "the name is free" and
   is not. Use `checkNameAvailability`, which answers honestly.
 
+**The BAS data is still on the office PC.** The Azure database has the platform's rows
+and zero `bas_*` rows. `scripts/bas-migrate-to-azure/` is the one-shot move (export,
+import in one transaction as a role that cannot touch the platform's tables, check),
+tested against a faithful scratch copy on 29 September 2026 and **not yet run against
+Azure**; `scripts/setup-bas-collector-role.sql` is the collector's least-privilege role
+for the Azure server. `BAS_CREDENTIAL_KEY` and `ANTHROPIC_API_KEY` reach the container
+app from Key Vault by reference as of 2026-10-01 (`BAS-CREDENTIAL-KEY`,
+`ANTHROPIC-API-KEY`, each behind a boolean parameter), but the two secret VALUES are
+set in the vault by hand and nothing in the repository can tell you whether that has
+been done: if the station-login panel or the Analyze tab says it is not configured in
+production, it has not. `infra/README.md` has the steps; the Analyze tab also needs
+`BAS_ASK_DATABASE_URL`, which is not wired yet. All of it is in `runbook.md` → *Moving
+the BAS data to the Azure database* and the sections after it, and *Secrets set by hand
+in Key Vault*.
+
 ### Moving the AI layer off the laptop
 
 The two scheduled AI tasks that drive the change-order automation still run on one Windows
@@ -325,7 +341,7 @@ module on. Effective immediately.
 
 **Someone leaves.** Disable them in Admin. Don't delete.
 
-**Checking BAS health.** The Collection Health screen at `/bas`. *Points at risk* counts
+**Checking BAS health.** The Projects tab at `/bas` shows each project's points at risk; the Collection Health screen at `/bas/health` has the detail. *Points at risk* counts
 both confirmed data loss and points whose capacity is unknown — **unknown is not safe and
 never renders green.**
 
@@ -371,7 +387,10 @@ table; a library rewrite regenerates internal IDs and the flow silently stops re
 Read it through the Graph workbook API only.
 
 **`PHB_ALLOW_SEND` gates every send.** It must be `false` outside production. It exists
-because development runs against the live mailbox — there is no test mailbox.
+because development runs against the live mailbox — there is no test mailbox. In
+production it has been `true` since 2026-10-14, pinned by the template; the date, the
+reason and the one-command emergency close are in `runbook.md` → *The send gate is
+open, deliberately*.
 
 **One outstanding oddity, harmless.** On 26 August, CO Intake 3 logged ten successful runs
 but one message reached Sent Items. Possibly a per-vendor fan-out, possibly retries.

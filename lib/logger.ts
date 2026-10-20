@@ -30,6 +30,8 @@ export interface LogFields {
    */
   question?: string;
   sql?: string;
+  /** Analyze: whether any SQL reached the database. `sql` alone cannot say. */
+  queried?: boolean;
   /**
    * Sign-in (lib/auth/entra-token-error.ts). Entra's token-endpoint error
    * body, copied field by field from a whitelist - the AADSTS code and the

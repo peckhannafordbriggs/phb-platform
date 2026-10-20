@@ -1,0 +1,623 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+
+/**
+ * The Analyze thread: layout and daily lifetime.
+ *
+ *  - two turns render in the order asked, and only the older one's rows
+ *    table is folded (a <details> behind the line it already carried);
+ *  - a reload of the same tab on the same day restores the thread from the
+ *    tab's session store, with no request to the server;
+ *  - a fresh session starts empty, even where the thread's old home
+ *    (localStorage, before 2026-10-12) still holds today's questions - and
+ *    that old copy is swept;
+ *  - a thread dated yesterday in a still-open tab is discarded on load, not
+ *    shown, and a tab left open past midnight starts the new day's thread
+ *    on its next question;
+ *  - two tabs are two stores, and neither touches the other;
+ *  - "New conversation" clears the screen and the storage;
+ *  - while a question is being worked on, the pending turn is in the thread,
+ *    the ask box is disabled, and a second question cannot be sent.
+ *
+ * The day is drawn in America/New_York (lib/activity/rollover.ts). The pure
+ * storage rules are held below without rendering anything.
+ *
+ * MUTATION RECORD, 2026-10-09. Each applied by hand, the named test failed,
+ * then reverted.
+ *   - analyze-thread.ts: loadThread returns whichever day's thread the
+ *     employee has and deletes nothing -> "discards the employee's other
+ *     days", "does not match its key" and "dated yesterday is discarded"
+ *     fail.
+ *   - analyze.tsx: every turn rendered compact -> "only the older one folds
+ *     its rows" fails (the newest is a <details>).
+ *   - analyze.tsx: the busy guard dropped from submit -> "nothing else can
+ *     be sent" fails (two POSTs).
+ */
+
+import { Analyze } from "@/app/(modules)/bas/analyze";
+import { NEAR_BOTTOM_PX, isNearBottom, scrollToBottom } from "@/app/(modules)/bas/analyze-scroll";
+import {
+  THREAD_VERSION,
+  browserStorage,
+  clearThread,
+  forgetLocalThreads,
+  loadThread,
+  priorTurnOf,
+  priorTurnsFor,
+  saveThread,
+  threadDay,
+  threadKey,
+  type AnalyzeTurn,
+} from "@/app/(modules)/bas/analyze-thread";
+import {
+  PRIOR_ROWS_MAX,
+  PRIOR_TURNS_MAX,
+  PRIOR_TURNS_MAX_BYTES,
+} from "@/lib/modules/bas/analyze/types";
+import type { AnalyzeResult, Provenance } from "@/lib/modules/bas/analyze/types";
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
+  true;
+
+// ------------------------------------------------------------------ fixtures
+
+const provenance: Provenance = {
+  timeRange: { start: "2026-10-01T00:00:00.000Z", end: "2026-10-08T00:00:00.000Z" },
+  scope: "declared",
+  points: [{ id: "1", name: "Zone Temp", site: "PHBoffice", station: "JACE", collected: true }],
+  gaps: { totalHours: 0, mergedRows: 0, items: [] },
+  unknownHorizon: { count: 0, names: [] },
+  coverage: {
+    earliest: "2026-09-01T00:00:00.000Z",
+    latest: "2026-10-08T00:00:00.000Z",
+    readings: 1200,
+    neverCollected: [],
+  },
+  unclassifiedExcluded: 0,
+  periodUndeclared: false,
+  coverageShortfall: null,
+};
+
+function answered(answer: string): AnalyzeResult {
+  return {
+    kind: "answered",
+    answer,
+    interpretation: "Average over the week.",
+    sql: "SELECT avg(value_num) FROM bas_readings",
+    table: { columns: ["avg"], rows: [[71.5]], rowCount: 1, truncated: false, rowCap: 200 },
+    provenance,
+    durationMs: 1200,
+    retried: false,
+  };
+}
+
+const EMPLOYEE = "11111111-1111-4111-8111-111111111111";
+const OTHER = "22222222-2222-4222-8222-222222222222";
+/** 3 PM in Cincinnati on 9 October 2026 (EDT): 19:00Z. */
+const NOW = new Date("2026-10-09T19:00:00.000Z");
+const TODAY = "2026-10-09";
+
+function turn(id: string, question: string, answer: string): AnalyzeTurn {
+  return {
+    id,
+    askedAt: NOW.toISOString(),
+    question,
+    outcome: { kind: "result", result: answered(answer) },
+  };
+}
+
+/** A Storage of its own, the way each browser tab has one. */
+function memoryStorage(): Storage {
+  const items = new Map<string, string>();
+  return {
+    get length() {
+      return items.size;
+    },
+    key: (i) => [...items.keys()][i] ?? null,
+    getItem: (k) => items.get(k) ?? null,
+    setItem: (k, v) => void items.set(k, v),
+    removeItem: (k) => void items.delete(k),
+    clear: () => items.clear(),
+  };
+}
+
+// ------------------------------------------------------------------ render
+
+const roots: Array<{ root: Root; host: HTMLDivElement }> = [];
+
+async function render(now: Date | (() => Date) = NOW): Promise<HTMLDivElement> {
+  const clock = typeof now === "function" ? now : () => now;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  roots.push({ root, host });
+  await act(async () => {
+    root.render(createElement(Analyze, { employeeId: EMPLOYEE, now: clock }));
+  });
+  await settle();
+  return host;
+}
+
+async function unmountAll(): Promise<void> {
+  for (const { root, host } of roots.splice(0)) {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+}
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** Type into the textarea the way React sees it, then press Enter. */
+async function ask(host: HTMLElement, question: string): Promise<void> {
+  const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+  await act(async () => {
+    setter.call(textarea, question);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  await settle();
+}
+
+const askedTexts = (host: HTMLElement) =>
+  [...host.querySelectorAll('[data-testid="bas-analyze-turn"] [data-testid="bas-analyze-question"]')].map(
+    (p) => p.textContent,
+  );
+
+let fetchMock: ReturnType<typeof vi.fn>;
+/** Answers for POSTs, in order; a function returns a promise the test controls. */
+let answers: Array<Response | (() => Promise<Response>)>;
+let posts: number;
+
+beforeEach(() => {
+  window.sessionStorage.clear();
+  window.localStorage.clear();
+  answers = [];
+  posts = 0;
+  fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      posts += 1;
+      const next = answers.shift();
+      if (next === undefined) throw new Error("no scripted answer left");
+      return typeof next === "function" ? next() : next;
+    }
+    return jsonResponse({ data: { configured: true, missing: [] } });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+});
+
+afterEach(async () => {
+  await unmountAll();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+// ------------------------------------------------------------------- tests
+
+describe("the storage rules, without a screen", () => {
+  it("keys a thread by employee and New York calendar day", () => {
+    expect(threadDay(NOW)).toBe(TODAY);
+    // 11 PM in Cincinnati is already the 10th in UTC and still the 9th here.
+    expect(threadDay(new Date("2026-10-10T03:30:00.000Z"))).toBe(TODAY);
+    expect(threadKey(EMPLOYEE, TODAY)).toBe(`phb.bas.analyze.thread:${EMPLOYEE}:${TODAY}`);
+  });
+
+  it("round-trips today's thread, discards the employee's other days, leaves other people alone", () => {
+    const storage = window.sessionStorage;
+    saveThread(storage, EMPLOYEE, "2026-10-08", [turn("y", "yesterday?", "Y")]);
+    saveThread(storage, EMPLOYEE, TODAY, [turn("t", "today?", "T")]);
+    saveThread(storage, OTHER, "2026-10-08", [turn("o", "theirs?", "O")]);
+
+    const turns = loadThread(storage, EMPLOYEE, TODAY);
+    expect(turns.map((t) => t.question)).toEqual(["today?"]);
+    expect(storage.getItem(threadKey(EMPLOYEE, "2026-10-08"))).toBeNull();
+    expect(storage.getItem(threadKey(OTHER, "2026-10-08"))).not.toBeNull();
+  });
+
+  it("treats a record that does not match its key, or does not parse, as absent", () => {
+    const storage = window.sessionStorage;
+    storage.setItem(
+      threadKey(EMPLOYEE, TODAY),
+      JSON.stringify({ version: THREAD_VERSION, employeeId: OTHER, day: TODAY, turns: [turn("x", "q", "a")] }),
+    );
+    expect(loadThread(storage, EMPLOYEE, TODAY)).toEqual([]);
+    storage.setItem(threadKey(EMPLOYEE, TODAY), "{not json");
+    expect(loadThread(storage, EMPLOYEE, TODAY)).toEqual([]);
+    expect(loadThread(null, EMPLOYEE, TODAY)).toEqual([]);
+  });
+
+  it("drops the oldest turns from the stored copy when storage refuses the size", () => {
+    const limit = JSON.stringify(turn("2", "second question?", "B")).length * 2;
+    const items = new Map<string, string>();
+    const tight: Storage = {
+      get length() {
+        return items.size;
+      },
+      key: (i) => [...items.keys()][i] ?? null,
+      getItem: (k) => items.get(k) ?? null,
+      setItem: (k, v) => {
+        if (v.length > limit + 120) throw new DOMException("quota", "QuotaExceededError");
+        items.set(k, v);
+      },
+      removeItem: (k) => void items.delete(k),
+      clear: () => items.clear(),
+    };
+    const stored = saveThread(tight, EMPLOYEE, TODAY, [
+      turn("1", "first question?", "A"),
+      turn("2", "second question?", "B"),
+      turn("3", "third question?", "C"),
+    ]);
+    expect(stored).toBeLessThan(3);
+    expect(stored).toBeGreaterThan(0);
+    const back = loadThread(tight, EMPLOYEE, TODAY).map((t) => t.question);
+    expect(back[back.length - 1]).toBe("third question?");
+  });
+});
+
+describe("the store is the tab's, not the browser's", () => {
+  it("reads and writes the session store, and sweeps the old local copy rather than reading it", () => {
+    expect(browserStorage()).toBe(window.sessionStorage);
+    window.localStorage.setItem(
+      threadKey(EMPLOYEE, TODAY),
+      JSON.stringify({ version: THREAD_VERSION, employeeId: EMPLOYEE, day: TODAY, turns: [turn("x", "old home?", "a")] }),
+    );
+    window.localStorage.setItem(threadKey(OTHER, "2026-10-01"), "{}");
+    window.localStorage.setItem("phb.co.grouping", "off");
+    expect(forgetLocalThreads(window.localStorage)).toBe(2);
+    expect(window.localStorage.getItem(threadKey(EMPLOYEE, TODAY))).toBeNull();
+    expect(window.localStorage.getItem(threadKey(OTHER, "2026-10-01"))).toBeNull();
+    // Another feature's key is not ours to touch.
+    expect(window.localStorage.getItem("phb.co.grouping")).toBe("off");
+    expect(forgetLocalThreads(null)).toBe(0);
+  });
+
+  it("two tabs are two stores: each holds its own thread for the same person and day, and neither touches the other", () => {
+    const tabA = memoryStorage();
+    const tabB = memoryStorage();
+    saveThread(tabA, EMPLOYEE, TODAY, [turn("a1", "tab A?", "A")]);
+    saveThread(tabB, EMPLOYEE, TODAY, [turn("b1", "tab B?", "B"), turn("b2", "tab B again?", "BB")]);
+
+    expect(loadThread(tabA, EMPLOYEE, TODAY).map((t) => t.question)).toEqual(["tab A?"]);
+    expect(loadThread(tabB, EMPLOYEE, TODAY).map((t) => t.question)).toEqual(["tab B?", "tab B again?"]);
+
+    // New conversation in one tab leaves the other's thread where it was.
+    clearThread(tabA, EMPLOYEE, TODAY);
+    expect(loadThread(tabA, EMPLOYEE, TODAY)).toEqual([]);
+    expect(loadThread(tabB, EMPLOYEE, TODAY)).toHaveLength(2);
+
+    // A follow-up carries the turns of the tab it is asked in, and only those.
+    expect(priorTurnsFor(loadThread(tabB, EMPLOYEE, TODAY)).map((p) => p.question)).toEqual([
+      "tab B?",
+      "tab B again?",
+    ]);
+    expect(priorTurnsFor(loadThread(tabA, EMPLOYEE, TODAY))).toEqual([]);
+  });
+});
+
+describe("the thread on screen", () => {
+  it("two turns, in the order asked, and only the older one folds its rows", async () => {
+    answers = [jsonResponse({ data: answered("First answer.") }), jsonResponse({ data: answered("Second answer.") })];
+    const host = await render();
+    expect(host.querySelector('[data-testid="bas-analyze-thread"]')).toBeNull();
+
+    await ask(host, "first question?");
+    await ask(host, "second question?");
+
+    expect(askedTexts(host)).toEqual(["first question?", "second question?"]);
+    const rows = [...host.querySelectorAll('[data-testid="bas-analyze-rows"]')];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.tagName).toBe("DETAILS");
+    expect(rows[0]!.getAttribute("data-folded")).toBe("true");
+    expect((rows[0] as HTMLDetailsElement).open).toBe(false);
+    expect(rows[0]!.querySelector("summary")!.textContent).toBe("Rows the database returned (1)");
+    expect(rows[1]!.tagName).toBe("DIV");
+    expect(rows[1]!.getAttribute("data-folded")).toBe("false");
+    expect(rows[1]!.querySelector("table")).not.toBeNull();
+
+    // Nothing else about the older turn is folded or removed.
+    const older = host.querySelectorAll('[data-testid="bas-analyze-turn"]')[0]!;
+    expect(older.textContent).toContain("First answer.");
+    expect(older.textContent).toContain("What was actually queried");
+    expect(older.textContent).toContain("Gaps in the period");
+    expect(older.querySelector("table")).not.toBeNull();
+
+    // The ask box is at the bottom, after the thread.
+    const thread = host.querySelector('[data-testid="bas-analyze-thread"]')!;
+    const form = host.querySelector("form")!;
+    expect(thread.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("a reload of the same tab on the same day restores the thread without asking the server again", async () => {
+    answers = [jsonResponse({ data: answered("Kept.") })];
+    const first = await render();
+    await ask(first, "will this survive?");
+    expect(posts).toBe(1);
+    await unmountAll();
+
+    const second = await render(new Date("2026-10-09T23:30:00.000Z")); // 7:30 PM, same day
+    expect(askedTexts(second)).toEqual(["will this survive?"]);
+    expect(second.textContent).toContain("Kept.");
+    expect(posts).toBe(1);
+  });
+
+  it("a fresh session starts empty, even where the thread's old home still holds today's questions", async () => {
+    // The browser has not been closed since before 2026-10-12: localStorage
+    // still carries today's thread. It is not read, and it is swept.
+    saveThread(window.localStorage, EMPLOYEE, TODAY, [turn("l", "from the old home?", "Old copy.")]);
+    const host = await render();
+    expect(host.querySelector('[data-testid="bas-analyze-thread"]')).toBeNull();
+    expect(host.textContent).not.toContain("from the old home?");
+    expect(host.textContent).toContain("Things people ask");
+    expect(window.localStorage.getItem(threadKey(EMPLOYEE, TODAY))).toBeNull();
+    expect(posts).toBe(0);
+  });
+
+  it("yesterday's thread in a still-open tab is discarded on load, not shown", async () => {
+    saveThread(window.sessionStorage, EMPLOYEE, "2026-10-08", [turn("y", "yesterday's question?", "Old.")]);
+    const host = await render();
+    expect(host.querySelector('[data-testid="bas-analyze-thread"]')).toBeNull();
+    expect(host.textContent).not.toContain("yesterday's question?");
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, "2026-10-08"))).toBeNull();
+    expect(host.textContent).toContain("Things people ask");
+  });
+
+  it("a tab left open past midnight starts the new day's thread on its next question", async () => {
+    answers = [jsonResponse({ data: answered("Before.") }), jsonResponse({ data: answered("After.") })];
+    let clock = new Date("2026-10-10T03:58:00.000Z"); // 11:58 PM on the 9th in Cincinnati
+    const host = await render(() => clock);
+    await ask(host, "before midnight?");
+    expect(askedTexts(host)).toEqual(["before midnight?"]);
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, TODAY))).not.toBeNull();
+
+    clock = new Date("2026-10-10T04:01:00.000Z"); // 12:01 AM on the 10th
+    await ask(host, "after midnight?");
+    expect(askedTexts(host)).toEqual(["after midnight?"]);
+    expect(host.textContent).not.toContain("Before.");
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, "2026-10-10"))).not.toBeNull();
+
+    // The next load of the tab reads the new day and drops the old key.
+    await unmountAll();
+    const again = await render(() => clock);
+    expect(askedTexts(again)).toEqual(["after midnight?"]);
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, TODAY))).toBeNull();
+    expect(posts).toBe(2);
+  });
+
+  it("New conversation clears the screen and the storage, and the examples return", async () => {
+    answers = [jsonResponse({ data: answered("Gone soon.") })];
+    const host = await render();
+    await ask(host, "clear me?");
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, TODAY))).not.toBeNull();
+
+    const button = host.querySelector('[data-testid="bas-analyze-new-conversation"]') as HTMLButtonElement;
+    expect(button.textContent).toBe("New conversation");
+    await act(async () => button.click());
+    await settle();
+
+    expect(host.querySelector('[data-testid="bas-analyze-thread"]')).toBeNull();
+    expect(window.sessionStorage.getItem(threadKey(EMPLOYEE, TODAY))).toBeNull();
+    expect(host.querySelector('[data-testid="bas-analyze-new-conversation"]')).toBeNull();
+    expect(host.textContent).toContain("Things people ask");
+  });
+
+  it("while an answer is being worked on, the question sits in the thread and nothing else can be sent", async () => {
+    let release: (value: Response) => void = () => {};
+    answers = [() => new Promise<Response>((resolve) => (release = resolve))];
+    const host = await render();
+
+    await ask(host, "slow question?");
+    const pending = host.querySelector('[data-testid="bas-analyze-pending"]')!;
+    expect(pending).not.toBeNull();
+    expect(pending.textContent).toContain("slow question?");
+    expect(pending.textContent).toContain("Working…");
+    expect(pending.querySelector('[aria-busy="true"]')).not.toBeNull();
+    const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+    expect(textarea.disabled).toBe(true);
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+
+    // A second question while the first is out: nothing is sent.
+    await ask(host, "second question?");
+    expect(posts).toBe(1);
+    expect(host.querySelectorAll('[data-testid="bas-analyze-pending"]')).toHaveLength(1);
+
+    await act(async () => release(jsonResponse({ data: answered("Done.") })));
+    await settle();
+    expect(host.querySelector('[data-testid="bas-analyze-pending"]')).toBeNull();
+    expect(askedTexts(host)).toEqual(["slow question?"]);
+    expect(textarea.disabled).toBe(false);
+  });
+
+  it("a request that fails is a turn too, with the existing message, and stays in the thread", async () => {
+    answers = [
+      jsonResponse({ error: { code: "rate_limited", message: "slow down" } }, 429),
+      jsonResponse({ data: answered("After.") }),
+    ];
+    const host = await render();
+    await ask(host, "too fast?");
+    await ask(host, "then this?");
+
+    const turns = [...host.querySelectorAll('[data-testid="bas-analyze-turn"]')];
+    expect(turns).toHaveLength(2);
+    expect(turns[0]!.getAttribute("role") ?? turns[0]!.querySelector('[role="alert"]')).not.toBeNull();
+    expect(turns[0]!.textContent).toContain("too fast?");
+    expect(turns[1]!.textContent).toContain("After.");
+  });
+});
+
+describe("the thread scrolls inside the panel (2026-10-13)", () => {
+  it("near the end is within the slack of the end, and a region with no overflow is at its end", () => {
+    const region = { clientHeight: 500, scrollHeight: 2000 };
+    expect(isNearBottom({ ...region, scrollTop: 1500 })).toBe(true);
+    expect(isNearBottom({ ...region, scrollTop: 1500 - NEAR_BOTTOM_PX })).toBe(true);
+    expect(isNearBottom({ ...region, scrollTop: 1500 - NEAR_BOTTOM_PX - 1 })).toBe(false);
+    expect(isNearBottom({ ...region, scrollTop: 0 })).toBe(false);
+    expect(isNearBottom({ scrollTop: 0, clientHeight: 500, scrollHeight: 300 })).toBe(true);
+    expect(isNearBottom({ scrollTop: 0, clientHeight: 0, scrollHeight: 0 })).toBe(true);
+    expect(isNearBottom({ ...region, scrollTop: 1000 }, 500)).toBe(true);
+  });
+
+  it("scrolls to the end with a jump from the top and a slide from anywhere else, and without scrollTo at all", () => {
+    const calls: ScrollToOptions[] = [];
+    const el = { scrollTop: 0, scrollHeight: 2000, scrollTo: (o: ScrollToOptions) => void calls.push(o) };
+    scrollToBottom(el as unknown as HTMLElement);
+    el.scrollTop = 900;
+    scrollToBottom(el as unknown as HTMLElement);
+    expect(calls).toEqual([
+      { top: 2000, behavior: "auto" },
+      { top: 2000, behavior: "smooth" },
+    ]);
+    const bare = { scrollTop: 10, scrollHeight: 700 };
+    scrollToBottom(bare as unknown as HTMLElement);
+    expect(bare.scrollTop).toBe(700);
+  });
+
+  /**
+   * jsdom lays nothing out, so the region's metrics are set by hand and the
+   * scroll event is dispatched by hand; what is asserted is the decision -
+   * a new turn follows a reader who was at the end and leaves one who had
+   * scrolled up where they were.
+   */
+  async function regionWith(host: HTMLElement, scrollTop: number) {
+    const el = host.querySelector('[data-testid="bas-analyze-scroll"]') as HTMLDivElement;
+    Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => 2000 });
+    Object.defineProperty(el, "clientHeight", { configurable: true, get: () => 500 });
+    Object.defineProperty(el, "scrollTop", { configurable: true, get: () => scrollTop, set: () => {} });
+    const scrollTo = vi.fn();
+    (el as unknown as { scrollTo: unknown }).scrollTo = scrollTo;
+    await act(async () => {
+      el.dispatchEvent(new Event("scroll"));
+    });
+    return scrollTo;
+  }
+
+  it("a new question and its answer scroll the thread to its end when the reader was at the end", async () => {
+    answers = [jsonResponse({ data: answered("First.") }), jsonResponse({ data: answered("Second.") })];
+    const host = await render();
+    await ask(host, "first?");
+    const scrollTo = await regionWith(host, 1500);
+    await ask(host, "second?");
+    // Once for the pending question, once for the answer that replaced it.
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 2000, behavior: "smooth" });
+  });
+
+  it("leaves a reader who scrolled up where they are when a new turn arrives", async () => {
+    answers = [jsonResponse({ data: answered("First.") }), jsonResponse({ data: answered("Second.") })];
+    const host = await render();
+    await ask(host, "first?");
+    const scrollTo = await regionWith(host, 200);
+    await ask(host, "second?");
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(askedTexts(host)).toEqual(["first?", "second?"]);
+  });
+
+  it("the ask bar is a sibling below the scrolling region, never inside it", async () => {
+    answers = [jsonResponse({ data: answered("A.") })];
+    const host = await render();
+    await ask(host, "question?");
+    const region = host.querySelector('[data-testid="bas-analyze-scroll"]')!;
+    const form = host.querySelector("form")!;
+    expect(region.contains(form)).toBe(false);
+    expect(region.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(region.querySelector('[data-testid="bas-analyze-thread"]')).not.toBeNull();
+  });
+});
+
+describe("what a follow-up sends", () => {
+  const bigTurn = (id: string): AnalyzeTurn => {
+    const rows = Array.from({ length: 200 }, (_, i) => [`point-${i}`, i * 1.5, "x".repeat(300)]);
+    return {
+      id,
+      askedAt: NOW.toISOString(),
+      question: `question ${id}?`,
+      outcome: {
+        kind: "result",
+        result: {
+          ...(answered("A".repeat(3_000)) as Extract<AnalyzeResult, { kind: "answered" }>),
+          sql: "SELECT " + "c, ".repeat(900) + "1",
+          table: { columns: ["name", "value", "note"], rows, rowCount: 200, truncated: true, rowCap: 200 },
+        },
+      },
+    };
+  };
+
+  it("cuts a turn to its question, reading, SQL, answer and a flagged sample of rows", () => {
+    const prior = priorTurnOf(bigTurn("t"))!;
+    expect(prior.rows).toHaveLength(PRIOR_ROWS_MAX);
+    expect(prior.rowsArePartial).toBe(true);
+    expect(prior.rowCount).toBe(200);
+    expect((prior.rows[0]![2] as string).length).toBeLessThanOrEqual(120);
+    expect(prior.answer!.length).toBeLessThanOrEqual(1_200);
+    expect(prior.sql!.length).toBeLessThanOrEqual(4_000);
+    // A short, complete table is sent whole and said to be.
+    const small = priorTurnOf(turn("s", "small?", "Three."))!;
+    expect(small.rowsArePartial).toBe(false);
+    expect(small.rows).toEqual([[71.5]]);
+    // A failed request gives a follow-up nothing to refer to.
+    expect(
+      priorTurnOf({ id: "e", askedAt: NOW.toISOString(), question: "q", outcome: { kind: "error", message: "m" } }),
+    ).toBeNull();
+  });
+
+  it("holds the caps under an oversized thread, keeping the newest turns, contiguous", () => {
+    const thread = Array.from({ length: 12 }, (_, i) => bigTurn(`t${i}`));
+    const sent = priorTurnsFor(thread);
+    expect(sent.length).toBeLessThanOrEqual(PRIOR_TURNS_MAX);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(JSON.stringify(sent).length).toBeLessThanOrEqual(PRIOR_TURNS_MAX_BYTES);
+    // The newest N, in the order asked.
+    const ids = thread.slice(thread.length - sent.length).map((t) => t.id);
+    expect(sent.map((p) => p.id)).toEqual(ids);
+    expect(sent[sent.length - 1]!.id).toBe("t11");
+    // Small turns: the count cap is what stops it.
+    const many = Array.from({ length: 10 }, (_, i) => turn(`s${i}`, `q${i}?`, "a"));
+    expect(priorTurnsFor(many).map((p) => p.id)).toEqual(["s4", "s5", "s6", "s7", "s8", "s9"]);
+    expect(priorTurnsFor([])).toEqual([]);
+  });
+
+  it("the first question of a day sends the body the tab has always sent; a follow-up carries the turns; a new conversation sends none again", async () => {
+    answers = [
+      jsonResponse({ data: answered("First.") }),
+      jsonResponse({ data: answered("Second.") }),
+      jsonResponse({ data: answered("Fresh.") }),
+    ];
+    const host = await render();
+
+    await ask(host, "first question?");
+    const first = fetchMock.mock.calls.find((c) => (c[1] as RequestInit)?.method === "POST")!;
+    expect((first[1] as RequestInit).body).toBe(JSON.stringify({ question: "first question?" }));
+
+    await ask(host, "which of those?");
+    const posts = fetchMock.mock.calls.filter((c) => (c[1] as RequestInit)?.method === "POST");
+    const body = JSON.parse((posts[1]![1] as RequestInit).body as string) as {
+      question: string;
+      priorTurns: Array<{ question: string; answer: string }>;
+    };
+    expect(body.question).toBe("which of those?");
+    expect(body.priorTurns).toHaveLength(1);
+    expect(body.priorTurns[0]!.question).toBe("first question?");
+    expect(body.priorTurns[0]!.answer).toBe("First.");
+
+    const button = host.querySelector('[data-testid="bas-analyze-new-conversation"]') as HTMLButtonElement;
+    await act(async () => button.click());
+    await settle();
+    await ask(host, "fresh start?");
+    const after = fetchMock.mock.calls.filter((c) => (c[1] as RequestInit)?.method === "POST");
+    expect((after[2]![1] as RequestInit).body).toBe(JSON.stringify({ question: "fresh start?" }));
+  });
+});

@@ -185,7 +185,7 @@ describe("the words beside the range", () => {
     expect(text).toContain("(America/New_York)");
   });
 
-  it("the sampling notice names the bucket, the counts, the cap and the band", () => {
+  it("the sampling notice names the bucket, the counts and the band - and not the cap (2026-09-30)", () => {
     const text = describeSampling({
       kind: "bucketed",
       bucketSeconds: 3600,
@@ -197,7 +197,10 @@ describe("the words beside the range", () => {
     expect(text).toContain("Averaged to one point per hour");
     expect(text).toContain("10,080 readings");
     expect(text).toContain("840 averages");
-    expect(text).toContain("10,000");
+    // Why the chart averages is the chart's business, not the reader's: the
+    // cap is not named, only what was kept.
+    expect(text).not.toContain("10,000");
+    expect(text).not.toContain("unusable");
     expect(text).toContain("lowest and highest reading");
     expect(describeSampling({ kind: "raw", readings: 12 })).toBeNull();
   });

@@ -37,15 +37,28 @@ describe("the tabs are real routes", () => {
    * a given viewer is actually OFFERED is `visibleBasTabs`, covered in
    * tests/bas-settings.test.ts.
    */
-  it("registers Collection Health, Point Explorer, Analyze and Settings, in that order", () => {
-    // Analyze (B5) sits after Point Explorer and before Settings, as the
-    // spec places it. Settings stays last.
+  it("registers Projects, Point Explorer, Analyze, Collection Health and Settings, in that order", () => {
+    // The Projects tab (component: Dashboard) took the module root on 2026-09-30 and Collection Health
+    // moved to /bas/health, after Analyze. Settings stays last.
     expect(BAS_TABS.map((tab) => tab.href)).toEqual([
       "/bas",
       "/bas/points",
       "/bas/analyze",
+      "/bas/health",
       "/bas/settings",
     ]);
+    expect(BAS_TABS.map((tab) => tab.label)).toEqual([
+      "Projects",
+      "Point Explorer",
+      "Analyze",
+      "Collection Health",
+      "Settings",
+    ]);
+  });
+
+  it("opens on Projects: the module root is the Projects tab", () => {
+    expect(basTab("/bas").label).toBe("Projects");
+    expect(BAS_TABS[0]?.href).toBe("/bas");
   });
 
   /**
@@ -85,7 +98,8 @@ describe("the tabs are real routes", () => {
   });
 
   it("looks a tab up by href and fails loudly on a typo", () => {
-    expect(basTab("/bas").label).toBe("Collection Health");
+    expect(basTab("/bas").label).toBe("Projects");
+    expect(basTab("/bas/health").label).toBe("Collection Health");
     expect(basTab("/bas/points").label).toBe("Point Explorer");
     expect(basTab("/bas/analyze").label).toBe("Analyze");
     expect(() => basTab("/bas/nope")).toThrow();
@@ -93,11 +107,12 @@ describe("the tabs are real routes", () => {
 });
 
 describe("which tab is active", () => {
-  it("does not light up Collection Health on every path", () => {
+  it("does not light up Projects on every path", () => {
     // Every BAS path starts with /bas, so a naive startsWith would mark the
     // first tab active on all of them. Longest match wins.
     expect(activeTabHref("/bas")).toBe("/bas");
     expect(activeTabHref("/bas/points")).toBe("/bas/points");
+    expect(activeTabHref("/bas/health")).toBe("/bas/health");
   });
 
   it("keeps the tab active on a child route", () => {
@@ -304,8 +319,9 @@ describe("a null reading is not a missing reading", () => {
 });
 
 describe("units are never left implicit", () => {
-  it("labels the axis with the unit when there is one", () => {
-    expect(axisLabel("fahrenheit")).toBe("fahrenheit");
+  it("labels the axis with the unit's symbol when there is one", () => {
+    // The symbol, not the stored name (2026-09-30): lib/modules/bas/units.ts.
+    expect(axisLabel("fahrenheit")).toBe("°F");
   });
 
   it("says the unit is unknown rather than leaving the axis bare", () => {
@@ -315,7 +331,7 @@ describe("units are never left implicit", () => {
   });
 
   it("renders a value with its unit, and without inventing one", () => {
-    expect(formatValue(58.51, "fahrenheit")).toBe("58.51 fahrenheit");
+    expect(formatValue(58.51, "fahrenheit")).toBe("58.51 °F");
     expect(formatValue(58.51, null)).toBe("58.51");
     expect(formatValue(null, "fahrenheit")).toBe("—");
   });

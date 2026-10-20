@@ -1,6 +1,21 @@
 import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk } from "@/lib/modules/bas/types";
+import { unitSymbol, withUnit } from "@/lib/modules/bas/units";
+import type { ValueKind } from "@/lib/modules/bas/value-kind";
+import {
+  LOOKBACK_DAYS,
+  MIN_READINGS,
+  PLAUSIBILITY_THRESHOLDS,
+  type NotCheckedReason,
+  type PlausibilitySummary,
+  type PointPlausibility,
+  type ReadingValue,
+} from "@/lib/modules/bas/plausibility";
 import type {
+  BasDashboard,
   BasSettingsTree,
+  BasVocabularies,
+  BuildingEquipmentList,
+  BulkClassifyResult,
   CollectionHealth,
   Completeness,
   PointHorizon,
@@ -8,11 +23,13 @@ import type {
   PointExplorer,
   PointExtent,
   PointHealthRow,
+  PointSuggestion,
   RollRisk,
   RunGap,
   StationPointsList,
   TrendRange,
   TrendSampling,
+  PointReadingsPage,
 } from "@/lib/modules/bas/types";
 
 /**
@@ -159,12 +176,13 @@ export function describeRange(range: TrendRange): string {
  */
 export function describeSampling(sampling: TrendSampling): string | null {
   if (sampling.kind === "raw") return null;
+  // What was kept, and nothing about why the chart does it: the band is what
+  // stops a flat average being read as a quiet day.
   return (
     `Averaged to one point per ${sampling.bucketLabel}: ${formatCount(sampling.readings)} ` +
-    `readings are drawn as ${formatCount(sampling.buckets)} averages, because more than ` +
-    `${formatCount(sampling.maxRaw)} readings would make the chart unusable. The shaded ` +
-    `band is each ${sampling.bucketLabel}'s lowest and highest reading, so a spike stays ` +
-    `visible when the average is flat.`
+    `readings drawn as ${formatCount(sampling.buckets)} averages. The band is each ` +
+    `${sampling.bucketLabel}'s lowest and highest reading, so a spike stays visible when ` +
+    `the average is flat.`
   );
 }
 
@@ -922,6 +940,32 @@ export function describeHeadroom(headroom: Headroom): string {
 
 // ------------------------------------------------------- B4: Point Explorer
 
+/** The Projects tab's one request (the route is still /dashboard): every project card, from one `now()`. */
+export async function fetchDashboard(signal?: AbortSignal): Promise<BasDashboard> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/dashboard`, { signal, cache: "no-store" });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: BasDashboard; error?: { code?: string; message?: string } }
+    | null;
+
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+  if (payload?.data === undefined) {
+    throw new ApiError("unexpected", "The server returned no data.");
+  }
+  return payload.data;
+}
+
 export async function fetchPointExplorer(
   options: {
     days?: number;
@@ -977,6 +1021,136 @@ export async function fetchPointExplorer(
 }
 
 /**
+ * One page of the raw readings behind the chart. Called by the readings table
+ * when it is shown and by nothing else - the explorer's own fetch is
+ * unchanged, so a person who never opens the table never makes this request.
+ * `from` and `to` are the chart's `range.from` / `range.to`, passed back
+ * exactly.
+ */
+export async function fetchPointReadings(
+  options: { pointId: string; from: string; to: string; page: number },
+  signal?: AbortSignal,
+): Promise<PointReadingsPage> {
+  const params = new URLSearchParams();
+  params.set("point", options.pointId);
+  params.set("from", options.from);
+  params.set("to", options.to);
+  params.set("page", String(options.page));
+
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/point-readings?${params.toString()}`, {
+      signal,
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: PointReadingsPage; error?: { code?: string; message?: string } }
+    | null;
+
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+
+  if (payload?.data === undefined) {
+    throw new ApiError("unexpected", "The server returned nothing.");
+  }
+
+  return payload.data;
+}
+
+/** What a CSV download came back with: the file, and the truth about it. */
+export interface ReadingsCsvDownload {
+  blob: Blob;
+  filename: string;
+  /** Readings in the range. */
+  total: number;
+  /** Rows in the file. Less than `total` only when the cap bit. */
+  exported: number;
+  cap: number;
+}
+
+/**
+ * Every raw reading in the chart's range as a CSV file.
+ *
+ * A fetch rather than a plain link, because the response's headers are the
+ * only place the server can say "500,000 of 612,000" - a link would save the
+ * file and say nothing. The three counts are read off the headers and the
+ * caller decides what to tell the person; the file is handed back as a Blob
+ * for the caller to save. Nothing is requested until this is called.
+ */
+export async function downloadPointReadingsCsv(
+  options: { pointId: string; from: string; to: string },
+  signal?: AbortSignal,
+): Promise<ReadingsCsvDownload> {
+  const params = new URLSearchParams();
+  params.set("point", options.pointId);
+  params.set("from", options.from);
+  params.set("to", options.to);
+
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/point-readings/csv?${params.toString()}`, {
+      signal,
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: { code?: string; message?: string } }
+      | null;
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+
+  const count = (name: string): number => {
+    const value = Number(response.headers.get(name));
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  };
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "readings.csv";
+
+  return {
+    blob: await response.blob(),
+    filename,
+    total: count("X-PHB-Readings-Total"),
+    exported: count("X-PHB-Readings-Exported"),
+    cap: count("X-PHB-Readings-Cap"),
+  };
+}
+
+/**
+ * The sentence under the Download button when the cap bit, and nothing when
+ * it did not. Says what is in the file, what is not, and the one thing that
+ * gets the rest: a narrower range. Exported so the test can hold the wording.
+ */
+export function describeCappedExport(download: {
+  total: number;
+  exported: number;
+}): string | null {
+  if (download.exported >= download.total) return null;
+  const cut = download.total - download.exported;
+  return (
+    `Exported the newest ${formatCount(download.exported)} of ${formatCount(download.total)} readings. ` +
+    `${formatCount(cut)} older reading${cut === 1 ? " was" : "s were"} not included; ` +
+    `narrow the range to export ${cut === 1 ? "it" : "them"}.`
+  );
+}
+
+/**
  * Is this sensor alive? Distinct-value count, NOT standard deviation.
  *
  * This was got wrong twice before it was got right, so the reasoning is here
@@ -1000,10 +1174,18 @@ export const DISTINCT_VALUES_GREEN = 20;
 export function distinctValuesTone(
   distinct: number,
   readings: number,
+  /**
+   * A boolean point has two values to be distinct between, so the numeric
+   * thresholds would call every healthy one a stuck sensor. It is not judged
+   * here at all. A string point is not judged either: nothing counts its
+   * values yet, and a zero that means "not counted" must not read as red.
+   */
+  kind: ValueKind = "numeric",
 ): Tone {
   // No readings at all is not a stuck sensor, it is no evidence. Rendering it
   // red would be as wrong as rendering it green.
   if (readings === 0) return "neutral";
+  if (kind !== "numeric") return "neutral";
   if (distinct >= DISTINCT_VALUES_GREEN) return "ok";
   if (distinct >= DISTINCT_VALUES_AMBER) return "warn";
   return "bad";
@@ -1013,10 +1195,14 @@ export function distinctValuesTone(
 export function describeDistinctValues(
   distinct: number,
   readings: number,
+  kind: ValueKind = "numeric",
 ): string {
   if (readings === 0) return "Nothing to judge in this window.";
 
   const of = `Across ${formatCount(readings)} readings.`;
+  // The stuck-sensor sentences below are about a quantity that should wander.
+  // A state should not, so a boolean or string point gets the denominator only.
+  if (kind !== "numeric") return of;
 
   // The denominator is invisible from the tile, and the low cases prevent a real
   // misreading: a flat line is a stable room OR a dead sensor, and they look
@@ -1050,7 +1236,8 @@ export function describeNullRecords(
 }
 
 /**
- * The unit for an axis label, and the honest answer when there is not one.
+ * The unit for an axis label, as its symbol, and the honest answer when there
+ * is not one.
  *
  * `points_RoomT` is fahrenheit; `Temp1` to `Temp3` carry no unit at all. The
  * chart plots one point at a time, so two units can never share an axis here -
@@ -1058,14 +1245,13 @@ export function describeNullRecords(
  * an unlabelled axis reads as "no unit needed" rather than "unit unknown".
  */
 export function axisLabel(unit: string | null): string {
-  return unit ?? "value (no unit recorded)";
+  return unitSymbol(unit) ?? "no unit recorded";
 }
 
-/** A reading, at the precision the database rounds to. */
+/** A reading, at the precision the database rounds to, with the unit's symbol. */
 export function formatValue(value: number | null, unit: string | null): string {
   if (value === null) return "—";
-  const rendered = value.toFixed(2);
-  return unit === null ? rendered : `${rendered} ${unit}`;
+  return withUnit(value.toFixed(2), unit);
 }
 
 
@@ -1475,6 +1661,186 @@ export const updatePointLabel = (pointId: string, label: string | null) =>
     { method: "PATCH", body: JSON.stringify({ label }) },
   );
 
+// ---------------------------------------------------------------------------
+// Roles and equipment (B8.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * One point's role, through the same strict one-field PATCH. `null` clears
+ * it back to "nobody has looked".
+ */
+export const updatePointRole = (pointId: string, role: string | null) =>
+  settingsWrite<{ changed: boolean; role: string | null; roleName: string | null }>(
+    `/points/${encodeURIComponent(pointId)}`,
+    { method: "PATCH", body: JSON.stringify({ role }) },
+  );
+
+/** One point's equipment. `null` detaches it. */
+export const updatePointEquipment = (pointId: string, equipmentId: string | null) =>
+  settingsWrite<{ changed: boolean; equipmentId: string | null; equipmentName: string | null }>(
+    `/points/${encodeURIComponent(pointId)}`,
+    { method: "PATCH", body: JSON.stringify({ equipmentId }) },
+  );
+
+/**
+ * Role and/or equipment on a selection, all or nothing. A key present with
+ * null clears; a key absent leaves the field alone. Also how ONE suggestion
+ * is accepted - a selection of one, both halves in one request - because
+ * that is one human action.
+ */
+export const bulkClassifyPoints = (body: {
+  pointIds: string[];
+  role?: string | null;
+  equipmentId?: string | null;
+}) =>
+  settingsWrite<BulkClassifyResult>("/points/bulk", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const createEquipment = (body: {
+  siteId: string;
+  name: string;
+  equipType: string;
+  parentEquipmentId?: string | null;
+  notes?: string | null;
+}) =>
+  settingsWrite<{ equipmentId: string }>("/equipment", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateEquipment = (
+  equipmentId: string,
+  body: {
+    name?: string;
+    equipType?: string;
+    parentEquipmentId?: string | null;
+    notes?: string | null;
+  },
+) =>
+  settingsWrite<{ changed: boolean }>(`/equipment/${encodeURIComponent(equipmentId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+
+export const deleteEquipment = (equipmentId: string) =>
+  settingsWrite<{ deleted: boolean }>(`/equipment/${encodeURIComponent(equipmentId)}`, {
+    method: "DELETE",
+  });
+
+/** A settings GET, with the same three answers fetchStationPoints gives. */
+async function settingsRead<T>(path: string, signal?: AbortSignal): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/settings${path}`, { signal, cache: "no-store" });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError("network", "Could not reach the server.");
+  }
+  if (response.status === 404) {
+    throw new ApiError(
+      "no_access",
+      "That is not available. It may have been removed, or you may no longer " +
+        "have access to Building Automation settings.",
+    );
+  }
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: T; error?: { code?: string; message?: string } }
+    | null;
+  if (!response.ok || payload?.error !== undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "Something went wrong.",
+    );
+  }
+  if (payload?.data === undefined) {
+    throw new ApiError("unexpected", "The server returned nothing.");
+  }
+  return payload.data;
+}
+
+export const fetchBuildingEquipment = (siteId: string, signal?: AbortSignal) =>
+  settingsRead<BuildingEquipmentList>(
+    `/buildings/${encodeURIComponent(siteId)}/equipment`,
+    signal,
+  );
+
+/**
+ * The vocabularies, fetched once per page load and shared by every Points
+ * list on the screen: 91 roles and 25 types that change only on a seed. A
+ * failed fetch is forgotten so the next list can try again.
+ */
+let vocabulariesPromise: Promise<BasVocabularies> | null = null;
+
+export function fetchVocabularies(): Promise<BasVocabularies> {
+  if (vocabulariesPromise === null) {
+    vocabulariesPromise = settingsRead<BasVocabularies>("/vocabularies").catch((error) => {
+      vocabulariesPromise = null;
+      throw error;
+    });
+  }
+  return vocabulariesPromise;
+}
+
+/**
+ * The one line beside the role picker. Short, because the quiet-UI rule
+ * says a sentence stays only if it stops a NUMBER being misread - and this
+ * one does: the setpoint and command/status pairings, the unclassified
+ * count, the value-plausibility check (which judges a measured quantity by
+ * the threshold for its kind, and judges nothing with no role) and the
+ * Analyze catalogue all judge a point by its role.
+ */
+export const ROLE_RIPPLE_NOTE =
+  "A role is not a label: the checks judge a point by what its role says it measures, so a wrong role is judged by the wrong rule.";
+
+/** "Zone Temperature · VAV-3 (new)", "Zone Temperature", or "VAV-3". */
+export function describeSuggestion(suggestion: PointSuggestion): string {
+  const parts: string[] = [];
+  if (suggestion.roleName !== null || suggestion.role !== null) {
+    parts.push(suggestion.roleName ?? suggestion.role ?? "");
+  }
+  if (suggestion.equipmentName !== null) {
+    parts.push(
+      suggestion.equipmentId === null
+        ? `${suggestion.equipmentName} (new)`
+        : suggestion.equipmentName,
+    );
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * What a bulk change did, in one sentence, from the server's counts rather
+ * than from the selection: "Changed the role on 10 points." / "Attached 16
+ * points to equipment; 2 already were." / "No point needed changing."
+ */
+export function describeBulkResult(result: BulkClassifyResult): string {
+  const noun = (n: number) => (n === 1 ? "point" : "points");
+  const parts: string[] = [];
+  if (result.roleChanged > 0) {
+    parts.push(`changed the role on ${result.roleChanged} ${noun(result.roleChanged)}`);
+  }
+  if (result.equipmentChanged > 0) {
+    parts.push(
+      `changed the equipment on ${result.equipmentChanged} ${noun(result.equipmentChanged)}`,
+    );
+  }
+  if (parts.length === 0) {
+    return `No point needed changing: all ${result.points} already held ${
+      result.points === 1 ? "that value" : "those values"
+    }.`;
+  }
+  const sentence = parts.join(" and ");
+  const unchanged =
+    result.unchanged > 0
+      ? ` ${result.unchanged} ${noun(result.unchanged)} already held ${
+          result.unchanged === 1 ? "it" : "them"
+        }.`
+      : "";
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.${unchanged}`;
+}
+
 /**
  * Replace the stored Niagara login.
  *
@@ -1649,4 +2015,169 @@ export function describeVanished(count: number, suffix: string): string {
     `off and cannot tell why: a deleted trend, a dropped device or a renamed history all ` +
     `look like this. Check in Workbench.`
   );
+}
+
+// ---------------------------------------------------------------------------
+// Value plausibility (2026-09-28) - values that have stopped changing
+// ---------------------------------------------------------------------------
+
+/**
+ * Amber from one flagged point, never red: a flag is "this looks wrong, go
+ * and look", and a human or a technician confirms it. Red is for data that is
+ * being destroyed. Never the ok tone above zero.
+ */
+export function stuckTone(count: number): Tone {
+  return count > 0 ? "warn" : "ok";
+}
+
+/**
+ * A total record, so a reason added to NotCheckedReason without wording here
+ * stops the build. "Role not set" is the wording the brief asked for, exactly:
+ * a point with no role is not guessed at, and the screen says so.
+ */
+export const NOT_CHECKED_WORDS: Record<NotCheckedReason, string> = {
+  not_collected: "not collected",
+  no_role: "role not set",
+  setpoint: "setpoint",
+  state: "status or command point",
+  state_type: "state point",
+  no_threshold: "no threshold for this kind of measurement",
+};
+
+/**
+ * The sentence at the top of the card. At zero it says how many points were
+ * judged, so an empty card can be told apart from a check that judged nothing
+ * - "0 stuck of 0 checked" is not reassurance.
+ */
+export function describeStuck(summary: PlausibilitySummary, suffix: string): string {
+  const flat = summary.flat.length;
+  const checked = summary.checked;
+  if (checked === 0) {
+    return (
+      `No point${suffix} was checked. A point is judged only when its role names a ` +
+      `measured quantity; set roles under Settings → Points.`
+    );
+  }
+  if (flat === 0) {
+    return (
+      `Every checked point${suffix} is still changing value - ${formatCount(checked)} ` +
+      `${checked === 1 ? "point" : "points"} judged.`
+    );
+  }
+  return (
+    `${formatCount(flat)} of ${formatCount(checked)} checked ${checked === 1 ? "point" : "points"}${suffix} ` +
+    `${flat === 1 ? "has" : "have"} held one value past the threshold for ${flat === 1 ? "its" : "their"} ` +
+    `kind of measurement. This looks wrong and is not confirmed: go and look at the sensor.`
+  );
+}
+
+/** "Not checked: 4 with no role, 2 setpoints, 3 status or command points." Null when everything was. */
+export function describeNotChecked(summary: PlausibilitySummary): string | null {
+  const parts: string[] = [];
+  const n = summary.notChecked;
+  if (n.no_role > 0) parts.push(`${n.no_role} with no role`);
+  if (n.setpoint > 0) parts.push(`${n.setpoint} ${n.setpoint === 1 ? "setpoint" : "setpoints"}`);
+  if (n.state > 0) {
+    parts.push(`${n.state} status or command ${n.state === 1 ? "point" : "points"}`);
+  }
+  if (n.state_type > 0) {
+    parts.push(`${n.state_type} state ${n.state_type === 1 ? "point" : "points"} (true/false or text values)`);
+  }
+  if (n.no_threshold > 0) {
+    parts.push(`${n.no_threshold} with no threshold for ${n.no_threshold === 1 ? "its" : "their"} kind`);
+  }
+  if (summary.tooFewReadings > 0) {
+    parts.push(
+      `${summary.tooFewReadings} with too few readings to judge (under ${MIN_READINGS})`,
+    );
+  }
+  if (parts.length === 0) return null;
+  return `Not judged: ${parts.join(", ")}.`;
+}
+
+/**
+ * The thresholds, on the screen rather than buried. Grouped by hours so the
+ * line reads as four rules rather than fifteen numbers.
+ */
+export function describeThresholds(): string {
+  const byHours = new Map<number, string[]>();
+  for (const t of PLAUSIBILITY_THRESHOLDS) {
+    const list = byHours.get(t.hours) ?? [];
+    list.push(t.measurement);
+    byHours.set(t.hours, list);
+  }
+  const groups = [...byHours.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([hours, kinds]) => `${kinds.join(", ")}: ${formatHours(hours)}`);
+  return (
+    `Flat for at least - ${groups.join(" · ")} - with at least ${MIN_READINGS} readings. ` +
+    `Setpoints, status and command points, and points with no role are not judged.`
+  );
+}
+
+/** A reading's value with its unit, or "no value" for a record the station logged empty. */
+export function formatReadingValue(value: ReadingValue | null, unit: string | null): string {
+  if (value === null) return "—";
+  if (value.num !== null) return formatValue(value.num, unit);
+  if (value.bool !== null) return value.bool ? "true" : "false";
+  if (value.str !== null) return value.str;
+  return "no value";
+}
+
+/**
+ * "35.0 days" or, when the search for a different value ran out of lookback,
+ * "at least 90.0 days" - a floor is not a measurement and must not read as
+ * one.
+ */
+export function formatFlatSpan(p: PointPlausibility): string {
+  if (p.flatHours === null) return "—";
+  return p.lookbackExhausted ? `at least ${formatHours(p.flatHours)}` : formatHours(p.flatHours);
+}
+
+/**
+ * "last different 76.10 fahrenheit at Aug 24 09:00", or the honest
+ * alternatives: never, in the readings held; or nothing different inside the
+ * lookback.
+ */
+export function describeLastDifferent(p: PointPlausibility, unit: string | null): string {
+  if (p.lastDifferentAt !== null) {
+    return `last different ${formatReadingValue(p.lastDifferentValue, unit)} at ${formatTimestamp(p.lastDifferentAt)}`;
+  }
+  if (p.lookbackExhausted) {
+    return `no different value in the last ${LOOKBACK_DAYS} days of readings`;
+  }
+  return `never different in the ${formatCount(p.readings ?? 0)} readings held`;
+}
+
+/**
+ * The Points list cell: one word, a detail, a tone. A flagged point is amber
+ * for the same reason the card is. A point that is not checked is neutral
+ * and says why, so "not checked, role not set" can never be read as fine.
+ */
+export function describePlausibility(
+  p: PointPlausibility,
+  unit: string | null,
+): { label: string; detail: string | null; tone: Tone } {
+  switch (p.state) {
+    case "flat":
+      return {
+        label: `Flat ${formatFlatSpan(p)} at ${formatReadingValue(p.value, unit)}`,
+        detail: `threshold ${formatHours(p.thresholdHours)} for ${p.measurement ?? "this kind"}`,
+        tone: "warn",
+      };
+    case "moving":
+      return { label: "Changing", detail: null, tone: "ok" };
+    case "too_few_readings":
+      return {
+        label: "Too few readings",
+        detail: `${formatCount(p.readings ?? 0)} of the ${MIN_READINGS} needed`,
+        tone: "neutral",
+      };
+    case "not_checked":
+      return {
+        label: "Not checked",
+        detail: p.notCheckedReason === null ? null : NOT_CHECKED_WORDS[p.notCheckedReason],
+        tone: "neutral",
+      };
+  }
 }

@@ -1,7 +1,7 @@
 # B8 — Point management
 
 **Written:** 17 September 2026
-**Status:** designed, not started
+**Status:** B8.1 to B8.5 built (B8.5 on 1 October 2026); B8.6 not started
 **Prerequisite:** none. B7 is complete and the office JACE is collecting.
 
 ---

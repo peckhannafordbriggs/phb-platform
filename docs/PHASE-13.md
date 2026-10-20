@@ -22,7 +22,7 @@ machine.
 Phase 13 does not wait for Phase 12 to finish. It **drives** Phase 12 Part E:
 
 ```
-12 A–D   engine in git, FileStore, container, Claude API   (D blocked on API key)
+12 A–D   engine in git, FileStore, container, Claude API   (D: key wired 2026-10-01)
 13       schedule the container against the COPY           ← this phase
 12 E     weeks of shadow running on that schedule
 14       repoint from copy to live, retire the laptop

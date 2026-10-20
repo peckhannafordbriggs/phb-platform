@@ -193,9 +193,259 @@ describe("production refuses a Graph client secret", () => {
     expect(bicep).not.toMatch(/name:\s*'GRAPH_CLIENT_SECRET'/);
     // Nor the CIP app's: it signs in with the managed identity too.
     expect(bicep).not.toMatch(/PHB_PLATFORM_CIP_APP_SECRET/);
-    expect(bicep).toContain("PHB_ALLOW_SEND");
-    // The send gate ships closed.
-    expect(bicep).toMatch(/name:\s*'PHB_ALLOW_SEND'[\s\S]{0,80}value:\s*'false'/);
+  });
+});
+
+describe("the production send gate is open, by decision", () => {
+  /**
+   * PHB_ALLOW_SEND was pinned to 'false' by the template from the first
+   * deployment until 2026-10-14, when the platform owner opened it after a
+   * supervised test send on 2026-09-29. The template now pins 'true' so a
+   * template deployment cannot silently close the gate again (the deploy
+   * workflow's `az containerapp update --image` keeps env vars; a template
+   * deployment replaces them - see "A template deployment must be told which
+   * image to keep" in CLAUDE.md). Prohibition 1 is unchanged: the gate decides
+   * whether a human's deliberate send is allowed, never whether anything sends
+   * on its own.
+   */
+  it("is pinned to exactly the lowercase string 'true' in the template", async () => {
+    const bicep = await import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+    // Present as a plain value - never a secretRef, never absent. Absent reads
+    // as closed, which is the silent failure the pin exists to prevent.
+    expect(bicep).toMatch(/name:\s*'PHB_ALLOW_SEND'[\s\S]{0,80}value:\s*'true'/);
+    // The gate compares with === "true": 'TRUE', 'True' and '1' all leave it
+    // shut (runbook.md -> "Nothing sends, and that is correct"). A case slip in
+    // the template would close production sending with no error anywhere.
+    expect(bicep).not.toMatch(/name:\s*'PHB_ALLOW_SEND'[\s\S]{0,80}value:\s*'(TRUE|True|1|yes|false)'/);
+  });
+});
+
+describe("the Anthropic API key reaches the container only by Key Vault reference", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+  it("is an environment variable backed by a secretRef, never a plain value", async () => {
+    const bicep = await readBicep();
+
+    expect(bicep).toMatch(
+      /name:\s*'ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'anthropic-api-key'/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'ANTHROPIC_API_KEY'[\s\S]{0,80}value:/);
+  });
+
+  it("is never a template parameter - the value is set in the vault by hand", async () => {
+    const bicep = await readBicep();
+
+    // A secure string parameter would put the key on every deploy's command
+    // line and let a blank redeploy overwrite it. The only parameter about it
+    // is the boolean saying the secret already exists.
+    expect(bicep).toMatch(/param anthropicApiKeyInKeyVault bool = false/);
+    expect(bicep).not.toMatch(/param \w*[aA]nthropic\w* string/);
+    // And the template never writes the secret itself.
+    expect(bicep).not.toMatch(
+      /vaults\/secrets@[\d-]+'\s*=\s*\{[\s\S]{0,120}name:\s*'ANTHROPIC-API-KEY'/,
+    );
+  });
+
+  it("is read lazily by the app, so a missing key cannot stop the boot", async () => {
+    const { readAnthropicApiKey } = await import("@/lib/env");
+    const before = process.env.ANTHROPIC_API_KEY;
+    try {
+      delete process.env.ANTHROPIC_API_KEY;
+      expect(readAnthropicApiKey()).toBeNull();
+      // .env.example ships it as "", and an Azure setting left blank arrives the
+      // same way. Blank is absent, not malformed.
+      process.env.ANTHROPIC_API_KEY = "   ";
+      expect(readAnthropicApiKey()).toBeNull();
+      process.env.ANTHROPIC_API_KEY = " not-a-real-key ";
+      expect(readAnthropicApiKey()).toBe("not-a-real-key");
+    } finally {
+      if (before === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = before;
+    }
+  });
+});
+
+/**
+ * The BAS credential key, the same way (2026-10-01). It encrypts the Niagara
+ * station passwords; the deployed Settings tab could not decrypt them because
+ * the container app was never given it. The mutation this block is for:
+ * remove either env entry from the bicep and the first test here fails.
+ */
+describe("the BAS credential key reaches the container only by Key Vault reference", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+  const readSource = (file: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, file), "utf8"),
+    );
+
+  it("is an environment variable backed by a secretRef, never a plain value", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(
+      /name:\s*'BAS_CREDENTIAL_KEY'[\s\S]{0,80}secretRef:\s*'bas-credential-key'/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'BAS_CREDENTIAL_KEY'[\s\S]{0,80}value:/);
+    // The secretRef resolves to a Key Vault URL under the managed identity,
+    // in the vault's naming style (DATABASE-URL, AUTH-SECRET, ANTHROPIC-API-KEY).
+    expect(bicep).toMatch(/var basCredentialKeySecretName = 'BAS-CREDENTIAL-KEY'/);
+    expect(bicep).toMatch(
+      /name:\s*'bas-credential-key'\s*keyVaultUrl:\s*'\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{basCredentialKeySecretName\}'\s*identity:\s*identity\.id/,
+    );
+  });
+
+  it("carries the key version beside it as a plain value, because it is not a secret", async () => {
+    const bicep = await readBicep();
+    // currentKeyVersion in credentials.ts reads it when a password is saved;
+    // decryption does not. The office PC's rows carry version 1, so the
+    // default is 1 and anything else is a deliberate rotation.
+    expect(bicep).toMatch(/param basCredentialKeyVersion string = '1'/);
+    expect(bicep).toMatch(
+      /name:\s*'BAS_CREDENTIAL_KEY_VERSION'[\s\S]{0,80}value:\s*basCredentialKeyVersion/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'BAS_CREDENTIAL_KEY_VERSION'[\s\S]{0,80}secretRef:/);
+  });
+
+  it("is never a template parameter - the value is set in the vault by hand, byte-identical to the collector's", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(/param basCredentialKeyInKeyVault bool = false/);
+    // The only string parameter about it is the version, which is not a
+    // secret; nothing carries the key itself, secure or otherwise.
+    expect(bicep).not.toMatch(/param \w*[cC]redentialKey(?!Version)\w* string/);
+    expect(bicep).not.toMatch(/@secure\(\)\s*param \w*[cC]redentialKey/);
+    // And the template never writes the secret itself.
+    expect(bicep).not.toMatch(
+      /vaults\/secrets@[\d-]+'\s*=\s*\{[\s\S]{0,120}name:\s*'BAS-CREDENTIAL-KEY'/,
+    );
+  });
+
+  it("needs no new role assignment: the identity already holds Key Vault Secrets User on the whole vault", async () => {
+    const bicep = await readBicep();
+    // Asserted from the grants in the template, not assumed. One role
+    // assignment scoped to the vault itself, for the container app's identity,
+    // with the Secrets User role id - which covers every secret in the vault,
+    // the two set by hand included. There is no per-secret assignment and
+    // there must not need to be.
+    const vaultAssignments = bicep.match(
+      /resource \w+ 'Microsoft\.Authorization\/roleAssignments@[\d-]+' = \{\s*scope: keyVault[\s\S]*?\n\}/g,
+    );
+    expect(vaultAssignments, "one role assignment scoped to the vault").toHaveLength(1);
+    const assignment = vaultAssignments![0]!;
+    expect(assignment).toContain("keyVaultSecretsUserRoleId");
+    expect(assignment).toMatch(/principalId:\s*identity\.properties\.principalId/);
+    expect(bicep).toMatch(
+      /var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'/,
+    );
+    // All three hand-set secrets are read under that same identity.
+    for (const secret of ["anthropic-api-key", "bas-credential-key", "bas-ask-database-url"]) {
+      expect(bicep).toMatch(
+        new RegExp(`name:\\s*'${secret}'[\\s\\S]{0,160}identity:\\s*identity\\.id`),
+      );
+    }
+    // The app waits for the grant before it starts.
+    expect(bicep).toMatch(/dependsOn:\s*\[[\s\S]{0,80}keyVaultRead/);
+  });
+
+  it("spells each variable's name in lib/env.ts and nowhere else in the readers", async () => {
+    const env = await import("@/lib/env");
+    expect(env.ANTHROPIC_API_KEY_VAR).toBe("ANTHROPIC_API_KEY");
+    expect(env.BAS_CREDENTIAL_KEY_VAR).toBe("BAS_CREDENTIAL_KEY");
+    expect(env.BAS_CREDENTIAL_KEY_VERSION_VAR).toBe("BAS_CREDENTIAL_KEY_VERSION");
+    expect(env.BAS_ASK_DATABASE_URL_VAR).toBe("BAS_ASK_DATABASE_URL");
+    // The readers import the name; a literal in either would be a second
+    // place a rename has to reach. Comments may mention it; code may not.
+    const strip = (source: string) =>
+      source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const credentials = strip(await readSource("lib/modules/bas/credentials.ts"));
+    expect(credentials).not.toMatch(/["'`]BAS_CREDENTIAL_KEY(_VERSION)?["'`]/);
+    expect(credentials).not.toMatch(/process\.env\.BAS_CREDENTIAL_KEY/);
+    const analyze = strip(await readSource("lib/modules/bas/analyze/env.ts"));
+    expect(analyze).not.toMatch(/["'`]ANTHROPIC_API_KEY["'`]/);
+    expect(analyze).not.toMatch(/["'`]BAS_ASK_DATABASE_URL["'`]/);
+    // And the bicep spells the same names, so the three cannot drift.
+    const bicep = await readBicep();
+    for (const name of [env.ANTHROPIC_API_KEY_VAR, env.BAS_CREDENTIAL_KEY_VAR, env.BAS_CREDENTIAL_KEY_VERSION_VAR, env.BAS_ASK_DATABASE_URL_VAR]) {
+      expect(bicep).toContain(`name: '${name}'`);
+    }
+  });
+
+  it("is read lazily, so a missing key disables credential storage and nothing else", async () => {
+    const { credentialKeyState, currentKeyVersion } = await import("@/lib/modules/bas/credentials");
+    const before = process.env.BAS_CREDENTIAL_KEY;
+    const beforeVersion = process.env.BAS_CREDENTIAL_KEY_VERSION;
+    try {
+      delete process.env.BAS_CREDENTIAL_KEY;
+      expect(credentialKeyState()).toEqual({ available: false, reason: "key_missing" });
+      process.env.BAS_CREDENTIAL_KEY = "   ";
+      expect(credentialKeyState()).toEqual({ available: false, reason: "key_missing" });
+      delete process.env.BAS_CREDENTIAL_KEY_VERSION;
+      expect(currentKeyVersion()).toBe(1);
+      process.env.BAS_CREDENTIAL_KEY_VERSION = "2";
+      expect(currentKeyVersion()).toBe(2);
+    } finally {
+      if (before === undefined) delete process.env.BAS_CREDENTIAL_KEY;
+      else process.env.BAS_CREDENTIAL_KEY = before;
+      if (beforeVersion === undefined) delete process.env.BAS_CREDENTIAL_KEY_VERSION;
+      else process.env.BAS_CREDENTIAL_KEY_VERSION = beforeVersion;
+    }
+  });
+
+  it("has an example parameters file that ships both flags off and the version at 1", async () => {
+    const example = JSON.parse(
+      await readSource("infra/main.parameters.example.json"),
+    ) as { parameters: Record<string, { value: unknown }> };
+    expect(example.parameters.anthropicApiKeyInKeyVault?.value).toBe(false);
+    expect(example.parameters.basCredentialKeyInKeyVault?.value).toBe(false);
+    expect(example.parameters.basAskDatabaseUrlInKeyVault?.value).toBe(false);
+    expect(example.parameters.basCredentialKeyVersion?.value).toBe("1");
+  });
+});
+
+describe("the Analyze database URL reaches the container only by Key Vault reference (2026-10-13)", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+  it("is an environment variable backed by a secretRef, never a plain value", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(
+      /name:\s*'BAS_ASK_DATABASE_URL'[\s\S]{0,80}secretRef:\s*'bas-ask-database-url'/,
+    );
+    expect(bicep).not.toMatch(/name:\s*'BAS_ASK_DATABASE_URL'[\s\S]{0,80}value:/);
+    expect(bicep).toMatch(/var basAskDatabaseUrlSecretName = 'BAS-ASK-DATABASE-URL'/);
+    expect(bicep).toMatch(
+      /name:\s*'bas-ask-database-url'\s*keyVaultUrl:\s*'\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{basAskDatabaseUrlSecretName\}'\s*identity:\s*identity\.id/,
+    );
+  });
+
+  it("is behind a boolean that defaults to false, and is never a template parameter or written by the template", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(/param basAskDatabaseUrlInKeyVault bool = false/);
+    // The URL carries the role's password. Nothing carries it as a parameter,
+    // secure or otherwise, and the template never writes the secret.
+    expect(bicep).not.toMatch(/param \w*[aA]skDatabaseUrl\w* string/);
+    expect(bicep).not.toMatch(/@secure\(\)\s*param \w*[aA]skDatabaseUrl/);
+    expect(bicep).not.toMatch(
+      /vaults\/secrets@[\d-]+'\s*=\s*\{[\s\S]{0,120}name:\s*'BAS-ASK-DATABASE-URL'/,
+    );
+    // Both the secret entry and the env entry are inside the same conditional,
+    // so the flag off leaves no dangling reference.
+    expect(bicep).toMatch(/\.\.\.\(basAskDatabaseUrlInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'bas-ask-database-url'/);
+    expect(bicep).toMatch(/\.\.\.\(basAskDatabaseUrlInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'BAS_ASK_DATABASE_URL'/);
+  });
+
+  it("is not DATABASE_URL: the platform's own connection stays its own secret", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(/name:\s*'DATABASE_URL'[\s\S]{0,80}secretRef:\s*'database-url'/);
+    expect(bicep).not.toMatch(/name:\s*'BAS_ASK_DATABASE_URL'[\s\S]{0,80}secretRef:\s*'database-url'/);
   });
 });
 
@@ -387,5 +637,117 @@ describe("the image ships public/", () => {
     expect(lines).not.toContain("public");
     expect(lines).not.toContain("public/");
     expect(lines).not.toContain("**/public");
+  });
+});
+
+describe("the two deploy paths cannot diverge on the image or the port", () => {
+  /**
+   * Two things write the container app and each owns half of it. The deploy
+   * workflow runs `az containerapp update --image`, which sets the image and
+   * keeps everything else from the running revision; a template deployment
+   * sets everything else and - because a deployment replaces the whole
+   * resource - the image too. `containerImage` used to default to the public
+   * placeholder and the parameters file never set it, so a routine template
+   * redeploy on 2026-10-13 put the placeholder back: revision 0000053, a
+   * hello-world listening on :80 under probes for :3000, ActivationFailed.
+   * Every port setting on that revision was 3000 and correct; the image was
+   * the drift. Nothing local can run a deployment, so this reads the files.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const PLACEHOLDER = "mcr.microsoft.com/k8se/quickstart";
+
+  it("requires containerImage - no default, so a forgotten image fails at validation", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    expect(bicep).toMatch(/^param containerImage string\s*$/m);
+    expect(bicep).not.toMatch(/^param containerImage string\s*=/m);
+  });
+
+  it("names the placeholder image only in comments, never as a value", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const codeLines = bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"));
+    expect(codeLines.join("\n")).not.toContain(PLACEHOLDER);
+    expect(bicep).toContain(PLACEHOLDER); // the comment that says why it is gone
+  });
+
+  it("keeps containerImage out of the example parameters, where it would go stale", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, unknown>;
+    };
+    expect(Object.keys(example.parameters)).not.toContain("containerImage");
+    expect(JSON.stringify(example.parameters)).not.toContain(PLACEHOLDER);
+  });
+
+  it("agrees with the Dockerfile on the port: PORT, EXPOSE and containerPort are one number", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const dockerfile = await readFile("Dockerfile");
+    const runtime = dockerfile.slice(dockerfile.lastIndexOf("FROM "));
+
+    const containerPort = bicep.match(/^param containerPort int = (\d+)\s*$/m)?.[1];
+    const envPort = runtime.match(/\bPORT=(\d+)/)?.[1];
+    const exposed = runtime.match(/^EXPOSE (\d+)\s*$/m)?.[1];
+
+    expect(containerPort).toBeDefined();
+    expect(envPort).toBe(containerPort);
+    expect(exposed).toBe(containerPort);
+  });
+
+  it("feeds the ingress target port and both probes from containerPort, and sets no PORT env of its own", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const app = bicep.slice(bicep.indexOf("resource containerApp "));
+
+    expect(app).toMatch(/targetPort:\s*containerPort\b/);
+    const probePorts = app.match(/httpGet:\s*\{[^}]*port:\s*(\w+)/g) ?? [];
+    expect(probePorts).toHaveLength(2);
+    for (const probe of probePorts) {
+      expect(probe).toMatch(/port:\s*containerPort\b/);
+    }
+    // The image decides where the process listens (Dockerfile ENV PORT). A
+    // PORT or HOSTNAME entry here would be carried forward by the workflow
+    // path and the Dockerfile would stop being the one place it is decided.
+    expect(app).not.toMatch(/name:\s*'PORT'/);
+    expect(app).not.toMatch(/name:\s*'HOSTNAME'/);
+  });
+
+  it("probes the same path the workflow and CI verify against", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const workflow = await readFile(".github/workflows/deploy.yml");
+    const ci = await readFile(".github/workflows/ci.yml");
+
+    const probePaths = [...bicep.matchAll(/httpGet:\s*\{\s*path:\s*'([^']+)'/g)].map((m) => m[1]);
+    expect(probePaths).toEqual(["/api/health", "/api/health"]);
+    expect(workflow).toContain('"https://$URL/api/health"');
+    // CI boots the image with no port mapping and curls the Dockerfile's port.
+    const dockerfile = await readFile("Dockerfile");
+    const envPort = dockerfile.match(/\bPORT=(\d+)/)?.[1];
+    expect(ci).toContain(`http://localhost:${envPort}/api/health`);
+  });
+
+  it("lets the workflow set the image and nothing else that shapes a revision", async () => {
+    const workflow = await readFile(".github/workflows/deploy.yml");
+    const deploy = workflow
+      .split("az containerapp update")[1]
+      ?.split("- name:")[0];
+    expect(deploy).toBeDefined();
+    expect(deploy).toContain("--image");
+    // Anything else here would be a second source of truth for a setting the
+    // template owns, and the two would drift the other way.
+    for (const flag of [
+      "--target-port",
+      "--set-env-vars",
+      "--env-vars",
+      "--replace-env-vars",
+      "--cpu",
+      "--memory",
+      "--min-replicas",
+      "--max-replicas",
+      "--secrets",
+    ]) {
+      expect(deploy, flag).not.toContain(flag);
+    }
   });
 });

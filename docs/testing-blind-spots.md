@@ -56,6 +56,12 @@ organisation. No viewer outside an org can be constructed.
 
 **What is asserted instead.** The queries compose `siteFilter(entitled, …)`,
 read from `basSiteScope`, rather than inventing a predicate. Source text.
+The readings table and CSV routes (2026-10-09, `lib/modules/bas/readings.ts`,
+`loadPoint`) are in the same position: one point, the same `siteFilter`
+over the same `basSiteScope`, and the same conflation - an unentitled point
+would be `point_not_found`, indistinguishable from a missing one. What
+`tests/bas-readings-table.test.ts` does provoke is the hidden, inactive and
+absent cases, and a viewer with no module grant on both routes.
 
 **What would make it real.** `bas_site_grant`, or any per-employee entitlement.
 The day `basSiteScope` returns a list, seed two orgs and assert the 404 on every
@@ -94,6 +100,29 @@ viewer one of them, and assert the other org's station returns
 names nothing. The same day, the equivalent assertions for the tree
 (`getBasSettingsTree`), Collection Health and Point Explorer stop being blind
 spots too, and this entry should be deleted rather than kept as history.
+
+---
+
+## Value plausibility: no change-of-value point is judged on the live estate
+
+**Recorded:** 28 September 2026. **Test:** `tests/bas-plausibility.test.ts`
+→ *change-of-value trends*.
+
+**The claim.** A change-of-value trend whose value has stopped changing is
+flagged from its last record to the collector's last successful pass, and a
+stalled collector is never mistaken for a dead sensor.
+
+**Why it cannot be provoked live.** Every change-of-value point on the estate
+- the eight office points with no `collection_interval_s` - is a status or
+command point, which the role excludes from the check. `npm run
+bas:plausibility:verify` therefore exercises only the interval path against
+real data; the change-of-value path is proved by three fixture points (flat to
+the ok pass, stalled collector, too few readings) and by mutation D.
+
+**What would make it real.** The first building with a change-of-value trend
+on a measured quantity - a zone temperature logged on change with a tolerance,
+say. Re-run the verify script there and check its verdict against Workbench,
+then delete this entry.
 
 ---
 
@@ -153,3 +182,27 @@ query is built with; it does not prove the comparison operator.
 **What would make it real.** A committed reading stamped exactly on a local
 midnight. None exists in the live data, and a synthetic one would be the one
 synthetic row in a fixture whose whole value is that it is not synthetic.
+
+---
+
+## `station_unassigned` cannot be provoked
+
+**Recorded:** 1 October 2026, from B8.5. **Test:**
+`tests/bas-point-classification.test.ts` → *PATCH { equipmentId }*.
+
+**The claim.** A point on a station attached to no building cannot be given
+equipment, because equipment belongs to a building and there is none to look
+it up on; the refusal is 409 `station_unassigned` and nothing is written.
+
+**Why it cannot be provoked.** `bas_stations.site_id` is NOT NULL at the
+current schema, so no station is attached to no building and Prisma refuses
+to create one. The settings tree and the Points list both carry the state
+(`unassignedStations`, `siteId: null`) for the day the column is relaxed, and
+the service has the refusal ready for the same day.
+
+**What is asserted instead.** Nothing about this code path. The code is kept
+because the two screens already model the state and a silent attach to
+equipment on some other building would be the wrong answer when it arrives.
+
+**What would make it real.** Relaxing the NOT NULL, which is the change the
+tree's *Discovered, unassigned* bucket was written for.

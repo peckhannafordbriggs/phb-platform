@@ -108,7 +108,10 @@ Each of those arrives with the phase that needs it, or not at all.
 
 ## Seeds
 
-- `Module`: one row, `change-orders`.
+- `Module`: four rows — `change-orders`, `bas`, `cost-intelligence`,
+  `knowledge-base`. **The seed is not how a module row reaches production**:
+  production was seeded once, on 9 September 2026, and never again, so every
+  module since carries a migration as well. `docs/10-adding-a-module.md`.
 - `Position`: so early users aren't all choosing "Other" — Accounting,
   Administrative, Co-Op Intern, Controls Engineer, Estimator, Executive, Foreman,
   Project Engineer, Project Manager, Superintendent. Admin-editable after, and
@@ -159,5 +162,6 @@ The division:
 | Schema | Migration |
 | Deleting reference data (a position, a department) | Migration — the app has no delete path |
 | Adding reference data | Seed (a migration may also add it; both are idempotent) |
+| **A module row** | **Both**: seed for fresh databases, migration with `ON CONFLICT (key) DO NOTHING` for production, which is never seeded again. `docs/10-adding-a-module.md` |
 | Employee rows, admin flags | **Seed only**, from `BOOTSTRAP_ADMIN_EMAIL` |
 | Correcting one person's profile | The admin screen |

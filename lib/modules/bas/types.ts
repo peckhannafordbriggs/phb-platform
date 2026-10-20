@@ -15,6 +15,9 @@
  *    *Four invariants*); local time is a rendering choice, never a stored one.
  */
 
+import type { PlausibilitySummary, PointPlausibility } from "./plausibility";
+import type { BooleanStates, ValueKind } from "./value-kind";
+
 /**
  * `roll_risk` from `bas_v_collection_health`, unchanged. The view is the only
  * thing that decides which one a point is in; nothing here re-derives it.
@@ -223,6 +226,15 @@ export interface CollectionHealthTotals {
    * deliberate reasons are not counted anywhere here; we chose those.
    */
   pointsNoLongerReported: number;
+  /**
+   * Active points whose value has stopped changing past the threshold for
+   * their kind of measurement (lib/modules/bas/plausibility.ts). "Looks
+   * stuck, go and look" - never a confirmed fault. Counted over EVERY active
+   * point in scope, hidden or not, and never subtracted from any other
+   * figure: a flagged point is still collected, still complete, still at
+   * whatever roll risk it is at.
+   */
+  pointsFlat: number;
   /** Active points whose last check said the station holds records we do not. */
   pointsIncomplete: number;
   /** Every completeness state's count, so the tile can say which. */
@@ -235,6 +247,58 @@ export interface CollectionHealthTotals {
    * anything" is close to the worst, and they must not render the same.
    */
   minutesSinceNewestReading: number | null;
+}
+
+/**
+ * One project's health, for its Projects card. `null` on the card when the
+ * project has no active point - see `DashboardProject.health`.
+ *
+ * The SAME shape `basFigure` (lib/home/bas-figure.ts) reads from the
+ * Collection Health totals, so the card's health line is worded by the same
+ * function as the Home tile: "No points at risk" or "N points at risk", over
+ * the age of the newest reading. `pointsAtRisk` is `atRiskCount(riskCounts)`
+ * by the one list in AT_RISK_ROLL_RISKS, scoped to the project, and
+ * tests/bas-at-risk-predicate.test.ts holds it to Collection Health filtered
+ * to the same project.
+ */
+export interface DashboardProjectHealth {
+  activePoints: number;
+  pointsAtRisk: number;
+  riskCounts: Record<RollRisk, number>;
+  /** Minutes since the project's newest reading; `null` when it has none. */
+  minutesSinceNewestReading: number | null;
+}
+
+export interface DashboardProject {
+  projectId: string;
+  name: string;
+  orgName: string;
+  /** Buildings in the project, counted without reference to points or readings. */
+  buildings: number;
+  /** JACEs registered under those buildings, active or not. */
+  stations: number;
+  /**
+   * `null` when the project has no active point: no stations yet, or stations
+   * that have not discovered a point. The card then shows its counts and no
+   * health line at all, because "No points at risk" over zero points is a
+   * claim about nothing dressed as a verdict.
+   */
+  health: DashboardProjectHealth | null;
+}
+
+export interface BasDashboard {
+  observedAt: string;
+  /** One per project the viewer may see, in org-then-name order. Never hardcoded. */
+  projects: DashboardProject[];
+  /**
+   * `count(*)` of the same projects with no joins at all - the guard the
+   * Points list carries (`stationsAccountedFor`). The card query joins
+   * buildings and the health view to build each card; if a join ever drops or
+   * doubles a project, `projects.length` and this disagree and the screen
+   * says so in red rather than quietly showing fewer cards than there are
+   * projects.
+   */
+  projectsInDatabase: number;
 }
 
 export interface PointHealthRow {
@@ -400,6 +464,8 @@ export interface UnfilteredTotals {
   pointsAtRisk: number;
   /** Same rule as `pointsAtRisk`: a vanished point outside the filter is still said. */
   pointsNoLongerReported: number;
+  /** Same rule again: a stuck value outside the filter is still said. */
+  pointsFlat: number;
 }
 
 export interface CollectionHealth {
@@ -447,6 +513,13 @@ export interface CollectionHealth {
    * an empty list is a claim the screen makes out loud - see VanishedCard.
    */
   vanished: VanishedPoint[];
+  /**
+   * The value-plausibility check (2026-09-28): which points in scope were
+   * judged, which were not and why, and every point whose value has stopped
+   * changing, by name. Always present; an empty `flat` list is a claim the
+   * card makes out loud, like `vanished`.
+   */
+  plausibility: PlausibilitySummary;
   runs: IngestRunRow[];
 
   /**
@@ -479,6 +552,18 @@ export interface PointOption {
   pointRole: string | null;
   unit: string | null;
   siteName: string;
+  /**
+   * Which value column this point's readings live in, and so which axis the
+   * chart draws. From `bas_points.data_type`; for the selected point refined
+   * from the readings when the type is `unknown`. See lib/modules/bas/value-kind.ts.
+   */
+  valueKind: ValueKind;
+  /**
+   * A boolean point's two state words - what `true` and `false` are shown as
+   * on the axis, in the tooltip and on the Latest tile. `null` for every other
+   * kind.
+   */
+  states: BooleanStates | null;
 }
 
 /**
@@ -502,6 +587,13 @@ export interface TrendPoint {
   /**
    * The reading itself when the trend is raw; the bucket's AVERAGE when it has
    * been downsampled (see `TrendSampling`).
+   *
+   * A BOOLEAN point's reading travels as 1 (true) or 0 (false), so one series
+   * shape serves every kind and the break and bucket logic need no second
+   * copy. A bucketed boolean's `value` is then the share of readings that were
+   * true, and its `min`/`max` are 0 and 1 when the state changed inside the
+   * bucket. The chart turns the number back into the state word
+   * (`PointOption.states`); nothing else reads it as a quantity.
    */
   value: number | null;
   /** `true` only for a synthetic break. A real null-valued row is `false`. */
@@ -686,6 +778,57 @@ export interface PointExplorer {
    */
   sampling: TrendSampling;
   dataGaps: DataGapRow[];
+}
+
+// ------------------------------------------------- the readings table (B4)
+
+/**
+ * One stored reading, as stored.
+ *
+ * All three value columns travel, not the one the point's kind says it uses,
+ * because the table exists to show what the database holds: a `real` point
+ * with a stray `value_bool` row is a collector defect, and a payload that had
+ * already chosen a column would hide it. `ts` is text rather than a Date so
+ * the six fractional digits PostgreSQL stores survive the trip - a JavaScript
+ * Date keeps three - and the CSV and the table print the same instant.
+ */
+export interface ReadingRow {
+  /** ISO 8601, UTC, microseconds: `2026-09-11T14:05:03.412000Z`. */
+  ts: string;
+  valueNum: number | null;
+  valueBool: boolean | null;
+  valueStr: string | null;
+  /** Always null on the current extraction path. See `BasReading.status`. */
+  status: string | null;
+}
+
+/**
+ * One page of a point's readings over the chart's range, newest first.
+ *
+ * RAW, always. Nothing here passes through `MAX_RAW_TREND_POINTS` or the
+ * bucket ladder; `total` is `count(*)` over the range and `rows` is a LIMIT /
+ * OFFSET slice of it in SQL. A table that showed the chart's averaged series
+ * would be a second drawing of the same guess, and the table exists to check
+ * the drawing.
+ */
+export interface PointReadingsPage {
+  point: PointOption;
+  /** The station the point is read from, for the CSV's identifiers. */
+  stationId: string;
+  stationName: string;
+  niagaraHistoryName: string;
+  /** The IANA zone timestamps are shown in - the building's, as on the chart. */
+  timezone: string;
+  /** The instants asked for, `from` inclusive and `to` exclusive, as given. */
+  from: string;
+  to: string;
+  /** Readings in the range, over every page. */
+  total: number;
+  /** The page served. The one asked for, clamped to the last page. */
+  page: number;
+  pageSize: number;
+  pages: number;
+  rows: ReadingRow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1020,11 +1163,28 @@ export interface SettingsPoint {
   niagaraHistoryName: string;
   /** What the STATION calls it - bas_points.display_name. Refreshed by every discover. */
   niagaraDisplayName: string | null;
+  /**
+   * bas_points.point_role. Editable since B8.5, through the role picker or a
+   * bulk assignment. NOT cosmetic: the setpoint and command/status pairings,
+   * the unclassified count and the Analyze catalogue all read it, so a wrong
+   * role is judged by the wrong rule. NULL means nobody has looked.
+   */
   pointRole: string | null;
   /** The vocabulary's wording for the role, when the point has one. */
   roleName: string | null;
+  /** bas_points.equipment_id, for the picker. Editable since B8.5. */
+  equipmentId: string | null;
   equipmentName: string | null;
   unit: string | null;
+  /**
+   * What a name pattern would classify this point as (B8.5), or null when no
+   * pattern is confident. NEVER applied by the platform: a suggestion is a
+   * sentence on the row until a person clicks it, and `Temp1`-`Temp3` on the
+   * lab station must carry null here forever unless someone says otherwise.
+   * Only the missing half is suggested - a point that already has a role gets
+   * no role suggestion. See lib/modules/bas/suggestions.ts.
+   */
+  suggestion: PointSuggestion | null;
   /**
    * is_active: whether the collector FETCHES this point. Off is permanent in
    * effect. Why it is off is `inactiveReason`, when somebody recorded one.
@@ -1047,6 +1207,13 @@ export interface SettingsPoint {
   lastRecordAt: string | null;
   /** is_visible. Editable since B8.3, and NEVER filtered on here. */
   visible: boolean;
+  /**
+   * Whether the value is still changing, judged the same way Collection
+   * Health judges it (lib/modules/bas/plausibility.ts). A point that is not
+   * checked says why - "role not set", "setpoint" - rather than reading as
+   * fine.
+   */
+  plausibility: PointPlausibility;
 }
 
 /**
@@ -1072,8 +1239,146 @@ export interface PointCounts {
 
 export interface StationPointsList {
   stationId: string;
+  /**
+   * The station's building, or null for a discovered-but-unassigned station.
+   * Equipment lives on a building (B8.5), so a null here means the equipment
+   * picker has nothing to offer and says why.
+   */
+  siteId: string | null;
   points: SettingsPoint[];
   pointsAccountedFor: PointCounts;
+}
+
+// ---------------------------------------------------------------------------
+// Roles and equipment (B8.5)
+// ---------------------------------------------------------------------------
+
+/** One row of bas_point_roles, as the picker needs it. */
+export interface PointRoleOption {
+  pointRole: string;
+  displayName: string;
+  description: string;
+  measurement: string | null;
+  typicalUnit: string | null;
+  isSetpoint: boolean;
+  isCommand: boolean;
+  isStatus: boolean;
+  setpointFor: string | null;
+  statusOf: string | null;
+}
+
+export interface EquipmentTypeOption {
+  equipType: string;
+  displayName: string;
+  category: string;
+}
+
+/** The two static vocabularies, fetched once per Points list. */
+export interface BasVocabularies {
+  roles: PointRoleOption[];
+  equipmentTypes: EquipmentTypeOption[];
+}
+
+export type RoleGroupKey = "measurement" | "setpoint" | "command" | "status" | "reviewed";
+
+export interface RoleGroup {
+  key: RoleGroupKey;
+  label: string;
+  roles: PointRoleOption[];
+}
+
+/**
+ * The vocabulary's own escape hatch: a role that MEANS "a person looked and
+ * could not map it". Distinct from NULL, which means nobody has looked. It is
+ * offered in the picker, in its own group, because that is what the vocabulary
+ * says it is for - but it is a role like any other to the database, so a point
+ * carrying it leaves the "unclassified" count (which is `point_role IS NULL`).
+ */
+export const REVIEWED_UNMAPPABLE_ROLE = "unclassified";
+
+/**
+ * The 91 roles in four groups a person can scan, from the flags the
+ * vocabulary already carries. Measurements are what is left when a role is
+ * not a setpoint, a command or a status. Within a group, by display name.
+ *
+ * A role that is both a command and a status (none today) would land in the
+ * first group that claims it, in the order below; the test asserts every role
+ * lands in exactly one group.
+ */
+export function groupRoles(roles: readonly PointRoleOption[]): RoleGroup[] {
+  const groups: RoleGroup[] = [
+    { key: "measurement", label: "Measurements", roles: [] },
+    { key: "setpoint", label: "Setpoints", roles: [] },
+    { key: "command", label: "Commands", roles: [] },
+    { key: "status", label: "Statuses and modes", roles: [] },
+    { key: "reviewed", label: "Reviewed, not mappable", roles: [] },
+  ];
+  const by = (key: RoleGroupKey) => groups.find((g) => g.key === key)!;
+  for (const role of roles) {
+    if (role.pointRole === REVIEWED_UNMAPPABLE_ROLE) by("reviewed").roles.push(role);
+    else if (role.isSetpoint) by("setpoint").roles.push(role);
+    else if (role.isCommand) by("command").roles.push(role);
+    else if (role.isStatus) by("status").roles.push(role);
+    else by("measurement").roles.push(role);
+  }
+  for (const group of groups) {
+    group.roles.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }
+  return groups.filter((g) => g.roles.length > 0);
+}
+
+/** One row of bas_equipment, with its type and parent named. */
+export interface SettingsEquipment {
+  equipmentId: string;
+  siteId: string;
+  name: string;
+  equipType: string | null;
+  equipTypeName: string | null;
+  parentEquipmentId: string | null;
+  parentName: string | null;
+  notes: string | null;
+  /** Points attached, over every station. What a delete is refused on. */
+  pointCount: number;
+}
+
+export interface BuildingEquipmentList {
+  siteId: string;
+  equipment: SettingsEquipment[];
+  /** Same guard as the Points list: a joinless count against the joined rows. */
+  equipmentAccountedFor: PointCounts;
+}
+
+/**
+ * What a bulk classification did. All-or-nothing: if any point in the
+ * selection could not be changed, nothing was and the request failed, so
+ * these numbers only ever describe a selection that was applied in full.
+ * `unchanged` is points that already held every value sent - not a failure,
+ * not an audit row.
+ */
+export interface BulkClassifyResult {
+  points: number;
+  roleChanged: number;
+  equipmentChanged: number;
+  unchanged: number;
+}
+
+/**
+ * What a name pattern proposes for one point (B8.5). Either half may be null
+ * when the point already has that half, or the pattern only speaks to one.
+ * `equipmentId` is set when equipment of that name already exists on the
+ * building; null with a name means accepting it creates the equipment first.
+ */
+export interface PointSuggestion {
+  role: string | null;
+  roleName: string | null;
+  equipmentName: string | null;
+  equipmentId: string | null;
+  /** The type the equipment would be created with. */
+  equipType: string | null;
+  /** The pattern that fired, for the tooltip and the audit row. */
+  pattern: string;
+  /** What "confident" means for this pattern, in one sentence. */
+  confidence: string;
 }
 
 /** RED is the list holding fewer points than the database says the station has. */

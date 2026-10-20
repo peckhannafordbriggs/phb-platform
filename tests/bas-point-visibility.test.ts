@@ -25,6 +25,9 @@ import {
   seedChangeOrdersModule,
   testDb,
 } from "./db";
+import { notCheckedPlausibility } from "@/lib/modules/bas/plausibility";
+
+const NOT_CHECKED_FIXTURE = notCheckedPlausibility("no_role");
 
 /**
  * The Shown checkbox (B8.3): one point, one field, and the field is not
@@ -365,14 +368,17 @@ describe("the Points list renders the checkbox", () => {
     niagaraDisplayName: null,
     pointRole: null,
     roleName: null,
+    equipmentId: null,
     equipmentName: null,
     unit: null,
+    suggestion: null,
     horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
     collected: true,
     inactiveReason: null,
     completeness: "complete",
     lastRecordAt: null,
     visible,
+    plausibility: NOT_CHECKED_FIXTURE,
   });
 
   const render = (visible: boolean) =>
@@ -380,6 +386,7 @@ describe("the Points list renders the checkbox", () => {
       createElement(PointsTable, {
         list: {
           stationId: "1",
+          siteId: "1",
           points: [point(visible)],
           pointsAccountedFor: { rendered: 1, inDatabase: 1 },
         },

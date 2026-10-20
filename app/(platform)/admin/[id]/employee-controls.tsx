@@ -15,6 +15,7 @@ export function EmployeeControls({
   isSelf,
   status,
   isPlatformAdmin,
+  profileCompleted,
   modules,
   grantedModuleKeys,
   moduleAdminKeys,
@@ -23,6 +24,7 @@ export function EmployeeControls({
   isSelf: boolean;
   status: "active" | "disabled";
   isPlatformAdmin: boolean;
+  profileCompleted: boolean;
   modules: { key: string; displayName: string }[];
   grantedModuleKeys: string[];
   /** Subset of grantedModuleKeys whose grant carries is_module_admin (B7.2). */
@@ -31,6 +33,7 @@ export function EmployeeControls({
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   async function call(path: string, init: RequestInit) {
     setBusy(true);
@@ -196,6 +199,66 @@ export function EmployeeControls({
           >
             {isPlatformAdmin ? "Remove admin" : "Make admin"}
           </button>
+        </div>
+
+        {/*
+          The one correction for a profile holding words nobody chose. Not an
+          edit: the name comes from Microsoft and the profile is the person's
+          own, so this re-runs onboarding instead. It ends their session on
+          purpose - the name is stamped at sign-in, and a form opened from a
+          live session would prefill the old words. The confirmation says so.
+        */}
+        <div className="border-t border-[var(--border)] pt-4">
+          {!confirmReset ? (
+            <button
+              type="button"
+              disabled={busy || status === "disabled"}
+              title={
+                status === "disabled"
+                  ? "A disabled employee cannot sign in to complete a profile."
+                  : undefined
+              }
+              onClick={() => setConfirmReset(true)}
+              className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50"
+            >
+              Ask to complete profile again
+            </button>
+          ) : (
+            <div className="rounded border border-[var(--border)] bg-[var(--surface)] px-3 py-3 text-sm">
+              <p>
+                {isSelf ? "You" : "This person"} will be signed out on{" "}
+                {isSelf ? "your" : "their"} next click and asked to complete{" "}
+                {isSelf ? "your" : "their"} profile again. The name is taken from
+                Microsoft again at that sign-in.
+                {profileCompleted
+                  ? ""
+                  : " The profile is already incomplete; this still ends the session and refreshes the name."}
+              </p>
+              <div className="mt-3 flex gap-3">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirmReset(false);
+                    void call(`/api/admin/employees/${employeeId}/profile-reset`, {
+                      method: "POST",
+                    });
+                  }}
+                  className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50"
+                >
+                  Sign out and ask
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setConfirmReset(false)}
+                  className="rounded px-3 py-1.5 text-sm text-[var(--muted)]"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {error !== null && (

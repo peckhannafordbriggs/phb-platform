@@ -19,6 +19,7 @@ import type {
 import {
   ApiError,
   axisLabel,
+  describeCappedExport,
   describeClockOffset,
   describeDistinctValues,
   describeExtentNotices,
@@ -27,6 +28,7 @@ import {
   describeRange,
   describeSampling,
   distinctValuesTone,
+  downloadPointReadingsCsv,
   fetchPointExplorer,
   formatChartTick,
   formatCount,
@@ -36,19 +38,32 @@ import {
   type Tone,
 } from "./health-client";
 import { RangePicker } from "./range-picker";
+import { ReadingsTable } from "./readings-table";
 import {
   ALL_SITES,
   POINT_PARAM,
   PROJECT_PARAM,
   SITE_PARAM,
   STATION_PARAM,
+  TABLE_VIEW,
+  VIEW_PARAM,
   readFilters,
   withCascade,
   withFilter,
   withRange,
 } from "./filters";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
-import { formatAxisTick, formatTooltipValue, valueAxis } from "./value-axis";
+import {
+  formatAxisTick,
+  formatStateBand,
+  formatStateTick,
+  formatStateTooltip,
+  formatTooltipValue,
+  stateAxis,
+  valueAxis,
+} from "./value-axis";
+import { unitSymbol } from "@/lib/modules/bas/units";
+import { stateWord, type BooleanStates } from "@/lib/modules/bas/value-kind";
 
 /**
  * Point Explorer - what one point has been doing.
@@ -88,6 +103,9 @@ export function PointExplorer() {
   const [loading, setLoading] = useState(true);
 
   const { siteId, windowDays, range, pointId, projectId, stationId } = filters;
+  // The trend panel as the chart (default) or the raw readings behind it.
+  // In the URL like every other choice here; read by nothing on the server.
+  const view: TrendView = searchParams.get(VIEW_PARAM) === TABLE_VIEW ? "table" : "chart";
 
   const load = useCallback(
     async (
@@ -244,6 +262,12 @@ export function PointExplorer() {
 
   const { stats, selectedPoint } = data;
   const unit = selectedPoint?.unit ?? null;
+  // A boolean point's two state words; null for every other kind. Where this
+  // is set, a reading is shown as its word and never as the 1 or 0 it travels
+  // as - on the tiles here and on the chart's axis and tooltip below.
+  const states = selectedPoint?.states ?? null;
+  const reading = (value: number | null): string =>
+    states === null ? formatValue(value, unit) : (stateWord(value, states) ?? "—");
 
   return (
     <div className="space-y-6">
@@ -286,6 +310,17 @@ export function PointExplorer() {
             className="min-w-56 rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
           >
             {data.points.length === 0 && <option value="">No points</option>}
+            {/*
+              Arrived from a Projects card (`?point=none`): the list is
+              there and nothing is chosen. A disabled placeholder holds the
+              empty value so the select does not display the first point as
+              though it were selected. Choosing one writes `point=<id>`.
+            */}
+            {data.points.length > 0 && selectedPoint === null && (
+              <option value="" disabled>
+                Choose a point
+              </option>
+            )}
             {data.points.map((point) => (
               <option key={point.pointId} value={point.pointId}>
                 {point.pointName}
@@ -314,9 +349,9 @@ export function PointExplorer() {
           ? "No point selected"
           : `${selectedPoint.pointName} at ${selectedPoint.siteName}`}
         {" · "}
-        {unit === null
-          ? "no unit recorded for this point"
-          : `values in ${unit}`}
+        {states !== null
+          ? `${states.on} / ${states.off}`
+          : (unitSymbol(unit) ?? "no unit recorded")}
         {" · "}
         {describeRange(data.range)}
         {" · as of "}
@@ -344,14 +379,29 @@ export function PointExplorer() {
       )}
 
       {selectedPoint === null ? (
-        <section className="rounded border border-[var(--border)] p-8 text-center">
-          <p className="text-sm font-medium">No active points</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            {data.sites.length === 0
-              ? "No buildings have been discovered yet."
-              : "Nothing has been discovered on the station for this building, or every point is marked inactive."}
-          </p>
-        </section>
+        data.points.length > 0 ? (
+          // Nothing loaded, by request: a Projects card lands here. Points
+          // exist and the person picks one; nothing is drawn until they do.
+          <section
+            className="rounded border border-[var(--border)] p-8 text-center"
+            data-testid="bas-choose-point"
+          >
+            <p className="text-sm font-medium">Choose a point</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              {data.points.length === 1 ? "1 point" : `${data.points.length} points`}
+              {data.scope.label === null ? "" : ` in ${data.scope.label}`}
+            </p>
+          </section>
+        ) : (
+          <section className="rounded border border-[var(--border)] p-8 text-center">
+            <p className="text-sm font-medium">No active points</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              {data.sites.length === 0
+                ? "No buildings have been discovered yet."
+                : "Nothing has been discovered on the station for this building, or every point is marked inactive."}
+            </p>
+          </section>
+        )
       ) : (
         <>
           {/* ---------------------------------------------------- tiles */}
@@ -362,17 +412,21 @@ export function PointExplorer() {
           >
             <Tile
               label="Latest"
-              value={formatValue(stats.latest, unit)}
+              value={reading(stats.latest)}
               tone="neutral"
+              // The one thing worth saying: this value may sit outside the
+              // range the other tiles cover, so the timestamp is stated.
               detail={
                 stats.latestAt === null
                   ? "This point has never produced a value."
-                  : `Most recent value, from ${formatTimestamp(stats.latestAt)}. Not limited to the window.`
+                  : `${formatTimestamp(stats.latestAt)} · not limited to the range`
               }
             />
             <Tile
               label={`Average (${describeRange(data.range)})`}
-              value={formatValue(stats.average, unit)}
+              // A state has no average. The database's mean of 1s and 0s is a
+              // share of readings, not of time, and a dash is truer than it.
+              value={states !== null ? "—" : formatValue(stats.average, unit)}
               tone="neutral"
             />
             <Tile
@@ -380,10 +434,13 @@ export function PointExplorer() {
               value={
                 stats.minimum === null || stats.maximum === null
                   ? "—"
-                  : `${stats.minimum.toFixed(2)} – ${stats.maximum.toFixed(2)}`
+                  : states !== null
+                    ? formatStateBand(stats.minimum, stats.maximum, states)
+                    : `${stats.minimum.toFixed(2)} – ${formatValue(stats.maximum, unit)}`
               }
               tone="neutral"
             />
+            {/* Boolean: 1 or 2 is the healthy count, so the numeric thresholds do not apply (see the function). */}
             <Tile
               label="Readings / null records"
               value={`${formatCount(stats.readings)} / ${formatCount(stats.nullRecords)}`}
@@ -393,14 +450,27 @@ export function PointExplorer() {
             <Tile
               label="Distinct values"
               value={formatCount(stats.distinctValues)}
-              tone={distinctValuesTone(stats.distinctValues, stats.readings)}
-              detail={describeDistinctValues(stats.distinctValues, stats.readings)}
+              tone={distinctValuesTone(
+                stats.distinctValues,
+                stats.readings,
+                selectedPoint.valueKind,
+              )}
+              detail={describeDistinctValues(
+                stats.distinctValues,
+                stats.readings,
+                selectedPoint.valueKind,
+              )}
             />
           </section>
 
           {/* ---------------------------------------------------- trend */}
 
-          <TrendPanel data={data} unit={unit} />
+          <TrendPanel
+            data={data}
+            unit={unit}
+            view={view}
+            onViewChange={(next) => setParam(VIEW_PARAM, next === "table" ? TABLE_VIEW : null)}
+          />
 
           {/* ----------------------------------------------------- gaps */}
 
@@ -416,7 +486,8 @@ export function PointExplorer() {
 
 // ------------------------------------------------------------------ pieces
 
-function Tile({
+/** Exported for tests/bas-unit-symbols.test.tsx, which renders one with a unit. */
+export function Tile({
   label,
   value,
   tone,
@@ -450,26 +521,89 @@ function Tile({
 
 function Panel({
   title,
+  count,
   description,
+  actions,
   children,
 }: {
   title: string;
+  /** Rows in a scrolling body, beside the title, so nobody scrolls to count. */
+  count?: number;
   description?: string;
+  /** Small controls at the right of the heading: a toggle, a button. */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="card overflow-hidden">
-      <header className="px-5 pb-3 pt-4">
-        <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
-          {title}
-        </h2>
-        {description !== undefined && description.length > 0 && (
-          <p className="mt-1 text-xs text-[var(--muted)]">{description}</p>
-        )}
+      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-5 pb-3 pt-4">
+        <div>
+          <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+            {title}
+            {count !== undefined && (
+              <span className="font-normal text-[var(--muted)]"> ({formatCount(count)})</span>
+            )}
+          </h2>
+          {description !== undefined && description.length > 0 && (
+            <p className="mt-1 text-xs text-[var(--muted)]">{description}</p>
+          )}
+        </div>
+        {actions !== undefined && <div className="flex items-center gap-2">{actions}</div>}
       </header>
       {children}
     </section>
   );
+}
+
+/** The trend panel's two faces. `chart` is the default and the URL's absent value. */
+export type TrendView = "chart" | "table";
+
+/** The Reset-zoom button's styling, shared by the view toggle and the download. */
+const SMALL_BUTTON =
+  "rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)] disabled:cursor-default disabled:opacity-40";
+
+/**
+ * Chart / Table. A pair of pressed-state buttons rather than a tab bar or a
+ * checkbox: two words, no sentence, and the pressed one says where you are.
+ */
+function ViewToggle({
+  view,
+  onChange,
+}: {
+  view: TrendView;
+  onChange: (view: TrendView) => void;
+}) {
+  const option = (value: TrendView, label: string) => (
+    <button
+      type="button"
+      aria-pressed={view === value}
+      onClick={() => onChange(value)}
+      className={SMALL_BUTTON + (view === value ? " bg-[var(--neutral-100)] font-medium" : "")}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div role="group" aria-label="Show as" className="flex items-center gap-1">
+      {option("chart", "Chart")}
+      {option("table", "Table")}
+    </div>
+  );
+}
+
+/**
+ * Save a fetched file through a temporary link. The one place the browser's
+ * download machinery is touched; the fetch itself is in health-client.ts.
+ */
+function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 /**
@@ -511,19 +645,24 @@ function Panel({
 export function TrendPanel({
   data,
   unit,
+  view = "chart",
+  onViewChange,
 }: {
   data: PointExplorerData;
   unit: string | null;
+  /** Chart (default) or the raw readings behind it. */
+  view?: TrendView;
+  onViewChange?: (view: TrendView) => void;
 }) {
   /**
    * The count and the longest are invisible from the chart; that the line stops
    * at a break is not - it is the thing you are looking at. No breaks needs no
-   * sentence at all.
+   * sentence at all, and nothing here describes the shading.
    */
   const gapSummary =
     data.trendGaps.length === 0
       ? undefined
-      : `${formatCount(data.trendGaps.length)} break${data.trendGaps.length === 1 ? "" : "s"}, shaded. Longest ${formatHours(Math.max(...data.trendGaps.map((g) => g.hours)))}.`;
+      : `${formatCount(data.trendGaps.length)} break${data.trendGaps.length === 1 ? "" : "s"} · longest ${formatHours(Math.max(...data.trendGaps.map((g) => g.hours)))}`;
 
   /**
    * Drag across the plot to zoom into a range; Reset goes back.
@@ -544,6 +683,69 @@ export function TrendPanel({
   const [zoom, setZoom] = useState<TrendZoom | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragTo, setDragTo] = useState<number | null>(null);
+
+  /**
+   * The table's total, lifted into the heading as "Readings (9,012)" - the
+   * module's count-in-the-heading rule. Known only once the table has
+   * fetched, which is only once it is shown.
+   */
+  const [tableTotal, setTableTotal] = useState<{ key: string; total: number } | null>(null);
+  const tableKey = `${data.selectedPoint?.pointId ?? ""}|${data.range.from}|${data.range.to}`;
+  const tableCount = tableTotal !== null && tableTotal.key === tableKey ? tableTotal.total : undefined;
+
+  /**
+   * Download CSV. Nothing is requested until the click; the response's
+   * headers say how many rows the file holds against how many the range
+   * holds, and when those differ the sentence below the heading says so, in
+   * the warning tone. A clean export says nothing - the file arriving is the
+   * message.
+   */
+  const [downloading, setDownloading] = useState(false);
+  const [downloadNote, setDownloadNote] = useState<
+    { tone: "warn" | "error"; text: string } | null
+  >(null);
+
+  async function downloadCsv(): Promise<void> {
+    if (data.selectedPoint === null || downloading) return;
+    setDownloading(true);
+    setDownloadNote(null);
+    try {
+      const download = await downloadPointReadingsCsv({
+        pointId: data.selectedPoint.pointId,
+        from: data.range.from,
+        to: data.range.to,
+      });
+      saveBlob(download.blob, download.filename);
+      const capped = describeCappedExport(download);
+      if (capped !== null) setDownloadNote({ tone: "warn", text: capped });
+    } catch (caught) {
+      setDownloadNote({
+        tone: "error",
+        text:
+          caught instanceof ApiError
+            ? `The download failed: ${caught.message}`
+            : "The download failed. Try again.",
+      });
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  const panelActions =
+    data.selectedPoint === null ? undefined : (
+      <>
+        <ViewToggle view={view} onChange={(next) => onViewChange?.(next)} />
+        <button
+          type="button"
+          onClick={() => void downloadCsv()}
+          disabled={downloading}
+          className={SMALL_BUTTON}
+          data-testid="bas-download-csv"
+        >
+          {downloading ? "Downloading…" : "Download CSV"}
+        </button>
+      </>
+    );
 
   function commitZoom(): void {
     if (dragFrom === null || dragTo === null || dragFrom === dragTo) {
@@ -587,8 +789,33 @@ export function TrendPanel({
   } as const;
 
   return (
-    <Panel title="Trend" description={gapSummary}>
-      {data.trend.length === 0 ? (
+    <Panel
+      title={view === "table" ? "Readings" : "Trend"}
+      count={view === "table" ? tableCount : undefined}
+      description={view === "table" ? undefined : gapSummary}
+      actions={panelActions}
+    >
+      {downloadNote !== null && (
+        <p
+          className={
+            "border-b px-4 py-2 text-xs" +
+            (downloadNote.tone === "error" ? " border-red-300 bg-red-50 text-red-900" : "")
+          }
+          style={downloadNote.tone === "warn" ? noticeStyle : undefined}
+          role={downloadNote.tone === "error" ? "alert" : "note"}
+          data-testid="bas-download-note"
+        >
+          {downloadNote.text}
+        </p>
+      )}
+      {view === "table" && data.selectedPoint !== null ? (
+        <ReadingsTable
+          point={data.selectedPoint}
+          range={data.range}
+          extent={data.pointExtent}
+          onTotal={(total) => setTableTotal({ key: tableKey, total })}
+        />
+      ) : data.trend.length === 0 ? (
         <p
           className="px-4 py-8 text-center text-sm text-[var(--muted)]"
           data-testid="bas-no-readings"
@@ -659,6 +886,7 @@ export function TrendPanel({
                 gaps={data.trendGaps}
                 recordedGaps={recordedGaps}
                 unit={unit}
+                states={data.selectedPoint?.states ?? null}
                 zoom={zoom}
                 range={rangeMs}
                 timeZone={timeZone}
@@ -673,7 +901,13 @@ export function TrendPanel({
             </ResponsiveContainer>
           </div>
 
-          {(data.trendGaps.length > 0 || recordedGaps.length > 0) && (
+          {/*
+            The written list of breaks: both timestamps and a duration, which
+            is the one form that survives being read out over the phone. The
+            recorded gaps get no sentence here - their outline on the chart
+            carries the cause and a tooltip, and the table below lists them.
+          */}
+          {data.trendGaps.length > 0 && (
             <ul className="border-t border-[var(--border)] px-4 py-2.5 text-xs text-[var(--muted)]">
               {data.trendGaps.map((gap) => (
                 <li key={gap.fromMs}>
@@ -683,13 +917,6 @@ export function TrendPanel({
                   {formatHours(gap.hours)}
                 </li>
               ))}
-              {recordedGaps.length > 0 && (
-                <li className="mt-1" data-testid="bas-recorded-gaps-legend">
-                  Dashed outlines are the {formatCount(recordedGaps.length)} gap
-                  {recordedGaps.length === 1 ? "" : "s"} in this range that the collector
-                  recorded and explained — listed with their cause in the table below.
-                </li>
-              )}
             </ul>
           )}
         </>
@@ -719,6 +946,7 @@ export function TrendChart({
   gaps,
   recordedGaps = [],
   unit,
+  states = null,
   zoom,
   range = null,
   timeZone = null,
@@ -740,6 +968,13 @@ export function TrendChart({
    */
   recordedGaps?: Array<{ fromMs: number; toMs: number; cause: string }>;
   unit: string | null;
+  /**
+   * Set for a BOOLEAN point, and it changes what the chart IS: a stepped line
+   * between two labelled states instead of a curve over a numeric axis. The
+   * values in `trend` are 1 and 0 either way; these are the words they are
+   * drawn as. Null for a numeric point. See value-kind.ts.
+   */
+  states?: BooleanStates | null;
   zoom: TrendZoom | null;
   /**
    * The range the data was asked for. Becomes the x domain when there is no
@@ -816,7 +1051,23 @@ export function TrendChart({
     )
     .flatMap((point) => [point.value, point.min ?? null, point.max ?? null])
     .filter((value): value is number => value !== null);
-  const axis = valueAxis(visibleValues, unit, { fontSize: CHART_FONT_SIZE });
+  /**
+   * A boolean point gets the state axis: two ticks at 0 and 1, labelled with
+   * its words, whatever is on screen - a day that was "On" throughout still
+   * shows both states, because an axis with one label is not an axis. The
+   * numeric path above is not consulted for it, so no zoom level and no
+   * bucket average can put a decimal on a state axis.
+   */
+  const axis =
+    states !== null
+      ? stateAxis(states, { fontSize: CHART_FONT_SIZE })
+      : valueAxis(visibleValues, unit, { fontSize: CHART_FONT_SIZE });
+  /**
+   * A state holds until it changes, then jumps: `stepAfter`. A curve between
+   * Off and On would draw the point half-occupied for a while, which is a
+   * value it cannot have. Numeric points keep `monotone` - see the Area below.
+   */
+  const lineType = states !== null ? "stepAfter" : "monotone";
 
   return (
     <AreaChart
@@ -883,13 +1134,23 @@ export function TrendChart({
         // Every tick we chose is drawn. Recharts would otherwise thin the
         // list by its own measurement, and the list is already sized to fit.
         interval={0}
-        tickFormatter={(value: number) => formatAxisTick(value, axis.decimals)}
-        label={{
-          value: axisLabel(unit),
-          angle: -90,
-          position: "insideLeft",
-          style: { fontSize: CHART_FONT_SIZE, fill: "var(--muted)" },
-        }}
+        tickFormatter={(value: number) =>
+          states !== null
+            ? formatStateTick(value, states)
+            : formatAxisTick(value, axis.decimals)
+        }
+        // The rotated unit label. A boolean point has no unit and its states
+        // ARE the axis, so it carries none rather than "no unit recorded".
+        label={
+          states !== null
+            ? undefined
+            : {
+                value: axisLabel(unit),
+                angle: -90,
+                position: "insideLeft",
+                style: { fontSize: CHART_FONT_SIZE, fill: "var(--muted)" },
+              }
+        }
       />
       <Tooltip
         defaultIndex={tooltipIndex}
@@ -903,6 +1164,24 @@ export function TrendChart({
         // A bucket's band arrives as [min, max] and is shown as such, so the
         // tooltip says what the band is rather than leaving it to be guessed.
         formatter={(value, name) => {
+          // A boolean point: the state word, never the 1 or 0 behind it. A
+          // bucket's band is the states seen in it; its value is the share
+          // of readings that were on, said as such.
+          if (states !== null) {
+            if (Array.isArray(value)) {
+              const [low, high] = value as [unknown, unknown];
+              return [
+                typeof low === "number" && typeof high === "number"
+                  ? formatStateBand(low, high, states)
+                  : "—",
+                "states seen",
+              ];
+            }
+            return [
+              typeof value === "number" ? formatStateTooltip(value, states) : "—",
+              name === "range" ? "states seen" : sampled ? "share of readings" : "state",
+            ];
+          }
           if (Array.isArray(value)) {
             const [low, high] = value as [unknown, unknown];
             return [
@@ -957,11 +1236,25 @@ export function TrendChart({
           key={`recorded-${gap.fromMs}-${gap.toMs}`}
           x1={gap.fromMs}
           x2={gap.toMs}
-          fill="none"
-          stroke="var(--phb-maroon)"
-          strokeOpacity={0.75}
-          strokeDasharray="8 4"
           ifOverflow="hidden"
+          // The outline is drawn here rather than through the fill/stroke
+          // props so that a <title> can sit on it: what the dashed outline
+          // means is said on the outline itself, on hover, and nowhere else.
+          shape={(props: { x?: number; y?: number; width?: number; height?: number }) => (
+            <g className="recharts-reference-area-rect">
+              <title>{`Recorded gap: ${gap.cause}. Listed in the table below.`}</title>
+              <rect
+                x={props.x}
+                y={props.y}
+                width={props.width}
+                height={props.height}
+                fill="none"
+                stroke="var(--phb-maroon)"
+                strokeOpacity={0.75}
+                strokeDasharray="8 4"
+              />
+            </g>
+          )}
           label={{
             value: gap.cause,
             position: "insideTop",
@@ -990,7 +1283,7 @@ export function TrendChart({
       */}
       {sampled && (
         <Area
-          type="monotone"
+          type={lineType}
           name="range"
           dataKey={(point: PointExplorerData["trend"][number]) =>
             point.min != null && point.max != null ? [point.min, point.max] : null
@@ -1010,9 +1303,9 @@ export function TrendChart({
           rather than a set of measurements joined with a ruler.
           `monotone` specifically: it will not overshoot between
           samples, so the curve never draws a peak the sensor did not
-          record.
+          record. A boolean point steps instead - see `lineType`.
         */
-        type="monotone"
+        type={lineType}
         dataKey="value"
         name="value"
         // One accent, and it is the module's. Sensor data is the content.
@@ -1047,6 +1340,7 @@ function GapTable({
   return (
     <Panel
       title="Known data gaps — periods we did not collect"
+      count={gaps.length}
       // Same misreading, same one line, same wording as the health screen.
       description="A gap means we were not watching, not that equipment was off."
     >
@@ -1059,14 +1353,19 @@ function GapTable({
           {overwritten.length > 0 && (
             <p className="border-b border-red-300 bg-red-50 px-4 py-2.5 text-sm text-red-900">
               {formatCount(overwritten.length)} of these
-              {overwritten.length === 1 ? " is" : " are"} a station overwrite: the
-              data existed, the station destroyed it before we read it, and it
-              cannot be recovered from anywhere.
+              {overwritten.length === 1 ? " is a station overwrite" : " are station overwrites"}:
+              the data existed, the station destroyed it before we read it, and
+              it cannot be recovered.
             </p>
           )}
-          <div className="overflow-x-auto">
+          {/*
+            The one scroll pattern, as on Collection Health: about seven rows,
+            a sticky header, the count in the heading. The red line above
+            stays outside the box so it cannot scroll away from the rows.
+          */}
+          <div className="max-h-72 overflow-auto">
             <table className="w-full min-w-[42rem] border-collapse text-sm">
-              <thead className="bg-[var(--surface)] text-left">
+              <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
                 <tr>
                   <th className="px-3 py-2 font-medium">From</th>
                   <th className="px-3 py-2 font-medium">To</th>

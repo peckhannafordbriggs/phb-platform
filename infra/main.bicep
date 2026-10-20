@@ -7,7 +7,8 @@
 //     --subscription <subscription-id> \
 //     --resource-group <resource-group> \
 //     --template-file infra/main.bicep \
-//     --parameters @infra/main.parameters.json
+//     --parameters @infra/main.parameters.json \
+//     --parameters containerImage="$IMAGE"   # the image the app runs NOW; see containerImage
 //
 // Nothing in this file assumes anything about PH+B. Every value that identifies
 // an organisation, a region, a person or an environment is a parameter without a
@@ -52,10 +53,37 @@ param tags object = {}
 // Container image
 // ---------------------------------------------------------------------------
 
-@description('Image the container app runs. On the very first deployment the registry is empty, so this defaults to a public placeholder; CI replaces it with the real image on every deploy.')
-param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
+// NO DEFAULT, deliberately. Two things write this container app and each owns
+// half of it: the deploy workflow (`az containerapp update --image`) sets the
+// image and keeps everything else from the running revision, while a template
+// deployment sets everything else and - because a deployment replaces the
+// whole resource - the image too. This used to default to the public
+// placeholder `mcr.microsoft.com/k8se/quickstart:latest`, and the parameters
+// file never set it, so every routine template deployment after the first real
+// deploy silently put the placeholder back. On 2026-10-13 that produced
+// revision 0000053: a hello-world listening on :80 under probes for :3000,
+// ActivationFailed, with the console log reading "Listening on :80..." - the
+// placeholder's own line; Next prints "Ready in", never that. Making it
+// required means a deployment that forgets it fails at parameter validation,
+// before anything is created. Read the running image first:
+//
+//   az containerapp show -n <app> -g <rg> \
+//     --query properties.template.containers[0].image -o tsv
+//
+// Only the very first deployment, when the registry is empty, passes the
+// placeholder - explicitly, on the command line. infra/README.md has both
+// commands; runbook.md -> "A template deployment fails activation".
+@description('Image the container app runs. Required. Pass the image the app is running now (read it with `az containerapp show`), or the public placeholder on the very first deployment only.')
+param containerImage string
 
-@description('Port the application listens on. Matches the Dockerfile.')
+// The image's own default. The Dockerfile sets PORT=3000 and EXPOSE 3000, the
+// template does NOT set a PORT environment variable, and this one parameter
+// feeds the ingress target port and both probes - so the image decides where
+// the process listens and the template decides where the platform looks, and
+// tests/deploy-guards.test.ts holds the two numbers equal. Do not add a PORT
+// env entry below: the workflow path would carry it forward and the Dockerfile
+// would stop being the single place the port is decided.
+@description('Port the application listens on. Must equal PORT and EXPOSE in the Dockerfile; a test asserts it.')
 param containerPort int = 3000
 
 @description('CPU cores per replica. 0.5 with 1Gi is the smallest Container Apps combination that is not memory starved for a Node server.')
@@ -139,6 +167,18 @@ param graphTenantId string = ''
 
 @description('Mailbox the Change Orders module may touch.')
 param coMailbox string = ''
+
+@description('Set to true once the Anthropic API key exists in Key Vault as ANTHROPIC-API-KEY - placed there by hand with `az keyvault secret set`, never as a template parameter. The container app then reads it by reference. Leave false until the secret exists: Container Apps resolves every Key Vault reference when it creates the revision, and a reference to a secret that is not there fails the whole deployment.')
+param anthropicApiKeyInKeyVault bool = false
+
+@description('Set to true once the BAS credential key exists in Key Vault as BAS-CREDENTIAL-KEY - the 32-byte base64 AES key that encrypts Niagara station passwords in bas_station_credentials, placed there by hand, never as a template parameter. It MUST be byte-identical to the BAS_CREDENTIAL_KEY in the .env of the collector on the office PC: every stored credential was encrypted under that key, and a different one turns them all into unreadable ciphertext. Same conditional as the Anthropic key, for the same reason.')
+param basCredentialKeyInKeyVault bool = false
+
+@description('BAS_CREDENTIAL_KEY_VERSION: the integer stamped on a credential row when a password is saved, so a key rotation does not need a flag day. Not a secret - a plain value. 1 is the version the key on the office PC carries and the default in the code; change it only when introducing a new key, together with the secret above.')
+param basCredentialKeyVersion string = '1'
+
+@description('Set to true once the Analyze database URL exists in Key Vault as BAS-ASK-DATABASE-URL - the connection URL of the bas_analyze role on THIS server (scripts/setup-bas-analyze-role.sql creates the role and the operator chooses its password at run time), placed in the vault by hand, never as a template parameter. Read by the container app as BAS_ASK_DATABASE_URL; absent, the Analyze tab says it is not configured and nothing else changes. Same conditional as the two secrets above, for the same reason.')
+param basAskDatabaseUrlInKeyVault bool = false
 
 // ---------------------------------------------------------------------------
 // Cost Intelligence
@@ -412,6 +452,26 @@ resource authSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   }
 }
 
+// The Anthropic API key is deliberately NOT a resource here and not a
+// parameter. The two secrets above are generated at deploy time and are
+// passed on every deploy; this one is issued once by the Anthropic Console and
+// pasted into the vault once, by the person holding it, so a routine redeploy
+// never needs it on the command line and can never overwrite it with a blank.
+// The template only knows the name it is stored under. infra/README.md has the
+// command; runbook.md has what goes wrong.
+var anthropicApiKeySecretName = 'ANTHROPIC-API-KEY'
+
+// The BAS credential key is the same shape: issued once (generated on the
+// office PC, where the collector already uses it), pasted into the vault once
+// by hand, never on a deploy's command line. The template knows the name only.
+var basCredentialKeySecretName = 'BAS-CREDENTIAL-KEY'
+
+// The Analyze database URL is the third of the same shape: the bas_analyze
+// role's connection URL on this server, built by the operator after running
+// scripts/setup-bas-analyze-role.sql, pasted into the vault once, never on a
+// deploy's command line. The template knows the name only.
+var basAskDatabaseUrlSecretName = 'BAS-ASK-DATABASE-URL'
+
 // ---------------------------------------------------------------------------
 // Container Apps
 // ---------------------------------------------------------------------------
@@ -475,6 +535,35 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${authSecretSecret.name}'
           identity: identity.id
         }
+        // Conditional, because a reference to a secret that is not in the
+        // vault fails the revision - see the anthropicApiKeyInKeyVault param.
+        ...(anthropicApiKeyInKeyVault
+          ? [
+              {
+                name: 'anthropic-api-key'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${anthropicApiKeySecretName}'
+                identity: identity.id
+              }
+            ]
+          : [])
+        ...(basCredentialKeyInKeyVault
+          ? [
+              {
+                name: 'bas-credential-key'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${basCredentialKeySecretName}'
+                identity: identity.id
+              }
+            ]
+          : [])
+        ...(basAskDatabaseUrlInKeyVault
+          ? [
+              {
+                name: 'bas-ask-database-url'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${basAskDatabaseUrlSecretName}'
+                identity: identity.id
+              }
+            ]
+          : [])
       ]
     }
     template: {
@@ -522,12 +611,20 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'BOOTSTRAP_ADMIN_EMAIL'
               value: bootstrapAdminEmails
             }
-            // CLAUDE.md prohibition 1. Nothing in this system sends
-            // automatically, and this stays false until a human has verified an
-            // end-to-end send.
+            // CLAUDE.md prohibition 1 still holds: nothing in this system
+            // sends automatically. This gate was 'false' from the first
+            // deployment until 2026-10-14, when the platform owner opened it
+            // after a supervised test send on 2026-09-29 (a ZZTEST draft to the
+            // operator's own address, which arrived and appeared in Sent
+            // Items). It is 'true' here so a template deployment does not
+            // close it again; every send is still one human, one draft, one
+            // deliberate action. Exactly the lowercase string - 'TRUE' and
+            // 'True' leave the gate shut. tests/deploy-guards.test.ts holds
+            // this value. To close it in an emergency, see runbook.md ->
+            // "The send gate is open, deliberately".
             {
               name: 'PHB_ALLOW_SEND'
-              value: 'false'
+              value: 'true'
             }
             {
               name: 'GRAPH_CLIENT_ID'
@@ -548,6 +645,48 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'CO_MAILBOX'
               value: coMailbox
             }
+            // Read lazily by readAnthropicApiKey in lib/env.ts. Absent
+            // disables BAS Ask (B5) and the Phase 12 Part D engine calls and
+            // nothing else; the platform boots without it. By reference like
+            // the two secrets at the top of this list - never a plain value.
+            ...(anthropicApiKeyInKeyVault
+              ? [
+                  {
+                    name: 'ANTHROPIC_API_KEY'
+                    secretRef: 'anthropic-api-key'
+                  }
+                ]
+              : [])
+            // Read lazily by credentialKeyState in lib/modules/bas/credentials.ts.
+            // Absent disables storing and decrypting station logins and nothing
+            // else. By reference, like the key above - never a plain value. The
+            // version beside it is a plain integer, not a secret, read only
+            // when a password is saved (currentKeyVersion).
+            ...(basCredentialKeyInKeyVault
+              ? [
+                  {
+                    name: 'BAS_CREDENTIAL_KEY'
+                    secretRef: 'bas-credential-key'
+                  }
+                  {
+                    name: 'BAS_CREDENTIAL_KEY_VERSION'
+                    value: basCredentialKeyVersion
+                  }
+                ]
+              : [])
+            // Read lazily by readAnalyzeEnv in lib/modules/bas/analyze/env.ts,
+            // beside the Anthropic key: the Analyze tab needs both and says
+            // which is missing. By reference, like the others - never a plain
+            // value, and never DATABASE_URL: this is the read-only bas_analyze
+            // role, not the platform's own connection.
+            ...(basAskDatabaseUrlInKeyVault
+              ? [
+                  {
+                    name: 'BAS_ASK_DATABASE_URL'
+                    secretRef: 'bas-ask-database-url'
+                  }
+                ]
+              : [])
             // Cost Intelligence: skill sync, project sync and the file tree read
             // SharePoint as the CIP app. No secret: the managed identity above.
             {
@@ -584,8 +723,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                 path: '/api/health'
                 port: containerPort
               }
-              initialDelaySeconds: 5
-              periodSeconds: 10
+              // Tuned from a measured cold start (2026-09-30, runbook.md ->
+              // "A cold start takes about 30 seconds"): the web container is
+              // listening 1.7 s after it starts, and with a 5 s initial delay
+              // and a 10 s period the readiness gate alone cost 8 to 12 of the
+              // 30 s. 1 s and 2 s take most of that back. /api/health touches
+              // nothing, so a 2 s period costs the process nothing to answer.
+              initialDelaySeconds: 1
+              periodSeconds: 2
               failureThreshold: 3
             }
           ]

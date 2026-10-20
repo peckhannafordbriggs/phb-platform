@@ -638,8 +638,9 @@ grouping — a thread genuinely spans folders, and going mailbox-wide needs a
 `conversationId eq` query per thread plus a decision about Deleted Items, which Graph
 returns and Outlook hides.
 
-**BAS** — B5, plain-English questions over the data: designed, not started, blocked on a
-company Anthropic API key. Point classification tooling, deferred because the right shape
+**BAS** — B5, plain-English questions over the data: built as the Analyze tab
+(§ 52); its API key reaches production from Key Vault by reference as of 2026-10-01.
+Point classification tooling, deferred because the right shape
 depends on how a given integrator named things and most fault rules need `equipment_id`,
 which nothing currently sets. Production deployment, blocked on Azure. Multiple buildings —
 the schema and filters already support it; the lab station caps around two or three
@@ -1528,6 +1529,108 @@ the first test and the fallback - the path every point is on - goes back to
 being unproven. Select `h.point_name` directly in a new query and the
 source-text test fails; that is what it is for.
 
+## 55 · The evidence is the flatness, not the number, and the role decides who is judged
+
+**Decision.** The value-plausibility check (built 2026-09-28, landed
+2026-10-01) asks one question of a point: has its value stopped changing
+when it should have? A run of identical readings longer than a threshold for
+the point's *kind* of measurement is flagged as "looks stuck, go and look".
+Which points are judged is decided by the role - `bas_point_roles.is_setpoint`
+and `measurement` - and by nothing else. There is no list of bad values.
+Nothing is stored; the check runs on every page load.
+
+**How it landed.** The branch sat unmerged for ten days while main took the
+quiet-UI rewrite (§ 58), unit symbols, the Projects tab and B8.5 (§ 61),
+and the notes said it was deployed when it was not. Where it met the quiet
+rules, the quiet rules won: the check is the third verdict `evaluateChecks`
+decides, one phrase on the *Checks:* line when nothing is flagged - *values
+still changing (17 judged)*, or *no values judged (no roles set)*, because a
+check that judged nothing must not read as reassurance - and its full card,
+with every finding sentence it had, when something is. The Points-list
+column followed the list into `settings-points.tsx`, where *not checked,
+role not set* is now a label for the row's role picker: B8.5 put a door
+beside the invitation, and the words open it. Values print through the
+unit-symbol formatter. The acceptance was re-run against the frozen 29
+September database with the same two faults found and the same silence on
+every setpoint and status point, and the mutations were re-run.
+
+**Why.** Every check before this one asked whether data was *arriving*.
+Two dead sensors arrived on time, complete, no gaps, for a month:
+`points_RoomT` at exactly -40 since 24 August (an open-circuit analog input)
+and `VAV-8 104-105_ZoneTemperature` at exactly 70.5 for its whole history.
+Both were found by a person reading numbers. The dashboard said all clear
+the whole time, which is worse than no dashboard.
+
+*The evidence is the flatness.* -40 and 32767 are what dead inputs often
+read, and a hard-coded list of them would have caught one of the two faults
+and missed the other - 70.5 is an ordinary room. It would also be a guess
+dressed as a fact: -40 is a real temperature somewhere. A step followed by a
+flat line and a flat line with no step have the same signature, and the
+signature is what is checked.
+
+*The role decides.* A check that flags every setpoint is worse than no
+check, because people learn to ignore it and then miss the real one. A
+setpoint holding still is the setpoint working; `Occupied` has 419 records in
+two and a half years and that is normal. The roles table already carried the
+distinction - `is_setpoint`, and a `measurement` kind of `status` or `mode`
+for the state words - and it was set on the twenty office points that matter.
+A point with no role is not checked and says *role not set*, never guessed
+at: Temp1, Temp2 and Temp3 are unclassified because nobody knows what they
+are, and a check that guessed would erase that fact. The SQL that picks the
+judged points is generated from the same threshold table the TypeScript
+applies, and a test walks all 91 roles in the vocabulary through both halves
+and fails on the first disagreement; the judge itself throws rather than
+guessing if it ever meets a row the two halves disagree on.
+
+*Thresholds are per kind, defended by measurement.* One number for
+everything would flag a damper at its minimum position (the office
+outside-air damper held exactly 10 % for 9.4 days in September, correctly)
+or miss a duct static that has been flat for six hours (broken). So pressure
+is 3 h, temperature 6 h, outputs and accumulators a week, electrical a day -
+each with its reason in the table and printed on the card, each sitting
+clear of the longest healthy run measured in the live history. A kind with
+no row is not judged with a default; it lands in a test that lists it until
+somebody decides.
+
+*Nothing is stored.* Measured against the live table: 6.5 ms for 17 judged
+points, because the plan walks backwards down the primary key and stops at
+the first different value - a healthy point costs four index probes whatever
+the table's size, and only a dead sensor's run is walked, bounded at 90
+days. A verdict stored per collector pass would live in the other repository
+(`phb-bas`), need a migration, and go stale whenever a threshold here
+changed. The condition to revisit is written down: 200 ms on the live screen.
+
+**What breaks if you undo it.** Add a bad-value list and the next stuck
+sensor at an ordinary value is missed while a cold-room sensor reading a
+real -40 is flagged. Drop `NOT is_setpoint` from `checkedRoleSql` and every
+setpoint on the office unit is flagged the next time the unit holds a
+setpoint for a shift - and the judge throws, because the two halves no
+longer agree; drop the TypeScript branch too and the acceptance test lists
+the setpoint in `flat`. Guess a role for an unclassified point and the check
+starts making claims about a number nobody can name. Use one threshold and
+either the dampers are flagged weekly or the pressures never are. Measure a
+change-of-value point to now() and a stopped collector reads as a dead
+sensor. Store the verdict and a threshold change here leaves the stored
+column wrong until the collector is redeployed. Deactivate a point to silence
+the card and the station overwrites what was not collected.
+
+**Amendment, 2026-10-06: the type is a gate too.** The role gate alone had a
+hole: a boolean or enum point given a measurement role - a fan status
+misclassified as `zone_temp` - would have been judged on that measurement's
+threshold and flagged after six hours of running. Nothing on live was in that
+position, but the vocabulary makes it one click away. The gate now has a
+second half, `checkedTypeSql` in SQL and the same `STATE_DATA_TYPES` list in
+the judge: `bool`, `str` and `enum` are never judged, whatever the role, with
+their own reason, `state_type`, worded *state point*. It sits AFTER the role
+gates on purpose, so a state point with no role still reads *role not set* -
+the words that open the role picker - and so no verdict or wording that
+existed before changed: the live run before and after is 17 judged, 2 flat,
+15 changing, and the five bool and string points carry the same reasons they
+did. A test walks all seven declared types through both halves; removing
+either half makes the agreement guard throw and fails the named test.
+
+---
+
 ## 56 · The assertion fetch is set on the provider object, and the test goes through Auth.js's own normalisation
 
 **What.** Production sign-in authenticates the token exchange with the managed
@@ -1573,6 +1676,708 @@ regression test asserts it: the day the issuer is changed to `common`,
 discovery would fail with no obvious connection to sign-in. Either way the
 test fails first, because it resolves the provider the way Auth.js does
 rather than the way the code reads.
+
+## 57 · The data migration writes as a role that cannot reach the employee table
+
+**What.** `scripts/bas-migrate-to-azure/import.sql` loads the fourteen `bas_*`
+tables into the Azure database inside one transaction. Before the first row is
+written it creates `bas_migrate_tmp`, grants it INSERT on those tables, UPDATE
+on their eight sequences and SELECT on `employees (id, email)`, switches the
+session to it with `SET LOCAL ROLE`, and drops it again before `COMMIT`. Every
+non-`bas_*` table is fingerprinted before and after, and a difference refuses
+the commit.
+
+**Why.** The instruction was that the script be *incapable* of writing
+`employees`, `modules`, `module_grants` and the rest — not careful. Care is a
+property of the author on the day; a privilege boundary is a property of the
+run. With the role in place, a wrong table name in a future edit of the file
+fails with `permission denied` instead of succeeding quietly. The fingerprint is
+the second layer, there so that the run *prints* the proof rather than relying
+on the reader to know the role's grants.
+
+The role is transient because roles are cluster-wide and this migration runs
+once: a permanent `bas_migrate` would outlive its only use, and a rolled-back
+run should leave nothing — including no role — behind. It is created inside
+the transaction so that both hold at once.
+
+**What it cost.** One defect on the first run against a non-superuser
+administrator, which is what Azure's is: `DROP OWNED BY` at the teardown needs
+the administrator to *inherit* the role's privileges, and the first version
+granted membership with `INHERIT FALSE`. The load succeeded, the teardown was
+refused, and the whole thing rolled back — the failure mode the design wants,
+observed rather than argued. `GRANT … WITH SET TRUE, INHERIT TRUE` is the fix,
+and the comment beside it says so.
+
+**What breaks if you undo it.** Running the COPYs as the administrator makes
+the "must not touch" tables reachable by any statement in the file, and the
+only thing between a typo and the employee table is a reviewer's eye. The
+fingerprint would still catch a change after the fact, but "rolled back
+because it changed employees" is a worse place to be than "could not".
+
+---
+
+## 58 · Quiet when fine, loud when broken — and the loud half is what the tests hold
+
+**What.** On 2026-09-30 the BAS screens stopped narrating themselves. A label
+says what a number is; it no longer explains the feature, justifies the
+design, or describes the screen's own drawing. Concretely: the two
+always-rendered check cards on Collection Health — *Station count against
+ours* and *No longer reported by the station* — collapse to one muted line,
+*Checks: station counts match · no vanished points*, when both pass, and each
+comes back as its full card, in its tone, above the hero, when it fails. The
+Home tile leads with the state (*No points at risk*, or *3 points at risk* in
+a maroon mark) over the newest reading's age, and headroom moved to Collection
+Health alone. Units are symbols — °F, %, inWC — from one formatter driven by
+the unit column, with the stored value untouched. Every table in the module
+scrolls in the same seven-row box. And about a dozen sentences went: *refreshes
+every minute while this tab is open*, *a backlog, not a fault*, *dashed
+outlines are the gaps the collector recorded and explained*, *not limited to
+the window*, *read-only; the question becomes one database query*.
+
+**Why.** That prose was useful while the module was being built — every
+sentence was a design decision written where its author would see it — and to
+a person running a building it is noise, and noise is how a real warning gets
+skimmed past. The test for each sentence was one question: does it stop a
+person misreading a **number**, or does it explain the **UI**? The first stays
+— *a gap means we were not watching, not that equipment was off* prevents a
+real misreading by a real user; *reads as a stuck sensor, not a stable room*
+is the product working. The second goes.
+
+The check cards are the case worth writing down. They were always rendered,
+green included, because a card that appears only when something is wrong
+cannot be told apart from a check that stopped running (§ 43's lesson, again).
+That reasoning still holds and the line is its answer: the check runs on
+every render — `evaluateChecks` is the only place either verdict is decided —
+and the line and the card are two renderings of one result. A screen with
+neither a line nor a card is a broken screen, not a healthy one. And *pass*
+is stricter than *green*: the vanished check fails on a filtered zero with
+vanished points elsewhere, so the B7.6 false calm still renders the full card.
+
+**The Home tile's mark is the one place this brushed against § 38.** The
+redesign's rule is that decorative colour and semantic colour are disjoint
+sets, and the runbook said a Home card carries no state colour at all. The
+brief asked for the at-risk headline in red, because a tile that reads calmer
+than the screen behind it is worse than one that clashes. The resolution keeps
+the rule and satisfies the brief: the **fill** is identity cyan and never
+changes with state; the fault is a maroon **mark on** the fill. Cyan is still
+never a state, maroon is still never decoration. `tests/home.test.ts` still
+asserts `page.tsx` names no tone token; the mark lives in `figure-block.tsx`
+and `tests/bas-quiet-ui.test.tsx` asserts it appears exactly when the count is
+above zero.
+
+**What it cost.** The diet is cheap; what it must not cost is the failure
+states, and so `tests/bas-quiet-ui.test.tsx` drives every collapsed or quieted
+element into its unhealthy state and asserts the full loud wording on the
+rendered HTML: a station-count mismatch, a vanished point, a filtered zero with
+vanished points elsewhere, both checks failing at once, points at risk on the
+Home tile. Each collapse was mutated to swallow the unhealthy state too, and
+the tests failed by name. `tests/bas-unit-symbols.test.tsx` renders a tile, the
+axis label, the tooltip and the per-point table and reads the symbol back.
+
+**What breaks if you undo it.** Adding a sentence back is harmless. Making a
+check card conditional on failure *without* the line — "it only shows when
+there is a problem" — recreates the indistinguishable-from-broken screen the
+cards existed to prevent, and the quiet-UI test fails on the healthy fixture.
+Rendering the Home tile from a second at-risk count, or tinting its fill,
+breaks the two tests named above.
+
+---
+
+## 59 · The Projects card's number is Collection Health's, and "nothing loaded" had to become sayable
+
+**What.** On 2026-09-30 the BAS module gained a Projects tab and opens on it
+(labelled *Dashboard* for a day; the component, route and types still carry
+that name, deliberately - see the runbook):
+one card per row of `bas_projects`, about three across. Each card is the
+project's name, its health in the Home tile's words — *No points at risk*, or
+*N points at risk* in a maroon mark — over the age of its newest reading, and
+*N buildings · N JACEs*. Collection Health moved from `/bas` to `/bas/health`.
+Clicking a card opens Point Explorer with the project set and **no point
+loaded**, at `/bas/points?project=<id>&point=none`.
+
+**Why the number comes from where it does.** The card's at-risk figure is
+per-state counts over `bas_v_collection_health` filtered on `is_active` alone
+— hidden points in — summed in TypeScript by `atRiskCount` over
+`AT_RISK_ROLL_RISKS`. It decides nothing itself; the component never sees a
+risk state and takes the service's number through the same `basFigure` the
+Home tile uses. Four private definitions of "at risk" were found on one
+screen on 2026-09-18 (§ 49) and unified; a new screen is precisely where a
+fifth appears, because it is the one place nobody is looking for the old
+bug. So `tests/bas-at-risk-predicate.test.ts` holds a card to
+`getCollectionHealth(viewer, { projectId })` for the same project, from the
+fixture that has a point in every horizon state.
+
+Two mutations were run to prove the hold is real. Give the card its own
+count — `active_points - risk_ok`, the 18 September sentence's answer — and
+three tests fail, all in the predicate file, while the Projects tab's own test
+file passes 31 of 31: its fixture has no not-full point, so it cannot tell
+the difference. Zero one state on the card alone and two fail, again only
+there. That asymmetry is the argument for holding every surface in one file
+against one fixture rather than each in its own: the fixture that can tell
+is the one that matters, and a surface tested only against a fixture that
+cannot is a surface with a hole shaped exactly like the last defect.
+
+**Why the health line is sometimes absent.** A project with no active point
+— no JACE yet, or one that has discovered nothing — shows its counts and no
+health line. *No points at risk* over zero points is a verdict about nothing,
+and § 58's rule was to be quiet when fine, not to be reassuring when empty.
+It appears with the first active point; with no readings it reads *No
+readings yet*, never a healthy zero. And a project with no buildings is a card
+but not a link: the Point Explorer cascade has always offered only projects
+that have a building, and answers one that has none with a 404. A card that
+leads to a 404 is worse than one that leads nowhere.
+
+**Why `point=none` exists.** Point Explorer's URL is its state — the filters
+live in the query string, `app/(modules)/bas/filters.ts` — and an absent
+`point` has always meant "the first point the picker offers". That is right for a
+bookmark and wrong for a card: someone who clicked *Liberty Center* would see
+whichever point sorts first drawn as if they had asked for it, under a URL
+that says nothing about a point. There was no value that meant "nothing", so
+one was added — `none`, which no id can collide with — and the route turns it
+into `selectPoint: false`, the service returns the lists and runs no point
+query, and the screen says *Choose a point*. Choosing one replaces it;
+changing a level above clears it through the same cascade as before. The card
+is a real href, so the back button returns to the Projects tab.
+
+**Why the counts have a guard.** The card query LEFT JOINs buildings and the
+health view and groups by project; a join that dropped or doubled a project
+would show the wrong number of cards with nothing on screen to notice it by.
+The payload carries a joinless `count(*)` of the same projects, and the screen
+says so in red when they differ — the `stationsAccountedFor` pattern from the
+Points list (§ 45), applied to the one screen where "how many projects" is the
+whole point.
+
+**What breaks if you undo it.** Computing the card's number in the component,
+or in SQL of its own, is the September defect with a new address; the
+predicate test's card case and its source-text guard both fail. Rendering a
+health line for a project with no active point fails the dashboard test's
+absence cases. Making the card an href for a project with no buildings sends
+people to a 404. Dropping `selectPoint` and letting a card arrive with an
+absent `point` draws the first point under a URL that never asked for it, and
+the "nothing loaded" tests fail.
+
+---
+
+## 60 · The Projects cards are filled in brand colours, and the colour is allowed to mean nothing
+
+**What.** Same day as § 59, the project cards became filled cards in Home's
+`.card--filled` language. Each project takes one of six brand fills —
+cyan, orange, teal, pink, purple, gold, in the mark's order — by its place in
+**creation order** (`project_id`), through `DECORATIVE_CARD_FILLS` and
+`decorativeCardFill` in `lib/module-accent.ts` and `projectFills` beside the
+component. All text on a card is full white. The at-risk mark is the Home
+tile's maroon box, now with a one-pixel white edge, from one stylesheet rule
+(`.card--filled .card-mark`).
+
+**Why creation order.** The cards display org-then-name. Had colour followed
+position on screen, a project named *Aardvark Plaza* created next year would
+sort first and recolour every other card; had it followed a hash of the id,
+two of three projects could share a colour on the day there are three. Rank
+by id is stable on every visit, gives a new project the next colour, and
+changes nobody else's. The one thing that shifts it is deleting a project,
+which shifts those created after it by one — the rarer event by far, and the
+colour never meant anything, so nothing is lost.
+
+**Why not red, and why not maroon.** Red is Change Orders' identity on Home,
+and the one hue a person reads as an alarm untaught; a project card in it
+would say something is wrong about a project that is fine. Maroon is the
+mark's colour on every surface. Both are left out rather than argued
+legible.
+
+**Why the mark has a white edge.** Measured from the tokens: maroon against
+every ink fill is under 2:1, and against purple it is 1.03 — the box would
+vanish into the card. On Home's cyan card the same box measures 1.94 and
+reads only because its white words do. Here the edge is white, which clears
+3:1 against every fill by a wide margin because the fills were chosen so that
+white *text* clears 4.5, and the words inside are white on maroon at 9.36. So
+the mark never relies on its own colour. A colour-blind reader tells a
+healthy card from an at-risk one by the boxed words *N points at risk*
+against the unboxed *No points at risk*; the fill tells them only which
+project.
+
+**Why full white.** Home's status line is white at 85%. On the ink fills that
+measures between 3.8 and 4.1, under AA; the ink tier was derived so that full
+white clears 4.5, not tinted white. `tests/bas-dashboard-colours.test.ts`
+records the measurement rather than fixing Home, which is a separate
+decision.
+
+**What breaks if you undo it.** Deriving the fill from anything but ids —
+the mutation run was `decorativeCardFill(pointsAtRisk)` — fails the
+"does not change with its health" test and the source-text guard on
+`project-colours.ts`. Adding red or maroon to the palette fails the palette
+test by name. Putting the mark's colours back inline, or dropping its edge,
+fails the stylesheet-rule test. Tinting the text fails the contrast test on
+the first ink fill it is measured against.
+
+---
+
+## 61 · A suggestion is a sentence until a person clicks, a bulk change is all or nothing, and the acceptance test is the SQL we did by hand
+
+**Decision.** B8.5 (2026-10-01) put roles and equipment in the UI three
+ways: a picker per point through the same strict one-field PATCH as the
+label, a bulk endpoint that takes a selection and is all-or-nothing in one
+transaction, and name-pattern suggestions that the platform computes on
+every read and writes never. The feature was accepted against one test:
+the office JACE's 26 active points, classified by hand in SQL on 17
+September, reproduced through the routes the UI calls and compared row for
+row with a fixture read from the live database.
+
+**Why suggestions never auto-apply.** The standing rule from B7: `Temp1`-
+`Temp3` on the lab are deliberately unclassified because nobody knows what
+they measure, and a made-up role makes the Analyze model answer confidently
+about something untrue. A pattern that is right about `VAV-3 120-121_
+ZoneTemperature` is still a guess; a guess a human confirms is fine and a
+guess written silently is not. So the engine returns a sentence and a
+button, the read that computes it is proven to change nothing, and the
+mutation that applied suggestions on read with a loosened "Temp" pattern
+fails the canon test by name. "Confident" is defined per pattern and shown
+on the row: a whole measurement phrase, setpoint words only to setpoint
+roles, disagreement is silence, a unit conflict is silence, a role the
+vocabulary lacks is silence. The next integrator's `VAV1_ZN_T` gets nothing,
+and that is the intended failure.
+
+**Why bulk is all or nothing.** A selection is one statement - "these ten
+are zone temperatures on their VAVs" - and nine right points plus one wrong
+one is a wrong statement, not nine right ones. Applying what can be applied
+leaves a person reconciling a half-applied selection against a list that
+no longer matches what they chose; refusing with the count and changing
+nothing is recovered from by adjusting the selection and clicking again.
+It costs nothing in traceability because a bulk change is one audit row per
+point per field either way, with `viaBulk` and the selection size on the
+row. The bulk endpoint is also the one place a role and an equipment travel
+together, because accepting a suggestion is one human action on both; the
+single-point PATCH stays one field per request so one request stays one
+audit row.
+
+**Why a role is not cosmetic, and the test says so.** The pairing views
+join a measurement to its setpoint from `setpoint_for` and shared equipment,
+the unclassified tile is `point_role IS NULL`, the Analyze catalogue lists
+roles with counts, and the value-plausibility check (§ 55) judges a measured
+quantity by the threshold for its role's kind and judges nothing with no
+role. That last one was not on main when B8.5 was built - the branch
+carrying it had sat unmerged for ten days - so the B8.5 pull request said no
+role-keyed check existed in this repository. It was true of main and false
+of the project; § 55 records the landing. Assigning a role moves a point into those verdicts
+and clearing it moves it out, and the test asserts that against the real
+views rather than a description of them. The one line beside the picker
+says so in the words the quiet-UI rule allows: it stops a number being
+misread. The catalogue's five-minute cache is dropped on every
+classification write; the collector reads none of these columns.
+
+**Why the acceptance test is the one from September.** The plan said it in
+so many words: we classified the office by hand first so this feature would
+have a known-correct answer. The fixture is that answer, read from live on
+1 October. The test does not call the service; it calls the route handlers
+with the bodies the UI sends, uses *Apply all* where the suggestions were
+confident (17 points, ten VAVs created), creates the RTU and reparents the
+VAVs afterwards (the edit the prompt said must be possible), attaches the
+16 RTU points in one bulk request selected the way the filters select, and
+sets the three remaining roles one at a time. If the routes could not
+reproduce something the SQL did, that would be a missing feature, and the
+fixture is not the thing to relax.
+
+**What breaks if you undo this.** Write a suggestion on read and the lab
+test fails on `Temp1`. Apply a bulk change to the filter or the station
+instead of the selection and the "NO other point" test fails by point id.
+Drop `.strict()` from the PATCH and `isActive` rides in beside `role`; two
+tests fail, one at the schema and one at the route. Let a partial bulk
+succeed and the all-or-nothing tests see rows change after a 404. Give the
+single PATCH two fields and one request becomes two audit rows with one
+cause.
+
+---
+
+## 62 · The two hand-set secrets are references the template knows by name, and the BAS key is copied, never generated
+
+**Decision.** `ANTHROPIC_API_KEY` and `BAS_CREDENTIAL_KEY` reach the
+container app from Key Vault by reference (`ANTHROPIC-API-KEY`,
+`BAS-CREDENTIAL-KEY`), each behind a boolean parameter that defaults to
+false. Neither is a template parameter, secure or otherwise, and the
+template never writes either secret. A person sets each value once with
+`az keyvault secret set`. The variable names are decided in `lib/env.ts` and
+imported by the two readers; `BAS_CREDENTIAL_KEY_VERSION` is a plain value.
+Built 2026-09-17 for the Anthropic key, found unmerged on 1 October (the
+second such branch that day), re-landed and extended to the BAS key the same
+way.
+
+**Why by reference and never a parameter.** `DATABASE-URL` and `AUTH-SECRET`
+are generated at deploy time, so passing them on every deploy is natural.
+These two are issued elsewhere - the Anthropic Console; the collector's `.env`
+on the office PC - and a secure parameter would put them on every deploy's
+command line and let a blank redeploy overwrite them. A reference means a
+routine redeploy never touches the value.
+
+**Why the boolean.** Container Apps resolves every Key Vault reference when
+it creates a revision, and a reference to a secret that does not exist fails
+the whole deployment rather than degrading to an unset variable. The
+parameter is the person saying "the secret is there now".
+
+**Why the BAS key is copied, byte for byte.** Every row in
+`bas_station_credentials` was encrypted on the office PC under the
+collector's key, and the collector keeps using it wherever it runs. A key
+generated for Azure would read every stored credential as `decrypt_failed`,
+and re-entering the passwords to make the panel green would re-encrypt them
+under a key the collector does not have - collection stops against a
+41.7-hour roll horizon. One secret, two systems, one value (§ 57 is the
+migration that carries the rows; the runbook's *one secret that lives in two
+places* is the rotation).
+
+**Why the version is a plain value.** It is a small integer stamped on a row
+when a password is saved so a rotation does not need a flag day; decryption
+never reads it. Treating it as a secret would be a second Key Vault entry to
+keep in step for nothing.
+
+**Why no new role assignment.** The managed identity holds **Key Vault
+Secrets User** on the vault itself, which covers every secret in it. The
+deploy-guard test asserts that from the template's grants - one assignment,
+vault-scoped, that role id, the app's identity, both references under it -
+rather than from a sentence saying so.
+
+**What breaks if you undo this.** Make either a `@secure()` parameter and
+the guard fails, and a blank redeploy can wipe the key. Give either a
+`value:` instead of a `secretRef:` and the guard fails. Generate a BAS key
+for Azure and every stored station login is unreadable the moment the
+revision starts. Spell a variable name in a reader instead of importing it
+and the guard fails; rename it in `lib/env.ts` without the bicep and the
+guard fails. Remove either `env:` entry and two guard tests fail by name -
+that mutation was run.
+
+---
+
+## 63 · A boolean point is a state, and the chart has to know which kind it is drawing before it chooses an axis
+
+**Decision.** The Point Explorer reads the value column a point's readings
+actually live in, decided from `bas_points.data_type`, and draws a boolean
+point as a stepped line between two labelled states - "Occupied" /
+"Unoccupied", "Enabled" / "Disabled", "On" / "Off", or "True" / "False" when
+nothing says better. The y-axis is those two words and nothing else; the
+tooltip and the Latest tile say the word, never the number. Numeric points
+are untouched: unit on the axis and in the tooltip through the one
+formatter, two decimals and "no unit recorded" when no unit is stored.
+String points are recognised (`valueKind: "string"`) and otherwise left
+exactly as they were, by decision, until the evidence has been looked at.
+2026-10-06.
+
+**What was wrong.** `bas_readings` has `value_num`, `value_bool` and
+`value_str`, the collector fills exactly one per row from the oBIX record
+type, and every Point Explorer query read `value_num`. A boolean point's 421
+rows therefore arrived as 421 null samples: an empty plot under an axis that
+read -0.01 / 0.00 / 0.01 (observed by calling `valueAxis([], null)`),
+"Latest —", and "Distinct values 0 · Reads as a stuck sensor, not a stable
+room" on a point that was working perfectly. The chart had no idea what kind
+of thing it was drawing, because nothing told it.
+
+**Where the knowledge comes from, and why there.** `data_type` is written by
+the collector at discovery from the history's `#RecordDef` prototype and is
+CHECK-constrained to seven values. On live it agrees with the populated
+column on all 39 points, and no point has readings in two columns - so it is
+the authority, and the readings refine it only when it is `unknown` (the
+column default, held by no live point). A declared type is never overruled by
+the data: a `real` point with a stray boolean row is a collector defect to
+find, not a chart to redraw, and letting the data vote would let the axis
+change kind as the window moved. The decision is one pure function,
+`valueKindOf` in `lib/modules/bas/value-kind.ts`, used by the service to
+pick the SQL expression and carried to the browser as `PointOption.valueKind`.
+
+**Why 1 and 0 in the series rather than a second series type.** A boolean
+travels through `TrendPoint.value` as `(value_bool::int)::float8` - NULL stays
+NULL - so the break logic, the bucketing, the custom date range and the
+zoom are the same code for every kind. The chart alone turns the number back
+into the word (`stateWord`), and the only place that is awkward is a
+downsampled bucket, where the average is the share of readings that were
+true. The tooltip says exactly that - "Occupied 72% of readings" beside a
+band of "Unoccupied – Occupied" - and the axis still shows only the two
+states, because a bucket average is not a third state. Two state points
+with 811 readings between them will not hit the 10,000 cap soon; the path
+exists so that when one does, nothing lies.
+
+**Why the state words are chosen the way they are.** The data cannot say -
+`value_bool` is true or false. The words come from what the point is FOR:
+occupancy roles or names, alarm roles or names, "enable" in the name, then
+any status or command role as On / Off, then True / False. Roles before
+names, because a role is a person's classification and a name is whatever
+the integrator typed. The table is five lines in `booleanStates` and is
+meant to be added to.
+
+**Why the tiles changed too.** The chart and the tiles are one screen about
+one point. A chart saying "Occupied" above a tile saying "stuck sensor" is
+the same false claim in a different box. Average reads "—" for a state - the
+database's mean of 1s and 0s is a share of readings, not of time, and a dash
+is truer; Range reads the states seen; Distinct values is not judged for a
+boolean or string point, because two is the healthy maximum and the numeric
+thresholds would call every working one dead.
+
+**Why no second axis.** The question "what happens when one chart shows two
+units" has no case: the Point Explorer is one point at a time, and that is a
+correctness decision recorded in the component's header since B4. No shared
+axis exists to fix.
+
+**What breaks if you undo this.** Draw the boolean with `monotone` and three
+tests fail (the line slopes between states, the band slopes, the source
+guard). Hand a boolean the numeric axis and six fail - raw, zoomed, bucketed,
+a single sample, a mostly-null series, and the gridline rule. Read
+`value_num` for every kind in the service and four fail against the real
+database, including the undeclared-type fallback. Judge a boolean's distinct
+values on the numeric thresholds and one fails. All four mutations were run.
+`tests/bas-value-kinds.test.tsx`, `tests/bas-value-kinds-service.test.ts`.
+
+---
+
+## 64 · The readings table is a second path, not a second view of the first one
+
+**Decision.** Point Explorer's trend panel has a *Chart / Table* toggle and
+a *Download CSV* button. The table is the stored rows behind the chart —
+same point, the same two instants the chart's response carries — newest
+first, 200 a page, paged in SQL; the CSV is every row in the range, streamed
+in keyset chunks, capped at 500,000 rows and saying so when the cap bites.
+Both are served by `lib/modules/bas/readings.ts`, which is not
+`getPointExplorer` and imports nothing from `range.ts`: no cap, no ladder,
+no `avg()`. Nothing runs until the toggle or the button is used. 2026-10-09.
+
+**Why a second path.** The chart's 10,000-reading cap is a measurement of
+what Recharts can draw and zoom under 400 ms (§ 53). It is a fact about SVG
+path points. A table does not draw a path and a file does not draw anything,
+so applying the cap to them would be applying a measurement to the thing it
+did not measure. The alternative — "reuse the explorer and page the trend" —
+would hand the table the bucketed series whenever the chart was bucketed,
+and the table exists for the moment the chart looks wrong. A table of the
+chart's averages is a second drawing of the same guess. The whole value of
+the thing is that it cannot agree with the chart by construction; it has to
+agree with the database.
+
+**Why instants and not dates.** The explorer resolves a calendar range in
+the building's zone, by PostgreSQL (§ 53), and its response carries the
+result as `range.from` / `range.to`. The table and the CSV take those two
+instants back exactly. Re-deriving the dates in a second place would be a
+second implementation of the zone rule to keep in step; taking the instants
+means "the same range the chart is showing" is true because it is literally
+the same two values. It also freezes a preset's trailing window between page
+1 and page 2, so paging a *last 7 days* table does not shift under a reading
+that arrived in between. The zone still travels, for display: a row's
+timestamp is the chart tooltip's own formatter in the chart's own zone, so a
+row and a point match by eye, and the exact instant is the cell's title.
+
+**Why the stored value and not the tooltip's.** The tooltip rounds to the
+unit's decimals plus one, because it is a label. The table shows
+`72.02734375 °F` — the float32 Niagara sent, whole, with the symbol through
+the one formatter — because it is evidence. The CSV goes one step further
+and writes `true` / `false` where the screen says *On* / *Off*, and the unit
+name where the screen shows the symbol: the file is for tracing a row back to
+the database, and a file that repeated the screen's display choices could not
+do that. A boolean point's rows on screen are its state words, the same words
+as its axis (§ 63), and never a digit.
+
+**Why the cap is honest, and why 500,000.** A silently truncated export is
+worse than no export: the person has a file, it looks complete, and the
+oldest readings — where the problem they are investigating usually is — are
+simply absent. So the server counts first, streams up to the cap, and sends
+three headers (`total`, `exported`, `cap`); the button fetches rather than
+links, precisely so it can read them, and turns a shortfall into a sentence
+in the warning tone with the one action that gets the rest. The number:
+under Excel's 1,048,576-row sheet limit with room to spare, so a capped file
+cannot be truncated a second time, quietly, by the program most likely to
+open it; about 45 MB, which a browser holds as a Blob; and one point at a
+one-minute cadence for 347 days, far past any point held today. The platform
+never holds the file — 10,000-row chunks, one query each, with the cursor as
+the printed timestamp rather than a Date, because a Date keeps three
+fractional digits and the column keeps six, and a truncated cursor skips
+rows.
+
+**Why `status` is in the file and not on the screen.** It is a real column
+and it is always NULL on this extraction path (`BasReading.status`). A file
+is for completeness, so it carries the column empty; a screen column that
+is always a dash is louder than the toggle, and the brief said nothing may
+be. Same reasoning for the seconds: the table's timestamp is the tooltip's
+format, and the exact instant is a hover away.
+
+**What breaks if you undo it.** Route the table through `getPointExplorer`
+and `tests/bas-readings-raw.test.ts` fails: over the real `points_RoomT`
+fixture with the chart's cap at 2,000 it asserts the table holds every one of
+the 7,600 raw readings, timestamp and value, while the chart holds 1,600
+averages, and that most of those averages are values no reading ever had.
+Import anything from `range.ts` into `readings.ts` and the same file's
+source test fails. Make the cursor a Date and the two-rows-in-one-millisecond
+test fails. Drop the headers or the sentence and the jsdom test fails on the
+exact wording. Fetch the table on page load and the "chart view makes no
+request" test fails. `tests/bas-readings-table.test.ts`,
+`tests/bas-readings-raw.test.ts`, `tests/bas-readings-table-ui.test.tsx`;
+`runbook.md` → *The readings table and the chart disagree, or a CSV export
+says it was cut*.
+
+---
+
+## 65 · A follow-up carries its own context, and an answer from memory names its source
+
+**Decision.** The Analyze tab's follow-ups work by the browser sending the
+newest earlier turns of today's thread with the question - at most six,
+24 KB, each cut to question, interpretation, SQL, answer and a sample of up
+to twenty rows - and the server staying stateless about it. The model may
+answer a follow-up from those rows without a query, and when it does the
+result is its own kind, `from_prior`, rendered with the no-query label and a
+provenance panel naming the earlier question it read from. 2026-10-09.
+
+**Why the browser sends the context.** The thread already lives in the
+browser for a day (§ 64's successor, the thread); a server-side copy would
+be a second store of the same thing with a lifetime to reconcile, and
+nothing on the server needs it between requests. Sending it makes the
+request self-describing - the audit row records how many turns came with
+the question - and makes the caps enforceable in one place that cannot be
+bypassed: the route validates the shape, bounds every string, refuses an
+unknown key and refuses the set by count and by size, so a hand-made body
+can be no larger than the screen would send.
+
+**Why an earlier turn cannot be a way around the guard.** It never touches
+the database. The planner is shown it inside a data block with the rule
+that it is data; whatever SQL the model then writes goes through the same
+guard, the same read-only role and the same transaction as a first
+question. The test is a planner that obediently repeats a crafted turn's
+`DELETE FROM bas_orgs`, twice: the guard refuses both, nothing ran, the
+table is unchanged. The prompt is not load-bearing for safety and was not
+before.
+
+**Why these fields and these caps.** Question, interpretation and answer
+are a few hundred bytes and are what "those" refers to. The SQL lets a
+follow-up be a modification rather than a reinvention. The rows are the
+hard call: without any, "which of those was worst" needs a new query every
+time, which is honest but slow; with all of them a 200-row table is 10 KB
+a turn. Twenty rows is the size of the lists people say "those" about -
+points, gaps, runs - and a longer table goes as a flagged sample with the
+instruction to query rather than guess from it. Six turns and 24 KB is
+about six thousand tokens beside a schema block that is cached, so a
+follow-up costs roughly what a first question costs. Measured on
+2026-10-09 against the live model and the local database
+(`npm run bas:analyze:followup-latency`), two runs:
+
+| Question | Earlier turn sent | Result | Time |
+|---|---|---|---|
+| Points with no reading in 24 h | none | answered, 39 rows | 20.4 s |
+| "Which of those has gone the longest?" | yes, 4.3 KB, rows a sample (20 of 39) | answered: a NEW query, ranked | 32.5 s |
+| the same words, cold | none | clarify: "which points did you mean?" | 6.3 s |
+| Gap hours in 30 days, by point | none | answered, 10 rows | 15.2 s |
+| "Which of those had the most?" | yes, 2.4 KB, all 10 rows | **from_prior**, source named | 6.0 s |
+| the same words, cold | none | clarify | 6.8 s |
+| "How many points had any gap at all?" | yes, all 10 rows | **from_prior**, source named | 12.4 s |
+
+Two things the numbers show. The model follows the partial-sample rule
+without being pushed: over the 39-row result it wrote a new query, over
+the complete 10-row result it read from memory. And a follow-up answered
+from memory is the cheapest thing the tab does - one model call, no query,
+no summary - while a follow-up that queries costs a first question plus a
+larger plan call. The cold runs are the control: without the earlier turn
+the same words are unanswerable, and the model says so.
+
+**Why a from-memory answer is its own kind.** An answer with no query is
+exactly the case the no-query label exists for, and `databaseQueried` is
+false for it, so the label comes for free. But the label alone says only
+what did NOT happen. The source panel says what did: which earlier
+question's rows were read, where that turn sits in the thread, and whether
+the model had all of its rows or a sample - amber when a sample, because a
+"worst" picked from twenty of a hundred and thirty-seven rows is not the
+worst. The service refuses a from-memory plan that names a turn outside
+what was sent: the model cannot have read it.
+
+**What breaks if you undo it.** Send `priorTurns: []` for a first question
+and the thread test fails on the body byte for byte. Drop a cap and the
+route test or the thread test fails by name. Let a from-memory answer
+through without a source and the UI test fails on the panel's wording.
+Route the earlier SQL anywhere but the planner's data block and the
+obedient-model test fails on `bas_orgs`. `tests/bas-analyze-prompt.test.ts`,
+`tests/bas-analyze-service.test.ts`, `tests/bas-analyze-route.test.ts`,
+`tests/bas-analyze-thread.test.tsx`, `tests/bas-analyze-ui.test.tsx`.
+
+---
+
+## 66 · The template is told which image to keep, because two writers each own half of the container app
+
+**Decision.** `containerImage` in `infra/main.bicep` has no default. Every
+template deployment reads the image the app is running and passes it on the
+command line; only the very first deployment, when the registry is empty,
+passes the public placeholder, explicitly. The parameters file never holds the
+image, and the template sets no `PORT` env entry - the Dockerfile's `PORT` and
+`EXPOSE` are the one place the port is decided, and `containerPort` must equal
+them.
+
+**Why.** Two things write the container app. The deploy workflow runs `az
+containerapp update --image`: it sets the image and keeps every other setting
+from the running revision. A template deployment sets every other setting from
+the file and - because a deployment replaces the whole resource - the image
+too. Each path owns half, and neither looks at the other's half. The template
+used to default the image to `mcr.microsoft.com/k8se/quickstart:latest` for
+the first-deployment bootstrap, the parameters file never overrode it, and the
+default was harmless for as long as nobody ran a template deployment after CI
+had pushed a real image. On 2026-10-13 somebody did, to turn two Key Vault
+flags on, and it produced revision `0000053`: a hello-world listening on
+`:80` under probes for `:3000`, `ActivationFailed`. The incident was reported
+as a port disagreement, and every port on the revision was 3000 and right;
+the image was the drift. The same comparison found the mirror case: the
+readiness-probe tuning of 30 September had never reached production, because
+the workflow never applies the template's probes.
+
+A required parameter was chosen over the template reading the running image
+from an `existing` resource reference. The lookup would be automatic, but it
+needs a conditional `existing` resource for the first deployment and depends
+on ARM evaluating only the taken branch of `if()`, and neither can be
+verified without running a deployment. A missing required parameter fails at
+validation before anything is created, which is testable from the file, and
+the cost is one `az containerapp show` before each deployment.
+
+**What breaks if you undo it.** Give the parameter a default and the next
+routine redeploy puts that image into production silently - the deployment
+reports success and the revision fails activation. Put the image in the
+parameters file and it goes stale on the next merge, which is the same
+failure one step removed. Add a `PORT` env entry to the template and the
+workflow path carries it forward, so the Dockerfile and the template can
+disagree with nothing to notice. `tests/deploy-guards.test.ts` → *the two
+deploy paths cannot diverge on the image or the port* holds all of it: the
+mutations were run, and restoring the default or changing the Dockerfile's
+port each fails by name. `runbook.md` → *A template deployment fails
+activation*.
+
+---
+
+## 67 · Analyze speaks like a controls engineer on a job site, and the rule it must never break is the one about causes
+
+On 2026-10-13 the team issued a voice guideline for Analyze and it was
+adopted verbatim as `docs/11-analyze-voice.md`. The readers are
+construction workers, site engineers, controls engineers, technicians,
+maintenance teams and project managers, and the test is whether the first
+can follow an answer that the rest still find useful.
+
+**What changed.** The summariser's rules (`SUMMARY_RULES`,
+`lib/modules/bas/analyze/planner.ts`) gained the spec's shape: answer
+first, then caveats; problem-identification framing when the rows support
+it; engineering detail kept and implementation detail dropped; plain words
+with the HVAC terms kept; old data given with its age; next steps only
+when they follow from the rows, and never a suggestion to change settings
+or bypass a control. The four-sentence cap and the no-bullets rule went,
+because a multi-equipment answer needs a short list to be scannable, and
+the answer renderer now shows paragraph breaks and `- ` bullets - nothing
+else. The planner's messages (clarifying questions, reasons for declining)
+and the platform's own no-data and cannot-answer sentences took the same
+voice.
+
+**What did not change.** The query, the guard, the read-only role, the
+provenance, the evidence panel, the no-query label, the gap warnings, the
+audit row, every cap. The voice is a layer over the same facts, and the
+plain-language rules of § 65's successor (2026-10-13, earlier the same day)
+stay underneath it.
+
+**The rule that is paranoid on purpose.** Section 6 of the spec: a
+possible cause is never presented as a confirmed diagnosis. A model that
+says "Room 107 has a broken damper" from a temperature reading has
+invented a fact, and on a job site an invented fact sends someone to the
+wrong part of the building. So the summariser is told to label each
+statement as confirmed, suggested, possible or undeterminable, to word a
+cause as "could be caused by … the readings don't confirm the cause yet",
+and never to name a broken part the rows have not shown; the prompt test
+fails the build if that instruction is missing. What the test cannot do
+is make the model obey; the evidence panel is what lets a reader check.
+
+**What breaks if you undo it.** Drop the section-6 rule and the answers
+drift toward diagnoses nobody measured. Drop the age-of-data rule and a
+reading from 29 September becomes "the room is 73 °F" in November. Put the
+four-sentence cap back and the ten-room answer becomes a wall of text or
+loses rooms.
 
 ## 47 · The judgment I'd most want to pass on
 

@@ -30,16 +30,42 @@ az bicep lint --file infra/main.bicep
 cp infra/main.parameters.example.json infra/main.parameters.json
 # fill it in, then:
 
+# The image the app is running NOW. A template deployment replaces the whole
+# container app, image included, so it has to be told which image to keep.
+IMAGE="$(az containerapp show -n <app> -g <resource-group> \
+  --query properties.template.containers[0].image -o tsv)"
+
 az deployment group create \
   --subscription <subscription-id> \
   --resource-group <resource-group> \
   --template-file infra/main.bicep \
   --parameters @infra/main.parameters.json \
+  --parameters containerImage="$IMAGE" \
   --parameters postgresAdminPassword="$PGPASSWORD" authSecret="$(npx auth secret --raw)"
 ```
 
 The two `@secure()` parameters are passed on the command line and never written to a
 file. Azure does not log the value of a secure parameter.
+
+**`containerImage` is required and is never in the parameters file.** Two things write
+the container app, and each owns half of it. The deploy workflow runs
+`az containerapp update --image`, which sets the image and keeps every other setting
+from the running revision - env vars, probes, scale, secrets. A template deployment is
+the other way round: it sets every other setting from `main.bicep` and, because a
+deployment replaces the whole resource, the image too. So a template deployment has to
+carry the running image forward, and the parameter used to default to the public
+placeholder instead. The parameters file never set it, and on 2026-10-13 a routine
+redeploy (turning the two Key Vault flags on) put the placeholder back: revision
+`0000053`, a hello-world listening on `:80` under probes for `:3000`, `ActivationFailed`.
+Forgetting the parameter now fails at validation before anything is created, and
+`tests/deploy-guards.test.ts` fails the build if a default comes back. See
+*A template deployment fails activation* in `runbook.md`.
+
+The corollary matters in the other direction too: **a change to env vars, probes or
+scale in `main.bicep` reaches production only through a template deployment.** The
+workflow never applies it. The readiness-probe tuning of 2026-09-30 sat in the template
+for two weeks while every CI revision kept the old values, until that same redeploy
+carried it.
 
 **`Contributor` on the resource group is NOT sufficient.** Verified against a real
 subscription, not inferred from the role name. Two things in this template are outside
@@ -105,16 +131,141 @@ failure it prevents destroys data held nowhere else while the cost of a larger d
 recoverable. The budget carries notification contacts only and no action group, so no
 spending threshold can stop the server.
 
+## Three secrets are set by hand, not by the template
+
+Three secrets are issued elsewhere and pasted into the vault once, by a person:
+the Anthropic API key (next heading), the BAS credential key (the heading
+after it) and the Analyze database URL (the heading after that). The template
+knows their names only - `ANTHROPIC-API-KEY`, `BAS-CREDENTIAL-KEY` and
+`BAS-ASK-DATABASE-URL` - and references each from the container app behind a
+boolean parameter. All three are read under the managed identity's existing
+**Key Vault Secrets User** grant on the vault; no new role assignment is
+needed, and `tests/deploy-guards.test.ts` asserts that from the template's
+grants.
+
+## The Anthropic API key is set by hand, not by the template
+
+`DATABASE-URL` and `AUTH-SECRET` are written into Key Vault by the template from
+secure parameters, because both are generated at deploy time. The Anthropic API key
+is different: it is issued once by the Anthropic Console, and the person holding it
+puts it in the vault themselves. The template never sees the value - it knows only
+the name, `ANTHROPIC-API-KEY`, and references it from the container app as the
+`ANTHROPIC_API_KEY` environment variable when `anthropicApiKeyInKeyVault` is true.
+
+Order matters. Container Apps resolves every Key Vault reference when it creates a
+revision, so the secret has to exist before the parameter is turned on.
+
+```powershell
+# 1. Find the vault. Its name carries a hash suffix, so read it rather than guess it.
+az keyvault list --resource-group <resource-group> --query "[].name" -o tsv
+
+# 2. Set the secret. Read-Host keeps the key out of the command line and the
+#    shell history; it is echoed to the screen, so do this at your own desk.
+az keyvault secret set --vault-name <vault-name> --name ANTHROPIC-API-KEY --value (Read-Host "Anthropic API key")
+
+# 3. Confirm it exists WITHOUT printing it.
+az keyvault secret show --vault-name <vault-name> --name ANTHROPIC-API-KEY --query "{enabled:attributes.enabled, updated:attributes.updated}"
+
+# 4. Set anthropicApiKeyInKeyVault to true in infra/main.parameters.json and redeploy.
+```
+
+The vault uses RBAC, so setting a secret needs **Key Vault Secrets Officer** on the
+vault. `Contributor` and `Owner` on the resource group are management-plane roles
+and do not grant it - expect `ForbiddenByRbac` without it, the same shape as the
+three permission walls under *Deploying to Azure* in `runbook.md`.
+
+The key does not expire, which is what prohibition 7 requires; it can be revoked in
+the Anthropic Console. To rotate, run step 2 again with the new key - a new version
+of the same secret - and create a new revision so the app picks it up.
+
+## The BAS credential key is copied from the collector, byte for byte
+
+`BAS_CREDENTIAL_KEY` is the AES-256 key that encrypts Niagara station passwords in
+`bas_station_credentials`. It is **not generated for Azure**: every stored credential
+was encrypted on the office PC under the collector's key, and the collector keeps
+using that key wherever it runs. The value in the vault must be the value in the
+collector's `.env` on the office PC, byte for byte - one character out and every
+stored credential is unreadable ciphertext (`runbook.md` → *The BAS credential key,
+the same way*). `BAS_CREDENTIAL_KEY_VERSION` is not a secret; it is the
+`basCredentialKeyVersion` parameter, default `"1"`, which is what the office PC's rows
+carry.
+
+```powershell
+# 1. Same vault as above.
+# 2. Set the secret from the collector's .env. Read-Host keeps it out of the
+#    command line and the shell history.
+az keyvault secret set --vault-name <vault-name> --name BAS-CREDENTIAL-KEY --value (Read-Host "BAS_CREDENTIAL_KEY, exactly as in the collector .env")
+
+# 3. Confirm it exists WITHOUT printing it. A 32-byte key is 44 base64
+#    characters; a different length is a truncated or padded paste.
+az keyvault secret show --vault-name <vault-name> --name BAS-CREDENTIAL-KEY --query "{enabled:attributes.enabled, updated:attributes.updated, length:length(value)}"
+
+# 4. Set basCredentialKeyInKeyVault to true in infra/main.parameters.json and redeploy.
+```
+
+To confirm it works on the deployed site: Settings → a station that has a stored
+login → the login panel shows the username and *password set* rather than
+`decrypt_failed` or *not configured*, and *Replace* is offered. Do not re-enter a
+password to make a red panel go green - that re-encrypts it under whatever key the
+container has, and if that key is wrong the collector can no longer read it.
+
+## The Analyze database URL is the bas_analyze role on this server
+
+`BAS_ASK_DATABASE_URL` is the connection URL the Analyze tab's SQL runs through:
+a separate, read-only PostgreSQL role, `bas_analyze`, on the **same** server and
+database as the platform. It is not `DATABASE_URL`, which can write. The role is
+created by `scripts/setup-bas-analyze-role.sql`, run as the server administrator
+with a password you choose at run time (the file's header has the exact command,
+including how to do it from the portal's Cloud Shell when you are off the office
+network), and the URL is then built by hand and pasted into the vault once.
+
+```powershell
+# 1. Create or rotate the role on the Azure database (see the script's header;
+#    it prompts for nothing itself - you pass the password as -v pw=...). It
+#    prints the URL shape at the end and the password nowhere.
+
+# 2. Same vault as above. Set the secret from the URL you built:
+#      postgresql://bas_analyze:<password>@<server>.postgres.database.azure.com:5432/phb_platform?sslmode=require
+#    Read-Host keeps it out of the command line and the shell history.
+az keyvault secret set --vault-name <vault-name> --name BAS-ASK-DATABASE-URL --value (Read-Host "BAS_ASK_DATABASE_URL for the bas_analyze role")
+
+# 3. Confirm it exists WITHOUT printing it.
+az keyvault secret show --vault-name <vault-name> --name BAS-ASK-DATABASE-URL --query "{enabled:attributes.enabled, updated:attributes.updated}"
+
+# 4. Set basAskDatabaseUrlInKeyVault to true in infra/main.parameters.json and
+#    redeploy - with the RUNNING image, as under *Deploy*.
+```
+
+To confirm it works on the deployed site: `/bas/analyze` shows the *Things people
+ask* chips instead of *Analyze is not configured on this server*, and one real
+question - "When did the collector last run, and did it succeed?" - comes back as
+an answer with its evidence panel. A *permission denied* answer means the role
+is missing a grant: `runbook.md` → *Analyze answers "permission denied" for every
+question*. To rotate, run the script again with a new password, set the secret
+again, and create a new revision.
+
 ## First deployment ordering
 
 The container app needs an image and its secrets before it can start, and its own URL
 before Auth.js can build a callback. So the first pass is not a single command:
 
-1. Deploy with `containerImage` left at its default. It points at a public placeholder
-   image, so the app comes up before the registry has anything in it.
-2. Take `containerAppUrl` from the outputs, and redeploy with `authUrl` set to it.
+1. Deploy with `containerImage=mcr.microsoft.com/k8se/quickstart:latest`, passed
+   explicitly on the command line. That public placeholder lets the app resource exist
+   before the registry has anything in it. It listens on `:80`, not `:3000`, so its
+   revision never passes the probes - expected on this one pass and a fault on any
+   other. This is the only time the placeholder is ever passed.
+2. Take `containerAppUrl` from the outputs, and redeploy with `authUrl` set to it (still
+   the placeholder image: nothing else exists yet).
 3. Give IT the `ssoRedirectUri` output and the `managedIdentityClientId` output — the
    redirect URI goes on the SSO app registration, and the federated credential is bound
    to that identity. Neither can be requested before this deployment exists.
 4. Push to `main`. CI builds the real image, runs migrations, and deploys it.
 5. Run the production seed **once**, by hand. See `runbook.md`.
+6. Set the three hand-set secrets as above - `BAS-CREDENTIAL-KEY` from the collector's
+   `.env`, `ANTHROPIC-API-KEY` from the Anthropic Console, `BAS-ASK-DATABASE-URL` from
+   the `bas_analyze` role the script creates - then redeploy with
+   `basCredentialKeyInKeyVault=true`, `anthropicApiKeyInKeyVault=true` and
+   `basAskDatabaseUrlInKeyVault=true`. Nothing before this step needs any of them.
+   From here on every redeploy passes the **running** image, read with the
+   `az containerapp show` line under *Deploy* - step 4 has put a real one there, and
+   the placeholder must never come back.

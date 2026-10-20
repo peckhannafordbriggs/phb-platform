@@ -8,8 +8,8 @@ Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
 B7's plan, as written before it was built, is `docs/B7_settings_and_hierarchy_plan.md`.
 B8's is `docs/B8_point_management_plan.md`; B8.1 (the schema), B8.2 (the
-Points list), B8.3 (show/hide) and B8.4 (labels) are built; B8.5 onward is
-not started.
+Points list), B8.3 (show/hide), B8.4 (labels) and B8.5 (roles, equipment,
+bulk assign and suggestions) are built; B8.6 is not started.
 
 **Last updated:** 17 September 2026 — a third pass. Every figure in it was read
 from the repositories, the git logs, the live database or the live stations on
@@ -31,7 +31,7 @@ under decides where to look and what can hold it to account.
 
 | | Owns | Where |
 |---|---|---|
-| **`phb-platform`** (this repo) | The `bas_*` schema and migrations, the API routes, the Building Automation module and its three screens, the module guard, the BAS tests, the verification tooling — `bas-import`, `bas-checksum`, `bas-verify-import`, `bas-health-oracle`, `bas-tables` — and these docs | `prisma/migrations/`, `app/(modules)/bas/`, `app/api/modules/bas/`, `lib/modules/bas/`, `tests/bas-*.test.ts`, `scripts/bas-*.ts`, `docs/` |
+| **`phb-platform`** (this repo) | The `bas_*` schema and migrations, the API routes, the Building Automation module and its five screens, the module guard, the BAS tests, the verification tooling — `bas-import`, `bas-checksum`, `bas-verify-import`, `bas-health-oracle`, `bas-tables` — and these docs | `prisma/migrations/`, `app/(modules)/bas/`, `app/api/modules/bas/`, `lib/modules/bas/`, `tests/bas-*.test.ts`, `scripts/bas-*.ts`, `docs/` |
 | **`phb-bas`** | `bas-collector` — the Python collector, `healthcheck.py`, `Backup-BasDatabase.ps1`, `Test-BasRestore.ps1`, `setup_backup_role.sql`, `Install-BasTasks.ps1`, its tests — plus `bas-db` (retired), `bas-mcp` and `bas-grafana` | those directories at the repo root, checked out locally with `C:\dev` **as** the repository root |
 
 **This is the module's view. The pipeline's view is
@@ -72,7 +72,7 @@ permanently. Thirty-nine histories in all, thirty collected: the office has 26
 real points and history back to February 2024, attached to one rooftop unit and
 ten VAVs (11 equipment rows, `bas_point_links` still empty); the lab has four
 synthetic ones. The platform's Building Automation module reads that data in
-four tabs; Grafana and Claude Desktop read the same tables. Nothing
+five tabs; Grafana and Claude Desktop read the same tables. Nothing
 is installed on either controller, the account used to read them cannot write
 back, and the collector reads its station list and logins from the platform
 database, entered through the module's own Settings tab.
@@ -88,7 +88,7 @@ database, entered through the module's own Settings tab.
 | **`bas_collector` Niagara account** | — | on each station | Read-only, `HTTPBasicScheme`. The only thing added to a JACE |
 | **Collector** | `phb-bas` | `bas-collector/` | Python. Reads oBIX every 15 min, writes to Postgres. Stations and logins from the database |
 | **`bas_*` tables** | `phb-platform` | `prisma/migrations/`, live in the platform database | 14 tables, 6 views, 20 CHECK constraints, 3 triggers. Permanent |
-| **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Three tabs behind the platform's own login and grants |
+| **Building Automation module** | `phb-platform` | `app/(modules)/bas/`, `app/api/modules/bas/` | Five tabs behind the platform's own login and grants |
 | **Grafana dashboards** | `phb-bas` | `bas-grafana/`, served at `localhost:3001` | Second view onto the same data. Development and verification tool, not a deliverable |
 | **`bas-mcp`** | `phb-bas` | `bas-mcp/` | Lets Claude Desktop query the data, read-only. Superseded by B5 when that ships |
 | **Nightly backup** | `phb-bas` | `bas-collector/Backup-BasDatabase.ps1`, 02:15 to OneDrive, as `bas_backup` | Load-bearing — see *The backup incident* |
@@ -127,6 +127,9 @@ building is not recorded.
 | **The backup gets its own role** | `bas_backup`, `BAS_BACKUP_URL`, `.verified` markers, the health check watches freshness | `d77a0cb` **(phb-bas)**, on `fix/backup-role-and-monitoring`, **not yet merged** on 2026-09-17 |
 | **Axis precision** | The trend's y-axis chooses round ticks at every zoom, decimals by unit; the stored reading is untouched | `fix/bas-chart-axis-precision` (2026-09-18) |
 | **Custom date range** | Point Explorer takes two calendar dates or a year, resolved in the building's zone by PostgreSQL; over 10,000 readings the trend is bucketed with a min–max band and says so; real readings committed as fixtures | `feat/bas-custom-date-range` (2026-09-22) |
+| **Value plausibility** | Does the data mean anything: a run of identical readings past a per-kind threshold is flagged, by role, never by a bad-value list; a card on Collection Health and a *Value* column on the Points list; both known dead sensors flagged live, nothing else | `feat/bas-value-plausibility` (2026-09-28), landed from `feat/bas-value-plausibility-reland` (2026-10-01) under the quiet-UI rules |
+| **Value kinds on the chart** | The Point Explorer reads the column a point's readings live in, from `data_type`; a boolean point is a stepped line between two labelled states with no numeric axis; string points recognised and left alone | `feat/bas-chart-value-kinds` (2026-10-06) |
+| **Readings table and CSV** | A *Chart / Table* toggle on Point Explorer shows the raw rows behind the chart, newest first, paged in SQL, never bucketed; *Download CSV* streams every row in the range with an honest 500,000-row cap; nothing fetched until used | `feat/bas-readings-table` (2026-10-09) |
 
 ### Test count
 
@@ -232,28 +235,68 @@ constraints and triggers.
 
 ## The screens
 
-One module, **three** tabs — real routes, not client-side state, so each is
+One module, **five** tabs — real routes, not client-side state, so each is
 bookmarkable and each guards itself independently. Listed in
-`app/(modules)/bas/tabs.ts`, which is the one place that knows they exist. A
-fourth, **B5 "Ask"**, is designed and is not a tab yet — see *Not built*.
+`app/(modules)/bas/tabs.ts`, which is the one place that knows they exist. The
+module opens on Projects (2026-09-30); Collection Health, which opened it
+before, is at `/bas/health`.
 
-### Collection Health — `/bas`
+### Projects — `/bas`
+
+*Projects* on screen; `dashboard` in code (`dashboard.tsx`, `/api/modules/bas/dashboard`,
+`getDashboard`) — renamed on screen the day it shipped, files left alone.
+One rounded card per row of `bas_projects`, about three across, wrapping. Each
+card: the project's name, big; its health in the Home tile's words — *No points
+at risk*, or *N points at risk* in a maroon mark — over the age of its newest
+reading; and *N buildings · N JACEs*. The at-risk number is Collection Health's
+for that project: the same per-state counts over `bas_v_collection_health`,
+summed by `atRiskCount` over the one list, hidden points included.
+`tests/bas-at-risk-predicate.test.ts` holds a card to the filtered screen. A
+project with no active point shows its counts and no health line; one with no
+building is a card and not a link. Clicking a card opens Point Explorer with the
+project set and **no point loaded** (`?project=<id>&point=none`) — the person
+picks. The payload carries a joinless project count beside the cards, and the
+screen says so in red if they differ. The cards are filled in six brand
+colours by creation order — decorative only, no red, no maroon — and the
+at-risk mark carries a white edge so it reads on every fill. `runbook.md` →
+*The BAS module opens on Projects*.
+
+### Collection Health — `/bas/health`
 
 In render order:
 
 | | What |
 |---|---|
-| **Hero tile** | Headroom — *how long until data starts being lost* — with the per-point risk breakdown behind it |
+| **Hero tile** | Points at risk, with headroom — *how long until data starts being lost* — as its badge and the per-point risk breakdown behind it. Any check that failed sits above it |
 | **Run chart** | Records written per collector run, full width |
 | **Four tiles** | Active points (with a live *n of m reporting* badge), total readings, unclassified points, time since the newest reading |
-| **Station count against ours** | The completeness check, surfaced (17 Sep). Red from one `incomplete` point, amber for `backfilling` or `unknown`, green only when every active point was checked and agrees. Lists each such point by name with both numbers |
-| **Tables** | Per-point status — now with a *Completeness* column and a *measured* mark on the roll horizon — recent collector runs, recorded data gaps |
+| **Checks line, or cards** | Three checks: the completeness check (17 Sep) — does the platform hold what the station reports holding — the vanished-point check (18 Sep), and the value-plausibility check (built 28 Sep, landed 1 Oct) — has a measured quantity stopped changing. When all pass they are one muted line, *Checks: station counts match · no vanished points · values still changing (17 judged)*. A check that fails is its full card, in its tone, above the hero: *Station count against ours* (red from one `incomplete` point, amber for `backfilling` or `unknown`, each short point by name with both numbers), *No longer reported by the station* (each vanished point by name with its last record), or *Values that have stopped changing* (amber from one flagged point, never red — a flag is "go and look", not a confirmed fault; each point with how long, at what value with its unit symbol, since when, when it was last different and what it read, and the threshold for its kind; which points were not judged and why; the thresholds themselves; hidden points listed and said. `docs/bas-plausibility-verification.md`) |
+| **Tables** | Per-point status — with a *Completeness* column, the unit as its symbol and a *measured* mark on the roll horizon — recent collector runs, recorded data gaps. Every one scrolls in the same seven-row box with a sticky header and its row count in the heading |
 
-**Why the completeness card is always rendered, even when green.** The check it
-reports spent a day writing verdicts to a column nothing read — which is the
-28 August failure again, gaps recorded correctly and unread. A card that only
-appeared when something was wrong could not be told apart from a check that had
-stopped running.
+**Why the checks are always rendered, as a line when green (30 Sep).** The
+completeness check spent a day writing verdicts to a column nothing read —
+which is the 28 August failure again, gaps recorded correctly and unread. A
+card that only appeared when something was wrong could not be told apart from
+a check that had stopped running. So both checks were always-rendered cards,
+and now they are always-rendered as one line when they pass and as the full
+card when they fail: the same proof at one-tenth the height. `evaluateChecks`
+is the one place either verdict is decided, and *pass* is stricter than
+*green* — a filtered zero over vanished points elsewhere fails the vanished
+check and the card names them.
+
+**The screens stopped narrating themselves the same day.** A label says what
+a number is; it no longer explains the feature, justifies the design or
+describes the screen's own drawing. The test for every sentence: does it stop
+a person misreading a *number* (kept: *a gap means we were not watching, not
+that equipment was off*; *reads as a stuck sensor, not a stable room*) or does
+it explain the *UI* (gone: *refreshes every minute while this tab is open*;
+*dashed outlines are the gaps the collector recorded*; *a backlog, not a
+fault*). Units are symbols everywhere — °F, %, inWC — from one formatter in
+`lib/modules/bas/units.ts`, and the stored `unit` column is untouched. The
+Home tile leads with the state, *No points at risk* or *3 points at risk* in
+a maroon mark, over the newest reading's age; headroom is Collection Health's
+alone. `tests/bas-quiet-ui.test.tsx` drives every quieted element into its
+failure state and asserts the loud wording survived.
 
 **Two things here have semantics that must not drift.** Headroom over a partly
 unknown set never renders as a bare number — the rule and its reasoning are in
@@ -282,8 +325,9 @@ chart. See `WHY-ITS-BUILT-THIS-WAY` § 30.
 
 **Drag across the plot to zoom; Reset returns.** The zoom is a domain change,
 never a filter on the data, so no zoom can smooth over a gap. **The curve is
-`monotone`**, so it never draws a peak the sensor did not record. **One point at
-a time**, so two units never share an axis.
+`monotone`** for a numeric point, so it never draws a peak the sensor did not
+record, and `stepAfter` for a boolean one, so it never slopes between states.
+**One point at a time**, so two units never share an axis.
 
 **The y-axis is chosen by the chart, not by Recharts.** Round ticks at every
 zoom, a fixed number of decimals by the kind of unit (temperature 1, percent 0,
@@ -305,6 +349,39 @@ first reading says where the data begins; `bas_data_gaps` rows are outlined on
 the chart. The office station's clock offset is stated, not corrected.
 `runbook.md` → *The trend chart says "Averaged to one point per …"*, *Which
 time zone a Point Explorer date range is in*; `WHY-ITS-BUILT-THIS-WAY` § 53.
+
+**The chart knows which kind of value it is drawing (2026-10-06).** The
+service reads the value column the point's `data_type` names - the
+collector's declaration from the oBIX record prototype, which agrees with the
+populated column on every live point - and carries `valueKind` and, for a
+boolean, two `states` words to the browser. A **boolean point** is a stepped
+line between two labelled states (Occupied / Unoccupied, Enabled / Disabled,
+Alarm / Normal, On / Off, or True / False), its y-axis is those two words and
+nothing else, and the tooltip and Latest tile say the word. The reading
+travels as 1 or 0, so the break, bucket, custom-range and zoom code is shared;
+a bucketed boolean reads as a share of readings. Numeric points are unchanged.
+**String and enum points are recognised and otherwise untouched**, pending a
+look at the evidence. `lib/modules/bas/value-kind.ts`; `runbook.md` → *A
+boolean point's chart is empty, or its axis reads On / Off*;
+`WHY-ITS-BUILT-THIS-WAY` § 63.
+
+**The raw readings behind the chart, as a table and as a file (2026-10-09).**
+A *Chart / Table* toggle at the right of the trend panel's heading, and a
+*Download CSV* button beside it. The table is the stored rows for the same
+point over the same two instants the chart's response carries — newest first,
+200 a page, `count(*)` and a `LIMIT / OFFSET` slice in SQL — with the count in
+the heading and a pager under the rows. A boolean point's rows are its state
+words; a numeric row is the stored value whole with the unit symbol; a
+timestamp is the tooltip's format in the building's zone with the exact
+instant as its title. **It is never bucketed**: it is served by
+`lib/modules/bas/readings.ts`, a separate path that imports nothing from the
+chart's downsampler, and a test holds every page of the real `points_RoomT`
+fixture against the file while the chart draws averages. The CSV is every
+row in the range, streamed in keyset chunks, capped at 500,000 rows with the
+shortfall said out loud in the warning tone. **Nothing is fetched until the
+toggle or the button is used.** `runbook.md` → *The readings table and the
+chart disagree, or a CSV export says it was cut*; `WHY-ITS-BUILT-THIS-WAY`
+§ 64.
 
 ### Analyze — `/bas/analyze` (B5, 2026-09-21)
 
@@ -443,6 +520,46 @@ asserts it first, on every screen, with the fixture's labels all NULL; the
 same file asserts the station-name fallback (`bas_stations.display_name` is
 NULL on both real stations too). The oBIX key is editable nowhere.
 
+**Value plausibility (built 28 September, landed 1 October).** The
+third check: a measured quantity whose value has held still past the
+threshold for its kind, by role. One phrase on the *Checks:* line when
+nothing is flagged, the full amber card when something is (the *Checks
+line, or cards* row above). On the Points list, a *Value* column per point -
+*Flat 35.0 days at -40.00 °F · threshold 6.0 h for temperature*,
+*Changing*, *Too few readings*, or *Not checked* with the reason: *role not
+set*, *setpoint*, *status or command point*, *not collected*. *Role not set*
+is a label for the row's role picker. `lib/modules/bas/plausibility.ts`;
+`docs/bas-plausibility-verification.md`.
+
+**Roles and equipment (B8.5, 1 October).** The *Role* cell is a picker over
+the 91 roles in four groups (measurements, setpoints, commands, statuses, from
+`is_setpoint` / `is_command` / `is_status`), with the vocabulary's own
+`unclassified` in a fifth, "reviewed, not mappable"; *No role* is NULL. The
+*Equipment* cell is a picker over the building's equipment with *New
+equipment…*, which opens an inline form - name, type from
+`bas_equipment_types`, optional parent, optional notes - and attaches the
+point on creation. An *Equipment in this building* panel under the list
+edits name, type, parent and notes after the fact and deletes equipment
+nothing depends on. A selection column with *Select all N shown* (the search
+and the three filters - role, equipment, collected - decide what is shown)
+feeds a bulk form: role and/or equipment on the selection, confirmed with a
+sentence naming the count. A *Suggestion* column shows what a name pattern
+would classify a point as, with an *Apply* button, and *Apply all N* in the
+toolbar - nothing is written until one of those is clicked; a point with no
+confident pattern shows a dash. API: `PATCH /settings/points/{id}` takes
+`{ role }` or `{ equipmentId }` under the same strict one-field schema;
+`POST /settings/points/bulk` takes `{ pointIds, role?, equipmentId? }`,
+all-or-nothing in one transaction, one audit row per point per field;
+`GET /settings/vocabularies`, `GET /settings/buildings/{siteId}/equipment`,
+`POST /settings/equipment`, `PATCH`/`DELETE /settings/equipment/{id}`. Five
+audit actions (`bas.point_role_changed`, `bas.point_equipment_changed`,
+`bas.equipment_created/updated/deleted`). The patterns and what "confident"
+means for each are in `lib/modules/bas/suggestions.ts`; a role is judged
+against the real vocabulary and the point's unit, and ambiguity is silence.
+The acceptance test reproduces the office's 17 September SQL classification
+through the routes (`tests/bas-office-classification.test.ts`, fixture read
+from live). Not changed: the collector, the views, the vocabulary itself.
+
 **A point the station stopped reporting is surfaced (18 September).** Found
 while building B8.3: every figure on Collection Health was
 `FILTER (WHERE is_active)`, so the collector marking a vanished history
@@ -507,7 +624,9 @@ doing this by hand. B8.1, the schema, is built: `bas_points.label` and
 `test_point_management.py` *(phb-bas)* proving `discover` writes neither.
 B8.2 reads them: the Points level of the Settings tree shows every point on a
 station, uncollected ones included, with a counting guard of its own. B8.3
-made *Shown* editable and B8.4 the label; roles and equipment are B8.5.
+made *Shown* editable, B8.4 the label, and B8.5 the role and equipment, with
+bulk assign and suggestions - the office classification is now reproducible
+through the UI, and the acceptance test does so on every run.
 
 ---
 
@@ -518,7 +637,7 @@ made *Shown* editable and B8.4 the label; roles and equipment are B8.5.
 | Account | Where | Can |
 |---|---|---|
 | `bas_collector` (Niagara) | on each JACE | Read histories, `HTTPBasicScheme`. Cannot write to the station at all |
-| `bas_collector` (Postgres) | platform database | Read/write `bas_*` only. Refused on `employees`, `audit_events`, `_prisma_migrations` — which is the refusal that broke the backup, below |
+| `bas_collector` (Postgres) | platform database | Read/write `bas_*` only. Refused on `employees`, `audit_events`, `_prisma_migrations` — which is the refusal that broke the backup, below. Created by hand on the office PC; for the Azure server, `scripts/setup-bas-collector-role.sql` *(this repo)* carries the same grants read from the live catalog and proves them |
 | `bas_readonly_platform` | platform database | SELECT on an **explicit allowlist** of `bas_*` objects, excluding the credentials table. Grafana and the MCP server |
 | `bas_backup` | platform database | `pg_read_all_data` — reads every table, writes none — plus `CREATEDB` for the restore test's scratch database. **Added 17 September**, `setup_backup_role.sql` *(phb-bas)*, which proves its own grants before finishing |
 | `bas_analyze` | platform database | SELECT on the **same explicit allowlist** as `bas_readonly_platform`, credentials table withheld. The Analyze tab's SQL and nothing else. **Added 21 September**, `npm run bas:analyze:role` *(this repo)*, which gates on unclassified `bas_*` objects and proves the refusals with read-only OFF before printing the URL. `TEMP` is deliberately not revoked — it is a `PUBLIC` grant and revoking it would change every role; the READ ONLY transaction refuses it instead |
@@ -556,6 +675,7 @@ pinning is stricter than one would be. Both direct stations are pinned.
 | `npx tsx scripts/bas-import.ts` | Dry run — counts only, writes nothing |
 | `… --apply` | Import. One transaction, verified before commit |
 | `npx tsx scripts/bas-checksum.ts` | Content checksum of the `bas_*` tables |
+| `npm run bas:plausibility:verify` | The value-plausibility acceptance test against the real database: every active point's verdict as Markdown, both known faults must be flagged, no setpoint or status point may be, counts compared before and after. Exit 1 on any failure |
 | `npm run bas:verify` | Independent content comparison of two databases |
 | `npm run bas:oracle` | Compares the screens against the Grafana dashboards' own SQL *(phb-bas)*, same moment |
 | `npx tsx scripts/bas-tables.ts` | Table inspection |
@@ -828,7 +948,7 @@ stations:
 | 6 views, all `bas_v_` prefixed | `information_schema.views` — 6 |
 | 20 CHECK constraints, 3 triggers | `pg_constraint`, `pg_trigger` on the live database |
 | 17 migrations applied | `_prisma_migrations`; the last five dated 17 September. `add_bas_comments` appears twice there — a rolled-back attempt and the successful re-application a minute later — and that is correct |
-| Three tabs, and B5 not among them | `app/(modules)/bas/tabs.ts` lists three; its comment says where B5's line would go |
+| Five tabs, Projects first | `app/(modules)/bas/tabs.ts` lists five (Projects added 2026-09-30, `Dashboard` in code); the module opens on `/bas`, Collection Health is `/bas/health` |
 | Credentials never returned | the settings query selects `cred.username` and `cred.updated_at` and says why the ciphertext is not there |
 | Every settings write audited | `audit_events`: `bas.project_created`, `bas.building_created`, `bas.station_created`, `bas.credential_set`, and their updates and deletes, each with an actor |
 | Two direct stations, one via-parent placeholder | `bas_stations`, with addresses, versions, pins and clock offsets |
@@ -848,25 +968,30 @@ records it), and why each collector outage happened.
 
 ## Not built
 
-**B5 — asking questions in plain English.** Eight tools, a guarded SQL escape
-hatch on its own read-only connection, an audit event per question. Designed, not
-started, **not a tab**. Blocked on a company Anthropic API key. It would live in
-`phb-platform`, and it is what supersedes `bas-mcp` *(phb-bas)* when it ships.
+**B5 — asking questions in plain English.** Built as the Analyze tab on
+2026-09-21 (the *B5 — Ask — BUILT as "Analyze"* section above). In Azure the
+Anthropic API key reaches the container app from Key Vault by reference as of
+2026-10-01 (`ANTHROPIC-API-KEY`, name decided in `lib/env.ts`, set in the vault
+by hand - `runbook.md` → *Secrets set by hand in Key Vault*); the tab's second
+variable, `BAS_ASK_DATABASE_URL`, is not wired yet. It supersedes `bas-mcp`
+*(phb-bas)*.
 
 **B8 — point management.** Designed 17 September; B8.1, the schema, and B8.2,
 the read-only Points list, built the same day; B8.3, show/hide with the risk
 rule, on 18 September; B8.4, labels with precedence and three-name search, on
-25 September; B8.5 onward not started:
-`docs/B8_point_management_plan.md`. There is no way in the UI to set a role,
-create equipment, attach a point or mark one inactive; the office
-was classified in SQL and the six state points wait for someone to decode them
-the same way. Thirty minutes for 26 points; a project with ten JACEs would take
-a week and nobody would do it.
+25 September; B8.5, roles and equipment with bulk assign and suggestions, on
+1 October; B8.6 not started: `docs/B8_point_management_plan.md`. A role,
+equipment and a label are set in the UI now; marking a point inactive is
+still SQL, by design. The six office state points still wait for someone to
+decode them, and the picker is where that answer goes.
 
 **Production deployment.** Firewall rule for the site's egress IP, a scoped role
 on the Azure database, and an always-on host **that stays on the building
 network**. Five outages say the laptop is not that host. Blocked on the Azure
-subscription and the host.
+subscription and the host. The data move itself is scripted and tested but not
+yet run: `scripts/bas-migrate-to-azure/`, and the role is
+`scripts/setup-bas-collector-role.sql` — `runbook.md` → *Moving the BAS data
+to the Azure database*.
 
 **Multiple buildings, the way they were planned.** The 20 August plan was one
 central station importing other JACEs' histories over the NiagaraNetwork, so
@@ -887,5 +1012,5 @@ between "the status point cycles every 12 seconds" and a verdict on the machine.
 Not one any more. **An always-on host on the building network**, so the five
 outages stop at five. **A backup that stays watched**: the mechanism is fixed and
 monitored as of today, and the first nightly run under it has not yet happened.
-**An API key** for B5. And **B8**, before the next building is classified by
-hand.
+~~An API key for B5~~ - in hand as of 2026-09-17. And **B8**, before the next
+building is classified by hand.
