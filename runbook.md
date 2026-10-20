@@ -9814,8 +9814,8 @@ creates outputs only in `<project>/AI FILES`. It costs nothing while idle.
 2. Check the CIP app registration has a federated credential for the platform's
    user-assigned identity (`managedIdentityClientId` output).
 3. In `infra/main.parameters.json` set `enableCipWorker: true`, `cipAppTenantId`,
-   `cipAppClientId` and the two `cipSharePoint*Folder` values (`ids:<driveId>/<itemId>`). Keep `containerImage` and `cipWorkerImage` at the
-   images now running, or a redeploy puts the placeholder back.
+   `cipAppClientId` and the two `cipSharePoint*Folder` values (`ids:<driveId>/<itemId>`). Set `containerImage` and `cipWorkerImage` to the
+   images now running (on first enable, `cipWorkerImage` is the image you built with `az acr build`). It has no default.
 4. `az deployment group what-if ...` (see `infra/README.md`), review, then `create`.
 5. Set the repository variable `AZURE_CIP_WORKER_JOB` to the `cipWorkerJobName`
    output. From the next push to `main`, `deploy.yml` builds `cip-worker:<sha>` and

@@ -187,8 +187,8 @@ param basAskDatabaseUrlInKeyVault bool = false
 @description('Create the Cost Intelligence run worker job. Off until the ANTHROPIC-API-KEY-CIP secret exists in the vault - the job cannot be created without it. See runbook.md, "Cost Intelligence worker in Azure".')
 param enableCipWorker bool = false
 
-@description('Worker image. Left at the placeholder on a first deployment; the deploy workflow sets the real one.')
-param cipWorkerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
+@description('Worker image. Required when enableCipWorker is true: the image the job runs now (`az containerapp job show`), or on first enable a cip-worker image built with `az acr build`. No placeholder default, so a redeploy cannot reset it.')
+param cipWorkerImage string = ''
 
 @description('Tenant ID of the CIP app registration (SharePoint access). Not a secret.')
 param cipAppTenantId string = ''
