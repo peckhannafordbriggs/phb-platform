@@ -174,6 +174,37 @@ param authUrl string = ''
 @description('Auth.js session secret. Optional: leave empty (the default) and the AUTH-SECRET vault secret keeps its current version. Required on the first deployment (the container app references the secret and the reference must resolve), and supplied again only to rotate it, which signs every existing session out. Generate with `npx auth secret`.')
 param authSecret string = ''
 
+// ---------------------------------------------------------------------------
+// Custom domain (2026-10-21)
+// ---------------------------------------------------------------------------
+//
+// The app's own address (<app>.<env-suffix>.azurecontainerapps.io) always
+// works and nothing here replaces it; a custom hostname is ADDED beside it,
+// with a free Azure managed certificate issued on the environment. Two DNS
+// records have to exist before the hostname is set, and both are checked by
+// Azure when the certificate is issued:
+//
+//   CNAME  <hostname>        -> <app>.<env-suffix>.azurecontainerapps.io
+//   TXT    asuid.<hostname>  -> the environment's customDomainVerificationId
+//                               (a public UUID-like value, not a secret)
+//
+// A managed certificate cannot be issued for a hostname the app does not yet
+// carry, and the app cannot bind a certificate that does not yet exist. So the
+// FIRST deployment with customDomainName set runs with customDomainBound=false
+// on the command line (hostname added, certificate issued), and every one after
+// it runs with the default, true (hostname bound to the certificate). The
+// default is true so that the parameters file never needs to carry the
+// binding and a routine redeploy cannot drop it - exactly the placeholder-image
+// rule above, in the other direction. authUrl is NOT changed by any of this:
+// sign-in keeps building its callback on whatever authUrl says until the SSO
+// app registration carries the new redirect URI as well.
+
+@description('Custom hostname for the container app, e.g. "platform.example.com". Empty (the default) attaches no custom domain. Before setting it, the CNAME and the asuid TXT record described above must be live. The azurecontainerapps.io address the app already has keeps working beside it.')
+param customDomainName string = ''
+
+@description('Whether the custom hostname is bound to its managed certificate. Pass false ONLY on the first deployment that sets customDomainName: that pass adds the hostname and issues the certificate, which cannot be bound until it exists. Every later deployment leaves this at its default, true. Never write it into the parameters file.')
+param customDomainBound bool = true
+
 // Whitespace counts as empty: a stray space at a prompt must not become the
 // administrator password. These two variables are the ONLY place the
 // "was a value supplied" decision is made; every use of either secure
@@ -560,6 +591,32 @@ var basCredentialKeySecretName = 'BAS-CREDENTIAL-KEY'
 // deploy's command line. The template knows the name only.
 var basAskDatabaseUrlSecretName = 'BAS-ASK-DATABASE-URL'
 
+var hasCustomDomain = !empty(trim(customDomainName))
+var managedCertificateName = 'mc-${replace(toLower(trim(customDomainName)), '.', '-')}'
+// Built with resourceId() rather than a symbolic reference ON PURPOSE. The
+// certificate depends on the app (the hostname must be on the app before Azure
+// will issue for it), so a symbolic reference from the app back to the
+// certificate would be a cycle. The id is a string the app carries; on the
+// bound pass the certificate already exists, because the unbound pass made it.
+var managedCertificateId = resourceId('Microsoft.App/managedEnvironments/managedCertificates', managedEnvironmentName, managedCertificateName)
+// The one custom-domain entry the ingress carries, in one of its two states.
+// A bound entry names the certificate; an unbound one does not carry the key
+// at all, which is not the same as carrying it empty.
+var customDomains = hasCustomDomain
+  ? [
+      customDomainBound
+        ? {
+            name: trim(customDomainName)
+            bindingType: 'SniEnabled'
+            certificateId: managedCertificateId
+          }
+        : {
+            name: trim(customDomainName)
+            bindingType: 'Disabled'
+          }
+    ]
+  : []
+
 // ---------------------------------------------------------------------------
 // Container Apps
 // ---------------------------------------------------------------------------
@@ -599,6 +656,9 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: containerPort
         transport: 'auto'
         allowInsecure: false
+        // The custom hostname, if any, beside the app's own address. See the
+        // Custom domain section above for the two-pass binding.
+        customDomains: customDomains
         traffic: [
           {
             latestRevision: true
@@ -875,6 +935,30 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   dependsOn: [
     acrPull
     keyVaultRead
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// Custom domain: the free managed certificate
+// ---------------------------------------------------------------------------
+
+// Issued by Azure on the environment for the hostname, validated through the
+// CNAME. Deployed AFTER the container app, because Azure refuses to issue for
+// a hostname no app in the environment carries; the app carries it from its
+// first (unbound) pass on. Re-deploying an issued certificate is a no-op, and
+// Azure renews it on its own - nothing here expires on a schedule a person has
+// to keep (prohibition 7).
+resource managedCertificate 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = if (hasCustomDomain) {
+  parent: managedEnvironment
+  name: managedCertificateName
+  location: location
+  tags: tags
+  properties: {
+    subjectName: trim(customDomainName)
+    domainControlValidation: 'CNAME'
+  }
+  dependsOn: [
+    containerApp
   ]
 }
 
@@ -1329,3 +1413,9 @@ output dbBackupJobName string = enableDbBackup ? dbBackupJob.name : ''
 output dbBackupStorageAccountName string = enableDbBackup ? backupStorage.name : ''
 // The redirect URI IT has to add to the SSO app registration in Part B.
 output ssoRedirectUri string = 'https://${containerApp.properties.configuration.ingress.fqdn}/api/auth/callback/microsoft-entra-id'
+// The custom hostname's address and ITS redirect URI, empty when no custom
+// domain is set. The second is a further redirect URI to ADD to the SSO app
+// registration - the one above stays, because the app's own address keeps
+// working and authUrl may still point at it.
+output customDomainUrl string = hasCustomDomain ? 'https://${trim(customDomainName)}' : ''
+output customDomainSsoRedirectUri string = hasCustomDomain ? 'https://${trim(customDomainName)}/api/auth/callback/microsoft-entra-id' : ''
