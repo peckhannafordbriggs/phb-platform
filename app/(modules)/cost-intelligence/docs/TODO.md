@@ -14,6 +14,9 @@ Settings:
 - skill and project sync read SharePoint (folder-store.ts). Next: daily scheduled sync; measure project sync time on the full BID-DOC (one Graph request per folder)
 
 Runs:
+- worker in Azure: done 2026-10-20 - Container Apps Job `phbplat-prod-cip-worker` from infra/main.bicep (KEDA Postgres scaler on queued cip_runs, --once), `cip-worker:<sha>` built and set by deploy.yml on every merge, `ANTHROPIC-API-KEY-CIP` in Key Vault. `runbook.md` → *Cost Intelligence worker in Azure*
+- worker files: done. Projects and skills are downloaded from SharePoint and outputs are created in <project>/AI FILES there (_revN, never replaced)
+- fix docker for tools
 - search: run results were placeholders and are gone; add them back with real search
 - add a optional text field for new run 
 - add optional file upload for new run

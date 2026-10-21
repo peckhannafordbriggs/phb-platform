@@ -208,8 +208,10 @@ does not live in a resource group. On that last one — `az keyvault list-delete
 returns an **empty array rather than an error** when you lack permission, which
 reads exactly like "the name is free" and is not. Use `checkNameAvailability`.
 
-**What is NOT done.** The container app still runs the placeholder image and so
-answers nothing; that is expected until CI pushes a real one, not a fault.
+**The container app runs real images built from `main`.** It held the
+placeholder until CI's first real push; the placeholder came back once, in
+the 13 October template deployment (*A template deployment must be told
+which image to keep*, below), and that fix ended it.
 
 **CI is fully wired, and the deploy job is no longer inert.** All seven
 `AZURE_*` repository **variables** are set and were verified against live Azure,
@@ -257,8 +259,9 @@ of its own, and Auth.js keeps it over one passed as an option, so every
 production token request since the 17th went out with no assertion
 (`AADSTS7000218`). The wrapper is now set on the provider object, composed
 over Auth.js's own fetch, and the test resolves the provider through Auth.js's
-real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`; whether it
-signs in is not yet observed.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
+real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`, and it
+signs in: production sign-in has worked for weeks, used by the admins, Mahi
+and two testers.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
 `runbook.md` → *Production sign-in bounces to
 `/signin?error=OAuthCallbackError`*.
 
@@ -667,8 +670,9 @@ its own `no_data` kind, the summariser is never called for it, and the
 explanation is written from coverage. Every question is one audit row
 (`bas.question_asked`) and one log line, both carrying the question and the
 SQL. Two variables, both lazy: `ANTHROPIC_API_KEY` and `BAS_ASK_DATABASE_URL`;
-missing either renders a not-configured state. Neither is in
-`infra/main.bicep` yet.
+missing either renders a not-configured state. Neither was in
+`infra/main.bicep` when B5 shipped; both are now, as Key Vault references
+(the 2026-10-01 and 2026-10-13 entries below), and both are set in production.
 
 **Verified live the same day, once a working key arrived**, and the live
 runs found three things a scripted planner could not: the widening rule
@@ -799,8 +803,11 @@ bulk actions were B8.5, below. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` �
 point has one name in Point Explorer and another in Settings*, and *Who hid
 it, and when* under *A point's label or hidden state disappeared*.
 
-**The BAS data migration to Azure is scripted and tested, not run
-(2026-09-29).** `scripts/bas-migrate-to-azure/` — `export.sql` from the office
+**The BAS data migration to Azure is scripted and tested (2026-09-29), and
+has since been run** — the deployed Point Explorer shows readings from 21
+February 2024 and from today, because the collector on the office PC now
+writes to the Azure server every 15 minutes (checked 2026-10-20/21).
+`scripts/bas-migrate-to-azure/` — `export.sql` from the office
 PC, `import.sql` into Azure in ONE transaction, `check.sql` after — moves the
 fourteen `bas_*` tables once. The import writes every row as `bas_migrate_tmp`,
 a role that exists only inside its transaction with INSERT on `bas_*`, UPDATE
@@ -1003,7 +1010,11 @@ repository. **`BAS_ASK_DATABASE_URL` is wired the same way since 2026-10-13**
 role for the Azure server - the same allowlist as `role.ts`, held to it by
 `tests/bas-analyze-role-sql.test.ts`, runnable from the portal's Cloud Shell.
 The deployed Analyze tab stays *not configured* until the role exists there,
-the URL is in the vault and the flag is on. `az bicep build` and `lint`
+the URL is in the vault and the flag is on — all three done: the role was
+created on 2026-10-13, the secret exists, and the deployed tab answers
+questions end to end (checked 2026-10-21). All three hand-set secrets are set
+in production; `ANTHROPIC-API-KEY` was rotated to a non-expiring key on
+2026-10-16. `az bicep build` and `lint`
 pass locally; removing either `env:` entry fails a named guard test.
 `infra/README.md` has the two command sequences and the click to confirm each;
 `runbook.md` → *Secrets set by hand in Key Vault*.
@@ -1099,8 +1110,9 @@ modules are billed, rate-limited and revoked independently. Name in
 `lib/env.ts` (`CO_ANTHROPIC_API_KEY_VAR`), reader
 `readChangeOrderAnthropicEnv` in `lib/modules/change-orders/anthropic-env.ts`,
 Key Vault `CO-ANTHROPIC-API-KEY` behind `coAnthropicApiKeyInKeyVault` - the
-fourth hand-set secret, same shape as the other three. **Nothing reads it
-yet**: no change-order code in this repo or in `phb-co-engine` creates an
+fourth hand-set secret, same shape as the other three; the secret exists in
+the production vault, parked, and `coAnthropicApiKeyInKeyVault` stays false.
+**Nothing reads it yet**: no change-order code in this repo or in `phb-co-engine` creates an
 Anthropic client today, and Phase 12 Part D is where it will be used. The rule
 that matters: `ANTHROPIC_API_KEY` is the SDK's default name, so a client built
 without an explicit `apiKey` runs on the BAS key silently - the CO reader never

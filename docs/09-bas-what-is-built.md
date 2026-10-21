@@ -972,8 +972,10 @@ records it), and why each collector outage happened.
 2026-09-21 (the *B5 — Ask — BUILT as "Analyze"* section above). In Azure the
 Anthropic API key reaches the container app from Key Vault by reference as of
 2026-10-01 (`ANTHROPIC-API-KEY`, name decided in `lib/env.ts`, set in the vault
-by hand - `runbook.md` → *Secrets set by hand in Key Vault*); the tab's second
-variable, `BAS_ASK_DATABASE_URL`, is not wired yet. It supersedes `bas-mcp`
+by hand - `runbook.md` → *Secrets set by hand in Key Vault*), and the tab's
+second variable, `BAS_ASK_DATABASE_URL`, the same way as of 2026-10-13; the
+`bas_analyze` role exists on the production server and the deployed tab
+answers questions (checked 2026-10-21). It supersedes `bas-mcp`
 *(phb-bas)*.
 
 **B8 — point management.** Designed 17 September; B8.1, the schema, and B8.2,
@@ -985,13 +987,15 @@ equipment and a label are set in the UI now; marking a point inactive is
 still SQL, by design. The six office state points still wait for someone to
 decode them, and the picker is where that answer goes.
 
-**Production deployment.** Firewall rule for the site's egress IP, a scoped role
-on the Azure database, and an always-on host **that stays on the building
-network**. Five outages say the laptop is not that host. Blocked on the Azure
-subscription and the host. The data move itself is scripted and tested but not
-yet run: `scripts/bas-migrate-to-azure/`, and the role is
-`scripts/setup-bas-collector-role.sql` — `runbook.md` → *Moving the BAS data
-to the Azure database*.
+**Production deployment - the data half is done.** The BAS data is in the Azure
+database and the collector on the office PC writes there every 15 minutes: the
+deployed Point Explorer shows readings from 21 February 2024 and from today
+(checked 2026-10-20/21). The move was `scripts/bas-migrate-to-azure/`, and the
+collector's role on the Azure server is `scripts/setup-bas-collector-role.sql`
+— `runbook.md` → *Moving the BAS data to the Azure database*. What the plan
+also asked for and this file does not record as settled: an always-on host
+**that stays on the building network** - five outages say the laptop is not
+that host, and whether the office PC is it for good is not decided here.
 
 **Multiple buildings, the way they were planned.** The 20 August plan was one
 central station importing other JACEs' histories over the NiagaraNetwork, so

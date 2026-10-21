@@ -109,10 +109,11 @@ Change-order automation (11 Power Automate flows) ──► same mailbox
 
 **Deployed as of 9 September 2026, in `eastus2`.** That diagram is now the shape of the
 running system rather than a plan. All seven Azure resources are up, the migrations are
-applied, and the production seed has run once. What is *not* yet true: nobody can sign
-in, because the production redirect URI does not exist yet. The container app serves
-whatever the last merge to `main` deployed — the placeholder image until the first real
-deploy lands, because CI has only been able to deploy since 16 September 2026. See
+applied, and the production seed has run once. Sign-in to the deployed site works and
+has for weeks: the admins, Mahi and two testers use it. The container app serves
+whatever the last merge to `main` deployed — real images built by CI, not the
+placeholder, which last appeared in the 13 October incident (`runbook.md` → *A template
+deployment fails activation*). See
 *Production deployment* below. `runbook.md` → *Deploying to Azure (Phase 7 Part B)* is
 kept current and this is a summary.
 
@@ -232,7 +233,7 @@ signature. BAS was rebuilt around a headroom hero tile, Home became a personal l
 and Change Orders gained resizable panes, breakpoints and keyboard navigation. The record
 is `docs/DESIGN-BRIEF.md` and the token comments in `app/globals.css`.
 
-### BAS — working, on synthetic data
+### BAS — working, on real building data
 
 Fourteen tables, six views, the collector running, five tabs — a Projects tab of
 cards, Point Explorer, Analyze, Collection Health, and a Settings tab behind a module-admin
@@ -242,21 +243,25 @@ database accounts, nightly backups with a tested restore.
 **Analyze (B5, 2026-09-21)** is a question box: the model writes one read-only `SELECT`,
 it runs as the `bas_analyze` role, and every answer shows the rows, the points and period covered, the hours of
 the period nobody was watching, and whether the readings held actually span the period
-asked about. Verified live on 21 September against the office data. It needs two things
-production does not yet have: the Anthropic API key in Key Vault (`ANTHROPIC_API_KEY`)
-and the role on the Azure database (`npm run bas:analyze:role`, then
-`BAS_ASK_DATABASE_URL`). Without
-them the tab says it is not configured and nothing else is affected. A key can be revoked
+asked about. Verified live on 21 September against the office data. It needs two things,
+and production has both: the Anthropic API key in Key Vault (`ANTHROPIC_API_KEY`,
+rotated to a non-expiring key on 16 October 2026) and the `bas_analyze` role on the
+Azure database (created 13 October 2026 with `scripts/setup-bas-analyze-role.sql`, its
+URL in the vault as `BAS-ASK-DATABASE-URL`). The deployed tab answers questions end to
+end, checked 21 October 2026. Without either the tab says it is not configured and
+nothing else is affected. A key can be revoked
 or run out of credit, and when it does this tab — only this tab — stops; `runbook.md` →
 *Analyze says the model service rejected the API key*.
 
 B7 added a project level above buildings and encrypted station credentials. The record is
 `docs/09-bas-what-is-built.md`; the reasoning is `docs/08-bas-and-niagara.md`.
 
-**The open dependency:** everything runs against four synthetic points on a lab station
-that isn't PH+B's asset. The real question isn't the controller's address — it's whether
-history extensions are configured on a production station at all. If nobody ever set them
-up, this becomes a Niagara engineering job before it's a data job.
+**The data is real.** The office JACE has been connected since August 2026 and the
+module runs on its readings, with the lab station (four synthetic points, not PH+B's
+asset) still collected beside it. For the next building the question isn't the
+controller's address — it's whether history extensions are configured on its station at
+all. If nobody ever set them up, that becomes a Niagara engineering job before it's a
+data job.
 
 ### Not built, deliberately
 
@@ -270,7 +275,7 @@ up, this becomes a Niagara engineering job before it's a data job.
   the BAS section) and stopped there.
 - **Moving the change-order AI off the laptop** — see below. Parts A and B are done.
 
-### Production deployment (Phase 7 Part B) — deployed, CI live, sign-in pending
+### Production deployment (Phase 7 Part B) — deployed, CI live, sign-in working
 
 Part A built the Dockerfile, the CI pipeline and the Bicep. Part B deployed them on
 9 September 2026. **Do not act on this summary without reading `runbook.md` →
@@ -280,7 +285,9 @@ Part A built the Dockerfile, the CI pipeline and the Bicep. Part B deployed them
 |---|---|
 | Running | Seven resources in `eastus2`, twelve migrations applied, the production seed run once, four admin rows with `entra_oid` null until each first sign-in |
 | Region | `eastus2`, not `eastus` — PostgreSQL Flexible Server is **offer-restricted** in `eastus` for this subscription. A restriction, not a quota, so more capacity cannot be requested |
-| Remaining | Two Entra changes with Vitis — the Graph federated credential and the production redirect URI — written out in `runbook.md` → *Request 2*. The deploy app registration is done: `AZURE_CLIENT_ID` was set on 16 September 2026, so a merge to `main` runs a real deploy. Until the redirect URI exists, nobody can sign in |
+| Sign-in | Works, and has for weeks: the admins, Mahi and two testers use the deployed site. The production redirect URI is therefore in place |
+| Image | Real images built from `main` by CI; the deploy app registration is done (`AZURE_CLIENT_ID` set on 16 September 2026), so a merge to `main` runs a real deploy. The placeholder last appeared in the 13 October incident, `runbook.md` → *A template deployment fails activation* |
+| Remaining | The Graph federated credential, written out in `runbook.md` → *Request 2*; whether it is in place is not recorded here |
 
 Three permission walls were hit getting here, all from *scope* rather than from the role
 names, and all worth knowing before the next Azure task: resource provider registration
@@ -296,21 +303,27 @@ Two traps worth carrying out of it:
   lack permission to see deleted vaults. That reads exactly like "the name is free" and
   is not. Use `checkNameAvailability`, which answers honestly.
 
-**The BAS data is still on the office PC.** The Azure database has the platform's rows
-and zero `bas_*` rows. `scripts/bas-migrate-to-azure/` is the one-shot move (export,
-import in one transaction as a role that cannot touch the platform's tables, check),
-tested against a faithful scratch copy on 29 September 2026 and **not yet run against
-Azure**; `scripts/setup-bas-collector-role.sql` is the collector's least-privilege role
-for the Azure server. `BAS_CREDENTIAL_KEY` and `ANTHROPIC_API_KEY` reach the container
-app from Key Vault by reference as of 2026-10-01 (`BAS-CREDENTIAL-KEY`,
-`ANTHROPIC-API-KEY`, each behind a boolean parameter), but the two secret VALUES are
-set in the vault by hand and nothing in the repository can tell you whether that has
-been done: if the station-login panel or the Analyze tab says it is not configured in
-production, it has not. `infra/README.md` has the steps; the Analyze tab also needs
-`BAS_ASK_DATABASE_URL`, which is not wired yet. Change Orders has its **own** Anthropic
+**The BAS data is in the Azure database, and the collector writes there.** The one-shot
+move, `scripts/bas-migrate-to-azure/` (export, import in one transaction as a role that
+cannot touch the platform's tables, check), was tested against a faithful scratch copy
+on 29 September 2026 and has since been run: the deployed Point Explorer shows readings
+from 21 February 2024 onward, and the collector on the office PC writes to the Azure
+server every 15 minutes, so the deployed site shows today's readings (both checked
+20–21 October 2026). `scripts/setup-bas-collector-role.sql` is the collector's
+least-privilege role for the Azure server. `BAS_CREDENTIAL_KEY` and `ANTHROPIC_API_KEY`
+reach the container app from Key Vault by reference as of 2026-10-01
+(`BAS-CREDENTIAL-KEY`, `ANTHROPIC-API-KEY`, each behind a boolean parameter), and the
+Analyze tab's `BAS_ASK_DATABASE_URL` the same way since 2026-10-13. The three secret
+VALUES are set in the vault by hand and nothing in the repository can tell you whether
+that has been done — the deployed site is the check, and as of 21 October 2026 it
+passes: the station-login panel decrypts the stored JACE credentials and the Analyze
+tab answers. If either says it is not configured in production, a flag went back to
+false or the revision predates the deployment that turned it on; `infra/README.md` has
+the steps to re-set and confirm each. Change Orders has its **own** Anthropic
 key since 2026-10-16, `CO_ANTHROPIC_API_KEY` (`CO-ANTHROPIC-API-KEY`,
-`coAnthropicApiKeyInKeyVault`), wired the same way and read by nothing until Phase 12
-Part D; it is a different key from the BAS one on purpose, and neither falls back to
+`coAnthropicApiKeyInKeyVault`), wired the same way; the secret is in the vault, parked,
+and read by nothing until Phase 12 Part D, so its flag stays false. It is a different
+key from the BAS one on purpose, and neither falls back to
 the other. All of it is in `runbook.md` → *Moving
 the BAS data to the Azure database* and the sections after it, and *Secrets set by hand
 in Key Vault*.
