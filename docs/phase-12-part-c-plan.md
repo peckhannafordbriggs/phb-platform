@@ -172,13 +172,15 @@ a OneDrive drive. That last one is the `GRAPH-TODO` least likely to transfer.
 | `rglob` against a deep real tree | the measurement is about the real library's shape |
 
 **The flow-triggering check has a problem beyond permissions.** Verifying it
-needs a copy site *and* a flow watching that copy, which means creating a
-twelfth flow. Prohibition 2 forbids modifying, disabling, re-authorizing or
-exporting the eleven; creating a new one on a copy is not literally any of those,
-but it is close enough to the line to be a decision rather than an assumption.
+needs a flow watching the copy, which means creating a twelfth flow.
+Prohibition 2 forbids modifying, disabling, re-authorizing or exporting the
+eleven; creating a new one on a copy is not literally any of those, but it is
+close enough to the line to be a decision rather than an assumption.
 `PHASE-12.md` says *"verify that rather than assuming it"*, so no amount of
-reasoning closes it. Worth settling early — it is the acceptance criterion most
-likely to be discovered late.
+reasoning closes it. **Decided 2026-10-21: not now.** The owner will decide
+before Phase 14, and the decision is a required pre-cutover step — *Before
+cutover: the flow-trigger decision* below has the evidence already in hand
+and the two ways to close it.
 
 ---
 
@@ -328,23 +330,151 @@ there is no config file. The managed-identity path adds
 `CO_GRAPH_MANAGED_IDENTITY_CLIENT_ID`, which is the *identity's* client id, not
 the app's, and does not exist until the container is deployed.
 
-### Where the copy should live
+### Where the copy lives — decided 2026-10-21: a sibling folder in AI Sandbox
 
-Recommendation: **a second site**, not a sibling folder in AI Sandbox.
+**This section used to recommend a second site.** The platform owner decided
+otherwise on 2026-10-21, and the reasoning on both sides is kept so the
+decision can be revisited on its merits rather than rediscovered.
 
-`Sites.Selected` is granted per site. A copy in a sibling folder of the same
-library means the app holds Write on the site that contains the live
-`CO Managment Process` — the container is then kept off the live tree by
-configuration (`--live-path`) rather than by incapacity, which is the weaker of
-the two and the opposite of how every other guard in this project is built. A
-copy site gives the app Write on a site that holds *no* live folder, and the
-flow-trigger check (bucket 3) needs a copy *site* anyway, because the flow that
-watches the copy must not be one of the eleven. The cost is one site, created
-by whoever can create team sites here, and the Request 4 grant re-done on it —
-which, on the evidence above, has not been done on AI Sandbox either.
+**What was recommended, and why.** `Sites.Selected` is granted per site. A
+copy in a sibling folder of the same library means the app holds Write on the
+site that contains the live `CO Managment Process` — so the container would be
+kept off the live tree by configuration (`--live-path`) rather than by
+incapacity, which is the weaker of the two and the opposite of how every other
+guard in this project is built. A copy site would give the app Write on a site
+holding *no* live folder.
 
-If a sibling folder is chosen anyway, name it so no path under it can be
-mistaken for the live one, and record the decision here.
+**Why AI Sandbox was chosen anyway.**
+
+1. **The comparison is about the real target library.** Bucket 3 says so in
+   its first row: *only the real target library counts*. Library throttling,
+   list view thresholds and how a server-side copy settles are exactly the
+   behaviours Part B warned do not transfer between drives. A second site is a
+   second library, and a comparison passed there would still have to be
+   re-run here before anyone trusted it.
+2. **A second site costs two things nobody on the team can do** — creating a
+   team site and a second `Sites.Selected` grant on it from Vitis — for a
+   copy that is deleted when the comparison is written up.
+3. **The weakness the recommendation named is answered in code, not by
+   placement.** Two guards in `GraphFileStore` (next section) make the fence
+   incapacity: the store is confined to the folder it is given, and refuses
+   the live folder by name whatever it is given. The engine cannot be pointed
+   at the live tree in graph mode without a code change.
+4. **The flow-trigger argument for a copy site was wrong.** A "file created"
+   trigger's folder parameter scopes it, so a flow watching the copy's folder
+   does not need a copy site. The check is deferred regardless — see *Before
+   cutover* below.
+
+**The copy, exactly.** Library `Documents` on the AISandbox site (drive id
+above), top-level folder `phb-co-engine scratch` — the root the step 7 job
+used — and under it:
+
+```
+/phb-co-engine scratch/part-c-copy-2026-10-21/
+    README.txt                  says it is not the live tree, and when to delete it
+    pristine/_manifest.json     every input file with its byte count and sha256
+    pristine/<CO name>/         the replay inputs of one fixture run, byte for byte
+    runs/<id>/<tag>/CMP/        one engine tree per comparison run, built from pristine
+    runs/<id>/<tag>/rep/        that run's report
+```
+
+The string `CO Managment Process` appears nowhere under it; `--sharepoint-root`
+is `…/CMP` and the engine's `CO In Progress` / `CO Finalized` checks resolve
+inside the copy. Built on 2026-10-21 by `tests/build_copy.py` *(phb-co-engine)*
+from the A3 fixture store, as the developer with the Azure CLI's token (small
+PUTs work for it; reads do not, and the comparison verifies every download
+against the manifest instead): **8 COs, 21 files, 549,143 bytes**, every size
+matching the fixture store exactly when read back by metadata.
+
+**Which COs, and why.** The eight the Part B and Part C differentials ran —
+CCHMC Bulletin 09, the Bulletin 12 chain with both same-subject conversations,
+Bulletin 13, RFI 169, 187, 229, 238, and ZZ PR-98 — because they are the only
+fixture runs with replay inputs and between them cover every path the engine
+has: returned for information, complete, the old template, a five-attempt
+resubmission, two conversations with one subject, and two attachment copies
+(RFI 238's P&ID, Bulletin 13's image), which are the only inputs that exercise
+Graph server-side copy through the real engine.
+
+**What data is in it, decided: real, not scrambled.** The intake JSON (the
+PM's address, subject, ACC link, note) and the intake workbook (project,
+owner, GC, dates, six PH+B names, the change narrative, the vendor table of
+company, contact and email), plus the two attachments. **No pricing**: the
+intake path is a request for pricing; quotes, `Bid Tracker.xlsx` and the
+response engine live under `Change Order Step 2` and the transferred
+packages, none of which is in the copy. Scrambling was declined because the
+copy sits in the library the originals already sit in, readable by the same
+people, so it adds no disclosure; a scrambler would have to preserve cell
+positions, formats, the typo dictionary's hits and the label-search fallback,
+and would be new code needing its own verification; and it would cut the
+link to the fixture store, where six of fourteen artifacts reproduce exactly.
+**Never in the copy**: anything a flow writes or triggers on —
+`transfer_ready.json`, `classification_result.json`, `bid_tracker_ready.json`,
+`draft_written.json` and the two engine sentinels as inputs — the Archive
+folders, prior attempts, and the whole of Step 2. The builder reads the
+fixture store and never the live folder, so none of those can travel, and it
+refuses the six names outright on top of the store's own sentinel rule.
+
+**Delete it** when the comparison is written up, and record the date here.
+
+### The two guards (2026-10-21)
+
+Both in `co_filestore.GraphFileStore` *(phb-co-engine,
+`feat/graph-store-root-jail`)*, each with tests, built before the copy was:
+
+| guard | what it does | where it bites |
+|---|---|---|
+| **the root jail** | `root` is a required constructor argument; every request URL is built from a path check against it, so a path outside the root never becomes a request. The drive root is refused as a root, because the live tree is in it | every store method, before any HTTP |
+| **the live folder, by name** | `CO Managment Process` as the first path segment is refused at every call whatever the root, case-insensitively, and a root inside it is refused at construction — before the engine fetches a token, so the refusal cannot read like an auth error | construction, and every call |
+
+The one write permitted above the root is `makedirs` creating the root's own
+ancestor folders, so a fresh scratch root can be made. In graph mode the
+engine now requires `--sharepoint-root` as well as `--drive-id` and
+`--live-path`, validates the root first, and refuses a `--live-path` or
+`CO_REPORT_DIR` outside it up front. Writing the tests found a real ordering
+defect: `replace`, `copy` and `move` looked at the destination before the
+source, so `replace(<live>, <copy>)` would have asked Graph whether the
+destination existed before anything refused the source. Both paths are now
+confined before any request in all three.
+
+`tests/test_graph_root_jail.py`, 14 tests, offline: every store method with a
+live path on a session whose every call raises; every spelling; traversal;
+case; the ancestor door; and **the real engine as a subprocess, pointed exactly
+where the laptop points, which stops at the root with no token set** — the
+test the owner asked for. Mutation: with the by-name refusal removed, 5 of
+the 14 fail and the jail still reports the same paths as outside, so the two
+layers are independent. The Part B differential was re-run afterwards: all
+eight COs EQUIVALENT. Removing the by-name refusal is the Phase 14 cutover
+change, made deliberately and nowhere else.
+
+### The comparison instrument, and the job that runs it
+
+`tests/compare_stores.py` *(phb-co-engine)*, per CO under `pristine/`:
+download and verify the inputs against the manifest; build a local tree and
+run the engine with `--store local`; build a Graph tree under `runs/<id>/`
+by server-side copy from `pristine` and run the engine with `--store graph`;
+download that tree, rewriting the Graph-side paths it recorded in its state
+files to the download location (the differ then strips both roots to
+`<ROOT>`, as it already does for the laptop-versus-container case); and hand
+both trees to `tests/co_output_diff.py`. Both halves run in one container, so
+the store is the only variable. **It has not run yet.** It can only run as
+the engine app, which exists only inside Azure, so it is a Container Apps job
+exactly like step 7's: image `phb-co-engine:part-c-compare` (built in the
+production registry 2026-10-21 from the branch, `INCLUDE_LIBREOFFICE=false`
+as step 7 was, so neither half renders a PDF), `infra/compare-job.sh`
+base64-encoded as the command, the step 7 spec's identity, environment,
+registry and six `CO_*` values, plus
+`CO_COPY_ROOT=/phb-co-engine scratch/part-c-copy-2026-10-21`. Timeout: allow
+1800 s; eight COs, two engine runs each, through Graph. The log reads
+`### COMPARE`, one block per CO ending in `EQUIVALENT` or `NOT EQUIVALENT`,
+a `SUMMARY`, `### COMPARE EXIT n`, `### DONE`. Creating the job is the
+owner's action, as before.
+
+**Pre-registered expectation.** SharePoint stamps a workbook after a write
+(§7c of the inventory), so the Graph half's copied intake workbooks carry
+injected OOXML parts the local half's byte copies do not. The differ compares
+workbooks structurally, so this should not surface; if it does, it is a differ
+class to widen, not an engine difference. Anything else that survives
+normalization is a store disagreement and is the finding Part C exists for.
 
 ## Step 7, second pass (2026-10-21): the credential is the platform's identity, and the test needs a job
 
@@ -497,10 +627,69 @@ changes only how the check decides, not what the store does.
 
 **What remains for Part C** is now exactly the plan's bucket 3: the
 byte-identical comparison of `GraphFileStore` output against `LocalFileStore`
-on a copy of the tree, and the flow-trigger check, which needs the copy site
-and the decision about a twelfth flow. Step 6 (Part E equivalence, in
-writing) is still not started. The job can be re-created from the same spec
-for the next run; the image is in the registry.
+on a copy of the tree, and the flow-trigger check. Step 6 (Part E
+equivalence, in writing) is still not started. The job can be re-created from
+the same spec for the next run; the image is in the registry.
+
+**Later the same day**, the guards were built, the copy was built and the
+comparison was packaged as a job — *Where the copy lives*, *The two guards*
+and *The comparison instrument* above. The comparison itself has not run.
+
+## Before cutover: the flow-trigger decision (required)
+
+`PHASE-12.md` Part C: *"writing a file through Graph changes its metadata.
+Power Automate matches on filenames, so this should be irrelevant — verify
+that rather than assuming it."* The owner deferred the verification on
+2026-10-21. **Phase 14 does not start until it is either done or explicitly
+waived in writing here**, because it is the acceptance criterion most likely
+to be discovered late, and after cutover the only flows that could reveal it
+are the eleven, on live data.
+
+**What the eleven watch** (from the engine's own flow map): Intake 2 watches
+`2 - Returned for Info` every minute; Intake 3 watches `3 - Ready for Vendor
+Pricing` every five; Intake 5 polls `CO In Progress` with a filename
+condition; all under `CO Managment Process`. The copy is a sibling top-level
+folder and so outside every watched folder — the library's six other
+top-level folders see daily activity and fire nothing, which Phase 11's
+run-history check can confirm from the portal.
+
+**Evidence already in hand, with no flow involved** (read live 2026-10-21):
+
+- Power Automate's own `transfer_ready.json` in an archived Bulletin 13
+  attempt folder was created by API — author `changeorder`, application
+  `Microsoft Power Platform` — and Intake 4 fires on exactly that file every
+  time. So a "file created" trigger in this pipeline already fires on files
+  that did not arrive through the OneDrive sync client.
+- The engine's sync-written `scrub_result.json` and `vendor_drafts.json`
+  beside it differ from the Power Automate file only in author, editor and
+  application fields; content type, version and name are identical.
+- A Graph app-only write shows the app as author, and a server-side copy
+  shows `SharePoint App` — observed on the step 7 scratch tree.
+- No card in the seven intake flows reads author or editor, per the
+  card-level map (*inferred* for expressions, which the map does not list
+  exhaustively).
+
+**What that does not prove**: that the trigger's poll picks up an item
+created by an application-only principal. No documented exclusion exists;
+that is reasoning, and the phase doc asks for observation.
+
+**Two ways to close it, cheapest first:**
+
+1. **A disposable personal flow.** In the owner's own environment and
+   connection, trigger *When a file is created (properties only)* on the AI
+   Sandbox library with the folder set to the copy's
+   `…/CMP/Change Order Intake/2 - Returned for Info`, one Compose action,
+   deleted after one observed run on a file the comparison job wrote. It
+   touches none of the eleven, uses no shared connection and sends nothing;
+   whether it sits inside prohibition 2's spirit is the owner's call. It does
+   not need a copy site.
+2. **Observe what the trigger would see.** Query the library's list items the
+   way the trigger does (`/sites/{id}/lists/{listId}/items` filtered on
+   `Created`, or the drive `delta`) and show an app-created item appears with
+   the same shape as a Power Automate-created one. Strong, and still not the
+   trigger.
+
+Record the outcome, or the waiver and its reasoning, here.
 
 ## Sequence
 
@@ -520,13 +709,20 @@ for the next run; the image is in the registry.
    started
 7. **Done through the probe and the harness, 2026-10-21** (*Step 7, third
    pass*): the credential works, the site grant is present and Write, and
-   15 of 16 checks pass as the app with the 16th a defect in the check. What
-   remains is the byte-identical comparison on a copy of the tree and the
-   flow-trigger check
+   15 of 16 checks pass as the app with the 16th a defect in the check
+8. **The two guards — done 2026-10-21**, with tests, before anything was
+   copied (*The two guards*)
+9. **The copy — built 2026-10-21** at
+   `/phb-co-engine scratch/part-c-copy-2026-10-21` (*Where the copy lives*)
+10. **The byte-identical comparison — packaged, not run.** Image
+    `phb-co-engine:part-c-compare` and `infra/compare-job.sh`; the job is the
+    owner's to create (*The comparison instrument*)
+11. **The flow-trigger decision — deferred, required before Phase 14**
+    (*Before cutover*)
 
-Steps 1–4 are complete without anybody granting anything. Step 5 needs a token
-from the right client, not a permission. Step 7 needs Vitis twice more: a way to
-authenticate as the app, and the site grant read back or made.
+Steps 1–4 and 8–9 are complete without anybody granting anything. Step 5 needs
+a token from the right client, not a permission. Step 10 needs the owner to run
+one job. Step 11 needs a decision.
 
 ---
 
