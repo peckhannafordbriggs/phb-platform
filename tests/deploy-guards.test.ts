@@ -1071,3 +1071,150 @@ describe("the two secure parameters are optional, and omitted means unchanged (2
     },
   );
 });
+
+describe("the custom domain lives in the template, and a routine redeploy cannot drop it (2026-10-21)", () => {
+  /**
+   * `platform.phb1899.com` is attached to the container app through
+   * `infra/main.bicep` - a custom hostname beside the app's own address, with
+   * a free managed certificate issued on the environment - rather than by a
+   * one-off `az containerapp hostname bind`, because a template deployment
+   * replaces the whole container app and would silently remove a hostname the
+   * template did not know about (the placeholder-image lesson, applied to a
+   * hostname).
+   *
+   * Two things that must stay true. The certificate depends on the app (Azure
+   * will not issue for a hostname no app carries) and the app names the
+   * certificate, so the id is built with resourceId() rather than a symbolic
+   * reference - a reference would be a cycle. And the binding defaults to
+   * TRUE: the first deployment passes customDomainBound=false on the command
+   * line to add the hostname and issue the certificate, and no later
+   * deployment needs to remember anything, because the parameters file never
+   * carries the binding. Nothing local can run a deployment, so this reads
+   * the files, and the compiled ARM where `az` is installed.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  const resourceBody = (bicep: string, symbolicName: string) => {
+    const start = bicep.indexOf(`resource ${symbolicName} `);
+    expect(start, `resource ${symbolicName}`).toBeGreaterThan(-1);
+    const rest = bicep.slice(start);
+    const next = rest.slice(1).search(/^(resource|module|output|param|var) /m);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+
+  it("takes the hostname as a parameter that defaults to empty, so a template without one deploys as before", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    expect(bicep).toMatch(/^param customDomainName string = ''\s*$/m);
+  });
+
+  it("defaults the binding to true, so the parameters file never has to carry it and a redeploy keeps the certificate bound", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    expect(bicep).toMatch(/^param customDomainBound bool = true\s*$/m);
+  });
+
+  it("ships the hostname in the example parameters, blank, and never the binding", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    expect(example.parameters.customDomainName).toEqual({ value: "" });
+    expect(Object.keys(example.parameters)).not.toContain("customDomainBound");
+  });
+
+  it("puts the hostname on the ingress in one of two states: bound to the certificate, or merely present", async () => {
+    const bicep = codeOnly(await readFile("infra/main.bicep"));
+    expect(resourceBody(bicep, "containerApp")).toMatch(/customDomains:\s*customDomains/);
+    const variable = bicep.slice(bicep.indexOf("var customDomains ="));
+    expect(variable).toContain("bindingType: 'SniEnabled'");
+    expect(variable).toContain("certificateId: managedCertificateId");
+    expect(variable).toContain("bindingType: 'Disabled'");
+    // Unbound: the key is absent, not empty. Both states keep the hostname.
+    const unbound = variable.slice(variable.indexOf("bindingType: 'Disabled'"));
+    expect(unbound.split("\n").slice(0, 3).join("\n")).not.toContain("certificateId");
+  });
+
+  it("names the certificate by resourceId(), never by a symbolic reference, because the certificate depends on the app", async () => {
+    const bicep = codeOnly(await readFile("infra/main.bicep"));
+    expect(bicep).toMatch(
+      /^var managedCertificateId = resourceId\('Microsoft\.App\/managedEnvironments\/managedCertificates', managedEnvironmentName, managedCertificateName\)\s*$/m,
+    );
+    expect(resourceBody(bicep, "containerApp")).not.toMatch(/\bmanagedCertificate\b/);
+    const certificate = resourceBody(bicep, "managedCertificate");
+    expect(certificate).toMatch(/= if \(hasCustomDomain\)/);
+    expect(certificate).toContain("domainControlValidation: 'CNAME'");
+    expect(certificate).toMatch(/dependsOn:\s*\[\s*containerApp\s*\]/);
+  });
+
+  it("leaves authUrl and the SSO redirect URI on the app's own address - sign-in moves only when the redirect URI is added", async () => {
+    const bicep = codeOnly(await readFile("infra/main.bicep"));
+    expect(bicep).toMatch(/name: 'AUTH_URL'\s*\n\s*value: authUrl\s*$/m);
+    expect(bicep).not.toMatch(/authUrl[^\n]*customDomain/);
+    expect(bicep).toMatch(
+      /^output ssoRedirectUri string = 'https:\/\/\$\{containerApp\.properties\.configuration\.ingress\.fqdn\}\/api\/auth\/callback\/microsoft-entra-id'\s*$/m,
+    );
+    expect(bicep).toMatch(/^output customDomainSsoRedirectUri string = /m);
+  });
+
+  it("is untouched by the deploy workflow, which sets the image and nothing else", async () => {
+    const workflow = await readFile(".github/workflows/deploy.yml");
+    expect(workflow).not.toMatch(/hostname|customDomain|certificate/i);
+  });
+
+  it("documents the two passes: the first with customDomainBound=false on the command line, every later one without it", async () => {
+    const readme = await readFile("infra/README.md");
+    const section = readme.split("## Custom domain")[1]?.split("\n## ")[0] ?? "";
+    expect(section).toContain("customDomainBound=false");
+    expect(section.match(/customDomainBound=false/g)?.length).toBe(1);
+    expect(section).toMatch(/asuid\./);
+    expect(section).toMatch(/CNAME/);
+  });
+
+  const az = spawnSync("az", ["bicep", "version"], { encoding: "utf8", shell: true });
+  const azAvailable = az.status === 0;
+
+  it.skipIf(!azAvailable)(
+    "compiles to ARM where the app does not depend on the certificate, the certificate depends on the app, and the binding defaults to true",
+    () => {
+      const build = spawnSync(
+        "az",
+        ["bicep", "build", "--file", "infra/main.bicep", "--stdout"],
+        { cwd: projectRoot, encoding: "utf8", shell: true, maxBuffer: 16 * 1024 * 1024 },
+      );
+      expect(build.status, build.stderr).toBe(0);
+      const arm = JSON.parse(build.stdout.replace(/^﻿/, "")) as {
+        parameters: Record<string, { type: string; defaultValue?: unknown }>;
+        variables: Record<string, unknown>;
+        resources: Record<string, ArmResource> | ArmResource[];
+      };
+      interface ArmResource {
+        type: string;
+        name: string;
+        condition?: string;
+        dependsOn?: string[];
+        properties?: { configuration?: { ingress?: { customDomains?: unknown } } };
+      }
+      expect(arm.parameters.customDomainName).toMatchObject({ type: "string", defaultValue: "" });
+      expect(arm.parameters.customDomainBound).toMatchObject({ type: "bool", defaultValue: true });
+
+      const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
+      const app = resources.find((r) => r.type === "Microsoft.App/containerApps");
+      const certificate = resources.find(
+        (r) => r.type === "Microsoft.App/managedEnvironments/managedCertificates",
+      );
+      expect(app).toBeDefined();
+      expect(certificate).toBeDefined();
+      expect(app?.properties?.configuration?.ingress?.customDomains).toBe("[variables('customDomains')]");
+      expect(JSON.stringify(app?.dependsOn)).not.toContain("managedCertificates");
+      expect(JSON.stringify(certificate?.dependsOn)).toContain("Microsoft.App/containerApps");
+      expect(certificate?.condition).toBe("[variables('hasCustomDomain')]");
+      expect(arm.variables.customDomains).toContain("'bindingType', 'SniEnabled', 'certificateId'");
+      expect(arm.variables.customDomains).toContain("'bindingType', 'Disabled'");
+    },
+  );
+});

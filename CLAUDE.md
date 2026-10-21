@@ -1195,6 +1195,24 @@ the compiled ARM where `az` is installed. `WHY-ITS-BUILT-THIS-WAY.md` § 70;
 `runbook.md` → *A template deployment rotated the database administrator
 password*; `infra/README.md` → *Deploy*.
 
+**The custom domain `platform.phb1899.com` is in the template (2026-10-21).**
+`customDomainName` puts the hostname on the container app's ingress beside the
+`azurecontainerapps.io` address, which keeps working, with a free managed
+certificate on the environment; `customDomainBound` defaults to **true** and is
+passed as `false` exactly once, on the first deployment that sets the hostname,
+because Azure will not issue a certificate for a hostname no app carries and
+the app cannot bind one that does not exist. The parameters file carries only
+the hostname, so a routine redeploy keeps the binding. The certificate is
+named from the app by `resourceId()`, never symbolically - it depends on the
+app, and a reference back is a cycle. **`authUrl` is unchanged**: sign-in
+keeps building its callback on the old address until Vitis adds the second
+redirect URI (`runbook.md` → *What to ask IT for* → Request 5), and only then
+does `authUrl` move - in that order, or sign-in breaks at both addresses.
+What-if against production showed the two expected effects and nothing else;
+the deployment itself is run by the owner (`infra/README.md` → *Custom
+domain*). `WHY-ITS-BUILT-THIS-WAY.md` § 71; `runbook.md` → *The custom domain
+answers with a certificate warning*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
