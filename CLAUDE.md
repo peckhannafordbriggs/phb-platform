@@ -436,7 +436,17 @@ hold on the real library; every content read fails because SharePoint refuses
 the Azure CLI's token for content transfer, which the harness now diagnoses
 first. `phb-co-engine/tests/probe_site_grant.py` is the instrument for the
 grant once anything can authenticate as the app. The plan doc's *Step 7*
-section has the three routes and the identifiers.
+section has the three routes and the identifiers. **2026-10-21:** the
+federated credential landed and names the **platform's production
+identity**, so the app authenticates only from inside Azure; the engine
+gained `--graph-auth federated` (the platform's assertion exchange in
+Python, reading the container app's identity endpoint rather than IMDS), the
+image `phb-co-engine:step7` is in the production registry, and the probe and
+harness are packaged as a one-off Container Apps job — **built, not run**:
+creating a job in the production resource group is the owner's action, and
+the plan doc's *Step 7, second pass* has the spec and the sequence. The app
+also carries a 2029 certificate from Vitis's PnP tooling; keeping it is an
+open decision recorded there.
 
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with

@@ -343,6 +343,100 @@ which, on the evidence above, has not been done on AI Sandbox either.
 If a sibling folder is chosen anyway, name it so no path under it can be
 mistaken for the live one, and record the decision here.
 
+## Step 7, second pass (2026-10-21): the credential is the platform's identity, and the test needs a job
+
+Vitis reported the federated credential added and the site grant made. Read
+back from Entra:
+
+| | observed |
+|---|---|
+| Federated identity credential `phb-platform-prod` | issuer: this tenant; subject `282bcb43-60e4-4d90-aa62-cea74fd719ae`; audience `api://AzureADTokenExchange` |
+| That subject | `phbplat-prod-identity`, the platform's production user-assigned identity (client id `d6ed7dd3-a599-444b-b043-90f1e7282bea`) |
+| Also on the app | a **certificate** credential, `PnP.Powershell`, valid 2026-10-19 → 2029-10-19, subject `PnPAutomationCert`, issued for a workstation — the one Vitis used to run the grant |
+| The site grant | still not readable by a non-admin; now provable **as the app** |
+
+Two consequences, one of them a decision for the owner:
+
+1. **The app can be authenticated only from inside Azure, as the platform's
+   identity.** Not from a laptop, not from GitHub Actions. So the probe and
+   the harness run as a Container Apps **job** in `phbplat-prod-env`, carrying
+   `phbplat-prod-identity`, from the engine image in the production registry.
+   That is exactly how the Cost Intelligence worker job authenticates to its
+   own app registration, so it is the conventional shape here, not a new one.
+2. **The certificate is a credential that expires**, on an app that will hold
+   Write on a SharePoint site, and its private key is on a workstation nobody
+   in the company controls. Prohibition 7 is about production and this is not
+   the production path — but the engine's rule is *no client secret, please*,
+   and a certificate is the same thing with a longer fuse. Ask Vitis to remove
+   it now that the grant is made; the federated credential is the one the
+   engine uses. **Decision for the platform owner, recorded here, not taken.**
+
+### What was built for it
+
+- `co_graph_auth.federated` *(phb-co-engine)*: the identity's token for the
+  exchange audience, presented as a `client_assertion` to the app — the
+  platform's `managed-identity-assertion.ts` in Python, with no SDK. It reads
+  the **container app's** identity endpoint (`IDENTITY_ENDPOINT` +
+  `IDENTITY_HEADER`), which is not IMDS; the existing `managed-identity` mode
+  assumed IMDS and would have failed on Container Apps with a message that
+  reads like "no identity assigned". Both modes now share one token fetch.
+  Entra's error body is kept on refusal, because it carries the AADSTS code
+  that says which half of the credential is wrong. Six offline tests assert
+  the shape of both requests and that no secret is in the form.
+- `--graph-auth federated` on the engine, the harness and the probe; three
+  env values, none secret: `CO_GRAPH_APP_CLIENT_ID`, `CO_GRAPH_TENANT_ID`,
+  `CO_GRAPH_MANAGED_IDENTITY_CLIENT_ID`.
+- The image now carries `tests/` and keeps the engine at its repository path
+  (`/app/AI Files/CO Intake Engine`, with `/app/engine` as a link), so the
+  instruments find it as they do in a checkout.
+- `phbplatprodovwzv7.azurecr.io/phb-co-engine:step7` — built in the registry
+  on 2026-10-21 with `az acr build … --build-arg INCLUDE_LIBREOFFICE=false`
+  (run `ch24`, succeeded). The local CLI crashed printing pip's output
+  (`charmap` codec); the build is server-side and finished regardless. Set
+  `PYTHONIOENCODING=utf-8` before `az acr` commands on Windows.
+- `infra/step7-job.sh` *(phb-co-engine)*: what the job runs — the probe with
+  the write probe, then the full harness, both against
+  `/phb-co-engine scratch/conformance-scratch`, a top-level folder of the
+  AI Sandbox library beside `CO Managment Process` and never inside it.
+
+### Running it — needs the platform owner
+
+Creating a job in the production resource group is a production deploy, and
+the agent's permission mode refused it (correctly: a new resource, with the
+production identity attached). The filled job spec is a one-off file outside
+both repositories — it carries the subscription id — and the sequence is:
+
+```
+export PYTHONIOENCODING=utf-8
+az containerapp job create -n phbplat-prod-co-step7 -g <resource group> --yaml <filled spec>
+az containerapp job start  -n phbplat-prod-co-step7 -g <resource group>
+az containerapp job execution list -n phbplat-prod-co-step7 -g <resource group> -o table
+az containerapp job logs show -n phbplat-prod-co-step7 -g <resource group> \
+    --container step7 --execution <execution name>
+az containerapp job delete -n phbplat-prod-co-step7 -g <resource group> --yes
+```
+
+The spec: `type: Microsoft.App/jobs`, `location: eastus2`, user-assigned
+identity `phbplat-prod-identity`, environment `phbplat-prod-env`, trigger
+`Manual`, timeout 900 s, no retries, registry `phbplatprodovwzv7.azurecr.io`
+pulled with the same identity, image `phb-co-engine:step7`, `cpu 0.5`,
+`memory 1Gi`, command `sh -c "echo <base64 of infra/step7-job.sh> | base64 -d | sh"`
+(base64 because `--args -c …` is parsed as an option by the CLI, and a YAML
+spec sidesteps it), and the six `CO_*` environment values above plus
+`CO_SITE_ID`. The log reads in three parts: `### PROBE` with its verdict line
+and `### PROBE EXIT n`, `### CONFORMANCE` with the 16 checks, `### DONE`.
+Then delete the job and the scratch folder; keep the log.
+
+**What the log will say, by case** — the probe's exit code is the answer the
+owner asked for:
+
+| exit | identity line | verdict |
+|---|---|---|
+| 0 | `application app 85ca496d-…`, roles `Sites.Selected` | working — the site grant is present |
+| 2, roles shown | same | consent done, **no grant on this site** |
+| 2, roles empty | `application`, roles `-` | no consent (or a token issued before it) |
+| 3 | any | bad token — and `no token: Entra refused the assertion …` before it means the federated credential did not match (the AADSTS code follows) |
+
 ## Sequence
 
 1. ~~Dockerfile and requirements~~ — done
@@ -359,10 +453,11 @@ mistaken for the live one, and record the decision here.
    the root into a Windows path and every request is a 400.
 6. Define Part E equivalence for the judgment steps, in writing, first — not
    started
-7. `Sites.Selected` is consented (2026-10-13); **the site grant is not verified
-   and no credential exists to verify it with** (above). When one of the three
-   routes lands: `probe_site_grant.py` as the app, then re-run 5 against the
-   copy, then the byte-identical comparison and the flow-trigger check
+7. `Sites.Selected` is consented (2026-10-13); the federated credential landed
+   2026-10-21 and names the **platform's production identity**, so the probe
+   and the harness run as a job in the production environment — built, not
+   yet run, because creating the job is the owner's action (*Step 7, second
+   pass*). Then the byte-identical comparison and the flow-trigger check
 
 Steps 1–4 are complete without anybody granting anything. Step 5 needs a token
 from the right client, not a permission. Step 7 needs Vitis twice more: a way to

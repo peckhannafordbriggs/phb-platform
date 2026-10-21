@@ -2253,6 +2253,14 @@ entry for the app. Three ways to close it, in `docs/phase-12-part-c-plan.md` →
 `Get-PnPAzureADAppSitePermission -Site https://peckhannafordbriggs.sharepoint.com/sites/AISandbox`
 and sending the output.
 
+**Second pass, 2026-10-21.** The federated credential Vitis added names
+`phbplat-prod-identity` — the platform's production managed identity — as its
+subject, so the engine app can be authenticated only from inside Azure as
+that identity, by a Container Apps job. The job spec and sequence are in
+`docs/phase-12-part-c-plan.md` → *Step 7, second pass*. The app also carries
+a `PnP.Powershell` **certificate** valid to 2029, the tool credential used to
+make the grant; whether it stays is the owner's decision, recorded there.
+
 ## The engine cannot reach the library (Phase 12 Part C)
 
 The engine's Graph path is exercised by two scripts in `phb-co-engine`:
@@ -2260,6 +2268,37 @@ The engine's Graph path is exercised by two scripts in `phb-co-engine`:
 scratch folder) and `tests/probe_site_grant.py` (can this identity open this
 site and drive). Both print what they saw; neither writes outside a path
 containing `scratch` or `conformance`.
+
+### The job says `no managed identity token from IMDS`
+
+**Symptom.** `probe_site_grant.py --graph-auth managed-identity` or
+`federated` fails before any Graph call with *no managed identity token from
+IMDS*, inside a Container Apps job that has the identity assigned.
+
+**Cause.** Container Apps do not answer on the IMDS address. They expose the
+identity through `IDENTITY_ENDPOINT` + `IDENTITY_HEADER` in the environment.
+Before 2026-10-21 `co_graph_auth.py` knew only IMDS.
+
+**Fix.** `co_graph_auth._identity_token` prefers the container app's endpoint
+when both variables are present and falls back to IMDS. The job script prints
+`### IDENTITY ENDPOINT PRESENT: yes` first; if that line is empty, the
+identity is not attached to the job (`identity.userAssignedIdentities` in the
+spec), which is a spec problem and not an auth one.
+
+### The job says `Entra refused the assertion for app …`
+
+**Symptom.** `--graph-auth federated` fails at the token endpoint; the message
+carries the HTTP status and Entra's body with an `AADSTS` code.
+
+**Cause.** The federated identity credential on `phb-co-engine` does not match
+the assertion: wrong subject (it must be the identity's **object** id,
+`282bcb43-…`, not its client id), wrong issuer, wrong audience, or the
+credential was created minutes ago and has not replicated.
+
+**Fix.** Read the code. `AADSTS70021` / `AADSTS700213`: no matching
+credential — compare subject, issuer and audience on the app with the
+identity's values. `AADSTS7000218`-class: the assertion did not reach Entra at
+all. Wait and retry before changing anything if the credential is new.
 
 ### Every Graph request from the engine's identity is 403
 
