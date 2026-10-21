@@ -131,17 +131,17 @@ failure it prevents destroys data held nowhere else while the cost of a larger d
 recoverable. The budget carries notification contacts only and no action group, so no
 spending threshold can stop the server.
 
-## Three secrets are set by hand, not by the template
+## Four secrets are set by hand, not by the template
 
-Three secrets are issued elsewhere and pasted into the vault once, by a person:
-the Anthropic API key (next heading), the BAS credential key (the heading
-after it) and the Analyze database URL (the heading after that). The template
-knows their names only - `ANTHROPIC-API-KEY`, `BAS-CREDENTIAL-KEY` and
-`BAS-ASK-DATABASE-URL` - and references each from the container app behind a
-boolean parameter. All three are read under the managed identity's existing
-**Key Vault Secrets User** grant on the vault; no new role assignment is
-needed, and `tests/deploy-guards.test.ts` asserts that from the template's
-grants.
+Four secrets are issued elsewhere and pasted into the vault once, by a person:
+the Anthropic API key (next heading), the Change Orders module's own Anthropic
+key (the heading after it), the BAS credential key and the Analyze database
+URL. The template knows their names only - `ANTHROPIC-API-KEY`,
+`CO-ANTHROPIC-API-KEY`, `BAS-CREDENTIAL-KEY` and `BAS-ASK-DATABASE-URL` - and
+references each from the container app behind a boolean parameter. All four
+are read under the managed identity's existing **Key Vault Secrets User**
+grant on the vault; no new role assignment is needed, and
+`tests/deploy-guards.test.ts` asserts that from the template's grants.
 
 ## The Anthropic API key is set by hand, not by the template
 
@@ -177,6 +177,33 @@ three permission walls under *Deploying to Azure* in `runbook.md`.
 The key does not expire, which is what prohibition 7 requires; it can be revoked in
 the Anthropic Console. To rotate, run step 2 again with the new key - a new version
 of the same secret - and create a new revision so the app picks it up.
+
+## The Change Orders Anthropic key is a second key, set the same way
+
+`CO_ANTHROPIC_API_KEY` is the Change Orders module's **own** Anthropic API key
+(2026-10-16): a second key, issued separately in the Anthropic Console, so the
+change-order pipeline and BAS Analyze are billed, rate-limited and revoked
+independently of each other. It is wired exactly like the key above - Key Vault
+`CO-ANTHROPIC-API-KEY`, referenced from the container app as
+`CO_ANTHROPIC_API_KEY` when `coAnthropicApiKeyInKeyVault` is true - and it is
+deliberately **not** the SDK's default variable name, because a client built
+without an explicit key would otherwise read the BAS key silently
+(`runbook.md` → *The Change Orders Anthropic key, the same way*). Nothing reads
+it until Phase 12 Part D is built, so the flag can stay false until then; absent,
+it disables those calls and nothing else.
+
+```powershell
+# 1. Same vault as above.
+# 2. Set the secret. A DIFFERENT key from ANTHROPIC-API-KEY - create one in the
+#    Anthropic Console for the change-order pipeline. Read-Host keeps it out of
+#    the command line and the shell history.
+az keyvault secret set --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --value (Read-Host "Change Orders Anthropic API key")
+
+# 3. Confirm it exists WITHOUT printing it.
+az keyvault secret show --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --query "{enabled:attributes.enabled, updated:attributes.updated}"
+
+# 4. Set coAnthropicApiKeyInKeyVault to true in infra/main.parameters.json and redeploy.
+```
 
 ## The BAS credential key is copied from the collector, byte for byte
 
@@ -261,11 +288,13 @@ before Auth.js can build a callback. So the first pass is not a single command:
    to that identity. Neither can be requested before this deployment exists.
 4. Push to `main`. CI builds the real image, runs migrations, and deploys it.
 5. Run the production seed **once**, by hand. See `runbook.md`.
-6. Set the three hand-set secrets as above - `BAS-CREDENTIAL-KEY` from the collector's
+6. Set the hand-set secrets as above - `BAS-CREDENTIAL-KEY` from the collector's
    `.env`, `ANTHROPIC-API-KEY` from the Anthropic Console, `BAS-ASK-DATABASE-URL` from
    the `bas_analyze` role the script creates - then redeploy with
    `basCredentialKeyInKeyVault=true`, `anthropicApiKeyInKeyVault=true` and
    `basAskDatabaseUrlInKeyVault=true`. Nothing before this step needs any of them.
+   `CO-ANTHROPIC-API-KEY` and `coAnthropicApiKeyInKeyVault=true` join this step
+   once Phase 12 Part D gives the change-order pipeline something to call with it.
    From here on every redeploy passes the **running** image, read with the
    `az containerapp show` line under *Deploy* - step 4 has put a real one there, and
    the placeholder must never come back.

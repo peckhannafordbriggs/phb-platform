@@ -158,9 +158,17 @@ it, because the flows are the thing that must not break.
 
 ## Part D — Move the judgment to the Claude API
 
-**Needs: a company Anthropic API key.** Wired from Key Vault as of 2026-10-01 — `ANTHROPIC_API_KEY`,
-the SDK's default name, so the Python engine reads it with no configuration; Key Vault
-`ANTHROPIC-API-KEY` in Azure. BAS phase B5 waited on the same key.
+**Needs: a company Anthropic API key — the change-order module's OWN one.** As of
+2026-10-16 the two modules have two keys: `ANTHROPIC_API_KEY` is BAS Analyze's, and
+Change Orders reads **`CO_ANTHROPIC_API_KEY`** (Key Vault `CO-ANTHROPIC-API-KEY`, behind
+`coAnthropicApiKeyInKeyVault`; name decided in `lib/env.ts`; reader
+`readChangeOrderAnthropicEnv` in `lib/modules/change-orders/anthropic-env.ts`), so the
+pipeline is billed, rate-limited and revoked independently of the BAS tab. The wiring is
+done and nothing reads it yet — this part is what will. **The Python SDK will not read it
+unprompted**: `anthropic.Anthropic()` reads `ANTHROPIC_API_KEY`, the BAS key, so the
+engine's client must be built with `api_key=os.environ["CO_ANTHROPIC_API_KEY"]`
+explicitly, and there is no fallback from one key to the other in either direction.
+`runbook.md` → *The Change Orders Anthropic key, the same way*.
 
 Replace the Cowork judgment steps one at a time, lowest consequence first. From the
 inventory, that ordering is likely: language review, then classification, then any draft

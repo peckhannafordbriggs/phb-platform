@@ -1067,6 +1067,22 @@ file (always empty on this path) and not on the screen. `runbook.md` → *The
 readings table and the chart disagree, or a CSV export says it was cut*;
 `WHY-ITS-BUILT-THIS-WAY.md` § 64.
 
+**Change Orders has its own Anthropic key (2026-10-16).** `CO_ANTHROPIC_API_KEY`,
+a second key separate from BAS Analyze's `ANTHROPIC_API_KEY`, so the two
+modules are billed, rate-limited and revoked independently. Name in
+`lib/env.ts` (`CO_ANTHROPIC_API_KEY_VAR`), reader
+`readChangeOrderAnthropicEnv` in `lib/modules/change-orders/anthropic-env.ts`,
+Key Vault `CO-ANTHROPIC-API-KEY` behind `coAnthropicApiKeyInKeyVault` - the
+fourth hand-set secret, same shape as the other three. **Nothing reads it
+yet**: no change-order code in this repo or in `phb-co-engine` creates an
+Anthropic client today, and Phase 12 Part D is where it will be used. The rule
+that matters: `ANTHROPIC_API_KEY` is the SDK's default name, so a client built
+without an explicit `apiKey` runs on the BAS key silently - the CO reader never
+falls back to it and `tests/anthropic-key-per-module.test.ts` walks both module
+trees for a bare `new Anthropic(`. The Python engine must pass `api_key=`
+explicitly for the same reason. `WHY-ITS-BUILT-THIS-WAY.md` § 68;
+`runbook.md` → *The Change Orders Anthropic key, the same way*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
