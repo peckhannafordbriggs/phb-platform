@@ -2004,11 +2004,12 @@ second such branch that day), re-landed and extended to the BAS key the same
 way.
 
 **Why by reference and never a parameter.** `DATABASE-URL` and `AUTH-SECRET`
-are generated at deploy time, so passing them on every deploy is natural.
-These two are issued elsewhere - the Anthropic Console; the collector's `.env`
-on the office PC - and a secure parameter would put them on every deploy's
-command line and let a blank redeploy overwrite them. A reference means a
-routine redeploy never touches the value.
+are generated at deploy time, so passing them on every deploy was natural
+(and, since § 70, no longer done - a routine deploy omits them and the
+template leaves both alone). These two are issued elsewhere - the Anthropic
+Console; the collector's `.env` on the office PC - and a secure parameter
+would put them on every deploy's command line and let a blank redeploy
+overwrite them. A reference means a routine redeploy never touches the value.
 
 **Why the boolean.** Container Apps resolves every Key Vault reference when
 it creates a revision, and a reference to a secret that does not exist fails
@@ -2417,6 +2418,88 @@ the pipeline bills to BAS; a deploy-guard test fails by name. Add `??
 env.ANTHROPIC_API_KEY` to the CO reader and the blank-beside-a-real-BAS-key
 test fails. Build a change-order client as `new Anthropic({ timeout })` and
 the source-text test names the file.
+
+## 70 · The two secure parameters are optional, and an omitted one changes nothing
+
+**What it is.** `postgresAdminPassword` and `authSecret` in `infra/main.bicep`
+default to empty (2026-10-21). Empty - or whitespace - means *leave the existing
+value untouched*: the database server keeps its current administrator password,
+the `DATABASE-URL` vault secret keeps its current version, `AUTH-SECRET` keeps
+its current version. Non-empty does what it always did: sets the password,
+writes a new `DATABASE-URL`, writes a new `AUTH-SECRET`. A routine template
+deployment passes `containerImage` and neither secure parameter; the first
+deployment and a deliberate rotation pass one or both.
+
+**Why.** Until that day both were required on every deployment, and a required
+secure parameter you leave off the command line is prompted for, with nothing
+echoed. Whatever was typed was SET, because a flexible-server PUT that carries
+`administratorLoginPassword` rotates the password to it. On 2026-10-13 a value
+mistyped at that prompt rotated the production administrator password. The
+deployment had been run to turn two Key Vault flags on; nothing about it was
+meant to touch the database. A parameter whose only safe value on a routine
+deployment is *the exact current value, retyped* is a parameter that will one
+day be mistyped, and "pass the current values on every run" was the
+instruction every document gave.
+
+**Why the decision is made once, in a variable, and not at each use.** The
+password is used in two places (the server property and the URL the
+`DATABASE-URL` secret is written from) and the session secret in one. If each
+use tested emptiness for itself, the three tests could disagree - a server
+left alone while `DATABASE-URL` was rewritten with an empty password is the
+worst outcome available, because it breaks the running app while looking like
+a no-op. `setPostgresAdminPassword` and `setAuthSecret` are the only two
+places "was a value supplied" is decided; every use is behind one of them,
+and the source-text test counts the uses.
+
+**Why the property is left out, not set to null or empty.** Three shapes were
+available for "do not rotate". Sending the current password back would need
+the deployer to know it, which is the original problem. Sending `null` or `''`
+is a PUT that *carries* `administratorLoginPassword`, and what a provider does
+with an empty password is at best a validation error and at worst a rotation
+to nothing. Spreading an empty object into the properties leaves the key out
+of the request entirely, which is the one form a provider cannot
+misinterpret: an update with no password is an update that keeps the password.
+The compiled ARM shows it as `if(variables('setPostgresAdminPassword'),
+createObject('administratorLoginPassword', …), createObject())` inside a
+`shallowMerge`, and the test reads that out of `az bicep build` where the CLI
+is installed.
+
+**Why the secrets are conditional resources rather than written with the old
+value.** The template cannot read a vault secret's value, so the only way to
+"write the same thing" would be to not write. A conditional resource with the
+condition false is not deployed: no PUT, no new version, the container app's
+reference - which carries no version - keeps resolving to what is there. The
+symbolic references (`databaseUrlSecret.name`, `authSecretSecret.name`) stay in
+the container app and the worker job so that on a first deployment the secrets
+are written before anything references them; ARM ignores a dependency on a
+resource whose condition is false, so on a redeploy the skipped secret blocks
+nothing.
+
+**Why `DATABASE-URL` follows the password's condition and not its own.** The
+URL embeds the password. A deployment that rotates the password must write the
+URL in the same deployment or the app is locked out of its own database; a
+deployment that does not rotate it must not touch the URL, because the only
+URL it could write would carry an empty password. One condition, the
+password's, gives exactly those two behaviours. A test asserts the secret is
+conditional on `setPostgresAdminPassword` and not on `setAuthSecret`.
+
+**Why `trim()`.** The failure being closed is a value mistyped at a prompt. A
+single space is the easiest value to type by accident and the hardest to see
+afterwards, and `empty(' ')` is false. Whitespace-only is treated as omitted.
+A real password is never whitespace-only, so nothing is lost.
+
+**What breaks if you undo this.** Make either parameter required again and
+the first test in the block fails on the missing `= ''`. Write
+`administratorLoginPassword: postgresAdminPassword` back as a bare property
+and the *absent, never sent empty or null* test fails, as does the compiled
+check's count of one mention inside the `if`. Drop the `if (…)` from either
+secret resource and the *conditional on their own parameter* test fails; swap
+`DATABASE-URL` onto the session secret's condition and the same test names it.
+Test emptiness at a use site instead of through the variable and the
+supplied-path test, which allows each use exactly one shape, fails on the
+line. Put the values back into the routine command in `infra/README.md` and
+the README test fails on the block. `runbook.md` → *A template deployment
+rotated the database administrator password*.
 
 ## 47 · The judgment I'd most want to pass on
 
