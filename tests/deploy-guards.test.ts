@@ -996,7 +996,7 @@ describe("the two secure parameters are optional, and omitted means unchanged (2
     // gives Bicep the dependency. ARM ignores a dependency on a resource
     // whose condition is false, so an omitted secret does not block a redeploy.
     const databaseUrlRefs = code.match(/secrets\/\$\{databaseUrlSecret\.name\}/g) ?? [];
-    expect(databaseUrlRefs.length).toBe(2); // the app and the CIP worker job
+    expect(databaseUrlRefs.length).toBe(3); // the app, the CIP worker job, the backup job
     expect(code).toMatch(/secrets\/\$\{authSecretSecret\.name\}/);
   });
 
@@ -1068,6 +1068,247 @@ describe("the two secure parameters are optional, and omitted means unchanged (2
         )?.condition;
       expect(secretCondition("DATABASE-URL")).toBe("[variables('setPostgresAdminPassword')]");
       expect(secretCondition("AUTH-SECRET")).toBe("[variables('setAuthSecret')]");
+    },
+  );
+});
+
+describe("the nightly database backup is conditional, identity-only, and holds no secret on a command line (2026-10-21)", () => {
+  /**
+   * A storage account, a container, a lifecycle rule, one role assignment
+   * and a scheduled Container Apps Job, all behind enableDbBackup - off by
+   * default, like enableCipWorker and for the same reason (the job names an
+   * image that has to be built into the registry first). The job reads
+   * DATABASE-URL by reference, runs the script with no argument, and the
+   * script hands the password to pg_dump through libpq's environment -
+   * tests/db-backup-script.test.ts holds the script side.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  /** The dbBackupJob resource block, from its declaration to the next section rule. */
+  const jobBlock = (bicep: string) => {
+    const start = bicep.indexOf("resource dbBackupJob ");
+    expect(start).toBeGreaterThan(-1);
+    const rest = bicep.slice(start);
+    return rest.slice(0, rest.indexOf("\n// ----"));
+  };
+  /** One resource block, from its declaration to the next declaration. */
+  const resourceBlock = (bicep: string, name: string) => {
+    const start = bicep.indexOf(`resource ${name} `);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = bicep.slice(start + 1);
+    return rest.slice(0, rest.indexOf("\nresource "));
+  };
+
+  const BACKUP_RESOURCES = [
+    "backupStorage",
+    "backupBlobService",
+    "dumpsContainer",
+    "backupLifecycle",
+    "backupBlobWrite",
+    "dbBackupJob",
+  ];
+
+  it("is off by default, and every one of its resources is conditional on the same parameter", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param enableDbBackup bool = false$/m);
+    for (const name of BACKUP_RESOURCES) {
+      expect(code, name).toMatch(new RegExp(`^resource ${name} '[^']+' = if \\(enableDbBackup\\) \\{$`, "m"));
+    }
+    // Exactly these, and the two outputs read them only through a ternary -
+    // a conditional resource read unconditionally fails the deployment when
+    // the flag is off.
+    const conditional = code.match(/^resource (\w+) '[^']+' = if \(enableDbBackup\)/gm) ?? [];
+    expect(conditional.length).toBe(BACKUP_RESOURCES.length);
+    const outputs = code.split("\n").filter((line) => /^output (dbBackupJobName|dbBackupStorageAccountName)/.test(line));
+    expect(outputs.length).toBe(2);
+    for (const line of outputs) expect(line).toMatch(/= enableDbBackup \? \w+\.name : ''$/);
+  });
+
+  it("runs on a UTC schedule, once, with a bounded run and one retry", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const job = jobBlock(code);
+    expect(job).toMatch(/triggerType: 'Schedule'/);
+    expect(job).toMatch(/cronExpression: dbBackupCron/);
+    expect(job).toMatch(/parallelism: 1/);
+    expect(job).toMatch(/replicaCompletionCount: 1/);
+    expect(job).toMatch(/replicaTimeout: \d+/);
+    expect(job).toMatch(/replicaRetryLimit: 1/);
+    expect(code).toMatch(/^param dbBackupCron string = '30 8 \* \* \*'$/m);
+    // The description says what that is in the building's zone, both halves of the year.
+    expect(await readFile("infra/main.bicep")).toMatch(/08:30 UTC[^\n]*03:30[^\n]*04:30/);
+  });
+
+  it("reads DATABASE-URL by reference and nothing secret as a value; the command is the script and no argument", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const job = jobBlock(code);
+    expect(job).toMatch(/name:\s*'DATABASE_URL'\s*\n\s*secretRef:\s*'database-url'/);
+    expect(job).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{databaseUrlSecret\.name\}'/);
+    // The one secret the job holds.
+    expect((job.match(/keyVaultUrl:/g) ?? []).length).toBe(1);
+    // Every plain value is configuration by name; none is a secret, a
+    // password or a connection string.
+    const values = job.split("\n").filter((line) => /^\s*value:/.test(line));
+    expect(values.length).toBe(3);
+    for (const line of values) {
+      expect(line).not.toMatch(/password|secret|databaseUrl|authSecret|Password/);
+    }
+    const names = [...job.matchAll(/name:\s*'([A-Z_]+)'\s*\n\s*value:/g)].map((m) => m[1]);
+    expect(names.sort()).toEqual(["AZURE_CLIENT_ID", "BACKUP_BLOB_ENDPOINT", "BACKUP_CONTAINER"]);
+    // One element: the script. An argument would be on every execution's record.
+    const command = job.match(/command: \[([^\]]*)\]/)?.[1] ?? "";
+    expect(command.trim().split(/\s+/)).toEqual(["'/usr/local/bin/phb-db-backup'"]);
+    // The template never names a backup role, password or URL of its own:
+    // the administrator's connection is the choice, and the reason is in the
+    // section comment.
+    expect(code).not.toMatch(/param \w*[bB]ackup\w*(Password|Secret|Url) /);
+    expect(await readFile("infra/main.bicep")).toMatch(/Why the administrator's connection and not a backup role of its own/);
+  });
+
+  it("names the image by the server's major, from a variable the deploy cannot drift", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^var dbBackupImage = '\$\{registry\.properties\.loginServer\}\/db-backup:pg\$\{postgresVersion\}'$/m);
+    expect(jobBlock(code)).toMatch(/image: dbBackupImage/);
+    expect(code).not.toMatch(/param dbBackupImage/);
+  });
+
+  it("uploads as the identity, to one container, with no shared key anywhere", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    // Storage Blob Data Contributor, by GUID, scoped to the container.
+    expect(code).toMatch(/^var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'$/m);
+    const assignment = resourceBlock(code, "backupBlobWrite");
+    expect(assignment).toMatch(/scope: dumpsContainer/);
+    expect(assignment).toMatch(/principalId: identity\.properties\.principalId/);
+    expect(assignment).toMatch(/storageBlobDataContributorRoleId/);
+    // The account refuses key-based access, public blobs and plain HTTP.
+    const account = resourceBlock(code, "backupStorage");
+    expect(account).toMatch(/allowSharedKeyAccess: false/);
+    expect(account).toMatch(/allowBlobPublicAccess: false/);
+    expect(account).toMatch(/supportsHttpsTrafficOnly: true/);
+    expect(account).toMatch(/minimumTlsVersion: 'TLS1_2'/);
+    expect(account).toMatch(/name: 'Standard_(LRS|ZRS|GRS|GZRS|RAGRS|RAGZRS)'/);
+    // No key is read anywhere: listKeys on the account would be a credential.
+    expect(code).not.toMatch(/backupStorage\.listKeys/);
+    // The job depends on the assignment, so a first run cannot race it.
+    expect(jobBlock(code)).toMatch(/dependsOn: \[\s*acrPull\s*keyVaultRead\s*backupBlobWrite\s*\]/);
+  });
+
+  it("deletes a dump after the retention period, from a parameter that defaults to 90 days", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param dbBackupRetentionDays int = 90$/m);
+    const policy = resourceBlock(code, "backupLifecycle");
+    expect(policy).toMatch(/daysAfterModificationGreaterThan: dbBackupRetentionDays/);
+    expect(policy).toMatch(/prefixMatch: \[\s*'\$\{dbBackupContainerName\}\/'\s*\]/);
+    expect(policy).toMatch(/blobTypes: \[\s*'blockBlob'\s*\]/);
+  });
+
+  it("makes the server's own point-in-time retention a parameter, defaulting to the live value", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param postgresBackupRetentionDays int = 7$/m);
+    expect(code).toMatch(/backupRetentionDays: postgresBackupRetentionDays/);
+    expect(code).not.toMatch(/backupRetentionDays: \d/);
+  });
+
+  it("ships the flag off in the example parameters, and the retention beside the other server settings", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    expect(example.parameters.enableDbBackup?.value).toBe(false);
+    expect(example.parameters.postgresBackupRetentionDays?.value).toBe(7);
+  });
+
+  it("is documented: the README lists what is created, and the runbook has the restore steps", async () => {
+    const readme = await readFile("infra/README.md");
+    const created = readme.split("## What gets created")[1]?.split("\n## ")[0] ?? "";
+    expect(created).toMatch(/enableDbBackup/);
+    expect(created).toMatch(/Storage Blob Data Contributor/);
+    const runbook = await readFile("runbook.md");
+    const section = runbook.split("\n## Nightly database backup")[1]?.split("\n## ")[0] ?? "";
+    expect(section.length).toBeGreaterThan(2000);
+    expect(section).toMatch(/az containerapp job execution list/);
+    expect(section).toMatch(/pg_restore/);
+    expect(section).toMatch(/--auth-mode login/);
+    expect(section).toMatch(/enableDbBackup/);
+    expect(section).toMatch(/per month/i);
+  });
+
+  const az = spawnSync("az", ["bicep", "version"], { encoding: "utf8", shell: true });
+  const azAvailable = az.status === 0;
+
+  it.skipIf(!azAvailable)(
+    "compiles to ARM where every backup resource carries the condition, the job is scheduled, and its command is one element",
+    () => {
+      const build = spawnSync(
+        "az",
+        ["bicep", "build", "--file", "infra/main.bicep", "--stdout"],
+        { cwd: projectRoot, encoding: "utf8", shell: true, maxBuffer: 16 * 1024 * 1024 },
+      );
+      expect(build.status, build.stderr).toBe(0);
+      interface ArmResource {
+        type: string;
+        name: string;
+        condition?: string;
+        properties?: {
+          configuration?: { triggerType?: string; secrets?: Array<{ name: string; keyVaultUrl?: string; value?: string }> };
+          template?: { containers?: Array<{ command?: string[]; env?: Array<{ name: string; value?: string; secretRef?: string }> }> };
+          allowSharedKeyAccess?: boolean;
+        };
+        sku?: { name: string };
+      }
+      const arm = JSON.parse(build.stdout.replace(/^﻿/, "")) as {
+        parameters: Record<string, { type: string; defaultValue?: unknown }>;
+        resources: Record<string, ArmResource> | ArmResource[];
+      };
+      expect(arm.parameters.enableDbBackup).toMatchObject({ type: "bool", defaultValue: false });
+      expect(arm.parameters.postgresBackupRetentionDays).toMatchObject({ type: "int", defaultValue: 7 });
+
+      const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
+      const ofType = (type: string) => resources.filter((r) => r.type === type);
+      for (const type of [
+        "Microsoft.Storage/storageAccounts",
+        "Microsoft.Storage/storageAccounts/blobServices",
+        "Microsoft.Storage/storageAccounts/blobServices/containers",
+        "Microsoft.Storage/storageAccounts/managementPolicies",
+      ]) {
+        const found = ofType(type);
+        expect(found.length, type).toBe(1);
+        expect(found[0]!.condition, type).toBe("[parameters('enableDbBackup')]");
+      }
+      const account = ofType("Microsoft.Storage/storageAccounts")[0]!;
+      expect(account.properties?.allowSharedKeyAccess).toBe(false);
+      expect(account.sku?.name).toMatch(/^Standard_/);
+
+      // Bicep hoists the GUID into an ARM variable, so the assignment names
+      // the variable; the source test above holds the variable to the GUID.
+      const blobRole = ofType("Microsoft.Authorization/roleAssignments").filter((r) =>
+        /ba92f5b4-2d11-453d-a403-e96b0029c9fe|storageBlobDataContributorRoleId/.test(JSON.stringify(r)),
+      );
+      expect(blobRole.length).toBe(1);
+      expect(blobRole[0]!.condition).toBe("[parameters('enableDbBackup')]");
+
+      const jobs = ofType("Microsoft.App/jobs");
+      const backup = jobs.find((j) => j.name.includes("db-backup"));
+      expect(backup).toBeDefined();
+      expect(backup!.condition).toBe("[parameters('enableDbBackup')]");
+      expect(backup!.properties?.configuration?.triggerType).toBe("Schedule");
+      const container = backup!.properties?.template?.containers?.[0];
+      expect(container?.command).toEqual(["/usr/local/bin/phb-db-backup"]);
+      const env = container?.env ?? [];
+      expect(env.find((e) => e.name === "DATABASE_URL")).toEqual({ name: "DATABASE_URL", secretRef: "database-url" });
+      for (const e of env) {
+        if (e.value !== undefined) expect(e.value, e.name).not.toMatch(/[pP]assword|[sS]ecret/);
+      }
+      // The job's one secret is a vault reference, never an inline value.
+      for (const s of backup!.properties?.configuration?.secrets ?? []) {
+        expect(s.keyVaultUrl, s.name).toBeDefined();
+        expect(s.value, s.name).toBeUndefined();
+      }
     },
   );
 });

@@ -1194,6 +1194,32 @@ pass them. `tests/deploy-guards.test.ts` pins both ways, in the source and in
 the compiled ARM where `az` is installed. `WHY-ITS-BUILT-THIS-WAY.md` § 70;
 `runbook.md` → *A template deployment rotated the database administrator
 password*; `infra/README.md` → *Deploy*.
+**A nightly database backup, outside the server (built 2026-10-21, not yet
+turned on).** Behind `enableDbBackup` (default false, the `enableCipWorker`
+pattern): a geo-redundant storage account with shared-key access **off**, one
+container `dumps`, a 90-day lifecycle rule, a Storage Blob Data Contributor
+assignment for the platform's identity scoped to that container, and a
+scheduled Container Apps Job (`30 8 * * *` UTC - 03:30 New York in winter,
+04:30 in summer) running `pg_dump -Fc` from an image built once by hand
+(`db-backup:pg17`, `infra/db-backup/`; the tag is `postgresVersion`, so client
+and server are one number). The job reads `DATABASE-URL` by reference and the
+script moves it into libpq's own `PG*` variables, so **`pg_dump` runs with no
+connection argument** and every credential header goes to `curl` on stdin;
+the execution log never holds the password. **The administrator's
+connection, not a backup role, by decision**: on Azure Flexible Server at
+PostgreSQL 16+ the admin cannot grant `pg_read_all_data`, and per-table
+grants are the shape that broke the office backup silently. Dumps are named
+in UTC, read back with `pg_restore --list`, uploaded with `Content-MD5` the
+service verifies, and confirmed with a HEAD; any failure exits non-zero so
+the execution shows Failed. Verified end to end against a throwaway
+PostgreSQL 17 and a fake of both Azure endpoints (`npm run
+db:backup:verify`, 26 checks); `tests/deploy-guards.test.ts` and
+`tests/db-backup-script.test.ts` pin it. **Found on the way: the server's
+point-in-time retention is 7 days on live, not 35**, and the template said
+`7` as a literal; it is `postgresBackupRetentionDays` now (default 7), read
+live before a deployment like `containerImage`. `runbook.md` → *Nightly
+database backup* has turning it on, the nightly check, the restore steps
+and the cost; `WHY-ITS-BUILT-THIS-WAY.md` § 71.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

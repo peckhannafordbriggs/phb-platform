@@ -381,6 +381,11 @@ means somebody cleared a variable. `runbook.md` → *A deploy fails*.
 
 **Restoring the BAS database.** `Test-BasRestore.ps1` in `phb-bas` restores to a scratch
 database and compares. Run it occasionally — an untested backup isn't a backup.
+The production database has its own nightly dump to blob storage, outside the
+server, built 2026-10-21 behind `enableDbBackup` and **not yet turned on**:
+`runbook.md` → *Nightly database backup* has the switch-on steps, the weekly
+"did it run" check (nothing alerts on a missed night), and the restore
+procedure. Turn it on, then run the restore once, before you need it.
 
 **Verifying the platform hasn't disturbed the automation.** `runbook.md` has the full
 repeatable procedure under *Has the platform disturbed the automation?* — six steps across
