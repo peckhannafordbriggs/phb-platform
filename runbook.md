@@ -2703,6 +2703,54 @@ capture script, then re-run. A sibling folder is outside every watched folder
 anyway; the refusal exists so that a mistake in the fixture store can never
 become a trigger-shaped file in the library.
 
+### The comparison job says `pristine inputs do not match`, naming an `.xlsx`
+
+**Symptom.** `compare_stores.py` prints `INPUT <name>.xlsx: bytes differ from
+the fixture` or, before 2026-10-21, `pristine inputs do not match the
+manifest: ['….xlsx']`, for most COs, never for a JSON, PNG or PDF.
+
+**Cause.** SharePoint rewrites a workbook on upload. On the first Part C copy
+it rewrote 7 of 8 — three grew by exactly 3,095 bytes, four changed with no
+size change — so a byte check against the fixture store cannot pass and a
+size check cannot see it. The inventory's §7c, on the inputs.
+
+**Fix.** Nothing is wrong with the copy. If the manifest predates the
+structural fields (`shape_sha256`, `parts` on each Office entry), refresh it:
+
+```
+MSYS_NO_PATHCONV=1 CO_GRAPH_TOKEN=<token> python tests/build_copy.py --manifest-only \
+    --drive-id <drive id> --root "/phb-co-engine scratch/part-c-copy-<date>"
+```
+
+Do not re-upload the workbooks to "fix" the bytes: SharePoint stamps them
+again on the way in. With a current manifest the line reads `input ….xlsx:
+content identical, bytes rewritten by SharePoint (+3095 B; parts added […])`
+and the CO proceeds. `CONTENT DIFFERS` is different: the cells, formats or
+table ranges changed, which SharePoint does not do, and the file in the
+library is not the fixture.
+
+### The comparison job stops with `HTTP 400` creating a folder, and the folder exists
+
+**Symptom.** Before 2026-10-21: `400 Client Error: Bad Request for url:
+…/runs:/children` from `makedirs`, no body, and afterwards an empty folder
+with that name created by `phb-co-engine`. Since then the same event reads
+`[graph] WARNING: '…' exists after an error response; continuing. create
+folder '…': HTTP 400 <code> '<message>' request-id=…`, and the run goes on.
+
+**Cause.** Unknown on the first occurrence, because the body was dropped. It
+is not the root jail (the same sequence succeeds from a developer token,
+traced), not the folder name, and not reproducible from a workstation. The
+store now keeps Graph's code, message and request id on every error, and
+`makedirs` decides by looking the folder up again rather than by the status.
+
+**Fix.** Read the warning's code and request id from the log. If it recurs,
+that pair is what to take to Microsoft, and the question to settle before
+Phase 14 is whether the same `POST …:/children` the engine issues for every
+attempt folder can answer 400 after succeeding. For a run that needs every
+request visible, set `CO_GRAPH_TRACE=1` on the job; it prints method, status
+and drive-relative path to stderr for each request and the body of each
+error, never a download URL.
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not
