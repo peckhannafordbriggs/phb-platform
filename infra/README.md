@@ -101,7 +101,8 @@ az deployment group what-if   --subscription <subscription-id>   --resource-grou
   `Key Vault Secrets User` on the vault
 - Optionally a resource-group budget (`enableBudget`, off by default)
 - Optionally the Cost Intelligence run worker, a Container Apps Job (`enableCipWorker`,
-  off by default; see `runbook.md`, "Cost Intelligence worker in Azure")
+  off by default and on in production since 2026-10-20; see `runbook.md`, "Cost
+  Intelligence worker in Azure")
 
 ## Four things that are deliberate
 
@@ -142,6 +143,11 @@ references each from the container app behind a boolean parameter. All four
 are read under the managed identity's existing **Key Vault Secrets User**
 grant on the vault; no new role assignment is needed, and
 `tests/deploy-guards.test.ts` asserts that from the template's grants.
+
+All four exist in the production vault as of 2026-10-21, and the first three
+flags are on; `coAnthropicApiKeyInKeyVault` stays false until Phase 12 Part D
+reads the key. `runbook.md` → *Secrets set by hand in Key Vault* carries the
+dated status, and the commands below are for re-setting or rotating one.
 
 ## The Anthropic API key is set by hand, not by the template
 
@@ -189,7 +195,8 @@ independently of each other. It is wired exactly like the key above - Key Vault
 deliberately **not** the SDK's default variable name, because a client built
 without an explicit key would otherwise read the BAS key silently
 (`runbook.md` → *The Change Orders Anthropic key, the same way*). Nothing reads
-it until Phase 12 Part D is built, so the flag can stay false until then; absent,
+it until Phase 12 Part D is built, so the flag stays false until then - the
+secret itself is already in the production vault, parked; absent,
 it disables those calls and nothing else.
 
 ```powershell

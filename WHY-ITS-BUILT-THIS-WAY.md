@@ -639,10 +639,13 @@ grouping — a thread genuinely spans folders, and going mailbox-wide needs a
 returns and Outlook hides.
 
 **BAS** — B5, plain-English questions over the data: built as the Analyze tab
-(§ 52); its API key reaches production from Key Vault by reference as of 2026-10-01.
+(§ 52); its API key reaches production from Key Vault by reference as of 2026-10-01
+and its database URL as of 2026-10-13, and the deployed tab answers.
 Point classification tooling, deferred because the right shape
 depends on how a given integrator named things and most fault rules need `equipment_id`,
-which nothing currently sets. Production deployment, blocked on Azure. Multiple buildings —
+which nothing currently sets. Production deployment, once blocked on Azure, is done:
+the data is in the Azure database and the collector writes there (`runbook.md` →
+*Moving the BAS data to the Azure database*). Multiple buildings —
 the schema and filters already support it; the lab station caps around two or three
 buildings, beyond which a Niagara Supervisor is a purchase nobody has owned.
 

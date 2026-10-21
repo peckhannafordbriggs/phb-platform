@@ -2790,6 +2790,16 @@ the same way*) since 2026-10-13, and the Change Orders module's own Anthropic
 key (*The Change Orders Anthropic key, the same way*) since 2026-10-16. The
 command sequences are in `infra/README.md`.
 
+**Status, checked in Azure and on the live site 2026-10-20/21.** All four exist
+in the production vault. `ANTHROPIC-API-KEY` was rotated on 2026-10-16 to a key
+that does not expire, and the deployed Analyze tab answers questions end to
+end; `BAS-CREDENTIAL-KEY` is the collector's key, and the deployed Settings tab
+decrypts the stored JACE credentials; `BAS-ASK-DATABASE-URL` points at the
+`bas_analyze` role created on the production server on 2026-10-13.
+`CO-ANTHROPIC-API-KEY` is set and parked: nothing reads it until Phase 12
+Part D and `coAnthropicApiKeyInKeyVault` stays false. The symptoms below
+describe a regression, not the current state.
+
 The Anthropic key is the first secret the template does not write. `DATABASE-URL` and
 `AUTH-SECRET` are generated at deploy time and passed on every deploy;
 the Anthropic key is issued once by the Anthropic Console and pasted into
@@ -3132,13 +3142,19 @@ database setting.
 
 ## Moving the BAS data to the Azure database
 
-**Written 2026-09-29. Not yet run against Azure.** The office PC's
-`phb_platform` holds every BAS reading since 21 February 2024, most of it gone
-from the JACE; the Azure database holds the platform's own rows (employees,
-modules, grants, the seed's positions and departments) and **zero rows in every
-`bas_*` table**. `scripts/bas-migrate-to-azure/` moves the fourteen `bas_*`
-tables across, once, and touches nothing else. Three psql files, run by a
-person, from the office PC:
+**Written 2026-09-29, and since run.** When it was written the office PC's
+`phb_platform` held every BAS reading since 21 February 2024, most of it gone
+from the JACE, and the Azure database held the platform's own rows (employees,
+modules, grants, the seed's positions and departments) and zero rows in every
+`bas_*` table. The move has been made: the deployed Point Explorer shows
+readings from 21 February 2024 onward, and the collector on the office PC now
+writes to the Azure server every 15 minutes, so the deployed site shows the
+day's readings (both checked 2026-10-20/21). The import refuses a target that
+already holds `bas_*` rows, so running it again stops before writing (below).
+What follows is the procedure as it was run, kept for the record and for a
+rebuild from an empty server. `scripts/bas-migrate-to-azure/` moves the
+fourteen `bas_*` tables across, once, and touches nothing else. Three psql
+files, run by a person, from the office PC:
 
 | File | Runs against | Does |
 |---|---|---|
@@ -3176,10 +3192,13 @@ two credential rows and the employee each resolves to; and a fingerprint of
 every non-BAS table. Read the credentials lines especially - see below. Then
 `YES` and Enter. Anything else rolls back with nothing written.
 
-Afterwards the collector on the office PC is still writing to the office PC.
-Repointing it at Azure needs the role in the next section, and is a separate
-decision: the roll horizon makes a gap in collection permanent, so the cutover
-is one deliberate pass with the new `DATABASE_URL`, not a gradual thing.
+Immediately afterwards the collector on the office PC is still writing to the
+office PC. Repointing it at Azure needs the role in the next section, and is a
+separate decision: the roll horizon makes a gap in collection permanent, so the
+cutover is one deliberate pass with the new `DATABASE_URL`, not a gradual thing.
+That cutover has happened: as of 2026-10-21 the collector on the office PC
+writes to the Azure server every 15 minutes, and the deployed site shows the
+day's readings.
 
 ### What the import refuses, and why a second run is safe
 
@@ -3329,7 +3348,14 @@ Vault* and `infra/README.md`. Before 2026-10-01 none of the three was in the
 template; that was recorded here on 2026-09-29 so it was not mistaken for a
 fault.
 
-**What that job has to get right.** The credential rows the migration above
+**As of 2026-10-21 neither half of the symptom is the state of production.**
+All three secrets are set, the flags are on, the deployed Settings tab decrypts
+the stored JACE credentials and the deployed Analyze tab answers questions.
+Seeing either message now means a flag went back to false or the revision
+predates the deployment that turned it on - *Secrets set by hand in Key Vault*
+has the per-symptom checks.
+
+**What that job had to get right, and did.** The credential rows the migration above
 carries were encrypted on the office PC under *its* `BAS_CREDENTIAL_KEY`, key
 version 1. The platform in Azure can only decrypt them with the **same** key -
 and so can the collector, wherever it runs. So either the office PC's key goes
@@ -3337,8 +3363,10 @@ into Key Vault as the production key, or the two station passwords are
 re-entered through Settings once a different key is set (each save re-encrypts
 under the current key and stamps its version; *Station credentials, and the
 one secret that lives in two places* has the rotation steps). A key that
-matches nowhere leaves the rows undecryptable and collection stops. For
-Analyze: the key from the Anthropic Console, and the `bas_analyze` role on
+matches nowhere leaves the rows undecryptable and collection stops. The first
+route is the one that was taken: the office PC's key is the vault value, and
+the deployed panel decrypts the rows. For
+Analyze (done 2026-10-13): the key from the Anthropic Console, and the `bas_analyze` role on
 the Azure database - `scripts/setup-bas-analyze-role.sql` from any psql
 (the Cloud Shell included), or `npm run bas:analyze:role` with
 `DATABASE_URL` set to the production admin URL - then the URL as
@@ -5418,8 +5446,10 @@ and not a flag.
 | `phb_platform_test` | `TEST_DATABASE_URL` | Whatever the suite is asserting on; truncated between files | `npm test`, `npm run db:test:setup` |
 
 Production in Azure is a fourth, reached by `migrate deploy` from the deploy
-workflow, by the one-shot BAS data migration run by a person from the office PC
-(*Moving the BAS data to the Azure database*), and by nothing else on a laptop.
+workflow, by the one-shot BAS data migration, run once by a person from the
+office PC (*Moving the BAS data to the Azure database*), by the collector on
+the office PC, which writes there every 15 minutes since the cutover, and by
+nothing else on a laptop.
 
 **How it is enforced.** `prisma.config.ts` reads the command from the CLI's own
 arguments and picks the URL. `migrate dev`, `migrate reset` and `db push` — the
@@ -7238,12 +7268,13 @@ collector run afterwards rather than assuming.
 A row whose `key_version` names a key nobody has any more is undecryptable and
 unrecoverable from here. Re-enter it.
 
-The rows the BAS migration copies to Azure were encrypted under the office PC's
+The rows the BAS migration copied to Azure were encrypted under the office PC's
 key. Production takes that same key from Key Vault (`BAS-CREDENTIAL-KEY`,
 set by hand, byte-identical) as of 2026-10-01 - *Secrets set by hand in Key
-Vault*. Until the secret is set and the parameter turned on, production has
-no key; what that looks like is under *The deployed Settings tab cannot store
-a station login*.
+Vault* - and it is set: the deployed Settings tab decrypts the stored
+credentials (checked 2026-10-21). If the secret were ever missing or the
+parameter off, production would have no key; what that looks like is under
+*The deployed Settings tab cannot store a station login*.
 
 ---
 
@@ -9327,8 +9358,9 @@ refusals, and prints the URL once - or, where only psql is to hand (the Azure
 portal's Cloud Shell), `scripts/setup-bas-analyze-role.sql`, the same role in
 SQL with the command in its header. Paste it as `BAS_ASK_DATABASE_URL`. The
 password is shown once and written nowhere by the script; re-running rotates
-it. Neither variable is in `infra/main.bicep` yet — production wiring is a
-separate step.
+it. In production both come from Key Vault by reference and both are set —
+*Secrets set by hand in Key Vault* — so this symptom there means a flag went
+back to false or the revision predates it, not a missing wiring step.
 
 ---
 
@@ -9958,6 +9990,15 @@ but not write on BID-DOC; the grant's role has to be write.
 heartbeat stopped) and starts one execution per run, up to 3 at once; each runs
 `cip-worker.ts --once` and exits. It reads projects and skills from SharePoint and
 creates outputs only in `<project>/AI FILES`. It costs nothing while idle.
+
+**Deployed 2026-10-20.** The job is `phbplat-prod-cip-worker`, created by a
+manual template deployment with `enableCipWorker` true and running
+`cip-worker:1ccd6fb`; the CIP app registration's federated credential for the
+platform's identity was created the same day; the Key Vault secret
+`ANTHROPIC-API-KEY-CIP` exists and the job references it; and the repository
+variable `AZURE_CIP_WORKER_JOB` is set, so `deploy.yml` points the job at a
+new `cip-worker:<sha>` on every merge to `main`. The steps below are how it
+was done, kept as the procedure for an empty resource group.
 
 **Turning it on, once, in this order.**
 

@@ -242,11 +242,13 @@ database accounts, nightly backups with a tested restore.
 **Analyze (B5, 2026-09-21)** is a question box: the model writes one read-only `SELECT`,
 it runs as the `bas_analyze` role, and every answer shows the rows, the points and period covered, the hours of
 the period nobody was watching, and whether the readings held actually span the period
-asked about. Verified live on 21 September against the office data. It needs two things
-production does not yet have: the Anthropic API key in Key Vault (`ANTHROPIC_API_KEY`)
-and the role on the Azure database (`npm run bas:analyze:role`, then
-`BAS_ASK_DATABASE_URL`). Without
-them the tab says it is not configured and nothing else is affected. A key can be revoked
+asked about. Verified live on 21 September against the office data. It needs two things,
+and production has both: the Anthropic API key in Key Vault (`ANTHROPIC_API_KEY`,
+rotated to a non-expiring key on 16 October 2026) and the `bas_analyze` role on the
+Azure database (created 13 October 2026 with `scripts/setup-bas-analyze-role.sql`, its
+URL in the vault as `BAS-ASK-DATABASE-URL`). The deployed tab answers questions end to
+end, checked 21 October 2026. Without either the tab says it is not configured and
+nothing else is affected. A key can be revoked
 or run out of credit, and when it does this tab — only this tab — stops; `runbook.md` →
 *Analyze says the model service rejected the API key*.
 
@@ -296,21 +298,27 @@ Two traps worth carrying out of it:
   lack permission to see deleted vaults. That reads exactly like "the name is free" and
   is not. Use `checkNameAvailability`, which answers honestly.
 
-**The BAS data is still on the office PC.** The Azure database has the platform's rows
-and zero `bas_*` rows. `scripts/bas-migrate-to-azure/` is the one-shot move (export,
-import in one transaction as a role that cannot touch the platform's tables, check),
-tested against a faithful scratch copy on 29 September 2026 and **not yet run against
-Azure**; `scripts/setup-bas-collector-role.sql` is the collector's least-privilege role
-for the Azure server. `BAS_CREDENTIAL_KEY` and `ANTHROPIC_API_KEY` reach the container
-app from Key Vault by reference as of 2026-10-01 (`BAS-CREDENTIAL-KEY`,
-`ANTHROPIC-API-KEY`, each behind a boolean parameter), but the two secret VALUES are
-set in the vault by hand and nothing in the repository can tell you whether that has
-been done: if the station-login panel or the Analyze tab says it is not configured in
-production, it has not. `infra/README.md` has the steps; the Analyze tab also needs
-`BAS_ASK_DATABASE_URL`, which is not wired yet. Change Orders has its **own** Anthropic
+**The BAS data is in the Azure database, and the collector writes there.** The one-shot
+move, `scripts/bas-migrate-to-azure/` (export, import in one transaction as a role that
+cannot touch the platform's tables, check), was tested against a faithful scratch copy
+on 29 September 2026 and has since been run: the deployed Point Explorer shows readings
+from 21 February 2024 onward, and the collector on the office PC writes to the Azure
+server every 15 minutes, so the deployed site shows today's readings (both checked
+20–21 October 2026). `scripts/setup-bas-collector-role.sql` is the collector's
+least-privilege role for the Azure server. `BAS_CREDENTIAL_KEY` and `ANTHROPIC_API_KEY`
+reach the container app from Key Vault by reference as of 2026-10-01
+(`BAS-CREDENTIAL-KEY`, `ANTHROPIC-API-KEY`, each behind a boolean parameter), and the
+Analyze tab's `BAS_ASK_DATABASE_URL` the same way since 2026-10-13. The three secret
+VALUES are set in the vault by hand and nothing in the repository can tell you whether
+that has been done — the deployed site is the check, and as of 21 October 2026 it
+passes: the station-login panel decrypts the stored JACE credentials and the Analyze
+tab answers. If either says it is not configured in production, a flag went back to
+false or the revision predates the deployment that turned it on; `infra/README.md` has
+the steps to re-set and confirm each. Change Orders has its **own** Anthropic
 key since 2026-10-16, `CO_ANTHROPIC_API_KEY` (`CO-ANTHROPIC-API-KEY`,
-`coAnthropicApiKeyInKeyVault`), wired the same way and read by nothing until Phase 12
-Part D; it is a different key from the BAS one on purpose, and neither falls back to
+`coAnthropicApiKeyInKeyVault`), wired the same way; the secret is in the vault, parked,
+and read by nothing until Phase 12 Part D, so its flag stays false. It is a different
+key from the BAS one on purpose, and neither falls back to
 the other. All of it is in `runbook.md` → *Moving
 the BAS data to the Azure database* and the sections after it, and *Secrets set by hand
 in Key Vault*.
