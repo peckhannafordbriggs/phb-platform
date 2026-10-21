@@ -125,10 +125,84 @@ password or on either vault secret. If it reports `Microsoft.KeyVault/vaults/sec
 `DATABASE-URL` or `AUTH-SECRET` as *Modify* or *Create*, a value was passed - stop and
 check whether a rotation was intended.
 
+## Custom domain
+
+The container app answers at its own address, `<app>.<env-suffix>.azurecontainerapps.io`,
+and that address never stops working. A custom hostname (`customDomainName`, e.g.
+`platform.phb1899.com`) is **added beside it**, with a free Azure managed
+certificate issued on the environment and renewed by Azure - nothing a person has
+to renew, which is what prohibition 7 requires. It lives in the template rather
+than in a one-off `az containerapp hostname bind` for the same reason
+`containerImage` does: a template deployment replaces the whole container app, and
+a hostname the template did not know about would be removed by the next routine
+redeploy, silently.
+
+**Two DNS records first.** Azure checks both when it issues the certificate, and the
+deployment fails on the certificate if either is missing or has not propagated:
+
+| Record | Name | Value |
+|---|---|---|
+| CNAME | `<hostname>` | the app's own FQDN (`az containerapp show … --query properties.configuration.ingress.fqdn`) |
+| TXT | `asuid.<hostname>` | the environment's verification id (`az containerapp show … --query properties.customDomainVerificationId`) |
+
+The verification id is a public value, not a secret. Check both with `nslookup
+-type=CNAME <hostname>` and `nslookup -type=TXT asuid.<hostname>` before deploying.
+
+**Two passes, because Azure will not issue a certificate for a hostname no app
+carries, and the app cannot bind a certificate that does not exist yet.**
+`customDomainBound` defaults to **true**, so the parameters file carries only the
+hostname and no later deployment has to remember anything. The one exception is the
+first deployment that sets the hostname: it passes the binding off on the command
+line, adds the hostname to the ingress and issues the certificate, and nothing else.
+
+```bash
+# Pass 1 - the ONLY time customDomainBound is passed. Adds the hostname
+# (unbound) and issues the managed certificate. Set customDomainName in
+# infra/main.parameters.json first.
+az deployment group create \
+  --subscription <subscription-id> \
+  --resource-group <resource-group> \
+  --template-file infra/main.bicep \
+  --parameters @infra/main.parameters.json \
+  --parameters containerImage="$IMAGE" customDomainBound=false
+
+# Pass 2 - the routine command from *Deploy*, exactly as written there.
+# Binds the hostname to the certificate. Every deployment from here on is
+# this command, and keeps the binding.
+az deployment group create \
+  --subscription <subscription-id> \
+  --resource-group <resource-group> \
+  --template-file infra/main.bicep \
+  --parameters @infra/main.parameters.json \
+  --parameters containerImage="$IMAGE"
+```
+
+`$IMAGE` is the running image, read as under *Deploy*, on both passes. Two outputs
+appear once the hostname is set: `customDomainUrl` and `customDomainSsoRedirectUri`.
+
+**The custom domain does not move sign-in.** `authUrl` stays whatever it is, so
+Auth.js keeps building its callback on the app's own address, and the SSO app
+registration keeps its existing redirect URI. Sign-in from the custom hostname
+needs a **second** redirect URI on that registration, added beside the first
+(`customDomainSsoRedirectUri` is the value; `runbook.md` → *What to ask IT for* →
+Request 5 is the request), and only then is `authUrl` changed to the custom
+hostname - a separate, later deployment. Changing `authUrl` before the redirect
+URI exists breaks sign-in at both addresses.
+
+**To confirm it works:** `curl -sSI https://<hostname>/api/health` returns `200`
+with no certificate warning, the certificate's subject is the hostname, and
+`az containerapp show … --query properties.configuration.ingress.customDomains`
+reads `bindingType: SniEnabled`. The app's own address still answers `200`.
+`runbook.md` → *The custom domain answers with a certificate warning* has the
+failure modes.
+
 ## What gets created
 
 - Log Analytics workspace — Container Apps requires one
 - Container Apps managed environment and container app
+- Optionally a custom hostname on the container app with a free managed
+  certificate on the environment (`customDomainName`; empty by default, and
+  empty attaches nothing; see *Custom domain* above)
 - Azure Container Registry (Basic)
 - Key Vault (RBAC authorization)
 - PostgreSQL Flexible Server, plus the application database

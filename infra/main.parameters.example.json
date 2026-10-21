@@ -78,6 +78,9 @@
     "authUrl": {
       "value": ""
     },
+    "customDomainName": {
+      "value": ""
+    },
     "ssoClientId": {
       "value": "<sso-app-registration-client-id>"
     },

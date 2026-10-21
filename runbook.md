@@ -2270,6 +2270,53 @@ that identity, by a Container Apps job. The job spec and sequence are in
 a `PnP.Powershell` **certificate** valid to 2029, the tool credential used to
 make the grant; whether it stays is the owner's decision — the next section.
 
+### Request 5 — a second SSO redirect URI for the custom domain (2026-10-21)
+
+The platform gained the hostname `platform.phb1899.com` on 2026-10-21 - a custom
+domain on the container app with a free managed certificate, beside the
+`azurecontainerapps.io` address, which keeps working. Sign-in from the new
+hostname needs the SSO app registration to carry a **second** redirect URI.
+**Nothing about the existing one changes**: `authUrl` still points at the
+`azurecontainerapps.io` address, sign-in keeps working there, and `authUrl` is
+moved to the new hostname only after this request is done
+(`infra/README.md` → *Custom domain*). Changing `authUrl` before the redirect URI
+exists breaks sign-in at both addresses, so the order is: this request, Vitis
+confirms, then the `authUrl` deployment.
+
+The value is the `customDomainSsoRedirectUri` deployment output; it is written out
+below because it is derived from the hostname alone and will not change.
+
+> Subject: One more redirect URI on the PH+B platform SSO app registration
+>
+> Hi Zac,
+>
+> The internal platform now also answers at **https://platform.phb1899.com**
+> (a custom domain on the same Azure container app, with an Azure-managed
+> certificate). For sign-in to work from that address, the SSO app
+> registration needs one more redirect URI.
+>
+>     App registration:  220921c1-f23e-4d01-b354-736884ba3d00
+>     Platform:          Web
+>     Redirect URI:      https://platform.phb1899.com/api/auth/callback/microsoft-entra-id
+>
+> Please **add** it and keep both existing ones in place:
+>
+>     https://phbplat-prod-app.agreeablebeach-60711c65.eastus2.azurecontainerapps.io/api/auth/callback/microsoft-entra-id
+>     http://localhost:3000/api/auth/callback/microsoft-entra-id
+>
+> The first still signs people in today and will keep doing so; the second is
+> local development. The URI has to match exactly, including the
+> `/api/auth/callback/microsoft-entra-id` path and with no trailing slash -
+> Entra does not do partial matches.
+>
+> Nothing else changes: no new permission, no consent, no secret, no
+> certificate, and the federated credential you added stays as it is.
+>
+> A reply saying it is in place is all we need - we switch the application's
+> own URL over on our side after that.
+>
+> Thanks,
+
 ## Open decision — the `PnP.Powershell` certificate on `phb-co-engine`
 
 **Status: open, as of 2026-10-21.** Nothing below has been asked of Vitis yet.
@@ -2747,6 +2794,63 @@ verify step should have caught this — if it did not, the probe answered 200 fr
 old revision while the new one was still failing.
 
 ---
+
+## The custom domain answers with a certificate warning, or does not answer at all
+
+**Context.** `platform.phb1899.com` is a custom hostname on the container app,
+attached by `infra/main.bicep` (2026-10-21) beside the app's own
+`azurecontainerapps.io` address with a free managed certificate on the
+environment. The app's own address is unaffected by anything in this section
+and is the fallback while the custom one is being fixed. `infra/README.md` →
+*Custom domain* is the design; this is what goes wrong.
+
+**Symptom: the browser warns that the certificate is for the wrong site, or
+`curl` reports a name mismatch.** The hostname is on the app but not bound to
+its certificate. Read it:
+
+```bash
+az containerapp show -n <app> -g <resource-group> \
+  --query "properties.configuration.ingress.customDomains"
+```
+
+`bindingType: Disabled` is the cause. It is the state the first deployment pass
+leaves deliberately (`customDomainBound=false` adds the hostname and issues the
+certificate, and binds nothing), so either the second pass was never run or a
+later deployment passed `customDomainBound=false` again. The fix is the routine
+template deployment with the running image and **no** `customDomainBound` -
+the default is true and binds it. Nothing about this is in the deploy workflow:
+`az containerapp update --image` keeps the ingress as it finds it, so CI can
+neither bind nor unbind.
+
+**Symptom: the hostname does not resolve, or resolves to something else.** The
+CNAME is gone or changed. It must point at the app's own FQDN
+(`properties.configuration.ingress.fqdn`), and the TXT record
+`asuid.<hostname>` must still hold `properties.customDomainVerificationId`;
+`nslookup -type=CNAME` and `nslookup -type=TXT` show both. DNS is owned outside
+this repository and outside Azure.
+
+**Symptom: the template deployment fails on the `managedCertificates`
+resource.** Azure could not validate the domain. In order: the CNAME or the TXT
+record is missing or has not propagated yet (wait, re-check with `nslookup`
+against a public resolver, retry); or the hostname is not on the app at all,
+because the certificate is only issued for a hostname an app in the environment
+carries - that is the first pass, `customDomainBound=false`, and it has to
+complete before the routine command can bind. A certificate that failed to
+issue leaves nothing behind; re-run the pass that failed.
+
+**Symptom: `https://platform.phb1899.com` loads with a valid certificate, and
+sign-in from it bounces or lands on the old address.** Expected until two
+things are done, in this order: Vitis adds the second redirect URI (*What to ask
+IT for* → Request 5) and then `authUrl` in `infra/main.parameters.json` is
+changed to `https://platform.phb1899.com` and deployed. Until the first,
+Auth.js builds its callback on the old address, which Entra accepts, and the
+session lands there. Do **not** change `authUrl` first: Entra refuses a
+redirect URI it does not carry, and sign-in is then broken at both addresses.
+
+**Removing the domain** is `customDomainName` set to empty and a routine
+deployment: the hostname leaves the ingress and the certificate resource is no
+longer deployed (it stays on the environment until deleted by hand; it costs
+nothing). The app's own address never changed.
 
 ## A template deployment fails activation, and the console log says `Listening on :80...`
 
