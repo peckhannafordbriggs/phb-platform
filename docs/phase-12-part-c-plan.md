@@ -476,6 +476,71 @@ workbooks structurally, so this should not surface; if it does, it is a differ
 class to widen, not an engine difference. Anything else that survives
 normalization is a store disagreement and is the finding Part C exists for.
 
+### The first run (2026-10-21, `runs/20261021-193816`): two failures, neither the store's
+
+The owner created and ran the job the same day. It failed before any
+comparison happened, in two ways. Neither was a store disagreement.
+
+**1. The pre-registered expectation hit the inputs, not the outputs.** Six
+COs failed the input check against the manifest, each on its workbook. The
+check was `sha256(bytes read back) == sha256(fixture bytes)`, and Graph's own
+`quickXorHash` on every pristine file, read afterwards by metadata, says why:
+
+| | workbooks | what SharePoint did |
+|---|---|---|
+| grew by exactly 3,095 bytes | Bulletin 09, RFI 169, ZZ PR-98 | parts added — the three with no SharePoint metadata before (a PM's original attachment, a synthetic form) |
+| **same size, different bytes** | Bulletin 12, 13, RFI 187, 229 | stamped in place — captured from the library, so they already carried the parts |
+| unchanged | RFI 238 | — |
+| JSON, PNG, PDF | all 14 | unchanged, hash for hash |
+
+So **7 of 8 uploaded workbooks are not the bytes that were uploaded**, and a
+size check would have missed four of them. This is §7c of the inventory
+observed on the way *in* rather than the way *out*, and it means no byte
+check can ever verify an uploaded workbook. **Decision: Office inputs verify
+by structure.** The manifest now carries `shape_sha256`, the sha256 of the
+differ's own `workbook_shape` (cell values, formats, fills, table ranges,
+widths — what the engine decides from), plus every zip part's digest;
+`compare_stores.py` verifies an `.xlsx`/`.docx` by the fingerprint and prints
+which parts the rewrite added or changed, as evidence; bytes still decide for
+everything else. The manifest was rewritten in place
+(`build_copy.py --manifest-only`) rather than re-uploading, which would only
+re-stamp. The two halves of the comparison were never affected: both read the
+same downloaded bytes, the local half writing them into its tree and the
+Graph half copying them server-side. What the check ties down is the link to
+the fixture store, and a structural match is the right link — it is what the
+differ uses for outputs, by the same §7c reasoning.
+
+**2. The one CO that passed crashed creating a folder.** `400 Bad Request` on
+`…/runs:/children`, creating the run folder — and the folder was there
+afterwards, empty, created by `phb-co-engine` at 19:38:29. `raise_for_status()`
+had dropped the body that would have said what was bad. Three things it was
+not, each tested from a developer token the same evening: the exact
+folder-creation sequence the job ran, traced request by request, succeeds
+(eight `makedirs`, every `POST` 201); the root jail did not change how
+folders are created — the trace shows the same lookups and the same creates
+as before, plus the ancestor lookups; and a date-shaped folder name creates
+and takes children fine. It is not reproducible from here, and the cause is
+in the body. So: every Graph error from the store is now a `GraphRequestError`
+carrying Graph's code, message and request id, with no `raise_for_status` left
+in the store; `makedirs` settles an ambiguous answer by looking the folder up
+again — continuing with a loud warning if it exists, raising with the body if
+not — because existence is what it promises and the first run showed the two
+can disagree; `CO_GRAPH_TRACE=1` prints every request's method, status and
+path for a run that needs it; and `compare_stores.py` carries on to the next
+CO when one crashes, so one fault does not cost the other seven.
+`tests/test_graph_errors_and_inputs.py`, 11 tests. **If the 400 recurs, the
+log will now say what it was**, and that is a finding to understand before
+Phase 14, since it is the same operation the engine performs on every attempt
+folder.
+
+**What the run left:** one empty folder, `runs/20261021-193816`, version 1,
+created by the engine app. Nothing else; `pristine/` is untouched apart from
+the rewritten manifest. Three probe folders made from the developer token
+while diagnosing were deleted the same minute.
+
+**Second attempt:** image `phb-co-engine:part-c-compare-2`, the same job
+spec with the tag changed. Not yet run.
+
 ## Step 7, second pass (2026-10-21): the credential is the platform's identity, and the test needs a job
 
 Vitis reported the federated credential added and the site grant made. Read
@@ -714,9 +779,10 @@ Record the outcome, or the waiver and its reasoning, here.
    copied (*The two guards*)
 9. **The copy — built 2026-10-21** at
    `/phb-co-engine scratch/part-c-copy-2026-10-21` (*Where the copy lives*)
-10. **The byte-identical comparison — packaged, not run.** Image
-    `phb-co-engine:part-c-compare` and `infra/compare-job.sh`; the job is the
-    owner's to create (*The comparison instrument*)
+10. **The byte-identical comparison — first run failed before comparing
+    anything** (*The first run*): inputs verified by bytes where SharePoint
+    rewrites workbooks, and a 400 whose body was dropped. Both fixed; image
+    `phb-co-engine:part-c-compare-2`; the second run is the owner's to start
 11. **The flow-trigger decision — deferred, required before Phase 14**
     (*Before cutover*)
 

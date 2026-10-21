@@ -470,7 +470,12 @@ The copy is built at `/phb-co-engine scratch/part-c-copy-2026-10-21`
 (eight COs' replay inputs, real data by decision, nothing a flow writes),
 the comparison is packaged as `tests/compare_stores.py` and image
 `phb-co-engine:part-c-compare`, and **running the job is the owner's
-action; it has not run.** The twelfth-flow question is deferred by the
+action.** The first run failed before comparing anything: SharePoint
+rewrote 7 of the 8 uploaded workbooks (4 with no size change), so Office
+inputs now verify by the differ's structural fingerprint; and a folder
+create answered 400 with the body dropped, so every store error now
+carries Graph's code and request id and `makedirs` looks again before
+failing. Image `part-c-compare-2`; the second run has not happened. The twelfth-flow question is deferred by the
 owner and is a **required step before Phase 14** — the plan doc's *Before
 cutover* section has the evidence in hand and the two ways to close it.
 
