@@ -204,9 +204,11 @@ the only thing making this app safe, and it was verified empirically: `Granted` 
 platform's `mail.sent` audit row is therefore the only record of who sent a message. Treat
 it as a deliverable, not as logging.
 
-**Watch for.** The credential has no SharePoint access at all — 403 on everything. Correct
-today. A future phase needing SharePoint requires a new consent grant with
-`Sites.Selected` on the AISandbox site only.
+**Watch for.** The credential has no SharePoint access at all — 403 on everything,
+re-verified live on 2026-10-21 (token roles `Mail.ReadWrite`, `Mail.Send`; the
+AISandbox site and a site search both 403). Correct, and it stays that way: when
+the platform needed SharePoint (§ 69) it got a **separate** registration with a
+folder-level grant, not a new consent on this one. Never widen this app.
 
 ## 11 · Nothing is ever sent automatically
 
@@ -2414,6 +2416,81 @@ the pipeline bills to BAS; a deploy-guard test fails by name. Add `??
 env.ANTHROPIC_API_KEY` to the CO reader and the blank-beside-a-real-BAS-key
 test fails. Build a change-order client as `new Anthropic({ timeout })` and
 the source-text test names the file.
+
+## 69 · Needs Review reads one folder as a third identity, and the email it shows comes from the mailbox
+
+**Decision (2026-10-21).** The Change Orders module gained a *Needs Review*
+tab that lists the notes the change-order classifier writes into the
+SharePoint folder `_needs_review` when it declines to decide. Three things
+were decided about how, and each was the less obvious choice.
+
+**A third app registration, folder-scoped.** `phb-platform-co-review`, with
+`Files.SelectedOperations.Selected` granted *Read* on the one folder - the
+Cost Intelligence pattern (`lib/modules/cost-intelligence/folder-store.ts`),
+not `Sites.Selected`. Not the mail app: its Exchange ApplicationAccessPolicy
+fence is the one thing that makes application-level `Mail.ReadWrite` safe
+(§ 10), and adding a SharePoint consent to it would muddy that story for the
+sake of one folder. Not `phb-co-engine`'s identity either: its open request
+is for *Write* on the whole `CO Managment Process` tree, which the platform
+must never hold. And not `Sites.Selected`, which the earlier note in § 10
+named, because it is site-wide - every library and folder on AI Sandbox,
+the live Bid Tracker and `_to_classify` included - where the folder grant is
+exactly the folder. Production signs in as the new app the same way the mail
+app does, through `createGraphCredential` with a different client id, so the
+prohibition-7 rules are inherited rather than copied: a secret in production
+refuses to boot (`tests/deploy-guards.test.ts` → *the Needs Review app
+registration reaches the container without a secret*).
+
+**The email comes from Exchange, not from the item folder.** A note names a
+subject and a date, and its filename carries the automation's stamp to the
+second and, in brackets, the first eight characters of the email's Internet
+Message-ID - checked against all fourteen live notes. The platform already
+reads the mailbox, and a mailbox-wide filter by exact subject and day found
+every note's message on 2026-10-21. The pairing rule is the **latest message
+received at or before the stamp**, after the bracket has narrowed the
+candidates to one sender: the stamp is Power Automate's clock after Exchange
+already has the message, 45 to 70 seconds later on every note, and the first
+draft's "nearest in time" picked somebody else's reply for a pair 72 seconds
+apart (`lib/modules/change-orders/review/match.ts`;
+`tests/co-review-match.test.ts` keeps that pair).
+So the Needs Review tab opens the message through the mailbox's own message
+route - the sanitizer, the sandboxed pane and the attachment streaming route
+are the Phase 5-8 ones, unchanged - and the SharePoint grant stays at one
+folder. It also makes the backlog work: on 2026-10-21 the folder held 14
+notes and ONE item folder, because until that day's flow fix the email folder
+never moved out of `_to_classify`, and ten of those fourteen have no item
+folder anywhere any more. Reading `body.txt` beside the note would have
+shown nothing for most of what was waiting. The match is stated as a match
+on screen, with the message's own sender and time beside the note's.
+
+**Read-only, enforced in code.** `_needs_review` is a queue folder the
+automation owns (`docs/13-needs-review.md` §11), and the standing rule is
+that Power Automate moves items between queue folders. The platform reading
+the folder changes no prohibition in CLAUDE.md; the platform writing to it is
+a decision Phase 1 was told not to make. So the review service has no method
+that moves, writes, renames or deletes, every review route exports `GET` and
+nothing else, the browser has no button that acts on a note, and
+`tests/co-review-read-only.test.ts` holds all three to the source text while
+`tests/co-review-service.test.ts` asserts every request on the wire is a
+GET. A handled note is moved to `_archive/` by a person in SharePoint, and
+the tab notices on its next poll. The count is the number of files named
+`NEEDS REVIEW - *.txt` - `.keep.txt` and the item folders are not notes -
+and the oldest date sits beside it so fourteen old notes read as a backlog
+rather than as a fault.
+
+**Notes are text.** A note is model-written prose that quotes a vendor's
+email. It is rendered as escaped text through React text nodes, never
+through the HTML sanitizer, which is an allowlist for markup and would turn
+"a < b" into "a". `tests/co-review-ui.test.tsx` renders a hostile note and
+reads the HTML back.
+
+**What breaks if you undo it.** Put the grant on the mail app and § 10's
+fence is no longer the whole story of that identity. Ask for `Sites.Selected`
+and the token reads the live Bid Tracker. Read the email from the item
+folder and the backlog shows nothing. Add a move to the service and two
+tests fail by name - and the next classifier run may find an item in a
+folder it did not expect, which is the failure docs/13 §7 took three months
+to notice the first time.
 
 ## 47 · The judgment I'd most want to pass on
 

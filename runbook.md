@@ -66,6 +66,15 @@ Only these. Everything else above you can do without talking to anyone.
 | `GRAPH_CLIENT_ID`, `GRAPH_TENANT_ID` | Owner of the **Graph** app registration | Both IDs. Not secret. |
 | `GRAPH_CLIENT_SECRET` | Same | A client secret value for local development. Production never has one. |
 
+| `PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID`, `PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID` | Owner of the **phb-platform-co-review** app registration (Request 5 below) | Both IDs. Not secret. |
+| `PHB_PLATFORM_CO_REVIEW_APP_SECRET` | Same | A client secret value for local development. Production never has one. |
+
+`CO_REVIEW_SHAREPOINT_FOLDER` you find yourself: the `_needs_review` folder as
+`ids:<driveId>/<itemId>`, or its browser URL (not an `AllItems.aspx?id=` link).
+See *Needs Review says it is not connected* for how to get the ids. All four
+may stay blank: the Needs Review tab then reports itself not connected and
+nothing else changes.
+
 `GRAPH_MANAGED_IDENTITY_CLIENT_ID` is **Azure only**. Leave it empty locally.
 
 `ANTHROPIC_API_KEY` and `CO_ANTHROPIC_API_KEY` are neither generated nor IT's:
@@ -1007,6 +1016,15 @@ not an error.
 
 ## Folder search: subject-only, sorted here, and capped
 
+**A search for `P&G` answered `mail_error` until 2026-10-21.** The Graph SDK
+does not percent-encode the `$filter` value, so an ampersand in the term
+split the query string and Graph answered 400. Every `$filter` the mail
+service sends - the search, the since-count and the Needs Review lookup -
+now goes through one `filterParam` helper that encodes it, and
+`tests/co-review-service.test.ts` reads the raw URL to hold it there. A
+search that 400s on a particular character again is that helper being
+bypassed, not Graph being picky.
+
 **Read this before "restoring" full-text search or adding an `$orderby`.** Both
 look like obvious improvements. One of them breaks every search outright.
 
@@ -1831,6 +1849,121 @@ the identity its two roles by hand afterwards produces a deployment whose output
 describe the running system, and the next `az deployment group create` does not put them
 back — it is a resource that exists in Azure and in nobody's record.
 
+## Needs Review
+
+The second Change Orders tab (2026-10-21): the notes the change-order
+classifier writes into the SharePoint folder `_needs_review` when it declines
+to decide, with the email behind each note read from the mailbox.
+`docs/13-needs-review.md` is what the folder is; `WHY-ITS-BUILT-THIS-WAY.md`
+§ 69 is why the tab is shaped this way. **Nothing on this tab writes
+anywhere.** A handled note is moved to `_archive/` by a person in SharePoint,
+and the tab notices within 20 seconds.
+
+### Needs Review says it is not connected
+
+**Symptom.** The tab opens on *Needs Review is not connected yet*, the tab
+label carries no count, and every review route answers
+`review_not_configured`.
+
+**Cause.** One or more of the four variables is blank:
+`PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID`, `PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID`,
+`CO_REVIEW_SHAREPOINT_FOLDER`, and outside production
+`PHB_PLATFORM_CO_REVIEW_APP_SECRET`. This is the expected state until Request
+5 is fulfilled, and it is a state rather than a fault: the folder is still
+readable in SharePoint and nothing about the automation changes.
+
+**Fix.** Set them. The two IDs come with the app registration. The folder value
+is the folder's browser URL (open `_needs_review` in SharePoint, copy the
+address bar, and drop anything from `/Forms/AllItems.aspx` onward), or
+`ids:<driveId>/<itemId>` found as the review app in Graph Explorer:
+`GET https://graph.microsoft.com/v1.0/shares/u!<base64url of the folder URL>/driveItem`
+gives `parentReference.driveId` and `id`. In Azure the three identifiers are
+template parameters (`coReviewAppTenantId`, `coReviewAppClientId`,
+`coReviewSharePointFolder`) and the secret does not exist - the managed
+identity signs in, and a secret set in production refuses to boot.
+
+### Needs Review says the platform is not permitted to read the review folder
+
+**Symptom.** `review_access_denied`; the list pane reads *The review folder
+could not be read* with that sentence.
+
+**Cause.** Graph answered 403. The app registration has consent for
+`Files.SelectedOperations.Selected` but no grant on this folder, the grant was
+removed, or the folder was moved or recreated (a grant is on the item, and a
+recreated folder is a new item). It is never "this employee lacks access" -
+employee authorization happens before Graph is reached.
+
+**Fix.** Ask the app's owner to re-grant Read on the `_needs_review` folder
+(Request 5). Confirm as the app in Graph Explorer with the `/shares/...` call
+above: 403 there is the grant, 200 means the grant is fine and the value in
+`CO_REVIEW_SHAREPOINT_FOLDER` points somewhere else.
+
+### The count on the tab and the folder in SharePoint disagree
+
+**Symptom.** SharePoint shows more items in `_needs_review` than the tab counts.
+
+**Cause.** The count is the number of files named `NEEDS REVIEW - ... .txt`.
+`.keep.txt` is not a note, and the item folders beside the notes are not
+notes - since the 2026-10-21 flow fix every new item arrives as a note AND a
+folder, so SharePoint's item count runs at up to twice the tab's. A file a
+person dropped there under another name is not counted either. If the tab
+counts MORE than the folder shows, the folder view is filtered or paged.
+
+**Fix.** None needed if the difference is folders and `.keep.txt`. A note that
+should count and does not is misnamed; the pattern is anchored and
+case-insensitive (`lib/modules/change-orders/review/notes.ts`).
+
+### A note has no email beneath it
+
+**Symptom.** The note shows, and under it *No message with this subject was
+found in the mailbox around <date>*, or *The mailbox could not be searched*.
+
+**Cause.** The email is found in Exchange by the note's exact subject and
+received day, narrowed by the bracket in the note's name (the first eight
+characters of the email's Message-ID), and settled as the latest message
+received at or before the automation's stamp
+(`lib/modules/change-orders/review/match.ts`). *Not found*: the subject in the
+note's header differs from the message's (the note did not parse, or a person
+edited it), the message was deleted from the mailbox, or it arrived on a
+different UTC day than the note says and outside the twelve-hour slack.
+*Could not be searched*: the mailbox is not configured or Graph refused the
+mailbox lookup - the mail routes will say the same.
+
+**Fix.** The note itself is complete: WHAT THEY WROTE quotes the message. Open
+*The whole note, as written* and check the `Subject:` line against the
+mailbox; the Mailbox tab's subject search finds the thread. A matched email is
+a match, not an identity: the pane says whether the message id or only the
+subject matched, and the message's own sender and time are shown beside the
+note's so a wrong pairing is visible. Two replies from ONE sender within the
+same minute are the one case the rule cannot tell apart, and the bracket does
+not help there; the sentence *N messages with this subject arrived that day*
+is the cue to check.
+
+### A note's sections are missing and it says it could not be picked out
+
+**Symptom.** *This note does not follow the usual layout* and the three
+sections read *Not stated in the note*.
+
+**Cause.** The classifier spec fixes the layout (its section 4.2) but a model
+writes it, and the parser is deliberately tolerant: it finds the three
+headings by exact text and the header lines by their labels, and a note that
+has neither is still a note - counted, listed, and shown whole rather than
+dropped.
+
+**Fix.** Read the whole note; it is below the sections. If a new layout is
+now the norm, extend `parseNote` with a test in `tests/co-review-notes.test.ts`.
+
+### Who moves a note out of `_needs_review`, and who must not
+
+A person, in SharePoint, into `_archive/` - `docs/13-needs-review.md` section 9.
+The platform does not: the review service has no write, every review route is
+GET, and `tests/co-review-read-only.test.ts` fails the build on either.
+Resolving from the platform is Phase 2 and needs, before anything else, the
+flow owner's confirmation that no flow watches `_needs_review` - asked, not
+found by exporting a flow (CLAUDE.md prohibition 2). Do not move an item back
+into `_to_classify`: its `classification_result.json` is already there and the
+classifier will skip it, but Flow 2's trigger will not.
+
 ## What to ask IT for, and when
 
 Two requests, and the order matters because the second one cannot be written until the
@@ -2246,6 +2379,37 @@ external system found defects that mocked transports agreed with. Finding those
 against a OneDrive copy costs nothing and needs nobody; finding them for the first
 time against the real library, after a tenant-wide permission grant, wastes the
 grant and the week.
+
+### Request 5 - the Needs Review app registration (sent 2026-10-21)
+
+For the Needs Review tab. Decided against widening the mail app (its mailbox
+fence is load-bearing), against reusing `phb-co-engine`'s (that request is for
+Write on the whole tree) and against `Sites.Selected` (site-wide). The grant
+is on one folder.
+
+> **New app registration: `phb-platform-co-review`**
+>
+>     Owner:                  an M365 group, not a person
+>     Graph application permission:
+>                             Files.SelectedOperations.Selected  (admin consent)
+>     Grant, as a separate step after consent:
+>                             Read on  AI Sandbox / Documents /
+>                               CO Managment Process / Change Order Step 2 / _needs_review
+>     Credential:             a federated identity credential for the platform's
+>                             user-assigned managed identity - the same identity and
+>                             the same shape as the Change Order Mail app's.
+>                             No client secret in Azure.
+>     For developer machines: one client secret, sent over Teams, not email.
+>
+> The permission grants nothing by itself; the folder grant is what makes it
+> work, and without it the app authenticates and then gets 403 on every
+> request. The platform only ever READS this folder. Please send the client id
+> and tenant id, and confirm the folder's drive id and item id if that is
+> easy - the browser URL is enough otherwise.
+
+Two optional grants were deliberately not asked for and can be added later if
+Phase 2 is approved: Read on `Bid Tracker.xlsx` (the `Needs review?` column)
+and Write on `_needs_review` and `_archive` (resolving from the platform).
 
 ## Deploy order
 

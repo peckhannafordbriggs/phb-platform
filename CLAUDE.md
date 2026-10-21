@@ -72,7 +72,9 @@ create-employee endpoint.
 index, no delta tokens, no webhooks, no sync engine. See `docs/03-exchange-and-graph.md`.
 
 **No mail caching beyond short-lived in-memory.** Never persist message bodies or
-attachments.
+attachments. The same rule covers the review notes in `_needs_review`
+(2026-10-21): a note is model-written text derived from a vendor's email, and
+it is mail for this purpose.
 
 **The mailbox is a licensed user mailbox**, shared with the current operator in Outlook.
 
@@ -161,6 +163,10 @@ that mocked transports agreed with:
   it — page-by-page sorting looks ordered and is not
 - An attachment's `size` is not its content length. A 337,145-byte PDF reports 337,527,
   and 337,532 after a forward copies it. Compare content, never the reported size
+- The Graph SDK does **not** percent-encode `$filter`. `contains(subject,'P&G')` went
+  out as two query parameters and Graph answered `400 BadRequest` - for a real project
+  name - from the day search shipped until 2026-10-21. Every filter now goes through
+  `filterParam` in the mail service; nothing else in the module builds a query string
 
 Fixtures are right for hostile-HTML tests and error mapping. Anything about Graph's
 actual behaviour needs the real mailbox.
@@ -1083,6 +1089,45 @@ trees for a bare `new Anthropic(`. The Python engine must pass `api_key=`
 explicitly for the same reason. `WHY-ITS-BUILT-THIS-WAY.md` § 68;
 `runbook.md` → *The Change Orders Anthropic key, the same way*.
 
+**Needs Review, Phase 1 - visibility, read-only (2026-10-21).** The Change
+Orders module has a tab bar on the BAS pattern (`app/(modules)/change-orders/tabs.ts`,
+`co-shell.tsx`): *Mailbox* at `/change-orders` and *Needs Review* at
+`/change-orders/review`, the label carrying the live count, *Needs Review (14)*,
+polled every 20 s while visible. The tab lists the notes the change-order
+classifier writes into the SharePoint folder `_needs_review` when it declines
+to decide, grouped by subject with the oldest date beside the count, and for a
+selected note shows its four sections as escaped text and, beneath it, the
+email it is about **from Exchange** - found by exact subject and day through
+one new mail-service lookup (`findMessagesReceivedBetween`, mailbox-wide, GET
+only), narrowed by the bracket in the note's name (the first eight characters
+of the email's Message-ID, verified for all 14 live notes) and settled as the
+**latest message received at or before the note's stamp**, never the nearest:
+the automation stamps 45-70 s after Exchange, and two replies 72 s apart put
+the nearest on the wrong side - and opened through the mailbox's own message
+route, so the sanitizer, the sandboxed pane and the attachment streaming route
+are the existing ones and not a second copy. **The count is the number of files named `NEEDS REVIEW -
+*.txt`**; `.keep.txt` and the item folders are not notes. **Read-only, as a
+property of the code**: the review service has no method that moves, writes or
+deletes, every route exports GET and nothing else, and
+`tests/co-review-read-only.test.ts` holds both to the source text while
+`tests/co-review-service.test.ts` holds the wire - a handled note is still
+moved to `_archive/` by a person in SharePoint, which is the routine in
+`docs/13-needs-review.md` §9. **A third app registration**,
+`phb-platform-co-review` (ticket sent 2026-10-21), on the Cost Intelligence
+pattern: `Files.SelectedOperations.Selected`, granted **Read on the one
+folder**, never the mail app (its mailbox fence is load-bearing) and never
+`Sites.Selected` (site-wide); production signs in as it with the managed
+identity, the same shared credential factory as the mail app, and refuses a
+secret. Until the grant lands every review route answers
+`review_not_configured` and the tab says so; the app boots without any of the
+four variables (`lib/env.ts` → `readReviewEnv`). **Not built, by decision:**
+resolving or dismissing from the platform (Phase 2), the Bid Tracker's `Needs
+review?` column (every row read `N` on 2026-10-21), notifications. The live
+folder on 2026-10-21 held 14 notes and ONE item folder - ten notes have no
+item folder anywhere, which is why the email comes from the mailbox and why
+"has an item folder" is shown as a fact rather than assumed.
+`WHY-ITS-BUILT-THIS-WAY.md` § 69; `runbook.md` → *Needs Review*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -1187,6 +1232,7 @@ either anywhere else — point at them.
 | `docs/10-adding-a-module.md` | **Read before adding a module.** The five pieces, Cost Intelligence as the worked example, and the rule that a module row reaches production only by migration |
 | `docs/11-analyze-voice.md` | **The canonical spec for every sentence Analyze shows a person** — answers, clarifying questions, no-data and error text. The team's voice guideline, verbatim, adopted 2026-10-13; the summariser and planner rules in `lib/modules/bas/analyze/planner.ts` implement it |
 | `docs/12-ai-layer-inventory.md` | **Phase 12: what the change-order engine reads, writes and decides.** The input to every later part |
+| `docs/13-needs-review.md` | **The `_needs_review` folder, in plain language:** what a note is, why items land there, the routine for working one, and the 2026-10-21 flow fix. The reference the Needs Review tab is built against |
 | `docs/DESIGN-BRIEF.md` | The redesign brief as issued, plus what the build actually chose where the two differ |
 | `docs/phase-1-verification.md` | Manual verification record |
 | `docs/phase-8-verification.md` | What Exchange actually did for the email actions |

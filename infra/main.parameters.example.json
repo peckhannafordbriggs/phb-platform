@@ -119,6 +119,16 @@
       "value": "ids:<driveId>/<itemId>"
     },
 
+    "coReviewAppTenantId": {
+      "value": ""
+    },
+    "coReviewAppClientId": {
+      "value": ""
+    },
+    "coReviewSharePointFolder": {
+      "value": ""
+    },
+
     "enableBudget": {
       "value": false
     },

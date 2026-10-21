@@ -102,6 +102,9 @@ az deployment group what-if   --subscription <subscription-id>   --resource-grou
 - Optionally a resource-group budget (`enableBudget`, off by default)
 - Optionally the Cost Intelligence run worker, a Container Apps Job (`enableCipWorker`,
   off by default; see `runbook.md`, "Cost Intelligence worker in Azure")
+- Three plain values for the Needs Review tab (`coReviewAppTenantId`,
+  `coReviewAppClientId`, `coReviewSharePointFolder`; blank by default, and blank
+  leaves the tab "not connected"; see `runbook.md`, "Needs Review")
 
 ## Four things that are deliberate
 

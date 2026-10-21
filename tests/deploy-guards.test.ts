@@ -527,6 +527,69 @@ describe("the Change Orders Anthropic key reaches the container only by Key Vaul
   });
 });
 
+/**
+ * Needs Review's app registration reaches the container as three plain
+ * identifiers and never a secret (2026-10-21). The same shape as the CIP
+ * app: client id, tenant id and the folder are template parameters because
+ * they are not secrets; the developer-machine secret has no parameter, no
+ * env entry and no Key Vault reference, because production presents the
+ * managed identity's token instead. The mutation this block is for: add a
+ * `PHB_PLATFORM_CO_REVIEW_APP_SECRET` entry to the bicep and the first test
+ * fails; remove an identifier entry and the second does.
+ */
+describe("the Needs Review app registration reaches the container without a secret", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+  it("never names the secret - not as a parameter, an env entry or a vault reference", async () => {
+    const bicep = await readBicep();
+    expect(bicep).not.toContain("PHB_PLATFORM_CO_REVIEW_APP_SECRET");
+    expect(bicep).not.toMatch(/param \w*[cC]oReview\w*[sS]ecret/);
+    expect(bicep).not.toMatch(/CO-REVIEW/);
+  });
+
+  it("carries the three identifiers as plain values from parameters that default to blank", async () => {
+    const bicep = await readBicep();
+
+    for (const [name, param] of [
+      ["PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID", "coReviewAppTenantId"],
+      ["PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID", "coReviewAppClientId"],
+      ["CO_REVIEW_SHAREPOINT_FOLDER", "coReviewSharePointFolder"],
+    ]) {
+      expect(bicep).toMatch(new RegExp(`name:\\s*'${name}'[\\s\\S]{0,60}value:\\s*${param}\\b`));
+      expect(bicep).not.toMatch(new RegExp(`name:\\s*'${name}'[\\s\\S]{0,60}secretRef:`));
+      expect(bicep).toMatch(new RegExp(`param ${param} string = ''`));
+    }
+  });
+
+  it("spells each variable's name in lib/env.ts, and the reader is lazy so a missing value cannot stop the boot", async () => {
+    const env = await import("@/lib/env");
+    expect(env.CO_REVIEW_APP_TENANT_ID_VAR).toBe("PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID");
+    expect(env.CO_REVIEW_APP_CLIENT_ID_VAR).toBe("PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID");
+    expect(env.CO_REVIEW_APP_SECRET_VAR).toBe("PHB_PLATFORM_CO_REVIEW_APP_SECRET");
+    expect(env.CO_REVIEW_SHAREPOINT_FOLDER_VAR).toBe("CO_REVIEW_SHAREPOINT_FOLDER");
+
+    // The suite leaves them unset; the reader reports that rather than throwing,
+    // which is what lets the app boot with the Needs Review tab unconfigured.
+    const result = env.readReviewEnv();
+    expect(result.present).toBe(false);
+  });
+
+  it("ships the three parameters blank in the example file, beside the CIP ones", async () => {
+    const example = JSON.parse(
+      await import("node:fs/promises").then((fs) =>
+        fs.readFile(path.join(projectRoot, "infra/main.parameters.example.json"), "utf8"),
+      ),
+    ) as { parameters: Record<string, { value: unknown }> };
+
+    expect(example.parameters.coReviewAppTenantId?.value).toBe("");
+    expect(example.parameters.coReviewAppClientId?.value).toBe("");
+    expect(example.parameters.coReviewSharePointFolder?.value).toBe("");
+  });
+});
+
 describe("no deployment file hardcodes an organisation", () => {
   const files = [
     "infra/main.bicep",
