@@ -2325,9 +2325,12 @@ large write fail with `401` — from a `sharepoint.com` URL, not from
 
 **Cause.** Graph serves file content by redirecting to SharePoint with a
 pre-authenticated URL. For a token whose *client* SharePoint refuses — the
-Azure CLI's (`az account get-access-token`) is one — Graph issues the redirect
-with no pre-auth, omits `@microsoft.graph.downloadUrl` from the item, and the
-upload session URL is refused the same way. The store is not at fault.
+Azure CLI's (`az account get-access-token`) is one — that hop is a 401, and
+the upload session URL is refused the same way. The store is not at fault.
+(The item's `@microsoft.graph.downloadUrl` is present for such a token too;
+ask for it as `$select=content.downloadUrl`, because naming the annotation in
+`$select` returns nothing and until 2026-10-21 made the first check report
+"no downloadUrl" for every token, the engine app's included.)
 
 **Fix.** A token from a client SharePoint accepts: paste one from the Graph
 Explorer's *Access token* tab into `CO_GRAPH_TOKEN`, or, once *Allow public

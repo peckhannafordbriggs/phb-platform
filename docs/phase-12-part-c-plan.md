@@ -229,9 +229,12 @@ granted by anyone, nothing near `CO Managment Process`.
 has to arrive pre-authenticated (`tempauth=…`) because the client cannot carry
 the Graph bearer across the hop. For a token whose *client* SharePoint refuses
 — and the Azure CLI's first-party app is one; the same token gets
-`invalid_request` from the SharePoint REST API directly — Graph omits the
-pre-auth, omits `@microsoft.graph.downloadUrl` from the item altogether, and the
-upload session's URL is refused the same way (`401 FORBIDDEN` on the PUT). Every
+`invalid_request` from the SharePoint REST API directly — the download URL
+carries no pre-auth and the hop is a 401, and the upload session's URL is
+refused the same way (`401 FORBIDDEN` on the PUT). *(Corrected 2026-10-21: this
+paragraph first said Graph "omits `@microsoft.graph.downloadUrl` altogether".
+It does not; the check had asked for it in a form Graph ignores. See
+*Step 7, third pass*.)* Every
 metadata call and every small `PUT` succeeded, and the `copy` and `move`
 destinations were present and the right size when listed; only reading them
 back failed. The harness now checks this first and says it once
@@ -437,6 +440,68 @@ owner asked for:
 | 2, roles empty | `application`, roles `-` | no consent (or a token issued before it) |
 | 3 | any | bad token — and `no token: Entra refused the assertion …` before it means the federated credential did not match (the AADSTS code follows) |
 
+## Step 7, third pass (2026-10-21): the job ran as the app, and the one failure was the check
+
+The platform owner created and ran the job. From the log, as reported:
+
+| | result |
+|---|---|
+| `probe_site_grant.py` | **exit 0** — identity `application`, roles `Sites.Selected`; site, drive and listing 200; the write probe created and removed a folder: **the grant is present, and it is Write** |
+| `store_conformance.py` | **15 of 16** |
+| the one failure | `content transfer is pre-authenticated for this token` — while the text and binary round-trips, append, copy, move and the 5 MiB upload all passed |
+
+So: **the credential works, the site grant is present, and `GraphFileStore`
+holds on the real library as the real identity.** Every one of Part B's four
+`GRAPH-TODO`s was exercised against SharePoint by the identity production will
+use: the 409 behind `create_exclusive`, append as read-modify-write, a
+server-side copy settled before the next read, `rglob` over a nested tree, and
+the upload-session path above 4 MB.
+
+What the library showed afterwards, read before deleting it: the whole tree
+under `phb-co-engine scratch/conformance-scratch` created by `phb-co-engine`
+(`copy_dst.txt` by *SharePoint App* — the server-side copy runs as SharePoint,
+not as the caller), `audit.csv` at 12 bytes (three appended rows), `large.bin`
+at exactly 5,242,880, `lock.lck`, `move_dst.txt` and no `move_src.txt`, five
+`marker.json` five levels deep. The probe's `write-probe` folder was gone, as
+the probe removes it. Deleted; the library root is back to its seven
+pre-existing folders, and nothing else was written anywhere.
+
+### The failing check's premise was wrong, and the fix is the check
+
+The check asked Graph for the item with
+`$select=id,size,@microsoft.graph.downloadUrl` and treated a missing URL as
+"SharePoint refuses this client". Graph ignores the annotation when it is named
+in `$select`; the documented form is `content.downloadUrl`. Measured against
+the file the job left, as a signed-in developer:
+
+| request | `@microsoft.graph.downloadUrl` |
+|---|---|
+| no `$select` | present |
+| `$select=id,size,@microsoft.graph.downloadUrl` | **absent** (four keys back) |
+| `$select=id,size,content.downloadUrl` | present |
+
+So the check reported "no downloadUrl" for every token — the engine app's
+included, whose reads all passed. The URL's presence was never the signal;
+whether the hop to `sharepoint.com` succeeds is. The lineage finding from the
+first pass stands on the reads, not on the metadata: the developer token's
+download URL, fetched with no header, is still a 401, and the six content
+operations still fail for it.
+
+The check now performs an actual read of what it just wrote. A 401 from
+`sharepoint.com` on that read is the lineage diagnosis, said once; anything
+else is a store failure reported as itself; and the download URL, asked for
+properly, is printed as information. Re-run: local 16/16; as the developer
+9/16 with the same six reads failing and the first check now naming the cause
+*from a read*. **Not re-run as the app** — that is another job, and the fix
+changes only how the check decides, not what the store does.
+
+**What remains for Part C** is now exactly the plan's bucket 3: the
+byte-identical comparison of `GraphFileStore` output against `LocalFileStore`
+on a copy of the tree, and the flow-trigger check, which needs the copy site
+and the decision about a twelfth flow. Step 6 (Part E equivalence, in
+writing) is still not started. The job can be re-created from the same spec
+for the next run; the image is in the registry.
+
 ## Sequence
 
 1. ~~Dockerfile and requirements~~ — done
@@ -453,11 +518,11 @@ owner asked for:
    the root into a Windows path and every request is a 400.
 6. Define Part E equivalence for the judgment steps, in writing, first — not
    started
-7. `Sites.Selected` is consented (2026-10-13); the federated credential landed
-   2026-10-21 and names the **platform's production identity**, so the probe
-   and the harness run as a job in the production environment — built, not
-   yet run, because creating the job is the owner's action (*Step 7, second
-   pass*). Then the byte-identical comparison and the flow-trigger check
+7. **Done through the probe and the harness, 2026-10-21** (*Step 7, third
+   pass*): the credential works, the site grant is present and Write, and
+   15 of 16 checks pass as the app with the 16th a defect in the check. What
+   remains is the byte-identical comparison on a copy of the tree and the
+   flow-trigger check
 
 Steps 1–4 are complete without anybody granting anything. Step 5 needs a token
 from the right client, not a permission. Step 7 needs Vitis twice more: a way to

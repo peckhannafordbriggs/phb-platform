@@ -442,11 +442,15 @@ identity**, so the app authenticates only from inside Azure; the engine
 gained `--graph-auth federated` (the platform's assertion exchange in
 Python, reading the container app's identity endpoint rather than IMDS), the
 image `phb-co-engine:step7` is in the production registry, and the probe and
-harness are packaged as a one-off Container Apps job — **built, not run**:
-creating a job in the production resource group is the owner's action, and
-the plan doc's *Step 7, second pass* has the spec and the sequence. The app
-also carries a 2029 certificate from Vitis's PnP tooling; keeping it is an
-open decision recorded there.
+harness are packaged as a one-off Container Apps job, created and run by
+the owner the same day: **probe exit 0, the site grant present and Write,
+15 of 16 conformance checks passing as the app** — every `GRAPH-TODO`
+exercised on the real library by the real identity. The 16th was the
+check's own premise (it named `@microsoft.graph.downloadUrl` in `$select`,
+which Graph ignores; it now tests a read). The app also carries a 2029
+certificate from Vitis's PnP tooling; keeping it is an open decision
+recorded in the plan doc. What remains of Part C is the byte-identical
+comparison on a copy and the flow-trigger check.
 
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
