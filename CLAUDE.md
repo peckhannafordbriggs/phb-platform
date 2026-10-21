@@ -1109,6 +1109,23 @@ trees for a bare `new Anthropic(`. The Python engine must pass `api_key=`
 explicitly for the same reason. `WHY-ITS-BUILT-THIS-WAY.md` § 68;
 `runbook.md` → *The Change Orders Anthropic key, the same way*.
 
+**The two secure template parameters are optional, and omitted means unchanged
+(2026-10-21).** `postgresAdminPassword` and `authSecret` in `infra/main.bicep`
+default to empty; empty or whitespace leaves the server's administrator
+password, the `DATABASE-URL` version and the `AUTH-SECRET` version exactly as
+they are, and non-empty sets them as before. Until then both were required on
+every deployment and whatever was typed was set - a value mistyped at the
+prompt on 2026-10-13 rotated the production administrator password. The
+decision is made once per parameter (`setPostgresAdminPassword`,
+`setAuthSecret`, from `trim()`), the password property is **left out** of the
+server request rather than sent empty, and the two secret resources are
+conditional. **A routine template deployment passes `containerImage` and
+neither secure parameter**; the first deployment and a deliberate rotation
+pass them. `tests/deploy-guards.test.ts` pins both ways, in the source and in
+the compiled ARM where `az` is installed. `WHY-ITS-BUILT-THIS-WAY.md` § 70;
+`runbook.md` → *A template deployment rotated the database administrator
+password*; `infra/README.md` → *Deploy*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

@@ -2739,6 +2739,71 @@ one exists.
 
 ---
 
+## A template deployment rotated the database administrator password
+
+**Symptom.** After an `az deployment group create` with `infra/main.bicep`, the
+next revision - or the running one after a restart - fails every database page with
+`P1000: Authentication failed`, while `/api/health` still answers 200. Or the
+deployment was run for some unrelated reason (a Key Vault flag, a probe change)
+and the server's administrator password no longer matches what anyone holds.
+`az postgres flexible-server show` cannot tell you - the password is write-only -
+but the deployment's history shows the server resource as *Modify*, and Key Vault
+shows a new `DATABASE-URL` version stamped at the deployment's time.
+
+**Cause.** Until 2026-10-21, `postgresAdminPassword` and `authSecret` were required
+on every template deployment, and whatever was typed was SET - `az` prompts for a
+required secure parameter you leave off the command line, the prompt echoes
+nothing, and a server PUT that carries `administratorLoginPassword` rotates the
+password to that value. On 2026-10-13 a value mistyped at the prompt rotated the
+production administrator password that way. The template then wrote the mistyped
+value into `DATABASE-URL` as well, so the app kept working from the new secret
+once a revision re-read it; the value nobody could reproduce was the server's
+password itself, and every other holder of the old one (psql from a laptop, the
+Cloud Shell route in *The Analyze database URL, the same way*) was locked out.
+
+**Fix, now.** Rotate deliberately to a value you hold, in one deployment, with
+the running image:
+
+```bash
+read -s PGPASSWORD   # the new password; nothing is echoed
+az deployment group create ... \
+  --parameters containerImage="$IMAGE" \
+  --parameters postgresAdminPassword="$PGPASSWORD"
+```
+
+That sets the server's password and writes a matching `DATABASE-URL` version in
+the same deployment, which is the one way the two cannot drift. Then
+`az containerapp revision restart` so the app re-reads the secret. Leave
+`authSecret` off: rotating it signs every session out, and nothing about this
+symptom calls for that.
+
+**What changed so it stops happening.** Both secure parameters now default to
+empty, and empty means *leave the existing value untouched*: the server keeps its
+password, `DATABASE-URL` keeps its version, `AUTH-SECRET` keeps its version. The
+decision is made once per parameter (`setPostgresAdminPassword`, `setAuthSecret`,
+from `trim()` so a stray space is not a password), the password property is left
+out of the server request rather than sent empty, and the two secret resources are
+conditional rather than written blank. A routine deployment therefore passes
+neither; the two cases that pass one are the **first** deployment (a server cannot
+be created without a password, and the container app's references must resolve)
+and a deliberate rotation. `infra/README.md` → *Deploy* has both commands;
+`tests/deploy-guards.test.ts` → *the two secure parameters are optional, and
+omitted means unchanged* pins the omitted and the supplied behaviour, in the
+source and in the compiled ARM.
+
+**What to check in what-if.** With both omitted, what-if shows neither vault
+secret and no change to the server. A `DATABASE-URL` or `AUTH-SECRET` line reading
+*Modify* means a value was passed; stop unless a rotation was the intent.
+
+**On the first deployment, omitting them fails loudly, not quietly.** The server
+provider refuses to create a flexible server without `administratorLoginPassword`,
+and the container app's Key Vault references fail the revision when the secret is
+not there. Neither can create anything half-configured. *(Expected from the
+resource providers' documented create requirements; not re-run against a fresh
+resource group since the change.)*
+
+---
+
 ## A static file 404s in production and works locally
 
 **Symptom.** `/phb-logo.png` (or anything else in `public/`) returns 404 from the
@@ -2791,10 +2856,12 @@ key (*The Change Orders Anthropic key, the same way*) since 2026-10-16. The
 command sequences are in `infra/README.md`.
 
 The Anthropic key is the first secret the template does not write. `DATABASE-URL` and
-`AUTH-SECRET` are generated at deploy time and passed on every deploy;
-the Anthropic key is issued once by the Anthropic Console and pasted into
-Key Vault once, by hand, so that a routine redeploy never needs it on the
-command line and can never overwrite it with a blank. The template knows only
+`AUTH-SECRET` are generated at deploy time and were passed on every deploy
+until 2026-10-21 - now a routine deploy omits them and the template leaves
+both alone (*A template deployment rotated the database administrator
+password*); the Anthropic key is issued once by the Anthropic Console and
+pasted into Key Vault once, by hand, so that a routine redeploy never needs
+it on the command line and can never overwrite it with a blank. The template knows only
 the secret's **name**, `ANTHROPIC-API-KEY`, and wires it to the container app
 as `ANTHROPIC_API_KEY` by reference when the `anthropicApiKeyInKeyVault`
 parameter is true. The command sequence is in `infra/README.md`.
@@ -3021,7 +3088,7 @@ outlasts it. Liveness answers "should this process be killed", and the answer is
 | Error | Cause | Fix |
 |---|---|---|
 | `P1001: Can't reach database server` | The firewall rule allowing Azure services was removed, or the server is stopped. Burstable tier servers can be stopped to save money and stay stopped — **which is why one may have been, and why it must not be.** Stopping this server destroys building data rather than merely postponing access to it: see `docs/08-bas-and-niagara.md`, *Azure: the container app may sleep, the database may not*. Restart it, then check the Collection Health screen for new `roll_overwrite` gaps. | `az postgres flexible-server show -g <rg> -n <server> --query state`. Confirm the `AllowAllAzureServicesAndResourcesWithinAzureIps` rule exists. |
-| `P1000: Authentication failed` | The admin password was rotated on the server but not in Key Vault. | Update the `DATABASE-URL` secret, then restart the revision — the container reads Key Vault at start, not per request. |
+| `P1000: Authentication failed` | The admin password was rotated on the server but not in Key Vault - or, before 2026-10-21, a template deployment set it to whatever was typed at the prompt (*A template deployment rotated the database administrator password*). | Update the `DATABASE-URL` secret, then restart the revision — the container reads Key Vault at start, not per request. If the server's password is the unknown, rotate it deliberately with `postgresAdminPassword` on one template deployment, which writes the matching `DATABASE-URL` too. |
 | `P2024: Timed out fetching a connection` | More replicas than the server's connection limit allows. Burstable tiers have low limits. | Lower `maxReplicas`, or move up a tier. |
 
 Nothing here needs a redeploy. Fix the database or the secret and restart the revision.
@@ -9971,6 +10038,11 @@ creates outputs only in `<project>/AI FILES`. It costs nothing while idle.
    `cipAppClientId` and the two `cipSharePoint*Folder` values (`ids:<driveId>/<itemId>`). Set `containerImage` and `cipWorkerImage` to the
    images now running (on first enable, `cipWorkerImage` is the image you built with `az acr build`). It has no default.
 4. `az deployment group what-if ...` (see `infra/README.md`), review, then `create`.
+   Pass `containerImage` and nothing secure: `postgresAdminPassword` and
+   `authSecret` are omitted, and omitting them leaves the server's password and
+   both vault secrets exactly as they are (since 2026-10-21). The job reads
+   `DATABASE-URL` by reference, so the version already in the vault is the one it
+   gets.
 5. Set the repository variable `AZURE_CIP_WORKER_JOB` to the `cipWorkerJobName`
    output. From the next push to `main`, `deploy.yml` builds `cip-worker:<sha>` and
    points the job at it. Until it is set those steps are skipped.
