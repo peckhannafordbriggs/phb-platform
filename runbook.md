@@ -1409,6 +1409,7 @@ broken auth callback. **Do not remove the `-p`.**
 | Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** Revocable in the Anthropic Console, and a revoked key fails as `401 authentication_error` on the next call | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
 | Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** A second, separately issued key, revocable on its own in the Anthropic Console | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
 | BAS credential key | Key Vault `BAS-CREDENTIAL-KEY` → `BAS_CREDENTIAL_KEY` on the container app; the collector's `.env` on the office PC; `.env.local` locally | **Does not expire.** Rotated only on purpose - *Station credentials, and the one secret that lives in two places* | Storing and decrypting Niagara station logins in Settings; the collector, wherever it runs. A value that differs from the collector's makes every stored login unreadable |
+| `PnP.Powershell` certificate on `phb-co-engine` | Entra app registration `85ca496d-3af9-4c3a-aa11-a6b7fd51105d` → Certificates & secrets; the private key is on the IT workstation that ran the site grant, not anywhere PH+B controls | **19 October 2029** | **Nothing of ours.** No engine code path presents a certificate, so its expiry breaks nothing and is noticed by nothing — the exposure is the three years it stays *valid*. Whether it is removed is an **open decision**: *Open decision — the `PnP.Powershell` certificate on `phb-co-engine`* |
 
 > **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
 > carries a note reading `Expiry Date of Entra : 8/13/2028`, but the same note
@@ -2265,7 +2266,85 @@ subject, so the engine app can be authenticated only from inside Azure as
 that identity, by a Container Apps job. The job spec and sequence are in
 `docs/phase-12-part-c-plan.md` → *Step 7, second pass*. The app also carries
 a `PnP.Powershell` **certificate** valid to 2029, the tool credential used to
-make the grant; whether it stays is the owner's decision, recorded there.
+make the grant; whether it stays is the owner's decision — the next section.
+
+## Open decision — the `PnP.Powershell` certificate on `phb-co-engine`
+
+**Status: open, as of 2026-10-21.** Nothing below has been asked of Vitis yet.
+The platform owner decides; this section is so the decision is made on the
+facts rather than rediscovered.
+
+### What is there
+
+Read live from Entra on 2026-10-21 (`az ad app list --display-name
+phb-co-engine`), not from the portal and not from memory:
+
+| | observed |
+|---|---|
+| Credential | one `keyCredentials` entry: `AsymmetricX509Cert`, usage `Verify`, display name `PnP.Powershell` |
+| Valid | 2026-10-19 → **2029-10-19** — three years, created two days before Vitis reported the site grant made |
+| Other credentials | `passwordCredentials` empty; one federated identity credential, `phb-platform-prod`, naming the platform's production managed identity |
+| Permissions actually consented | application `Sites.Selected` only; delegated `Files.ReadWrite.All` + `User.Read` for all users. **Not** `Sites.FullControl.All` |
+| Owners | none |
+
+The name and the dates say what it is: PnP PowerShell's own authentication.
+`Grant-PnPAzureADAppSitePermission` has to be run from a PnP session, a PnP
+session authenticates as an app registration, and the convenient app
+registration to hand was the engine's. The private key that goes with the
+certificate is on whatever machine ran the command — an IT workstation,
+outside anything PH+B controls or can inventory.
+
+Two things the facts rule out. It is **not** how the grant is held: a
+`Sites.Selected` site grant is stored on the site against the app id, and the
+engine proved the grant present on 2026-10-21 using the federated credential
+alone (*Step 7, third pass* in `docs/phase-12-part-c-plan.md`). And it is
+**not** a route to anything beyond `Sites.Selected`: whoever holds the key
+gets exactly the engine app's own permissions, no more — which is still Write
+on the one site that holds the live `CO Managment Process`.
+
+### Why it matters
+
+1. **It is a second way to be the engine app.** Production will authenticate
+   as `phb-co-engine` through the managed identity and nothing else. For as
+   long as the certificate exists, a private key on a machine nobody here
+   controls is an equally valid way to obtain a token with Write on the AI
+   Sandbox site — the site the live change-order tree lives in. Every other
+   identity in this project has exactly one credential path, and it is one
+   that cannot be copied off a disk.
+2. **It expires, and its expiry is silent.** Nothing of ours presents it, so
+   on 2029-10-19 nothing breaks and nobody is told. That is the opposite of
+   the usual expiry problem: the risk is not an outage at the end but three
+   years of a credential nobody is watching. The *What expires, and when*
+   table carries it so that at least the date is written down somewhere PH+B
+   owns.
+3. **It is what Request 4 asked not to have.** The request said *no client
+   secret, please*, and gave the reason: an expiring credential bound to a
+   machine or a person is what prohibitions 6 and 7 exist to keep out of
+   production. A certificate is a client secret with a longer fuse. The
+   engine's own `co_graph_auth.py` has no certificate path and says in its
+   docstring that adding one is the wrong answer.
+4. **It will be wanted again, briefly.** If the Part C copy ever moves to a
+   second site (the plan doc's recommendation), the site grant has to be made
+   on that site too, by the same command, from a PnP session. Removing the
+   certificate now means Vitis recreates one then — a few minutes of their
+   time, against three years of ours not knowing where a key is.
+
+### The options
+
+| | what happens | recommendation |
+|---|---|---|
+| **Remove it now** | Vitis deletes the credential; the grant stays, the federated path is unaffected. Verified afterwards by `az ad app list --display-name phb-co-engine --query "[0].keyCredentials"` reading `[]` and the step 7 probe still exiting 0 | **Recommended.** One credential path, the one that cannot leak |
+| Keep it until the Part C copy site exists | The one plausible reason to wait. Record who holds the key, on which machine, and set a reminder to remove it the day the second grant is made | Acceptable if the second site is weeks away, not months |
+| Keep it indefinitely | Three years of a key outside the company's inventory on an app with Write on the live site | Not acceptable; if chosen anyway, record it in *What expires, and when* as the decision rather than as an oversight |
+
+Removal is an Entra action on the app registration, which this account cannot
+perform — it is a request to Vitis, worded like the others under *What to ask
+IT for*. Ask for the credential by its `keyId`
+(`17d6dc07-057e-40af-96ca-35ade2647d97`) rather than by name, so the right one
+goes and the federated credential stays.
+
+**When the decision is made, replace the first line of this section with the
+date and the outcome, and update the table row.**
 
 ## The engine cannot reach the library (Phase 12 Part C)
 
