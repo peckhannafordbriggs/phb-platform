@@ -426,6 +426,32 @@ classes split, because Part E is nothing but weeks of difference
 classification. `docs/phase-12-part-c-plan.md` is the reasoning and the
 blocked/not-blocked split; do not re-derive it from `PHASE-12.md` alone.
 
+**Step 7 status (2026-10-14).** `Sites.Selected` is **consented** on
+`phb-co-engine` (read live from Entra), the app has **no credential of any
+kind** and no public-client flow, and the **site grant cannot be verified from
+this account** — the site's principal list shows no entry for the app, which
+is consistent with the grant not having been made. Step 5 ran for the first
+time, half of it: writes, `create_exclusive`'s real 409, and path addressing
+hold on the real library; every content read fails because SharePoint refuses
+the Azure CLI's token for content transfer, which the harness now diagnoses
+first. `phb-co-engine/tests/probe_site_grant.py` is the instrument for the
+grant once anything can authenticate as the app. The plan doc's *Step 7*
+section has the three routes and the identifiers. **2026-10-21:** the
+federated credential landed and names the **platform's production
+identity**, so the app authenticates only from inside Azure; the engine
+gained `--graph-auth federated` (the platform's assertion exchange in
+Python, reading the container app's identity endpoint rather than IMDS), the
+image `phb-co-engine:step7` is in the production registry, and the probe and
+harness are packaged as a one-off Container Apps job, created and run by
+the owner the same day: **probe exit 0, the site grant present and Write,
+15 of 16 conformance checks passing as the app** — every `GRAPH-TODO`
+exercised on the real library by the real identity. The 16th was the
+check's own premise (it named `@microsoft.graph.downloadUrl` in `$select`,
+which Graph ignores; it now tests a read). The app also carries a 2029
+certificate from Vitis's PnP tooling; keeping it is an open decision
+recorded in the plan doc. What remains of Part C is the byte-identical
+comparison on a copy and the flow-trigger check.
+
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
 four points at zero records: the collector's first-sync window was 30 days and
