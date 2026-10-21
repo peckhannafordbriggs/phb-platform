@@ -208,8 +208,10 @@ does not live in a resource group. On that last one — `az keyvault list-delete
 returns an **empty array rather than an error** when you lack permission, which
 reads exactly like "the name is free" and is not. Use `checkNameAvailability`.
 
-**What is NOT done.** The container app still runs the placeholder image and so
-answers nothing; that is expected until CI pushes a real one, not a fault.
+**The container app runs real images built from `main`.** It held the
+placeholder until CI's first real push; the placeholder came back once, in
+the 13 October template deployment (*A template deployment must be told
+which image to keep*, below), and that fix ended it.
 
 **CI is fully wired, and the deploy job is no longer inert.** All seven
 `AZURE_*` repository **variables** are set and were verified against live Azure,
@@ -257,8 +259,9 @@ of its own, and Auth.js keeps it over one passed as an option, so every
 production token request since the 17th went out with no assertion
 (`AADSTS7000218`). The wrapper is now set on the provider object, composed
 over Auth.js's own fetch, and the test resolves the provider through Auth.js's
-real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`; whether it
-signs in is not yet observed.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
+real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`, and it
+signs in: production sign-in has worked for weeks, used by the admins, Mahi
+and two testers.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
 `runbook.md` → *Production sign-in bounces to
 `/signin?error=OAuthCallbackError`*.
 

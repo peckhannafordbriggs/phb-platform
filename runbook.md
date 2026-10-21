@@ -1923,7 +1923,9 @@ version.
 pipeline "stays switched off until it is set", that described the state before
 2026-09-16; a merge to `main` now deploys. No merge had reached `main` after the
 variable was set when this was written, so the container app still held the
-placeholder image and the next merge is the first real deploy.
+placeholder image and the next merge was the first real deploy. It has long
+since landed: the app runs CI-built images from `main`, and the placeholder's
+one return, on 13 October, is under *A template deployment fails activation*.
 
 **Substitute two values before sending.** The resource group and subscription id
 are deliberately not written in this repository (`tests/deploy-guards.test.ts`

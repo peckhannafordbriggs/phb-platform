@@ -109,10 +109,11 @@ Change-order automation (11 Power Automate flows) ──► same mailbox
 
 **Deployed as of 9 September 2026, in `eastus2`.** That diagram is now the shape of the
 running system rather than a plan. All seven Azure resources are up, the migrations are
-applied, and the production seed has run once. What is *not* yet true: nobody can sign
-in, because the production redirect URI does not exist yet. The container app serves
-whatever the last merge to `main` deployed — the placeholder image until the first real
-deploy lands, because CI has only been able to deploy since 16 September 2026. See
+applied, and the production seed has run once. Sign-in to the deployed site works and
+has for weeks: the admins, Mahi and two testers use it. The container app serves
+whatever the last merge to `main` deployed — real images built by CI, not the
+placeholder, which last appeared in the 13 October incident (`runbook.md` → *A template
+deployment fails activation*). See
 *Production deployment* below. `runbook.md` → *Deploying to Azure (Phase 7 Part B)* is
 kept current and this is a summary.
 
@@ -232,7 +233,7 @@ signature. BAS was rebuilt around a headroom hero tile, Home became a personal l
 and Change Orders gained resizable panes, breakpoints and keyboard navigation. The record
 is `docs/DESIGN-BRIEF.md` and the token comments in `app/globals.css`.
 
-### BAS — working, on synthetic data
+### BAS — working, on real building data
 
 Fourteen tables, six views, the collector running, five tabs — a Projects tab of
 cards, Point Explorer, Analyze, Collection Health, and a Settings tab behind a module-admin
@@ -255,10 +256,12 @@ or run out of credit, and when it does this tab — only this tab — stops; `ru
 B7 added a project level above buildings and encrypted station credentials. The record is
 `docs/09-bas-what-is-built.md`; the reasoning is `docs/08-bas-and-niagara.md`.
 
-**The open dependency:** everything runs against four synthetic points on a lab station
-that isn't PH+B's asset. The real question isn't the controller's address — it's whether
-history extensions are configured on a production station at all. If nobody ever set them
-up, this becomes a Niagara engineering job before it's a data job.
+**The data is real.** The office JACE has been connected since August 2026 and the
+module runs on its readings, with the lab station (four synthetic points, not PH+B's
+asset) still collected beside it. For the next building the question isn't the
+controller's address — it's whether history extensions are configured on its station at
+all. If nobody ever set them up, that becomes a Niagara engineering job before it's a
+data job.
 
 ### Not built, deliberately
 
@@ -272,7 +275,7 @@ up, this becomes a Niagara engineering job before it's a data job.
   the BAS section) and stopped there.
 - **Moving the change-order AI off the laptop** — see below. Parts A and B are done.
 
-### Production deployment (Phase 7 Part B) — deployed, CI live, sign-in pending
+### Production deployment (Phase 7 Part B) — deployed, CI live, sign-in working
 
 Part A built the Dockerfile, the CI pipeline and the Bicep. Part B deployed them on
 9 September 2026. **Do not act on this summary without reading `runbook.md` →
@@ -282,7 +285,9 @@ Part A built the Dockerfile, the CI pipeline and the Bicep. Part B deployed them
 |---|---|
 | Running | Seven resources in `eastus2`, twelve migrations applied, the production seed run once, four admin rows with `entra_oid` null until each first sign-in |
 | Region | `eastus2`, not `eastus` — PostgreSQL Flexible Server is **offer-restricted** in `eastus` for this subscription. A restriction, not a quota, so more capacity cannot be requested |
-| Remaining | Two Entra changes with Vitis — the Graph federated credential and the production redirect URI — written out in `runbook.md` → *Request 2*. The deploy app registration is done: `AZURE_CLIENT_ID` was set on 16 September 2026, so a merge to `main` runs a real deploy. Until the redirect URI exists, nobody can sign in |
+| Sign-in | Works, and has for weeks: the admins, Mahi and two testers use the deployed site. The production redirect URI is therefore in place |
+| Image | Real images built from `main` by CI; the deploy app registration is done (`AZURE_CLIENT_ID` set on 16 September 2026), so a merge to `main` runs a real deploy. The placeholder last appeared in the 13 October incident, `runbook.md` → *A template deployment fails activation* |
+| Remaining | The Graph federated credential, written out in `runbook.md` → *Request 2*; whether it is in place is not recorded here |
 
 Three permission walls were hit getting here, all from *scope* rather than from the role
 names, and all worth knowing before the next Azure task: resource provider registration
