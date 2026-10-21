@@ -166,6 +166,13 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   return (await getWithResponse<T>(path, signal)).data;
 }
 
+/**
+ * The same GET for the module's other client (review-client.ts), so the
+ * Needs Review tab reads the envelope and raises ApiError exactly as the
+ * mailbox does rather than with a second copy of this function.
+ */
+export { get as apiGet };
+
 const BASE = "/api/modules/change-orders";
 
 export function fetchFolders(signal?: AbortSignal): Promise<{ folders: FolderNode[] }> {

@@ -222,6 +222,22 @@ param cipSharePointSkillsFolder string = ''
 @description('SharePoint BID-DOC folder, as ids:<driveId>/<itemId>.')
 param cipSharePointProjectsFolder string = ''
 
+// Change Orders → Needs Review (2026-10-21). A third app registration,
+// phb-platform-co-review, read-only on the automation's _needs_review folder
+// through Files.SelectedOperations.Selected - never the mail app, whose
+// mailbox fence is load-bearing, and never a secret: production signs in as
+// it with the managed identity and a federated credential, as the CIP app
+// does. All three values are identifiers, not secrets. Blank leaves the
+// Needs Review tab reporting itself not configured and nothing else changes.
+@description('Tenant ID of the phb-platform-co-review app registration. Not a secret.')
+param coReviewAppTenantId string = ''
+
+@description('Client ID of the phb-platform-co-review app registration. Production signs in as it with the managed identity and a federated credential; no secret.')
+param coReviewAppClientId string = ''
+
+@description('The _needs_review folder, as ids:<driveId>/<itemId> or its browser URL.')
+param coReviewSharePointFolder string = ''
+
 @description('Model the skills run on. Empty means the default in lib/modules/cost-intelligence/runs.ts.')
 param cipRunModel string = ''
 
@@ -771,6 +787,21 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'CIP_SHAREPOINT_PROJECTS_FOLDER'
               value: cipSharePointProjectsFolder
+            }
+            // Change Orders → Needs Review: the _needs_review folder, read as
+            // the phb-platform-co-review app. No secret: the managed identity
+            // above. The names are decided in lib/env.ts.
+            {
+              name: 'PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID'
+              value: coReviewAppTenantId
+            }
+            {
+              name: 'PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID'
+              value: coReviewAppClientId
+            }
+            {
+              name: 'CO_REVIEW_SHAREPOINT_FOLDER'
+              value: coReviewSharePointFolder
             }
           ]
           probes: [

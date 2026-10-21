@@ -136,6 +136,10 @@ check whether a rotation was intended.
   `Key Vault Secrets User` on the vault
 - Optionally a resource-group budget (`enableBudget`, off by default)
 - Optionally the Cost Intelligence run worker, a Container Apps Job (`enableCipWorker`,
+  off by default; see `runbook.md`, "Cost Intelligence worker in Azure")
+- Three plain values for the Needs Review tab (`coReviewAppTenantId`,
+  `coReviewAppClientId`, `coReviewSharePointFolder`; blank by default, and blank
+  leaves the tab "not connected"; see `runbook.md`, "Needs Review")
   off by default and on in production since 2026-10-20; see `runbook.md`, "Cost
   Intelligence worker in Azure")
 

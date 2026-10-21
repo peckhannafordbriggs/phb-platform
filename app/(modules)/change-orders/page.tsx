@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
 import { requireModuleAccess } from "@/lib/authz";
 import { CHANGE_ORDERS_MODULE_KEY } from "@/lib/modules/change-orders/constants";
-import { ModuleHeader } from "@/components/module-header";
+import { CoShell } from "./co-shell";
 import { MailboxWorkspace } from "./mailbox-workspace";
+import { MAILBOX_TAB_HREF, coTab } from "./tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -27,12 +28,13 @@ export default async function ChangeOrdersPage() {
     // height of its own, and three independently scrolling panes need one.
     // 4rem is the shell's vertical padding.
     <div className="flex h-[calc(100vh-4rem)] min-h-0 flex-col">
+      {/*
+        The Mailbox tab, since 2026-10-21. The header and tab bar come from
+        CoShell; the blurb is the tab's own, so the tab and the page cannot
+        describe themselves differently.
+      */}
       <div className="mb-4">
-        <ModuleHeader
-          moduleKey={CHANGE_ORDERS_MODULE_KEY}
-          title="Change Orders"
-          blurb="Reading changeorder@phb1899.com live. Outlook remains a fully working path and is unaffected by anything here."
-        />
+        <CoShell blurb={coTab(MAILBOX_TAB_HREF).blurb} />
       </div>
 
       <div className="min-h-0 flex-1">
