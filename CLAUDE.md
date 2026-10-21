@@ -475,7 +475,12 @@ rewrote 7 of the 8 uploaded workbooks (4 with no size change), so Office
 inputs now verify by the differ's structural fingerprint; and a folder
 create answered 400 with the body dropped, so every store error now
 carries Graph's code and request id and `makedirs` looks again before
-failing. Image `part-c-compare-2`; the second run has not happened. The twelfth-flow question is deferred by the
+failing. The second run's inputs verified, but the Graph engine never ran: the
+instrument put the report directory beside `CMP` while the jail root was
+`CMP`, the engine refused in one second eight times, and the instrument
+printed only `rc=1`. Layout fixed and held inside the jail by test, any
+non-zero engine exit now quotes its stderr. Image `part-c-compare-3`; the
+third run has not happened. The twelfth-flow question is deferred by the
 owner and is a **required step before Phase 14** — the plan doc's *Before
 cutover* section has the evidence in hand and the two ways to close it.
 
