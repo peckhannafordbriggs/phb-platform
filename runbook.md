@@ -2437,6 +2437,62 @@ PowerShell. (Until 2026-10-14 the `create_exclusive on a taken path` check
 reported **ok** in this state, because it accepted any exception as the 409;
 it now accepts only `FileExistsError`.)
 
+### The engine says `refusing to run: … is inside 'CO Managment Process', the live tree`
+
+**Symptom.** `run_workflow.py --store graph` exits before printing
+`FileStore : graph`, with a message naming the live tree. Or any store call
+raises `ForbiddenPath` with the same words mid-run.
+
+**Cause.** The Phase 12 fence. `GraphFileStore` refuses `CO Managment
+Process` as the first path segment at every call, whatever root it was given,
+and refuses a `--sharepoint-root` inside it at construction — before a token
+is fetched, so this is never an auth problem. The engine's identity holds
+Write on the whole AI Sandbox site; this refusal is what keeps the container
+off the live tree, not `--live-path`.
+
+**Fix.** Point the run at the copy: `--sharepoint-root "/phb-co-engine
+scratch/part-c-copy-<date>/runs/<id>/<tag>/CMP"` and a `--live-path` under
+it (`docs/phase-12-part-c-plan.md` → *Where the copy lives*). There is no
+override and none should be added. The one legitimate time this message means
+the code must change is the Phase 14 cutover, when the refusal is removed
+deliberately, in `co_filestore.py`, with its test.
+
+### The engine says `… is outside this store's root`
+
+**Symptom.** `refusing to run: --live-path … is outside this store's root`,
+or `CO_REPORT_DIR … is outside`, or a `ForbiddenPath` with those words from
+inside a run. From Git Bash the refused path may begin `C:/Program Files/Git/`.
+
+**Cause.** The second half of the fence: the store addresses nothing outside
+the `--sharepoint-root` it was built with, and in graph mode `--live-path` and
+`CO_REPORT_DIR` are checked against it up front. The Git Bash form is the
+shell rewriting a drive-relative path into a Windows one before Python sees
+it (next entry).
+
+**Fix.** Make `--live-path` and `CO_REPORT_DIR` paths under
+`--sharepoint-root`; from Git Bash prefix the command with
+`MSYS_NO_PATHCONV=1`. `tests/build_copy.py` and `tests/compare_stores.py`
+derive every path from `--root` so they cannot hit this; the bare engine can.
+
+### `build_copy.py` says `REFUSING: … is a flow-written or flow-trigger name`
+
+**Symptom.** The copy builder stops before uploading anything, naming a file
+in the fixture store.
+
+**Cause.** The fixture store is supposed to carry every flow-written payload
+renamed by role (`phb-co-engine-fixtures/README.md`), and an `inputs/` folder
+should hold only an intake JSON, a workbook and attachments. A file named
+`scrub_result.json`, `vendor_drafts.json`, `transfer_ready.json`,
+`classification_result.json`, `bid_tracker_ready.json` or `draft_written.json`
+in an inputs folder means the store was rebuilt without the guard, or
+something was copied in by hand.
+
+**Fix.** Do not rename the file to get past the check. Remove it from
+`inputs/` (it is not a replay input) or rebuild the fixture store with the
+capture script, then re-run. A sibling folder is outside every watched folder
+anyway; the refusal exists so that a mistake in the fixture store can never
+become a trigger-shaped file in the library.
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not

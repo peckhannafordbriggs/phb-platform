@@ -452,8 +452,21 @@ exercised on the real library by the real identity. The 16th was the
 check's own premise (it named `@microsoft.graph.downloadUrl` in `$select`,
 which Graph ignores; it now tests a read). The app also carries a 2029
 certificate from Vitis's PnP tooling; keeping it is an open decision
-recorded in the plan doc. What remains of Part C is the byte-identical
-comparison on a copy and the flow-trigger check.
+recorded in the plan doc and `runbook.md`. **Later on 2026-10-21:** the
+owner chose a **sibling folder in AI Sandbox** for the copy over the plan
+doc's second-site recommendation, and two guards in `GraphFileStore` make
+the fence incapacity rather than configuration — the store is confined to
+the root it is given, and refuses `CO Managment Process` by name at every
+call and at construction, before any token is fetched. 14 offline tests
+including the real engine as a subprocess pointed where the laptop points;
+mutation run; the Part B differential re-run, eight of eight equivalent.
+The copy is built at `/phb-co-engine scratch/part-c-copy-2026-10-21`
+(eight COs' replay inputs, real data by decision, nothing a flow writes),
+the comparison is packaged as `tests/compare_stores.py` and image
+`phb-co-engine:part-c-compare`, and **running the job is the owner's
+action; it has not run.** The twelfth-flow question is deferred by the
+owner and is a **required step before Phase 14** — the plan doc's *Before
+cutover* section has the evidence in hand and the two ways to close it.
 
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
