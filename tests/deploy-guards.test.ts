@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -891,4 +891,183 @@ describe("the two deploy paths cannot diverge on the image or the port", () => {
       expect(deploy, flag).not.toContain(flag);
     }
   });
+});
+
+describe("the two secure parameters are optional, and omitted means unchanged (2026-10-21)", () => {
+  /**
+   * Until 2026-10-21 `postgresAdminPassword` and `authSecret` were required on
+   * every template deployment and whatever was typed was SET: on 2026-10-13 a
+   * value mistyped at the prompt rotated the production administrator
+   * password, and the running app kept the old one in DATABASE-URL until the
+   * next revision picked the new URL up. Now each defaults to empty, and empty
+   * means "leave it alone": the server keeps its password, DATABASE-URL keeps
+   * its version, AUTH-SECRET keeps its version. Non-empty behaves as before.
+   *
+   * Pinned both ways. Omitted: the password is ABSENT from the server request
+   * (not sent empty, not sent null) and neither secret resource is deployed.
+   * Supplied: the value reaches the server and both secrets exactly as it
+   * always did. Nothing local can run a deployment, so this reads the
+   * template, and where `az` is installed it reads the ARM it compiles to.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+
+  it("defaults both secure parameters to empty, so a deployment can omit them", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    // @secure() stays: Azure logs neither the value nor the fact it was empty.
+    expect(bicep).toMatch(
+      /@secure\(\)\s*\n@description\([^\n]*\)\s*\nparam postgresAdminPassword string = ''\s*$/m,
+    );
+    expect(bicep).toMatch(
+      /@secure\(\)\s*\n@description\([^\n]*\)\s*\nparam authSecret string = ''\s*$/m,
+    );
+  });
+
+  it("decides 'supplied' once for each, from trim(), so a stray space is not a password", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^var setPostgresAdminPassword = !empty\(trim\(postgresAdminPassword\)\)\s*$/m);
+    expect(code).toMatch(/^var setAuthSecret = !empty\(trim\(authSecret\)\)\s*$/m);
+  });
+
+  it("omitted: the password is absent from the server request, never sent empty or null", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    // The only way the property enters the request is a spread that is an
+    // empty object when nothing was supplied.
+    expect(code).toMatch(
+      /\.\.\.\(setPostgresAdminPassword \? \{ administratorLoginPassword: postgresAdminPassword \} : \{\}\)/,
+    );
+    // Never as a bare property, which would SET whatever the parameter holds -
+    // the pre-2026-10-21 shape and the one that rotated production.
+    expect(code).not.toMatch(/^\s*administratorLoginPassword:/m);
+    // And never "set it to nothing" as a stand-in for "leave it".
+    expect(code).not.toMatch(/administratorLoginPassword:\s*(null|''|"")/);
+  });
+
+  it("omitted: neither vault secret is written - both resources are conditional on their own parameter", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(
+      /^resource databaseUrlSecret 'Microsoft\.KeyVault\/vaults\/secrets@[\d-]+' = if \(setPostgresAdminPassword\) \{/m,
+    );
+    expect(code).toMatch(
+      /^resource authSecretSecret 'Microsoft\.KeyVault\/vaults\/secrets@[\d-]+' = if \(setAuthSecret\) \{/m,
+    );
+    // DATABASE-URL embeds the password, so it follows the PASSWORD's
+    // condition, not the session secret's and not its own.
+    expect(code).not.toMatch(/resource databaseUrlSecret[^\n]*if \(setAuthSecret\)/);
+  });
+
+  it("supplied: the value still reaches the server and both secrets, exactly as before", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const linesUsing = (identifier: RegExp) =>
+      code.split("\n").filter((line) => identifier.test(line) && !/^\s*param /.test(line));
+
+    // Every use of the password outside its declaration is one of three
+    // things: the decision variable, the server's conditional property, or
+    // the connection URL the DATABASE-URL secret is written from.
+    const passwordUses = linesUsing(/\bpostgresAdminPassword\b/);
+    expect(passwordUses.length).toBe(3);
+    for (const line of passwordUses) {
+      expect(line).toMatch(
+        /^var setPostgresAdminPassword = |\.\.\.\(setPostgresAdminPassword \? \{ administratorLoginPassword: postgresAdminPassword \}|^var databaseUrl = .*uriComponent\(postgresAdminPassword\)/,
+      );
+    }
+    expect(code).toMatch(/value:\s*databaseUrl\s*\n/);
+
+    // And every use of the session secret is the decision variable or the
+    // AUTH-SECRET value. (`authSecretSecret` and `setAuthSecret` are other
+    // identifiers; the word boundary keeps them out.)
+    const secretUses = linesUsing(/\bauthSecret\b/);
+    expect(secretUses.length).toBe(2);
+    for (const line of secretUses) {
+      expect(line).toMatch(/^var setAuthSecret = |^\s*value:\s*authSecret\s*$/);
+    }
+  });
+
+  it("keeps the container app and the worker job depending on both secrets, so a first deployment writes them before anything references them", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    // The reference is through the resource's symbolic name, which is what
+    // gives Bicep the dependency. ARM ignores a dependency on a resource
+    // whose condition is false, so an omitted secret does not block a redeploy.
+    const databaseUrlRefs = code.match(/secrets\/\$\{databaseUrlSecret\.name\}/g) ?? [];
+    expect(databaseUrlRefs.length).toBe(2); // the app and the CIP worker job
+    expect(code).toMatch(/secrets\/\$\{authSecretSecret\.name\}/);
+  });
+
+  it("keeps both out of the example parameters, where a value would be committed", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, unknown>;
+    };
+    expect(Object.keys(example.parameters)).not.toContain("postgresAdminPassword");
+    expect(Object.keys(example.parameters)).not.toContain("authSecret");
+  });
+
+  it("tells the deployer the routine command omits them, and the README says what omitting does", async () => {
+    const readme = await readFile("infra/README.md");
+    const deploySection = readme.split("## Deploy")[1]?.split("\n## ")[0] ?? "";
+    const routineCommand = deploySection.split("```bash")[1]?.split("```")[0] ?? "";
+    expect(routineCommand).toContain("az deployment group create");
+    expect(routineCommand).toContain("containerImage=");
+    expect(routineCommand).not.toContain("postgresAdminPassword");
+    expect(routineCommand).not.toContain("authSecret");
+    expect(deploySection).toMatch(/omit\w*[^\n]*(unchanged|untouched|leave)/i);
+  });
+
+  // The compiled check. `az bicep build` is what CI runs; here it proves the
+  // ARM says what the source says, where the CLI is installed.
+  const az = spawnSync("az", ["bicep", "version"], { encoding: "utf8", shell: true });
+  const azAvailable = az.status === 0;
+
+  it.skipIf(!azAvailable)(
+    "compiles to ARM where both parameters default to empty, the password is only inside the conditional, and both secrets carry a condition",
+    () => {
+      const build = spawnSync(
+        "az",
+        ["bicep", "build", "--file", "infra/main.bicep", "--stdout"],
+        { cwd: projectRoot, encoding: "utf8", shell: true, maxBuffer: 16 * 1024 * 1024 },
+      );
+      expect(build.status, build.stderr).toBe(0);
+      const arm = JSON.parse(build.stdout.replace(/^﻿/, "")) as {
+        parameters: Record<string, { type: string; defaultValue?: unknown }>;
+        variables: Record<string, unknown>;
+        resources: Record<string, ArmResource> | ArmResource[];
+      };
+      interface ArmResource {
+        type: string;
+        name: string;
+        condition?: string;
+        properties?: unknown;
+      }
+
+      expect(arm.parameters.postgresAdminPassword).toMatchObject({ type: "securestring", defaultValue: "" });
+      expect(arm.parameters.authSecret).toMatchObject({ type: "securestring", defaultValue: "" });
+      expect(arm.variables.setPostgresAdminPassword).toBe(
+        "[not(empty(trim(parameters('postgresAdminPassword'))))]",
+      );
+      expect(arm.variables.setAuthSecret).toBe("[not(empty(trim(parameters('authSecret'))))]");
+
+      const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
+      const server = resources.find((r) => r.type === "Microsoft.DBforPostgreSQL/flexibleServers");
+      expect(server).toBeDefined();
+      const serverProperties = JSON.stringify(server?.properties);
+      // Exactly one mention, and it is inside the `if(...)`.
+      expect(serverProperties.match(/administratorLoginPassword/g)?.length).toBe(1);
+      expect(serverProperties).toContain(
+        "if(variables('setPostgresAdminPassword'), createObject('administratorLoginPassword', parameters('postgresAdminPassword')), createObject())",
+      );
+
+      const secretCondition = (name: string) =>
+        resources.find(
+          (r) => r.type === "Microsoft.KeyVault/vaults/secrets" && r.name.includes(`'${name}'`),
+        )?.condition;
+      expect(secretCondition("DATABASE-URL")).toBe("[variables('setPostgresAdminPassword')]");
+      expect(secretCondition("AUTH-SECRET")).toBe("[variables('setAuthSecret')]");
+    },
+  );
 });

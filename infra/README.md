@@ -40,12 +40,42 @@ az deployment group create \
   --resource-group <resource-group> \
   --template-file infra/main.bicep \
   --parameters @infra/main.parameters.json \
+  --parameters containerImage="$IMAGE"
+```
+
+That is the whole routine command. **The two `@secure()` parameters,
+`postgresAdminPassword` and `authSecret`, are omitted on a routine deployment, and
+omitting them leaves the existing values untouched** (since 2026-10-21): the database
+server keeps its current administrator password, the `DATABASE-URL` vault secret keeps
+its current version, and `AUTH-SECRET` keeps its current version. Each parameter
+defaults to empty, empty or whitespace means "do not touch", and the template never
+sends an empty password or writes an empty secret version - the password property is
+left out of the server request altogether and the two secret resources are not
+deployed. `tests/deploy-guards.test.ts` → *the two secure parameters are optional, and
+omitted means unchanged* pins it both ways.
+
+They are supplied in exactly two situations, and a non-empty value **sets** the value
+it names:
+
+```bash
+# FIRST deployment only: a server cannot be created without a password, and the
+# container app's references to both secrets must resolve.
+#
+# Or a deliberate ROTATION of one or both. A new postgresAdminPassword rotates the
+# server's password and writes a new DATABASE-URL version in the same deployment;
+# a new authSecret signs every existing session out. Pass only the one you mean to
+# rotate. Read the value in with `read -s` rather than typing it on the line.
+az deployment group create \
+  ... \
   --parameters containerImage="$IMAGE" \
   --parameters postgresAdminPassword="$PGPASSWORD" authSecret="$(npx auth secret --raw)"
 ```
 
-The two `@secure()` parameters are passed on the command line and never written to a
-file. Azure does not log the value of a secure parameter.
+Until 2026-10-21 both were required on every deployment and whatever was typed was
+set, which is how a value mistyped at the prompt on 2026-10-13 rotated the production
+administrator password. See *A template deployment rotated the database administrator
+password* in `runbook.md`. The values are passed on the command line and never written
+to a file; Azure does not log the value of a secure parameter.
 
 **`containerImage` is required and is never in the parameters file.** Two things write
 the container app, and each owns half of it. The deploy workflow runs
@@ -87,8 +117,13 @@ error text, and the two grant options are under *Deploying to Azure (Phase 7 Par
 Run `what-if` first — it catches both without creating anything:
 
 ```bash
-az deployment group what-if   --subscription <subscription-id>   --resource-group <resource-group>   --template-file infra/main.bicep   --parameters @infra/main.parameters.json   --parameters postgresAdminPassword="$PGPASSWORD" authSecret="$AUTH_SECRET"
+az deployment group what-if   --subscription <subscription-id>   --resource-group <resource-group>   --template-file infra/main.bicep   --parameters @infra/main.parameters.json   --parameters containerImage="$IMAGE"
 ```
+
+With the two secure parameters omitted, what-if shows no change on the server's
+password or on either vault secret. If it reports `Microsoft.KeyVault/vaults/secrets`
+`DATABASE-URL` or `AUTH-SECRET` as *Modify* or *Create*, a value was passed - stop and
+check whether a rotation was intended.
 
 ## What gets created
 
@@ -105,6 +140,8 @@ az deployment group what-if   --subscription <subscription-id>   --resource-grou
 - Three plain values for the Needs Review tab (`coReviewAppTenantId`,
   `coReviewAppClientId`, `coReviewSharePointFolder`; blank by default, and blank
   leaves the tab "not connected"; see `runbook.md`, "Needs Review")
+  off by default and on in production since 2026-10-20; see `runbook.md`, "Cost
+  Intelligence worker in Azure")
 
 ## Four things that are deliberate
 
@@ -146,12 +183,18 @@ are read under the managed identity's existing **Key Vault Secrets User**
 grant on the vault; no new role assignment is needed, and
 `tests/deploy-guards.test.ts` asserts that from the template's grants.
 
+All four exist in the production vault as of 2026-10-21, and the first three
+flags are on; `coAnthropicApiKeyInKeyVault` stays false until Phase 12 Part D
+reads the key. `runbook.md` → *Secrets set by hand in Key Vault* carries the
+dated status, and the commands below are for re-setting or rotating one.
+
 ## The Anthropic API key is set by hand, not by the template
 
 `DATABASE-URL` and `AUTH-SECRET` are written into Key Vault by the template from
-secure parameters, because both are generated at deploy time. The Anthropic API key
-is different: it is issued once by the Anthropic Console, and the person holding it
-puts it in the vault themselves. The template never sees the value - it knows only
+secure parameters, on the deployment that supplies them - the first one, and a
+deliberate rotation; a deployment that omits them leaves both alone (see *Deploy*).
+The Anthropic API key is different: it is issued once by the Anthropic Console, and
+the person holding it puts it in the vault themselves. The template never sees the value - it knows only
 the name, `ANTHROPIC-API-KEY`, and references it from the container app as the
 `ANTHROPIC_API_KEY` environment variable when `anthropicApiKeyInKeyVault` is true.
 
@@ -192,7 +235,8 @@ independently of each other. It is wired exactly like the key above - Key Vault
 deliberately **not** the SDK's default variable name, because a client built
 without an explicit key would otherwise read the BAS key silently
 (`runbook.md` → *The Change Orders Anthropic key, the same way*). Nothing reads
-it until Phase 12 Part D is built, so the flag can stay false until then; absent,
+it until Phase 12 Part D is built, so the flag stays false until then - the
+secret itself is already in the production vault, parked; absent,
 it disables those calls and nothing else.
 
 ```powershell

@@ -129,9 +129,19 @@ param postgresStorageAutoGrow string = 'Enabled'
 @description('Administrator login for the database server. Not an email address, and not a person.')
 param postgresAdminUsername string
 
+// The two @secure() parameters below are OPTIONAL, and omitting one changes
+// nothing (2026-10-21). Until then both were required on every deployment and
+// whatever was typed was SET: on 2026-10-13 a value mistyped at the prompt
+// rotated the production administrator password. Empty - the default - means
+// "leave the existing value untouched": the server keeps its current password
+// and DATABASE-URL keeps its current version; the session secret keeps its
+// current version. Non-empty behaves as it always did. The decision is made
+// ONCE, in the two `set…` variables below, and every use of either parameter
+// is behind its variable, so an empty default can never set an empty password
+// or create an empty secret version. See infra/README.md -> Deploy.
 @secure()
-@description('Administrator password. Supply at deploy time; never commit it. Rotate through Key Vault afterwards.')
-param postgresAdminPassword string
+@description('Administrator password. Optional: leave empty (the default) and the server keeps its current password and the DATABASE-URL secret keeps its current version. Required on the FIRST deployment, because a server cannot be created without one, and supplied again only when you mean to rotate it - a non-empty value SETS the password. Never commit it.')
+param postgresAdminPassword string = ''
 
 @description('Application database name.')
 param databaseName string = 'phb_platform'
@@ -150,8 +160,15 @@ param bootstrapAdminEmails string
 param authUrl string = ''
 
 @secure()
-@description('Auth.js session secret. Generate with `npx auth secret`.')
-param authSecret string
+@description('Auth.js session secret. Optional: leave empty (the default) and the AUTH-SECRET vault secret keeps its current version. Required on the first deployment (the container app references the secret and the reference must resolve), and supplied again only to rotate it, which signs every existing session out. Generate with `npx auth secret`.')
+param authSecret string = ''
+
+// Whitespace counts as empty: a stray space at a prompt must not become the
+// administrator password. These two variables are the ONLY place the
+// "was a value supplied" decision is made; every use of either secure
+// parameter below is conditional on one of them.
+var setPostgresAdminPassword = !empty(trim(postgresAdminPassword))
+var setAuthSecret = !empty(trim(authSecret))
 
 @description('Client ID of the SSO app registration. Not a secret; it appears in every authorization URL.')
 param ssoClientId string
@@ -393,7 +410,12 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   properties: {
     version: postgresVersion
     administratorLogin: postgresAdminUsername
-    administratorLoginPassword: postgresAdminPassword
+    // The password is present in the request ONLY when one was supplied. A
+    // flexible server PUT without administratorLoginPassword keeps the
+    // current password; one with it SETS it, whatever it is. Spreading an
+    // empty object leaves the property out of the request altogether, which
+    // is not the same as sending it empty or null.
+    ...(setPostgresAdminPassword ? { administratorLoginPassword: postgresAdminPassword } : {})
     storage: {
       storageSizeGB: postgresStorageGb
       autoGrow: postgresStorageAutoGrow
@@ -449,13 +471,24 @@ resource allowAzureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallR
 // repository or in a parameters file that gets committed. Azure does not log
 // the value of a parameter marked @secure().
 //
+// Both secret resources are CONDITIONAL on their parameter having been
+// supplied (2026-10-21). A deployment that omits the parameter does not touch
+// the secret: no PUT, no new version, the container app's reference keeps
+// resolving to the version already there. A deployment that supplies it writes
+// a new version, exactly as before. The resources keep their symbolic names so
+// the container app and the worker job still depend on them, and ARM ignores a
+// dependency on a resource whose condition is false.
+//
 // Key Vault secret names allow alphanumerics and hyphens only, hence the naming
 // that differs from the environment variables they become.
 // ---------------------------------------------------------------------------
 
+// Only meaningful when a password was supplied; with none it would be a URL
+// with an empty password, and the conditional below is what keeps that URL
+// from ever being written.
 var databaseUrl = 'postgresql://${postgresAdminUsername}:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/${databaseName}?sslmode=require'
 
-resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (setPostgresAdminPassword) {
   parent: keyVault
   name: 'DATABASE-URL'
   properties: {
@@ -463,7 +496,7 @@ resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   }
 }
 
-resource authSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+resource authSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (setAuthSecret) {
   parent: keyVault
   name: 'AUTH-SECRET'
   properties: {
@@ -472,12 +505,12 @@ resource authSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
 }
 
 // The Anthropic API key is deliberately NOT a resource here and not a
-// parameter. The two secrets above are generated at deploy time and are
-// passed on every deploy; this one is issued once by the Anthropic Console and
-// pasted into the vault once, by the person holding it, so a routine redeploy
-// never needs it on the command line and can never overwrite it with a blank.
-// The template only knows the name it is stored under. infra/README.md has the
-// command; runbook.md has what goes wrong.
+// parameter. The two secrets above are generated at deploy time and were, until
+// 2026-10-21, passed on every deploy; this one is issued once by the Anthropic
+// Console and pasted into the vault once, by the person holding it, so a
+// routine redeploy never needs it on the command line and can never overwrite
+// it with a blank. The template only knows the name it is stored under.
+// infra/README.md has the command; runbook.md has what goes wrong.
 var anthropicApiKeySecretName = 'ANTHROPIC-API-KEY'
 
 // The Change Orders module's Anthropic key is the same shape and a DIFFERENT

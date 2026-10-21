@@ -1427,6 +1427,7 @@ broken auth callback. **Do not remove the `-p`.**
 | Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** Revocable in the Anthropic Console, and a revoked key fails as `401 authentication_error` on the next call | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
 | Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** A second, separately issued key, revocable on its own in the Anthropic Console | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
 | BAS credential key | Key Vault `BAS-CREDENTIAL-KEY` → `BAS_CREDENTIAL_KEY` on the container app; the collector's `.env` on the office PC; `.env.local` locally | **Does not expire.** Rotated only on purpose - *Station credentials, and the one secret that lives in two places* | Storing and decrypting Niagara station logins in Settings; the collector, wherever it runs. A value that differs from the collector's makes every stored login unreadable |
+| `PnP.Powershell` certificate on `phb-co-engine` | Entra app registration `85ca496d-3af9-4c3a-aa11-a6b7fd51105d` → Certificates & secrets; the private key is on the IT workstation that ran the site grant, not anywhere PH+B controls | **19 October 2029** | **Nothing of ours.** No engine code path presents a certificate, so its expiry breaks nothing and is noticed by nothing — the exposure is the three years it stays *valid*. Whether it is removed is an **open decision**: *Open decision — the `PnP.Powershell` certificate on `phb-co-engine`* |
 
 > **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
 > carries a note reading `Expiry Date of Entra : 8/13/2028`, but the same note
@@ -2056,7 +2057,9 @@ version.
 pipeline "stays switched off until it is set", that described the state before
 2026-09-16; a merge to `main` now deploys. No merge had reached `main` after the
 variable was set when this was written, so the container app still held the
-placeholder image and the next merge is the first real deploy.
+placeholder image and the next merge was the first real deploy. It has long
+since landed: the app runs CI-built images from `main`, and the placeholder's
+one return, on 13 October, is under *A template deployment fails activation*.
 
 **Substitute two values before sending.** The resource group and subscription id
 are deliberately not written in this repository (`tests/deploy-guards.test.ts`
@@ -2410,6 +2413,192 @@ is on one folder.
 Two optional grants were deliberately not asked for and can be added later if
 Phase 2 is approved: Read on `Bid Tracker.xlsx` (the `Needs review?` column)
 and Write on `_needs_review` and `_archive` (resolving from the platform).
+**Request 4 status, read live from Entra on 2026-10-14.** `phb-co-engine`
+exists (client id `85ca496d-3af9-4c3a-aa11-a6b7fd51105d`), `Sites.Selected`
+is consented, delegated `Files.ReadWrite.All` is consented for all users, and
+the app has **no credential, no federated identity credential, no public-client
+flow and no owners**. The site grant — the second step the request warns about
+— could not be read: a non-admin gets `accessDenied` on
+`GET /sites/{id}/permissions`, and the site's own principal list carries no
+entry for the app. Three ways to close it, in `docs/phase-12-part-c-plan.md` →
+*Step 7*; the cheapest is Vitis running
+`Get-PnPAzureADAppSitePermission -Site https://peckhannafordbriggs.sharepoint.com/sites/AISandbox`
+and sending the output.
+
+**Second pass, 2026-10-21.** The federated credential Vitis added names
+`phbplat-prod-identity` — the platform's production managed identity — as its
+subject, so the engine app can be authenticated only from inside Azure as
+that identity, by a Container Apps job. The job spec and sequence are in
+`docs/phase-12-part-c-plan.md` → *Step 7, second pass*. The app also carries
+a `PnP.Powershell` **certificate** valid to 2029, the tool credential used to
+make the grant; whether it stays is the owner's decision — the next section.
+
+## Open decision — the `PnP.Powershell` certificate on `phb-co-engine`
+
+**Status: open, as of 2026-10-21.** Nothing below has been asked of Vitis yet.
+The platform owner decides; this section is so the decision is made on the
+facts rather than rediscovered.
+
+### What is there
+
+Read live from Entra on 2026-10-21 (`az ad app list --display-name
+phb-co-engine`), not from the portal and not from memory:
+
+| | observed |
+|---|---|
+| Credential | one `keyCredentials` entry: `AsymmetricX509Cert`, usage `Verify`, display name `PnP.Powershell` |
+| Valid | 2026-10-19 → **2029-10-19** — three years, created two days before Vitis reported the site grant made |
+| Other credentials | `passwordCredentials` empty; one federated identity credential, `phb-platform-prod`, naming the platform's production managed identity |
+| Permissions actually consented | application `Sites.Selected` only; delegated `Files.ReadWrite.All` + `User.Read` for all users. **Not** `Sites.FullControl.All` |
+| Owners | none |
+
+The name and the dates say what it is: PnP PowerShell's own authentication.
+`Grant-PnPAzureADAppSitePermission` has to be run from a PnP session, a PnP
+session authenticates as an app registration, and the convenient app
+registration to hand was the engine's. The private key that goes with the
+certificate is on whatever machine ran the command — an IT workstation,
+outside anything PH+B controls or can inventory.
+
+Two things the facts rule out. It is **not** how the grant is held: a
+`Sites.Selected` site grant is stored on the site against the app id, and the
+engine proved the grant present on 2026-10-21 using the federated credential
+alone (*Step 7, third pass* in `docs/phase-12-part-c-plan.md`). And it is
+**not** a route to anything beyond `Sites.Selected`: whoever holds the key
+gets exactly the engine app's own permissions, no more — which is still Write
+on the one site that holds the live `CO Managment Process`.
+
+### Why it matters
+
+1. **It is a second way to be the engine app.** Production will authenticate
+   as `phb-co-engine` through the managed identity and nothing else. For as
+   long as the certificate exists, a private key on a machine nobody here
+   controls is an equally valid way to obtain a token with Write on the AI
+   Sandbox site — the site the live change-order tree lives in. Every other
+   identity in this project has exactly one credential path, and it is one
+   that cannot be copied off a disk.
+2. **It expires, and its expiry is silent.** Nothing of ours presents it, so
+   on 2029-10-19 nothing breaks and nobody is told. That is the opposite of
+   the usual expiry problem: the risk is not an outage at the end but three
+   years of a credential nobody is watching. The *What expires, and when*
+   table carries it so that at least the date is written down somewhere PH+B
+   owns.
+3. **It is what Request 4 asked not to have.** The request said *no client
+   secret, please*, and gave the reason: an expiring credential bound to a
+   machine or a person is what prohibitions 6 and 7 exist to keep out of
+   production. A certificate is a client secret with a longer fuse. The
+   engine's own `co_graph_auth.py` has no certificate path and says in its
+   docstring that adding one is the wrong answer.
+4. **It will be wanted again, briefly.** If the Part C copy ever moves to a
+   second site (the plan doc's recommendation), the site grant has to be made
+   on that site too, by the same command, from a PnP session. Removing the
+   certificate now means Vitis recreates one then — a few minutes of their
+   time, against three years of ours not knowing where a key is.
+
+### The options
+
+| | what happens | recommendation |
+|---|---|---|
+| **Remove it now** | Vitis deletes the credential; the grant stays, the federated path is unaffected. Verified afterwards by `az ad app list --display-name phb-co-engine --query "[0].keyCredentials"` reading `[]` and the step 7 probe still exiting 0 | **Recommended.** One credential path, the one that cannot leak |
+| Keep it until the Part C copy site exists | The one plausible reason to wait. Record who holds the key, on which machine, and set a reminder to remove it the day the second grant is made | Acceptable if the second site is weeks away, not months |
+| Keep it indefinitely | Three years of a key outside the company's inventory on an app with Write on the live site | Not acceptable; if chosen anyway, record it in *What expires, and when* as the decision rather than as an oversight |
+
+Removal is an Entra action on the app registration, which this account cannot
+perform — it is a request to Vitis, worded like the others under *What to ask
+IT for*. Ask for the credential by its `keyId`
+(`17d6dc07-057e-40af-96ca-35ade2647d97`) rather than by name, so the right one
+goes and the federated credential stays.
+
+**When the decision is made, replace the first line of this section with the
+date and the outcome, and update the table row.**
+
+## The engine cannot reach the library (Phase 12 Part C)
+
+The engine's Graph path is exercised by two scripts in `phb-co-engine`:
+`tests/store_conformance.py --store graph` (every file operation, against a
+scratch folder) and `tests/probe_site_grant.py` (can this identity open this
+site and drive). Both print what they saw; neither writes outside a path
+containing `scratch` or `conformance`.
+
+### The job says `no managed identity token from IMDS`
+
+**Symptom.** `probe_site_grant.py --graph-auth managed-identity` or
+`federated` fails before any Graph call with *no managed identity token from
+IMDS*, inside a Container Apps job that has the identity assigned.
+
+**Cause.** Container Apps do not answer on the IMDS address. They expose the
+identity through `IDENTITY_ENDPOINT` + `IDENTITY_HEADER` in the environment.
+Before 2026-10-21 `co_graph_auth.py` knew only IMDS.
+
+**Fix.** `co_graph_auth._identity_token` prefers the container app's endpoint
+when both variables are present and falls back to IMDS. The job script prints
+`### IDENTITY ENDPOINT PRESENT: yes` first; if that line is empty, the
+identity is not attached to the job (`identity.userAssignedIdentities` in the
+spec), which is a spec problem and not an auth one.
+
+### The job says `Entra refused the assertion for app …`
+
+**Symptom.** `--graph-auth federated` fails at the token endpoint; the message
+carries the HTTP status and Entra's body with an `AADSTS` code.
+
+**Cause.** The federated identity credential on `phb-co-engine` does not match
+the assertion: wrong subject (it must be the identity's **object** id,
+`282bcb43-…`, not its client id), wrong issuer, wrong audience, or the
+credential was created minutes ago and has not replicated.
+
+**Fix.** Read the code. `AADSTS70021` / `AADSTS700213`: no matching
+credential — compare subject, issuer and audience on the app with the
+identity's values. `AADSTS7000218`-class: the assertion did not reach Entra at
+all. Wait and retry before changing anything if the credential is new.
+
+### Every Graph request from the engine's identity is 403
+
+**Symptom.** `probe_site_grant.py` reports `403` on the site, the drive and the
+listing, and the token's `roles` line shows `Sites.Selected`.
+
+**Cause.** `Sites.Selected` grants access to **no** site on its own. Admin
+consent is done; the per-site grant (the second step) is missing. This is not
+a consent problem, and asking for consent again changes nothing.
+
+**Fix.** An admin grants the app on the one site:
+`Grant-PnPAzureADAppSitePermission -AppId <client id> -DisplayName phb-co-engine -Site <site url> -Permissions Write`,
+or `POST /sites/{siteId}/permissions`. Re-run the probe; it should read
+`reachable as the application: the site grant is present`. If the `roles` line
+is empty instead, consent itself is missing — the first step, Request 4.
+
+### The conformance harness reads 401 from `sharepoint.com` on every content read
+
+**Symptom.** `makedirs`, `size`, `listdir`, `create_exclusive` and every small
+write pass; every `read_text` / `read_bytes`, `append`, `copy`, `move` and the
+large write fail with `401` — from a `sharepoint.com` URL, not from
+`graph.microsoft.com`. The first check,
+`content transfer is pre-authenticated for this token`, fails and names this.
+
+**Cause.** Graph serves file content by redirecting to SharePoint with a
+pre-authenticated URL. For a token whose *client* SharePoint refuses — the
+Azure CLI's (`az account get-access-token`) is one — that hop is a 401, and
+the upload session URL is refused the same way. The store is not at fault.
+(The item's `@microsoft.graph.downloadUrl` is present for such a token too;
+ask for it as `$select=content.downloadUrl`, because naming the annotation in
+`$select` returns nothing and until 2026-10-21 made the first check report
+"no downloadUrl" for every token, the engine app's included.)
+
+**Fix.** A token from a client SharePoint accepts: paste one from the Graph
+Explorer's *Access token* tab into `CO_GRAPH_TOKEN`, or, once *Allow public
+client flows* is on for `phb-co-engine`, a device-code sign-in through the
+engine app. Nothing in the store needs changing for this.
+
+### Every request is 400 and the URL contains `C%3A`
+
+**Symptom.** The harness's `root` line reads `C:/Program Files/Git/...` when a
+drive-relative path such as `/scratch` was given, and every request is `400`.
+
+**Cause.** Git Bash on Windows rewrites an argument that starts with `/` into a
+Windows path before Python sees it.
+
+**Fix.** `MSYS_NO_PATHCONV=1` in front of the command, or run it from
+PowerShell. (Until 2026-10-14 the `create_exclusive on a taken path` check
+reported **ok** in this state, because it accepted any exception as the 409;
+it now accepts only `FileExistsError`.)
 
 ## Deploy order
 
@@ -2794,6 +2983,71 @@ one exists.
 
 ---
 
+## A template deployment rotated the database administrator password
+
+**Symptom.** After an `az deployment group create` with `infra/main.bicep`, the
+next revision - or the running one after a restart - fails every database page with
+`P1000: Authentication failed`, while `/api/health` still answers 200. Or the
+deployment was run for some unrelated reason (a Key Vault flag, a probe change)
+and the server's administrator password no longer matches what anyone holds.
+`az postgres flexible-server show` cannot tell you - the password is write-only -
+but the deployment's history shows the server resource as *Modify*, and Key Vault
+shows a new `DATABASE-URL` version stamped at the deployment's time.
+
+**Cause.** Until 2026-10-21, `postgresAdminPassword` and `authSecret` were required
+on every template deployment, and whatever was typed was SET - `az` prompts for a
+required secure parameter you leave off the command line, the prompt echoes
+nothing, and a server PUT that carries `administratorLoginPassword` rotates the
+password to that value. On 2026-10-13 a value mistyped at the prompt rotated the
+production administrator password that way. The template then wrote the mistyped
+value into `DATABASE-URL` as well, so the app kept working from the new secret
+once a revision re-read it; the value nobody could reproduce was the server's
+password itself, and every other holder of the old one (psql from a laptop, the
+Cloud Shell route in *The Analyze database URL, the same way*) was locked out.
+
+**Fix, now.** Rotate deliberately to a value you hold, in one deployment, with
+the running image:
+
+```bash
+read -s PGPASSWORD   # the new password; nothing is echoed
+az deployment group create ... \
+  --parameters containerImage="$IMAGE" \
+  --parameters postgresAdminPassword="$PGPASSWORD"
+```
+
+That sets the server's password and writes a matching `DATABASE-URL` version in
+the same deployment, which is the one way the two cannot drift. Then
+`az containerapp revision restart` so the app re-reads the secret. Leave
+`authSecret` off: rotating it signs every session out, and nothing about this
+symptom calls for that.
+
+**What changed so it stops happening.** Both secure parameters now default to
+empty, and empty means *leave the existing value untouched*: the server keeps its
+password, `DATABASE-URL` keeps its version, `AUTH-SECRET` keeps its version. The
+decision is made once per parameter (`setPostgresAdminPassword`, `setAuthSecret`,
+from `trim()` so a stray space is not a password), the password property is left
+out of the server request rather than sent empty, and the two secret resources are
+conditional rather than written blank. A routine deployment therefore passes
+neither; the two cases that pass one are the **first** deployment (a server cannot
+be created without a password, and the container app's references must resolve)
+and a deliberate rotation. `infra/README.md` → *Deploy* has both commands;
+`tests/deploy-guards.test.ts` → *the two secure parameters are optional, and
+omitted means unchanged* pins the omitted and the supplied behaviour, in the
+source and in the compiled ARM.
+
+**What to check in what-if.** With both omitted, what-if shows neither vault
+secret and no change to the server. A `DATABASE-URL` or `AUTH-SECRET` line reading
+*Modify* means a value was passed; stop unless a rotation was the intent.
+
+**On the first deployment, omitting them fails loudly, not quietly.** The server
+provider refuses to create a flexible server without `administratorLoginPassword`,
+and the container app's Key Vault references fail the revision when the secret is
+not there. Neither can create anything half-configured. *(Expected from the
+resource providers' documented create requirements; not re-run against a fresh
+resource group since the change.)*
+
+---
+
 ## A static file 404s in production and works locally
 
 **Symptom.** `/phb-logo.png` (or anything else in `public/`) returns 404 from the
@@ -2845,11 +3099,23 @@ the same way*) since 2026-10-13, and the Change Orders module's own Anthropic
 key (*The Change Orders Anthropic key, the same way*) since 2026-10-16. The
 command sequences are in `infra/README.md`.
 
+**Status, checked in Azure and on the live site 2026-10-20/21.** All four exist
+in the production vault. `ANTHROPIC-API-KEY` was rotated on 2026-10-16 to a key
+that does not expire, and the deployed Analyze tab answers questions end to
+end; `BAS-CREDENTIAL-KEY` is the collector's key, and the deployed Settings tab
+decrypts the stored JACE credentials; `BAS-ASK-DATABASE-URL` points at the
+`bas_analyze` role created on the production server on 2026-10-13.
+`CO-ANTHROPIC-API-KEY` is set and parked: nothing reads it until Phase 12
+Part D and `coAnthropicApiKeyInKeyVault` stays false. The symptoms below
+describe a regression, not the current state.
+
 The Anthropic key is the first secret the template does not write. `DATABASE-URL` and
-`AUTH-SECRET` are generated at deploy time and passed on every deploy;
-the Anthropic key is issued once by the Anthropic Console and pasted into
-Key Vault once, by hand, so that a routine redeploy never needs it on the
-command line and can never overwrite it with a blank. The template knows only
+`AUTH-SECRET` are generated at deploy time and were passed on every deploy
+until 2026-10-21 - now a routine deploy omits them and the template leaves
+both alone (*A template deployment rotated the database administrator
+password*); the Anthropic key is issued once by the Anthropic Console and
+pasted into Key Vault once, by hand, so that a routine redeploy never needs
+it on the command line and can never overwrite it with a blank. The template knows only
 the secret's **name**, `ANTHROPIC-API-KEY`, and wires it to the container app
 as `ANTHROPIC_API_KEY` by reference when the `anthropicApiKeyInKeyVault`
 parameter is true. The command sequence is in `infra/README.md`.
@@ -3076,7 +3342,7 @@ outlasts it. Liveness answers "should this process be killed", and the answer is
 | Error | Cause | Fix |
 |---|---|---|
 | `P1001: Can't reach database server` | The firewall rule allowing Azure services was removed, or the server is stopped. Burstable tier servers can be stopped to save money and stay stopped — **which is why one may have been, and why it must not be.** Stopping this server destroys building data rather than merely postponing access to it: see `docs/08-bas-and-niagara.md`, *Azure: the container app may sleep, the database may not*. Restart it, then check the Collection Health screen for new `roll_overwrite` gaps. | `az postgres flexible-server show -g <rg> -n <server> --query state`. Confirm the `AllowAllAzureServicesAndResourcesWithinAzureIps` rule exists. |
-| `P1000: Authentication failed` | The admin password was rotated on the server but not in Key Vault. | Update the `DATABASE-URL` secret, then restart the revision — the container reads Key Vault at start, not per request. |
+| `P1000: Authentication failed` | The admin password was rotated on the server but not in Key Vault - or, before 2026-10-21, a template deployment set it to whatever was typed at the prompt (*A template deployment rotated the database administrator password*). | Update the `DATABASE-URL` secret, then restart the revision — the container reads Key Vault at start, not per request. If the server's password is the unknown, rotate it deliberately with `postgresAdminPassword` on one template deployment, which writes the matching `DATABASE-URL` too. |
 | `P2024: Timed out fetching a connection` | More replicas than the server's connection limit allows. Burstable tiers have low limits. | Lower `maxReplicas`, or move up a tier. |
 
 Nothing here needs a redeploy. Fix the database or the secret and restart the revision.
@@ -3187,13 +3453,19 @@ database setting.
 
 ## Moving the BAS data to the Azure database
 
-**Written 2026-09-29. Not yet run against Azure.** The office PC's
-`phb_platform` holds every BAS reading since 21 February 2024, most of it gone
-from the JACE; the Azure database holds the platform's own rows (employees,
-modules, grants, the seed's positions and departments) and **zero rows in every
-`bas_*` table**. `scripts/bas-migrate-to-azure/` moves the fourteen `bas_*`
-tables across, once, and touches nothing else. Three psql files, run by a
-person, from the office PC:
+**Written 2026-09-29, and since run.** When it was written the office PC's
+`phb_platform` held every BAS reading since 21 February 2024, most of it gone
+from the JACE, and the Azure database held the platform's own rows (employees,
+modules, grants, the seed's positions and departments) and zero rows in every
+`bas_*` table. The move has been made: the deployed Point Explorer shows
+readings from 21 February 2024 onward, and the collector on the office PC now
+writes to the Azure server every 15 minutes, so the deployed site shows the
+day's readings (both checked 2026-10-20/21). The import refuses a target that
+already holds `bas_*` rows, so running it again stops before writing (below).
+What follows is the procedure as it was run, kept for the record and for a
+rebuild from an empty server. `scripts/bas-migrate-to-azure/` moves the
+fourteen `bas_*` tables across, once, and touches nothing else. Three psql
+files, run by a person, from the office PC:
 
 | File | Runs against | Does |
 |---|---|---|
@@ -3231,10 +3503,13 @@ two credential rows and the employee each resolves to; and a fingerprint of
 every non-BAS table. Read the credentials lines especially - see below. Then
 `YES` and Enter. Anything else rolls back with nothing written.
 
-Afterwards the collector on the office PC is still writing to the office PC.
-Repointing it at Azure needs the role in the next section, and is a separate
-decision: the roll horizon makes a gap in collection permanent, so the cutover
-is one deliberate pass with the new `DATABASE_URL`, not a gradual thing.
+Immediately afterwards the collector on the office PC is still writing to the
+office PC. Repointing it at Azure needs the role in the next section, and is a
+separate decision: the roll horizon makes a gap in collection permanent, so the
+cutover is one deliberate pass with the new `DATABASE_URL`, not a gradual thing.
+That cutover has happened: as of 2026-10-21 the collector on the office PC
+writes to the Azure server every 15 minutes, and the deployed site shows the
+day's readings.
 
 ### What the import refuses, and why a second run is safe
 
@@ -3384,7 +3659,14 @@ Vault* and `infra/README.md`. Before 2026-10-01 none of the three was in the
 template; that was recorded here on 2026-09-29 so it was not mistaken for a
 fault.
 
-**What that job has to get right.** The credential rows the migration above
+**As of 2026-10-21 neither half of the symptom is the state of production.**
+All three secrets are set, the flags are on, the deployed Settings tab decrypts
+the stored JACE credentials and the deployed Analyze tab answers questions.
+Seeing either message now means a flag went back to false or the revision
+predates the deployment that turned it on - *Secrets set by hand in Key Vault*
+has the per-symptom checks.
+
+**What that job had to get right, and did.** The credential rows the migration above
 carries were encrypted on the office PC under *its* `BAS_CREDENTIAL_KEY`, key
 version 1. The platform in Azure can only decrypt them with the **same** key -
 and so can the collector, wherever it runs. So either the office PC's key goes
@@ -3392,8 +3674,10 @@ into Key Vault as the production key, or the two station passwords are
 re-entered through Settings once a different key is set (each save re-encrypts
 under the current key and stamps its version; *Station credentials, and the
 one secret that lives in two places* has the rotation steps). A key that
-matches nowhere leaves the rows undecryptable and collection stops. For
-Analyze: the key from the Anthropic Console, and the `bas_analyze` role on
+matches nowhere leaves the rows undecryptable and collection stops. The first
+route is the one that was taken: the office PC's key is the vault value, and
+the deployed panel decrypts the rows. For
+Analyze (done 2026-10-13): the key from the Anthropic Console, and the `bas_analyze` role on
 the Azure database - `scripts/setup-bas-analyze-role.sql` from any psql
 (the Cloud Shell included), or `npm run bas:analyze:role` with
 `DATABASE_URL` set to the production admin URL - then the URL as
@@ -5473,8 +5757,10 @@ and not a flag.
 | `phb_platform_test` | `TEST_DATABASE_URL` | Whatever the suite is asserting on; truncated between files | `npm test`, `npm run db:test:setup` |
 
 Production in Azure is a fourth, reached by `migrate deploy` from the deploy
-workflow, by the one-shot BAS data migration run by a person from the office PC
-(*Moving the BAS data to the Azure database*), and by nothing else on a laptop.
+workflow, by the one-shot BAS data migration, run once by a person from the
+office PC (*Moving the BAS data to the Azure database*), by the collector on
+the office PC, which writes there every 15 minutes since the cutover, and by
+nothing else on a laptop.
 
 **How it is enforced.** `prisma.config.ts` reads the command from the CLI's own
 arguments and picks the URL. `migrate dev`, `migrate reset` and `db push` — the
@@ -7293,12 +7579,13 @@ collector run afterwards rather than assuming.
 A row whose `key_version` names a key nobody has any more is undecryptable and
 unrecoverable from here. Re-enter it.
 
-The rows the BAS migration copies to Azure were encrypted under the office PC's
+The rows the BAS migration copied to Azure were encrypted under the office PC's
 key. Production takes that same key from Key Vault (`BAS-CREDENTIAL-KEY`,
 set by hand, byte-identical) as of 2026-10-01 - *Secrets set by hand in Key
-Vault*. Until the secret is set and the parameter turned on, production has
-no key; what that looks like is under *The deployed Settings tab cannot store
-a station login*.
+Vault* - and it is set: the deployed Settings tab decrypts the stored
+credentials (checked 2026-10-21). If the secret were ever missing or the
+parameter off, production would have no key; what that looks like is under
+*The deployed Settings tab cannot store a station login*.
 
 ---
 
@@ -9382,8 +9669,9 @@ refusals, and prints the URL once - or, where only psql is to hand (the Azure
 portal's Cloud Shell), `scripts/setup-bas-analyze-role.sql`, the same role in
 SQL with the command in its header. Paste it as `BAS_ASK_DATABASE_URL`. The
 password is shown once and written nowhere by the script; re-running rotates
-it. Neither variable is in `infra/main.bicep` yet — production wiring is a
-separate step.
+it. In production both come from Key Vault by reference and both are set —
+*Secrets set by hand in Key Vault* — so this symptom there means a flag went
+back to false or the revision predates it, not a missing wiring step.
 
 ---
 
@@ -10014,6 +10302,15 @@ heartbeat stopped) and starts one execution per run, up to 3 at once; each runs
 `cip-worker.ts --once` and exits. It reads projects and skills from SharePoint and
 creates outputs only in `<project>/AI FILES`. It costs nothing while idle.
 
+**Deployed 2026-10-20.** The job is `phbplat-prod-cip-worker`, created by a
+manual template deployment with `enableCipWorker` true and running
+`cip-worker:1ccd6fb`; the CIP app registration's federated credential for the
+platform's identity was created the same day; the Key Vault secret
+`ANTHROPIC-API-KEY-CIP` exists and the job references it; and the repository
+variable `AZURE_CIP_WORKER_JOB` is set, so `deploy.yml` points the job at a
+new `cip-worker:<sha>` on every merge to `main`. The steps below are how it
+was done, kept as the procedure for an empty resource group.
+
 **Turning it on, once, in this order.**
 
 1. Create the Key Vault secret `ANTHROPIC-API-KEY-CIP` by hand, in the Portal
@@ -10026,6 +10323,11 @@ creates outputs only in `<project>/AI FILES`. It costs nothing while idle.
    `cipAppClientId` and the two `cipSharePoint*Folder` values (`ids:<driveId>/<itemId>`). Set `containerImage` and `cipWorkerImage` to the
    images now running (on first enable, `cipWorkerImage` is the image you built with `az acr build`). It has no default.
 4. `az deployment group what-if ...` (see `infra/README.md`), review, then `create`.
+   Pass `containerImage` and nothing secure: `postgresAdminPassword` and
+   `authSecret` are omitted, and omitting them leaves the server's password and
+   both vault secrets exactly as they are (since 2026-10-21). The job reads
+   `DATABASE-URL` by reference, so the version already in the vault is the one it
+   gets.
 5. Set the repository variable `AZURE_CIP_WORKER_JOB` to the `cipWorkerJobName`
    output. From the next push to `main`, `deploy.yml` builds `cip-worker:<sha>` and
    points the job at it. Until it is set those steps are skipped.

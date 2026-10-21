@@ -214,8 +214,10 @@ does not live in a resource group. On that last one — `az keyvault list-delete
 returns an **empty array rather than an error** when you lack permission, which
 reads exactly like "the name is free" and is not. Use `checkNameAvailability`.
 
-**What is NOT done.** The container app still runs the placeholder image and so
-answers nothing; that is expected until CI pushes a real one, not a fault.
+**The container app runs real images built from `main`.** It held the
+placeholder until CI's first real push; the placeholder came back once, in
+the 13 October template deployment (*A template deployment must be told
+which image to keep*, below), and that fix ended it.
 
 **CI is fully wired, and the deploy job is no longer inert.** All seven
 `AZURE_*` repository **variables** are set and were verified against live Azure,
@@ -263,8 +265,9 @@ of its own, and Auth.js keeps it over one passed as an option, so every
 production token request since the 17th went out with no assertion
 (`AADSTS7000218`). The wrapper is now set on the provider object, composed
 over Auth.js's own fetch, and the test resolves the provider through Auth.js's
-real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`; whether it
-signs in is not yet observed.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
+real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`, and it
+signs in: production sign-in has worked for weeks, used by the admins, Mahi
+and two testers.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
 `runbook.md` → *Production sign-in bounces to
 `/signin?error=OAuthCallbackError`*.
 
@@ -431,6 +434,32 @@ endings **and** timestamps, so a timestamp-only difference was reported as
 classes split, because Part E is nothing but weeks of difference
 classification. `docs/phase-12-part-c-plan.md` is the reasoning and the
 blocked/not-blocked split; do not re-derive it from `PHASE-12.md` alone.
+
+**Step 7 status (2026-10-14).** `Sites.Selected` is **consented** on
+`phb-co-engine` (read live from Entra), the app has **no credential of any
+kind** and no public-client flow, and the **site grant cannot be verified from
+this account** — the site's principal list shows no entry for the app, which
+is consistent with the grant not having been made. Step 5 ran for the first
+time, half of it: writes, `create_exclusive`'s real 409, and path addressing
+hold on the real library; every content read fails because SharePoint refuses
+the Azure CLI's token for content transfer, which the harness now diagnoses
+first. `phb-co-engine/tests/probe_site_grant.py` is the instrument for the
+grant once anything can authenticate as the app. The plan doc's *Step 7*
+section has the three routes and the identifiers. **2026-10-21:** the
+federated credential landed and names the **platform's production
+identity**, so the app authenticates only from inside Azure; the engine
+gained `--graph-auth federated` (the platform's assertion exchange in
+Python, reading the container app's identity endpoint rather than IMDS), the
+image `phb-co-engine:step7` is in the production registry, and the probe and
+harness are packaged as a one-off Container Apps job, created and run by
+the owner the same day: **probe exit 0, the site grant present and Write,
+15 of 16 conformance checks passing as the app** — every `GRAPH-TODO`
+exercised on the real library by the real identity. The 16th was the
+check's own premise (it named `@microsoft.graph.downloadUrl` in `$select`,
+which Graph ignores; it now tests a read). The app also carries a 2029
+certificate from Vitis's PnP tooling; keeping it is an open decision
+recorded in the plan doc. What remains of Part C is the byte-identical
+comparison on a copy and the flow-trigger check.
 
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
@@ -647,8 +676,9 @@ its own `no_data` kind, the summariser is never called for it, and the
 explanation is written from coverage. Every question is one audit row
 (`bas.question_asked`) and one log line, both carrying the question and the
 SQL. Two variables, both lazy: `ANTHROPIC_API_KEY` and `BAS_ASK_DATABASE_URL`;
-missing either renders a not-configured state. Neither is in
-`infra/main.bicep` yet.
+missing either renders a not-configured state. Neither was in
+`infra/main.bicep` when B5 shipped; both are now, as Key Vault references
+(the 2026-10-01 and 2026-10-13 entries below), and both are set in production.
 
 **Verified live the same day, once a working key arrived**, and the live
 runs found three things a scripted planner could not: the widening rule
@@ -779,8 +809,11 @@ bulk actions were B8.5, below. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` �
 point has one name in Point Explorer and another in Settings*, and *Who hid
 it, and when* under *A point's label or hidden state disappeared*.
 
-**The BAS data migration to Azure is scripted and tested, not run
-(2026-09-29).** `scripts/bas-migrate-to-azure/` — `export.sql` from the office
+**The BAS data migration to Azure is scripted and tested (2026-09-29), and
+has since been run** — the deployed Point Explorer shows readings from 21
+February 2024 and from today, because the collector on the office PC now
+writes to the Azure server every 15 minutes (checked 2026-10-20/21).
+`scripts/bas-migrate-to-azure/` — `export.sql` from the office
 PC, `import.sql` into Azure in ONE transaction, `check.sql` after — moves the
 fourteen `bas_*` tables once. The import writes every row as `bas_migrate_tmp`,
 a role that exists only inside its transaction with INSERT on `bas_*`, UPDATE
@@ -983,7 +1016,11 @@ repository. **`BAS_ASK_DATABASE_URL` is wired the same way since 2026-10-13**
 role for the Azure server - the same allowlist as `role.ts`, held to it by
 `tests/bas-analyze-role-sql.test.ts`, runnable from the portal's Cloud Shell.
 The deployed Analyze tab stays *not configured* until the role exists there,
-the URL is in the vault and the flag is on. `az bicep build` and `lint`
+the URL is in the vault and the flag is on — all three done: the role was
+created on 2026-10-13, the secret exists, and the deployed tab answers
+questions end to end (checked 2026-10-21). All three hand-set secrets are set
+in production; `ANTHROPIC-API-KEY` was rotated to a non-expiring key on
+2026-10-16. `az bicep build` and `lint`
 pass locally; removing either `env:` entry fails a named guard test.
 `infra/README.md` has the two command sequences and the click to confirm each;
 `runbook.md` → *Secrets set by hand in Key Vault*.
@@ -1079,8 +1116,9 @@ modules are billed, rate-limited and revoked independently. Name in
 `lib/env.ts` (`CO_ANTHROPIC_API_KEY_VAR`), reader
 `readChangeOrderAnthropicEnv` in `lib/modules/change-orders/anthropic-env.ts`,
 Key Vault `CO-ANTHROPIC-API-KEY` behind `coAnthropicApiKeyInKeyVault` - the
-fourth hand-set secret, same shape as the other three. **Nothing reads it
-yet**: no change-order code in this repo or in `phb-co-engine` creates an
+fourth hand-set secret, same shape as the other three; the secret exists in
+the production vault, parked, and `coAnthropicApiKeyInKeyVault` stays false.
+**Nothing reads it yet**: no change-order code in this repo or in `phb-co-engine` creates an
 Anthropic client today, and Phase 12 Part D is where it will be used. The rule
 that matters: `ANTHROPIC_API_KEY` is the SDK's default name, so a client built
 without an explicit `apiKey` runs on the BAS key silently - the CO reader never
@@ -1127,6 +1165,22 @@ folder on 2026-10-21 held 14 notes and ONE item folder - ten notes have no
 item folder anywhere, which is why the email comes from the mailbox and why
 "has an item folder" is shown as a fact rather than assumed.
 `WHY-ITS-BUILT-THIS-WAY.md` § 69; `runbook.md` → *Needs Review*.
+**The two secure template parameters are optional, and omitted means unchanged
+(2026-10-21).** `postgresAdminPassword` and `authSecret` in `infra/main.bicep`
+default to empty; empty or whitespace leaves the server's administrator
+password, the `DATABASE-URL` version and the `AUTH-SECRET` version exactly as
+they are, and non-empty sets them as before. Until then both were required on
+every deployment and whatever was typed was set - a value mistyped at the
+prompt on 2026-10-13 rotated the production administrator password. The
+decision is made once per parameter (`setPostgresAdminPassword`,
+`setAuthSecret`, from `trim()`), the password property is **left out** of the
+server request rather than sent empty, and the two secret resources are
+conditional. **A routine template deployment passes `containerImage` and
+neither secure parameter**; the first deployment and a deliberate rotation
+pass them. `tests/deploy-guards.test.ts` pins both ways, in the source and in
+the compiled ARM where `az` is installed. `WHY-ITS-BUILT-THIS-WAY.md` § 70;
+`runbook.md` → *A template deployment rotated the database administrator
+password*; `infra/README.md` → *Deploy*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

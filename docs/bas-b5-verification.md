@@ -195,9 +195,11 @@ the cleanup of the four rows are separate decisions.
 
 ## Not done in this phase
 
-- Production wiring: `ANTHROPIC_API_KEY` and `BAS_ASK_DATABASE_URL` are not in
-  `infra/main.bicep`; the `bas_analyze` role does not exist on the Azure
-  database.
+- Production wiring: `ANTHROPIC_API_KEY` and `BAS_ASK_DATABASE_URL` were not in
+  `infra/main.bicep`, and the `bas_analyze` role did not exist on the Azure
+  database. *(Since done: the key by reference on 2026-10-01, the URL on
+  2026-10-13 with the role created the same day; the deployed tab answers
+  questions. `runbook.md` → *Secrets set by hand in Key Vault*.)*
 - Per-site entitlement: the service refuses outright if `basSiteScope` ever
   returns a list. Written, untested (`docs/testing-blind-spots.md`).
 - Server-side refusal fallbacks on the model call: considered, left out.
