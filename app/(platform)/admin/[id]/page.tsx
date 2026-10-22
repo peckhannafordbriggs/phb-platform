@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { APP_TIME_ZONE } from "@/lib/activity/rollover";
 import { requireAdmin } from "@/lib/authz";
 import { prisma } from "@/lib/db";
 import { getEmployeeDetail, moduleDisplayNames } from "@/lib/admin/service";
@@ -170,6 +171,7 @@ function formatDate(value: Date | null): string {
     year: "numeric",
     month: "short",
     day: "numeric",
+    timeZone: APP_TIME_ZONE,
   });
 }
 

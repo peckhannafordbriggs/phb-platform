@@ -1,6 +1,7 @@
 import { denialResponse, requireModuleAdmin } from "@/lib/authz";
 import { fail, notFound, ok, serverError } from "@/lib/api/response";
-import { logUnexpected, logger } from "@/lib/logger";
+import { logger } from "@/lib/logger";
+import { cipRequestFailed } from "@/lib/modules/cost-intelligence/audit";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { ProjectSyncInProgressError, syncProjects } from "@/lib/modules/cost-intelligence/project-sync";
 import { SkillSyncInProgressError, syncSkills } from "@/lib/modules/cost-intelligence/skill-sync";
@@ -42,7 +43,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ ta
     if (error instanceof SkillSyncInProgressError || error instanceof ProjectSyncInProgressError) {
       return fail(409, "sync_in_progress", error.message);
     }
-    logUnexpected(`cip.${target}_sync_failed`, error, { route, employeeId: access.viewer.id });
+    await cipRequestFailed(`cip.${target}_sync_failed`, error, { route, employeeId: access.viewer.id });
     return serverError();
   }
 }

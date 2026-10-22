@@ -82,6 +82,15 @@ function stringField(meta: Record<string, unknown>, key: string): string | null 
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+/** "Bid review on Anderson" for a Cost Intelligence run. */
+function runSubject(meta: Record<string, unknown>): string {
+  return `${stringField(meta, "workflowName") ?? "a workflow"} on ${stringField(meta, "projectName") ?? "a project"}`;
+}
+
 /** " (one of 10 in a bulk change)" - B8.5's bulk rows are one per point. */
 function bulkSuffix(meta: Record<string, unknown>): string {
   const n = meta.selectionSize;
@@ -397,8 +406,43 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
 
   "cip.run_cancelled": ({ actor, meta }) => `${actor} cancelled run ${stringField(meta, "runId") ?? "?"}`,
 
+  "cip.run_continued": ({ actor, meta }) =>
+    `${actor} continued run ${stringField(meta, "runId") ?? "?"}` +
+    (typeof meta.step === "number" ? ` from step ${meta.step}` : ""),
+
   "cip.checkpoint_answered": ({ actor, meta }) =>
     `${actor} answered a question on run ${stringField(meta, "runId") ?? "?"}`,
+
+  // The worker's own events: the actor is the platform, so the run leads.
+  "cip.run_succeeded": ({ meta }) =>
+    `Run ${stringField(meta, "runId") ?? "?"} (${runSubject(meta)}) finished` +
+    (typeof meta.costUsd === "number" ? `, $${meta.costUsd.toFixed(2)}` : ""),
+
+  "cip.run_failed": ({ meta }) =>
+    `Run ${stringField(meta, "runId") ?? "?"} (${runSubject(meta)}) failed` +
+    (typeof meta.step === "number" ? ` at step ${meta.step}` : "") +
+    `: ${stringField(meta, "error") ?? "no reason recorded"}`,
+
+  "cip.question_asked": ({ meta }) =>
+    `Run ${stringField(meta, "runId") ?? "?"} asked a question` +
+    (typeof meta.step === "number" ? ` at step ${meta.step}` : "") +
+    `: "${clip(stringField(meta, "question") ?? "", 200)}"`,
+
+  "cip.outputs_published": ({ meta }) => {
+    const files = Array.isArray(meta.files) ? meta.files.filter((f): f is string => typeof f === "string") : [];
+    const shown = files.length > 3 ? `${files.slice(0, 3).join(", ")} and ${files.length - 3} more` : files.join(", ");
+    return `Run ${stringField(meta, "runId") ?? "?"} saved ${files.length} file${files.length === 1 ? "" : "s"} to AI FILES: ${shown}`;
+  },
+
+  "cip.skills_sync_failed": ({ actor, meta }) =>
+    `${actor}'s sync of the Cost Intelligence skill catalog failed: ${stringField(meta, "error") ?? "no reason recorded"}`,
+
+  "cip.projects_sync_failed": ({ actor, meta }) =>
+    `${actor}'s sync of the Cost Intelligence projects failed: ${stringField(meta, "error") ?? "no reason recorded"}`,
+
+  "cip.request_failed": ({ actor, meta }) =>
+    `${actor} hit an unexpected Cost Intelligence error (${stringField(meta, "operation") ?? "unknown"}): ` +
+    `${stringField(meta, "error") ?? "no message"}`,
 
   "cip.workflow_created": ({ actor, meta }) =>
     `${actor} created the Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
@@ -673,7 +717,15 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "cip.projects_synced": "Cost Intelligence projects synced",
   "cip.run_started": "Cost Intelligence run started",
   "cip.run_cancelled": "Cost Intelligence run cancelled",
+  "cip.run_continued": "Cost Intelligence run continued",
   "cip.checkpoint_answered": "Cost Intelligence run question answered",
+  "cip.run_succeeded": "Cost Intelligence run finished",
+  "cip.run_failed": "Cost Intelligence run failed",
+  "cip.question_asked": "Cost Intelligence run asked a question",
+  "cip.outputs_published": "Cost Intelligence files saved",
+  "cip.skills_sync_failed": "Cost Intelligence skill sync failed",
+  "cip.projects_sync_failed": "Cost Intelligence project sync failed",
+  "cip.request_failed": "Cost Intelligence error",
   "cip.workflow_created": "Cost Intelligence workflow created",
   "cip.workflow_updated": "Cost Intelligence workflow updated",
   "cip.workflow_steps_changed": "Cost Intelligence workflow steps changed",
@@ -711,4 +763,21 @@ export function knownAuditActions(): { action: AuditAction; label: string }[] {
   return (Object.keys(KNOWN_ACTIONS) as AuditAction[])
     .map((action) => ({ action, label: ACTION_LABELS[action] }))
     .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/**
+ * Modules whose actions the filter offers as one entry. The value `cip.*`
+ * matches every action starting `cip.` (listAuditEvents in lib/admin/service.ts).
+ */
+const ACTION_GROUPS = [{ prefix: "cip.", label: "Cost Intelligence" }];
+
+/** What the Action dropdown offers: single actions, with each group's actions folded into one entry. */
+export function auditActionFilterOptions(): { value: string; label: string }[] {
+  const inGroup = (action: string) => ACTION_GROUPS.some((g) => action.startsWith(g.prefix));
+  return [
+    ...knownAuditActions()
+      .filter(({ action }) => !inGroup(action))
+      .map(({ action, label }) => ({ value: action, label })),
+    ...ACTION_GROUPS.map((g) => ({ value: `${g.prefix}*`, label: g.label })),
+  ].sort((a, b) => a.label.localeCompare(b.label));
 }

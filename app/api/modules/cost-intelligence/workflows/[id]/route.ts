@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { denialResponse, requireModuleAdmin } from "@/lib/authz";
 import { fail, ok, serverError, validationFailed } from "@/lib/api/response";
-import { logUnexpected } from "@/lib/logger";
+import { cipRequestFailed } from "@/lib/modules/cost-intelligence/audit";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { WORKFLOW_ERROR_STATUS, deleteWorkflow, updateWorkflow } from "@/lib/modules/cost-intelligence/workflows";
 
@@ -33,7 +33,7 @@ export async function PATCH(request: Request, { params }: Params) {
     if (!result.ok) return fail(WORKFLOW_ERROR_STATUS[result.code], result.code, result.message);
     return ok(result.data);
   } catch (error) {
-    logUnexpected("cip.workflow_update_failed", error, { route: ROUTE, employeeId: access.viewer.id });
+    await cipRequestFailed("cip.workflow_update_failed", error, { route: ROUTE, employeeId: access.viewer.id });
     return serverError();
   }
 }
@@ -49,7 +49,7 @@ export async function DELETE(_request: Request, { params }: Params) {
     if (!result.ok) return fail(WORKFLOW_ERROR_STATUS[result.code], result.code, result.message);
     return ok(result.data);
   } catch (error) {
-    logUnexpected("cip.workflow_delete_failed", error, { route: ROUTE, employeeId: access.viewer.id });
+    await cipRequestFailed("cip.workflow_delete_failed", error, { route: ROUTE, employeeId: access.viewer.id });
     return serverError();
   }
 }

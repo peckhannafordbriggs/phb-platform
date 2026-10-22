@@ -1,3 +1,4 @@
+import { APP_TIME_ZONE } from "@/lib/activity/rollover";
 import {
   describeAuditEvent,
   type DescribableAuditEvent,
@@ -96,5 +97,7 @@ function formatDateTime(value: Date): string {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    // Rendered on the server, which runs in UTC on Azure.
+    timeZone: APP_TIME_ZONE,
   });
 }

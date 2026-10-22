@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { denialResponse, requireModuleAdmin } from "@/lib/authz";
 import { fail, ok, serverError, validationFailed } from "@/lib/api/response";
-import { logUnexpected } from "@/lib/logger";
+import { cipRequestFailed } from "@/lib/modules/cost-intelligence/audit";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import { WORKFLOW_ERROR_STATUS, createWorkflow } from "@/lib/modules/cost-intelligence/workflows";
 
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     if (!result.ok) return fail(WORKFLOW_ERROR_STATUS[result.code], result.code, result.message);
     return ok(result.data, 201);
   } catch (error) {
-    logUnexpected("cip.workflow_create_failed", error, { route: ROUTE, employeeId: access.viewer.id });
+    await cipRequestFailed("cip.workflow_create_failed", error, { route: ROUTE, employeeId: access.viewer.id });
     return serverError();
   }
 }

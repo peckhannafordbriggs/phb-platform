@@ -1,6 +1,7 @@
 import { writeAuditEvent } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/lib/generated/prisma/client";
+import { auditError, cipAudit } from "./audit";
 import { COST_INTELLIGENCE_MODULE_KEY } from "./constants";
 import { GRAPH_PARALLEL, limiter, localStore, skillsStore, type FolderStore } from "./folder-store";
 
@@ -82,6 +83,11 @@ export async function syncSkills(options: {
   }
 
   const fail = async (message: string, errors: FolderError[] = []): Promise<SkillSyncOutcome> => {
+    await cipAudit("cip.skills_sync_failed", options.triggeredById, {
+      syncId: syncId.toString(),
+      trigger: options.trigger,
+      error: auditError(message),
+    });
     await prisma.cipSkillSync.update({
       where: { id: syncId },
       data: { status: "failed", finishedAt: now(), skillsSeen: errors.length, errors: [{ reason: message }, ...errors] },

@@ -862,7 +862,12 @@ export async function listAuditEvents(query: AuditQuery) {
   const where = {
     ...(targetEmployeeId !== undefined ? { targetEmployeeId } : {}),
     ...(actorEmployeeId !== undefined ? { actorEmployeeId } : {}),
-    ...(action !== undefined && action.length > 0 ? { action } : {}),
+    ...(action === undefined || action.length === 0
+      ? {}
+      : action.endsWith(".*")
+        ? // A module's whole group, e.g. "cip.*" (auditActionFilterOptions).
+          { action: { startsWith: action.slice(0, -1) } }
+        : { action }),
     ...occurredAt,
   };
 

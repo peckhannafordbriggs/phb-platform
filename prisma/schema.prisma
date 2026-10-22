@@ -662,6 +662,8 @@ model CipRun {
   status        String       @default("queued")
   currentStep   Int          @default(0) @map("current_step")
   sessionId     String?      @map("session_id")
+  /// Set by Continue: what the worker resumes the session with, once
+  resumePrompt  String?      @map("resume_prompt")
   model         String
   budgetUsd     Decimal      @map("budget_usd") @db.Decimal(10, 2)
   costUsd       Decimal      @default(0) @map("cost_usd") @db.Decimal(12, 6)
