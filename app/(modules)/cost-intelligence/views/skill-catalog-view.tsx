@@ -4,7 +4,7 @@ import { Pill } from "../ui/Pill";
 import { SideList, SyncButton, SyncStatus } from "./side-list";
 
 /** CHANGELOG dates are stored as midnight UTC; formatting in UTC keeps them on the right day. */
-const DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+const DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/New_York" });
 const MOMENT = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",

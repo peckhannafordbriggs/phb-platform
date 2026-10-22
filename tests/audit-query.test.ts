@@ -98,6 +98,15 @@ describe("filtering by who", () => {
     expect(result.events[0]?.action).toBe("grant.added");
   });
 
+  it("filters by a module's whole group of actions", async () => {
+    await writeEvent("cip.run_started", sarah.id, null, AT("2026-09-13T09:00:00Z"));
+    await writeEvent("cip.run_failed", null, null, AT("2026-09-13T09:30:00Z"));
+
+    const result = await listAuditEvents(query({ action: "cip.*" }));
+
+    expect(result.events.map((e) => e.action).sort()).toEqual(["cip.run_failed", "cip.run_started"]);
+  });
+
   it("combines filters", async () => {
     const result = await listAuditEvents(
       query({ targetEmployeeId: sarah.id, action: "grant.removed" }),

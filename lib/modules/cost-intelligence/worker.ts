@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/lib/generated/prisma/client";
+import { auditError, cipAudit } from "./audit";
 import { AI_FILES, FileExistsError, isNotFound, projectsStore, skillsStore, type FolderStore } from "./folder-store";
 import type { RunStepSnapshot } from "./runs";
 
@@ -42,6 +43,8 @@ export type WorkerConfig = {
   workspaceDir: string;
   /** Where projects and skills come from, for the startup log. */
   sources?: { projects: string; skills: string };
+  /** How often the heartbeat is written while a run is held. Tests shorten it. */
+  heartbeatMs?: number;
 };
 
 export function workerConfigFromEnv(): WorkerConfig {
@@ -63,6 +66,7 @@ export function workerConfigFromEnv(): WorkerConfig {
 /** A `running` run with no heartbeat for this long is a worker that died. */
 export const STALE_AFTER_MS = 10 * 60 * 1000;
 const HEARTBEAT_EVERY_MS = 15_000;
+/** Also how quickly a worker notices its run was cancelled or failed by someone else. */
 const CANCEL_CHECK_EVERY_MS = 5_000;
 /** One ledger line stays readable; the full text is in the transcript. */
 const LEDGER_TEXT_MAX = 1500;
@@ -166,8 +170,10 @@ export type RunAgent = typeof query;
 type StepOutcome =
   | { kind: "done" }
   | { kind: "asked" }
-  | { kind: "cancelled" }
-  | { kind: "failed"; message: string };
+  /** The run left `running` under us: cancelled, or failed by another worker. */
+  | { kind: "stopped" }
+  /** `progressed`: the model produced output, as opposed to the session failing to start. */
+  | { kind: "failed"; message: string; progressed: boolean };
 
 /**
  * Claim one queued run and work on it until it finishes, waits on a question,
@@ -178,10 +184,23 @@ export async function workOnce(config: WorkerConfig, runAgent: RunAgent = query)
   const runId = await claimNextRun();
   if (runId === null) return null;
 
+  // The heartbeat runs on a timer for as long as this worker holds the run, not
+  // per agent message: rebuilding the workspace (a full SharePoint download on
+  // resume) and long silent tool calls send no messages, and a run with no
+  // heartbeat for STALE_AFTER_MS is failed by the next worker. Only a `running`
+  // run is touched, so a run that went waiting, cancelled or failed stays so.
+  const heartbeat = setInterval(() => {
+    void prisma.cipRun
+      .updateMany({ where: { id: runId, status: "running" }, data: { heartbeatAt: new Date() } })
+      .catch(() => undefined);
+  }, config.heartbeatMs ?? HEARTBEAT_EVERY_MS);
+
   try {
     await processRun(runId, config, runAgent);
   } catch (error) {
     await finish(runId, "failed", `The worker hit an error: ${errorText(error)}`).catch(() => undefined);
+  } finally {
+    clearInterval(heartbeat);
   }
   return runId;
 }
@@ -196,20 +215,33 @@ async function processRun(runId: bigint, config: WorkerConfig, runAgent: RunAgen
 
   let current = run.currentStep;
   let sessionId = run.sessionId;
+  // Set by Continue: resume the session that died mid-step with this, once.
+  let continuePrompt = run.resumePrompt;
+  if (continuePrompt !== null) await prisma.cipRun.update({ where: { id: runId }, data: { resumePrompt: null } });
 
   while (current < steps.length) {
     const step = steps[current]!;
-    const resumeWith = sessionId ? await answerFor(runId, current) : null;
+    const continuing = sessionId !== null && continuePrompt !== null;
+    const resumeWith = continuing ? continuePrompt : sessionId ? await answerFor(runId, current) : null;
+    continuePrompt = null;
     if (sessionId && resumeWith === null) {
       // A session with no answered question to resume from: start the step over.
       sessionId = null;
     }
     if (!resumeWith) await event(runId, current, "step_started", `Step ${current + 1} of ${steps.length}: ${step.name}`);
 
+    const building = Date.now();
     await buildWorkspace(workspace, config, run.project.folderName, step.folderName);
+    await event(runId, current, "workspace", `Workspace ready (${Math.round((Date.now() - building) / 1000)} s)`);
 
     const outcome = await runStep({ runId, step, current, workspace, sessionId, resumeWith, model: run.model, runAgent });
-    if (outcome.kind === "cancelled") break;
+    if (outcome.kind === "stopped") break;
+    if (outcome.kind === "failed" && continuing && !outcome.progressed) {
+      // The session could not be picked back up (it may have died mid tool call): redo the step instead.
+      await event(runId, current, "resume_failed", `Could not pick the session back up, so step ${current + 1} starts over`);
+      sessionId = null;
+      continue;
+    }
     if (outcome.kind === "failed") {
       await finish(runId, "failed", outcome.message);
       break;
@@ -219,6 +251,9 @@ async function processRun(runId: bigint, config: WorkerConfig, runAgent: RunAgen
     // another container, and the published files come back in ./project/AI FILES.
     const published = await publishOutputs(path.join(workspace, "out"), config.projects, run.project.folderName);
     for (const file of published) await event(runId, current, "output", `${AI_FILES}/${file}`);
+    if (published.length > 0) {
+      await cipAudit("cip.outputs_published", null, { runId: runId.toString(), step: current + 1, files: published });
+    }
     if (outcome.kind === "asked") {
       await rm(workspace, { recursive: true, force: true });
       return;
@@ -275,26 +310,30 @@ async function runStep(args: {
       asked = true;
       await prisma.cipRunCheckpoint.create({ data: { runId, step: current, question, options: options ?? [] } });
       await event(runId, current, "checkpoint", question);
+      await cipAudit("cip.question_asked", null, { runId: runId.toString(), step: current + 1, question });
       return { content: [{ type: "text", text: "Question sent. Stop now and end your turn; the answer will be the next message." }] };
     },
   );
 
   const abort = new AbortController();
-  let cancelled = false;
+  // Stop the agent once the run is no longer ours to work on: cancelled by a
+  // person, or failed by another worker that took it for dead. Carrying on
+  // would spend money on a run that already shows as finished.
+  let stopped = false;
   const watcher = setInterval(() => {
     void prisma.cipRun
       .findUnique({ where: { id: runId }, select: { status: true } })
       .then((r) => {
-        if (r?.status === "cancelled") {
-          cancelled = true;
+        if (r?.status !== "running") {
+          stopped = true;
           abort.abort();
         }
       })
       .catch(() => undefined);
   }, CANCEL_CHECK_EVERY_MS);
 
-  let lastBeat = Date.now();
   let sessionSeen: string | null = null;
+  let progressed = false;
   let failure: string | null = null;
   let succeeded = false;
 
@@ -331,6 +370,9 @@ async function runStep(args: {
     });
 
     for await (const message of messages) {
+      // Model output only: a session that cannot be resumed still sends its
+      // init, an error result, and sometimes a synthetic assistant error.
+      if (message.type === "assistant" && !message.error) progressed = true;
       await record(runId, current, message);
       // Every message carries the session id; keep it so an answered question can resume this session.
       const session = "session_id" in message && typeof message.session_id === "string" ? message.session_id : null;
@@ -343,24 +385,20 @@ async function runStep(args: {
         if (message.subtype === "success") succeeded = true;
         else failure = resultFailure(message.subtype, Number(run.budgetUsd));
       }
-      if (Date.now() - lastBeat > HEARTBEAT_EVERY_MS) {
-        lastBeat = Date.now();
-        await prisma.cipRun.update({ where: { id: runId }, data: { heartbeatAt: new Date() } });
-      }
     }
   } catch (error) {
-    if (!cancelled) failure = `The agent stopped: ${errorText(error)}`;
+    if (!stopped) failure = `The agent stopped: ${errorText(error)}`;
   } finally {
     clearInterval(watcher);
   }
 
-  if (cancelled) return { kind: "cancelled" };
+  if (stopped) return { kind: "stopped" };
   if (asked) {
     await prisma.cipRun.update({ where: { id: runId }, data: { status: "waiting", heartbeatAt: null } });
     return { kind: "asked" };
   }
-  if (failure) return { kind: "failed", message: failure };
-  if (!succeeded) return { kind: "failed", message: "The agent ended without finishing." };
+  if (failure) return { kind: "failed", message: failure, progressed };
+  if (!succeeded) return { kind: "failed", message: "The agent ended without finishing.", progressed };
   return { kind: "done" };
 }
 
@@ -495,7 +533,19 @@ async function finish(runId: bigint, status: "succeeded" | "failed", error: stri
     where: { id: runId, status: { in: ["queued", "running", "waiting"] } },
     data: { status, error, finishedAt: new Date(), heartbeatAt: null },
   });
-  if (count > 0) await event(runId, null, status, status === "succeeded" ? "Run completed" : (error ?? "Run failed"));
+  if (count === 0) return;
+  await event(runId, null, status, status === "succeeded" ? "Run completed" : (error ?? "Run failed"));
+  const run = await prisma.cipRun.findUnique({
+    where: { id: runId },
+    select: { workflowName: true, currentStep: true, costUsd: true, project: { select: { folderName: true } } },
+  });
+  await cipAudit(status === "succeeded" ? "cip.run_succeeded" : "cip.run_failed", null, {
+    runId: runId.toString(),
+    workflowName: run?.workflowName ?? null,
+    projectName: run?.project.folderName ?? null,
+    costUsd: Number(run?.costUsd ?? 0),
+    ...(status === "failed" ? { step: (run?.currentStep ?? 0) + 1, error: error === null ? null : auditError(error) } : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@ export type RunErrorCode =
   | "project_not_found"
   | "project_busy"
   | "not_cancellable"
+  | "not_continuable"
   | "no_open_checkpoint"
   | "invalid_answer";
 
@@ -45,6 +46,7 @@ export const RUN_ERROR_STATUS: Record<RunErrorCode, number> = {
   project_not_found: 404,
   project_busy: 409,
   not_cancellable: 409,
+  not_continuable: 409,
   no_open_checkpoint: 409,
   invalid_answer: 422,
 };
@@ -149,6 +151,64 @@ export async function cancelRun(actorId: string, rawId: string): Promise<RunResu
     });
     return { ok: true as const, data: { cancelled: true as const } };
   });
+}
+
+/** What a continued run's agent is told when its session is picked back up. */
+export const CONTINUE_PROMPT =
+  "The run stopped partway through this step and has been restarted. Pick up where you left off. " +
+  "The workspace was rebuilt: ./project is a fresh copy, files already published are in ./project/AI FILES, " +
+  "and anything written to ./out or ./tmp since then is gone, so recreate what you still need.";
+
+/**
+ * Put a failed run back in the queue at the step it failed on. Finished steps
+ * are not redone. When the step had a session, the worker resumes it with
+ * CONTINUE_PROMPT, so the agent keeps what it had read; otherwise the step
+ * starts over. Cost so far counts against the budget.
+ */
+export async function continueRun(actorId: string, rawId: string): Promise<RunResult<{ continued: true }>> {
+  const id = parseId(rawId);
+  if (id === null) return fail("not_found", "Run not found.");
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const run = await tx.cipRun.findUnique({
+        where: { id },
+        select: { status: true, sessionId: true, currentStep: true, costUsd: true, budgetUsd: true },
+      });
+      if (run === null) return fail("not_found", "Run not found.");
+      if (run.status !== "failed") return fail("not_continuable", "Only a failed run can be continued.");
+      if (Number(run.costUsd) >= Number(run.budgetUsd)) {
+        return fail("not_continuable", `This run has used its $${Number(run.budgetUsd).toFixed(2)} budget. Start a new run instead.`);
+      }
+      const resuming = run.sessionId !== null;
+      const { count } = await tx.cipRun.updateMany({
+        where: { id, status: "failed" },
+        data: { status: "queued", error: null, finishedAt: null, heartbeatAt: null, resumePrompt: resuming ? CONTINUE_PROMPT : null },
+      });
+      if (count === 0) return fail("not_continuable", "Only a failed run can be continued.");
+      await tx.cipRunEvent.create({
+        data: {
+          runId: id,
+          step: run.currentStep,
+          type: "continued",
+          message: resuming ? "Continued: the agent picks up where it stopped" : "Continued: the step starts over",
+        },
+      });
+      await writeAuditEvent(tx, {
+        action: "cip.run_continued",
+        actorEmployeeId: actorId,
+        moduleKey: COST_INTELLIGENCE_MODULE_KEY,
+        metadata: { runId: id.toString(), step: run.currentStep + 1, resumed: resuming },
+      });
+      return { ok: true as const, data: { continued: true as const } };
+    });
+  } catch (error) {
+    // cip_runs_one_active_per_project_key: another run on this project is going.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return fail("project_busy", "This project already has a run going. Wait for it or cancel it.");
+    }
+    throw error;
+  }
 }
 
 /** Answer the run's open question and put it back in the queue to resume. */

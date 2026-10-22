@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { ArrowUpRight, FileText, MessageSquare, Paperclip, X } from "lucide-react";
+import { ArrowUpRight, FileText, MessageSquare, Paperclip, Play, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { LaunchOption, RunDetail, RunListItem, RunStatus } from "@/lib/modules/cost-intelligence/runs";
 import { Button } from "../ui/Button";
@@ -293,14 +293,14 @@ function Node({ color, filled = false }: { color: string; filled?: boolean }) {
 export function RunMonitor({ run }: { run: RunDetail }) {
   const router = useRouter();
   const active = ACTIVE.includes(run.status);
-  const [cancelling, setCancelling] = useState(false);
+  const [busy, setBusy] = useState<"cancel" | "continue" | null>(null);
   const [error, setError] = useState<string | null>(null);
   useLiveRefresh(active && run.status !== "waiting");
 
-  async function cancel() {
-    setCancelling(true);
-    const result = await post(`${API}/${run.id}`, { action: "cancel" });
-    setCancelling(false);
+  async function act(action: "cancel" | "continue") {
+    setBusy(action);
+    const result = await post(`${API}/${run.id}`, { action });
+    setBusy(null);
     if (!result.ok) return setError(result.message);
     router.refresh();
   }
@@ -312,10 +312,16 @@ export function RunMonitor({ run }: { run: RunDetail }) {
           <span className="eyebrow text-[var(--muted)]">Run {run.id}</span>
           <div className="flex items-center gap-2">
             <StatusPill status={run.status} />
+            {run.status === "failed" && (
+              <Button onClick={() => act("continue")} disabled={busy !== null}>
+                <Play size={14} aria-hidden="true" />
+                {busy === "continue" ? "Continuing…" : "Continue run"}
+              </Button>
+            )}
             {active && (
-              <Button onClick={cancel} disabled={cancelling}>
+              <Button onClick={() => act("cancel")} disabled={busy !== null}>
                 <X size={14} aria-hidden="true" />
-                {cancelling ? "Cancelling…" : "Cancel run"}
+                {busy === "cancel" ? "Cancelling…" : "Cancel run"}
               </Button>
             )}
           </div>
