@@ -69,7 +69,23 @@ const ASSIGNED: ReadonlyMap<string, number> = new Map([
   // colours in the two places that have to agree.
   ["cost-intelligence", 3],
   ["knowledge-base", 4],
+  // The last free slot. With this the palette is exhausted: see EXHAUSTED below.
+  ["freeze-protection", 2],
 ]);
+
+/**
+ * What an unassigned module wears once every quadrant colour is taken
+ * (2026-10-22, when Freeze Protection took orange).
+ *
+ * Before then the fallback could always find a free slot. With none left, the
+ * old code fell through to PALETTE[0] and an unassigned module wore Change
+ * Orders' red, the collision the fallback exists to prevent. The chrome purple
+ * belongs to no module and clears AA as text unmodified (8.65), so it serves
+ * as both fill and ink. It reads as "not assigned yet", which is the truth:
+ * a sixth module needs a palette decision, and this keeps it from borrowing
+ * another module's identity until somebody makes one.
+ */
+const EXHAUSTED: ModuleAccent = { fill: "var(--phb-purple)", ink: "var(--phb-purple)" };
 
 /**
  * `index` is the module's position in whatever list is being rendered, used
@@ -84,15 +100,16 @@ export function moduleAccent(moduleKey: string, index = 0): ModuleAccent {
   }
 
   /**
-   * Unassigned modules take colours from the end of the palette backwards, so a
-   * new module cannot collide with a settled one until the palette is exhausted.
-   * Reserved slots are skipped rather than overwritten.
+   * Unassigned modules take the slots no module holds, so a new module cannot
+   * collide with a settled one. Reserved slots are skipped rather than
+   * overwritten, and once none are left every unassigned module gets EXHAUSTED.
    */
   const reserved = new Set(ASSIGNED.values());
   const available = PALETTE.filter((_, i) => !reserved.has(i));
-  const fallback = available[index % Math.max(available.length, 1)];
+  if (available.length === 0) return EXHAUSTED;
+  const fallback = available[index % available.length];
 
-  return fallback ?? PALETTE[0]!;
+  return fallback ?? EXHAUSTED;
 }
 
 /**

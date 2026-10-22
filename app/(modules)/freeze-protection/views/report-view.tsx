@@ -6,7 +6,15 @@ import { Slot } from "../ui/Slot";
  * The document handed to the CM or owner. Read-only except signoff and transmittal.
  * Phase 1: the sections in order. Phase 2: tables, print styles, the standalone download.
  */
-export function ReportView({ project, equipment }: { project: FpProject; equipment: FpEquipment[] }) {
+export function ReportView({ project, equipment }: { project: FpProject | null; equipment: FpEquipment[] }) {
+  if (!project) {
+    return (
+      <Card className="mx-auto flex w-full max-w-[56rem] flex-1 flex-col items-center justify-center gap-3 text-center">
+        <span className="diamond opacity-30" aria-hidden="true" />
+        <p className="text-[0.8125rem] text-[var(--muted)]">No projects yet, so there is no report.</p>
+      </Card>
+    );
+  }
   return (
     <Card padding="p-8" className="mx-auto w-full max-w-[56rem]">
       <p className="eyebrow text-[var(--muted)]">Freeze protection verification</p>

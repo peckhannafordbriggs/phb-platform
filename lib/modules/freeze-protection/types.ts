@@ -1,7 +1,7 @@
 /**
  * The shape of a freeze protection register, ported from the Controls Division's
- * verification sheet. Design phase: these types drive the screens and the mock
- * data. The Prisma models will be written to match them, not the other way round.
+ * verification sheet. These types drive the screens; the Prisma models are written
+ * to match them, not the other way round.
  *
  * Date-only values are `YYYY-MM-DD` strings. Never parse them into a Date in the
  * browser's zone; they show the day before.

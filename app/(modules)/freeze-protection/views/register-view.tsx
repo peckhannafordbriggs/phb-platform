@@ -14,11 +14,12 @@ export function RegisterView({
   equipment,
   selected,
 }: {
-  project: FpProject;
+  project: FpProject | null;
   equipment: FpEquipment[];
-  selected: FpEquipment;
+  selected: FpEquipment | null;
 }) {
-  const href = (id: string) => `/freeze-protection/register?project=${encodeURIComponent(project?.id || "")}&equipment=${id}`;
+  if (!project) return <NoProjects />;
+  const href = (id: string) => `/freeze-protection?project=${encodeURIComponent(project.id)}&equipment=${id}`;
 
   return (
     <div className="flex flex-col gap-5 lg:min-h-0 lg:flex-1">
@@ -123,5 +124,14 @@ function NoSelection() {
       <span className="diamond opacity-30" aria-hidden="true" />
       <p className="text-[0.8125rem] text-[var(--muted)]">Pick a line to see where it stands.</p>
     </div>
+  );
+}
+
+function NoProjects() {
+  return (
+    <Card className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+      <span className="diamond opacity-30" aria-hidden="true" />
+      <p className="text-[0.8125rem] text-[var(--muted)]">No projects yet.</p>
+    </Card>
   );
 }

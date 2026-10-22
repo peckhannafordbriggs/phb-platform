@@ -32,7 +32,7 @@ export function RegisterActions({ projects, projectId }: { projects: ProjectOpti
   return (
     <>
       <ProjectPicker projects={projects} value={projectId} />
-      <Button variant="primary" href={`/freeze-protection/register?project=${encodeURIComponent(projectId)}&new=1`}>
+      <Button variant="primary" href={`/freeze-protection?project=${encodeURIComponent(projectId)}&new=1`}>
         <Plus size={16} aria-hidden="true" />
         Add equipment
       </Button>
