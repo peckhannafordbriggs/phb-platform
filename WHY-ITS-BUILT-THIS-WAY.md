@@ -2577,7 +2577,59 @@ line. Put the values back into the routine command in `infra/README.md` and
 the README test fails on the block. `runbook.md` → *A template deployment
 rotated the database administrator password*.
 
-## 71 · The nightly dump runs as the administrator, with no password on any command line
+## 71 · The custom domain is in the template, bound by default, and attached in two passes
+
+**What it is.** `platform.phb1899.com` is a custom hostname on the production
+container app (2026-10-21), beside the `azurecontainerapps.io` address rather
+than instead of it, with a free Azure managed certificate issued on the
+Container Apps environment. It is declared in `infra/main.bicep`:
+`customDomainName` (default empty, attaches nothing) and `customDomainBound`
+(default **true**). The hostname goes on the ingress as one entry in one of two
+states; the certificate is a `managedCertificates` resource on the environment,
+conditional on the hostname, validated through the CNAME, deployed after the
+app. `authUrl` is untouched by any of it.
+
+**Why in the template.** `az containerapp hostname bind` would have done it in
+one afternoon and been undone by the next routine template deployment, because
+a deployment replaces the whole container app and a hostname the template did
+not know about is not carried forward. That is the `containerImage` lesson of
+2026-10-13 (§ 66) applied to a hostname, and the test that holds it is in the
+same file.
+
+**Why two passes.** Azure refuses to issue a managed certificate for a
+hostname that no app in the environment carries, and the app cannot bind a
+certificate that does not yet exist. So the first deployment that sets the
+hostname passes `customDomainBound=false` on the command line - hostname added,
+certificate issued, nothing bound - and the next routine deployment binds it.
+The certificate is named from the app with `resourceId()` rather than a
+symbolic reference, on purpose: the certificate depends on the app, and a
+symbolic reference back would be a cycle.
+
+**Why the default is true.** The alternative - default false, and the
+parameters file carrying `customDomainBound: true` after the first pass - makes
+every later deployment depend on a line in a gitignored file. Lose the line
+and the hostname silently drops to `Disabled` and answers with the wrong
+certificate. With the default true the parameters file carries only the
+hostname, the first pass is the one time the flag is typed, and forgetting it
+afterwards is the correct state. The same shape as the placeholder image: the
+exceptional value is passed once on the command line and never written down.
+
+**Why sign-in does not move with it.** `authUrl` decides where Auth.js builds
+its callback, and Entra accepts only the redirect URIs the SSO app registration
+carries. Changing `authUrl` to the new hostname before that registration has
+the matching URI breaks sign-in at both addresses, so the order is fixed: the
+hostname and certificate (this), then Request 5 to Vitis, then `authUrl`.
+
+**What breaks if you undo it.** Bind the hostname by hand instead and the next
+template deployment removes it. Flip the default to false and a routine redeploy
+unbinds the certificate. Reference the certificate symbolically from the app and
+Bicep refuses the cycle; drop the `dependsOn` and Azure refuses to issue. Put
+the binding in the example parameters and the guard test names the key. Derive
+`AUTH_URL` from the hostname and the same test fails on the line.
+`tests/deploy-guards.test.ts` → *the custom domain lives in the template*;
+`runbook.md` → *The custom domain answers with a certificate warning*.
+
+## 72 · The nightly dump runs as the administrator, with no password on any command line
 
 **Decision (2026-10-21).** A scheduled Container Apps Job dumps the
 production database every night with `pg_dump -Fc` and uploads the file to a
@@ -2644,57 +2696,6 @@ puts the password in `ps` and, the first time somebody adds `set -x` to
 debug, in the execution log. Giving the storage account a key gives the
 platform its first credential that can leak and never expires. Turning the
 flag on before the image is built fails the whole deployment at the job.
-## 71 · The custom domain is in the template, bound by default, and attached in two passes
-
-**What it is.** `platform.phb1899.com` is a custom hostname on the production
-container app (2026-10-21), beside the `azurecontainerapps.io` address rather
-than instead of it, with a free Azure managed certificate issued on the
-Container Apps environment. It is declared in `infra/main.bicep`:
-`customDomainName` (default empty, attaches nothing) and `customDomainBound`
-(default **true**). The hostname goes on the ingress as one entry in one of two
-states; the certificate is a `managedCertificates` resource on the environment,
-conditional on the hostname, validated through the CNAME, deployed after the
-app. `authUrl` is untouched by any of it.
-
-**Why in the template.** `az containerapp hostname bind` would have done it in
-one afternoon and been undone by the next routine template deployment, because
-a deployment replaces the whole container app and a hostname the template did
-not know about is not carried forward. That is the `containerImage` lesson of
-2026-10-13 (§ 66) applied to a hostname, and the test that holds it is in the
-same file.
-
-**Why two passes.** Azure refuses to issue a managed certificate for a
-hostname that no app in the environment carries, and the app cannot bind a
-certificate that does not yet exist. So the first deployment that sets the
-hostname passes `customDomainBound=false` on the command line - hostname added,
-certificate issued, nothing bound - and the next routine deployment binds it.
-The certificate is named from the app with `resourceId()` rather than a
-symbolic reference, on purpose: the certificate depends on the app, and a
-symbolic reference back would be a cycle.
-
-**Why the default is true.** The alternative - default false, and the
-parameters file carrying `customDomainBound: true` after the first pass - makes
-every later deployment depend on a line in a gitignored file. Lose the line
-and the hostname silently drops to `Disabled` and answers with the wrong
-certificate. With the default true the parameters file carries only the
-hostname, the first pass is the one time the flag is typed, and forgetting it
-afterwards is the correct state. The same shape as the placeholder image: the
-exceptional value is passed once on the command line and never written down.
-
-**Why sign-in does not move with it.** `authUrl` decides where Auth.js builds
-its callback, and Entra accepts only the redirect URIs the SSO app registration
-carries. Changing `authUrl` to the new hostname before that registration has
-the matching URI breaks sign-in at both addresses, so the order is fixed: the
-hostname and certificate (this), then Request 5 to Vitis, then `authUrl`.
-
-**What breaks if you undo it.** Bind the hostname by hand instead and the next
-template deployment removes it. Flip the default to false and a routine redeploy
-unbinds the certificate. Reference the certificate symbolically from the app and
-Bicep refuses the cycle; drop the `dependsOn` and Azure refuses to issue. Put
-the binding in the example parameters and the guard test names the key. Derive
-`AUTH_URL` from the hostname and the same test fails on the line.
-`tests/deploy-guards.test.ts` → *the custom domain lives in the template*;
-`runbook.md` → *The custom domain answers with a certificate warning*.
 
 ## 47 · The judgment I'd most want to pass on
 

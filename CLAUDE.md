@@ -1224,7 +1224,7 @@ point-in-time retention is 7 days on live, not 35**, and the template said
 `7` as a literal; it is `postgresBackupRetentionDays` now (default 7), read
 live before a deployment like `containerImage`. `runbook.md` → *Nightly
 database backup* has turning it on, the nightly check, the restore steps
-and the cost; `WHY-ITS-BUILT-THIS-WAY.md` § 71.
+and the cost; `WHY-ITS-BUILT-THIS-WAY.md` § 72.
 
 **The custom domain `platform.phb1899.com` is in the template (2026-10-21).**
 `customDomainName` puts the hostname on the container app's ingress beside the
