@@ -2629,6 +2629,74 @@ the binding in the example parameters and the guard test names the key. Derive
 `tests/deploy-guards.test.ts` → *the custom domain lives in the template*;
 `runbook.md` → *The custom domain answers with a certificate warning*.
 
+## 72 · The nightly dump runs as the administrator, with no password on any command line
+
+**Decision (2026-10-21).** A scheduled Container Apps Job dumps the
+production database every night with `pg_dump -Fc` and uploads the file to a
+blob container that nothing else writes, as the platform's managed identity.
+The job reads `DATABASE-URL` - the administrator's connection, the same secret
+the app and the CIP worker read - rather than a backup role of its own. The
+script turns the URL into libpq's `PGHOST`, `PGUSER`, `PGPASSWORD`,
+`PGDATABASE` and `PGSSLMODE`, unsets it, and runs `pg_dump` with no
+connection argument; the two headers that carry a credential reach `curl`
+through a config file on stdin. The storage account refuses shared-key
+access. Everything is behind one flag, off by default.
+
+**Why the administrator.** The office PC's dump runs as `bas_backup`, a
+member of `pg_read_all_data`, and that was the first design here. On an
+Azure Flexible Server at PostgreSQL 16 and later the administrator is not a
+superuser and holds `pg_read_all_data` without ADMIN OPTION, so it cannot
+grant membership of it - *permission denied to grant role* (Microsoft Q&A
+1767915; azure-service-operator issue 4639). What is left is granting SELECT
+table by table, and that is the exact mechanism that failed the office
+backup every night for three weeks in August and September: a migration
+added a table, the role had never been granted it, and `pg_dump` died on the
+first table it could not read (§ 44's neighbour, *Repointing the collector
+also repoints the nightly backup* in `runbook.md`). `ALTER DEFAULT
+PRIVILEGES` would cover tables the administrator creates, which is every
+Prisma migration, and nothing a different role ever created - a third way to
+be incomplete. A dump as the owner of every object is complete by
+construction and stays complete through every migration. It also makes
+turning the backup on one parameter flip, as asked, instead of a role, a
+password and a vault secret first.
+
+**What that costs, and what bounds it.** The job holds a credential that can
+write. The image holds `pg_dump`, `pg_restore`, `curl`, `openssl` and one
+script; the script's only SQL is pg_dump's reads; the secret is a vault
+reference, never printed; and `tests/db-backup-script.test.ts` fails the
+build if a `pg_dump` line ever carries a connection argument, a `-H` ever
+carries a credential, or `set -x` ever appears. If Azure's administrator
+gains the ADMIN OPTION on `pg_read_all_data` - Microsoft said in 2024 a fix
+was being worked on - the switch is a role, a password-only vault secret
+(the script already takes the connection as separate variables, so a URL
+would not even be needed) and one `secretRef`.
+
+**Why the password is kept off every command line even inside a container
+nobody can exec into.** Because "nobody can" is a property of today's
+permissions, and the execution log is read by whoever is debugging a failed
+night, at a distance, in a hurry. A rule with no exceptions is cheaper to
+hold than a rule with a reason.
+
+**Why the image is built once by hand and tagged with the server's major.**
+Nothing in it is application code, so a per-commit tag would be a value for
+a redeploy to get wrong (§ 66). The template names the image from
+`postgresVersion`, the Dockerfile's default is held equal to it by a test,
+and a `pg_dump` older than the server refuses to run - so the tag, the client
+and the server are one number and cannot drift apart silently.
+
+**What was found on the way.** The server's point-in-time retention was
+believed to be 35 days and reads 7 on the live server, and the template said
+`7` as a literal, so a template deployment would have reset a portal change
+silently - the same drift as § 66, in another property. It is a parameter
+now, defaulting to the live value.
+
+**What breaks if you undo it.** Dumping as a per-table-granted role brings
+back the silent three weeks. Putting the URL on `pg_dump`'s command line
+puts the password in `ps` and, the first time somebody adds `set -x` to
+debug, in the execution log. Giving the storage account a key gives the
+platform its first credential that can leak and never expires. Turning the
+flag on before the image is built fails the whole deployment at the job.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.

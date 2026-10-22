@@ -1,0 +1,5 @@
+# A shell script that runs inside a Linux container must leave this machine
+# with LF endings whatever core.autocrlf says: a CR after the shebang is
+# "bad interpreter" in the container, and `az acr build` uploads the working
+# tree as it is on disk.
+*.sh text eol=lf

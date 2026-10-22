@@ -126,6 +126,17 @@ param postgresStorageGb int = 32
 ])
 param postgresStorageAutoGrow string = 'Enabled'
 
+// Point-in-time retention is a parameter so that a template deployment cannot
+// quietly reset a value somebody raised in the portal - the same drift that
+// put the placeholder image back on 2026-10-13. The default is what the live
+// server held when this was parameterised (7, read with `az postgres
+// flexible-server show` on 2026-10-21). These backups live WITH the server and
+// are lost with it; the nightly dump job below is the copy that is not.
+@minValue(7)
+@maxValue(35)
+@description('Days of point-in-time restore the server keeps. Read the live value before a deployment and pass it; a lower number here shortens production\'s restore window on the next deployment.')
+param postgresBackupRetentionDays int = 7
+
 @description('Administrator login for the database server. Not an email address, and not a person.')
 param postgresAdminUsername string
 
@@ -271,6 +282,24 @@ param coReviewSharePointFolder string = ''
 
 @description('Model the skills run on. Empty means the default in lib/modules/cost-intelligence/runs.ts.')
 param cipRunModel string = ''
+
+// ---------------------------------------------------------------------------
+// Nightly database backup
+// ---------------------------------------------------------------------------
+
+@description('Create the nightly database backup: a storage account with a blob container, a 90-day lifecycle rule, and a scheduled Container Apps Job that runs pg_dump and uploads the dump as the managed identity. Off by default so a fresh deployment is not refused on an image that is not in the registry yet - build it first (infra/README.md), then turn this on. See runbook.md, "Nightly database backup".')
+param enableDbBackup bool = false
+
+// Container Apps evaluates this in UTC and there is no time-zone setting on a
+// job, so a fixed local time does not exist: 08:30 UTC is 03:30 in New York
+// under standard time and 04:30 under daylight time. Either is the quiet part
+// of the night for a building-automation database.
+@description('When the backup runs, as a cron expression in UTC. The default is 08:30 UTC: 03:30 America/New_York in winter, 04:30 in summer.')
+param dbBackupCron string = '30 8 * * *'
+
+@minValue(1)
+@description('Days a dump is kept in blob storage before the lifecycle rule deletes it.')
+param dbBackupRetentionDays int = 90
 
 // ---------------------------------------------------------------------------
 // Budget
@@ -452,7 +481,7 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
       autoGrow: postgresStorageAutoGrow
     }
     backup: {
-      backupRetentionDays: 7
+      backupRetentionDays: postgresBackupRetentionDays
       geoRedundantBackup: 'Disabled'
     }
     highAvailability: {
@@ -1075,6 +1104,259 @@ resource cipWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableCipWorker) {
 }
 
 // ---------------------------------------------------------------------------
+// Nightly database backup
+//
+// The readings in this database exist nowhere else once the JACE rolls them
+// off, and the server's own point-in-time backups are lost with the server.
+// This is the copy that is not: a pg_dump every night, as a Container Apps
+// Job on a schedule, uploaded to a blob container that nothing else writes.
+//
+// Three pieces, all behind enableDbBackup, which is off by default for the
+// same reason enableCipWorker is - the job names an image that has to be in
+// the registry before the job can be created:
+//
+//   the storage account, one container (`dumps`), a lifecycle rule that
+//   deletes a dump after dbBackupRetentionDays, and blob soft delete for the
+//   fortnight after;
+//   a Storage Blob Data Contributor assignment for the platform's identity,
+//   scoped to that one container - the only credential the upload has. The
+//   account refuses shared-key access altogether, so there is no account key
+//   to leak and no SAS to expire (prohibition 7);
+//   the job, running infra/db-backup/backup.sh from an image built once
+//   (`db-backup:pg17`) from infra/db-backup/Dockerfile. It reads DATABASE-URL
+//   by reference, the same secret the app and the CIP worker read, and the
+//   script moves the password into libpq's own environment variables so that
+//   pg_dump runs with no connection argument at all.
+//
+// Why the administrator's connection and not a backup role of its own. The
+// office PC's dump runs as `bas_backup`, a member of pg_read_all_data; on an
+// Azure Flexible Server at PostgreSQL 16 and later the administrator is not a
+// superuser and holds that predefined role without ADMIN OPTION, so it cannot
+// grant it (Microsoft Q&A 1767915, azure-service-operator issue 4639). The
+// alternative is per-table grants, and that is the exact shape that failed the
+// office backup silently for three weeks when a migration added a table the
+// role had never been granted (runbook.md -> "Repointing the collector also
+// repoints the nightly backup"). A dump as the owner of every object is
+// complete by construction and stays complete through every migration, and
+// enabling it is one parameter flip rather than a role, a password and a
+// vault secret first. The cost is that the job holds a credential that can
+// write; what bounds it is that the image holds pg_dump, curl and this script
+// and nothing else, and the secret is by reference and never printed.
+// ---------------------------------------------------------------------------
+
+// Storage account names: 3-24 characters, lowercase letters and digits only,
+// globally unique. 11 + 4 + 2 + 6 at the longest prefix is 23.
+var backupStorageAccountName = toLower(replace('${namePrefix}${environmentName}bk${uniqueSuffix}', '-', ''))
+var dbBackupContainerName = 'dumps'
+
+// Built once, from infra/db-backup/Dockerfile, into this registry; named by
+// the server's major version so the client cannot drift from it. Not a
+// parameter: nothing in the image changes with the application, so there is
+// no per-commit tag for a redeploy to get wrong.
+var dbBackupImage = '${registry.properties.loginServer}/db-backup:pg${postgresVersion}'
+
+resource backupStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (enableDbBackup) {
+  name: backupStorageAccountName
+  location: location
+  tags: tags
+  kind: 'StorageV2'
+  sku: {
+    // Geo-redundant: the second copy sits in the paired region. The server's
+    // own backups are locally redundant and in the same region as the server,
+    // so a regional loss is the one event they cannot answer and the one this
+    // copy exists for. At this database's size the whole account is pennies
+    // a month over LRS, which is what a nightly dump of a few megabytes costs
+    // at any redundancy tier. Not read-access (RA-GRS): nothing reads the
+    // secondary day to day, and a failover is a deliberate act.
+    name: 'Standard_GRS'
+  }
+  properties: {
+    accessTier: 'Hot'
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    allowBlobPublicAccess: false
+    // No account keys, so nothing but a role assignment can write or read a
+    // dump. `az storage blob` then needs `--auth-mode login` and a data-plane
+    // role on the container - runbook.md says which.
+    allowSharedKeyAccess: false
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
+resource backupBlobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = if (enableDbBackup) {
+  parent: backupStorage
+  name: 'default'
+  properties: {
+    // A deleted dump - by the lifecycle rule or by a person - can be undeleted
+    // for a fortnight. Costs the space of the deleted blobs for those days.
+    deleteRetentionPolicy: {
+      enabled: true
+      days: 14
+    }
+    containerDeleteRetentionPolicy: {
+      enabled: true
+      days: 14
+    }
+  }
+}
+
+resource dumpsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (enableDbBackup) {
+  parent: backupBlobService
+  name: dbBackupContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource backupLifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = if (enableDbBackup) {
+  parent: backupStorage
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'delete-dumps-after-retention'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: [
+                'blockBlob'
+              ]
+              prefixMatch: [
+                '${dbBackupContainerName}/'
+              ]
+            }
+            actions: {
+              baseBlob: {
+                delete: {
+                  daysAfterModificationGreaterThan: dbBackupRetentionDays
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
+// Storage Blob Data Contributor - read, write and delete blobs; nothing on
+// the account itself. Scoped to the one container, not the account.
+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+resource backupBlobWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableDbBackup) {
+  scope: dumpsContainer
+  name: guid(backupStorage.id, dbBackupContainerName, identity.id, storageBlobDataContributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      storageBlobDataContributorRoleId
+    )
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource dbBackupJob 'Microsoft.App/jobs@2024-03-01' = if (enableDbBackup) {
+  name: '${baseName}-db-backup'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // A dump of this database takes seconds; half an hour is the ceiling
+      // for a server under load, after which the execution is Failed.
+      replicaTimeout: 1800
+      // One retry, for a transient refusal from the server or the storage
+      // endpoint. Both attempts failing is a Failed execution, as it should be.
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: dbBackupCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'db-backup'
+          image: dbBackupImage
+          // The script, and no argument. An argument is on the command line
+          // of every execution's record; the script takes everything it
+          // needs from the environment below.
+          command: [
+            '/usr/local/bin/phb-db-backup'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: [
+            // By reference, never a plain value - and the only secret the
+            // job holds. The script turns it into PGHOST/PGUSER/PGPASSWORD
+            // and unsets it before pg_dump runs.
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'database-url'
+            }
+            // Everything below is configuration, not secret.
+            // Built from the name and the cloud's storage suffix rather than
+            // read off the account resource: the two are conditional on the
+            // same parameter, but the compiler cannot see that and warns
+            // (BCP318) that the account may be null.
+            {
+              name: 'BACKUP_BLOB_ENDPOINT'
+              value: 'https://${backupStorageAccountName}.blob.${environment().suffixes.storage}/'
+            }
+            {
+              name: 'BACKUP_CONTAINER'
+              value: dbBackupContainerName
+            }
+            // Which identity to ask the Container Apps identity endpoint for
+            // a token as. The role assignment above is what makes the answer
+            // useful.
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: identity.properties.clientId
+            }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+    backupBlobWrite
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
 
@@ -1125,6 +1407,10 @@ output managedIdentityClientId string = identity.properties.clientId
 output managedIdentityPrincipalId string = identity.properties.principalId
 // Set as the AZURE_CIP_WORKER_JOB repository variable so deploys update its image.
 output cipWorkerJobName string = enableCipWorker ? cipWorkerJob.name : ''
+// The backup job and where its dumps land, for `az containerapp job execution
+// list` and `az storage blob list` in runbook.md -> "Nightly database backup".
+output dbBackupJobName string = enableDbBackup ? dbBackupJob.name : ''
+output dbBackupStorageAccountName string = enableDbBackup ? backupStorage.name : ''
 // The redirect URI IT has to add to the SSO app registration in Part B.
 output ssoRedirectUri string = 'https://${containerApp.properties.configuration.ingress.fqdn}/api/auth/callback/microsoft-entra-id'
 // The custom hostname's address and ITS redirect URI, empty when no custom
