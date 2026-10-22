@@ -57,14 +57,76 @@ export type FpDocumentation = {
   method: string | null;
 };
 
-/** One line in a project's register. Null means "not answered yet". */
-export type FpEquipment = {
+/** A building on a project. Every unit belongs to one. */
+export type FpBuilding = {
+  id: string;
+  name: string;
+  equipmentCount: number;
+};
+
+/** A construction job. Identified by its job number; linked to nothing else. */
+export type FpProject = {
+  id: string;
+  jobNumber: string;
+  name: string;
+  buildings: FpBuilding[];
+};
+
+/** A project as the picker lists it. */
+export type FpProjectSummary = {
+  id: string;
+  jobNumber: string;
+  name: string;
+  equipmentCount: number;
+  /** The newest round's date, or null when the project has none yet. */
+  latestVerificationDate: string | null;
+};
+
+/** Who signed, and when. The signer is the signed-in employee, never typed. */
+export type FpSignature = {
+  employeeId: string | null;
+  name: string;
+  at: string;
+};
+
+/**
+ * One verification round on a project. The report speaks for `verificationDate`.
+ * Step 7: `completed` is the person who carried it out, `reviewed` a different
+ * engineer.
+ */
+export type FpVerification = {
   id: string;
   projectId: string;
-  name: string;
-  location: string;
-  status: EquipmentStatus;
+  verificationDate: string;
+  completed: FpSignature | null;
+  reviewed: FpSignature | null;
+  transmittedTo: string | null;
+  transmittedDate: string | null;
+  /**
+   * True when anything in the round changed after it was reviewed. Nothing is
+   * locked (decision 2026-10-22); the report says so instead, because the sheet
+   * requires a new review after any later change.
+   */
+  changedAfterReview: boolean;
+};
+
+/**
+ * One line in a round's register: the unit (from the equipment schedule) and
+ * its result in this round. Null means "not answered yet".
+ */
+export type FpLine = {
+  /** The equipment id: stable across rounds. */
+  id: string;
+  /** This round's result row. */
+  resultId: string;
+  buildingId: string;
+  buildingName: string;
+  tag: string;
+  equipmentType: string | null;
+  areaServed: string | null;
   coil: CoilType | null;
+  equipmentNotes: string | null;
+  status: EquipmentStatus;
   exposure: Exposure | null;
   protection: Protection | null;
   test: FpTestResult;
@@ -74,24 +136,6 @@ export type FpEquipment = {
   notes: string | null;
   updatedAt: string;
   updatedBy: string | null;
-};
-
-/** Step 7 and the transmittal. One per project. */
-export type FpSignoff = {
-  completedBy: string | null;
-  completedDate: string | null;
-  reviewedBy: string | null;
-  reviewedDate: string | null;
-  transmittedTo: string | null;
-  transmittedDate: string | null;
-};
-
-export type FpProject = {
-  id: string;
-  name: string;
-  /** The date the report speaks for. Equipment brought online after it is not covered. */
-  verificationDate: string | null;
-  signoff: FpSignoff;
 };
 
 /**

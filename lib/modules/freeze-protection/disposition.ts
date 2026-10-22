@@ -1,4 +1,4 @@
-import type { Disposition, FpEquipment, FpTone } from "./types";
+import type { Disposition, FpLine, FpTone } from "./types";
 import { TESTS } from "./vocab";
 
 /**
@@ -12,10 +12,10 @@ import { TESTS } from "./vocab";
  * all read this and nothing else, so no two screens can disagree about a line.
  */
 
-const notYetWet = (e: FpEquipment) => e.status === "not_installed" || e.status === "dry";
-const noProtection = (e: FpEquipment) => e.protection === "none" || e.protection === "unknown";
+const notYetWet = (e: FpLine) => e.status === "not_installed" || e.status === "dry";
+const noProtection = (e: FpLine) => e.protection === "none" || e.protection === "unknown";
 
-export function disposition(e: FpEquipment): Disposition {
+export function disposition(e: FpLine): Disposition {
   if (!e.coil) return d("coil_open", "open", "Step 2 open", "Coil type not answered.", 2);
   if (e.coil === "none")
     return d("closed_no_coil", "closed", "Closed, no coil", "No water, glycol or steam coil. Closed.", null);
@@ -85,7 +85,7 @@ function d(code: Disposition["code"], tone: FpTone, label: string, sentence: str
 }
 
 /** Which workflow steps a line shows. Mirrors the branching in `disposition`. */
-export function visibleSteps(e: FpEquipment) {
+export function visibleSteps(e: FpLine) {
   const exposed = Boolean(e.coil && e.coil !== "none" && e.exposure === "yes");
   const protectedOk = exposed && Boolean(e.protection) && !noProtection(e);
   const test = protectedOk && !notYetWet(e);
@@ -101,7 +101,7 @@ export function visibleSteps(e: FpEquipment) {
 }
 
 /** The register narrowing to verified. Each stage is a subset of the one before. */
-export function funnel(items: FpEquipment[]) {
+export function funnel(items: FpLine[]) {
   const coil = items.filter((e) => e.coil && e.coil !== "none");
   const exposed = coil.filter((e) => e.exposure === "yes");
   const protectedOk = exposed.filter((e) => e.protection && !noProtection(e));
@@ -116,7 +116,7 @@ export function funnel(items: FpEquipment[]) {
 }
 
 /** Counts by tone, the figures the overview tiles and the report summary read. */
-export function toneCounts(items: FpEquipment[]): Record<FpTone, number> {
+export function toneCounts(items: FpLine[]): Record<FpTone, number> {
   const counts: Record<FpTone, number> = { ok: 0, warn: 0, bad: 0, open: 0, closed: 0 };
   for (const e of items) counts[disposition(e).tone] += 1;
   return counts;

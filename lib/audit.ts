@@ -145,6 +145,29 @@ export type AuditAction =
   | "cip.workflow_updated"
   | "cip.workflow_steps_changed"
   | "cip.workflow_deleted"
+  /**
+   * Freeze Protection. Every write in lib/modules/freeze-protection/ writes one
+   * of these in the same transaction. Metadata always carries `projectId` and
+   * `jobNumber`, because the job number is what a person searches for. Updates
+   * carry `changes` (field -> { from, to }) since the row they describe is
+   * overwritten; deletes carry what was removed, counts included.
+   * `fp.result_updated` also carries the line's disposition after the change.
+   */
+  | "fp.project_created"
+  | "fp.project_updated"
+  | "fp.project_deleted"
+  | "fp.building_created"
+  | "fp.building_updated"
+  | "fp.building_deleted"
+  | "fp.equipment_created"
+  | "fp.equipment_updated"
+  | "fp.equipment_deleted"
+  | "fp.verification_created"
+  | "fp.verification_updated"
+  | "fp.verification_deleted"
+  | "fp.verification_signed"
+  | "fp.verification_unsigned"
+  | "fp.result_updated"
   | "position.created"
   | "position.updated"
   | "department.created"

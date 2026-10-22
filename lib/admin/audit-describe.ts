@@ -105,6 +105,56 @@ function moduleLabel(
   return moduleNames.get(moduleKey) ?? moduleKey;
 }
 
+/** "job 26-104A", or "a project" when the metadata predates the field. */
+function fpJob(meta: Record<string, unknown>): string {
+  const job = stringField(meta, "jobNumber");
+  return job === null ? "a project" : `job ${job}`;
+}
+
+/** Freeze Protection field names as a person says them, for `changes` metadata. */
+const FP_FIELD_WORDS: Record<string, string> = {
+  tag: "the tag",
+  equipmentType: "the equipment type",
+  areaServed: "the area served",
+  coil: "the coil type",
+  notes: "the notes",
+  buildingId: "the building",
+  sortOrder: "the order",
+  verificationDate: "the verification date",
+  transmittedTo: "who it was transmitted to",
+  transmittedDate: "the transmittal date",
+  status: "the status",
+  exposure: "outside air exposure",
+  protection: "the protection",
+  testFanStops: "the fan test",
+  testDamperCloses: "the damper test",
+  testValveFullFlow: "the valve test",
+  testManualReset: "the reset test",
+  tripTempF: "the trip temperature",
+  testedBy: "who tested",
+  testDate: "the test date",
+  elements: "the elements tested",
+  notifyWho: "who was notified",
+  notifyDate: "the notice date",
+  notifyMethod: "the notice method",
+  notifyResponse: "the notice response",
+  deficiencyDescription: "the deficiency",
+  deficiencyOwner: "the deficiency owner",
+  deficiencyDue: "the deficiency due date",
+  documentedWith: "who it was confirmed with",
+  documentedName: "the confirming name",
+  documentedDate: "the confirmation date",
+  documentedMethod: "the confirmation method",
+};
+
+function fpFields(meta: Record<string, unknown>): string {
+  const changes = meta.changes;
+  const keys = changes !== null && typeof changes === "object" ? Object.keys(changes) : [];
+  if (keys.length === 0) return "details";
+  const words = keys.map((k) => FP_FIELD_WORDS[k] ?? k);
+  return words.length <= 2 ? words.join(" and ") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+}
+
 /**
  * The known actions, as sentence builders.
  *
@@ -431,6 +481,47 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "cip.workflow_deleted": ({ actor, meta }) =>
     `${actor} deleted the draft Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
 
+  // Freeze Protection. Every sentence names the job number, which is how people
+  // find a project; the unit tag where there is one.
+  "fp.project_created": ({ actor, meta }) =>
+    `${actor} created the freeze protection project ${fpJob(meta)} "${stringField(meta, "name") ?? "(unnamed)"}"`,
+  "fp.project_updated": ({ actor, meta }) => {
+    const changes: string[] = [];
+    const previousJob = stringField(meta, "previousJobNumber");
+    if (previousJob !== null) changes.push(`changed its job number from ${previousJob}`);
+    const previousName = stringField(meta, "previousName");
+    if (previousName !== null) changes.push(`renamed it from "${previousName}"`);
+    return changes.length === 0
+      ? `${actor} updated the freeze protection project ${fpJob(meta)}`
+      : `${actor} ${changes.join(" and ")} on freeze protection project ${fpJob(meta)}`;
+  },
+  "fp.project_deleted": ({ actor, meta }) =>
+    `${actor} deleted the freeze protection project ${fpJob(meta)} "${stringField(meta, "name") ?? "(unnamed)"}" and everything in it`,
+  "fp.building_created": ({ actor, meta }) =>
+    `${actor} added the building "${stringField(meta, "name") ?? "(unnamed)"}" to ${fpJob(meta)}`,
+  "fp.building_updated": ({ actor, meta }) =>
+    `${actor} renamed the building "${stringField(meta, "previousName") ?? "?"}" to "${stringField(meta, "name") ?? "?"}" on ${fpJob(meta)}`,
+  "fp.building_deleted": ({ actor, meta }) =>
+    `${actor} removed the building "${stringField(meta, "name") ?? "(unnamed)"}" from ${fpJob(meta)}`,
+  "fp.equipment_created": ({ actor, meta }) =>
+    `${actor} added ${stringField(meta, "tag") ?? "a unit"} to the ${fpJob(meta)} register`,
+  "fp.equipment_updated": ({ actor, meta }) =>
+    `${actor} changed ${fpFields(meta)} of ${stringField(meta, "tag") ?? "a unit"} on ${fpJob(meta)}`,
+  "fp.equipment_deleted": ({ actor, meta }) =>
+    `${actor} removed ${stringField(meta, "tag") ?? "a unit"} and its results from the ${fpJob(meta)} register`,
+  "fp.verification_created": ({ actor, meta }) =>
+    `${actor} started the ${stringField(meta, "verificationDate") ?? "?"} freeze protection verification on ${fpJob(meta)}`,
+  "fp.verification_updated": ({ actor, meta }) =>
+    `${actor} changed ${fpFields(meta)} of a freeze protection verification on ${fpJob(meta)}`,
+  "fp.verification_deleted": ({ actor, meta }) =>
+    `${actor} deleted the ${stringField(meta, "verificationDate") ?? "?"} freeze protection verification on ${fpJob(meta)}`,
+  "fp.verification_signed": ({ actor, meta }) =>
+    `${actor} ${stringField(meta, "role") === "reviewed" ? "reviewed and signed" : "marked completed"} the ${stringField(meta, "verificationDate") ?? "?"} freeze protection verification on ${fpJob(meta)}`,
+  "fp.verification_unsigned": ({ actor, meta }) =>
+    `${actor} removed the ${stringField(meta, "role") === "reviewed" ? "review signature" : "completion"} from the ${stringField(meta, "verificationDate") ?? "?"} freeze protection verification on ${fpJob(meta)}`,
+  "fp.result_updated": ({ actor, meta }) =>
+    `${actor} recorded ${fpFields(meta)} for ${stringField(meta, "tag") ?? "a unit"} on ${fpJob(meta)}`,
+
   "grant.admin_removed": ({ actor, target, module }) =>
     `${actor} removed ${target ?? "an employee"}'s administrator access for ${module}`,
 
@@ -678,6 +769,21 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "cip.workflow_updated": "Cost Intelligence workflow updated",
   "cip.workflow_steps_changed": "Cost Intelligence workflow steps changed",
   "cip.workflow_deleted": "Cost Intelligence workflow deleted",
+  "fp.project_created": "Freeze Protection project created",
+  "fp.project_updated": "Freeze Protection project updated",
+  "fp.project_deleted": "Freeze Protection project deleted",
+  "fp.building_created": "Freeze Protection building added",
+  "fp.building_updated": "Freeze Protection building renamed",
+  "fp.building_deleted": "Freeze Protection building removed",
+  "fp.equipment_created": "Freeze Protection unit added",
+  "fp.equipment_updated": "Freeze Protection unit changed",
+  "fp.equipment_deleted": "Freeze Protection unit removed",
+  "fp.verification_created": "Freeze Protection verification started",
+  "fp.verification_updated": "Freeze Protection verification changed",
+  "fp.verification_deleted": "Freeze Protection verification deleted",
+  "fp.verification_signed": "Freeze Protection verification signed",
+  "fp.verification_unsigned": "Freeze Protection signature removed",
+  "fp.result_updated": "Freeze Protection result recorded",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

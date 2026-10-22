@@ -13,7 +13,7 @@ export default async function RegisterPage() {
   // No service layer yet, so there is nothing to load: the register shows its empty state.
   return (
     <FpShell>
-      <RegisterView project={null} equipment={[]} selected={null} />
+      <RegisterView project={null} verification={null} equipment={[]} selected={null} />
     </FpShell>
   );
 }

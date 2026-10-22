@@ -55,3 +55,16 @@ export const STEP_OWNER: Record<number, string | undefined> = {
   3: "PH+B engineer",
   5: "Controls team",
 };
+
+/**
+ * The closed vocabularies as lists, for validation. Derived from the label
+ * records so a value cannot be accepted without a label to show for it. The
+ * migration's CHECK constraints hold the same lists; tests/fp-schema.test.ts
+ * reads them back and compares.
+ */
+const keys = <T extends string>(record: Record<T, string>) => Object.keys(record) as [T, ...T[]];
+export const STATUS_VALUES = keys(STATUS_LABEL);
+export const COIL_VALUES = keys(COIL_LABEL);
+export const EXPOSURE_VALUES = keys(EXPOSURE_LABEL);
+export const PROTECTION_VALUES = keys(PROTECTION_LABEL);
+export const CONFIRMED_WITH_VALUES = keys(CONFIRMED_WITH_LABEL);

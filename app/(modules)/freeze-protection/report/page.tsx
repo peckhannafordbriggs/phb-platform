@@ -13,7 +13,7 @@ export default async function ReportPage() {
   // No service layer yet, so there is nothing to load: the report shows its empty state.
   return (
     <FpShell>
-      <ReportView project={null} equipment={[]} />
+      <ReportView project={null} verification={null} equipment={[]} />
     </FpShell>
   );
 }
