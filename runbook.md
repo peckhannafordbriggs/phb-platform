@@ -9931,10 +9931,24 @@ PostgreSQL service.
 **Cause.** The run was **Running** and its worker sent no heartbeat for ten
 minutes: the process was killed, the machine slept, or the container was
 recycled mid-run. The next worker to start marks it failed rather than guessing
-how far it got.
+how far it got. The heartbeat is on a 15-second timer for as long as a worker
+holds a run (workspace downloads and silent tool calls included), so a live
+worker is never taken for dead; before 2026-10-22 it was written only per agent
+message, and a slow SharePoint download on resume tripped it.
 
-**Fix.** Start the run again. Files it had already published stay in
-`AI FILES`; the new run writes the next `_revN` beside them, never over them.
+**Fix.** **Continue run** on the run page. It goes back in the queue at the
+step that failed; finished steps are not redone, and the agent's session is
+picked up where it stopped (or the step starts over when it cannot be). Files
+already published stay in `AI FILES`. A worker whose run was failed under it
+stops within about 5 seconds instead of spending on it.
+
+**Known gap: the dead attempt's cost.** The SDK reports cost only in its final
+result, so the attempt that died never saved what it spent. A resumed session's
+first result carries the earlier turns from its transcript, so a Continue that
+resumes recovers it when the step ends; one where the step starts over does not,
+and the SDK's per-run cap counts only the new attempt. A run can therefore pass
+$5 by up to one dead attempt per Continue. The Anthropic Console spend limit is
+still the hard cap.
 
 ---
 

@@ -209,7 +209,8 @@ describe("workOnce", () => {
   /**
    * An agent per call: call `dieOn` starts its session and then throws, the way
    * a worker that loses its container looks from the next one; `failToStart`
-   * throws before saying anything, the way a session that cannot be resumed does.
+   * ends in an error result with no model output, the way a session that
+   * cannot be resumed does.
    */
   function flakyAgent(dieOn: number, failToStart?: number) {
     const seen: { prompt: string; resume: string | undefined }[] = [];
@@ -217,8 +218,11 @@ describe("workOnce", () => {
       seen.push({ prompt, resume: options.resume });
       const n = seen.length;
       return (async function* () {
-        if (n === failToStart) throw new Error("cannot resume");
         yield { type: "system", subtype: "init", session_id: `sess-${n}` } as unknown as SDKMessage;
+        if (n === failToStart) {
+          yield { type: "result", subtype: "error_during_execution", total_cost_usd: 0, modelUsage: {} } as unknown as SDKMessage;
+          return;
+        }
         if (n === dieOn) throw new Error("container went away");
         yield { type: "result", subtype: "success", total_cost_usd: 0.25, modelUsage: {} } as unknown as SDKMessage;
       })();

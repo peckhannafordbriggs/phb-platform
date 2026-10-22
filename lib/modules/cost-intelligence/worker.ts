@@ -172,7 +172,7 @@ type StepOutcome =
   | { kind: "asked" }
   /** The run left `running` under us: cancelled, or failed by another worker. */
   | { kind: "stopped" }
-  /** `progressed`: the agent did anything at all, as opposed to failing to start. */
+  /** `progressed`: the model produced output, as opposed to the session failing to start. */
   | { kind: "failed"; message: string; progressed: boolean };
 
 /**
@@ -370,7 +370,9 @@ async function runStep(args: {
     });
 
     for await (const message of messages) {
-      if (message.type !== "system") progressed = true;
+      // Model output only: a session that cannot be resumed still sends its
+      // init, an error result, and sometimes a synthetic assistant error.
+      if (message.type === "assistant" && !message.error) progressed = true;
       await record(runId, current, message);
       // Every message carries the session id; keep it so an answered question can resume this session.
       const session = "session_id" in message && typeof message.session_id === "string" ? message.session_id : null;
