@@ -2751,6 +2751,29 @@ request visible, set `CO_GRAPH_TRACE=1` on the job; it prints method, status
 and drive-relative path to stderr for each request and the body of each
 error, never a download URL.
 
+### The comparison job reads `graph rc=1 1.0s` on every CO, and the Graph tree is empty
+
+**Symptom.** Every CO's block shows the local engine succeeding in a couple
+of seconds and the Graph engine exiting 1 in about one second; the diff then
+lists the engine's outputs as *only in local* and the untouched inputs as
+*only in graph*.
+
+**Cause.** The Graph engine refused to start. An exit in one second is the
+engine's own up-front check, not a Graph call: in graph mode it requires
+`--drive-id`, `--live-path`, `--sharepoint-root` and `CO_REPORT_DIR`, and
+refuses a live path or report directory outside the root. On 2026-10-21 the
+comparison itself put the report directory beside `CMP` with the root set to
+`CMP`. Before that day the instrument printed only the exit code for an exit
+of 1, because the Part B differential treats 1 as "ran, with failures".
+
+**Fix.** Since 2026-10-21 the block prints the engine's stderr for any
+non-zero exit and records the CO as *graph engine rc=N*; read the quoted
+`refusing to run:` line, which names the argument and the root. If it is the
+instrument's layout, `compare_stores.layout()` is the one place it is
+decided and `tests/test_compare_layout.py` holds it inside the jail. If it is
+a hand-run engine, put `--live-path` and `CO_REPORT_DIR` under
+`--sharepoint-root`. A one-second exit is never a store finding.
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not
