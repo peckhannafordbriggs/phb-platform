@@ -1147,14 +1147,21 @@ because Azure will not issue a certificate for a hostname no app carries and
 the app cannot bind one that does not exist. The parameters file carries only
 the hostname, so a routine redeploy keeps the binding. The certificate is
 named from the app by `resourceId()`, never symbolically - it depends on the
-app, and a reference back is a cycle. **`authUrl` is unchanged**: sign-in
-keeps building its callback on the old address until Vitis adds the second
-redirect URI (`runbook.md` → *What to ask IT for* → Request 5), and only then
-does `authUrl` move - in that order, or sign-in breaks at both addresses.
-What-if against production showed the two expected effects and nothing else;
-the deployment itself is run by the owner (`infra/README.md` → *Custom
-domain*). `WHY-ITS-BUILT-THIS-WAY.md` § 71; `runbook.md` → *The custom domain
-answers with a certificate warning*.
+app, and a reference back is a cycle. Deployed in two passes by the owner on
+2026-10-21 (the agent's deployment was refused as a production change; what-if
+had shown the two expected effects and nothing else), and verified live: both
+addresses answer, the certificate's subject is the hostname. **`authUrl`
+moved on 2026-10-22**, in the order that keeps sign-in working: Vitis added
+the second redirect URI first (`runbook.md` → *What to ask IT for* → Request
+5, confirmed in the portal by the owner), then `authUrl` was switched to
+`https://platform.phb1899.com` in the gitignored parameters file and deployed
+with the routine command, and sign-in at the new address stays there. The old
+redirect URI stays on the registration and the old address keeps answering; a
+sign-in started there finishes on the new one. **The parameters file is the
+only place the new `authUrl` lives**: a template deployment from a copy that
+still carries the old value moves sign-in back. `WHY-ITS-BUILT-THIS-WAY.md`
+§ 71; `runbook.md` → *The custom domain answers with a certificate warning*;
+`infra/README.md` → *Custom domain*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

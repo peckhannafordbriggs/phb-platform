@@ -187,7 +187,11 @@ needs a **second** redirect URI on that registration, added beside the first
 (`customDomainSsoRedirectUri` is the value; `runbook.md` → *What to ask IT for* →
 Request 5 is the request), and only then is `authUrl` changed to the custom
 hostname - a separate, later deployment. Changing `authUrl` before the redirect
-URI exists breaks sign-in at both addresses.
+URI exists breaks sign-in at both addresses. For `platform.phb1899.com` every
+step of this is done (hostname 2026-10-21, redirect URI and `authUrl`
+2026-10-22) and `authUrl` in the parameters file is the custom hostname; the
+sequence stays here for the next hostname, and for the day a parameters file
+with the old `authUrl` quietly moves sign-in back.
 
 **To confirm it works:** `curl -sSI https://<hostname>/api/health` returns `200`
 with no certificate warning, the certificate's subject is the hostname, and
