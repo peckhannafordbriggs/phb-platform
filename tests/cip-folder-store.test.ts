@@ -113,6 +113,31 @@ describe("sharePointStore", () => {
     expect(await readFile(path.join(dest, "copy", "deep", "x.txt"), "utf8")).toBe("xx");
   });
 
+  it("streams a large file to disk intact, and writes an empty one", async () => {
+    const big = Buffer.alloc(12 * 1024 * 1024, 7);
+    big.write("end", big.length - 3);
+    const store = sharePointStore("ids:d/root", token, async (url) => {
+      const p = decodeURIComponent(new URL(url).pathname.replace("/v1.0", ""));
+      if (p.endsWith("/children")) {
+        return Response.json({
+          value: [
+            { id: "big", name: "Drawings.pdf", file: {}, size: big.length, fileSystemInfo: { lastModifiedDateTime: "2026-10-01T00:00:00Z" } },
+            { id: "empty", name: "empty.txt", file: {}, size: 0, fileSystemInfo: { lastModifiedDateTime: "2026-10-01T00:00:00Z" } },
+          ],
+        });
+      }
+      if (p === "/drives/d/items/big/content") return new Response(big);
+      if (p === "/drives/d/items/empty/content") return new Response(null);
+      return Response.json({ id: "root", parentReference: { driveId: "d" } });
+    });
+    dest = await mkdtemp(path.join(tmpdir(), "cip-store-"));
+
+    await store.download("", path.join(dest, "copy"), /^$/);
+
+    expect((await readFile(path.join(dest, "copy", "Drawings.pdf"))).equals(big)).toBe(true);
+    expect(await readFile(path.join(dest, "copy", "empty.txt"), "utf8")).toBe("");
+  });
+
   it("finds the folder from its URL through /shares", async () => {
     const { fetchImpl, calls } = fakeGraph();
     const store = sharePointStore("https://phb.sharepoint.com/sites/AI Sandbox/Shared Documents/BID-DOC", token, fetchImpl);

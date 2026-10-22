@@ -139,6 +139,8 @@ describe("workOnce", () => {
       "queued", "started", "step_started", "workspace", "message", "tool", "output", "step_finished", "succeeded",
     ]);
     expect(run?.events.find((e) => e.type === "tool")?.message).toBe("Read Specs/spec.pdf");
+    // Archive is skipped, so the copy is the one spec.
+    expect(run?.events.find((e) => e.type === "workspace")?.message).toMatch(/^Workspace ready: 1 file, 0 MB in \d+ s$/);
     const audited = await testDb.auditEvent.findMany({ where: { action: { startsWith: "cip." } } });
     expect(audited.map((a) => `${a.action} ${a.actorEmployeeId === null ? "platform" : "person"}`).sort()).toEqual([
       "cip.outputs_published platform",

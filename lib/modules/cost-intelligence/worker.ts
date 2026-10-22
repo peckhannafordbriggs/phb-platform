@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, realpath, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -232,7 +232,16 @@ async function processRun(runId: bigint, config: WorkerConfig, runAgent: RunAgen
 
     const building = Date.now();
     await buildWorkspace(workspace, config, run.project.folderName, step.folderName);
-    await event(runId, current, "workspace", `Workspace ready (${Math.round((Date.now() - building) / 1000)} s)`);
+    const copied = await measure(path.join(workspace, "project"));
+    const seconds = Math.round((Date.now() - building) / 1000);
+    // In the ledger and in `data`, so download time per project can be compared across runs.
+    await event(
+      runId,
+      current,
+      "workspace",
+      `Workspace ready: ${copied.files.toLocaleString("en-US")} file${copied.files === 1 ? "" : "s"}, ${formatSize(copied.bytes)} in ${seconds} s`,
+      { files: copied.files, bytes: copied.bytes, seconds },
+    );
 
     const outcome = await runStep({ runId, step, current, workspace, sessionId, resumeWith, model: run.model, runAgent });
     if (outcome.kind === "stopped") break;
@@ -523,8 +532,30 @@ function describeTool(name: string, input: unknown): string {
   }
 }
 
-async function event(runId: bigint, step: number | null, type: string, message: string): Promise<void> {
-  await prisma.cipRunEvent.create({ data: { runId, step, type, message } });
+async function event(
+  runId: bigint,
+  step: number | null,
+  type: string,
+  message: string,
+  data?: Record<string, number>,
+): Promise<void> {
+  await prisma.cipRunEvent.create({ data: { runId, step, type, message, ...(data ? { data } : {}) } });
+}
+
+/** Files and bytes under a folder: the project copy, for the ledger. */
+async function measure(dir: string): Promise<{ files: number; bytes: number }> {
+  let files = 0;
+  let bytes = 0;
+  for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+    if (!entry.isFile()) continue;
+    files += 1;
+    bytes += (await stat(path.join(entry.parentPath, entry.name))).size;
+  }
+  return { files, bytes };
+}
+
+function formatSize(bytes: number): string {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
 }
 
 /** Set a final status unless the run was cancelled meanwhile. */
