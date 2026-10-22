@@ -9,8 +9,7 @@ export function withProject(path: string, projectId?: string) {
 
 export function tabs(projectId?: string): Tab[] {
   return [
-    { href: BASE, label: "Overview", path: BASE, exact: true },
-    { href: withProject(`${BASE}/register`, projectId), label: "Register", path: `${BASE}/register` },
+    { href: BASE, label: "Register", path: BASE, exact: true },
     { href: withProject(`${BASE}/report`, projectId), label: "Report", path: `${BASE}/report` },
   ];
 }

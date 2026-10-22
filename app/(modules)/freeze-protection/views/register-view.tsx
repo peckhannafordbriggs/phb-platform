@@ -16,9 +16,9 @@ export function RegisterView({
 }: {
   project: FpProject;
   equipment: FpEquipment[];
-  selected: FpEquipment | null;
+  selected: FpEquipment;
 }) {
-  const href = (id: string) => `/freeze-protection/register?project=${encodeURIComponent(project.id)}&equipment=${id}`;
+  const href = (id: string) => `/freeze-protection/register?project=${encodeURIComponent(project?.id || "")}&equipment=${id}`;
 
   return (
     <div className="flex flex-col gap-5 lg:min-h-0 lg:flex-1">
