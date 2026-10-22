@@ -2446,6 +2446,15 @@ moved to the new hostname only after this request is done
 exists breaks sign-in at both addresses, so the order is: this request, Vitis
 confirms, then the `authUrl` deployment.
 
+**Done, 2026-10-22.** Vitis closed the ticket; the owner confirmed all three
+redirect URIs on the registration in the Entra portal (a Conditional Access
+location policy refused the CLI's Graph token for that read); `authUrl` was
+switched to `https://platform.phb1899.com` in the gitignored parameters file
+and deployed with the routine command; sign-in at the new address works and
+stays there. The old redirect URI is still on the registration and should
+stay: the old address keeps answering, and a sign-in started there now
+finishes on the new one, which is the intended end state.
+
 The value is the `customDomainSsoRedirectUri` deployment output; it is written out
 below because it is derived from the hostname alone and will not change.
 
@@ -3106,13 +3115,20 @@ complete before the routine command can bind. A certificate that failed to
 issue leaves nothing behind; re-run the pass that failed.
 
 **Symptom: `https://platform.phb1899.com` loads with a valid certificate, and
-sign-in from it bounces or lands on the old address.** Expected until two
-things are done, in this order: Vitis adds the second redirect URI (*What to ask
-IT for* → Request 5) and then `authUrl` in `infra/main.parameters.json` is
-changed to `https://platform.phb1899.com` and deployed. Until the first,
-Auth.js builds its callback on the old address, which Entra accepts, and the
-session lands there. Do **not** change `authUrl` first: Entra refuses a
-redirect URI it does not carry, and sign-in is then broken at both addresses.
+sign-in from it bounces or lands on the old address.** This was the expected
+state between 2026-10-21 and 2026-10-22, and both steps are now done: Vitis
+added the second redirect URI (*What to ask IT for* → Request 5), then
+`authUrl` in `infra/main.parameters.json` was changed to
+`https://platform.phb1899.com` and deployed, and sign-in at the new address was
+verified to stay there. If it comes back, `AUTH_URL` on the running revision has
+reverted - a template deployment from a parameters file that still carries the
+old `authUrl` does exactly that; read it with the `az containerapp show` query
+under *Verify the deployment*, and redeploy from a parameters file that carries
+the new value. Sign-in started at the **old** address now finishes on the new
+one, since `AUTH_URL` is one value; that is intended. If sign-in is broken at
+**both** addresses, Entra refuses the callback: confirm the registration still
+carries the redirect URI for whatever `AUTH_URL` says, and do not change
+`authUrl` to a hostname the registration does not carry.
 
 **Removing the domain** is `customDomainName` set to empty and a routine
 deployment: the hostname leaves the ingress and the certificate resource is no
