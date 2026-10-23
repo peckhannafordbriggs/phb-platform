@@ -5,7 +5,7 @@ import { handleWrite } from "../handle";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** A line from the equipment schedule. Joins the project's newest round, if there is one. */
+/** A unit from the project's equipment schedule. Name required; type and area served optional. */
 export async function POST(request: Request) {
   return handleWrite(request, {
     route: "/api/modules/freeze-protection/equipment",

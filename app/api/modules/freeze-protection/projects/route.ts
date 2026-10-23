@@ -17,7 +17,7 @@ export async function GET() {
   return ok(await listProjects());
 }
 
-/** A project with its job number and at least one building. */
+/** A project: job number, name, and its verification date (today if not given). */
 export async function POST(request: Request) {
   return handleWrite(request, {
     route: ROUTE,

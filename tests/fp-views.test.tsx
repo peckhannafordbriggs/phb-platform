@@ -19,27 +19,19 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RegisterView } from "@/app/(modules)/freeze-protection/views/register-view";
 import { ReportView } from "@/app/(modules)/freeze-protection/views/report-view";
-import type { FpLine, FpProject, FpVerification } from "@/lib/modules/freeze-protection/types";
+import type { FpHistoryEntry, FpLine, FpProject } from "@/lib/modules/freeze-protection/types";
 
 const PROJECT: FpProject = {
   id: "1",
   jobNumber: "26-104A",
   name: "Riverside MOB",
-  buildings: [
-    { id: "10", name: "Main", equipmentCount: 2 },
-    { id: "11", name: "Annex", equipmentCount: 1 },
-  ],
-};
-
-const ROUND: FpVerification = {
-  id: "7",
-  projectId: "1",
   verificationDate: "2026-11-01",
   completed: { employeeId: "a", name: "Dana Whitfield", at: "2026-11-01T15:00:00.000Z" },
   reviewed: { employeeId: "b", name: "Lee Park", at: "2026-11-02T15:00:00.000Z" },
   transmittedTo: "Turner CM",
   transmittedDate: "2026-11-03",
   changedAfterReview: false,
+  equipmentCount: 5,
 };
 
 const PASSED = { fanStops: "yes", damperCloses: "yes", valveFullFlow: "yes", manualReset: "yes" } as const;
@@ -47,14 +39,10 @@ const PASSED = { fanStops: "yes", damperCloses: "yes", valveFullFlow: "yes", man
 function line(id: string, overrides: Partial<FpLine> = {}): FpLine {
   return {
     id,
-    resultId: `r${id}`,
-    buildingId: "10",
-    buildingName: "Main",
-    tag: `AHU-${id}`,
+    name: `AHU-${id}`,
     equipmentType: "AHU",
     areaServed: "Level 1",
     coil: null,
-    equipmentNotes: null,
     status: "service",
     exposure: null,
     protection: null,
@@ -84,61 +72,45 @@ const VERIFIED = line("3", {
   test: { answers: PASSED, tripTempF: "37", testedBy: "C. Moreno", testDate: "2026-10-30", elements: null },
   documentation: { with: "owner", name: "R. Patel", date: "2026-10-31", method: "Email" },
 });
-const NO_COIL = line("4", { coil: "none", tag: "EF-1", buildingId: "11", buildingName: "Annex" });
+const NO_COIL = line("4", { coil: "none", name: "EF-1", equipmentType: null, areaServed: null });
 const OPEN = line("5", { coil: "water" });
 const LINES = [NO_PROTECTION, FAILED, VERIFIED, NO_COIL, OPEN];
+const HISTORY: FpHistoryEntry[] = [
+  { id: "h2", at: "2026-10-30T18:05:00.000Z", sentence: "Chris Moreno recorded the damper test for AHU-2 on job 26-104A" },
+  { id: "h1", at: "2026-10-29T14:00:00.000Z", sentence: "Dana Whitfield added AHU-2 to the job 26-104A register" },
+];
 
 const register = (props: Partial<Parameters<typeof RegisterView>[0]>) =>
   renderToStaticMarkup(
-    createElement(RegisterView, {
-      project: PROJECT,
-      verifications: [ROUND],
-      verification: ROUND,
-      lines: LINES,
-      selected: null,
-      buildingId: null,
-      panel: null,
-      today: "2026-11-01",
-      ...props,
-    }),
+    createElement(RegisterView, { project: PROJECT, lines: LINES, selected: null, history: [], panel: null, today: "2026-11-01", ...props }),
   );
 
 describe("Register", () => {
   it("offers a new project when there are none", () => {
-    const html = register({ project: null, verifications: [], verification: null, lines: [] });
+    const html = register({ project: null, lines: [] });
     expect(html).toContain("No projects yet");
     expect(html).toContain("New project");
   });
 
-  it("asks for a verification before showing the register", () => {
-    expect(register({ verifications: [], verification: null, lines: [] })).toContain("Start a verification to see the register");
+  it("asks for the schedule when the project has no equipment", () => {
+    expect(register({ lines: [] })).toContain("List every unit on the mechanical equipment schedule");
   });
 
-  it("lists every unit with its disposition in words, and the funnel", () => {
+  it("lists every unit by name with its disposition in words, the funnel, and Add equipment; no buildings or rounds", () => {
     const html = register({});
     for (const label of ["No protection", "Test failed", "Verified", "Closed, no coil", "Step 3 open"]) expect(html).toContain(label);
-    expect(html).toContain("Outside air exposure");
-    expect(html).toContain("5 units · 2026-11-01 verification");
-  });
-
-  it("has a building switcher and Add equipment in the equipment card, and no filter", () => {
-    const html = register({});
-    expect(html).toContain("All buildings");
+    expect(html).toContain("Equipment · 5");
     expect(html).toContain("Add equipment");
-    expect(html).toContain("Building</button>");
-    expect(html).not.toContain('type="search"');
+    expect(html).toContain(">Name</span>");
+    expect(html).not.toContain(">Tag</span>");
+    expect(html).not.toContain("Building");
+    expect(html).not.toContain("New verification");
   });
 
-  it("one building: only its schedule, no Building column, and the funnel follows it", () => {
-    const html = register({ buildingId: "11" });
-    expect(html).toContain("EF-1");
-    expect(html).not.toContain("AHU-1");
-    expect(html).toContain("1 unit in Annex · 2026-11-01 verification");
-    expect(html).not.toContain(">Building</span>");
-  });
-
-  it("an unknown building id shows all buildings rather than nothing", () => {
-    expect(register({ buildingId: "999" })).toContain("5 units · 2026-11-01 verification");
+  it("shows the verification date and where the signoff stands", () => {
+    expect(register({})).toContain("Reviewed");
+    expect(register({ project: { ...PROJECT, reviewed: null } })).toContain("Completed, awaiting review");
+    expect(register({ project: { ...PROJECT, changedAfterReview: true } })).toContain("Changed after review");
   });
 
   it("no protection: the stop and the notice fields, not the test", () => {
@@ -148,9 +120,8 @@ describe("Register", () => {
     expect(html).not.toContain("Test the safety");
   });
 
-  it("failed test: the four tests, the trip temperature, and the deficiency", () => {
+  it("failed test: the tests and the deficiency, not step 6", () => {
     const html = register({ selected: FAILED });
-    expect(html).toContain("Test the safety");
     expect(html).toContain("Outside air damper drives closed");
     expect(html).toContain("Deficiency.");
     expect(html).not.toContain("Documented with the owner");
@@ -160,72 +131,71 @@ describe("Register", () => {
     expect(register({ selected: VERIFIED })).toContain("Documented with the owner or controls vendor");
   });
 
-  it("no coil: closed, nothing past step 2", () => {
-    const html = register({ selected: NO_COIL });
-    expect(html).toContain("Closed.");
-    expect(html).not.toContain("Outside air exposure</h4>");
+  it("names the optional fields as optional", () => {
+    const html = register({ selected: OPEN });
+    expect(html).toContain("Equipment type (optional)");
+    expect(html).toContain("Area served (optional)");
+  });
+
+  it("shows the unit's history with timestamps", () => {
+    const html = register({ selected: FAILED, history: HISTORY });
+    expect(html).toContain("History");
+    expect(html).toContain("recorded the damper test for AHU-2");
+    expect(html).toContain('dateTime="2026-10-30T18:05:00.000Z"');
+    expect(register({ selected: OPEN })).toContain("No changes recorded yet.");
   });
 
   it("opens the forms from the URL", () => {
-    expect(register({ panel: "project" })).toContain("Create project");
+    expect(register({ panel: "project" })).toContain("Verification date");
     expect(register({ panel: "equipment" })).toContain("Add from the equipment schedule");
   });
 });
 
 describe("Report", () => {
   const report = (props: Partial<Parameters<typeof ReportView>[0]>) =>
-    renderToStaticMarkup(createElement(ReportView, { project: PROJECT, verification: ROUND, lines: LINES, ...props }));
+    renderToStaticMarkup(createElement(ReportView, { project: PROJECT, lines: LINES, ...props }));
 
   it("says so when there is nothing to report", () => {
-    expect(report({ verification: null, lines: [] })).toContain("No verification on this project yet");
+    expect(report({ project: null, lines: [] })).toContain("No projects yet");
   });
 
-  it("speaks for its date, in words, without shifting the day", () => {
-    expect(report({})).toContain("Verification date November 1, 2026.");
-    expect(report({})).toContain("between November 1 and March 1");
-  });
-
-  it("lists the action items with their owner and due date, and the open items", () => {
+  it("entire project: speaks for its date, lists every unit, the action items and open items", () => {
     const html = report({});
+    expect(html).toContain("Verification date November 1, 2026.");
+    expect(html).toContain("between November 1 and March 1");
+    expect(html).toContain("Equipment register · 5");
     expect(html).toContain("Items requiring action · 2");
     expect(html).toContain("OA damper actuator does not stroke closed.");
-    expect(html).toContain("2026-11-08");
     expect(html).toContain("Open items · 1");
   });
 
-  it("shows both signatures by name", () => {
+  it("one unit: its full record and history, not the register; the project's signoff, said so", () => {
+    const html = report({ unit: FAILED, history: HISTORY });
+    expect(html).toContain("26-104A</span> · Riverside MOB");
+    expect(html).toContain("AHU-2");
+    expect(html).toContain("Test failed");
+    expect(html).toContain("Outside air damper drives closed");
+    expect(html).toContain("PH+B controls");
+    expect(html).toContain("History · 2");
+    expect(html).not.toContain("Equipment register");
+    expect(html).not.toContain("AHU-3");
+    expect(html).toContain("These signatures cover the whole project");
+  });
+
+  it("one unit with nothing recorded says Not answered", () => {
+    expect(report({ unit: OPEN })).toContain("Not answered");
+  });
+
+  it("shows both signatures by name, and flags a change after review", () => {
     const html = report({});
     expect(html).toContain("Dana Whitfield");
     expect(html).toContain("Lee Park");
-  });
-
-  it("flags a change after review", () => {
-    expect(report({})).not.toContain("Changed after review.");
-    expect(report({ verification: { ...ROUND, changedAfterReview: true } })).toContain("Changed after review.");
-  });
-
-  it("entire project by default: every building, with a Building column", () => {
-    const html = report({});
-    expect(html).toContain("Equipment register · 5");
-    expect(html).not.toContain(" only.");
-    expect(html).toContain(">Building</th>");
-  });
-
-  it("one building: only its units and findings, says so, and keeps the whole-verification signoff", () => {
-    const html = report({ building: PROJECT.buildings[1] });
-    expect(html).toContain(" · Annex");
-    expect(html).toContain("Annex only.");
-    expect(html).toContain("Equipment register · 1");
-    expect(html).toContain("EF-1");
-    expect(html).not.toContain("AHU-1");
-    expect(html).not.toContain("Items requiring action");
-    expect(html).not.toContain(">Building</th>");
-    expect(html).toContain("These signatures cover the whole verification");
-    expect(html).toContain("Dana Whitfield");
+    expect(html).not.toContain("Changed after review.");
+    expect(report({ project: { ...PROJECT, changedAfterReview: true } })).toContain("Changed after review.");
   });
 
   it("offers signing only where it applies", () => {
-    const html = report({ verification: { ...ROUND, completed: null, reviewed: null } });
+    const html = report({ project: { ...PROJECT, completed: null, reviewed: null } });
     expect(html.match(/Sign as me/g)).toHaveLength(2);
     expect(html).toContain("Not signed.");
   });

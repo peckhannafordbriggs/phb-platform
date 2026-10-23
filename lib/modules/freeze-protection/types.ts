@@ -1,7 +1,7 @@
 /**
  * The shape of a freeze protection register, ported from the Controls Division's
- * verification sheet. These types drive the screens; the Prisma models are written
- * to match them, not the other way round.
+ * verification sheet. A project is verified once; each unit carries its results.
+ * These types drive the screens; the Prisma models are written to match them.
  *
  * Date-only values are `YYYY-MM-DD` strings. Never parse them into a Date in the
  * browser's zone; they show the day before.
@@ -57,19 +57,11 @@ export type FpDocumentation = {
   method: string | null;
 };
 
-/** A building on a project. Every unit belongs to one. */
-export type FpBuilding = {
-  id: string;
+/** Who signed, and when. The signer is the signed-in employee, never typed. */
+export type FpSignature = {
+  employeeId: string | null;
   name: string;
-  equipmentCount: number;
-};
-
-/** A construction job. Identified by its job number; linked to nothing else. */
-export type FpProject = {
-  id: string;
-  jobNumber: string;
-  name: string;
-  buildings: FpBuilding[];
+  at: string;
 };
 
 /** A project as the picker lists it. */
@@ -78,54 +70,38 @@ export type FpProjectSummary = {
   jobNumber: string;
   name: string;
   equipmentCount: number;
-  /** The newest round's date, or null when the project has none yet. */
-  latestVerificationDate: string | null;
-};
-
-/** Who signed, and when. The signer is the signed-in employee, never typed. */
-export type FpSignature = {
-  employeeId: string | null;
-  name: string;
-  at: string;
 };
 
 /**
- * One verification round on a project. The report speaks for `verificationDate`.
- * Step 7: `completed` is the person who carried it out, `reviewed` a different
- * engineer.
+ * A construction job and its one verification. The report speaks for
+ * `verificationDate`. Step 7: `completed` is the person who carried it out,
+ * `reviewed` a different engineer.
  */
-export type FpVerification = {
+export type FpProject = {
   id: string;
-  projectId: string;
+  jobNumber: string;
+  name: string;
   verificationDate: string;
   completed: FpSignature | null;
   reviewed: FpSignature | null;
   transmittedTo: string | null;
   transmittedDate: string | null;
   /**
-   * True when anything in the round changed after it was reviewed. Nothing is
-   * locked (decision 2026-10-22); the report says so instead, because the sheet
-   * requires a new review after any later change.
+   * True when a unit was added, changed or removed after the review. Nothing
+   * is locked; the report says so instead, because the procedure requires a
+   * new review after any later change. Read from the audit log.
    */
   changedAfterReview: boolean;
+  equipmentCount: number;
 };
 
-/**
- * One line in a round's register: the unit (from the equipment schedule) and
- * its result in this round. Null means "not answered yet".
- */
+/** One unit from the equipment schedule with its results. Null means "not answered yet". */
 export type FpLine = {
-  /** The equipment id: stable across rounds. */
   id: string;
-  /** This round's result row. */
-  resultId: string;
-  buildingId: string;
-  buildingName: string;
-  tag: string;
+  name: string;
   equipmentType: string | null;
   areaServed: string | null;
   coil: CoilType | null;
-  equipmentNotes: string | null;
   status: EquipmentStatus;
   exposure: Exposure | null;
   protection: Protection | null;
@@ -136,6 +112,14 @@ export type FpLine = {
   notes: string | null;
   updatedAt: string;
   updatedBy: string | null;
+};
+
+/** One change in a unit's history, from the audit log. */
+export type FpHistoryEntry = {
+  id: string;
+  /** ISO timestamp. */
+  at: string;
+  sentence: string;
 };
 
 /**

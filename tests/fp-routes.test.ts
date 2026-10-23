@@ -7,14 +7,9 @@ vi.mock("@/auth", () => ({ auth: vi.fn() }));
 import { auth } from "@/auth";
 import * as projects from "@/app/api/modules/freeze-protection/projects/route";
 import * as project from "@/app/api/modules/freeze-protection/projects/[id]/route";
-import * as projectBuildings from "@/app/api/modules/freeze-protection/projects/[id]/buildings/route";
-import * as projectRounds from "@/app/api/modules/freeze-protection/projects/[id]/verifications/route";
-import * as building from "@/app/api/modules/freeze-protection/buildings/[id]/route";
+import * as signoff from "@/app/api/modules/freeze-protection/projects/[id]/signoff/route";
 import * as equipmentList from "@/app/api/modules/freeze-protection/equipment/route";
 import * as equipment from "@/app/api/modules/freeze-protection/equipment/[id]/route";
-import * as round from "@/app/api/modules/freeze-protection/verifications/[id]/route";
-import * as signoff from "@/app/api/modules/freeze-protection/verifications/[id]/signoff/route";
-import * as result from "@/app/api/modules/freeze-protection/results/[id]/route";
 import { FREEZE_PROTECTION_MODULE_KEY } from "@/lib/modules/freeze-protection/constants";
 import { createEmployee, disconnectDb, grantModule, resetDb, testDb } from "./db";
 
@@ -45,22 +40,15 @@ const code = async (res: Response) => ((await res.json()) as { error: { code: st
 /** Every handler in the module, called once. The access tests walk this list. */
 const EVERY_ROUTE: [string, () => Promise<Response>][] = [
   ["GET projects", () => projects.GET()],
-  ["POST projects", () => projects.POST(req("POST", { jobNumber: "1", name: "X", buildings: ["A"] }))],
+  ["POST projects", () => projects.POST(req("POST", { jobNumber: "1", name: "X" }))],
   ["GET project", () => project.GET(req("GET"), ctx("1"))],
   ["PATCH project", () => project.PATCH(req("PATCH", { name: "Y" }), ctx("1"))],
   ["DELETE project", () => project.DELETE(req("DELETE"), ctx("1"))],
-  ["POST building", () => projectBuildings.POST(req("POST", { name: "B" }), ctx("1"))],
-  ["POST round", () => projectRounds.POST(req("POST", { verificationDate: "2026-10-22" }), ctx("1"))],
-  ["PATCH building", () => building.PATCH(req("PATCH", { name: "B" }), ctx("1"))],
-  ["DELETE building", () => building.DELETE(req("DELETE"), ctx("1"))],
-  ["POST equipment", () => equipmentList.POST(req("POST", { buildingId: "1", tag: "AHU-1" }))],
-  ["PATCH equipment", () => equipment.PATCH(req("PATCH", { tag: "AHU-2" }), ctx("1"))],
-  ["DELETE equipment", () => equipment.DELETE(req("DELETE"), ctx("1"))],
-  ["GET round", () => round.GET(req("GET"), ctx("1"))],
-  ["PATCH round", () => round.PATCH(req("PATCH", { transmittedTo: "CM" }), ctx("1"))],
-  ["DELETE round", () => round.DELETE(req("DELETE"), ctx("1"))],
   ["POST signoff", () => signoff.POST(req("POST", { role: "completed", signed: true }), ctx("1"))],
-  ["PATCH result", () => result.PATCH(req("PATCH", { exposure: "yes" }), ctx("1"))],
+  ["POST equipment", () => equipmentList.POST(req("POST", { projectId: "1", name: "AHU-1" }))],
+  ["GET equipment history", () => equipment.GET(req("GET"), ctx("1"))],
+  ["PATCH equipment", () => equipment.PATCH(req("PATCH", { exposure: "yes" }), ctx("1"))],
+  ["DELETE equipment", () => equipment.DELETE(req("DELETE"), ctx("1"))],
 ];
 
 beforeEach(async () => {
@@ -68,9 +56,7 @@ beforeEach(async () => {
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   await resetDb();
-  await testDb.module.create({
-    data: { key: FREEZE_PROTECTION_MODULE_KEY, displayName: "Freeze Protection", sortOrder: 500 },
-  });
+  await testDb.module.create({ data: { key: FREEZE_PROTECTION_MODULE_KEY, displayName: "Freeze Protection", sortOrder: 500 } });
 });
 afterEach(() => vi.restoreAllMocks());
 afterAll(disconnectDb);
@@ -90,7 +76,7 @@ describe("access", () => {
 
   it("a grant alone is enough to do everything (no module-admin actions)", async () => {
     await signIn(true);
-    const created = await projects.POST(req("POST", { jobNumber: "26-104A", name: "Riverside", buildings: ["Main"] }));
+    const created = await projects.POST(req("POST", { jobNumber: "26-104A", name: "Riverside" }));
     expect(created.status).toBe(201);
     const p = await data<{ id: string }>(created);
     expect((await project.DELETE(req("DELETE"), ctx(p.id))).status).toBe(200);
@@ -101,17 +87,17 @@ describe("validation", () => {
   beforeEach(() => signIn(true));
 
   it("422 for an unknown field rather than ignoring it", async () => {
-    const res = await projects.POST(req("POST", { jobNumber: "1", name: "X", buildings: ["A"], owner: "me" }));
-    expect(res.status).toBe(422);
+    expect((await projects.POST(req("POST", { jobNumber: "1", name: "X", buildings: ["A"] }))).status).toBe(422);
+    expect((await equipment.PATCH(req("PATCH", { tag: "AHU-1" }), ctx("1"))).status).toBe(422);
   });
 
   it("422 for a value outside the vocabulary", async () => {
-    expect((await result.PATCH(req("PATCH", { protection: "hope" }), ctx("1"))).status).toBe(422);
-    expect((await result.PATCH(req("PATCH", { testFanStops: "y" }), ctx("1"))).status).toBe(422);
+    expect((await equipment.PATCH(req("PATCH", { protection: "hope" }), ctx("1"))).status).toBe(422);
+    expect((await equipment.PATCH(req("PATCH", { testFanStops: "y" }), ctx("1"))).status).toBe(422);
   });
 
   it("422 for a date that is not a real day", async () => {
-    expect((await projectRounds.POST(req("POST", { verificationDate: "2026-02-30" }), ctx("1"))).status).toBe(422);
+    expect((await projects.POST(req("POST", { jobNumber: "1", name: "X", verificationDate: "2026-02-30" }))).status).toBe(422);
   });
 
   it("422 for a body that is not JSON", async () => {
@@ -124,25 +110,25 @@ describe("validation", () => {
   });
 });
 
-describe("the service's refusals reach the caller as their own codes", () => {
+describe("end to end", () => {
   it("409 job_number_taken", async () => {
     await signIn(true);
-    const body = { jobNumber: "26-104A", name: "Riverside", buildings: ["Main"] };
+    const body = { jobNumber: "26-104A", name: "Riverside" };
     expect((await projects.POST(req("POST", body))).status).toBe(201);
     const again = await projects.POST(req("POST", body));
     expect(again.status).toBe(409);
     expect(await code(again)).toBe("job_number_taken");
   });
 
-  it("409 self_review, end to end", async () => {
+  it("records a result, returns the unit's history, and refuses self-review", async () => {
     await signIn(true);
-    const p = await data<{ id: string; buildings: { id: string }[] }>(
-      await projects.POST(req("POST", { jobNumber: "26-1", name: "X", buildings: ["Main"] })),
-    );
-    await equipmentList.POST(req("POST", { buildingId: p.buildings[0]!.id, tag: "AHU-1" }));
-    const v = await data<{ id: string }>(await projectRounds.POST(req("POST", { verificationDate: "2026-10-22" }), ctx(p.id)));
-    expect((await signoff.POST(req("POST", { role: "completed", signed: true }), ctx(v.id))).status).toBe(200);
-    const self = await signoff.POST(req("POST", { role: "reviewed", signed: true }), ctx(v.id));
+    const p = await data<{ id: string }>(await projects.POST(req("POST", { jobNumber: "26-1", name: "X" })));
+    const e = await data<{ id: string }>(await equipmentList.POST(req("POST", { projectId: p.id, name: "AHU-1" })));
+    expect((await equipment.PATCH(req("PATCH", { coil: "water", exposure: "yes" }), ctx(e.id))).status).toBe(200);
+    const { history } = await data<{ history: { sentence: string }[] }>(await equipment.GET(req("GET"), ctx(e.id)));
+    expect(history.length).toBe(3);
+    expect((await signoff.POST(req("POST", { role: "completed", signed: true }), ctx(p.id))).status).toBe(200);
+    const self = await signoff.POST(req("POST", { role: "reviewed", signed: true }), ctx(p.id));
     expect(self.status).toBe(409);
     expect(await code(self)).toBe("self_review");
   });

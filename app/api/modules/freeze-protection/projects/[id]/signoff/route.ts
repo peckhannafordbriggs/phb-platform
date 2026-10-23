@@ -1,5 +1,5 @@
+import { signProject } from "@/lib/modules/freeze-protection/projects";
 import { signSchema } from "@/lib/modules/freeze-protection/schemas";
-import { signVerification } from "@/lib/modules/freeze-protection/verifications";
 import { type IdParams, handleWrite } from "../../../handle";
 
 export const runtime = "nodejs";
@@ -9,9 +9,9 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request, { params }: IdParams) {
   const { id } = await params;
   return handleWrite(request, {
-    route: "/api/modules/freeze-protection/verifications/[id]/signoff",
-    event: "fp.verification_sign_failed",
+    route: "/api/modules/freeze-protection/projects/[id]/signoff",
+    event: "fp.project_sign_failed",
     schema: signSchema,
-    run: (actorId, body) => signVerification(actorId, id, body.role, body.signed),
+    run: (actorId, body) => signProject(actorId, id, body.role, body.signed),
   });
 }

@@ -9,17 +9,11 @@ import { FpNav, type Tab } from "./fp-nav";
 /** Chrome for every Freeze Protection view. A component, not a layout, so it never wraps a 404. */
 export function FpShell({
   projectId,
-  roundId,
-  buildingId,
   actions,
   children,
 }: {
   /** Carried across tabs so Register and Report open on the same project. */
   projectId?: string;
-  /** The verification round showing, carried across tabs the same way. */
-  roundId?: string;
-  /** The building in view (Register switcher, Report scope), carried the same way. */
-  buildingId?: string;
   /** Right-aligned controls on the tab row. */
   actions?: React.ReactNode;
   children: React.ReactNode;
@@ -37,7 +31,7 @@ export function FpShell({
           title={FREEZE_PROTECTION_MODULE_NAME}
           blurb="Coil freeze exposure, safeties and test results, by project."
         >
-          <FpNav tabs={tabs(projectId, roundId, buildingId)} actions={actions} />
+          <FpNav tabs={tabs(projectId)} actions={actions} />
         </ModuleHeader>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-8 pt-6">
@@ -49,13 +43,9 @@ export function FpShell({
 
 const BASE = "/freeze-protection";
 
-/** Project, round and building travel in the URL, so a tab switch keeps them and a refresh restores them. */
-function tabs(projectId?: string, roundId?: string, buildingId?: string): Tab[] {
-  const query = projectId
-    ? `?project=${encodeURIComponent(projectId)}` +
-      (roundId ? `&round=${encodeURIComponent(roundId)}` : "") +
-      (buildingId ? `&building=${encodeURIComponent(buildingId)}` : "")
-    : "";
+/** The project travels in the URL, so a tab switch keeps it and a refresh restores it. */
+function tabs(projectId?: string): Tab[] {
+  const query = projectId ? `?project=${encodeURIComponent(projectId)}` : "";
   return [
     { href: `${BASE}${query}`, label: "Register", path: BASE, exact: true },
     { href: `${BASE}/report${query}`, label: "Report", path: `${BASE}/report` },

@@ -10,10 +10,7 @@ export type FpErrorCode =
   | "not_found"
   | "invalid"
   | "job_number_taken"
-  | "building_name_taken"
-  | "tag_taken"
-  | "building_not_empty"
-  | "last_building"
+  | "name_taken"
   | "already_signed"
   | "not_completed"
   | "self_review";
@@ -24,10 +21,7 @@ export const FP_ERROR_STATUS: Record<FpErrorCode, number> = {
   not_found: 404,
   invalid: 422,
   job_number_taken: 409,
-  building_name_taken: 409,
-  tag_taken: 409,
-  building_not_empty: 409,
-  last_building: 409,
+  name_taken: 409,
   already_signed: 409,
   not_completed: 409,
   self_review: 409,

@@ -1,21 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { FREEZE_PROTECTION_MODULE_KEY } from "@/lib/modules/freeze-protection/constants";
-import { addEquipment, deleteEquipment, updateEquipment } from "@/lib/modules/freeze-protection/equipment";
-import {
-  addBuilding,
-  createProject,
-  deleteBuilding,
-  deleteProject,
-  listProjects,
-  updateProject,
-} from "@/lib/modules/freeze-protection/projects";
-import {
-  createVerification,
-  getRegister,
-  getVerification,
-  signVerification,
-  updateResult,
-} from "@/lib/modules/freeze-protection/verifications";
+import { addEquipment, deleteEquipment, getHistory, listEquipment, updateEquipment } from "@/lib/modules/freeze-protection/equipment";
+import { createProject, deleteProject, getProject, listProjects, signProject, updateProject } from "@/lib/modules/freeze-protection/projects";
 import { createEmployee, disconnectDb, resetDb, testDb } from "./db";
 
 /**
@@ -28,249 +14,209 @@ let engineer: string;
 
 beforeEach(async () => {
   await resetDb();
-  await testDb.module.create({
-    data: { key: FREEZE_PROTECTION_MODULE_KEY, displayName: "Freeze Protection", sortOrder: 500 },
-  });
+  await testDb.module.create({ data: { key: FREEZE_PROTECTION_MODULE_KEY, displayName: "Freeze Protection", sortOrder: 500 } });
   pm = (await createEmployee()).id;
   engineer = (await createEmployee()).id;
 });
 afterAll(disconnectDb);
 
-async function project(buildings = ["Main"]) {
-  const r = await createProject(pm, { jobNumber: "26-104A", name: "Riverside MOB", buildings });
+async function project(jobNumber = "26-104A") {
+  const r = await createProject(pm, { jobNumber, name: "Riverside MOB", verificationDate: "2026-11-01" });
   if (!r.ok) throw new Error(r.message);
   return r.data;
 }
 
-async function unit(buildingId: string, tag = "AHU-1", coil: "water" | null = "water") {
-  const r = await addEquipment(pm, { buildingId, tag, coil });
+async function unit(projectId: string, name = "AHU-1") {
+  const r = await addEquipment(pm, { projectId, name, coil: "water" });
   if (!r.ok) throw new Error(r.message);
   return r.data;
 }
 
-async function round(projectId: string, date = "2026-10-22") {
-  const r = await createVerification(pm, projectId, date);
-  if (!r.ok) throw new Error(r.message);
-  return r.data;
-}
+const tick = () => new Promise((r) => setTimeout(r, 5));
 
-describe("projects and buildings", () => {
-  it("creates a project with its buildings and one audit row", async () => {
-    const p = await project(["Main", "Annex"]);
-    expect(p.buildings.map((b) => b.name)).toEqual(["Main", "Annex"]);
+describe("projects", () => {
+  it("creates a project with its verification date and one audit row", async () => {
+    const p = await project();
+    expect(p.verificationDate).toBe("2026-11-01");
+    expect(p.completed).toBeNull();
     expect(await testDb.auditEvent.count({ where: { action: "fp.project_created" } })).toBe(1);
+  });
+
+  it("defaults the verification date to today", async () => {
+    const r = await createProject(pm, { jobNumber: "26-2", name: "X" });
+    expect(r.ok && /^\d{4}-\d{2}-\d{2}$/.test(r.data.verificationDate)).toBe(true);
   });
 
   it("refuses a job number already in use, ignoring case", async () => {
     await project();
-    const r = await createProject(pm, { jobNumber: "26-104a", name: "Other", buildings: ["Main"] });
-    expect(r).toMatchObject({ ok: false, code: "job_number_taken" });
+    expect(await createProject(pm, { jobNumber: "26-104a", name: "Other" })).toMatchObject({ ok: false, code: "job_number_taken" });
   });
 
-  it("refuses two buildings with the same name", async () => {
-    const r = await createProject(pm, { jobNumber: "26-1", name: "X", buildings: ["Main", "main"] });
-    expect(r).toMatchObject({ ok: false, code: "building_name_taken" });
-  });
-
-  it("records the previous values when a project is renamed", async () => {
+  it("audits identity and verification changes as separate actions", async () => {
     const p = await project();
-    await updateProject(pm, p.id, { name: "Riverside Medical" });
-    const row = await testDb.auditEvent.findFirstOrThrow({ where: { action: "fp.project_updated" } });
-    expect(row.metadata).toMatchObject({ previousName: "Riverside MOB", name: "Riverside Medical" });
+    await updateProject(pm, p.id, { name: "Riverside Medical", verificationDate: "2026-11-02" });
+    const identity = await testDb.auditEvent.findFirstOrThrow({ where: { action: "fp.project_updated" } });
+    expect(identity.metadata).toMatchObject({ previousName: "Riverside MOB", name: "Riverside Medical" });
+    const verification = await testDb.auditEvent.findFirstOrThrow({ where: { action: "fp.verification_updated" } });
+    expect(verification.metadata).toMatchObject({ changes: { verificationDate: { from: "2026-11-01", to: "2026-11-02" } } });
   });
 
-  it("refuses to remove a building that holds equipment, or the last building", async () => {
-    const p = await project(["Main", "Annex"]);
-    await unit(p.buildings[0]!.id);
-    expect(await deleteBuilding(pm, p.buildings[0]!.id)).toMatchObject({ ok: false, code: "building_not_empty" });
-    expect((await deleteBuilding(pm, p.buildings[1]!.id)).ok).toBe(true);
-  });
-
-  it("adds a building, refusing a name the project already has", async () => {
+  it("stores date-only values without shifting the day", async () => {
     const p = await project();
-    const r = await addBuilding(pm, p.id, "Annex");
-    expect(r.ok && r.data.buildings.map((b) => b.name)).toEqual(["Main", "Annex"]);
-    expect(await addBuilding(pm, p.id, "MAIN")).toMatchObject({ ok: false, code: "building_name_taken" });
+    await updateProject(pm, p.id, { transmittedDate: "2026-11-01" });
+    expect((await getProject(p.id))!.transmittedDate).toBe("2026-11-01");
   });
 
-  it("keeps the last building", async () => {
-    const r = await createProject(pm, { jobNumber: "26-2", name: "Y", buildings: ["Only"] });
-    if (!r.ok) throw new Error();
-    expect(await deleteBuilding(pm, r.data.buildings[0]!.id)).toMatchObject({ ok: false, code: "last_building" });
-  });
-
-  it("deleting a project removes everything in it", async () => {
+  it("deleting a project removes its equipment", async () => {
     const p = await project();
-    await unit(p.buildings[0]!.id);
-    await round(p.id);
+    await unit(p.id);
     expect((await deleteProject(pm, p.id)).ok).toBe(true);
-    expect(await testDb.fpResult.count()).toBe(0);
     expect(await testDb.fpEquipment.count()).toBe(0);
     expect(await listProjects()).toEqual([]);
   });
 });
 
 describe("equipment", () => {
-  it("allows the same tag in two buildings, not twice in one", async () => {
-    const p = await project(["Main", "Annex"]);
-    await unit(p.buildings[0]!.id, "AHU-1");
-    expect((await addEquipment(pm, { buildingId: p.buildings[1]!.id, tag: "AHU-1" })).ok).toBe(true);
-    expect(await addEquipment(pm, { buildingId: p.buildings[0]!.id, tag: "ahu-1" })).toMatchObject({ ok: false, code: "tag_taken" });
-  });
-
-  it("joins only the newest round when added after rounds exist", async () => {
+  it("needs only a name; type and area served are optional", async () => {
     const p = await project();
-    await unit(p.buildings[0]!.id, "AHU-1");
-    const older = await round(p.id, "2025-11-01");
-    const newer = await round(p.id, "2026-10-22");
-    await unit(p.buildings[0]!.id, "AHU-2");
-    expect((await getRegister(older.id)).map((l) => l.tag)).toEqual(["AHU-1"]);
-    expect((await getRegister(newer.id)).map((l) => l.tag)).toEqual(["AHU-1", "AHU-2"]);
+    const r = await addEquipment(pm, { projectId: p.id, name: "EF-1" });
+    expect(r.ok && r.data).toMatchObject({ name: "EF-1", equipmentType: null, areaServed: null, status: "service" });
+    expect(await addEquipment(pm, { projectId: p.id, name: "   " })).toMatchObject({ ok: false, code: "invalid" });
   });
 
-  it("will not move a unit to another project's building", async () => {
+  it("refuses a name already on the project, ignoring case; another project may reuse it", async () => {
     const p = await project();
-    const other = await createProject(pm, { jobNumber: "26-9", name: "Other", buildings: ["B"] });
-    if (!other.ok) throw new Error();
-    const e = await unit(p.buildings[0]!.id);
-    expect(await updateEquipment(pm, e.id, { buildingId: other.data.buildings[0]!.id })).toMatchObject({ ok: false, code: "invalid" });
+    await unit(p.id, "AHU-1");
+    expect(await addEquipment(pm, { projectId: p.id, name: "ahu-1" })).toMatchObject({ ok: false, code: "name_taken" });
+    const other = await project("26-9");
+    expect((await addEquipment(pm, { projectId: other.id, name: "AHU-1" })).ok).toBe(true);
   });
 
-  it("removing a unit removes its results and says how many rounds it was in", async () => {
+  it("lists in schedule order, AHU-2 before AHU-10", async () => {
     const p = await project();
-    const e = await unit(p.buildings[0]!.id);
-    await round(p.id, "2025-11-01");
-    await round(p.id, "2026-10-22");
-    await deleteEquipment(pm, e.id);
-    expect(await testDb.fpResult.count()).toBe(0);
-    const row = await testDb.auditEvent.findFirstOrThrow({ where: { action: "fp.equipment_deleted" } });
-    expect(row.metadata).toMatchObject({ tag: "AHU-1", rounds: 2 });
-  });
-});
-
-describe("verification rounds", () => {
-  it("gives every unit a result in a new round", async () => {
-    const p = await project(["Main", "Annex"]);
-    await unit(p.buildings[0]!.id, "AHU-1");
-    await unit(p.buildings[1]!.id, "RTU-1");
-    const v = await round(p.id);
-    const lines = await getRegister(v.id);
-    expect(lines.map((l) => `${l.buildingName} ${l.tag}`)).toEqual(["Main AHU-1", "Annex RTU-1"]);
+    await unit(p.id, "AHU-10");
+    await unit(p.id, "AHU-2");
+    await testDb.fpEquipment.updateMany({ data: { sortOrder: 0 } });
+    expect((await listEquipment(p.id)).map((l) => l.name)).toEqual(["AHU-2", "AHU-10"]);
   });
 
-  it("carries status, exposure and protection forward, and not this round's evidence", async () => {
+  it("audits a schedule fix and a recorded result as different actions", async () => {
     const p = await project();
-    await unit(p.buildings[0]!.id);
-    const first = await round(p.id, "2025-11-01");
-    const [line] = await getRegister(first.id);
-    await updateResult(pm, line!.resultId, {
-      status: "filled",
-      exposure: "yes",
-      protection: "manual",
-      testFanStops: "yes",
-      testedBy: "C. Moreno",
-      documentedWith: "owner",
-    });
-    const second = await round(p.id, "2026-10-22");
-    const [next] = await getRegister(second.id);
-    expect(next).toMatchObject({ status: "filled", exposure: "yes", protection: "manual" });
-    expect(next!.test.answers).toEqual({});
-    expect(next!.test.testedBy).toBeNull();
-    expect(next!.documentation).toBeNull();
-  });
-
-  it("stores date-only values without shifting the day", async () => {
-    const p = await project();
-    await unit(p.buildings[0]!.id);
-    const v = await round(p.id, "2026-11-01");
-    const [line] = await getRegister(v.id);
-    const r = await updateResult(pm, line!.resultId, { testDate: "2026-11-01" });
-    expect(r.ok && r.data.test.testDate).toBe("2026-11-01");
-    expect((await getVerification(v.id))!.verificationDate).toBe("2026-11-01");
-  });
-
-  it("audits each saved field's before and after, with the disposition after", async () => {
-    const p = await project();
-    await unit(p.buildings[0]!.id);
-    const v = await round(p.id);
-    const [line] = await getRegister(v.id);
-    await updateResult(pm, line!.resultId, { exposure: "no" });
-    const row = await testDb.auditEvent.findFirstOrThrow({ where: { action: "fp.result_updated" } });
-    expect(row.metadata).toMatchObject({
-      tag: "AHU-1",
-      changes: { exposure: { from: null, to: "no" } },
-      disposition: "closed_no_exposure",
-    });
+    const e = await unit(p.id);
+    await updateEquipment(pm, e.id, { areaServed: "Level 2", exposure: "no" });
+    const schedule = await testDb.auditEvent.findFirstOrThrow({ where: { action: "fp.equipment_updated" } });
+    expect(schedule.metadata).toMatchObject({ name: "AHU-1", changes: { areaServed: { from: null, to: "Level 2" } } });
+    const result = await testDb.auditEvent.findFirstOrThrow({ where: { action: "fp.result_updated" } });
+    expect(result.metadata).toMatchObject({ changes: { exposure: { from: null, to: "no" } }, disposition: "closed_no_exposure" });
   });
 
   it("writes nothing when a save changes nothing", async () => {
     const p = await project();
-    await unit(p.buildings[0]!.id);
-    const v = await round(p.id);
-    const [line] = await getRegister(v.id);
-    await updateResult(pm, line!.resultId, { status: "service", notes: "   " });
-    expect(await testDb.auditEvent.count({ where: { action: "fp.result_updated" } })).toBe(0);
+    const e = await unit(p.id);
+    await updateEquipment(pm, e.id, { status: "service", notes: "   " });
+    expect(await testDb.auditEvent.count({ where: { action: { in: ["fp.equipment_updated", "fp.result_updated"] } } })).toBe(0);
+  });
+
+  it("stores a test date without shifting the day", async () => {
+    const p = await project();
+    const e = await unit(p.id);
+    const r = await updateEquipment(pm, e.id, { testDate: "2026-11-01" });
+    expect(r.ok && r.data.test.testDate).toBe("2026-11-01");
+  });
+
+  it("removing a unit removes its results; its history survives in the audit log", async () => {
+    const p = await project();
+    const e = await unit(p.id);
+    await updateEquipment(pm, e.id, { exposure: "yes" });
+    await deleteEquipment(pm, e.id);
+    expect(await testDb.fpEquipment.count()).toBe(0);
+    expect((await getHistory(e.id)).length).toBe(3);
+  });
+});
+
+describe("history", () => {
+  it("is every change to the unit, newest first, with who and when", async () => {
+    const p = await project();
+    const e = await unit(p.id);
+    await tick();
+    await updateEquipment(engineer, e.id, { exposure: "yes" });
+    const history = await getHistory(e.id);
+    expect(history).toHaveLength(2);
+    expect(history[0]!.sentence).toContain("recorded outside air exposure for AHU-1 on job 26-104A");
+    expect(history[1]!.sentence).toContain("added AHU-1 to the job 26-104A register");
+    expect(new Date(history[0]!.at) >= new Date(history[1]!.at)).toBe(true);
+  });
+
+  it("belongs to one unit only", async () => {
+    const p = await project();
+    const a = await unit(p.id, "AHU-1");
+    const b = await unit(p.id, "AHU-2");
+    await updateEquipment(pm, b.id, { exposure: "no" });
+    expect((await getHistory(a.id)).every((h) => h.sentence.includes("AHU-1"))).toBe(true);
   });
 });
 
 describe("step 7 signoff", () => {
-  async function completedRound() {
+  async function completed() {
     const p = await project();
-    await unit(p.buildings[0]!.id);
-    const v = await round(p.id);
-    const [line] = await getRegister(v.id);
-    await updateResult(pm, line!.resultId, { exposure: "no" });
-    const r = await signVerification(pm, v.id, "completed", true);
+    const e = await unit(p.id);
+    await updateEquipment(pm, e.id, { exposure: "no" });
+    const r = await signProject(pm, p.id, "completed", true);
     if (!r.ok) throw new Error(r.message);
-    return { v, line: line! };
+    return { p, e };
   }
 
-  it("records the signed-in employee, not a typed name", async () => {
-    const { v } = await completedRound();
-    const after = await getVerification(v.id);
-    expect(after!.completed?.employeeId).toBe(pm);
+  it("records the signed-in employee", async () => {
+    const { p } = await completed();
+    expect((await getProject(p.id))!.completed?.employeeId).toBe(pm);
   });
 
   it("refuses a review before completion", async () => {
     const p = await project();
-    const v = await round(p.id);
-    expect(await signVerification(engineer, v.id, "reviewed", true)).toMatchObject({ ok: false, code: "not_completed" });
+    expect(await signProject(engineer, p.id, "reviewed", true)).toMatchObject({ ok: false, code: "not_completed" });
   });
 
   it("refuses the person who completed it as reviewer", async () => {
-    const { v } = await completedRound();
-    expect(await signVerification(pm, v.id, "reviewed", true)).toMatchObject({ ok: false, code: "self_review" });
+    const { p } = await completed();
+    expect(await signProject(pm, p.id, "reviewed", true)).toMatchObject({ ok: false, code: "self_review" });
   });
 
-  it("refuses a reviewer who recorded results in the round", async () => {
-    const { v, line } = await completedRound();
-    await updateResult(engineer, line.resultId, { notes: "Walked the unit" });
-    expect(await signVerification(engineer, v.id, "reviewed", true)).toMatchObject({ ok: false, code: "self_review" });
+  it("refuses a reviewer who recorded any result on the project, not only the last", async () => {
+    const { p, e } = await completed();
+    await updateEquipment(engineer, e.id, { protection: "manual" });
+    await updateEquipment(pm, e.id, { protection: "auto" });
+    expect(await signProject(engineer, p.id, "reviewed", true)).toMatchObject({ ok: false, code: "self_review" });
   });
 
-  it("accepts a different engineer, and flags a change made after the review", async () => {
-    const { v, line } = await completedRound();
-    expect((await signVerification(engineer, v.id, "reviewed", true)).ok).toBe(true);
-    expect((await getVerification(v.id))!.changedAfterReview).toBe(false);
-
-    await new Promise((r) => setTimeout(r, 5));
-    await updateResult(pm, line.resultId, { notes: "Rechecked" });
-    expect((await getVerification(v.id))!.changedAfterReview).toBe(true);
+  it("does not count a schedule fix as recording results", async () => {
+    const { p, e } = await completed();
+    await updateEquipment(engineer, e.id, { areaServed: "Level 2" });
+    expect((await signProject(engineer, p.id, "reviewed", true)).ok).toBe(true);
   });
 
-  it("flags a coil change on the unit after the review", async () => {
-    const { v, line } = await completedRound();
-    await signVerification(engineer, v.id, "reviewed", true);
-    await new Promise((r) => setTimeout(r, 5));
-    await updateEquipment(pm, line.id, { coil: "glycol" });
-    expect((await getVerification(v.id))!.changedAfterReview).toBe(true);
+  it("flags a unit added, changed or removed after the review; signoff and transmittal do not", async () => {
+    const { p, e } = await completed();
+    await signProject(engineer, p.id, "reviewed", true);
+    await tick();
+    await updateProject(pm, p.id, { transmittedTo: "Turner CM" });
+    expect((await getProject(p.id))!.changedAfterReview).toBe(false);
+    await updateEquipment(pm, e.id, { notes: "Rechecked" });
+    expect((await getProject(p.id))!.changedAfterReview).toBe(true);
+  });
+
+  it("flags a unit removed after the review", async () => {
+    const { p, e } = await completed();
+    await signProject(engineer, p.id, "reviewed", true);
+    await tick();
+    await deleteEquipment(pm, e.id);
+    expect((await getProject(p.id))!.changedAfterReview).toBe(true);
   });
 
   it("removing the completion removes the review with it", async () => {
-    const { v } = await completedRound();
-    await signVerification(engineer, v.id, "reviewed", true);
-    await signVerification(pm, v.id, "completed", false);
-    const after = await getVerification(v.id);
+    const { p } = await completed();
+    await signProject(engineer, p.id, "reviewed", true);
+    await signProject(pm, p.id, "completed", false);
+    const after = await getProject(p.id);
     expect(after!.completed).toBeNull();
     expect(after!.reviewed).toBeNull();
   });
