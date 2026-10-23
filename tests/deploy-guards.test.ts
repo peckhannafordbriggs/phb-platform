@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -527,6 +527,69 @@ describe("the Change Orders Anthropic key reaches the container only by Key Vaul
   });
 });
 
+/**
+ * Needs Review's app registration reaches the container as three plain
+ * identifiers and never a secret (2026-10-21). The same shape as the CIP
+ * app: client id, tenant id and the folder are template parameters because
+ * they are not secrets; the developer-machine secret has no parameter, no
+ * env entry and no Key Vault reference, because production presents the
+ * managed identity's token instead. The mutation this block is for: add a
+ * `PHB_PLATFORM_CO_REVIEW_APP_SECRET` entry to the bicep and the first test
+ * fails; remove an identifier entry and the second does.
+ */
+describe("the Needs Review app registration reaches the container without a secret", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+  it("never names the secret - not as a parameter, an env entry or a vault reference", async () => {
+    const bicep = await readBicep();
+    expect(bicep).not.toContain("PHB_PLATFORM_CO_REVIEW_APP_SECRET");
+    expect(bicep).not.toMatch(/param \w*[cC]oReview\w*[sS]ecret/);
+    expect(bicep).not.toMatch(/CO-REVIEW/);
+  });
+
+  it("carries the three identifiers as plain values from parameters that default to blank", async () => {
+    const bicep = await readBicep();
+
+    for (const [name, param] of [
+      ["PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID", "coReviewAppTenantId"],
+      ["PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID", "coReviewAppClientId"],
+      ["CO_REVIEW_SHAREPOINT_FOLDER", "coReviewSharePointFolder"],
+    ]) {
+      expect(bicep).toMatch(new RegExp(`name:\\s*'${name}'[\\s\\S]{0,60}value:\\s*${param}\\b`));
+      expect(bicep).not.toMatch(new RegExp(`name:\\s*'${name}'[\\s\\S]{0,60}secretRef:`));
+      expect(bicep).toMatch(new RegExp(`param ${param} string = ''`));
+    }
+  });
+
+  it("spells each variable's name in lib/env.ts, and the reader is lazy so a missing value cannot stop the boot", async () => {
+    const env = await import("@/lib/env");
+    expect(env.CO_REVIEW_APP_TENANT_ID_VAR).toBe("PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID");
+    expect(env.CO_REVIEW_APP_CLIENT_ID_VAR).toBe("PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID");
+    expect(env.CO_REVIEW_APP_SECRET_VAR).toBe("PHB_PLATFORM_CO_REVIEW_APP_SECRET");
+    expect(env.CO_REVIEW_SHAREPOINT_FOLDER_VAR).toBe("CO_REVIEW_SHAREPOINT_FOLDER");
+
+    // The suite leaves them unset; the reader reports that rather than throwing,
+    // which is what lets the app boot with the Needs Review tab unconfigured.
+    const result = env.readReviewEnv();
+    expect(result.present).toBe(false);
+  });
+
+  it("ships the three parameters blank in the example file, beside the CIP ones", async () => {
+    const example = JSON.parse(
+      await import("node:fs/promises").then((fs) =>
+        fs.readFile(path.join(projectRoot, "infra/main.parameters.example.json"), "utf8"),
+      ),
+    ) as { parameters: Record<string, { value: unknown }> };
+
+    expect(example.parameters.coReviewAppTenantId?.value).toBe("");
+    expect(example.parameters.coReviewAppClientId?.value).toBe("");
+    expect(example.parameters.coReviewSharePointFolder?.value).toBe("");
+  });
+});
+
 describe("no deployment file hardcodes an organisation", () => {
   const files = [
     "infra/main.bicep",
@@ -828,4 +891,330 @@ describe("the two deploy paths cannot diverge on the image or the port", () => {
       expect(deploy, flag).not.toContain(flag);
     }
   });
+});
+
+describe("the two secure parameters are optional, and omitted means unchanged (2026-10-21)", () => {
+  /**
+   * Until 2026-10-21 `postgresAdminPassword` and `authSecret` were required on
+   * every template deployment and whatever was typed was SET: on 2026-10-13 a
+   * value mistyped at the prompt rotated the production administrator
+   * password, and the running app kept the old one in DATABASE-URL until the
+   * next revision picked the new URL up. Now each defaults to empty, and empty
+   * means "leave it alone": the server keeps its password, DATABASE-URL keeps
+   * its version, AUTH-SECRET keeps its version. Non-empty behaves as before.
+   *
+   * Pinned both ways. Omitted: the password is ABSENT from the server request
+   * (not sent empty, not sent null) and neither secret resource is deployed.
+   * Supplied: the value reaches the server and both secrets exactly as it
+   * always did. Nothing local can run a deployment, so this reads the
+   * template, and where `az` is installed it reads the ARM it compiles to.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+
+  it("defaults both secure parameters to empty, so a deployment can omit them", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    // @secure() stays: Azure logs neither the value nor the fact it was empty.
+    expect(bicep).toMatch(
+      /@secure\(\)\s*\n@description\([^\n]*\)\s*\nparam postgresAdminPassword string = ''\s*$/m,
+    );
+    expect(bicep).toMatch(
+      /@secure\(\)\s*\n@description\([^\n]*\)\s*\nparam authSecret string = ''\s*$/m,
+    );
+  });
+
+  it("decides 'supplied' once for each, from trim(), so a stray space is not a password", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^var setPostgresAdminPassword = !empty\(trim\(postgresAdminPassword\)\)\s*$/m);
+    expect(code).toMatch(/^var setAuthSecret = !empty\(trim\(authSecret\)\)\s*$/m);
+  });
+
+  it("omitted: the password is absent from the server request, never sent empty or null", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    // The only way the property enters the request is a spread that is an
+    // empty object when nothing was supplied.
+    expect(code).toMatch(
+      /\.\.\.\(setPostgresAdminPassword \? \{ administratorLoginPassword: postgresAdminPassword \} : \{\}\)/,
+    );
+    // Never as a bare property, which would SET whatever the parameter holds -
+    // the pre-2026-10-21 shape and the one that rotated production.
+    expect(code).not.toMatch(/^\s*administratorLoginPassword:/m);
+    // And never "set it to nothing" as a stand-in for "leave it".
+    expect(code).not.toMatch(/administratorLoginPassword:\s*(null|''|"")/);
+  });
+
+  it("omitted: neither vault secret is written - both resources are conditional on their own parameter", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(
+      /^resource databaseUrlSecret 'Microsoft\.KeyVault\/vaults\/secrets@[\d-]+' = if \(setPostgresAdminPassword\) \{/m,
+    );
+    expect(code).toMatch(
+      /^resource authSecretSecret 'Microsoft\.KeyVault\/vaults\/secrets@[\d-]+' = if \(setAuthSecret\) \{/m,
+    );
+    // DATABASE-URL embeds the password, so it follows the PASSWORD's
+    // condition, not the session secret's and not its own.
+    expect(code).not.toMatch(/resource databaseUrlSecret[^\n]*if \(setAuthSecret\)/);
+  });
+
+  it("supplied: the value still reaches the server and both secrets, exactly as before", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const linesUsing = (identifier: RegExp) =>
+      code.split("\n").filter((line) => identifier.test(line) && !/^\s*param /.test(line));
+
+    // Every use of the password outside its declaration is one of three
+    // things: the decision variable, the server's conditional property, or
+    // the connection URL the DATABASE-URL secret is written from.
+    const passwordUses = linesUsing(/\bpostgresAdminPassword\b/);
+    expect(passwordUses.length).toBe(3);
+    for (const line of passwordUses) {
+      expect(line).toMatch(
+        /^var setPostgresAdminPassword = |\.\.\.\(setPostgresAdminPassword \? \{ administratorLoginPassword: postgresAdminPassword \}|^var databaseUrl = .*uriComponent\(postgresAdminPassword\)/,
+      );
+    }
+    expect(code).toMatch(/value:\s*databaseUrl\s*\n/);
+
+    // And every use of the session secret is the decision variable or the
+    // AUTH-SECRET value. (`authSecretSecret` and `setAuthSecret` are other
+    // identifiers; the word boundary keeps them out.)
+    const secretUses = linesUsing(/\bauthSecret\b/);
+    expect(secretUses.length).toBe(2);
+    for (const line of secretUses) {
+      expect(line).toMatch(/^var setAuthSecret = |^\s*value:\s*authSecret\s*$/);
+    }
+  });
+
+  it("keeps the container app and the worker job depending on both secrets, so a first deployment writes them before anything references them", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    // The reference is through the resource's symbolic name, which is what
+    // gives Bicep the dependency. ARM ignores a dependency on a resource
+    // whose condition is false, so an omitted secret does not block a redeploy.
+    const databaseUrlRefs = code.match(/secrets\/\$\{databaseUrlSecret\.name\}/g) ?? [];
+    expect(databaseUrlRefs.length).toBe(2); // the app and the CIP worker job
+    expect(code).toMatch(/secrets\/\$\{authSecretSecret\.name\}/);
+  });
+
+  it("keeps both out of the example parameters, where a value would be committed", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, unknown>;
+    };
+    expect(Object.keys(example.parameters)).not.toContain("postgresAdminPassword");
+    expect(Object.keys(example.parameters)).not.toContain("authSecret");
+  });
+
+  it("tells the deployer the routine command omits them, and the README says what omitting does", async () => {
+    const readme = await readFile("infra/README.md");
+    const deploySection = readme.split("## Deploy")[1]?.split("\n## ")[0] ?? "";
+    const routineCommand = deploySection.split("```bash")[1]?.split("```")[0] ?? "";
+    expect(routineCommand).toContain("az deployment group create");
+    expect(routineCommand).toContain("containerImage=");
+    expect(routineCommand).not.toContain("postgresAdminPassword");
+    expect(routineCommand).not.toContain("authSecret");
+    expect(deploySection).toMatch(/omit\w*[^\n]*(unchanged|untouched|leave)/i);
+  });
+
+  // The compiled check. `az bicep build` is what CI runs; here it proves the
+  // ARM says what the source says, where the CLI is installed.
+  const az = spawnSync("az", ["bicep", "version"], { encoding: "utf8", shell: true });
+  const azAvailable = az.status === 0;
+
+  it.skipIf(!azAvailable)(
+    "compiles to ARM where both parameters default to empty, the password is only inside the conditional, and both secrets carry a condition",
+    () => {
+      const build = spawnSync(
+        "az",
+        ["bicep", "build", "--file", "infra/main.bicep", "--stdout"],
+        { cwd: projectRoot, encoding: "utf8", shell: true, maxBuffer: 16 * 1024 * 1024 },
+      );
+      expect(build.status, build.stderr).toBe(0);
+      const arm = JSON.parse(build.stdout.replace(/^﻿/, "")) as {
+        parameters: Record<string, { type: string; defaultValue?: unknown }>;
+        variables: Record<string, unknown>;
+        resources: Record<string, ArmResource> | ArmResource[];
+      };
+      interface ArmResource {
+        type: string;
+        name: string;
+        condition?: string;
+        properties?: unknown;
+      }
+
+      expect(arm.parameters.postgresAdminPassword).toMatchObject({ type: "securestring", defaultValue: "" });
+      expect(arm.parameters.authSecret).toMatchObject({ type: "securestring", defaultValue: "" });
+      expect(arm.variables.setPostgresAdminPassword).toBe(
+        "[not(empty(trim(parameters('postgresAdminPassword'))))]",
+      );
+      expect(arm.variables.setAuthSecret).toBe("[not(empty(trim(parameters('authSecret'))))]");
+
+      const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
+      const server = resources.find((r) => r.type === "Microsoft.DBforPostgreSQL/flexibleServers");
+      expect(server).toBeDefined();
+      const serverProperties = JSON.stringify(server?.properties);
+      // Exactly one mention, and it is inside the `if(...)`.
+      expect(serverProperties.match(/administratorLoginPassword/g)?.length).toBe(1);
+      expect(serverProperties).toContain(
+        "if(variables('setPostgresAdminPassword'), createObject('administratorLoginPassword', parameters('postgresAdminPassword')), createObject())",
+      );
+
+      const secretCondition = (name: string) =>
+        resources.find(
+          (r) => r.type === "Microsoft.KeyVault/vaults/secrets" && r.name.includes(`'${name}'`),
+        )?.condition;
+      expect(secretCondition("DATABASE-URL")).toBe("[variables('setPostgresAdminPassword')]");
+      expect(secretCondition("AUTH-SECRET")).toBe("[variables('setAuthSecret')]");
+    },
+  );
+});
+
+describe("the custom domain lives in the template, and a routine redeploy cannot drop it (2026-10-21)", () => {
+  /**
+   * `platform.phb1899.com` is attached to the container app through
+   * `infra/main.bicep` - a custom hostname beside the app's own address, with
+   * a free managed certificate issued on the environment - rather than by a
+   * one-off `az containerapp hostname bind`, because a template deployment
+   * replaces the whole container app and would silently remove a hostname the
+   * template did not know about (the placeholder-image lesson, applied to a
+   * hostname).
+   *
+   * Two things that must stay true. The certificate depends on the app (Azure
+   * will not issue for a hostname no app carries) and the app names the
+   * certificate, so the id is built with resourceId() rather than a symbolic
+   * reference - a reference would be a cycle. And the binding defaults to
+   * TRUE: the first deployment passes customDomainBound=false on the command
+   * line to add the hostname and issue the certificate, and no later
+   * deployment needs to remember anything, because the parameters file never
+   * carries the binding. Nothing local can run a deployment, so this reads
+   * the files, and the compiled ARM where `az` is installed.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  const resourceBody = (bicep: string, symbolicName: string) => {
+    const start = bicep.indexOf(`resource ${symbolicName} `);
+    expect(start, `resource ${symbolicName}`).toBeGreaterThan(-1);
+    const rest = bicep.slice(start);
+    const next = rest.slice(1).search(/^(resource|module|output|param|var) /m);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+
+  it("takes the hostname as a parameter that defaults to empty, so a template without one deploys as before", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    expect(bicep).toMatch(/^param customDomainName string = ''\s*$/m);
+  });
+
+  it("defaults the binding to true, so the parameters file never has to carry it and a redeploy keeps the certificate bound", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    expect(bicep).toMatch(/^param customDomainBound bool = true\s*$/m);
+  });
+
+  it("ships the hostname in the example parameters, blank, and never the binding", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    expect(example.parameters.customDomainName).toEqual({ value: "" });
+    expect(Object.keys(example.parameters)).not.toContain("customDomainBound");
+  });
+
+  it("puts the hostname on the ingress in one of two states: bound to the certificate, or merely present", async () => {
+    const bicep = codeOnly(await readFile("infra/main.bicep"));
+    expect(resourceBody(bicep, "containerApp")).toMatch(/customDomains:\s*customDomains/);
+    const variable = bicep.slice(bicep.indexOf("var customDomains ="));
+    expect(variable).toContain("bindingType: 'SniEnabled'");
+    expect(variable).toContain("certificateId: managedCertificateId");
+    expect(variable).toContain("bindingType: 'Disabled'");
+    // Unbound: the key is absent, not empty. Both states keep the hostname.
+    const unbound = variable.slice(variable.indexOf("bindingType: 'Disabled'"));
+    expect(unbound.split("\n").slice(0, 3).join("\n")).not.toContain("certificateId");
+  });
+
+  it("names the certificate by resourceId(), never by a symbolic reference, because the certificate depends on the app", async () => {
+    const bicep = codeOnly(await readFile("infra/main.bicep"));
+    expect(bicep).toMatch(
+      /^var managedCertificateId = resourceId\('Microsoft\.App\/managedEnvironments\/managedCertificates', managedEnvironmentName, managedCertificateName\)\s*$/m,
+    );
+    expect(resourceBody(bicep, "containerApp")).not.toMatch(/\bmanagedCertificate\b/);
+    const certificate = resourceBody(bicep, "managedCertificate");
+    expect(certificate).toMatch(/= if \(hasCustomDomain\)/);
+    expect(certificate).toContain("domainControlValidation: 'CNAME'");
+    expect(certificate).toMatch(/dependsOn:\s*\[\s*containerApp\s*\]/);
+  });
+
+  it("leaves authUrl and the SSO redirect URI on the app's own address - sign-in moves only when the redirect URI is added", async () => {
+    const bicep = codeOnly(await readFile("infra/main.bicep"));
+    expect(bicep).toMatch(/name: 'AUTH_URL'\s*\n\s*value: authUrl\s*$/m);
+    expect(bicep).not.toMatch(/authUrl[^\n]*customDomain/);
+    expect(bicep).toMatch(
+      /^output ssoRedirectUri string = 'https:\/\/\$\{containerApp\.properties\.configuration\.ingress\.fqdn\}\/api\/auth\/callback\/microsoft-entra-id'\s*$/m,
+    );
+    expect(bicep).toMatch(/^output customDomainSsoRedirectUri string = /m);
+  });
+
+  it("is untouched by the deploy workflow, which sets the image and nothing else", async () => {
+    const workflow = await readFile(".github/workflows/deploy.yml");
+    expect(workflow).not.toMatch(/hostname|customDomain|certificate/i);
+  });
+
+  it("documents the two passes: the first with customDomainBound=false on the command line, every later one without it", async () => {
+    const readme = await readFile("infra/README.md");
+    const section = readme.split("## Custom domain")[1]?.split("\n## ")[0] ?? "";
+    expect(section).toContain("customDomainBound=false");
+    expect(section.match(/customDomainBound=false/g)?.length).toBe(1);
+    expect(section).toMatch(/asuid\./);
+    expect(section).toMatch(/CNAME/);
+  });
+
+  const az = spawnSync("az", ["bicep", "version"], { encoding: "utf8", shell: true });
+  const azAvailable = az.status === 0;
+
+  it.skipIf(!azAvailable)(
+    "compiles to ARM where the app does not depend on the certificate, the certificate depends on the app, and the binding defaults to true",
+    () => {
+      const build = spawnSync(
+        "az",
+        ["bicep", "build", "--file", "infra/main.bicep", "--stdout"],
+        { cwd: projectRoot, encoding: "utf8", shell: true, maxBuffer: 16 * 1024 * 1024 },
+      );
+      expect(build.status, build.stderr).toBe(0);
+      const arm = JSON.parse(build.stdout.replace(/^﻿/, "")) as {
+        parameters: Record<string, { type: string; defaultValue?: unknown }>;
+        variables: Record<string, unknown>;
+        resources: Record<string, ArmResource> | ArmResource[];
+      };
+      interface ArmResource {
+        type: string;
+        name: string;
+        condition?: string;
+        dependsOn?: string[];
+        properties?: { configuration?: { ingress?: { customDomains?: unknown } } };
+      }
+      expect(arm.parameters.customDomainName).toMatchObject({ type: "string", defaultValue: "" });
+      expect(arm.parameters.customDomainBound).toMatchObject({ type: "bool", defaultValue: true });
+
+      const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
+      const app = resources.find((r) => r.type === "Microsoft.App/containerApps");
+      const certificate = resources.find(
+        (r) => r.type === "Microsoft.App/managedEnvironments/managedCertificates",
+      );
+      expect(app).toBeDefined();
+      expect(certificate).toBeDefined();
+      expect(app?.properties?.configuration?.ingress?.customDomains).toBe("[variables('customDomains')]");
+      expect(JSON.stringify(app?.dependsOn)).not.toContain("managedCertificates");
+      expect(JSON.stringify(certificate?.dependsOn)).toContain("Microsoft.App/containerApps");
+      expect(certificate?.condition).toBe("[variables('hasCustomDomain')]");
+      expect(arm.variables.customDomains).toContain("'bindingType', 'SniEnabled', 'certificateId'");
+      expect(arm.variables.customDomains).toContain("'bindingType', 'Disabled'");
+    },
+  );
 });

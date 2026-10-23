@@ -72,7 +72,9 @@ create-employee endpoint.
 index, no delta tokens, no webhooks, no sync engine. See `docs/03-exchange-and-graph.md`.
 
 **No mail caching beyond short-lived in-memory.** Never persist message bodies or
-attachments.
+attachments. The same rule covers the review notes in `_needs_review`
+(2026-10-21): a note is model-written text derived from a vendor's email, and
+it is mail for this purpose.
 
 **The mailbox is a licensed user mailbox**, shared with the current operator in Outlook.
 
@@ -161,6 +163,10 @@ that mocked transports agreed with:
   it — page-by-page sorting looks ordered and is not
 - An attachment's `size` is not its content length. A 337,145-byte PDF reports 337,527,
   and 337,532 after a forward copies it. Compare content, never the reported size
+- The Graph SDK does **not** percent-encode `$filter`. `contains(subject,'P&G')` went
+  out as two query parameters and Graph answered `400 BadRequest` - for a real project
+  name - from the day search shipped until 2026-10-21. Every filter now goes through
+  `filterParam` in the mail service; nothing else in the module builds a query string
 
 Fixtures are right for hostile-HTML tests and error mapping. Anything about Graph's
 actual behaviour needs the real mailbox.
@@ -208,8 +214,10 @@ does not live in a resource group. On that last one — `az keyvault list-delete
 returns an **empty array rather than an error** when you lack permission, which
 reads exactly like "the name is free" and is not. Use `checkNameAvailability`.
 
-**What is NOT done.** The container app still runs the placeholder image and so
-answers nothing; that is expected until CI pushes a real one, not a fault.
+**The container app runs real images built from `main`.** It held the
+placeholder until CI's first real push; the placeholder came back once, in
+the 13 October template deployment (*A template deployment must be told
+which image to keep*, below), and that fix ended it.
 
 **CI is fully wired, and the deploy job is no longer inert.** All seven
 `AZURE_*` repository **variables** are set and were verified against live Azure,
@@ -257,8 +265,9 @@ of its own, and Auth.js keeps it over one passed as an option, so every
 production token request since the 17th went out with no assertion
 (`AADSTS7000218`). The wrapper is now set on the provider object, composed
 over Auth.js's own fetch, and the test resolves the provider through Auth.js's
-real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`; whether it
-signs in is not yet observed.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
+real `parseProviders`. **Built on `fix/sso-provider-custom-fetch`, and it
+signs in: production sign-in has worked for weeks, used by the admins, Mahi
+and two testers.** `WHY-ITS-BUILT-THIS-WAY.md` § 56;
 `runbook.md` → *Production sign-in bounces to
 `/signin?error=OAuthCallbackError`*.
 
@@ -449,8 +458,26 @@ exercised on the real library by the real identity. The 16th was the
 check's own premise (it named `@microsoft.graph.downloadUrl` in `$select`,
 which Graph ignores; it now tests a read). The app also carries a 2029
 certificate from Vitis's PnP tooling; keeping it is an open decision
-recorded in the plan doc. What remains of Part C is the byte-identical
-comparison on a copy and the flow-trigger check.
+recorded in the plan doc and `runbook.md`. **Later on 2026-10-21:** the
+owner chose a **sibling folder in AI Sandbox** for the copy over the plan
+doc's second-site recommendation, and two guards in `GraphFileStore` make
+the fence incapacity rather than configuration — the store is confined to
+the root it is given, and refuses `CO Managment Process` by name at every
+call and at construction, before any token is fetched. 14 offline tests
+including the real engine as a subprocess pointed where the laptop points;
+mutation run; the Part B differential re-run, eight of eight equivalent.
+The copy is built at `/phb-co-engine scratch/part-c-copy-2026-10-21`
+(eight COs' replay inputs, real data by decision, nothing a flow writes),
+the comparison is packaged as `tests/compare_stores.py` and image
+`phb-co-engine:part-c-compare`, and **running the job is the owner's
+action.** The first run failed before comparing anything: SharePoint
+rewrote 7 of the 8 uploaded workbooks (4 with no size change), so Office
+inputs now verify by the differ's structural fingerprint; and a folder
+create answered 400 with the body dropped, so every store error now
+carries Graph's code and request id and `makedirs` looks again before
+failing. Image `part-c-compare-2`; the second run has not happened. The twelfth-flow question is deferred by the
+owner and is a **required step before Phase 14** — the plan doc's *Before
+cutover* section has the evidence in hand and the two ways to close it.
 
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
@@ -667,8 +694,9 @@ its own `no_data` kind, the summariser is never called for it, and the
 explanation is written from coverage. Every question is one audit row
 (`bas.question_asked`) and one log line, both carrying the question and the
 SQL. Two variables, both lazy: `ANTHROPIC_API_KEY` and `BAS_ASK_DATABASE_URL`;
-missing either renders a not-configured state. Neither is in
-`infra/main.bicep` yet.
+missing either renders a not-configured state. Neither was in
+`infra/main.bicep` when B5 shipped; both are now, as Key Vault references
+(the 2026-10-01 and 2026-10-13 entries below), and both are set in production.
 
 **Verified live the same day, once a working key arrived**, and the live
 runs found three things a scripted planner could not: the widening rule
@@ -799,8 +827,11 @@ bulk actions were B8.5, below. `WHY-ITS-BUILT-THIS-WAY.md` § 54; `runbook.md` �
 point has one name in Point Explorer and another in Settings*, and *Who hid
 it, and when* under *A point's label or hidden state disappeared*.
 
-**The BAS data migration to Azure is scripted and tested, not run
-(2026-09-29).** `scripts/bas-migrate-to-azure/` — `export.sql` from the office
+**The BAS data migration to Azure is scripted and tested (2026-09-29), and
+has since been run** — the deployed Point Explorer shows readings from 21
+February 2024 and from today, because the collector on the office PC now
+writes to the Azure server every 15 minutes (checked 2026-10-20/21).
+`scripts/bas-migrate-to-azure/` — `export.sql` from the office
 PC, `import.sql` into Azure in ONE transaction, `check.sql` after — moves the
 fourteen `bas_*` tables once. The import writes every row as `bas_migrate_tmp`,
 a role that exists only inside its transaction with INSERT on `bas_*`, UPDATE
@@ -1003,7 +1034,11 @@ repository. **`BAS_ASK_DATABASE_URL` is wired the same way since 2026-10-13**
 role for the Azure server - the same allowlist as `role.ts`, held to it by
 `tests/bas-analyze-role-sql.test.ts`, runnable from the portal's Cloud Shell.
 The deployed Analyze tab stays *not configured* until the role exists there,
-the URL is in the vault and the flag is on. `az bicep build` and `lint`
+the URL is in the vault and the flag is on — all three done: the role was
+created on 2026-10-13, the secret exists, and the deployed tab answers
+questions end to end (checked 2026-10-21). All three hand-set secrets are set
+in production; `ANTHROPIC-API-KEY` was rotated to a non-expiring key on
+2026-10-16. `az bicep build` and `lint`
 pass locally; removing either `env:` entry fails a named guard test.
 `infra/README.md` has the two command sequences and the click to confirm each;
 `runbook.md` → *Secrets set by hand in Key Vault*.
@@ -1099,8 +1134,9 @@ modules are billed, rate-limited and revoked independently. Name in
 `lib/env.ts` (`CO_ANTHROPIC_API_KEY_VAR`), reader
 `readChangeOrderAnthropicEnv` in `lib/modules/change-orders/anthropic-env.ts`,
 Key Vault `CO-ANTHROPIC-API-KEY` behind `coAnthropicApiKeyInKeyVault` - the
-fourth hand-set secret, same shape as the other three. **Nothing reads it
-yet**: no change-order code in this repo or in `phb-co-engine` creates an
+fourth hand-set secret, same shape as the other three; the secret exists in
+the production vault, parked, and `coAnthropicApiKeyInKeyVault` stays false.
+**Nothing reads it yet**: no change-order code in this repo or in `phb-co-engine` creates an
 Anthropic client today, and Phase 12 Part D is where it will be used. The rule
 that matters: `ANTHROPIC_API_KEY` is the SDK's default name, so a client built
 without an explicit `apiKey` runs on the BAS key silently - the CO reader never
@@ -1108,6 +1144,79 @@ falls back to it and `tests/anthropic-key-per-module.test.ts` walks both module
 trees for a bare `new Anthropic(`. The Python engine must pass `api_key=`
 explicitly for the same reason. `WHY-ITS-BUILT-THIS-WAY.md` § 68;
 `runbook.md` → *The Change Orders Anthropic key, the same way*.
+
+**Needs Review, Phase 1 - visibility, read-only (2026-10-21).** The Change
+Orders module has a tab bar on the BAS pattern (`app/(modules)/change-orders/tabs.ts`,
+`co-shell.tsx`): *Mailbox* at `/change-orders` and *Needs Review* at
+`/change-orders/review`, the label carrying the live count, *Needs Review (14)*,
+polled every 20 s while visible. The tab lists the notes the change-order
+classifier writes into the SharePoint folder `_needs_review` when it declines
+to decide, grouped by subject with the oldest date beside the count, and for a
+selected note shows its four sections as escaped text and, beneath it, the
+email it is about **from Exchange** - found by exact subject and day through
+one new mail-service lookup (`findMessagesReceivedBetween`, mailbox-wide, GET
+only), narrowed by the bracket in the note's name (the first eight characters
+of the email's Message-ID, verified for all 14 live notes) and settled as the
+**latest message received at or before the note's stamp**, never the nearest:
+the automation stamps 45-70 s after Exchange, and two replies 72 s apart put
+the nearest on the wrong side - and opened through the mailbox's own message
+route, so the sanitizer, the sandboxed pane and the attachment streaming route
+are the existing ones and not a second copy. **The count is the number of files named `NEEDS REVIEW -
+*.txt`**; `.keep.txt` and the item folders are not notes. **Read-only, as a
+property of the code**: the review service has no method that moves, writes or
+deletes, every route exports GET and nothing else, and
+`tests/co-review-read-only.test.ts` holds both to the source text while
+`tests/co-review-service.test.ts` holds the wire - a handled note is still
+moved to `_archive/` by a person in SharePoint, which is the routine in
+`docs/13-needs-review.md` §9. **A third app registration**,
+`phb-platform-co-review` (ticket sent 2026-10-21), on the Cost Intelligence
+pattern: `Files.SelectedOperations.Selected`, granted **Read on the one
+folder**, never the mail app (its mailbox fence is load-bearing) and never
+`Sites.Selected` (site-wide); production signs in as it with the managed
+identity, the same shared credential factory as the mail app, and refuses a
+secret. Until the grant lands every review route answers
+`review_not_configured` and the tab says so; the app boots without any of the
+four variables (`lib/env.ts` → `readReviewEnv`). **Not built, by decision:**
+resolving or dismissing from the platform (Phase 2), the Bid Tracker's `Needs
+review?` column (every row read `N` on 2026-10-21), notifications. The live
+folder on 2026-10-21 held 14 notes and ONE item folder - ten notes have no
+item folder anywhere, which is why the email comes from the mailbox and why
+"has an item folder" is shown as a fact rather than assumed.
+`WHY-ITS-BUILT-THIS-WAY.md` § 69; `runbook.md` → *Needs Review*.
+**The two secure template parameters are optional, and omitted means unchanged
+(2026-10-21).** `postgresAdminPassword` and `authSecret` in `infra/main.bicep`
+default to empty; empty or whitespace leaves the server's administrator
+password, the `DATABASE-URL` version and the `AUTH-SECRET` version exactly as
+they are, and non-empty sets them as before. Until then both were required on
+every deployment and whatever was typed was set - a value mistyped at the
+prompt on 2026-10-13 rotated the production administrator password. The
+decision is made once per parameter (`setPostgresAdminPassword`,
+`setAuthSecret`, from `trim()`), the password property is **left out** of the
+server request rather than sent empty, and the two secret resources are
+conditional. **A routine template deployment passes `containerImage` and
+neither secure parameter**; the first deployment and a deliberate rotation
+pass them. `tests/deploy-guards.test.ts` pins both ways, in the source and in
+the compiled ARM where `az` is installed. `WHY-ITS-BUILT-THIS-WAY.md` § 70;
+`runbook.md` → *A template deployment rotated the database administrator
+password*; `infra/README.md` → *Deploy*.
+
+**The custom domain `platform.phb1899.com` is in the template (2026-10-21).**
+`customDomainName` puts the hostname on the container app's ingress beside the
+`azurecontainerapps.io` address, which keeps working, with a free managed
+certificate on the environment; `customDomainBound` defaults to **true** and is
+passed as `false` exactly once, on the first deployment that sets the hostname,
+because Azure will not issue a certificate for a hostname no app carries and
+the app cannot bind one that does not exist. The parameters file carries only
+the hostname, so a routine redeploy keeps the binding. The certificate is
+named from the app by `resourceId()`, never symbolically - it depends on the
+app, and a reference back is a cycle. **`authUrl` is unchanged**: sign-in
+keeps building its callback on the old address until Vitis adds the second
+redirect URI (`runbook.md` → *What to ask IT for* → Request 5), and only then
+does `authUrl` move - in that order, or sign-in breaks at both addresses.
+What-if against production showed the two expected effects and nothing else;
+the deployment itself is run by the owner (`infra/README.md` → *Custom
+domain*). `WHY-ITS-BUILT-THIS-WAY.md` § 71; `runbook.md` → *The custom domain
+answers with a certificate warning*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
@@ -1213,6 +1322,7 @@ either anywhere else — point at them.
 | `docs/10-adding-a-module.md` | **Read before adding a module.** The five pieces, Cost Intelligence as the worked example, and the rule that a module row reaches production only by migration |
 | `docs/11-analyze-voice.md` | **The canonical spec for every sentence Analyze shows a person** — answers, clarifying questions, no-data and error text. The team's voice guideline, verbatim, adopted 2026-10-13; the summariser and planner rules in `lib/modules/bas/analyze/planner.ts` implement it |
 | `docs/12-ai-layer-inventory.md` | **Phase 12: what the change-order engine reads, writes and decides.** The input to every later part |
+| `docs/13-needs-review.md` | **The `_needs_review` folder, in plain language:** what a note is, why items land there, the routine for working one, and the 2026-10-21 flow fix. The reference the Needs Review tab is built against |
 | `docs/DESIGN-BRIEF.md` | The redesign brief as issued, plus what the build actually chose where the two differ |
 | `docs/phase-1-verification.md` | Manual verification record |
 | `docs/phase-8-verification.md` | What Exchange actually did for the email actions |

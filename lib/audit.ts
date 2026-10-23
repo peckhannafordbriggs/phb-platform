@@ -135,7 +135,28 @@ export type AuditAction =
   | "cip.projects_synced"
   | "cip.run_started"
   | "cip.run_cancelled"
+  /** A failed run put back in the queue. `resumed`: whether the agent's session is picked up. */
+  | "cip.run_continued"
   | "cip.checkpoint_answered"
+  /**
+   * What the run worker did, with a null actor: the platform acted. Metadata
+   * carries the run id (a string), the 1-based step, and for a failure the
+   * error the person sees on the run page. Questions carry their text, which is
+   * the agent's words about the project, not a secret.
+   */
+  | "cip.run_succeeded"
+  | "cip.run_failed"
+  | "cip.question_asked"
+  | "cip.outputs_published"
+  /**
+   * Failures a person ran into. A sync that failed changes nothing, so it was
+   * only in cip_*_syncs; it is here too so the audit page shows every error.
+   * `cip.request_failed` is an unexpected error in a Cost Intelligence API
+   * route: `operation` names it, `error` is the message (never a stack).
+   */
+  | "cip.skills_sync_failed"
+  | "cip.projects_sync_failed"
+  | "cip.request_failed"
   /**
    * Cost Intelligence workflows, built by PCEs in Settings. Metadata carries the
    * workflow id and name; updates carry what changed (previousName,

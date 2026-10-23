@@ -66,6 +66,15 @@ Only these. Everything else above you can do without talking to anyone.
 | `GRAPH_CLIENT_ID`, `GRAPH_TENANT_ID` | Owner of the **Graph** app registration | Both IDs. Not secret. |
 | `GRAPH_CLIENT_SECRET` | Same | A client secret value for local development. Production never has one. |
 
+| `PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID`, `PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID` | Owner of the **phb-platform-co-review** app registration (Request 5 below) | Both IDs. Not secret. |
+| `PHB_PLATFORM_CO_REVIEW_APP_SECRET` | Same | A client secret value for local development. Production never has one. |
+
+`CO_REVIEW_SHAREPOINT_FOLDER` you find yourself: the `_needs_review` folder as
+`ids:<driveId>/<itemId>`, or its browser URL (not an `AllItems.aspx?id=` link).
+See *Needs Review says it is not connected* for how to get the ids. All four
+may stay blank: the Needs Review tab then reports itself not connected and
+nothing else changes.
+
 `GRAPH_MANAGED_IDENTITY_CLIENT_ID` is **Azure only**. Leave it empty locally.
 
 `ANTHROPIC_API_KEY` and `CO_ANTHROPIC_API_KEY` are neither generated nor IT's:
@@ -1007,6 +1016,15 @@ not an error.
 
 ## Folder search: subject-only, sorted here, and capped
 
+**A search for `P&G` answered `mail_error` until 2026-10-21.** The Graph SDK
+does not percent-encode the `$filter` value, so an ampersand in the term
+split the query string and Graph answered 400. Every `$filter` the mail
+service sends - the search, the since-count and the Needs Review lookup -
+now goes through one `filterParam` helper that encodes it, and
+`tests/co-review-service.test.ts` reads the raw URL to hold it there. A
+search that 400s on a particular character again is that helper being
+bypassed, not Graph being picky.
+
 **Read this before "restoring" full-text search or adding an `$orderby`.** Both
 look like obvious improvements. One of them breaks every search outright.
 
@@ -1832,6 +1850,121 @@ the identity its two roles by hand afterwards produces a deployment whose output
 describe the running system, and the next `az deployment group create` does not put them
 back — it is a resource that exists in Azure and in nobody's record.
 
+## Needs Review
+
+The second Change Orders tab (2026-10-21): the notes the change-order
+classifier writes into the SharePoint folder `_needs_review` when it declines
+to decide, with the email behind each note read from the mailbox.
+`docs/13-needs-review.md` is what the folder is; `WHY-ITS-BUILT-THIS-WAY.md`
+§ 69 is why the tab is shaped this way. **Nothing on this tab writes
+anywhere.** A handled note is moved to `_archive/` by a person in SharePoint,
+and the tab notices within 20 seconds.
+
+### Needs Review says it is not connected
+
+**Symptom.** The tab opens on *Needs Review is not connected yet*, the tab
+label carries no count, and every review route answers
+`review_not_configured`.
+
+**Cause.** One or more of the four variables is blank:
+`PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID`, `PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID`,
+`CO_REVIEW_SHAREPOINT_FOLDER`, and outside production
+`PHB_PLATFORM_CO_REVIEW_APP_SECRET`. This is the expected state until Request
+5 is fulfilled, and it is a state rather than a fault: the folder is still
+readable in SharePoint and nothing about the automation changes.
+
+**Fix.** Set them. The two IDs come with the app registration. The folder value
+is the folder's browser URL (open `_needs_review` in SharePoint, copy the
+address bar, and drop anything from `/Forms/AllItems.aspx` onward), or
+`ids:<driveId>/<itemId>` found as the review app in Graph Explorer:
+`GET https://graph.microsoft.com/v1.0/shares/u!<base64url of the folder URL>/driveItem`
+gives `parentReference.driveId` and `id`. In Azure the three identifiers are
+template parameters (`coReviewAppTenantId`, `coReviewAppClientId`,
+`coReviewSharePointFolder`) and the secret does not exist - the managed
+identity signs in, and a secret set in production refuses to boot.
+
+### Needs Review says the platform is not permitted to read the review folder
+
+**Symptom.** `review_access_denied`; the list pane reads *The review folder
+could not be read* with that sentence.
+
+**Cause.** Graph answered 403. The app registration has consent for
+`Files.SelectedOperations.Selected` but no grant on this folder, the grant was
+removed, or the folder was moved or recreated (a grant is on the item, and a
+recreated folder is a new item). It is never "this employee lacks access" -
+employee authorization happens before Graph is reached.
+
+**Fix.** Ask the app's owner to re-grant Read on the `_needs_review` folder
+(Request 5). Confirm as the app in Graph Explorer with the `/shares/...` call
+above: 403 there is the grant, 200 means the grant is fine and the value in
+`CO_REVIEW_SHAREPOINT_FOLDER` points somewhere else.
+
+### The count on the tab and the folder in SharePoint disagree
+
+**Symptom.** SharePoint shows more items in `_needs_review` than the tab counts.
+
+**Cause.** The count is the number of files named `NEEDS REVIEW - ... .txt`.
+`.keep.txt` is not a note, and the item folders beside the notes are not
+notes - since the 2026-10-21 flow fix every new item arrives as a note AND a
+folder, so SharePoint's item count runs at up to twice the tab's. A file a
+person dropped there under another name is not counted either. If the tab
+counts MORE than the folder shows, the folder view is filtered or paged.
+
+**Fix.** None needed if the difference is folders and `.keep.txt`. A note that
+should count and does not is misnamed; the pattern is anchored and
+case-insensitive (`lib/modules/change-orders/review/notes.ts`).
+
+### A note has no email beneath it
+
+**Symptom.** The note shows, and under it *No message with this subject was
+found in the mailbox around <date>*, or *The mailbox could not be searched*.
+
+**Cause.** The email is found in Exchange by the note's exact subject and
+received day, narrowed by the bracket in the note's name (the first eight
+characters of the email's Message-ID), and settled as the latest message
+received at or before the automation's stamp
+(`lib/modules/change-orders/review/match.ts`). *Not found*: the subject in the
+note's header differs from the message's (the note did not parse, or a person
+edited it), the message was deleted from the mailbox, or it arrived on a
+different UTC day than the note says and outside the twelve-hour slack.
+*Could not be searched*: the mailbox is not configured or Graph refused the
+mailbox lookup - the mail routes will say the same.
+
+**Fix.** The note itself is complete: WHAT THEY WROTE quotes the message. Open
+*The whole note, as written* and check the `Subject:` line against the
+mailbox; the Mailbox tab's subject search finds the thread. A matched email is
+a match, not an identity: the pane says whether the message id or only the
+subject matched, and the message's own sender and time are shown beside the
+note's so a wrong pairing is visible. Two replies from ONE sender within the
+same minute are the one case the rule cannot tell apart, and the bracket does
+not help there; the sentence *N messages with this subject arrived that day*
+is the cue to check.
+
+### A note's sections are missing and it says it could not be picked out
+
+**Symptom.** *This note does not follow the usual layout* and the three
+sections read *Not stated in the note*.
+
+**Cause.** The classifier spec fixes the layout (its section 4.2) but a model
+writes it, and the parser is deliberately tolerant: it finds the three
+headings by exact text and the header lines by their labels, and a note that
+has neither is still a note - counted, listed, and shown whole rather than
+dropped.
+
+**Fix.** Read the whole note; it is below the sections. If a new layout is
+now the norm, extend `parseNote` with a test in `tests/co-review-notes.test.ts`.
+
+### Who moves a note out of `_needs_review`, and who must not
+
+A person, in SharePoint, into `_archive/` - `docs/13-needs-review.md` section 9.
+The platform does not: the review service has no write, every review route is
+GET, and `tests/co-review-read-only.test.ts` fails the build on either.
+Resolving from the platform is Phase 2 and needs, before anything else, the
+flow owner's confirmation that no flow watches `_needs_review` - asked, not
+found by exporting a flow (CLAUDE.md prohibition 2). Do not move an item back
+into `_to_classify`: its `classification_result.json` is already there and the
+classifier will skip it, but Flow 2's trigger will not.
+
 ## What to ask IT for, and when
 
 Two requests, and the order matters because the second one cannot be written until the
@@ -1924,7 +2057,9 @@ version.
 pipeline "stays switched off until it is set", that described the state before
 2026-09-16; a merge to `main` now deploys. No merge had reached `main` after the
 variable was set when this was written, so the container app still held the
-placeholder image and the next merge is the first real deploy.
+placeholder image and the next merge was the first real deploy. It has long
+since landed: the app runs CI-built images from `main`, and the placeholder's
+one return, on 13 October, is under *A template deployment fails activation*.
 
 **Substitute two values before sending.** The resource group and subscription id
 are deliberately not written in this repository (`tests/deploy-guards.test.ts`
@@ -2248,6 +2383,36 @@ against a OneDrive copy costs nothing and needs nobody; finding them for the fir
 time against the real library, after a tenant-wide permission grant, wastes the
 grant and the week.
 
+### Request 5 - the Needs Review app registration (sent 2026-10-21)
+
+For the Needs Review tab. Decided against widening the mail app (its mailbox
+fence is load-bearing), against reusing `phb-co-engine`'s (that request is for
+Write on the whole tree) and against `Sites.Selected` (site-wide). The grant
+is on one folder.
+
+> **New app registration: `phb-platform-co-review`**
+>
+>     Owner:                  an M365 group, not a person
+>     Graph application permission:
+>                             Files.SelectedOperations.Selected  (admin consent)
+>     Grant, as a separate step after consent:
+>                             Read on  AI Sandbox / Documents /
+>                               CO Managment Process / Change Order Step 2 / _needs_review
+>     Credential:             a federated identity credential for the platform's
+>                             user-assigned managed identity - the same identity and
+>                             the same shape as the Change Order Mail app's.
+>                             No client secret in Azure.
+>     For developer machines: one client secret, sent over Teams, not email.
+>
+> The permission grants nothing by itself; the folder grant is what makes it
+> work, and without it the app authenticates and then gets 403 on every
+> request. The platform only ever READS this folder. Please send the client id
+> and tenant id, and confirm the folder's drive id and item id if that is
+> easy - the browser URL is enough otherwise.
+
+Two optional grants were deliberately not asked for and can be added later if
+Phase 2 is approved: Read on `Bid Tracker.xlsx` (the `Needs review?` column)
+and Write on `_needs_review` and `_archive` (resolving from the platform).
 **Request 4 status, read live from Entra on 2026-10-14.** `phb-co-engine`
 exists (client id `85ca496d-3af9-4c3a-aa11-a6b7fd51105d`), `Sites.Selected`
 is consented, delegated `Files.ReadWrite.All` is consented for all users, and
@@ -2267,6 +2432,53 @@ that identity, by a Container Apps job. The job spec and sequence are in
 `docs/phase-12-part-c-plan.md` → *Step 7, second pass*. The app also carries
 a `PnP.Powershell` **certificate** valid to 2029, the tool credential used to
 make the grant; whether it stays is the owner's decision — the next section.
+
+### Request 5 — a second SSO redirect URI for the custom domain (2026-10-21)
+
+The platform gained the hostname `platform.phb1899.com` on 2026-10-21 - a custom
+domain on the container app with a free managed certificate, beside the
+`azurecontainerapps.io` address, which keeps working. Sign-in from the new
+hostname needs the SSO app registration to carry a **second** redirect URI.
+**Nothing about the existing one changes**: `authUrl` still points at the
+`azurecontainerapps.io` address, sign-in keeps working there, and `authUrl` is
+moved to the new hostname only after this request is done
+(`infra/README.md` → *Custom domain*). Changing `authUrl` before the redirect URI
+exists breaks sign-in at both addresses, so the order is: this request, Vitis
+confirms, then the `authUrl` deployment.
+
+The value is the `customDomainSsoRedirectUri` deployment output; it is written out
+below because it is derived from the hostname alone and will not change.
+
+> Subject: One more redirect URI on the PH+B platform SSO app registration
+>
+> Hi Zac,
+>
+> The internal platform now also answers at **https://platform.phb1899.com**
+> (a custom domain on the same Azure container app, with an Azure-managed
+> certificate). For sign-in to work from that address, the SSO app
+> registration needs one more redirect URI.
+>
+>     App registration:  220921c1-f23e-4d01-b354-736884ba3d00
+>     Platform:          Web
+>     Redirect URI:      https://platform.phb1899.com/api/auth/callback/microsoft-entra-id
+>
+> Please **add** it and keep both existing ones in place:
+>
+>     https://phbplat-prod-app.agreeablebeach-60711c65.eastus2.azurecontainerapps.io/api/auth/callback/microsoft-entra-id
+>     http://localhost:3000/api/auth/callback/microsoft-entra-id
+>
+> The first still signs people in today and will keep doing so; the second is
+> local development. The URI has to match exactly, including the
+> `/api/auth/callback/microsoft-entra-id` path and with no trailing slash -
+> Entra does not do partial matches.
+>
+> Nothing else changes: no new permission, no consent, no secret, no
+> certificate, and the federated credential you added stays as it is.
+>
+> A reply saying it is in place is all we need - we switch the application's
+> own URL over on our side after that.
+>
+> Thanks,
 
 ## Open decision — the `PnP.Powershell` certificate on `phb-co-engine`
 
@@ -2434,6 +2646,110 @@ Windows path before Python sees it.
 PowerShell. (Until 2026-10-14 the `create_exclusive on a taken path` check
 reported **ok** in this state, because it accepted any exception as the 409;
 it now accepts only `FileExistsError`.)
+
+### The engine says `refusing to run: … is inside 'CO Managment Process', the live tree`
+
+**Symptom.** `run_workflow.py --store graph` exits before printing
+`FileStore : graph`, with a message naming the live tree. Or any store call
+raises `ForbiddenPath` with the same words mid-run.
+
+**Cause.** The Phase 12 fence. `GraphFileStore` refuses `CO Managment
+Process` as the first path segment at every call, whatever root it was given,
+and refuses a `--sharepoint-root` inside it at construction — before a token
+is fetched, so this is never an auth problem. The engine's identity holds
+Write on the whole AI Sandbox site; this refusal is what keeps the container
+off the live tree, not `--live-path`.
+
+**Fix.** Point the run at the copy: `--sharepoint-root "/phb-co-engine
+scratch/part-c-copy-<date>/runs/<id>/<tag>/CMP"` and a `--live-path` under
+it (`docs/phase-12-part-c-plan.md` → *Where the copy lives*). There is no
+override and none should be added. The one legitimate time this message means
+the code must change is the Phase 14 cutover, when the refusal is removed
+deliberately, in `co_filestore.py`, with its test.
+
+### The engine says `… is outside this store's root`
+
+**Symptom.** `refusing to run: --live-path … is outside this store's root`,
+or `CO_REPORT_DIR … is outside`, or a `ForbiddenPath` with those words from
+inside a run. From Git Bash the refused path may begin `C:/Program Files/Git/`.
+
+**Cause.** The second half of the fence: the store addresses nothing outside
+the `--sharepoint-root` it was built with, and in graph mode `--live-path` and
+`CO_REPORT_DIR` are checked against it up front. The Git Bash form is the
+shell rewriting a drive-relative path into a Windows one before Python sees
+it (next entry).
+
+**Fix.** Make `--live-path` and `CO_REPORT_DIR` paths under
+`--sharepoint-root`; from Git Bash prefix the command with
+`MSYS_NO_PATHCONV=1`. `tests/build_copy.py` and `tests/compare_stores.py`
+derive every path from `--root` so they cannot hit this; the bare engine can.
+
+### `build_copy.py` says `REFUSING: … is a flow-written or flow-trigger name`
+
+**Symptom.** The copy builder stops before uploading anything, naming a file
+in the fixture store.
+
+**Cause.** The fixture store is supposed to carry every flow-written payload
+renamed by role (`phb-co-engine-fixtures/README.md`), and an `inputs/` folder
+should hold only an intake JSON, a workbook and attachments. A file named
+`scrub_result.json`, `vendor_drafts.json`, `transfer_ready.json`,
+`classification_result.json`, `bid_tracker_ready.json` or `draft_written.json`
+in an inputs folder means the store was rebuilt without the guard, or
+something was copied in by hand.
+
+**Fix.** Do not rename the file to get past the check. Remove it from
+`inputs/` (it is not a replay input) or rebuild the fixture store with the
+capture script, then re-run. A sibling folder is outside every watched folder
+anyway; the refusal exists so that a mistake in the fixture store can never
+become a trigger-shaped file in the library.
+
+### The comparison job says `pristine inputs do not match`, naming an `.xlsx`
+
+**Symptom.** `compare_stores.py` prints `INPUT <name>.xlsx: bytes differ from
+the fixture` or, before 2026-10-21, `pristine inputs do not match the
+manifest: ['….xlsx']`, for most COs, never for a JSON, PNG or PDF.
+
+**Cause.** SharePoint rewrites a workbook on upload. On the first Part C copy
+it rewrote 7 of 8 — three grew by exactly 3,095 bytes, four changed with no
+size change — so a byte check against the fixture store cannot pass and a
+size check cannot see it. The inventory's §7c, on the inputs.
+
+**Fix.** Nothing is wrong with the copy. If the manifest predates the
+structural fields (`shape_sha256`, `parts` on each Office entry), refresh it:
+
+```
+MSYS_NO_PATHCONV=1 CO_GRAPH_TOKEN=<token> python tests/build_copy.py --manifest-only \
+    --drive-id <drive id> --root "/phb-co-engine scratch/part-c-copy-<date>"
+```
+
+Do not re-upload the workbooks to "fix" the bytes: SharePoint stamps them
+again on the way in. With a current manifest the line reads `input ….xlsx:
+content identical, bytes rewritten by SharePoint (+3095 B; parts added […])`
+and the CO proceeds. `CONTENT DIFFERS` is different: the cells, formats or
+table ranges changed, which SharePoint does not do, and the file in the
+library is not the fixture.
+
+### The comparison job stops with `HTTP 400` creating a folder, and the folder exists
+
+**Symptom.** Before 2026-10-21: `400 Client Error: Bad Request for url:
+…/runs:/children` from `makedirs`, no body, and afterwards an empty folder
+with that name created by `phb-co-engine`. Since then the same event reads
+`[graph] WARNING: '…' exists after an error response; continuing. create
+folder '…': HTTP 400 <code> '<message>' request-id=…`, and the run goes on.
+
+**Cause.** Unknown on the first occurrence, because the body was dropped. It
+is not the root jail (the same sequence succeeds from a developer token,
+traced), not the folder name, and not reproducible from a workstation. The
+store now keeps Graph's code, message and request id on every error, and
+`makedirs` decides by looking the folder up again rather than by the status.
+
+**Fix.** Read the warning's code and request id from the log. If it recurs,
+that pair is what to take to Microsoft, and the question to settle before
+Phase 14 is whether the same `POST …:/children` the engine issues for every
+attempt folder can answer 400 after succeeding. For a run that needs every
+request visible, set `CO_GRAPH_TRACE=1` on the job; it prints method, status
+and drive-relative path to stderr for each request and the body of each
+error, never a download URL.
 
 ## Deploy order
 
@@ -2746,6 +3062,63 @@ old revision while the new one was still failing.
 
 ---
 
+## The custom domain answers with a certificate warning, or does not answer at all
+
+**Context.** `platform.phb1899.com` is a custom hostname on the container app,
+attached by `infra/main.bicep` (2026-10-21) beside the app's own
+`azurecontainerapps.io` address with a free managed certificate on the
+environment. The app's own address is unaffected by anything in this section
+and is the fallback while the custom one is being fixed. `infra/README.md` →
+*Custom domain* is the design; this is what goes wrong.
+
+**Symptom: the browser warns that the certificate is for the wrong site, or
+`curl` reports a name mismatch.** The hostname is on the app but not bound to
+its certificate. Read it:
+
+```bash
+az containerapp show -n <app> -g <resource-group> \
+  --query "properties.configuration.ingress.customDomains"
+```
+
+`bindingType: Disabled` is the cause. It is the state the first deployment pass
+leaves deliberately (`customDomainBound=false` adds the hostname and issues the
+certificate, and binds nothing), so either the second pass was never run or a
+later deployment passed `customDomainBound=false` again. The fix is the routine
+template deployment with the running image and **no** `customDomainBound` -
+the default is true and binds it. Nothing about this is in the deploy workflow:
+`az containerapp update --image` keeps the ingress as it finds it, so CI can
+neither bind nor unbind.
+
+**Symptom: the hostname does not resolve, or resolves to something else.** The
+CNAME is gone or changed. It must point at the app's own FQDN
+(`properties.configuration.ingress.fqdn`), and the TXT record
+`asuid.<hostname>` must still hold `properties.customDomainVerificationId`;
+`nslookup -type=CNAME` and `nslookup -type=TXT` show both. DNS is owned outside
+this repository and outside Azure.
+
+**Symptom: the template deployment fails on the `managedCertificates`
+resource.** Azure could not validate the domain. In order: the CNAME or the TXT
+record is missing or has not propagated yet (wait, re-check with `nslookup`
+against a public resolver, retry); or the hostname is not on the app at all,
+because the certificate is only issued for a hostname an app in the environment
+carries - that is the first pass, `customDomainBound=false`, and it has to
+complete before the routine command can bind. A certificate that failed to
+issue leaves nothing behind; re-run the pass that failed.
+
+**Symptom: `https://platform.phb1899.com` loads with a valid certificate, and
+sign-in from it bounces or lands on the old address.** Expected until two
+things are done, in this order: Vitis adds the second redirect URI (*What to ask
+IT for* → Request 5) and then `authUrl` in `infra/main.parameters.json` is
+changed to `https://platform.phb1899.com` and deployed. Until the first,
+Auth.js builds its callback on the old address, which Entra accepts, and the
+session lands there. Do **not** change `authUrl` first: Entra refuses a
+redirect URI it does not carry, and sign-in is then broken at both addresses.
+
+**Removing the domain** is `customDomainName` set to empty and a routine
+deployment: the hostname leaves the ingress and the certificate resource is no
+longer deployed (it stays on the environment until deleted by hand; it costs
+nothing). The app's own address never changed.
+
 ## A template deployment fails activation, and the console log says `Listening on :80...`
 
 **Symptom.** `az deployment group create` with `infra/main.bicep` reports the
@@ -2818,6 +3191,71 @@ one exists.
 
 ---
 
+## A template deployment rotated the database administrator password
+
+**Symptom.** After an `az deployment group create` with `infra/main.bicep`, the
+next revision - or the running one after a restart - fails every database page with
+`P1000: Authentication failed`, while `/api/health` still answers 200. Or the
+deployment was run for some unrelated reason (a Key Vault flag, a probe change)
+and the server's administrator password no longer matches what anyone holds.
+`az postgres flexible-server show` cannot tell you - the password is write-only -
+but the deployment's history shows the server resource as *Modify*, and Key Vault
+shows a new `DATABASE-URL` version stamped at the deployment's time.
+
+**Cause.** Until 2026-10-21, `postgresAdminPassword` and `authSecret` were required
+on every template deployment, and whatever was typed was SET - `az` prompts for a
+required secure parameter you leave off the command line, the prompt echoes
+nothing, and a server PUT that carries `administratorLoginPassword` rotates the
+password to that value. On 2026-10-13 a value mistyped at the prompt rotated the
+production administrator password that way. The template then wrote the mistyped
+value into `DATABASE-URL` as well, so the app kept working from the new secret
+once a revision re-read it; the value nobody could reproduce was the server's
+password itself, and every other holder of the old one (psql from a laptop, the
+Cloud Shell route in *The Analyze database URL, the same way*) was locked out.
+
+**Fix, now.** Rotate deliberately to a value you hold, in one deployment, with
+the running image:
+
+```bash
+read -s PGPASSWORD   # the new password; nothing is echoed
+az deployment group create ... \
+  --parameters containerImage="$IMAGE" \
+  --parameters postgresAdminPassword="$PGPASSWORD"
+```
+
+That sets the server's password and writes a matching `DATABASE-URL` version in
+the same deployment, which is the one way the two cannot drift. Then
+`az containerapp revision restart` so the app re-reads the secret. Leave
+`authSecret` off: rotating it signs every session out, and nothing about this
+symptom calls for that.
+
+**What changed so it stops happening.** Both secure parameters now default to
+empty, and empty means *leave the existing value untouched*: the server keeps its
+password, `DATABASE-URL` keeps its version, `AUTH-SECRET` keeps its version. The
+decision is made once per parameter (`setPostgresAdminPassword`, `setAuthSecret`,
+from `trim()` so a stray space is not a password), the password property is left
+out of the server request rather than sent empty, and the two secret resources are
+conditional rather than written blank. A routine deployment therefore passes
+neither; the two cases that pass one are the **first** deployment (a server cannot
+be created without a password, and the container app's references must resolve)
+and a deliberate rotation. `infra/README.md` → *Deploy* has both commands;
+`tests/deploy-guards.test.ts` → *the two secure parameters are optional, and
+omitted means unchanged* pins the omitted and the supplied behaviour, in the
+source and in the compiled ARM.
+
+**What to check in what-if.** With both omitted, what-if shows neither vault
+secret and no change to the server. A `DATABASE-URL` or `AUTH-SECRET` line reading
+*Modify* means a value was passed; stop unless a rotation was the intent.
+
+**On the first deployment, omitting them fails loudly, not quietly.** The server
+provider refuses to create a flexible server without `administratorLoginPassword`,
+and the container app's Key Vault references fail the revision when the secret is
+not there. Neither can create anything half-configured. *(Expected from the
+resource providers' documented create requirements; not re-run against a fresh
+resource group since the change.)*
+
+---
+
 ## A static file 404s in production and works locally
 
 **Symptom.** `/phb-logo.png` (or anything else in `public/`) returns 404 from the
@@ -2869,11 +3307,23 @@ the same way*) since 2026-10-13, and the Change Orders module's own Anthropic
 key (*The Change Orders Anthropic key, the same way*) since 2026-10-16. The
 command sequences are in `infra/README.md`.
 
+**Status, checked in Azure and on the live site 2026-10-20/21.** All four exist
+in the production vault. `ANTHROPIC-API-KEY` was rotated on 2026-10-16 to a key
+that does not expire, and the deployed Analyze tab answers questions end to
+end; `BAS-CREDENTIAL-KEY` is the collector's key, and the deployed Settings tab
+decrypts the stored JACE credentials; `BAS-ASK-DATABASE-URL` points at the
+`bas_analyze` role created on the production server on 2026-10-13.
+`CO-ANTHROPIC-API-KEY` is set and parked: nothing reads it until Phase 12
+Part D and `coAnthropicApiKeyInKeyVault` stays false. The symptoms below
+describe a regression, not the current state.
+
 The Anthropic key is the first secret the template does not write. `DATABASE-URL` and
-`AUTH-SECRET` are generated at deploy time and passed on every deploy;
-the Anthropic key is issued once by the Anthropic Console and pasted into
-Key Vault once, by hand, so that a routine redeploy never needs it on the
-command line and can never overwrite it with a blank. The template knows only
+`AUTH-SECRET` are generated at deploy time and were passed on every deploy
+until 2026-10-21 - now a routine deploy omits them and the template leaves
+both alone (*A template deployment rotated the database administrator
+password*); the Anthropic key is issued once by the Anthropic Console and
+pasted into Key Vault once, by hand, so that a routine redeploy never needs
+it on the command line and can never overwrite it with a blank. The template knows only
 the secret's **name**, `ANTHROPIC-API-KEY`, and wires it to the container app
 as `ANTHROPIC_API_KEY` by reference when the `anthropicApiKeyInKeyVault`
 parameter is true. The command sequence is in `infra/README.md`.
@@ -3100,7 +3550,7 @@ outlasts it. Liveness answers "should this process be killed", and the answer is
 | Error | Cause | Fix |
 |---|---|---|
 | `P1001: Can't reach database server` | The firewall rule allowing Azure services was removed, or the server is stopped. Burstable tier servers can be stopped to save money and stay stopped — **which is why one may have been, and why it must not be.** Stopping this server destroys building data rather than merely postponing access to it: see `docs/08-bas-and-niagara.md`, *Azure: the container app may sleep, the database may not*. Restart it, then check the Collection Health screen for new `roll_overwrite` gaps. | `az postgres flexible-server show -g <rg> -n <server> --query state`. Confirm the `AllowAllAzureServicesAndResourcesWithinAzureIps` rule exists. |
-| `P1000: Authentication failed` | The admin password was rotated on the server but not in Key Vault. | Update the `DATABASE-URL` secret, then restart the revision — the container reads Key Vault at start, not per request. |
+| `P1000: Authentication failed` | The admin password was rotated on the server but not in Key Vault - or, before 2026-10-21, a template deployment set it to whatever was typed at the prompt (*A template deployment rotated the database administrator password*). | Update the `DATABASE-URL` secret, then restart the revision — the container reads Key Vault at start, not per request. If the server's password is the unknown, rotate it deliberately with `postgresAdminPassword` on one template deployment, which writes the matching `DATABASE-URL` too. |
 | `P2024: Timed out fetching a connection` | More replicas than the server's connection limit allows. Burstable tiers have low limits. | Lower `maxReplicas`, or move up a tier. |
 
 Nothing here needs a redeploy. Fix the database or the secret and restart the revision.
@@ -3211,13 +3661,19 @@ database setting.
 
 ## Moving the BAS data to the Azure database
 
-**Written 2026-09-29. Not yet run against Azure.** The office PC's
-`phb_platform` holds every BAS reading since 21 February 2024, most of it gone
-from the JACE; the Azure database holds the platform's own rows (employees,
-modules, grants, the seed's positions and departments) and **zero rows in every
-`bas_*` table**. `scripts/bas-migrate-to-azure/` moves the fourteen `bas_*`
-tables across, once, and touches nothing else. Three psql files, run by a
-person, from the office PC:
+**Written 2026-09-29, and since run.** When it was written the office PC's
+`phb_platform` held every BAS reading since 21 February 2024, most of it gone
+from the JACE, and the Azure database held the platform's own rows (employees,
+modules, grants, the seed's positions and departments) and zero rows in every
+`bas_*` table. The move has been made: the deployed Point Explorer shows
+readings from 21 February 2024 onward, and the collector on the office PC now
+writes to the Azure server every 15 minutes, so the deployed site shows the
+day's readings (both checked 2026-10-20/21). The import refuses a target that
+already holds `bas_*` rows, so running it again stops before writing (below).
+What follows is the procedure as it was run, kept for the record and for a
+rebuild from an empty server. `scripts/bas-migrate-to-azure/` moves the
+fourteen `bas_*` tables across, once, and touches nothing else. Three psql
+files, run by a person, from the office PC:
 
 | File | Runs against | Does |
 |---|---|---|
@@ -3255,10 +3711,13 @@ two credential rows and the employee each resolves to; and a fingerprint of
 every non-BAS table. Read the credentials lines especially - see below. Then
 `YES` and Enter. Anything else rolls back with nothing written.
 
-Afterwards the collector on the office PC is still writing to the office PC.
-Repointing it at Azure needs the role in the next section, and is a separate
-decision: the roll horizon makes a gap in collection permanent, so the cutover
-is one deliberate pass with the new `DATABASE_URL`, not a gradual thing.
+Immediately afterwards the collector on the office PC is still writing to the
+office PC. Repointing it at Azure needs the role in the next section, and is a
+separate decision: the roll horizon makes a gap in collection permanent, so the
+cutover is one deliberate pass with the new `DATABASE_URL`, not a gradual thing.
+That cutover has happened: as of 2026-10-21 the collector on the office PC
+writes to the Azure server every 15 minutes, and the deployed site shows the
+day's readings.
 
 ### What the import refuses, and why a second run is safe
 
@@ -3408,7 +3867,14 @@ Vault* and `infra/README.md`. Before 2026-10-01 none of the three was in the
 template; that was recorded here on 2026-09-29 so it was not mistaken for a
 fault.
 
-**What that job has to get right.** The credential rows the migration above
+**As of 2026-10-21 neither half of the symptom is the state of production.**
+All three secrets are set, the flags are on, the deployed Settings tab decrypts
+the stored JACE credentials and the deployed Analyze tab answers questions.
+Seeing either message now means a flag went back to false or the revision
+predates the deployment that turned it on - *Secrets set by hand in Key Vault*
+has the per-symptom checks.
+
+**What that job had to get right, and did.** The credential rows the migration above
 carries were encrypted on the office PC under *its* `BAS_CREDENTIAL_KEY`, key
 version 1. The platform in Azure can only decrypt them with the **same** key -
 and so can the collector, wherever it runs. So either the office PC's key goes
@@ -3416,8 +3882,10 @@ into Key Vault as the production key, or the two station passwords are
 re-entered through Settings once a different key is set (each save re-encrypts
 under the current key and stamps its version; *Station credentials, and the
 one secret that lives in two places* has the rotation steps). A key that
-matches nowhere leaves the rows undecryptable and collection stops. For
-Analyze: the key from the Anthropic Console, and the `bas_analyze` role on
+matches nowhere leaves the rows undecryptable and collection stops. The first
+route is the one that was taken: the office PC's key is the vault value, and
+the deployed panel decrypts the rows. For
+Analyze (done 2026-10-13): the key from the Anthropic Console, and the `bas_analyze` role on
 the Azure database - `scripts/setup-bas-analyze-role.sql` from any psql
 (the Cloud Shell included), or `npm run bas:analyze:role` with
 `DATABASE_URL` set to the production admin URL - then the URL as
@@ -5497,8 +5965,10 @@ and not a flag.
 | `phb_platform_test` | `TEST_DATABASE_URL` | Whatever the suite is asserting on; truncated between files | `npm test`, `npm run db:test:setup` |
 
 Production in Azure is a fourth, reached by `migrate deploy` from the deploy
-workflow, by the one-shot BAS data migration run by a person from the office PC
-(*Moving the BAS data to the Azure database*), and by nothing else on a laptop.
+workflow, by the one-shot BAS data migration, run once by a person from the
+office PC (*Moving the BAS data to the Azure database*), by the collector on
+the office PC, which writes there every 15 minutes since the cutover, and by
+nothing else on a laptop.
 
 **How it is enforced.** `prisma.config.ts` reads the command from the CLI's own
 arguments and picks the URL. `migrate dev`, `migrate reset` and `db push` — the
@@ -7342,12 +7812,13 @@ collector run afterwards rather than assuming.
 A row whose `key_version` names a key nobody has any more is undecryptable and
 unrecoverable from here. Re-enter it.
 
-The rows the BAS migration copies to Azure were encrypted under the office PC's
+The rows the BAS migration copied to Azure were encrypted under the office PC's
 key. Production takes that same key from Key Vault (`BAS-CREDENTIAL-KEY`,
 set by hand, byte-identical) as of 2026-10-01 - *Secrets set by hand in Key
-Vault*. Until the secret is set and the parameter turned on, production has
-no key; what that looks like is under *The deployed Settings tab cannot store
-a station login*.
+Vault* - and it is set: the deployed Settings tab decrypts the stored
+credentials (checked 2026-10-21). If the secret were ever missing or the
+parameter off, production would have no key; what that looks like is under
+*The deployed Settings tab cannot store a station login*.
 
 ---
 
@@ -9431,8 +9902,9 @@ refusals, and prints the URL once - or, where only psql is to hand (the Azure
 portal's Cloud Shell), `scripts/setup-bas-analyze-role.sql`, the same role in
 SQL with the command in its header. Paste it as `BAS_ASK_DATABASE_URL`. The
 password is shown once and written nowhere by the script; re-running rotates
-it. Neither variable is in `infra/main.bicep` yet — production wiring is a
-separate step.
+it. In production both come from Key Vault by reference and both are set —
+*Secrets set by hand in Key Vault* — so this symptom there means a flag went
+back to false or the revision predates it, not a missing wiring step.
 
 ---
 
@@ -9956,10 +10428,24 @@ PostgreSQL service.
 **Cause.** The run was **Running** and its worker sent no heartbeat for ten
 minutes: the process was killed, the machine slept, or the container was
 recycled mid-run. The next worker to start marks it failed rather than guessing
-how far it got.
+how far it got. The heartbeat is on a 15-second timer for as long as a worker
+holds a run (workspace downloads and silent tool calls included), so a live
+worker is never taken for dead; before 2026-10-22 it was written only per agent
+message, and a slow SharePoint download on resume tripped it.
 
-**Fix.** Start the run again. Files it had already published stay in
-`AI FILES`; the new run writes the next `_revN` beside them, never over them.
+**Fix.** **Continue run** on the run page. It goes back in the queue at the
+step that failed; finished steps are not redone, and the agent's session is
+picked up where it stopped (or the step starts over when it cannot be). Files
+already published stay in `AI FILES`. A worker whose run was failed under it
+stops within about 5 seconds instead of spending on it.
+
+**Known gap: the dead attempt's cost.** The SDK reports cost only in its final
+result, so the attempt that died never saved what it spent. A resumed session's
+first result carries the earlier turns from its transcript, so a Continue that
+resumes recovers it when the step ends; one where the step starts over does not,
+and the SDK's per-run cap counts only the new attempt. A run can therefore pass
+$5 by up to one dead attempt per Continue. The Anthropic Console spend limit is
+still the hard cap.
 
 ---
 
@@ -10063,6 +10549,15 @@ heartbeat stopped) and starts one execution per run, up to 3 at once; each runs
 `cip-worker.ts --once` and exits. It reads projects and skills from SharePoint and
 creates outputs only in `<project>/AI FILES`. It costs nothing while idle.
 
+**Deployed 2026-10-20.** The job is `phbplat-prod-cip-worker`, created by a
+manual template deployment with `enableCipWorker` true and running
+`cip-worker:1ccd6fb`; the CIP app registration's federated credential for the
+platform's identity was created the same day; the Key Vault secret
+`ANTHROPIC-API-KEY-CIP` exists and the job references it; and the repository
+variable `AZURE_CIP_WORKER_JOB` is set, so `deploy.yml` points the job at a
+new `cip-worker:<sha>` on every merge to `main`. The steps below are how it
+was done, kept as the procedure for an empty resource group.
+
 **Turning it on, once, in this order.**
 
 1. Create the Key Vault secret `ANTHROPIC-API-KEY-CIP` by hand, in the Portal
@@ -10075,6 +10570,11 @@ creates outputs only in `<project>/AI FILES`. It costs nothing while idle.
    `cipAppClientId` and the two `cipSharePoint*Folder` values (`ids:<driveId>/<itemId>`). Set `containerImage` and `cipWorkerImage` to the
    images now running (on first enable, `cipWorkerImage` is the image you built with `az acr build`). It has no default.
 4. `az deployment group what-if ...` (see `infra/README.md`), review, then `create`.
+   Pass `containerImage` and nothing secure: `postgresAdminPassword` and
+   `authSecret` are omitted, and omitting them leaves the server's password and
+   both vault secrets exactly as they are (since 2026-10-21). The job reads
+   `DATABASE-URL` by reference, so the version already in the vault is the one it
+   gets.
 5. Set the repository variable `AZURE_CIP_WORKER_JOB` to the `cipWorkerJobName`
    output. From the next push to `main`, `deploy.yml` builds `cip-worker:<sha>` and
    points the job at it. Until it is set those steps are skipped.

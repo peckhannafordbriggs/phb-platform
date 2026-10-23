@@ -93,6 +93,25 @@ The SharePoint site is `peckhannafordbriggs.sharepoint.com/sites/AISandbox`, lib
 The folder is spelled **`CO Managment Process`** — one A. Every flow depends on the
 literal string. **Do not fix the spelling.**
 
+## The review tray: `_needs_review`
+
+When the classifier cannot confidently say which change order a reply belongs
+to, it refuses to guess: the item is routed to `Change Order Step 2/_needs_review`
+with a plain-text note (`NEEDS REVIEW - <item id>.txt`) saying why, what was
+written and what it suggests. `docs/13-needs-review.md` is the plain-language
+reference. Three facts about it bind platform work:
+
+- **Power Automate owns the queue folders.** Nothing but a flow moves an item
+  between `_to_classify`, `_needs_review` and `_processed`. A person moves a
+  handled note to `_archive/` in SharePoint; the platform does not move
+  anything (Phase 1, 2026-10-21, read-only by test).
+- **The platform reads the folder as a separate, folder-scoped identity**, never
+  the mail app, and shows the email behind a note from the mailbox rather than
+  from the item folder. See `WHY-ITS-BUILT-THIS-WAY.md` § 69.
+- **Not every flagged item is in the folder.** When the classifier identifies
+  the CO but is not confident, it flags the Bid Tracker row (`Needs review?`)
+  instead. That column is read nowhere yet.
+
 ## Known defects — do not "fix" without an explicit task
 
 - **`/me/` in Intake 1, 6 and 7** (six occurrences each). Resolves to whoever owns

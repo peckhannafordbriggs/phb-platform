@@ -251,3 +251,79 @@ export function readChangeOrderAnthropicApiKey(): string | null {
   const result = anthropicApiKeySchema.safeParse(process.env[CO_ANTHROPIC_API_KEY_VAR]);
   return result.success && result.data ? result.data : null;
 }
+
+/**
+ * The Needs Review folder (Change Orders, 2026-10-21): the SharePoint folder
+ * `_needs_review` that the change-order automation writes its "I need a
+ * human" notes into, read by the platform and never written.
+ *
+ * Read lazily, the same shape as the Graph configuration and for the same
+ * reason: the platform must boot and serve every other screen with none of
+ * this set, and the Needs Review tab reports itself not configured until the
+ * folder grant lands.
+ *
+ * A SEPARATE app registration from the mail one, deliberately. The mail app is
+ * fenced to one mailbox by an Exchange ApplicationAccessPolicy, and that fence
+ * is load-bearing (HANDOVER.md); widening that registration to SharePoint
+ * would muddy the one story that makes it safe. This registration follows the
+ * Cost Intelligence pattern instead: `Files.SelectedOperations.Selected`,
+ * granted Read on the one folder, nothing else in the tenant visible to it.
+ * The folder value is `ids:<driveId>/<itemId>` or the folder's browser URL.
+ * The secret is for developer machines only; production presents the managed
+ * identity's token, exactly as the mail app does, and
+ * lib/modules/change-orders/graph/credential.ts refuses a secret there.
+ */
+export const CO_REVIEW_APP_TENANT_ID_VAR = "PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID";
+export const CO_REVIEW_APP_CLIENT_ID_VAR = "PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID";
+/** Local development only. Never a template parameter, never in Azure. */
+export const CO_REVIEW_APP_SECRET_VAR = "PHB_PLATFORM_CO_REVIEW_APP_SECRET";
+export const CO_REVIEW_SHAREPOINT_FOLDER_VAR = "CO_REVIEW_SHAREPOINT_FOLDER";
+
+const reviewSchema = z.object({
+  [CO_REVIEW_APP_CLIENT_ID_VAR]: blankAsAbsent(guid),
+  [CO_REVIEW_APP_TENANT_ID_VAR]: blankAsAbsent(guid),
+  [CO_REVIEW_APP_SECRET_VAR]: blankAsAbsent(z.string().trim().min(1).optional()),
+  [CO_REVIEW_SHAREPOINT_FOLDER_VAR]: blankAsAbsent(z.string().trim().min(1)),
+  // The same user-assigned identity the mail app federates to. Absent means
+  // the system-assigned identity, as for GRAPH_*.
+  GRAPH_MANAGED_IDENTITY_CLIENT_ID: blankAsAbsent(guid.optional()),
+});
+
+export interface ReviewEnv {
+  clientId: string;
+  tenantId: string;
+  clientSecret: string | null;
+  managedIdentityClientId: string | null;
+  /** `ids:<driveId>/<itemId>`, or the folder URL. Resolved by the service. */
+  folder: string;
+}
+
+export type ReviewEnvResult =
+  | { present: true; values: ReviewEnv }
+  | { present: false; missing: string[] };
+
+export function readReviewEnv(): ReviewEnvResult {
+  const result = reviewSchema.safeParse(process.env);
+
+  if (result.success) {
+    const values = result.data;
+    return {
+      present: true,
+      values: {
+        clientId: values[CO_REVIEW_APP_CLIENT_ID_VAR],
+        tenantId: values[CO_REVIEW_APP_TENANT_ID_VAR],
+        clientSecret: values[CO_REVIEW_APP_SECRET_VAR] ?? null,
+        managedIdentityClientId: values.GRAPH_MANAGED_IDENTITY_CLIENT_ID ?? null,
+        folder: values[CO_REVIEW_SHAREPOINT_FOLDER_VAR],
+      },
+    };
+  }
+
+  const missing = [
+    ...new Set(
+      result.error.issues.map((issue) => String(issue.path[0] ?? "(unknown)")),
+    ),
+  ].sort();
+
+  return { present: false, missing };
+}

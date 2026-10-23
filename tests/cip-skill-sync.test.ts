@@ -196,6 +196,9 @@ describe("syncSkills", () => {
     expect(outcome.status).toBe("failed");
     expect(outcome.message).toMatch(/Could not read the skills folder/);
     expect(await testDb.cipSkillSync.findFirstOrThrow()).toMatchObject({ status: "failed", finishedAt: T0 });
+    expect(await testDb.auditEvent.findFirstOrThrow({ where: { action: "cip.skills_sync_failed" } })).toMatchObject({
+      metadata: { trigger: "manual", error: expect.stringMatching(/Could not read the skills folder/) },
+    });
   });
 
   it("fails with a message naming CIP_SKILLS_DIR when it is not set", async () => {

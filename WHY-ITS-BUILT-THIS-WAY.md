@@ -204,9 +204,11 @@ the only thing making this app safe, and it was verified empirically: `Granted` 
 platform's `mail.sent` audit row is therefore the only record of who sent a message. Treat
 it as a deliverable, not as logging.
 
-**Watch for.** The credential has no SharePoint access at all — 403 on everything. Correct
-today. A future phase needing SharePoint requires a new consent grant with
-`Sites.Selected` on the AISandbox site only.
+**Watch for.** The credential has no SharePoint access at all — 403 on everything,
+re-verified live on 2026-10-21 (token roles `Mail.ReadWrite`, `Mail.Send`; the
+AISandbox site and a site search both 403). Correct, and it stays that way: when
+the platform needed SharePoint (§ 69) it got a **separate** registration with a
+folder-level grant, not a new consent on this one. Never widen this app.
 
 ## 11 · Nothing is ever sent automatically
 
@@ -639,10 +641,13 @@ grouping — a thread genuinely spans folders, and going mailbox-wide needs a
 returns and Outlook hides.
 
 **BAS** — B5, plain-English questions over the data: built as the Analyze tab
-(§ 52); its API key reaches production from Key Vault by reference as of 2026-10-01.
+(§ 52); its API key reaches production from Key Vault by reference as of 2026-10-01
+and its database URL as of 2026-10-13, and the deployed tab answers.
 Point classification tooling, deferred because the right shape
 depends on how a given integrator named things and most fault rules need `equipment_id`,
-which nothing currently sets. Production deployment, blocked on Azure. Multiple buildings —
+which nothing currently sets. Production deployment, once blocked on Azure, is done:
+the data is in the Azure database and the collector writes there (`runbook.md` →
+*Moving the BAS data to the Azure database*). Multiple buildings —
 the schema and filters already support it; the lab station caps around two or three
 buildings, beyond which a Niagara Supervisor is a purchase nobody has owned.
 
@@ -2001,11 +2006,12 @@ second such branch that day), re-landed and extended to the BAS key the same
 way.
 
 **Why by reference and never a parameter.** `DATABASE-URL` and `AUTH-SECRET`
-are generated at deploy time, so passing them on every deploy is natural.
-These two are issued elsewhere - the Anthropic Console; the collector's `.env`
-on the office PC - and a secure parameter would put them on every deploy's
-command line and let a blank redeploy overwrite them. A reference means a
-routine redeploy never touches the value.
+are generated at deploy time, so passing them on every deploy was natural
+(and, since § 70, no longer done - a routine deploy omits them and the
+template leaves both alone). These two are issued elsewhere - the Anthropic
+Console; the collector's `.env` on the office PC - and a secure parameter
+would put them on every deploy's command line and let a blank redeploy
+overwrite them. A reference means a routine redeploy never touches the value.
 
 **Why the boolean.** Container Apps resolves every Key Vault reference when
 it creates a revision, and a reference to a secret that does not exist fails
@@ -2414,6 +2420,214 @@ the pipeline bills to BAS; a deploy-guard test fails by name. Add `??
 env.ANTHROPIC_API_KEY` to the CO reader and the blank-beside-a-real-BAS-key
 test fails. Build a change-order client as `new Anthropic({ timeout })` and
 the source-text test names the file.
+
+## 69 · Needs Review reads one folder as a third identity, and the email it shows comes from the mailbox
+
+**Decision (2026-10-21).** The Change Orders module gained a *Needs Review*
+tab that lists the notes the change-order classifier writes into the
+SharePoint folder `_needs_review` when it declines to decide. Three things
+were decided about how, and each was the less obvious choice.
+
+**A third app registration, folder-scoped.** `phb-platform-co-review`, with
+`Files.SelectedOperations.Selected` granted *Read* on the one folder - the
+Cost Intelligence pattern (`lib/modules/cost-intelligence/folder-store.ts`),
+not `Sites.Selected`. Not the mail app: its Exchange ApplicationAccessPolicy
+fence is the one thing that makes application-level `Mail.ReadWrite` safe
+(§ 10), and adding a SharePoint consent to it would muddy that story for the
+sake of one folder. Not `phb-co-engine`'s identity either: its open request
+is for *Write* on the whole `CO Managment Process` tree, which the platform
+must never hold. And not `Sites.Selected`, which the earlier note in § 10
+named, because it is site-wide - every library and folder on AI Sandbox,
+the live Bid Tracker and `_to_classify` included - where the folder grant is
+exactly the folder. Production signs in as the new app the same way the mail
+app does, through `createGraphCredential` with a different client id, so the
+prohibition-7 rules are inherited rather than copied: a secret in production
+refuses to boot (`tests/deploy-guards.test.ts` → *the Needs Review app
+registration reaches the container without a secret*).
+
+**The email comes from Exchange, not from the item folder.** A note names a
+subject and a date, and its filename carries the automation's stamp to the
+second and, in brackets, the first eight characters of the email's Internet
+Message-ID - checked against all fourteen live notes. The platform already
+reads the mailbox, and a mailbox-wide filter by exact subject and day found
+every note's message on 2026-10-21. The pairing rule is the **latest message
+received at or before the stamp**, after the bracket has narrowed the
+candidates to one sender: the stamp is Power Automate's clock after Exchange
+already has the message, 45 to 70 seconds later on every note, and the first
+draft's "nearest in time" picked somebody else's reply for a pair 72 seconds
+apart (`lib/modules/change-orders/review/match.ts`;
+`tests/co-review-match.test.ts` keeps that pair).
+So the Needs Review tab opens the message through the mailbox's own message
+route - the sanitizer, the sandboxed pane and the attachment streaming route
+are the Phase 5-8 ones, unchanged - and the SharePoint grant stays at one
+folder. It also makes the backlog work: on 2026-10-21 the folder held 14
+notes and ONE item folder, because until that day's flow fix the email folder
+never moved out of `_to_classify`, and ten of those fourteen have no item
+folder anywhere any more. Reading `body.txt` beside the note would have
+shown nothing for most of what was waiting. The match is stated as a match
+on screen, with the message's own sender and time beside the note's.
+
+**Read-only, enforced in code.** `_needs_review` is a queue folder the
+automation owns (`docs/13-needs-review.md` §11), and the standing rule is
+that Power Automate moves items between queue folders. The platform reading
+the folder changes no prohibition in CLAUDE.md; the platform writing to it is
+a decision Phase 1 was told not to make. So the review service has no method
+that moves, writes, renames or deletes, every review route exports `GET` and
+nothing else, the browser has no button that acts on a note, and
+`tests/co-review-read-only.test.ts` holds all three to the source text while
+`tests/co-review-service.test.ts` asserts every request on the wire is a
+GET. A handled note is moved to `_archive/` by a person in SharePoint, and
+the tab notices on its next poll. The count is the number of files named
+`NEEDS REVIEW - *.txt` - `.keep.txt` and the item folders are not notes -
+and the oldest date sits beside it so fourteen old notes read as a backlog
+rather than as a fault.
+
+**Notes are text.** A note is model-written prose that quotes a vendor's
+email. It is rendered as escaped text through React text nodes, never
+through the HTML sanitizer, which is an allowlist for markup and would turn
+"a < b" into "a". `tests/co-review-ui.test.tsx` renders a hostile note and
+reads the HTML back.
+
+**What breaks if you undo it.** Put the grant on the mail app and § 10's
+fence is no longer the whole story of that identity. Ask for `Sites.Selected`
+and the token reads the live Bid Tracker. Read the email from the item
+folder and the backlog shows nothing. Add a move to the service and two
+tests fail by name - and the next classifier run may find an item in a
+folder it did not expect, which is the failure docs/13 §7 took three months
+to notice the first time.
+## 70 · The two secure parameters are optional, and an omitted one changes nothing
+
+**What it is.** `postgresAdminPassword` and `authSecret` in `infra/main.bicep`
+default to empty (2026-10-21). Empty - or whitespace - means *leave the existing
+value untouched*: the database server keeps its current administrator password,
+the `DATABASE-URL` vault secret keeps its current version, `AUTH-SECRET` keeps
+its current version. Non-empty does what it always did: sets the password,
+writes a new `DATABASE-URL`, writes a new `AUTH-SECRET`. A routine template
+deployment passes `containerImage` and neither secure parameter; the first
+deployment and a deliberate rotation pass one or both.
+
+**Why.** Until that day both were required on every deployment, and a required
+secure parameter you leave off the command line is prompted for, with nothing
+echoed. Whatever was typed was SET, because a flexible-server PUT that carries
+`administratorLoginPassword` rotates the password to it. On 2026-10-13 a value
+mistyped at that prompt rotated the production administrator password. The
+deployment had been run to turn two Key Vault flags on; nothing about it was
+meant to touch the database. A parameter whose only safe value on a routine
+deployment is *the exact current value, retyped* is a parameter that will one
+day be mistyped, and "pass the current values on every run" was the
+instruction every document gave.
+
+**Why the decision is made once, in a variable, and not at each use.** The
+password is used in two places (the server property and the URL the
+`DATABASE-URL` secret is written from) and the session secret in one. If each
+use tested emptiness for itself, the three tests could disagree - a server
+left alone while `DATABASE-URL` was rewritten with an empty password is the
+worst outcome available, because it breaks the running app while looking like
+a no-op. `setPostgresAdminPassword` and `setAuthSecret` are the only two
+places "was a value supplied" is decided; every use is behind one of them,
+and the source-text test counts the uses.
+
+**Why the property is left out, not set to null or empty.** Three shapes were
+available for "do not rotate". Sending the current password back would need
+the deployer to know it, which is the original problem. Sending `null` or `''`
+is a PUT that *carries* `administratorLoginPassword`, and what a provider does
+with an empty password is at best a validation error and at worst a rotation
+to nothing. Spreading an empty object into the properties leaves the key out
+of the request entirely, which is the one form a provider cannot
+misinterpret: an update with no password is an update that keeps the password.
+The compiled ARM shows it as `if(variables('setPostgresAdminPassword'),
+createObject('administratorLoginPassword', …), createObject())` inside a
+`shallowMerge`, and the test reads that out of `az bicep build` where the CLI
+is installed.
+
+**Why the secrets are conditional resources rather than written with the old
+value.** The template cannot read a vault secret's value, so the only way to
+"write the same thing" would be to not write. A conditional resource with the
+condition false is not deployed: no PUT, no new version, the container app's
+reference - which carries no version - keeps resolving to what is there. The
+symbolic references (`databaseUrlSecret.name`, `authSecretSecret.name`) stay in
+the container app and the worker job so that on a first deployment the secrets
+are written before anything references them; ARM ignores a dependency on a
+resource whose condition is false, so on a redeploy the skipped secret blocks
+nothing.
+
+**Why `DATABASE-URL` follows the password's condition and not its own.** The
+URL embeds the password. A deployment that rotates the password must write the
+URL in the same deployment or the app is locked out of its own database; a
+deployment that does not rotate it must not touch the URL, because the only
+URL it could write would carry an empty password. One condition, the
+password's, gives exactly those two behaviours. A test asserts the secret is
+conditional on `setPostgresAdminPassword` and not on `setAuthSecret`.
+
+**Why `trim()`.** The failure being closed is a value mistyped at a prompt. A
+single space is the easiest value to type by accident and the hardest to see
+afterwards, and `empty(' ')` is false. Whitespace-only is treated as omitted.
+A real password is never whitespace-only, so nothing is lost.
+
+**What breaks if you undo this.** Make either parameter required again and
+the first test in the block fails on the missing `= ''`. Write
+`administratorLoginPassword: postgresAdminPassword` back as a bare property
+and the *absent, never sent empty or null* test fails, as does the compiled
+check's count of one mention inside the `if`. Drop the `if (…)` from either
+secret resource and the *conditional on their own parameter* test fails; swap
+`DATABASE-URL` onto the session secret's condition and the same test names it.
+Test emptiness at a use site instead of through the variable and the
+supplied-path test, which allows each use exactly one shape, fails on the
+line. Put the values back into the routine command in `infra/README.md` and
+the README test fails on the block. `runbook.md` → *A template deployment
+rotated the database administrator password*.
+
+## 71 · The custom domain is in the template, bound by default, and attached in two passes
+
+**What it is.** `platform.phb1899.com` is a custom hostname on the production
+container app (2026-10-21), beside the `azurecontainerapps.io` address rather
+than instead of it, with a free Azure managed certificate issued on the
+Container Apps environment. It is declared in `infra/main.bicep`:
+`customDomainName` (default empty, attaches nothing) and `customDomainBound`
+(default **true**). The hostname goes on the ingress as one entry in one of two
+states; the certificate is a `managedCertificates` resource on the environment,
+conditional on the hostname, validated through the CNAME, deployed after the
+app. `authUrl` is untouched by any of it.
+
+**Why in the template.** `az containerapp hostname bind` would have done it in
+one afternoon and been undone by the next routine template deployment, because
+a deployment replaces the whole container app and a hostname the template did
+not know about is not carried forward. That is the `containerImage` lesson of
+2026-10-13 (§ 66) applied to a hostname, and the test that holds it is in the
+same file.
+
+**Why two passes.** Azure refuses to issue a managed certificate for a
+hostname that no app in the environment carries, and the app cannot bind a
+certificate that does not yet exist. So the first deployment that sets the
+hostname passes `customDomainBound=false` on the command line - hostname added,
+certificate issued, nothing bound - and the next routine deployment binds it.
+The certificate is named from the app with `resourceId()` rather than a
+symbolic reference, on purpose: the certificate depends on the app, and a
+symbolic reference back would be a cycle.
+
+**Why the default is true.** The alternative - default false, and the
+parameters file carrying `customDomainBound: true` after the first pass - makes
+every later deployment depend on a line in a gitignored file. Lose the line
+and the hostname silently drops to `Disabled` and answers with the wrong
+certificate. With the default true the parameters file carries only the
+hostname, the first pass is the one time the flag is typed, and forgetting it
+afterwards is the correct state. The same shape as the placeholder image: the
+exceptional value is passed once on the command line and never written down.
+
+**Why sign-in does not move with it.** `authUrl` decides where Auth.js builds
+its callback, and Entra accepts only the redirect URIs the SSO app registration
+carries. Changing `authUrl` to the new hostname before that registration has
+the matching URI breaks sign-in at both addresses, so the order is fixed: the
+hostname and certificate (this), then Request 5 to Vitis, then `authUrl`.
+
+**What breaks if you undo it.** Bind the hostname by hand instead and the next
+template deployment removes it. Flip the default to false and a routine redeploy
+unbinds the certificate. Reference the certificate symbolically from the app and
+Bicep refuses the cycle; drop the `dependsOn` and Azure refuses to issue. Put
+the binding in the example parameters and the guard test names the key. Derive
+`AUTH_URL` from the hostname and the same test fails on the line.
+`tests/deploy-guards.test.ts` → *the custom domain lives in the template*;
+`runbook.md` → *The custom domain answers with a certificate warning*.
 
 ## 47 · The judgment I'd most want to pass on
 

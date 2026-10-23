@@ -9,9 +9,11 @@ import { POST as create } from "@/app/api/modules/cost-intelligence/runs/route";
 import { POST as act } from "@/app/api/modules/cost-intelligence/runs/[id]/route";
 import { COST_INTELLIGENCE_MODULE_KEY } from "@/lib/modules/cost-intelligence/constants";
 import {
+  CONTINUE_PROMPT,
   RUN_BUDGET_USD,
   answerCheckpoint,
   cancelRun,
+  continueRun,
   createRun,
   getRun,
   listLaunchOptions,
@@ -146,6 +148,35 @@ describe("cancelRun", () => {
     expect(await testDb.cipRunCheckpoint.count()).toBe(0);
     expect(await cancelRun(actor, result.data.id)).toMatchObject({ code: "not_cancellable" });
     expect(await cancelRun(actor, "999")).toMatchObject({ code: "not_found" });
+  });
+});
+
+describe("continueRun", () => {
+  it("puts a failed run back in the queue at its step, resuming the session when there is one", async () => {
+    const result = await createRun(actor, { workflowId, projectId });
+    if (!result.ok) throw new Error(result.message);
+    const id = BigInt(result.data.id);
+    expect(await continueRun(actor, result.data.id)).toMatchObject({ code: "not_continuable" }); // queued
+
+    await testDb.cipRun.update({ where: { id }, data: { status: "failed", error: "The worker stopped.", currentStep: 1, sessionId: "s", finishedAt: new Date() } });
+    expect(await continueRun(actor, result.data.id)).toEqual({ ok: true, data: { continued: true } });
+
+    expect(await testDb.cipRun.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      status: "queued", error: null, finishedAt: null, currentStep: 1, sessionId: "s", resumePrompt: CONTINUE_PROMPT,
+    });
+    expect((await getRun(result.data.id))?.events.at(-1)).toMatchObject({ type: "continued" });
+    expect(await testDb.auditEvent.findFirstOrThrow({ where: { action: "cip.run_continued" } })).toMatchObject({
+      actorEmployeeId: actor,
+      metadata: { runId: result.data.id, step: 2, resumed: true },
+    });
+  });
+
+  it("refuses a run that has spent its budget", async () => {
+    const result = await createRun(actor, { workflowId, projectId });
+    if (!result.ok) throw new Error(result.message);
+    await testDb.cipRun.update({ where: { id: BigInt(result.data.id) }, data: { status: "failed", costUsd: 5 } });
+    expect(await continueRun(actor, result.data.id)).toMatchObject({ code: "not_continuable", message: expect.stringMatching(/budget/) });
+    expect(await continueRun(actor, "999")).toMatchObject({ code: "not_found" });
   });
 });
 

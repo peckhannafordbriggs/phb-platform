@@ -1,5 +1,9 @@
+import { createWriteStream } from "node:fs";
 import { cp, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { ClientAssertionCredential, ClientSecretCredential, type TokenCredential } from "@azure/identity";
 import { createManagedIdentityAssertionProvider } from "@/lib/azure/managed-identity-assertion";
 
@@ -281,8 +285,14 @@ export function sharePointStore(
             .map(async (child) => {
               const target = path.join(to, child.name);
               if (child.folder !== undefined) return copy(join(from, child.name), target);
-              const body = await limit(async () => Buffer.from(await (await fetchFile(child.id)).arrayBuffer()));
-              await writeFile(target, body);
+              // Streamed to disk inside the limit, never held whole: a bid project's
+              // drawing sets run to hundreds of MB each, and eight of them buffered
+              // at once ran the 4 GB worker out of memory (OOMKilled on resume).
+              await limit(async () => {
+                const response = await fetchFile(child.id);
+                if (response.body === null) return writeFile(target, "");
+                await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), createWriteStream(target));
+              });
             }),
         );
       }

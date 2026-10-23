@@ -129,9 +129,19 @@ param postgresStorageAutoGrow string = 'Enabled'
 @description('Administrator login for the database server. Not an email address, and not a person.')
 param postgresAdminUsername string
 
+// The two @secure() parameters below are OPTIONAL, and omitting one changes
+// nothing (2026-10-21). Until then both were required on every deployment and
+// whatever was typed was SET: on 2026-10-13 a value mistyped at the prompt
+// rotated the production administrator password. Empty - the default - means
+// "leave the existing value untouched": the server keeps its current password
+// and DATABASE-URL keeps its current version; the session secret keeps its
+// current version. Non-empty behaves as it always did. The decision is made
+// ONCE, in the two `set…` variables below, and every use of either parameter
+// is behind its variable, so an empty default can never set an empty password
+// or create an empty secret version. See infra/README.md -> Deploy.
 @secure()
-@description('Administrator password. Supply at deploy time; never commit it. Rotate through Key Vault afterwards.')
-param postgresAdminPassword string
+@description('Administrator password. Optional: leave empty (the default) and the server keeps its current password and the DATABASE-URL secret keeps its current version. Required on the FIRST deployment, because a server cannot be created without one, and supplied again only when you mean to rotate it - a non-empty value SETS the password. Never commit it.')
+param postgresAdminPassword string = ''
 
 @description('Application database name.')
 param databaseName string = 'phb_platform'
@@ -150,8 +160,46 @@ param bootstrapAdminEmails string
 param authUrl string = ''
 
 @secure()
-@description('Auth.js session secret. Generate with `npx auth secret`.')
-param authSecret string
+@description('Auth.js session secret. Optional: leave empty (the default) and the AUTH-SECRET vault secret keeps its current version. Required on the first deployment (the container app references the secret and the reference must resolve), and supplied again only to rotate it, which signs every existing session out. Generate with `npx auth secret`.')
+param authSecret string = ''
+
+// ---------------------------------------------------------------------------
+// Custom domain (2026-10-21)
+// ---------------------------------------------------------------------------
+//
+// The app's own address (<app>.<env-suffix>.azurecontainerapps.io) always
+// works and nothing here replaces it; a custom hostname is ADDED beside it,
+// with a free Azure managed certificate issued on the environment. Two DNS
+// records have to exist before the hostname is set, and both are checked by
+// Azure when the certificate is issued:
+//
+//   CNAME  <hostname>        -> <app>.<env-suffix>.azurecontainerapps.io
+//   TXT    asuid.<hostname>  -> the environment's customDomainVerificationId
+//                               (a public UUID-like value, not a secret)
+//
+// A managed certificate cannot be issued for a hostname the app does not yet
+// carry, and the app cannot bind a certificate that does not yet exist. So the
+// FIRST deployment with customDomainName set runs with customDomainBound=false
+// on the command line (hostname added, certificate issued), and every one after
+// it runs with the default, true (hostname bound to the certificate). The
+// default is true so that the parameters file never needs to carry the
+// binding and a routine redeploy cannot drop it - exactly the placeholder-image
+// rule above, in the other direction. authUrl is NOT changed by any of this:
+// sign-in keeps building its callback on whatever authUrl says until the SSO
+// app registration carries the new redirect URI as well.
+
+@description('Custom hostname for the container app, e.g. "platform.example.com". Empty (the default) attaches no custom domain. Before setting it, the CNAME and the asuid TXT record described above must be live. The azurecontainerapps.io address the app already has keeps working beside it.')
+param customDomainName string = ''
+
+@description('Whether the custom hostname is bound to its managed certificate. Pass false ONLY on the first deployment that sets customDomainName: that pass adds the hostname and issues the certificate, which cannot be bound until it exists. Every later deployment leaves this at its default, true. Never write it into the parameters file.')
+param customDomainBound bool = true
+
+// Whitespace counts as empty: a stray space at a prompt must not become the
+// administrator password. These two variables are the ONLY place the
+// "was a value supplied" decision is made; every use of either secure
+// parameter below is conditional on one of them.
+var setPostgresAdminPassword = !empty(trim(postgresAdminPassword))
+var setAuthSecret = !empty(trim(authSecret))
 
 @description('Client ID of the SSO app registration. Not a secret; it appears in every authorization URL.')
 param ssoClientId string
@@ -204,6 +252,22 @@ param cipSharePointSkillsFolder string = ''
 
 @description('SharePoint BID-DOC folder, as ids:<driveId>/<itemId>.')
 param cipSharePointProjectsFolder string = ''
+
+// Change Orders → Needs Review (2026-10-21). A third app registration,
+// phb-platform-co-review, read-only on the automation's _needs_review folder
+// through Files.SelectedOperations.Selected - never the mail app, whose
+// mailbox fence is load-bearing, and never a secret: production signs in as
+// it with the managed identity and a federated credential, as the CIP app
+// does. All three values are identifiers, not secrets. Blank leaves the
+// Needs Review tab reporting itself not configured and nothing else changes.
+@description('Tenant ID of the phb-platform-co-review app registration. Not a secret.')
+param coReviewAppTenantId string = ''
+
+@description('Client ID of the phb-platform-co-review app registration. Production signs in as it with the managed identity and a federated credential; no secret.')
+param coReviewAppClientId string = ''
+
+@description('The _needs_review folder, as ids:<driveId>/<itemId> or its browser URL.')
+param coReviewSharePointFolder string = ''
 
 @description('Model the skills run on. Empty means the default in lib/modules/cost-intelligence/runs.ts.')
 param cipRunModel string = ''
@@ -377,7 +441,12 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   properties: {
     version: postgresVersion
     administratorLogin: postgresAdminUsername
-    administratorLoginPassword: postgresAdminPassword
+    // The password is present in the request ONLY when one was supplied. A
+    // flexible server PUT without administratorLoginPassword keeps the
+    // current password; one with it SETS it, whatever it is. Spreading an
+    // empty object leaves the property out of the request altogether, which
+    // is not the same as sending it empty or null.
+    ...(setPostgresAdminPassword ? { administratorLoginPassword: postgresAdminPassword } : {})
     storage: {
       storageSizeGB: postgresStorageGb
       autoGrow: postgresStorageAutoGrow
@@ -433,13 +502,24 @@ resource allowAzureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallR
 // repository or in a parameters file that gets committed. Azure does not log
 // the value of a parameter marked @secure().
 //
+// Both secret resources are CONDITIONAL on their parameter having been
+// supplied (2026-10-21). A deployment that omits the parameter does not touch
+// the secret: no PUT, no new version, the container app's reference keeps
+// resolving to the version already there. A deployment that supplies it writes
+// a new version, exactly as before. The resources keep their symbolic names so
+// the container app and the worker job still depend on them, and ARM ignores a
+// dependency on a resource whose condition is false.
+//
 // Key Vault secret names allow alphanumerics and hyphens only, hence the naming
 // that differs from the environment variables they become.
 // ---------------------------------------------------------------------------
 
+// Only meaningful when a password was supplied; with none it would be a URL
+// with an empty password, and the conditional below is what keeps that URL
+// from ever being written.
 var databaseUrl = 'postgresql://${postgresAdminUsername}:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/${databaseName}?sslmode=require'
 
-resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (setPostgresAdminPassword) {
   parent: keyVault
   name: 'DATABASE-URL'
   properties: {
@@ -447,7 +527,7 @@ resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   }
 }
 
-resource authSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+resource authSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (setAuthSecret) {
   parent: keyVault
   name: 'AUTH-SECRET'
   properties: {
@@ -456,12 +536,12 @@ resource authSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
 }
 
 // The Anthropic API key is deliberately NOT a resource here and not a
-// parameter. The two secrets above are generated at deploy time and are
-// passed on every deploy; this one is issued once by the Anthropic Console and
-// pasted into the vault once, by the person holding it, so a routine redeploy
-// never needs it on the command line and can never overwrite it with a blank.
-// The template only knows the name it is stored under. infra/README.md has the
-// command; runbook.md has what goes wrong.
+// parameter. The two secrets above are generated at deploy time and were, until
+// 2026-10-21, passed on every deploy; this one is issued once by the Anthropic
+// Console and pasted into the vault once, by the person holding it, so a
+// routine redeploy never needs it on the command line and can never overwrite
+// it with a blank. The template only knows the name it is stored under.
+// infra/README.md has the command; runbook.md has what goes wrong.
 var anthropicApiKeySecretName = 'ANTHROPIC-API-KEY'
 
 // The Change Orders module's Anthropic key is the same shape and a DIFFERENT
@@ -481,6 +561,32 @@ var basCredentialKeySecretName = 'BAS-CREDENTIAL-KEY'
 // scripts/setup-bas-analyze-role.sql, pasted into the vault once, never on a
 // deploy's command line. The template knows the name only.
 var basAskDatabaseUrlSecretName = 'BAS-ASK-DATABASE-URL'
+
+var hasCustomDomain = !empty(trim(customDomainName))
+var managedCertificateName = 'mc-${replace(toLower(trim(customDomainName)), '.', '-')}'
+// Built with resourceId() rather than a symbolic reference ON PURPOSE. The
+// certificate depends on the app (the hostname must be on the app before Azure
+// will issue for it), so a symbolic reference from the app back to the
+// certificate would be a cycle. The id is a string the app carries; on the
+// bound pass the certificate already exists, because the unbound pass made it.
+var managedCertificateId = resourceId('Microsoft.App/managedEnvironments/managedCertificates', managedEnvironmentName, managedCertificateName)
+// The one custom-domain entry the ingress carries, in one of its two states.
+// A bound entry names the certificate; an unbound one does not carry the key
+// at all, which is not the same as carrying it empty.
+var customDomains = hasCustomDomain
+  ? [
+      customDomainBound
+        ? {
+            name: trim(customDomainName)
+            bindingType: 'SniEnabled'
+            certificateId: managedCertificateId
+          }
+        : {
+            name: trim(customDomainName)
+            bindingType: 'Disabled'
+          }
+    ]
+  : []
 
 // ---------------------------------------------------------------------------
 // Container Apps
@@ -521,6 +627,9 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: containerPort
         transport: 'auto'
         allowInsecure: false
+        // The custom hostname, if any, beside the app's own address. See the
+        // Custom domain section above for the two-pass binding.
+        customDomains: customDomains
         traffic: [
           {
             latestRevision: true
@@ -739,6 +848,21 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'CIP_SHAREPOINT_PROJECTS_FOLDER'
               value: cipSharePointProjectsFolder
             }
+            // Change Orders → Needs Review: the _needs_review folder, read as
+            // the phb-platform-co-review app. No secret: the managed identity
+            // above. The names are decided in lib/env.ts.
+            {
+              name: 'PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID'
+              value: coReviewAppTenantId
+            }
+            {
+              name: 'PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID'
+              value: coReviewAppClientId
+            }
+            {
+              name: 'CO_REVIEW_SHAREPOINT_FOLDER'
+              value: coReviewSharePointFolder
+            }
           ]
           probes: [
             {
@@ -782,6 +906,30 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   dependsOn: [
     acrPull
     keyVaultRead
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// Custom domain: the free managed certificate
+// ---------------------------------------------------------------------------
+
+// Issued by Azure on the environment for the hostname, validated through the
+// CNAME. Deployed AFTER the container app, because Azure refuses to issue for
+// a hostname no app in the environment carries; the app carries it from its
+// first (unbound) pass on. Re-deploying an issued certificate is a no-op, and
+// Azure renews it on its own - nothing here expires on a schedule a person has
+// to keep (prohibition 7).
+resource managedCertificate 'Microsoft.App/managedEnvironments/managedCertificates@2024-03-01' = if (hasCustomDomain) {
+  parent: managedEnvironment
+  name: managedCertificateName
+  location: location
+  tags: tags
+  properties: {
+    subjectName: trim(customDomainName)
+    domainControlValidation: 'CNAME'
+  }
+  dependsOn: [
+    containerApp
   ]
 }
 
@@ -979,3 +1127,9 @@ output managedIdentityPrincipalId string = identity.properties.principalId
 output cipWorkerJobName string = enableCipWorker ? cipWorkerJob.name : ''
 // The redirect URI IT has to add to the SSO app registration in Part B.
 output ssoRedirectUri string = 'https://${containerApp.properties.configuration.ingress.fqdn}/api/auth/callback/microsoft-entra-id'
+// The custom hostname's address and ITS redirect URI, empty when no custom
+// domain is set. The second is a further redirect URI to ADD to the SSO app
+// registration - the one above stays, because the app's own address keeps
+// working and authUrl may still point at it.
+output customDomainUrl string = hasCustomDomain ? 'https://${trim(customDomainName)}' : ''
+output customDomainSsoRedirectUri string = hasCustomDomain ? 'https://${trim(customDomainName)}/api/auth/callback/microsoft-entra-id' : ''

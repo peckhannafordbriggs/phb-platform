@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { APP_TIME_ZONE } from "@/lib/activity/rollover";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { moduleAccent } from "@/lib/module-accent";
@@ -388,5 +389,6 @@ function formatDate(value: Date | string | null): string {
     year: "numeric",
     month: "short",
     day: "numeric",
+    timeZone: APP_TIME_ZONE,
   });
 }

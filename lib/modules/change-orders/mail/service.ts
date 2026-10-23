@@ -48,6 +48,7 @@ import type {
   MailFolderSummary,
   MailboxConnectionStatus,
   MessageDetail,
+  MessageMatchCandidate,
   MessagePage,
   MessageSummary,
 } from "./types";
@@ -373,6 +374,22 @@ const CONTROL_CHARACTERS = new RegExp("[\\u0000-\\u001f\\u007f]", "g");
  */
 function escapeODataLiteral(value: string): string {
   return value.replace(CONTROL_CHARACTERS, "").replace(/'/g, "''");
+}
+
+/**
+ * A `$filter` expression, ready for the SDK's `.filter()`.
+ *
+ * The SDK does NOT percent-encode the value it is given: it writes
+ * `$filter=<string>` into the URL as-is and leaves the rest to the URL
+ * parser, which encodes a space or a quote and treats `&` and `#` as
+ * structure. So `contains(subject,'P&G')` reached Graph as a `$filter` of
+ * `contains(subject,'P` plus a stray `G')` parameter, and Graph answered
+ * `400 BadRequest` - found live on 2026-10-21, searching the Inbox for the
+ * one project whose name has an ampersand. Encoded here, once, for every
+ * filter this class sends.
+ */
+function filterParam(expression: string): string {
+  return encodeURIComponent(expression);
 }
 
 function toAddress(recipient: Recipient | null | undefined): MailAddress | null {
@@ -794,7 +811,7 @@ export class ChangeOrderMailService {
       this.client
         .api(this.path(`/mailFolders/${encodeURIComponent(folderId)}/messages`))
         .select("id")
-        .filter(`receivedDateTime ge ${since.toISOString()}`)
+        .filter(filterParam(`receivedDateTime ge ${since.toISOString()}`))
         .top(cap)
         .get() as Promise<GraphCollection<Message>>,
     );
@@ -807,6 +824,52 @@ export class ChangeOrderMailService {
       // cap, which is the boundary case where a nextLink may be absent.
       atLeast: count >= cap || cursorFrom(page["@odata.nextLink"]) !== null,
     };
+  }
+
+  /**
+   * Messages with exactly this subject, received inside a window, from the
+   * whole mailbox rather than one folder (2026-10-21, for Needs Review).
+   *
+   * Mailbox-wide because Power Automate files a message into a project folder
+   * after it arrives, so the folder a note's email sits in today is not
+   * knowable from the note. `/users/{mailbox}/messages` spans every folder.
+   *
+   * `subject eq`, not `contains`: the note carries the subject verbatim, and
+   * the window is already narrow. No `$orderby` - Graph refuses to order a
+   * filtered message collection (`InefficientFilter`) - so the page is sorted
+   * here. Capped at one page and the cap is the caller's to notice: a day of
+   * one subject exceeding fifty messages is not a change-order thread.
+   *
+   * READ-ONLY, like every method above it; this adds a GET and nothing else.
+   */
+  async findMessagesReceivedBetween(
+    subject: string,
+    from: Date,
+    to: Date,
+    cap = MESSAGES_SINCE_CAP,
+  ): Promise<MessageMatchCandidate[]> {
+    const filter =
+      `receivedDateTime ge ${from.toISOString()} and ` +
+      `receivedDateTime lt ${to.toISOString()} and ` +
+      `subject eq '${escapeODataLiteral(subject)}'`;
+
+    const page = await this.call("findMessagesReceivedBetween", () =>
+      this.client
+        .api(this.path("/messages"))
+        // Plus the Message-ID: the note's filename carries its first eight
+        // characters, and that is what tells two senders' replies apart.
+        .select(`${MESSAGE_SUMMARY_SELECT},internetMessageId`)
+        .filter(filterParam(filter))
+        .top(cap)
+        .get() as Promise<GraphCollection<Message>>,
+    );
+
+    return (page.value ?? [])
+      .map((message) => ({
+        ...toMessageSummary(message),
+        internetMessageId: message.internetMessageId ?? null,
+      }))
+      .sort(byNewestFirst);
   }
 
   async getFolder(folderId: string): Promise<MailFolderSummary> {
@@ -939,7 +1002,7 @@ export class ChangeOrderMailService {
           let request = this.client
             .api(path)
             .select(MESSAGE_SUMMARY_SELECT)
-            .filter(filter)
+            .filter(filterParam(filter))
             .top(SEARCH_PAGE_SIZE);
 
           if (offset > 0) request = request.skip(offset);

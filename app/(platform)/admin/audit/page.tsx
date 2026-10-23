@@ -6,7 +6,7 @@ import {
   listAuditEvents,
   moduleDisplayNames,
 } from "@/lib/admin/service";
-import { knownAuditActions } from "@/lib/admin/audit-describe";
+import { auditActionFilterOptions } from "@/lib/admin/audit-describe";
 import { auditQuerySchema } from "@/lib/validation/admin";
 import { AuditList } from "../audit-list";
 
@@ -109,8 +109,8 @@ export default async function AuditPage({
             className="rounded border border-[var(--border)] bg-white px-3 py-1.5 text-sm"
           >
             <option value="">Any</option>
-            {knownAuditActions().map(({ action, label }) => (
-              <option key={action} value={action}>
+            {auditActionFilterOptions().map(({ value, label }) => (
+              <option key={value} value={value}>
                 {label}
               </option>
             ))}

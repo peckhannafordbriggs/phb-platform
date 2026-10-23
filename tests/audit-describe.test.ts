@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  auditActionFilterOptions,
   auditActionLabel,
   describeAuditEvent,
   knownAuditActions,
@@ -305,6 +306,23 @@ describe("hostile or absent metadata", () => {
   });
 });
 
+describe("Cost Intelligence worker events", () => {
+  const cip = (action: string, metadata: Record<string, unknown>) =>
+    describeAuditEvent(event({ action, moduleKey: "cost-intelligence", metadata, actor: null, target: null }), MODULES);
+
+  it("leads with the run, since the platform acted", () => {
+    const meta = { runId: "12", workflowName: "Bid review", projectName: "Anderson" };
+    expect(cip("cip.run_failed", { ...meta, step: 2, error: "The worker stopped while running this." }).sentence).toBe(
+      "Run 12 (Bid review on Anderson) failed at step 2: The worker stopped while running this.",
+    );
+    expect(cip("cip.run_succeeded", { ...meta, costUsd: 1.7234 }).sentence).toBe("Run 12 (Bid review on Anderson) finished, $1.72");
+    expect(cip("cip.outputs_published", { runId: "12", step: 1, files: ["a.md", "b.xlsx", "c.pdf", "d.txt"] }).sentence).toBe(
+      "Run 12 saved 4 files to AI FILES: a.md, b.xlsx, c.pdf and 1 more",
+    );
+    expect(cip("cip.run_failed", meta).known).toBe(true);
+  });
+});
+
 describe("the filter dropdown", () => {
   it("offers every action the renderer knows, and no others", () => {
     const offered = knownAuditActions().map((a) => a.action);
@@ -326,6 +344,16 @@ describe("the filter dropdown", () => {
 
   it("sorts by label, not by the dotted key", () => {
     const labels = knownAuditActions().map((a) => a.label);
+    expect([...labels].sort((a, b) => a.localeCompare(b))).toEqual(labels);
+  });
+
+  it("folds every Cost Intelligence action into one entry, and keeps the rest as they are", () => {
+    const options = auditActionFilterOptions();
+    expect(options.filter((o) => o.value.startsWith("cip."))).toEqual([{ value: "cip.*", label: "Cost Intelligence" }]);
+    for (const { value } of options.filter((o) => o.value !== "cip.*")) {
+      expect(describeAuditEvent(event({ action: value }), MODULES).known).toBe(true);
+    }
+    const labels = options.map((o) => o.label);
     expect([...labels].sort((a, b) => a.localeCompare(b))).toEqual(labels);
   });
 

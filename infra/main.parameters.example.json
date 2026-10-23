@@ -9,11 +9,16 @@
     "on the az command line, and the region and names are parameters.",
     "",
     "The two secure parameters - postgresAdminPassword, authSecret - are NOT in",
-    "this file and must never be committed. containerImage is not in this file",
-    "either, deliberately: it is the image the app is running NOW, which changes",
-    "on every merge to main, so it is read from the app and passed on the command",
-    "line. A value written here goes stale and a template deployment would put",
-    "the stale image back (it did, on 2026-10-13 - see infra/README.md).",
+    "this file and must never be committed. They are also NOT passed on a",
+    "routine deployment: each defaults to empty, and empty leaves the existing",
+    "value untouched (the server keeps its password, DATABASE-URL and",
+    "AUTH-SECRET keep their current versions). Pass one only on the first",
+    "deployment or to rotate it - a non-empty value SETS it. containerImage is",
+    "not in this file either, deliberately: it is the image the app is running",
+    "NOW, which changes on every merge to main, so it is read from the app and",
+    "passed on the command line. A value written here goes stale and a template",
+    "deployment would put the stale image back (it did, on 2026-10-13 - see",
+    "infra/README.md).",
     "",
     "  IMAGE=\"$(az containerapp show -n <app> -g <resource-group> \\",
     "    --query properties.template.containers[0].image -o tsv)\"",
@@ -22,7 +27,9 @@
     "    --resource-group <resource-group> \\",
     "    --template-file infra/main.bicep \\",
     "    --parameters @infra/main.parameters.json \\",
-    "    --parameters containerImage=\"$IMAGE\" \\",
+    "    --parameters containerImage=\"$IMAGE\"",
+    "",
+    "  First deployment or a deliberate rotation only - add:",
     "    --parameters postgresAdminPassword=\"$PGPASSWORD\" authSecret=\"$AUTH_SECRET\""
   ],
   "parameters": {
@@ -71,6 +78,9 @@
     "authUrl": {
       "value": ""
     },
+    "customDomainName": {
+      "value": ""
+    },
     "ssoClientId": {
       "value": "<sso-app-registration-client-id>"
     },
@@ -117,6 +127,16 @@
     },
     "cipSharePointProjectsFolder": {
       "value": "ids:<driveId>/<itemId>"
+    },
+
+    "coReviewAppTenantId": {
+      "value": ""
+    },
+    "coReviewAppClientId": {
+      "value": ""
+    },
+    "coReviewSharePointFolder": {
+      "value": ""
     },
 
     "enableBudget": {

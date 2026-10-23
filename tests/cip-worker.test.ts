@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { answerCheckpoint, cancelRun, createRun, getRun } from "@/lib/modules/cost-intelligence/runs";
+import { CONTINUE_PROMPT, answerCheckpoint, cancelRun, continueRun, createRun, getRun } from "@/lib/modules/cost-intelligence/runs";
 import {
   STALE_AFTER_MS,
   failStaleRuns,
@@ -136,9 +136,18 @@ describe("workOnce", () => {
     const run = await getRun(id);
     expect(run).toMatchObject({ status: "succeeded", costUsd: 0.25, tokens: 1700, outputs: [{ path: "AI FILES/Job_Brief_rev0.docx" }] });
     expect(run?.events.map((e) => e.type)).toEqual([
-      "queued", "started", "step_started", "message", "tool", "output", "step_finished", "succeeded",
+      "queued", "started", "step_started", "workspace", "message", "tool", "output", "step_finished", "succeeded",
     ]);
     expect(run?.events.find((e) => e.type === "tool")?.message).toBe("Read Specs/spec.pdf");
+    // Archive is skipped, so the copy is the one spec.
+    expect(run?.events.find((e) => e.type === "workspace")?.message).toMatch(/^Workspace ready: 1 file, 0 MB in \d+ s$/);
+    const audited = await testDb.auditEvent.findMany({ where: { action: { startsWith: "cip." } } });
+    expect(audited.map((a) => `${a.action} ${a.actorEmployeeId === null ? "platform" : "person"}`).sort()).toEqual([
+      "cip.outputs_published platform",
+      "cip.run_started person",
+      "cip.run_succeeded platform",
+    ]);
+    expect(audited.find((a) => a.action === "cip.outputs_published")!.metadata).toMatchObject({ runId: id, step: 1, files: ["Job_Brief_rev0.docx"] });
     expect(await readdir(config.workspaceDir)).toEqual([]);
   });
 
@@ -199,6 +208,61 @@ describe("workOnce", () => {
     expect(run?.costUsd).toBe(0.5);
   });
 
+  /**
+   * An agent per call: call `dieOn` starts its session and then throws, the way
+   * a worker that loses its container looks from the next one; `failToStart`
+   * ends in an error result with no model output, the way a session that
+   * cannot be resumed does.
+   */
+  function flakyAgent(dieOn: number, failToStart?: number) {
+    const seen: { prompt: string; resume: string | undefined }[] = [];
+    const agent = (({ prompt, options }: { prompt: string; options: Options }) => {
+      seen.push({ prompt, resume: options.resume });
+      const n = seen.length;
+      return (async function* () {
+        yield { type: "system", subtype: "init", session_id: `sess-${n}` } as unknown as SDKMessage;
+        if (n === failToStart) {
+          yield { type: "result", subtype: "error_during_execution", total_cost_usd: 0, modelUsage: {} } as unknown as SDKMessage;
+          return;
+        }
+        if (n === dieOn) throw new Error("container went away");
+        yield { type: "result", subtype: "success", total_cost_usd: 0.25, modelUsage: {} } as unknown as SDKMessage;
+      })();
+    }) as unknown as RunAgent;
+    return { agent, seen };
+  }
+
+  it("continues a failed run by resuming its session at the step it failed on", async () => {
+    const id = await start(["phb-a", "phb-b"]);
+    const { agent, seen } = flakyAgent(2);
+    await workOnce(config, agent);
+    expect(await getRun(id)).toMatchObject({ status: "failed" });
+
+    await continueRun(actor, id);
+    await workOnce(config, agent);
+
+    expect(seen.map((s) => s.prompt.split(" ")[0])).toEqual(["/phb-a", "/phb-b", CONTINUE_PROMPT.split(" ")[0]]);
+    expect(seen[2]).toEqual({ prompt: CONTINUE_PROMPT, resume: "sess-2" });
+    expect(await getRun(id)).toMatchObject({ status: "succeeded" });
+    expect((await testDb.cipRun.findUniqueOrThrow({ where: { id: BigInt(id) } })).resumePrompt).toBeNull();
+  });
+
+  it("starts the step over when a continued session cannot be resumed", async () => {
+    const id = await start(["phb-a", "phb-b"]);
+    const { agent, seen } = flakyAgent(2, 3);
+    await workOnce(config, agent);
+    await continueRun(actor, id);
+    await workOnce(config, agent);
+
+    expect(seen.slice(2)).toEqual([
+      { prompt: CONTINUE_PROMPT, resume: "sess-2" },
+      { prompt: expect.stringMatching(/^\/phb-b /), resume: undefined },
+    ]);
+    const run = await getRun(id);
+    expect(run).toMatchObject({ status: "succeeded" });
+    expect(run?.events.some((e) => e.type === "resume_failed")).toBe(true);
+  });
+
   it("stops at the cost cap with a plain reason", async () => {
     const id = await start();
     const agent = ((() =>
@@ -257,7 +321,7 @@ describe("workOnce", () => {
     expect(await getRun(id)).toMatchObject({ status: "cancelled" });
   }, 15_000);
 
-  it("fails a run whose worker stopped sending heartbeats", async () => {
+  it("fails a run whose worker stopped sending heartbeats, and records it in the audit log", async () => {
     const id = await start();
     await testDb.cipRun.update({
       where: { id: BigInt(id) },
@@ -265,7 +329,50 @@ describe("workOnce", () => {
     });
     expect(await failStaleRuns()).toBe(1);
     expect(await getRun(id)).toMatchObject({ status: "failed" });
+    expect(await testDb.auditEvent.findFirstOrThrow({ where: { action: "cip.run_failed" } })).toMatchObject({
+      actorEmployeeId: null,
+      metadata: { runId: id, step: 1, error: "The worker stopped while running this. Start the run again." },
+    });
   });
+
+  it("keeps the heartbeat going while the workspace is built, when the agent sends nothing", async () => {
+    const id = await start();
+    const beats: (Date | null)[] = [];
+    const slow: FolderStore = {
+      ...config.projects,
+      download: async (...args) => {
+        for (let i = 0; i < 3; i++) {
+          beats.push((await testDb.cipRun.findUniqueOrThrow({ where: { id: BigInt(id) } })).heartbeatAt);
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        }
+        return config.projects.download(...args);
+      },
+    };
+
+    await workOnce({ ...config, projects: slow, heartbeatMs: 50 }, fakeAgent([]));
+
+    expect(beats[2]!.getTime()).toBeGreaterThan(beats[0]!.getTime());
+    expect(await getRun(id)).toMatchObject({ status: "succeeded" });
+  });
+
+  it("stops working on a run another worker failed, and publishes nothing", async () => {
+    const id = await start();
+    const agent = ((({ options }: { options: Options }) =>
+      (async function* () {
+        yield { type: "system", subtype: "init", session_id: "s" } as unknown as SDKMessage;
+        await writeFile(path.join(options.cwd!, "out", "late.md"), "x");
+        await testDb.cipRun.update({ where: { id: BigInt(id) }, data: { status: "failed", error: "taken for dead" } });
+        await new Promise<void>((resolve, reject) => {
+          options.abortController!.signal.addEventListener("abort", () => reject(new Error("aborted")));
+          setTimeout(resolve, 8000);
+        });
+      })()) as unknown) as RunAgent;
+
+    await workOnce(config, agent);
+
+    expect(await getRun(id)).toMatchObject({ status: "failed", error: "taken for dead" });
+    await expect(readdir(path.join(projectDir, "AI FILES"))).rejects.toThrow();
+  }, 15_000);
 });
 
 describe("runSessionStore", () => {

@@ -40,6 +40,15 @@ export interface MessageSummary {
   hasAttachments: boolean;
 }
 
+/**
+ * A message as the Needs Review lookup returns it (2026-10-21): a summary plus
+ * the Internet Message-ID, which the note's filename carries a fragment of.
+ * Only that lookup selects the field; nothing else in the module needs it.
+ */
+export interface MessageMatchCandidate extends MessageSummary {
+  internetMessageId: string | null;
+}
+
 export interface MessageBody {
   /** Always sanitized when `format` is "html". Never the raw vendor markup. */
   content: string;
