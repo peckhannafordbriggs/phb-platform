@@ -96,7 +96,10 @@ export function visibleSteps(e: FpLine) {
     notify: exposed && noProtection(e),
     test,
     deficiency: code === "test_failed" || code === "deficiency",
-    documentation: test && TESTS.every((t) => e.test.answers[t.key]),
+    // Step 6 confirms a PASSED test ("Tested and passed. Written confirmation...").
+    // The sheet showed it once all four were answered, failures included; a
+    // failed test is a deficiency to fix, not a result to confirm.
+    documentation: test && TESTS.every((t) => e.test.answers[t.key] === "yes"),
   };
 }
 

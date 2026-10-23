@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LinkPending } from "./ui/LinkPending";
+import { LinkPending } from "./ui/kit";
 
 /** Plain data: it crosses from the server shell into this client component. */
 export type Tab = { href: string; label: string; path: string; exact?: boolean };

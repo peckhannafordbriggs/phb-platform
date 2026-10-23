@@ -112,8 +112,9 @@ describe("visibleSteps", () => {
     expect(visibleSteps(line({ ...exposedManual, status: "dry" })).test).toBe(false);
   });
 
-  it("shows documentation only once every test is answered", () => {
+  it("shows documentation only once every test has passed", () => {
     expect(visibleSteps(line({ ...exposedManual, ...tested({ fanStops: "yes" }) })).documentation).toBe(false);
+    expect(visibleSteps(line({ ...exposedManual, ...tested({ ...PASSED, damperCloses: "no" }) })).documentation).toBe(false);
     expect(visibleSteps(line({ ...exposedManual, ...tested(PASSED) })).documentation).toBe(true);
   });
 });
