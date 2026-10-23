@@ -138,29 +138,7 @@ function ProjectBody({ lines }: { lines: FpLine[] }) {
 
   return (
     <>
-      <Section title="Summary">
-        <table className="w-full max-w-md">
-          <tbody>
-            {[
-              ["Equipment listed", stage("listed")],
-              ["With a water, glycol or steam coil", stage("coil")],
-              ["Exposed to outside air", stage("exposed")],
-              ["Verified", counts.ok],
-              ["No protection or failed test", counts.bad],
-              ["Deficiencies and unresolved exposure", counts.warn],
-              ["Open items", counts.open],
-              ["Closed, nothing to protect", counts.closed],
-            ].map(([label, n]) => (
-              <tr key={label} className="border-b border-[var(--divider-soft)]">
-                <td className="py-1.5 pr-4">{label}</td>
-                <td className="py-1.5 text-right font-mono">{n}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Section>
-
-      <Section title={`Equipment register · ${lines.length}`}>
+      <Section title={`Equipment schedule · ${lines.length}`}>
         {lines.length === 0 ? (
           <p className="text-[var(--muted)]">No equipment listed.</p>
         ) : (
@@ -238,6 +216,28 @@ function ProjectBody({ lines }: { lines: FpLine[] }) {
           </table>
         </Section>
       )}
+
+      <Section title="Summary">
+        <table className="w-full max-w-md">
+          <tbody>
+            {[
+              ["Equipment listed", stage("listed")],
+              ["With a water, glycol or steam coil", stage("coil")],
+              ["Exposed to outside air", stage("exposed")],
+              ["Verified", counts.ok],
+              ["No protection or failed test", counts.bad],
+              ["Deficiencies and unresolved exposure", counts.warn],
+              ["Open items", counts.open],
+              ["Closed, nothing to protect", counts.closed],
+            ].map(([label, n]) => (
+              <tr key={label} className="border-b border-[var(--divider-soft)]">
+                <td className="py-1.5 pr-4">{label}</td>
+                <td className="py-1.5 text-right font-mono">{n}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Section>
     </>
   );
 }

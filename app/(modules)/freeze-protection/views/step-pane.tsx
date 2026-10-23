@@ -81,7 +81,8 @@ export function StepPane({ line: e, history }: { line: FpLine; history: FpHistor
     </div>
   );
   const section = "border-b border-[var(--divider-soft)] pb-5 last:border-b-0";
-  const grid = "grid grid-cols-1 gap-3 sm:grid-cols-2";
+  // The pane is the wide container, so fields sit three across on large screens.
+  const grid = "grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3";
 
   return (
     <>
@@ -166,7 +167,7 @@ export function StepPane({ line: e, history }: { line: FpLine; history: FpHistor
               With the fan running and the outside air damper open, apply ice water or spray to the sensing element. Test each element separately
               where more than one is wired in series.
             </p>
-            <div className="mb-3">
+            <div className="mb-3 grid grid-cols-1 gap-x-8 xl:grid-cols-2">
               {TESTS.map((t) => (
                 <YesNo key={t.key} label={t.label} value={e.test.answers[t.key]} onSave={save(TEST_FIELD[t.key])} />
               ))}

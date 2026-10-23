@@ -14,7 +14,7 @@ export default async function RegisterPage({ searchParams }: { searchParams: Pro
   if (!access.ok) notFound();
 
   const params = await searchParams;
-  const { projects, project, lines, unit, history } = await loadProject(params);
+  const { projects, project, lines, unit, history } = await loadProject(params, { firstUnitByDefault: true });
   const panel = params.new === "project" ? "project" : params.new === "equipment" && project ? "equipment" : null;
 
   return (

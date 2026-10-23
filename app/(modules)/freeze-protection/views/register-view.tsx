@@ -11,11 +11,6 @@ import { ProjectBar } from "./project-bar";
 import { ProjectForm } from "./project-form";
 import { StepPane } from "./step-pane";
 
-const COIL_SHORT = { none: "None", water: "Water", glycol: "Glycol", steam: "Steam" } as const;
-const COLUMNS = ["Name", "Type", "Area served", "Status", "Coil", "Disposition"];
-const GRID = {
-  gridTemplateColumns: "minmax(0,0.9fr) minmax(0,0.7fr) minmax(0,1.2fr) minmax(0,0.9fr) minmax(0,0.6fr) minmax(0,1fr)",
-};
 
 export type RegisterPanel = "project" | "equipment" | null;
 
@@ -30,8 +25,9 @@ type Props = {
 };
 
 /**
- * One project's register: its units on the left, the selected unit's steps and
- * history on the right. What is showing is in the URL
+ * One project's register: the selected unit's steps and history in the wide
+ * container, the project's equipment in the narrow column beside it. The
+ * first unit is selected when the URL names none. What is showing is in the URL
  * (`?project=&equipment=&new=`), so refresh and back work.
  */
 export function RegisterView(props: Props) {
@@ -63,35 +59,37 @@ function Register({ project, lines, selected, history, panel }: Props & { projec
       <ProjectBar project={project} lines={lines} />
       {panel === "equipment" && <EquipmentForm projectId={project.id} doneHref={base} />}
 
-      <div className="grid grid-cols-1 gap-5 lg:min-h-[22rem] lg:flex-[1_1_0px] lg:grid-cols-[minmax(0,1fr)_32rem] lg:grid-rows-[minmax(0,1fr)]">
+      {/* The selected unit is the work, so it gets the room; the list is the narrow column beside it. */}
+      <div className="grid grid-cols-1 gap-5 lg:min-h-[22rem] lg:flex-[1_1_0px] lg:grid-cols-[minmax(0,1fr)_24rem] lg:grid-rows-[minmax(0,1fr)]">
+        <Card padding="p-0" className="flex min-h-[24rem] flex-col lg:min-h-0">
+          {selected ? (
+            <StepPane key={selected.id} line={selected} history={history} />
+          ) : (
+            <Empty>No equipment yet. Add each unit from the mechanical equipment schedule.</Empty>
+          )}
+        </Card>
+
         <Card padding="p-0" className="flex min-h-0 flex-col">
-          <div className="flex shrink-0 items-center justify-between gap-3 px-5 pt-4">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
             <h3 className="eyebrow text-[var(--muted)]">Equipment · {lines.length}</h3>
             {panel !== "equipment" && (
-              <Button variant="primary" href={`${base}&new=equipment`}>
-                <Plus size={16} aria-hidden="true" />
+              <Button variant="primary" href={`${base}&new=equipment`} className="h-8! px-3!">
+                <Plus size={14} aria-hidden="true" />
                 Add equipment
               </Button>
             )}
           </div>
 
-          <div className="grid shrink-0 gap-4 border-b border-[var(--border)] px-5 pb-3 pt-4" style={GRID}>
-            {COLUMNS.map((h) => (
-              <span key={h} className="eyebrow truncate text-[var(--muted)]">
-                {h}
-              </span>
-            ))}
-          </div>
-
           {lines.length === 0 ? (
-            <p className="px-5 py-8 text-[0.8125rem] text-[var(--muted)]">
+            <p className="px-4 py-6 text-[0.8125rem] text-[var(--muted)]">
               List every unit on the mechanical equipment schedule, including units not yet installed and systems not yet filled.
             </p>
           ) : (
-            <ul className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+            <ul className="min-h-0 flex-1 overflow-y-auto p-2">
               {lines.map((e) => {
                 const d = disposition(e);
                 const isSelected = e.id === selected?.id;
+                const detail = [e.equipmentType, e.areaServed, STATUS_LABEL[e.status]].filter(Boolean).join(" · ");
                 return (
                   <li key={e.id}>
                     <Link
@@ -99,32 +97,20 @@ function Register({ project, lines, selected, history, panel }: Props & { projec
                       scroll={false}
                       aria-current={isSelected ? "true" : undefined}
                       className={
-                        "grid items-center gap-4 rounded-[var(--radius-row)] px-3 py-2.5 text-[0.8125rem] hover:bg-[var(--neutral-50)] " +
-                        (isSelected ? "bg-[var(--neutral-50)] font-medium" : "")
+                        "flex flex-col gap-0.5 rounded-[var(--radius-row)] px-3 py-2 text-[0.8125rem] hover:bg-[var(--neutral-50)] " +
+                        (isSelected ? "bg-[var(--neutral-50)]" : "")
                       }
-                      style={GRID}
                     >
-                      <span className="truncate font-mono">{e.name}</span>
-                      <span className="truncate text-[var(--muted)]">{e.equipmentType ?? "—"}</span>
-                      <span className="truncate text-[var(--muted)]">{e.areaServed ?? "—"}</span>
-                      <span className="truncate">{STATUS_LABEL[e.status]}</span>
-                      <span className="truncate">{e.coil ? COIL_SHORT[e.coil] : "—"}</span>
-                      <span className="min-w-0">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className={"truncate font-mono " + (isSelected ? "font-medium" : "")}>{e.name}</span>
                         <Pill tone={d.tone}>{d.label}</Pill>
                       </span>
+                      <span className="truncate text-[0.75rem] text-[var(--muted)]">{detail}</span>
                     </Link>
                   </li>
                 );
               })}
             </ul>
-          )}
-        </Card>
-
-        <Card padding="p-0" className="flex min-h-[24rem] flex-col lg:min-h-0">
-          {selected ? (
-            <StepPane key={selected.id} line={selected} history={history} />
-          ) : (
-            <Empty>Pick a unit to see where it stands and record its results.</Empty>
           )}
         </Card>
       </div>

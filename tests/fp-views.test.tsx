@@ -101,8 +101,7 @@ describe("Register", () => {
     for (const label of ["No protection", "Test failed", "Verified", "Closed, no coil", "Step 3 open"]) expect(html).toContain(label);
     expect(html).toContain("Equipment · 5");
     expect(html).toContain("Add equipment");
-    expect(html).toContain(">Name</span>");
-    expect(html).not.toContain(">Tag</span>");
+    expect(html).not.toContain(">Tag<");
     expect(html).not.toContain("Building");
     expect(html).not.toContain("New verification");
   });
@@ -129,6 +128,12 @@ describe("Register", () => {
 
   it("verified: step 6 shows", () => {
     expect(register({ selected: VERIFIED })).toContain("Documented with the owner or controls vendor");
+  });
+
+  it("puts the selected unit in the wide container first and the equipment list in the narrow column", () => {
+    const html = register({ selected: OPEN });
+    expect(html).toContain("lg:grid-cols-[minmax(0,1fr)_24rem]");
+    expect(html.indexOf("Equipment and status")).toBeLessThan(html.indexOf("Equipment · 5"));
   });
 
   it("names the optional fields as optional", () => {
@@ -163,10 +168,19 @@ describe("Report", () => {
     const html = report({});
     expect(html).toContain("Verification date November 1, 2026.");
     expect(html).toContain("between November 1 and March 1");
-    expect(html).toContain("Equipment register · 5");
+    expect(html).toContain("Equipment schedule · 5");
+    expect(html).not.toContain("Equipment register");
     expect(html).toContain("Items requiring action · 2");
     expect(html).toContain("OA damper actuator does not stroke closed.");
     expect(html).toContain("Open items · 1");
+  });
+
+  it("puts the summary at the bottom of the project report, after the schedule and items, before signoff", () => {
+    const html = report({});
+    const summary = html.indexOf(">Summary<");
+    expect(summary).toBeGreaterThan(html.indexOf("Equipment schedule · 5"));
+    expect(summary).toBeGreaterThan(html.indexOf("Open items · 1"));
+    expect(summary).toBeLessThan(html.indexOf("Step 7 · Signoff"));
   });
 
   it("one unit: its full record and history, not the register; the project's signoff, said so", () => {
@@ -177,7 +191,7 @@ describe("Report", () => {
     expect(html).toContain("Outside air damper drives closed");
     expect(html).toContain("PH+B controls");
     expect(html).toContain("History · 2");
-    expect(html).not.toContain("Equipment register");
+    expect(html).not.toContain("Equipment schedule");
     expect(html).not.toContain("AHU-3");
     expect(html).toContain("These signatures cover the whole project");
   });
