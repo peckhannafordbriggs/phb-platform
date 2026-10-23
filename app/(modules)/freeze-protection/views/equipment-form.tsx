@@ -2,55 +2,45 @@
 
 import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition } from "react";
-import type { CoilType, FpBuilding } from "@/lib/modules/freeze-protection/types";
+import type { CoilType } from "@/lib/modules/freeze-protection/types";
 import { COIL_LABEL } from "@/lib/modules/freeze-protection/vocab";
 import { call } from "../client";
 import { FieldLabel, INPUT } from "../ui/Field";
 import { Button, Card, Label } from "../ui/kit";
 
 /**
- * Adds lines from the mechanical equipment schedule. Stays open after each one,
- * keeping the building, because a schedule is entered one unit after another.
- * Opened by `?new=equipment`.
+ * Adds units from the mechanical equipment schedule. Stays open after each
+ * one, because a schedule is entered one unit after another. Only the name is
+ * required. Opened by `?new=equipment`.
  */
-export function EquipmentForm({
-  buildings,
-  defaultBuildingId,
-  doneHref,
-}: {
-  buildings: FpBuilding[];
-  /** The building the switcher is showing, if one. */
-  defaultBuildingId: string | null;
-  doneHref: string;
-}) {
+export function EquipmentForm({ projectId, doneHref }: { projectId: string; doneHref: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [buildingId, setBuildingId] = useState(defaultBuildingId ?? buildings[0]?.id ?? "");
-  const [tag, setTag] = useState("");
+  const [name, setName] = useState("");
   const [equipmentType, setEquipmentType] = useState("");
   const [areaServed, setAreaServed] = useState("");
   const [coil, setCoil] = useState<CoilType | "">("");
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<string[]>([]);
-  const tagRef = useRef<HTMLInputElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     startTransition(async () => {
-      const r = await call<{ tag: string }>("POST", "/equipment", {
-        buildingId,
-        tag,
+      const r = await call<{ name: string }>("POST", "/equipment", {
+        projectId,
+        name,
         equipmentType: equipmentType || null,
         areaServed: areaServed || null,
         coil: coil || null,
       });
       if (!r.ok) return setError(r.message);
-      setAdded([r.data.tag, ...added]);
-      setTag("");
+      setAdded([r.data.name, ...added]);
+      setName("");
       setAreaServed("");
       setCoil("");
-      tagRef.current?.focus();
+      nameRef.current?.focus();
       router.refresh();
     });
   }
@@ -66,23 +56,17 @@ export function EquipmentForm({
           </p>
         )}
       </div>
-      <form onSubmit={submit} className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_8rem_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto_auto]">
-        <FieldLabel label="Building">
-          <select value={buildingId} onChange={(e) => setBuildingId(e.target.value)} className={INPUT}>
-            {buildings.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
+      <form
+        onSubmit={submit}
+        className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2 lg:grid-cols-[10rem_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_auto_auto]"
+      >
+        <FieldLabel label="Name">
+          <input ref={nameRef} required autoFocus value={name} onChange={(e) => setName(e.target.value)} className={INPUT + " font-mono"} placeholder="AHU-1" />
         </FieldLabel>
-        <FieldLabel label="Tag">
-          <input ref={tagRef} required autoFocus value={tag} onChange={(e) => setTag(e.target.value)} className={INPUT + " font-mono"} placeholder="AHU-1" />
-        </FieldLabel>
-        <FieldLabel label="Equipment type">
+        <FieldLabel label="Equipment type (optional)">
           <input value={equipmentType} onChange={(e) => setEquipmentType(e.target.value)} className={INPUT} placeholder="AHU, RTU, MAU…" />
         </FieldLabel>
-        <FieldLabel label="Area served">
+        <FieldLabel label="Area served (optional)">
           <input value={areaServed} onChange={(e) => setAreaServed(e.target.value)} className={INPUT} />
         </FieldLabel>
         <FieldLabel label="Coil">
@@ -95,7 +79,7 @@ export function EquipmentForm({
             ))}
           </select>
         </FieldLabel>
-        <Button type="submit" variant="primary" disabled={pending || buildingId === ""}>
+        <Button type="submit" variant="primary" disabled={pending}>
           Add
         </Button>
         <Button href={doneHref}>Done</Button>

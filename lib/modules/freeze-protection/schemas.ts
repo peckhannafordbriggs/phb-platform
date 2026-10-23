@@ -17,39 +17,14 @@ const yesNo = z.enum(["yes", "no"]).nullable();
 export const createProjectSchema = z.strictObject({
   jobNumber: name,
   name,
-  /** At least one; a single-building job has one. */
-  buildings: z.array(name).min(1).max(50),
+  /** Defaults to today in America/New_York. */
+  verificationDate: dateOnly.optional(),
 });
 
+/** The project and its one verification: identity, date and transmittal. Signoff has its own route. */
 export const updateProjectSchema = z.strictObject({
   jobNumber: name.optional(),
   name: name.optional(),
-});
-
-export const buildingSchema = z.strictObject({ name });
-
-export const createEquipmentSchema = z.strictObject({
-  buildingId: z.string(),
-  tag: name,
-  equipmentType: shortText.optional(),
-  areaServed: shortText.optional(),
-  coil: z.enum(COIL_VALUES).nullable().optional(),
-  notes: text.optional(),
-});
-
-export const updateEquipmentSchema = z.strictObject({
-  buildingId: z.string().optional(),
-  tag: name.optional(),
-  equipmentType: shortText.optional(),
-  areaServed: shortText.optional(),
-  coil: z.enum(COIL_VALUES).nullable().optional(),
-  notes: text.optional(),
-  sortOrder: z.number().int().min(0).max(1_000_000).optional(),
-});
-
-export const createVerificationSchema = z.strictObject({ verificationDate: dateOnly });
-
-export const updateVerificationSchema = z.strictObject({
   verificationDate: dateOnly.optional(),
   transmittedTo: shortText.optional(),
   transmittedDate: dateOnly.nullable().optional(),
@@ -61,8 +36,28 @@ export const signSchema = z.strictObject({
   signed: z.boolean(),
 });
 
-/** One unit in one round. Every field optional: the step pane saves one field at a time. */
-export const updateResultSchema = z.strictObject({
+/** What the equipment schedule says about a unit. Type and area served are optional. */
+const scheduleFields = {
+  name: name.optional(),
+  equipmentType: shortText.optional(),
+  areaServed: shortText.optional(),
+  coil: z.enum(COIL_VALUES).nullable().optional(),
+  notes: text.optional(),
+};
+
+export const createEquipmentSchema = z.strictObject({
+  projectId: z.string(),
+  ...scheduleFields,
+  name,
+});
+
+/**
+ * One save from the step pane: any subset of the unit's schedule fields and
+ * verification answers. Every field optional, because the pane saves one at a time.
+ */
+export const updateEquipmentSchema = z.strictObject({
+  ...scheduleFields,
+  sortOrder: z.number().int().min(0).max(1_000_000).optional(),
   status: z.enum(STATUS_VALUES).optional(),
   exposure: z.enum(EXPOSURE_VALUES).nullable().optional(),
   protection: z.enum(PROTECTION_VALUES).nullable().optional(),
@@ -86,12 +81,9 @@ export const updateResultSchema = z.strictObject({
   documentedName: shortText.optional(),
   documentedDate: dateOnly.nullable().optional(),
   documentedMethod: shortText.optional(),
-  notes: text.optional(),
 });
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 export type CreateEquipmentInput = z.infer<typeof createEquipmentSchema>;
 export type UpdateEquipmentInput = z.infer<typeof updateEquipmentSchema>;
-export type UpdateVerificationInput = z.infer<typeof updateVerificationSchema>;
-export type UpdateResultInput = z.infer<typeof updateResultSchema>;

@@ -122,6 +122,7 @@ function fpJob(meta: Record<string, unknown>): string {
 
 /** Freeze Protection field names as a person says them, for `changes` metadata. */
 const FP_FIELD_WORDS: Record<string, string> = {
+  name: "the name",
   tag: "the tag",
   equipmentType: "the equipment type",
   areaServed: "the area served",
@@ -155,6 +156,11 @@ const FP_FIELD_WORDS: Record<string, string> = {
   documentedDate: "the confirmation date",
   documentedMethod: "the confirmation method",
 };
+
+/** The unit's name. Rows written before 2026-10-23 called it "tag". */
+function fpUnit(meta: Record<string, unknown>): string {
+  return stringField(meta, "name") ?? stringField(meta, "tag") ?? "a unit";
+}
 
 function fpFields(meta: Record<string, unknown>): string {
   const changes = meta.changes;
@@ -548,11 +554,11 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "fp.building_deleted": ({ actor, meta }) =>
     `${actor} removed the building "${stringField(meta, "name") ?? "(unnamed)"}" from ${fpJob(meta)}`,
   "fp.equipment_created": ({ actor, meta }) =>
-    `${actor} added ${stringField(meta, "tag") ?? "a unit"} to the ${fpJob(meta)} register`,
+    `${actor} added ${fpUnit(meta)} to the ${fpJob(meta)} register`,
   "fp.equipment_updated": ({ actor, meta }) =>
-    `${actor} changed ${fpFields(meta)} of ${stringField(meta, "tag") ?? "a unit"} on ${fpJob(meta)}`,
+    `${actor} changed ${fpFields(meta)} of ${fpUnit(meta)} on ${fpJob(meta)}`,
   "fp.equipment_deleted": ({ actor, meta }) =>
-    `${actor} removed ${stringField(meta, "tag") ?? "a unit"} and its results from the ${fpJob(meta)} register`,
+    `${actor} removed ${fpUnit(meta)} and its results from the ${fpJob(meta)} register`,
   "fp.verification_created": ({ actor, meta }) =>
     `${actor} started the ${stringField(meta, "verificationDate") ?? "?"} freeze protection verification on ${fpJob(meta)}`,
   "fp.verification_updated": ({ actor, meta }) =>
@@ -564,7 +570,7 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "fp.verification_unsigned": ({ actor, meta }) =>
     `${actor} removed the ${stringField(meta, "role") === "reviewed" ? "review signature" : "completion"} from the ${stringField(meta, "verificationDate") ?? "?"} freeze protection verification on ${fpJob(meta)}`,
   "fp.result_updated": ({ actor, meta }) =>
-    `${actor} recorded ${fpFields(meta)} for ${stringField(meta, "tag") ?? "a unit"} on ${fpJob(meta)}`,
+    `${actor} recorded ${fpFields(meta)} for ${fpUnit(meta)} on ${fpJob(meta)}`,
 
   "grant.admin_removed": ({ actor, target, module }) =>
     `${actor} removed ${target ?? "an employee"}'s administrator access for ${module}`,

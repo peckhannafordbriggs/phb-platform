@@ -10604,11 +10604,17 @@ new one. Files it already published stay in `AI FILES`.
 
 # Freeze Protection
 
-Projects (one per job number), their buildings, the equipment schedule from the
-mechanical drawings, and verification rounds with a result per unit per round.
-Everything is typed in here, so the platform is the only copy: there is no
-external system to re-sync from. Code: `lib/modules/freeze-protection/`; tables
-`fp_*`; every write leaves an `fp.*` audit row with the job number in it.
+Projects (one per job number) and the equipment from each project's mechanical
+schedule. A project is verified once: its verification date, step 7 signoff and
+transmittal are on the project, and each unit's results are on its own row.
+Everything is typed in here, so the platform is the only copy. Code:
+`lib/modules/freeze-protection/`; tables `fp_projects` and `fp_equipment`.
+
+**History is the audit log.** Every write leaves an `fp.*` audit row with the
+job number, before and after values and a timestamp. A unit's History (step
+pane, single-unit report) is its rows by `metadata.equipmentId`; Admin → Audit,
+filtered to Freeze Protection, shows everything. Rows that mention buildings or
+verification rounds are from before 2026-10-23, when the module was simplified.
 
 ## Freeze Protection says a job number is already a project
 
@@ -10622,56 +10628,44 @@ so `26-104a` and `26-104A` are the same job.
 duplicate, Admin → Audit, filter on *Freeze Protection project created*, shows
 who made each and when.
 
-## A building cannot be removed
+## A unit cannot be added or renamed: "This project already has a unit named …"
 
-**Symptom.** *Main has 12 units. Move or remove them first.*, or *A project needs
-at least one building.*
+**Symptom.** Adding or renaming equipment answers *This project already has a
+unit named AHU-1.*
 
-**Cause.** Deliberate. Removing a building would remove its units' results in
-every round, so the service refuses while it holds equipment, and every unit
-needs a building.
+**Cause.** Unit names are unique within a project, ignoring case
+(`fp_equipment_project_id_name_lower_key`). Another project may use the same name.
 
-**Fix.** Move each unit to another building on the same project (a unit cannot
-move to another project), or remove the units, then remove the building.
+**Fix.** Use the name exactly as the schedule shows it. If the schedule really
+has two units with one name, add what tells them apart (`AHU-1 (Annex)`).
 
 ## A reviewer is refused: "A different engineer has to review it"
 
-**Symptom.** Signing a verification as reviewed answers *You completed this
+**Symptom.** Signing the verification as reviewed answers *You completed this
 verification* or *You recorded results in this verification.*
 
 **Cause.** Step 7 of the Controls Division's procedure: the reviewer must not be
 the person who carried out the verification. The platform records the signed-in
 employee, never a typed name, so it can check. It refuses the person who marked
-it completed (also enforced by `fp_verifications_reviewer_not_completer`), and
-anyone who is the last person to have changed a result in that round.
+it completed (also enforced by `fp_projects_reviewer_not_completer`), and anyone
+with an `fp.result_updated` audit row on the project, at any time. Fixing a
+unit's name, type, area served, coil or notes is not recording a result and does
+not count.
 
 **Fix.** Another engineer signs. If the wrong person marked it completed, they
 remove their completion (which also removes any review) and the right person
-marks it. The check sees only each result's last editor; the audit log
-(*Freeze Protection result recorded*) has every change if a stricter answer is
-needed.
+marks it.
 
 ## A report says "Changed after review"
 
 **Symptom.** A reviewed verification is flagged as changed after its review.
 
-**Cause.** Nothing is locked after signoff (manager decision, 2026-10-22). A
-result in that round was saved after the review time, or a unit's coil type was
-changed after it (coil belongs to the unit, so it changes every round that
-shows the unit). The procedure requires a new review after any later change.
+**Cause.** Nothing is locked after signoff (manager decision, 2026-10-22). A unit
+was added, changed or removed after the review time: any `fp.equipment_*` or
+`fp.result_updated` audit row on the project newer than `reviewed_at`. Signoff,
+transmittal and project renames do not count. The procedure requires a new
+review after any later change.
 
 **Fix.** Review again: remove the review signature, then a different engineer
-signs. Admin → Audit, filtered to Freeze Protection, shows what changed and who
-changed it.
-
-## A unit added to a project is missing from an older verification
-
-**Symptom.** A unit appears in the newest round's register and not in earlier ones.
-
-**Cause.** Deliberate. A new unit joins the project's newest round only; older
-rounds are history and keep the register they had. A new round includes every
-unit on the project, carrying status, exposure and protection forward from each
-unit's previous result; tests, notices, deficiencies and documentation start empty.
-
-**Fix.** None needed. To verify the unit, record it in the newest round or start
-a new one.
+signs. The unit's History, or Admin → Audit filtered to Freeze Protection,
+shows what changed and who changed it.

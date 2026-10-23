@@ -13,14 +13,10 @@ const PASSED = { fanStops: "yes", damperCloses: "yes", valveFullFlow: "yes", man
 function line(overrides: Partial<FpLine> = {}): FpLine {
   return {
     id: "1",
-    resultId: "1",
-    buildingId: "1",
-    buildingName: "Main",
-    tag: "AHU-1",
+    name: "AHU-1",
     equipmentType: null,
     areaServed: null,
     coil: null,
-    equipmentNotes: null,
     status: "service",
     exposure: null,
     protection: null,

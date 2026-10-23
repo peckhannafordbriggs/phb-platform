@@ -27,11 +27,11 @@ async function checkValues(constraint: string): Promise<string[]> {
 
 describe("closed vocabularies agree with the database", () => {
   it.each([
-    ["fp_results_status_check", STATUS_VALUES],
+    ["fp_equipment_status_check", STATUS_VALUES],
     ["fp_equipment_coil_check", COIL_VALUES],
-    ["fp_results_exposure_check", EXPOSURE_VALUES],
-    ["fp_results_protection_check", PROTECTION_VALUES],
-    ["fp_results_documented_with_check", CONFIRMED_WITH_VALUES],
+    ["fp_equipment_exposure_check", EXPOSURE_VALUES],
+    ["fp_equipment_protection_check", PROTECTION_VALUES],
+    ["fp_equipment_documented_with_check", CONFIRMED_WITH_VALUES],
   ] as const)("%s", async (constraint, values) => {
     expect(await checkValues(constraint)).toEqual([...values].sort());
   });

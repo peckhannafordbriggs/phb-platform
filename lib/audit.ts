@@ -173,6 +173,13 @@ export type AuditAction =
    * carry `changes` (field -> { from, to }) since the row they describe is
    * overwritten; deletes carry what was removed, counts included.
    * `fp.result_updated` also carries the line's disposition after the change.
+   *
+   * These rows are also the module's history (a unit's history is its rows by
+   * `metadata.equipmentId`). Since 2026-10-23 a project is verified once and has
+   * no buildings, so `fp.building_*`, `fp.verification_created` and
+   * `fp.verification_deleted` are no longer written. They stay in this union
+   * because audit rows are permanent and the rows that carry them must still
+   * render as sentences.
    */
   | "fp.project_created"
   | "fp.project_updated"

@@ -2,7 +2,6 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { Download, Plus, Printer } from "lucide-react";
-import type { FpProject } from "@/lib/modules/freeze-protection/types";
 import { Button } from "./ui/kit";
 import { REPORT_ID } from "./views/report-view";
 
@@ -42,25 +41,27 @@ export function RegisterActions({ projects, projectId }: { projects: ProjectOpti
   );
 }
 
+type UnitOption = { id: string; name: string };
+
 export function ReportActions({
   projects,
-  project,
-  roundId,
-  buildingId,
+  projectId,
+  units,
+  unitId,
   fileName,
 }: {
   projects: ProjectOption[];
-  project: FpProject | null;
-  roundId: string | null;
+  projectId: string | null;
+  units: UnitOption[];
   /** Null means the entire project. */
-  buildingId: string | null;
+  unitId: string | null;
   /** Null when there is no report to save. */
   fileName: string | null;
 }) {
   return (
     <>
-      {project && projects.length > 0 && <ProjectPicker projects={projects} value={project.id} />}
-      {project && project.buildings.length > 1 && <ReportScope project={project} roundId={roundId} buildingId={buildingId} />}
+      {projectId && projects.length > 0 && <ProjectPicker projects={projects} value={projectId} />}
+      {projectId && units.length > 0 && <ReportScope projectId={projectId} units={units} unitId={unitId} />}
       <Button onClick={() => window.print()} disabled={fileName === null}>
         <Printer size={16} aria-hidden="true" />
         Print
@@ -73,27 +74,22 @@ export function ReportActions({
   );
 }
 
-/** The entire project, or one building. Rewrites `?building=` and keeps the round. */
-function ReportScope({ project, roundId, buildingId }: { project: FpProject; roundId: string | null; buildingId: string | null }) {
+/** The entire project, or one unit with its full record and history. Rewrites `?equipment=`. */
+function ReportScope({ projectId, units, unitId }: { projectId: string; units: UnitOption[]; unitId: string | null }) {
   const router = useRouter();
-  const go = (building: string) =>
-    router.push(
-      `/freeze-protection/report?project=${encodeURIComponent(project.id)}` +
-        (roundId ? `&round=${encodeURIComponent(roundId)}` : "") +
-        (building ? `&building=${encodeURIComponent(building)}` : ""),
-    );
+  const base = `/freeze-protection/report?project=${encodeURIComponent(projectId)}`;
   return (
     <label className="flex items-center gap-2">
       <span className="eyebrow text-[var(--muted)]">Report on</span>
       <select
-        value={buildingId ?? ""}
-        onChange={(e) => go(e.target.value)}
+        value={unitId ?? ""}
+        onChange={(e) => router.push(e.target.value ? `${base}&equipment=${encodeURIComponent(e.target.value)}` : base)}
         className="h-9 max-w-[14rem] truncate rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 text-[0.8125rem]"
       >
         <option value="">Entire project</option>
-        {project.buildings.map((b) => (
-          <option key={b.id} value={b.id}>
-            {b.name}
+        {units.map((u) => (
+          <option key={u.id} value={u.id}>
+            {u.name}
           </option>
         ))}
       </select>
