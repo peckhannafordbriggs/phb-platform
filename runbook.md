@@ -6189,6 +6189,31 @@ after the other, never together.
 
 ---
 
+## `npm run build` fails locally with `SsoConfigurationError`
+
+**Symptom.** A local `npm run build` gets through linting and types, then dies at
+*Collecting page data* with `AUTH_MICROSOFT_ENTRA_ID_SECRET is set in production`
+and `Failed to collect page data for /api/...`.
+
+**Cause.** Deliberate. `next build` runs with `NODE_ENV=production`, and
+production refuses to start with the SSO client secret set (prohibition 7;
+`buildEntraProvider` in `lib/auth/entra-provider.ts`). Your `.env.local` holds
+that secret for local sign-in, which is allowed in development, and Next loads
+it into the build. CI never hits this: `ci.yml` builds without the secret.
+
+**Fix.** Do not remove the guard or the secret. Build with the variable blanked
+for that one command. Next only takes a value from `.env.local` when the
+variable is not already set, and `secretOrNull` treats whitespace as absent. In
+PowerShell it has to be a space, because assigning `""` deletes the variable:
+
+```powershell
+$env:AUTH_MICROSOFT_ENTRA_ID_SECRET = " "; npm run build; Remove-Item Env:AUTH_MICROSOFT_ENTRA_ID_SECRET
+```
+
+In bash: `AUTH_MICROSOFT_ENTRA_ID_SECRET=" " npm run build`.
+
+---
+
 ## The suite refuses to start when the test database is behind
 
 The guard the earlier entry asks for now exists: `tests/global-setup.ts`, wired
