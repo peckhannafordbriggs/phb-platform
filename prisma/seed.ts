@@ -53,6 +53,14 @@ const MODULES = [
     icon: "search",
     sortOrder: 400,
   },
+  {
+    key: "freeze-protection",
+    displayName: "Freeze Protection",
+    description:
+      "Coil freeze exposure, safeties and test results, by project.",
+    icon: "snowflake",
+    sortOrder: 500,
+  },
 ];
 
 // From docs/05-database-and-sources.md, so early users are not all choosing

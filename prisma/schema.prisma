@@ -74,6 +74,12 @@ model Employee {
   runsStarted      CipRun[]
   checkpointsAnswered CipRunCheckpoint[]
 
+  fpProjectsCreated      FpProject[]      @relation("FpProjectCreatedBy")
+  fpVerificationsCreated FpVerification[] @relation("FpVerificationCreatedBy")
+  fpVerificationsCompleted FpVerification[] @relation("FpVerificationCompletedBy")
+  fpVerificationsReviewed  FpVerification[] @relation("FpVerificationReviewedBy")
+  fpResultsUpdated       FpResult[]       @relation("FpResultUpdatedBy")
+
   @@index([status])
   @@index([departmentId])
   @@index([positionId])
@@ -731,4 +737,129 @@ model CipRunTranscript {
 
   @@index([runId, sessionId, subpath, id])
   @@map("cip_run_transcripts")
+}
+
+// ---------------------------------------------------------------------------
+// Freeze Protection (fp_). Entered by hand in the platform, so the platform is
+// the source of truth and stores everything. Closed vocabularies are text with
+// CHECK constraints in the migration, matching lib/modules/freeze-protection/types.ts.
+// ---------------------------------------------------------------------------
+
+/// A construction job whose equipment is verified for freeze protection. Not linked to BAS or any other module
+model FpProject {
+  id          BigInt    @id @default(autoincrement())
+  jobNumber   String    @map("job_number")
+  name        String
+  createdById String?   @map("created_by_id") @db.Uuid
+  createdBy   Employee? @relation("FpProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  buildings     FpBuilding[]
+  verifications FpVerification[]
+
+  @@map("fp_projects")
+}
+
+/// A building on a project. Every unit belongs to one; a single-building job has one
+model FpBuilding {
+  id        BigInt    @id @default(autoincrement())
+  projectId BigInt    @map("project_id")
+  project   FpProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  sortOrder Int       @default(0) @map("sort_order")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  equipment FpEquipment[]
+
+  @@index([projectId])
+  @@map("fp_buildings")
+}
+
+/// One line of the mechanical equipment schedule: what the unit is and where. Results live per round in fp_results
+model FpEquipment {
+  id            BigInt     @id @default(autoincrement())
+  buildingId    BigInt     @map("building_id")
+  building      FpBuilding @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  tag           String
+  equipmentType String?    @map("equipment_type")
+  areaServed    String?    @map("area_served")
+  /// Step 2. Null until answered; 'none' closes the line in every round
+  coil          String?
+  /// When coil last changed. Coil is a unit fact read by every round, so a change after a review is that round's change too
+  coilUpdatedAt DateTime?  @map("coil_updated_at") @db.Timestamptz(3)
+  notes         String?
+  sortOrder     Int        @default(0) @map("sort_order")
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  results FpResult[]
+
+  @@index([buildingId])
+  @@map("fp_equipment")
+}
+
+/// One verification round on a project: the date it speaks for, its signoff (step 7) and transmittal
+model FpVerification {
+  id               BigInt    @id @default(autoincrement())
+  projectId        BigInt    @map("project_id")
+  project          FpProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  verificationDate DateTime  @map("verification_date") @db.Date
+  completedById    String?   @map("completed_by_id") @db.Uuid
+  completedBy      Employee? @relation("FpVerificationCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  completedAt      DateTime? @map("completed_at") @db.Timestamptz(3)
+  reviewedById     String?   @map("reviewed_by_id") @db.Uuid
+  reviewedBy       Employee? @relation("FpVerificationReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt       DateTime? @map("reviewed_at") @db.Timestamptz(3)
+  transmittedTo    String?   @map("transmitted_to")
+  transmittedDate  DateTime? @map("transmitted_date") @db.Date
+  createdById      String?   @map("created_by_id") @db.Uuid
+  createdBy        Employee? @relation("FpVerificationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  results FpResult[]
+
+  @@index([projectId, verificationDate(sort: Desc)])
+  @@map("fp_verifications")
+}
+
+/// One unit in one round: its status and steps 3 to 6. Null means not answered yet
+model FpResult {
+  id                    BigInt         @id @default(autoincrement())
+  verificationId        BigInt         @map("verification_id")
+  verification          FpVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+  equipmentId           BigInt         @map("equipment_id")
+  equipment             FpEquipment    @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  status                String         @default("service")
+  exposure              String?
+  protection            String?
+  testFanStops          String?        @map("test_fan_stops")
+  testDamperCloses      String?        @map("test_damper_closes")
+  testValveFullFlow     String?        @map("test_valve_full_flow")
+  testManualReset       String?        @map("test_manual_reset")
+  tripTempF             Float?         @map("trip_temp_f")
+  testedBy              String?        @map("tested_by")
+  testDate              DateTime?      @map("test_date") @db.Date
+  elements              String?
+  notifyWho             String?        @map("notify_who")
+  notifyDate            DateTime?      @map("notify_date") @db.Date
+  notifyMethod          String?        @map("notify_method")
+  notifyResponse        String?        @map("notify_response")
+  deficiencyDescription String?        @map("deficiency_description")
+  deficiencyOwner       String?        @map("deficiency_owner")
+  deficiencyDue         DateTime?      @map("deficiency_due") @db.Date
+  documentedWith        String?        @map("documented_with")
+  documentedName        String?        @map("documented_name")
+  documentedDate        DateTime?      @map("documented_date") @db.Date
+  documentedMethod      String?        @map("documented_method")
+  notes                 String?
+  updatedById           String?        @map("updated_by_id") @db.Uuid
+  updatedBy             Employee?      @relation("FpResultUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt             DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([verificationId, equipmentId])
+  @@index([equipmentId])
+  @@map("fp_results")
 }

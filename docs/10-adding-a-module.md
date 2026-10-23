@@ -114,16 +114,16 @@ const ASSIGNED: ReadonlyMap<string, number> = new Map([
   ["bas", 1],
   ["cost-intelligence", 3],
   ["knowledge-base", 4],
+  ["freeze-protection", 2],
 ]);
 ```
 
-Add a line for your key. The number is an index into the five logo colours
-(red, cyan, orange, teal, pink). Four are taken; **index 2, orange, is the one
-left**. After that the palette is exhausted and a sixth module needs a design
-decision rather than a line — `tests/module-accent.test.ts` is where that is
-asserted. An unassigned key still gets a colour (the file explains the
-fallback), but assign it anyway: the sidebar and the header compute the colour
-separately, and only an assignment keeps them agreeing.
+The number is an index into the five logo colours (red, cyan, orange, teal,
+pink). **All five are taken** since Freeze Protection took orange on
+2026-10-22, so a sixth module needs a design decision rather than a line.
+Until it gets one, an unassigned key wears the chrome purple (`EXHAUSTED` in
+the file), never another module's colour; `tests/module-accent.test.ts`
+asserts that.
 
 ### 2d. The seed row — `prisma/seed.ts`
 

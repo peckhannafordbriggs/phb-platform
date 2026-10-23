@@ -6659,6 +6659,31 @@ after the other, never together.
 
 ---
 
+## `npm run build` fails locally with `SsoConfigurationError`
+
+**Symptom.** A local `npm run build` gets through linting and types, then dies at
+*Collecting page data* with `AUTH_MICROSOFT_ENTRA_ID_SECRET is set in production`
+and `Failed to collect page data for /api/...`.
+
+**Cause.** Deliberate. `next build` runs with `NODE_ENV=production`, and
+production refuses to start with the SSO client secret set (prohibition 7;
+`buildEntraProvider` in `lib/auth/entra-provider.ts`). Your `.env.local` holds
+that secret for local sign-in, which is allowed in development, and Next loads
+it into the build. CI never hits this: `ci.yml` builds without the secret.
+
+**Fix.** Do not remove the guard or the secret. Build with the variable blanked
+for that one command. Next only takes a value from `.env.local` when the
+variable is not already set, and `secretOrNull` treats whitespace as absent. In
+PowerShell it has to be a space, because assigning `""` deletes the variable:
+
+```powershell
+$env:AUTH_MICROSOFT_ENTRA_ID_SECRET = " "; npm run build; Remove-Item Env:AUTH_MICROSOFT_ENTRA_ID_SECRET
+```
+
+In bash: `AUTH_MICROSOFT_ENTRA_ID_SECRET=" " npm run build`.
+
+---
+
 ## The suite refuses to start when the test database is behind
 
 The guard the earlier entry asks for now exists: `tests/global-setup.ts`, wired
@@ -10574,3 +10599,79 @@ of prepaid credit. Nothing is wrong with the run.
 as the hard stop above the $5 per-run cap. The failed run cannot resume; start a
 new one. Files it already published stay in `AI FILES`.
 
+
+---
+
+# Freeze Protection
+
+Projects (one per job number), their buildings, the equipment schedule from the
+mechanical drawings, and verification rounds with a result per unit per round.
+Everything is typed in here, so the platform is the only copy: there is no
+external system to re-sync from. Code: `lib/modules/freeze-protection/`; tables
+`fp_*`; every write leaves an `fp.*` audit row with the job number in it.
+
+## Freeze Protection says a job number is already a project
+
+**Symptom.** Creating or renaming a project answers *Job number 26-104A is
+already a project.*
+
+**Cause.** Job numbers are unique ignoring case (`fp_projects_job_number_lower_key`),
+so `26-104a` and `26-104A` are the same job.
+
+**Fix.** Open the existing project from the picker. If it is a mistaken
+duplicate, Admin → Audit, filter on *Freeze Protection project created*, shows
+who made each and when.
+
+## A building cannot be removed
+
+**Symptom.** *Main has 12 units. Move or remove them first.*, or *A project needs
+at least one building.*
+
+**Cause.** Deliberate. Removing a building would remove its units' results in
+every round, so the service refuses while it holds equipment, and every unit
+needs a building.
+
+**Fix.** Move each unit to another building on the same project (a unit cannot
+move to another project), or remove the units, then remove the building.
+
+## A reviewer is refused: "A different engineer has to review it"
+
+**Symptom.** Signing a verification as reviewed answers *You completed this
+verification* or *You recorded results in this verification.*
+
+**Cause.** Step 7 of the Controls Division's procedure: the reviewer must not be
+the person who carried out the verification. The platform records the signed-in
+employee, never a typed name, so it can check. It refuses the person who marked
+it completed (also enforced by `fp_verifications_reviewer_not_completer`), and
+anyone who is the last person to have changed a result in that round.
+
+**Fix.** Another engineer signs. If the wrong person marked it completed, they
+remove their completion (which also removes any review) and the right person
+marks it. The check sees only each result's last editor; the audit log
+(*Freeze Protection result recorded*) has every change if a stricter answer is
+needed.
+
+## A report says "Changed after review"
+
+**Symptom.** A reviewed verification is flagged as changed after its review.
+
+**Cause.** Nothing is locked after signoff (manager decision, 2026-10-22). A
+result in that round was saved after the review time, or a unit's coil type was
+changed after it (coil belongs to the unit, so it changes every round that
+shows the unit). The procedure requires a new review after any later change.
+
+**Fix.** Review again: remove the review signature, then a different engineer
+signs. Admin → Audit, filtered to Freeze Protection, shows what changed and who
+changed it.
+
+## A unit added to a project is missing from an older verification
+
+**Symptom.** A unit appears in the newest round's register and not in earlier ones.
+
+**Cause.** Deliberate. A new unit joins the project's newest round only; older
+rounds are history and keep the register they had. A new round includes every
+unit on the project, carrying status, exposure and protection forward from each
+unit's previous result; tests, notices, deficiencies and documentation start empty.
+
+**Fix.** None needed. To verify the unit, record it in the newest round or start
+a new one.

@@ -26,6 +26,12 @@ describe("the settled assignments", () => {
     expect(moduleAccent("knowledge-base", 3).fill).toBe("var(--phb-pink)");
   });
 
+  it("gives Freeze Protection the orange, the last free slot", () => {
+    expect(moduleAccent("freeze-protection").fill).toBe("var(--phb-orange)");
+    expect(moduleAccent("freeze-protection", 4).fill).toBe("var(--phb-orange)");
+    expect(moduleAccent("freeze-protection").ink).toBe("var(--phb-orange-ink)");
+  });
+
   it("pairs every fill with an ink that clears AA as text", () => {
     // The fill fills shapes; the ink carries glyphs. app/globals.css explains
     // why they cannot be the same value for anything but purple and maroon.
@@ -60,19 +66,24 @@ describe("a module with no assignment", () => {
     expect(accent.ink).toMatch(/^var\(--phb-/);
   });
 
-  it("does not collide with a settled module until the palette runs out", () => {
-    // Four of five slots are assigned, so orange is all that is left. The
-    // palette is now exhausted: a fifth module has to be assigned by hand.
+  it("never wears a settled module's colour, now that the palette is exhausted", () => {
+    // All five quadrant colours are assigned. An unassigned module gets the
+    // chrome purple at every index, not PALETTE[0] (Change Orders' red), until
+    // somebody decides its colour. lib/module-accent.ts -> EXHAUSTED.
     const taken = new Set([
       "var(--phb-red)",
       "var(--phb-cyan)",
+      "var(--phb-orange)",
       "var(--phb-teal)",
       "var(--phb-pink)",
     ]);
-    const given = [0, 1, 2].map((i) => moduleAccent(`future-${i}`, i).fill);
+    const given = [0, 1, 2, 7, 40].map((i) => moduleAccent(`future-${i}`, i));
 
-    for (const fill of given) expect(taken.has(fill)).toBe(false);
-    expect(new Set(given).size).toBe(1);
+    for (const accent of given) {
+      expect(taken.has(accent.fill)).toBe(false);
+      expect(accent.fill).toBe("var(--phb-purple)");
+      expect(accent.ink).toBe("var(--phb-purple)");
+    }
   });
 
   it("wraps rather than returning undefined when the palette is exhausted", () => {
@@ -108,7 +119,13 @@ describe("keys that are members of Object.prototype", () => {
   ];
 
   it("does not hand them a settled module's colour", () => {
-    const settled = new Set(["var(--phb-red)", "var(--phb-cyan)"]);
+    const settled = new Set([
+      "var(--phb-red)",
+      "var(--phb-cyan)",
+      "var(--phb-orange)",
+      "var(--phb-teal)",
+      "var(--phb-pink)",
+    ]);
 
     for (const key of PROTOTYPE_KEYS) {
       expect(settled.has(moduleAccent(key, 0).fill), key).toBe(false);
@@ -126,9 +143,8 @@ describe("keys that are members of Object.prototype", () => {
 
   it("treats them as unassigned, taking the fallback like any unknown key", () => {
     // Proves the lookup missed rather than matched. Compared against a key that
-    // is definitely unassigned rather than across two indices, because with four
-    // of five slots assigned the fallback has one colour left and two indices no
-    // longer separate anything.
+    // is definitely unassigned rather than across two indices, because with the
+    // palette exhausted every index falls back to the same colour.
     for (const key of PROTOTYPE_KEYS) {
       expect(moduleAccent(key, 0).fill, key).toBe(
         moduleAccent("definitely-not-a-module", 0).fill,

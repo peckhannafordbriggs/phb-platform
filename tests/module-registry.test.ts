@@ -53,6 +53,17 @@ const REGISTERED_KEYS = ["cost-intelligence", "knowledge-base"] as const;
  */
 const SEEDED_ON_PRODUCTION_BY_HAND = ["change-orders", "bas"] as const;
 
+/**
+ * Modules registered by a migration of their own rather than the one this file
+ * drives. They are in the seed too, so a seed-populated database holds them;
+ * the last describe below checks each one has its migration.
+ */
+const REGISTERED_BY_OWN_MIGRATION = ["freeze-protection"] as const;
+
+/** Every row the seed writes. One number, so adding a module changes one list above and nothing here. */
+const SEEDED_MODULE_COUNT =
+  REGISTERED_KEYS.length + SEEDED_ON_PRODUCTION_BY_HAND.length + REGISTERED_BY_OWN_MIGRATION.length;
+
 const migrationSql = readFileSync(
   path.join(MIGRATIONS_DIR, REGISTER_MIGRATION, "migration.sql"),
   "utf8",
@@ -112,7 +123,7 @@ let seeded: ModuleRow[] = [];
 beforeAll(async () => {
   await resetDb();
   const output = runSeed();
-  expect(output).toContain("Seeded 4 module(s)");
+  expect(output).toContain(`Seeded ${SEEDED_MODULE_COUNT} module(s)`);
   seeded = await readModules();
 });
 
@@ -133,19 +144,19 @@ describe("the seed, which is the reference", () => {
       expect(seedSource).toContain(`key: "${key}"`);
     }
     expect(seeded.map((m) => m.key)).toEqual(
-      [...REGISTERED_KEYS, ...SEEDED_ON_PRODUCTION_BY_HAND].sort(),
+      [...REGISTERED_KEYS, ...SEEDED_ON_PRODUCTION_BY_HAND, ...REGISTERED_BY_OWN_MIGRATION].sort(),
     );
   });
 });
 
 describe("against a database the seed already populated", () => {
   it("changes nothing: no duplicate row and no changed value", async () => {
-    expect(seeded).toHaveLength(4);
+    expect(seeded).toHaveLength(SEEDED_MODULE_COUNT);
 
     await applyMigration();
 
     const after = await readModules();
-    expect(after).toHaveLength(4);
+    expect(after).toHaveLength(SEEDED_MODULE_COUNT);
     expect(after).toEqual(seeded);
   });
 
