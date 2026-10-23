@@ -84,7 +84,7 @@ const VERIFIED = line("3", {
   test: { answers: PASSED, tripTempF: "37", testedBy: "C. Moreno", testDate: "2026-10-30", elements: null },
   documentation: { with: "owner", name: "R. Patel", date: "2026-10-31", method: "Email" },
 });
-const NO_COIL = line("4", { coil: "none", tag: "EF-1" });
+const NO_COIL = line("4", { coil: "none", tag: "EF-1", buildingId: "11", buildingName: "Annex" });
 const OPEN = line("5", { coil: "water" });
 const LINES = [NO_PROTECTION, FAILED, VERIFIED, NO_COIL, OPEN];
 
@@ -96,6 +96,7 @@ const register = (props: Partial<Parameters<typeof RegisterView>[0]>) =>
       verification: ROUND,
       lines: LINES,
       selected: null,
+      buildingId: null,
       panel: null,
       today: "2026-11-01",
       ...props,
@@ -117,7 +118,27 @@ describe("Register", () => {
     const html = register({});
     for (const label of ["No protection", "Test failed", "Verified", "Closed, no coil", "Step 3 open"]) expect(html).toContain(label);
     expect(html).toContain("Outside air exposure");
-    expect(html).toContain("5 units in the 2026-11-01 verification");
+    expect(html).toContain("5 units · 2026-11-01 verification");
+  });
+
+  it("has a building switcher and Add equipment in the equipment card, and no filter", () => {
+    const html = register({});
+    expect(html).toContain("All buildings");
+    expect(html).toContain("Add equipment");
+    expect(html).toContain("Building</button>");
+    expect(html).not.toContain('type="search"');
+  });
+
+  it("one building: only its schedule, no Building column, and the funnel follows it", () => {
+    const html = register({ buildingId: "11" });
+    expect(html).toContain("EF-1");
+    expect(html).not.toContain("AHU-1");
+    expect(html).toContain("1 unit in Annex · 2026-11-01 verification");
+    expect(html).not.toContain(">Building</span>");
+  });
+
+  it("an unknown building id shows all buildings rather than nothing", () => {
+    expect(register({ buildingId: "999" })).toContain("5 units · 2026-11-01 verification");
   });
 
   it("no protection: the stop and the notice fields, not the test", () => {
@@ -181,6 +202,26 @@ describe("Report", () => {
   it("flags a change after review", () => {
     expect(report({})).not.toContain("Changed after review.");
     expect(report({ verification: { ...ROUND, changedAfterReview: true } })).toContain("Changed after review.");
+  });
+
+  it("entire project by default: every building, with a Building column", () => {
+    const html = report({});
+    expect(html).toContain("Equipment register · 5");
+    expect(html).not.toContain(" only.");
+    expect(html).toContain(">Building</th>");
+  });
+
+  it("one building: only its units and findings, says so, and keeps the whole-verification signoff", () => {
+    const html = report({ building: PROJECT.buildings[1] });
+    expect(html).toContain(" · Annex");
+    expect(html).toContain("Annex only.");
+    expect(html).toContain("Equipment register · 1");
+    expect(html).toContain("EF-1");
+    expect(html).not.toContain("AHU-1");
+    expect(html).not.toContain("Items requiring action");
+    expect(html).not.toContain(">Building</th>");
+    expect(html).toContain("These signatures cover the whole verification");
+    expect(html).toContain("Dana Whitfield");
   });
 
   it("offers signing only where it applies", () => {

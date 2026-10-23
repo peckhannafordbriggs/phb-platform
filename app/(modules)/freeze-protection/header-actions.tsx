@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { Download, Plus, Printer } from "lucide-react";
+import type { FpProject } from "@/lib/modules/freeze-protection/types";
 import { Button } from "./ui/kit";
 import { REPORT_ID } from "./views/report-view";
 
@@ -30,34 +31,36 @@ export function ProjectPicker({ projects, value }: { projects: ProjectOption[]; 
 }
 
 export function RegisterActions({ projects, projectId }: { projects: ProjectOption[]; projectId: string | null }) {
-  const here = projectId ? `/freeze-protection?project=${encodeURIComponent(projectId)}` : "/freeze-protection";
   return (
     <>
       {projectId && projects.length > 0 && <ProjectPicker projects={projects} value={projectId} />}
-      <Button href="/freeze-protection?new=project">New project</Button>
-      {projectId && (
-        <Button variant="primary" href={`${here}&new=equipment`}>
-          <Plus size={16} aria-hidden="true" />
-          Add equipment
-        </Button>
-      )}
+      <Button variant="primary" href="/freeze-protection?new=project">
+        <Plus size={16} aria-hidden="true" />
+        New project
+      </Button>
     </>
   );
 }
 
 export function ReportActions({
   projects,
-  projectId,
+  project,
+  roundId,
+  buildingId,
   fileName,
 }: {
   projects: ProjectOption[];
-  projectId: string | null;
+  project: FpProject | null;
+  roundId: string | null;
+  /** Null means the entire project. */
+  buildingId: string | null;
   /** Null when there is no report to save. */
   fileName: string | null;
 }) {
   return (
     <>
-      {projectId && projects.length > 0 && <ProjectPicker projects={projects} value={projectId} />}
+      {project && projects.length > 0 && <ProjectPicker projects={projects} value={project.id} />}
+      {project && project.buildings.length > 1 && <ReportScope project={project} roundId={roundId} buildingId={buildingId} />}
       <Button onClick={() => window.print()} disabled={fileName === null}>
         <Printer size={16} aria-hidden="true" />
         Print
@@ -67,6 +70,34 @@ export function ReportActions({
         Download
       </Button>
     </>
+  );
+}
+
+/** The entire project, or one building. Rewrites `?building=` and keeps the round. */
+function ReportScope({ project, roundId, buildingId }: { project: FpProject; roundId: string | null; buildingId: string | null }) {
+  const router = useRouter();
+  const go = (building: string) =>
+    router.push(
+      `/freeze-protection/report?project=${encodeURIComponent(project.id)}` +
+        (roundId ? `&round=${encodeURIComponent(roundId)}` : "") +
+        (building ? `&building=${encodeURIComponent(building)}` : ""),
+    );
+  return (
+    <label className="flex items-center gap-2">
+      <span className="eyebrow text-[var(--muted)]">Report on</span>
+      <select
+        value={buildingId ?? ""}
+        onChange={(e) => go(e.target.value)}
+        className="h-9 max-w-[14rem] truncate rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 text-[0.8125rem]"
+      >
+        <option value="">Entire project</option>
+        {project.buildings.map((b) => (
+          <option key={b.id} value={b.id}>
+            {b.name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

@@ -13,10 +13,19 @@ import { Button, Card, Label } from "../ui/kit";
  * keeping the building, because a schedule is entered one unit after another.
  * Opened by `?new=equipment`.
  */
-export function EquipmentForm({ buildings, doneHref }: { buildings: FpBuilding[]; doneHref: string }) {
+export function EquipmentForm({
+  buildings,
+  defaultBuildingId,
+  doneHref,
+}: {
+  buildings: FpBuilding[];
+  /** The building the switcher is showing, if one. */
+  defaultBuildingId: string | null;
+  doneHref: string;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [buildingId, setBuildingId] = useState(buildings[0]?.id ?? "");
+  const [buildingId, setBuildingId] = useState(defaultBuildingId ?? buildings[0]?.id ?? "");
   const [tag, setTag] = useState("");
   const [equipmentType, setEquipmentType] = useState("");
   const [areaServed, setAreaServed] = useState("");

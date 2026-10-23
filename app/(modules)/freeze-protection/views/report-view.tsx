@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { FREEZE_SEASON } from "@/lib/modules/freeze-protection/constants";
 import { disposition, funnel, toneCounts } from "@/lib/modules/freeze-protection/disposition";
-import type { FpLine, FpProject, FpSignature, FpVerification } from "@/lib/modules/freeze-protection/types";
+import type { FpBuilding, FpLine, FpProject, FpSignature, FpVerification } from "@/lib/modules/freeze-protection/types";
 import { EXPOSURE_SHORT, PROTECTION_LABEL, STATUS_LABEL } from "@/lib/modules/freeze-protection/vocab";
 import { call } from "../client";
 import { DateField, TextField } from "../ui/Field";
@@ -22,18 +22,24 @@ const seasonDay = ({ month, day }: { month: number; day: number }) => `${MONTH.f
 const COIL_SHORT = { none: "None", water: "Water", glycol: "Glycol", steam: "Steam" } as const;
 
 /**
- * The document handed to the CM or owner, for one verification round. It is
- * read-only except step 7 (signoff, recorded as the signed-in employee) and the
- * transmittal. Nothing locks after review; a later change is flagged instead.
+ * The document handed to the CM or owner, for one verification round, covering
+ * the entire project or one building. It is read-only except step 7 (signoff,
+ * recorded as the signed-in employee) and the transmittal, which belong to the
+ * whole verification whatever the scope. Nothing locks after review; a later
+ * change is flagged instead.
  */
 export function ReportView({
   project,
   verification,
   lines,
+  building = null,
 }: {
   project: FpProject | null;
   verification: FpVerification | null;
+  /** Every line in the round; the report narrows them to `building`. */
   lines: FpLine[];
+  /** One building, or null for the entire project. */
+  building?: FpBuilding | null;
 }) {
   if (!project || !verification) {
     return (
@@ -44,10 +50,21 @@ export function ReportView({
       </Card>
     );
   }
-  return <Report project={project} verification={verification} lines={lines} />;
+  return <Report project={project} verification={verification} lines={lines} building={building} />;
 }
 
-function Report({ project, verification: v, lines }: { project: FpProject; verification: FpVerification; lines: FpLine[] }) {
+function Report({
+  project,
+  verification: v,
+  lines: allLines,
+  building,
+}: {
+  project: FpProject;
+  verification: FpVerification;
+  lines: FpLine[];
+  building: FpBuilding | null;
+}) {
+  const lines = building ? allLines.filter((l) => l.buildingId === building.id) : allLines;
   const counts = toneCounts(lines);
   const stages = funnel(lines);
   const stage = (key: string) => stages.find((s) => s.key === key)?.count ?? 0;
@@ -74,6 +91,7 @@ function Report({ project, verification: v, lines }: { project: FpProject; verif
             <p className="eyebrow text-[var(--muted)]">Freeze protection verification</p>
             <h2 className="mt-1 text-lg font-semibold">
               <span className="font-mono">{project.jobNumber}</span> · {project.name}
+              {building && <span className="text-[var(--muted)]"> · {building.name}</span>}
             </h2>
             <p className="text-[var(--muted)]">Peck Hannaford + Briggs Controls Division</p>
           </header>
@@ -82,6 +100,12 @@ function Report({ project, verification: v, lines }: { project: FpProject; verif
             {v.changedAfterReview && (
               <Callout tone="warn" lead="Changed after review.">
                 Something in this verification changed after it was reviewed. The procedure requires a new review and signoff.
+              </Callout>
+            )}
+            {building && (
+              <Callout tone="closed" lead={`${building.name} only.`}>
+                This report covers the equipment in {building.name}. The project has {project.buildings.length} buildings; the verification and its
+                signoff cover all of them.
               </Callout>
             )}
             <Callout tone="closed" lead={`Verification date ${longDate(v.verificationDate)}.`}>
@@ -123,7 +147,18 @@ function Report({ project, verification: v, lines }: { project: FpProject; verif
                 <table className="w-full min-w-[44rem]">
                   <thead>
                     <tr className="border-b border-[var(--border)] text-left">
-                      {["Equipment", "Building", "Area served", "Status", "Coil", "Outside air", "Protection", "Trip °F", "Tested", "Disposition"].map((h) => (
+                      {[
+                        "Equipment",
+                        ...(building ? [] : ["Building"]),
+                        "Area served",
+                        "Status",
+                        "Coil",
+                        "Outside air",
+                        "Protection",
+                        "Trip °F",
+                        "Tested",
+                        "Disposition",
+                      ].map((h) => (
                         <th key={h} className="eyebrow py-2 pr-3 font-semibold text-[var(--muted)]">
                           {h}
                         </th>
@@ -134,7 +169,7 @@ function Report({ project, verification: v, lines }: { project: FpProject; verif
                     {withDisposition.map(({ line: e, d }) => (
                       <tr key={e.id} className="border-b border-[var(--divider-soft)] align-top">
                         <td className="py-1.5 pr-3 font-mono">{e.tag}</td>
-                        <td className="py-1.5 pr-3">{e.buildingName}</td>
+                        {!building && <td className="py-1.5 pr-3">{e.buildingName}</td>}
                         <td className="py-1.5 pr-3">{e.areaServed ?? "—"}</td>
                         <td className="py-1.5 pr-3">{STATUS_LABEL[e.status]}</td>
                         <td className="py-1.5 pr-3">{e.coil ? COIL_SHORT[e.coil] : "—"}</td>
@@ -194,7 +229,7 @@ function Report({ project, verification: v, lines }: { project: FpProject; verif
             </Section>
           )}
 
-          <Signoff verification={v} />
+          <Signoff verification={v} scoped={building !== null} />
           <Transmittal key={`${v.id}-${v.transmittedTo}-${v.transmittedDate}`} verification={v} />
         </article>
       </Card>
@@ -231,7 +266,7 @@ function useWrite() {
 }
 
 /** Step 7. Both signatures are the signed-in employee; the server refuses self-review with a sentence. */
-function Signoff({ verification: v }: { verification: FpVerification }) {
+function Signoff({ verification: v, scoped }: { verification: FpVerification; scoped: boolean }) {
   const { pending, error, run } = useWrite();
   const sign = (role: "completed" | "reviewed", signed: boolean) =>
     run(() => call("POST", `/verifications/${v.id}/signoff`, { role, signed }));
@@ -273,6 +308,7 @@ function Signoff({ verification: v }: { verification: FpVerification }) {
       <p className="mb-3 text-[var(--muted)]">
         A PH+B engineer who did not perform steps 3 through 6 reviews this report and signs. Any later change to freeze protection logic, safety
         wiring, or a related setpoint requires a new review and signoff.
+        {scoped && " These signatures cover the whole verification, every building on the project."}
       </p>
       <div className="flex flex-wrap gap-4">
         {box("Verification completed by", "completed", v.completed, true)}

@@ -10,6 +10,7 @@ import { FpNav, type Tab } from "./fp-nav";
 export function FpShell({
   projectId,
   roundId,
+  buildingId,
   actions,
   children,
 }: {
@@ -17,6 +18,8 @@ export function FpShell({
   projectId?: string;
   /** The verification round showing, carried across tabs the same way. */
   roundId?: string;
+  /** The building in view (Register switcher, Report scope), carried the same way. */
+  buildingId?: string;
   /** Right-aligned controls on the tab row. */
   actions?: React.ReactNode;
   children: React.ReactNode;
@@ -34,7 +37,7 @@ export function FpShell({
           title={FREEZE_PROTECTION_MODULE_NAME}
           blurb="Coil freeze exposure, safeties and test results, by project."
         >
-          <FpNav tabs={tabs(projectId, roundId)} actions={actions} />
+          <FpNav tabs={tabs(projectId, roundId, buildingId)} actions={actions} />
         </ModuleHeader>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-8 pt-6">
@@ -46,10 +49,12 @@ export function FpShell({
 
 const BASE = "/freeze-protection";
 
-/** Project and round travel in the URL, so a tab switch keeps them and a refresh restores them. */
-function tabs(projectId?: string, roundId?: string): Tab[] {
+/** Project, round and building travel in the URL, so a tab switch keeps them and a refresh restores them. */
+function tabs(projectId?: string, roundId?: string, buildingId?: string): Tab[] {
   const query = projectId
-    ? `?project=${encodeURIComponent(projectId)}${roundId ? `&round=${encodeURIComponent(roundId)}` : ""}`
+    ? `?project=${encodeURIComponent(projectId)}` +
+      (roundId ? `&round=${encodeURIComponent(roundId)}` : "") +
+      (buildingId ? `&building=${encodeURIComponent(buildingId)}` : "")
     : "";
   return [
     { href: `${BASE}${query}`, label: "Register", path: BASE, exact: true },

@@ -14,17 +14,18 @@ export default async function RegisterPage({ searchParams }: { searchParams: Pro
   if (!access.ok) notFound();
 
   const params = await searchParams;
-  const { projects, project, verifications, verification, lines } = await loadRegister(params);
+  const { projects, project, verifications, verification, lines, building } = await loadRegister(params);
   const panel = params.new === "project" ? "project" : params.new === "equipment" && project ? "equipment" : null;
 
   return (
-    <FpShell projectId={project?.id} roundId={verification?.id} actions={<RegisterActions projects={projects} projectId={project?.id ?? null} />}>
+    <FpShell projectId={project?.id} roundId={verification?.id} buildingId={building?.id} actions={<RegisterActions projects={projects} projectId={project?.id ?? null} />}>
       <RegisterView
         project={project}
         verifications={verifications}
         verification={verification}
         lines={lines}
         selected={lines.find((l) => l.id === params.equipment) ?? null}
+        buildingId={building?.id ?? null}
         panel={panel}
         today={todayInNewYork()}
       />

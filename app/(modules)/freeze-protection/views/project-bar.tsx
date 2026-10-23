@@ -16,8 +16,10 @@ function roundLabel(v: FpVerification) {
 }
 
 /**
- * The project's header on the Register: job number and name, its buildings,
- * which verification round is showing (and starting a new one), and the funnel.
+ * The project's header on the Register: job number and name, which
+ * verification round is showing (and starting a new one), and the funnel for
+ * whatever the table is showing. The pencil opens Edit project, which is also
+ * where buildings are renamed and removed.
  */
 export function ProjectBar({
   project,
@@ -29,20 +31,22 @@ export function ProjectBar({
   project: FpProject;
   verifications: FpVerification[];
   verification: FpVerification | null;
+  /** The lines the table is showing, so the funnel follows the building switcher. */
   lines: FpLine[];
   today: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [addingBuilding, setAddingBuilding] = useState(false);
-  const [buildingName, setBuildingName] = useState("");
   const [startingRound, setStartingRound] = useState(false);
   const [roundDate, setRoundDate] = useState(today);
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const base = `/freeze-protection?project=${encodeURIComponent(project.id)}`;
+  const unitCount = project.buildings.reduce((n, b) => n + b.equipmentCount, 0);
+
+  /** Runs a write; the server's sentence is shown if it refuses. Always re-renders from the database. */
   const run = (fn: () => Promise<string | null>) => {
     setError(null);
     startTransition(async () => {
@@ -51,22 +55,12 @@ export function ProjectBar({
       router.refresh();
     });
   };
-
-  const addBuilding = (e: React.FormEvent) => {
-    e.preventDefault();
+  const write = (method: "PATCH" | "DELETE", path: string, body?: unknown) =>
     run(async () => {
-      const r = await call("POST", `/projects/${project.id}/buildings`, { name: buildingName });
-      if (!r.ok) return r.message;
-      setBuildingName("");
-      setAddingBuilding(false);
-      return null;
-    });
-  };
-  const removeBuilding = (id: string) =>
-    run(async () => {
-      const r = await call("DELETE", `/buildings/${id}`);
+      const r = await call(method, path, body);
       return r.ok ? null : r.message;
     });
+
   const startRound = (e: React.FormEvent) => {
     e.preventDefault();
     run(async () => {
@@ -77,21 +71,6 @@ export function ProjectBar({
       return null;
     });
   };
-
-  const unitCount = project.buildings.reduce((n, b) => n + b.equipmentCount, 0);
-
-  const saveProject = (field: "jobNumber" | "name") => (value: string | null) =>
-    value !== null &&
-    run(async () => {
-      const r = await call("PATCH", `/projects/${project.id}`, { [field]: value });
-      return r.ok ? null : r.message;
-    });
-  const renameBuilding = (id: string) => (value: string | null) =>
-    value !== null &&
-    run(async () => {
-      const r = await call("PATCH", `/buildings/${id}`, { name: value });
-      return r.ok ? null : r.message;
-    });
   const deleteProject = () =>
     run(async () => {
       const r = await call("DELETE", `/projects/${project.id}`);
@@ -105,23 +84,46 @@ export function ProjectBar({
       <Card className="shrink-0">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div key={`${project.jobNumber}-${project.name}`} className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
-            <TextField label="Job number" value={project.jobNumber} onSave={saveProject("jobNumber")} mono />
-            <TextField label="Project name" value={project.name} onSave={saveProject("name")} />
+            <TextField label="Job number" value={project.jobNumber} onSave={(v) => v && write("PATCH", `/projects/${project.id}`, { jobNumber: v })} mono />
+            <TextField label="Project name" value={project.name} onSave={(v) => v && write("PATCH", `/projects/${project.id}`, { name: v })} />
           </div>
           <Button onClick={() => setEditing(false)}>Done</Button>
         </div>
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+
+        <p className="eyebrow mb-2 mt-5 text-[var(--muted)]">Buildings</p>
+        <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {project.buildings.map((b) => (
-            <TextField key={`${b.id}-${b.name}`} label={`Building · ${b.equipmentCount} units`} value={b.name} onSave={renameBuilding(b.id)} />
+            <li key={`${b.id}-${b.name}`} className="flex items-end gap-2">
+              <div className="min-w-0 flex-1">
+                <TextField
+                  label={`${b.equipmentCount} unit${b.equipmentCount === 1 ? "" : "s"}`}
+                  value={b.name}
+                  onSave={(v) => v && write("PATCH", `/buildings/${b.id}`, { name: v })}
+                />
+              </div>
+              {project.buildings.length > 1 && (
+                <button
+                  type="button"
+                  aria-label={`Remove building ${b.name}`}
+                  title={b.equipmentCount > 0 ? "Move or remove its units first" : "Remove building"}
+                  onClick={() => write("DELETE", `/buildings/${b.id}`)}
+                  className="mb-2 shrink-0 text-[var(--muted)] hover:text-[var(--phb-maroon)]"
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </li>
           ))}
-        </div>
+        </ul>
+
         {error && <p className="mt-3 text-[0.8125rem] text-[var(--phb-maroon)]">{error}</p>}
         <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-[var(--divider-soft)] pt-3 text-[0.75rem] text-[var(--muted)]">
           {confirmDelete ? (
             <>
               <span>
                 Delete job {project.jobNumber} with its {project.buildings.length} building{project.buildings.length === 1 ? "" : "s"}, {unitCount}{" "}
-                unit{unitCount === 1 ? "" : "s"} and {verifications.length} verification{verifications.length === 1 ? "" : "s"}? The audit log keeps a record.
+                unit{unitCount === 1 ? "" : "s"} and {verifications.length} verification{verifications.length === 1 ? "" : "s"}? The audit log keeps a
+                record.
               </span>
               <Button onClick={deleteProject} disabled={pending}>
                 Delete project
@@ -140,70 +142,20 @@ export function ProjectBar({
 
   return (
     <Card className="shrink-0">
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="truncate text-base font-semibold">
-              <span className="font-mono">{project.jobNumber}</span> <span className="text-[var(--muted)]">·</span> {project.name}
-            </h2>
-            <button
-              type="button"
-              aria-label="Edit project"
-              onClick={() => setEditing(true)}
-              className="shrink-0 text-[var(--muted)] hover:text-[var(--foreground)]"
-            >
-              <Pencil size={14} />
-            </button>
-          </div>
-          <ul className="mt-2 flex flex-wrap items-center gap-1.5" aria-label="Buildings">
-            {project.buildings.map((b) => (
-              <li
-                key={b.id}
-                className="inline-flex items-center gap-1 rounded-full bg-[var(--neutral-100)] py-0.5 pl-2.5 pr-1.5 text-[0.75rem]"
-              >
-                {b.name}
-                <span className="font-mono text-[var(--muted)]">{b.equipmentCount}</span>
-                {project.buildings.length > 1 && (
-                  <button
-                    type="button"
-                    aria-label={`Remove building ${b.name}`}
-                    onClick={() => removeBuilding(b.id)}
-                    className="text-[var(--muted)] hover:text-[var(--foreground)]"
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </li>
-            ))}
-            <li>
-              {addingBuilding ? (
-                <form onSubmit={addBuilding} className="flex items-center gap-1.5">
-                  <input
-                    autoFocus
-                    required
-                    value={buildingName}
-                    aria-label="New building name"
-                    onChange={(e) => setBuildingName(e.target.value)}
-                    className={INPUT + " h-7 w-40"}
-                  />
-                  <Button type="submit" disabled={pending} className="h-7! px-2.5!">
-                    Add
-                  </Button>
-                  <button type="button" onClick={() => setAddingBuilding(false)} className="text-[0.75rem] text-[var(--muted)]">
-                    Cancel
-                  </button>
-                </form>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setAddingBuilding(true)}
-                  className="inline-flex items-center gap-1 text-[0.75rem] text-[var(--muted)] hover:text-[var(--foreground)]"
-                >
-                  <Plus size={12} aria-hidden="true" /> Building
-                </button>
-              )}
-            </li>
-          </ul>
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <h2 className="truncate text-base font-semibold">
+            <span className="font-mono">{project.jobNumber}</span> <span className="text-[var(--muted)]">·</span> {project.name}
+          </h2>
+          <button
+            type="button"
+            aria-label="Edit project"
+            title="Edit project and buildings"
+            onClick={() => setEditing(true)}
+            className="shrink-0 text-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            <Pencil size={14} />
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -253,7 +205,7 @@ export function ProjectBar({
         ) : (
           <p className="text-[0.8125rem] text-[var(--muted)]">
             {unitCount === 0
-              ? "No equipment yet. Add the units from the mechanical equipment schedule, then start a verification."
+              ? "No equipment yet. Add each building's units from its mechanical equipment schedule, then start a verification."
               : `${unitCount} unit${unitCount === 1 ? "" : "s"} on the schedule. Start a verification to record results.`}
           </p>
         )}
