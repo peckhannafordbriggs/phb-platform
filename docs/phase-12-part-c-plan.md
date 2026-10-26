@@ -538,8 +538,46 @@ created by the engine app. Nothing else; `pristine/` is untouched apart from
 the rewritten manifest. Three probe folders made from the developer token
 while diagnosing were deleted the same minute.
 
-**Second attempt:** image `phb-co-engine:part-c-compare-2`, the same job
-spec with the tag changed. Not yet run.
+### The second run (2026-10-21, `runs/20261021-203211`): the instrument broke its own rule
+
+Image `part-c-compare-2`. Both first-run fixes held: every workbook read
+*content identical, bytes rewritten by SharePoint*, with the touched parts
+named (`customXml/item*.xml` and `itemProps*.xml` on the stamped-in-place
+four; `[trash]/*.dat` and the custom parts added on the three that grew);
+the 400 did not recur; and all eight Graph trees were built by server-side
+copy. Then every CO read `graph rc=1 1.0s`, and every CO "differed" because
+the Graph side had no outputs.
+
+**The engine never ran, and the reason was the comparison's own layout.** The
+instrument put each tree's report directory *beside* `CMP` while telling the
+engine its root was `CMP`. The root jail refused `CO_REPORT_DIR` as outside
+the root before any request, exactly as `test_the_engine_refuses_a_report_dir_
+outside_the_root` says it must — eight refusals, one second each, the guard
+working as designed against its own author. Reproduced offline with the
+run's exact arguments and a dummy token: `refusing to run: CO_REPORT_DIR
+'…/rfi238/rep' is outside this store's root '…/rfi238/CMP'`; with `rep`
+inside `CMP` the engine proceeds to its first store call. The local half
+had no jail and ran fine, which is why the two trees disagreed.
+
+**And the instrument hid it.** `compare_stores.py` printed an engine's stderr
+only for an exit code *other than* 0 or 1, a convention copied from the Part B
+differential where exit 1 means "ran, with failures". Here it meant "never
+ran", and the number alone said nothing. Changed: `rep` lives inside `CMP`
+on both sides, the layout is one function and `tests/test_compare_layout.py`
+holds every path the Graph engine is given inside the jail root it is given;
+a non-zero exit from either engine prints that engine's last 40 lines of
+stderr and 10 of stdout, and the CO is recorded as *local engine rc=N* or
+*graph engine rc=N* instead of being diffed against an empty tree. The
+SUMMARY now separates "never reached a verdict" from "differs".
+
+**What the run left:** eight populated trees under `runs/20261021-203211/`,
+each with the pristine inputs copied into `1 - New Requests/<CO>/` and the
+seven empty folders — nothing the engine wrote, since it never ran — plus
+the empty `runs/20261021-193816` from the first run. Left in place until the
+comparison is written up.
+
+**Third attempt:** image `phb-co-engine:part-c-compare-3`, the same job spec
+with the tag changed. Not yet run.
 
 ## Step 7, second pass (2026-10-21): the credential is the platform's identity, and the test needs a job
 
