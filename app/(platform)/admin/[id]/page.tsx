@@ -122,6 +122,8 @@ export default async function AdminEmployeePage({
         inline and readable, rendered by the same describeAuditEvent the audit
         page uses rather than by a second, narrower renderer here - which is
         what this section used to be, printing `grant.added` and two emails.
+        Account and access events only, the audit page's own scope
+        (lib/admin/audit-screen.ts); the service applies it.
       */}
       <section className="mt-6 rounded border border-[var(--border)]">
         <h2 className="flex items-baseline justify-between border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-semibold">
@@ -138,11 +140,11 @@ export default async function AdminEmployeePage({
           moduleNames={moduleNames}
           // Every row here is about this person; repeating the name would be noise.
           hideTarget
-          emptyMessage="Nothing has been recorded for this employee yet."
+          emptyMessage="No account or access changes have been recorded for this employee yet."
         />
         {employee.auditHistory.length === 100 && (
           <p className="border-t border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
-            Showing the 100 most recent events. The audit log has the rest.
+            Showing the 100 most recent account and access changes. The audit log has the rest.
           </p>
         )}
       </section>

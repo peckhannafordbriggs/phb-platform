@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { writeAuditEvent } from "@/lib/audit";
 import { hasSettingsSurface } from "@/lib/module-settings";
+import { SCREEN_AUDIT_ACTIONS, screenActionsFor } from "./audit-screen";
 import type { EmployeeListQuery, AuditQuery } from "@/lib/validation/admin";
 
 /**
@@ -196,9 +197,12 @@ export async function getEmployeeDetail(employeeId: string) {
    * them as the target. Selected through AUDIT_SELECT so the same describe()
    * renders it as the audit page; a second, narrower select is how the two
    * views would drift.
+   *
+   * Account and access events only, the same scope as the audit page
+   * (./audit-screen.ts). The rest is still recorded and read with SQL.
    */
   const auditHistory = await prisma.auditEvent.findMany({
-    where: { targetEmployeeId: employeeId },
+    where: { targetEmployeeId: employeeId, action: { in: [...SCREEN_AUDIT_ACTIONS] } },
     select: AUDIT_SELECT,
     orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
     take: 100,
@@ -859,15 +863,15 @@ export async function listAuditEvents(query: AuditQuery) {
           },
         };
 
+  // The screen shows account and access events only (./audit-screen.ts), so
+  // the action clause is always an IN over that set: narrowed to one action or
+  // a module group ("cip.*", auditActionFilterOptions) when the filter asks,
+  // and to nothing at all when it asks for an action the screen does not show.
+  // Recording is untouched; the hidden rows are read with SQL.
   const where = {
     ...(targetEmployeeId !== undefined ? { targetEmployeeId } : {}),
     ...(actorEmployeeId !== undefined ? { actorEmployeeId } : {}),
-    ...(action === undefined || action.length === 0
-      ? {}
-      : action.endsWith(".*")
-        ? // A module's whole group, e.g. "cip.*" (auditActionFilterOptions).
-          { action: { startsWith: action.slice(0, -1) } }
-        : { action }),
+    action: { in: screenActionsFor(action) },
     ...occurredAt,
   };
 
@@ -902,16 +906,20 @@ export async function listAuditEvents(query: AuditQuery) {
  * essentially the admins - and every option in it returns at least one row, so
  * the filter cannot offer a choice that produces an empty page. A dropdown of
  * 130 names where 120 of them yield nothing is worse than no dropdown.
+ *
+ * Over the shown actions only, for the same reason: somebody whose only rows
+ * are mail sends would otherwise be offered and return an empty page.
  */
 export async function auditFilterOptions() {
+  const shown = { in: [...SCREEN_AUDIT_ACTIONS] };
   const [actorIds, targetIds] = await Promise.all([
     prisma.auditEvent.findMany({
-      where: { actorEmployeeId: { not: null } },
+      where: { actorEmployeeId: { not: null }, action: shown },
       select: { actorEmployeeId: true },
       distinct: ["actorEmployeeId"],
     }),
     prisma.auditEvent.findMany({
-      where: { targetEmployeeId: { not: null } },
+      where: { targetEmployeeId: { not: null }, action: shown },
       select: { targetEmployeeId: true },
       distinct: ["targetEmployeeId"],
     }),

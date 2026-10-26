@@ -4988,11 +4988,56 @@ here do not cover it. `scripts/co-verify-phase9.ts watch` is the instrument.
 and by date range. An employee's own history is also inline on `/admin/<id>`,
 which is the faster route when the question is about one person.
 
+**The screen shows account and access events only (since 2026-10-26)**: first
+sign-ins, module access granted or revoked (module-admin rights included),
+administrators added or removed, accounts disabled or re-enabled, and who did
+each. Everything else - mail edits, sends, moves and deletes, BAS Analyze
+questions, point and station changes, Cost Intelligence runs, profile and
+position changes, denied sign-ins - is **still recorded** in `audit_events`
+exactly as before and is read with SQL. The next section has the queries.
+
 Under app-only Graph auth Exchange records the *application* as the sender, not
 the person — so for anything touching mail, these rows are the only record
 anywhere of who did it. That is why this table matters more than an audit log
 usually does, and why it is append-only at the database level rather than by
-convention.
+convention. It is also why the screen's scope is a reader's rule and not a
+writer's: nothing in `lib/audit.ts` knows the list exists.
+
+## The audit log screen does not show a mail send, a BAS question or a profile change
+
+**Symptom.** Somebody sent a vendor email, asked Analyze a question, moved a
+message or completed their profile, and neither `/admin/audit` nor the History
+panel on their employee page shows it. Filtering the audit page by that person
+as *Done by* finds nothing, or the person is not in the dropdown at all.
+
+**Cause.** By decision on 2026-10-26 the two screens show the four kinds of
+account and access change and nothing else. The list is
+`SCREEN_AUDIT_ACTIONS` in `lib/admin/audit-screen.ts`; the service applies it
+to the audit page, the employee History, the *Action* dropdown and the two
+person dropdowns, so a filter cannot offer something that would return an
+empty page. A hand-edited URL asking for `action=mail.sent` gets an empty page
+too, never the rows.
+
+**The rows are there.** Recording was not changed - `tests/audit-screen-scope.test.ts`
+writes one of every hidden action through the real writer and reads it back.
+Read them with SQL:
+
+- who sent a message: *Who sent a message, and when*
+- moves, deletes, drafts and attachments: *Who moved, deleted or attached — the audit trail*
+- Analyze questions: *Analyze: reading the log of questions*
+- anything else, by prefix:
+
+```sql
+SELECT a.occurred_at, a.action, e.email AS by, a.metadata
+FROM audit_events a
+LEFT JOIN employees e ON e.id = a.actor_employee_id
+WHERE a.action LIKE 'mail.%'          -- or 'bas.%', 'cip.%', 'fp.%', 'employee.%'
+ORDER BY a.occurred_at DESC
+LIMIT 50;
+```
+
+**Widening the screen** is editing that one list; the test pins it as a
+literal so the change is deliberate. `WHY-ITS-BUILT-THIS-WAY.md` § 73.
 
 **Nothing can edit or delete a row**, including an administrator. There is no
 route, and the trigger refuses both regardless. If a row is wrong, the fix is
@@ -10256,9 +10301,12 @@ question, the SQL that ran (or was last tried) - which is NOT rendered on
 the screen, by decision on 2026-09-21, so this row is where to read it - the
 row count, the duration,
 the outcome kind, the gap hours and the unknown-horizon count in `metadata`,
-and one `bas.analyze.question` log line with the same. `/admin/audit` filters
-by action; the sentence reads *Jim Schwarz asked Building Automation "…" — no
-data matched*.
+and one `bas.analyze.question` log line with the same. **Not on
+`/admin/audit` since 2026-10-26** - the screen shows account and access events
+only - so read the rows with SQL (*The audit log screen does not show a mail
+send, a BAS question or a profile change*, under *Admin panel*); the sentence
+`describeAuditEvent` would word it as is still *Jim Schwarz asked Building
+Automation "…" — no data matched*.
 
 **`priorTurns` and `sourceQuestion` (2026-10-09)** in the same `metadata`:
 how many earlier turns the browser sent with the question, and for an
@@ -10942,9 +10990,12 @@ Everything is typed in here, so the platform is the only copy. Code:
 
 **History is the audit log.** Every write leaves an `fp.*` audit row with the
 job number, before and after values and a timestamp. A unit's History (step
-pane, single-unit report) is its rows by `metadata.equipmentId`; Admin → Audit,
-filtered to Freeze Protection, shows everything. Rows that mention buildings or
-verification rounds are from before 2026-10-23, when the module was simplified.
+pane, single-unit report) is its rows by `metadata.equipmentId`; the whole set
+is `SELECT … FROM audit_events WHERE action LIKE 'fp.%'`, because Admin → Audit
+shows account and access events only since 2026-10-26 (*The audit log screen
+does not show a mail send, a BAS question or a profile change*). Rows that
+mention buildings or verification rounds are from before 2026-10-23, when the
+module was simplified.
 
 ## Freeze Protection says a job number is already a project
 
