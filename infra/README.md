@@ -210,12 +210,49 @@ failure modes.
   `Key Vault Secrets User` on the vault
 - Optionally a resource-group budget (`enableBudget`, off by default)
 - Optionally the Cost Intelligence run worker, a Container Apps Job (`enableCipWorker`,
-  off by default; see `runbook.md`, "Cost Intelligence worker in Azure")
+  off by default and on in production since 2026-10-20; see `runbook.md`, "Cost
+  Intelligence worker in Azure")
+- Optionally the nightly database backup (`enableDbBackup`, off by default; see
+  `runbook.md`, "Nightly database backup"): a geo-redundant storage account with
+  shared-key access disabled, one blob container (`dumps`), a lifecycle rule that
+  deletes a dump after `dbBackupRetentionDays` (90) with 14 days of soft delete
+  after, a `Storage Blob Data Contributor` assignment for the identity scoped to
+  that container, and a scheduled Container Apps Job (`dbBackupCron`, 08:30 UTC)
+  that runs `pg_dump` from the `db-backup:pg<postgresVersion>` image and uploads
+  as the identity. The image is built once, by hand - next section
 - Three plain values for the Needs Review tab (`coReviewAppTenantId`,
   `coReviewAppClientId`, `coReviewSharePointFolder`; blank by default, and blank
   leaves the tab "not connected"; see `runbook.md`, "Needs Review")
-  off by default and on in production since 2026-10-20; see `runbook.md`, "Cost
-  Intelligence worker in Azure")
+
+## The backup image is built once, by hand
+
+The backup job runs `infra/db-backup/Dockerfile`: the official `postgres:17-alpine`
+image plus `curl`, `openssl` and `infra/db-backup/backup.sh`. No application code
+is in it, so no merge to `main` builds it; it is built into the registry once and
+rebuilt only when the PostgreSQL major changes. The tag is the major, and the
+template names the image as `db-backup:pg${postgresVersion}`, so the `pg_dump`
+client and the server are one number (`tests/db-backup-script.test.ts` holds the
+Dockerfile's default to the template's).
+
+```bash
+az acr build --registry <registry-name> --image db-backup:pg17 infra/db-backup
+```
+
+Then `enableDbBackup: true` in the parameters file and a template deployment. The
+job references the image, so a deployment with the flag on and no image fails at
+the job - build first. `runbook.md` → *Nightly database backup* → *Turning it on*
+has the whole sequence, the first-run check, and the restore procedure.
+
+The script was run for real against a throwaway PostgreSQL 17 and a fake of the
+two Azure endpoints before it was committed: `npm run db:backup:verify` builds the
+image with Docker, migrates a throwaway database with the real migrations, and
+asserts the dump lands with a verified MD5, that no request carries the password,
+and that three kinds of failure exit non-zero.
+
+`postgresBackupRetentionDays` is the server's **own** point-in-time retention,
+parameterised the same day (default 7, the live value on 2026-10-21) so that a
+template deployment cannot silently reset a value raised in the portal. Read it
+before a deployment and pass what the server holds, or the number you mean.
 
 ## Four things that are deliberate
 
@@ -419,3 +456,7 @@ before Auth.js can build a callback. So the first pass is not a single command:
    From here on every redeploy passes the **running** image, read with the
    `az containerapp show` line under *Deploy* - step 4 has put a real one there, and
    the placeholder must never come back.
+7. Build the backup image (*The backup image is built once, by hand*), set
+   `enableDbBackup: true`, redeploy, start one execution by hand and check the
+   dump landed - `runbook.md` → *Nightly database backup* → *Turning it on*. Until
+   this step the readings exist only on the server.

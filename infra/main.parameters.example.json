@@ -62,6 +62,9 @@
     "postgresStorageAutoGrow": {
       "value": "Enabled"
     },
+    "postgresBackupRetentionDays": {
+      "value": 7
+    },
     "postgresAdminUsername": {
       "value": "<database-admin-login, not a person>"
     },
@@ -137,6 +140,10 @@
     },
     "coReviewSharePointFolder": {
       "value": ""
+    },
+
+    "enableDbBackup": {
+      "value": false
     },
 
     "enableBudget": {

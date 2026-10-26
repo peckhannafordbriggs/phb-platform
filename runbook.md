@@ -10587,6 +10587,297 @@ setting is named in the first lines.
 
 ---
 
+## Nightly database backup
+
+**What it is.** A Container Apps Job, `<baseName>-db-backup` (`dbBackupJob` in
+`infra/main.bicep`), on a schedule: every night it runs `pg_dump -Fc` of the
+production database and uploads the dump to a blob container, `dumps`, in a
+storage account the template creates for nothing else. The dump is the copy of
+the readings that exists **outside the database server**. The server's own
+point-in-time backups live with the server and are lost with it; the JACEs
+roll their history off after about 42 hours; so until this job existed, losing
+the server meant losing everything older than two days. `docs/08-bas-and-niagara.md`
+says why that is a correctness problem and not hygiene.
+
+**Built 2026-10-21, not yet turned on.** The resources are in the template
+behind `enableDbBackup`, which is `false`; nothing exists in Azure until the
+steps under *Turning it on* are done. The image, the script and the upload
+were verified end to end on 2026-10-21 against a throwaway PostgreSQL 17 and
+a fake of the two Azure endpoints (`npm run db:backup:verify`, 26 checks),
+and `tests/deploy-guards.test.ts` and `tests/db-backup-script.test.ts` pin
+the properties below. The first execution in Azure is a step in *Turning it
+on*, and its date goes here when it has run.
+
+**What it costs, roughly, per month.** Under a dollar at this database's size,
+and most of that is rounding:
+
+| | Basis | About |
+|---|---|---|
+| Blob storage | A platform dump was 0.7 MB on 2026-09-22 with 87,100 readings; call it 3 MB by the end of the year. 90 dumps × 3 MB is 270 MB, geo-redundant hot storage at roughly $0.04 per GB | **$0.01** |
+| The job | Consumption plan, 0.5 vCPU and 1 GiB for about 30 seconds a night: 450 vCPU-seconds and 900 GiB-seconds a month at $0.000024 and $0.000003 | **$0.02**, and the environment's free grant covers it |
+| The image | One more repository in the Basic registry, inside its 10 GB | **$0** |
+| The storage account itself | No minimum charge; transactions are a few hundred a month | **$0** |
+
+If a dump ever reached 100 MB the storage line would be about **$0.35** a
+month. The server's own point-in-time retention is a separate cost: backup
+storage up to the server's provisioned size (32 GB) is free, and
+`backup_storage_used` read **7.9 GB at 7 days of retention** on 2026-10-21,
+so **35 days would be about 30 to 40 GB** and the part above 32 GB is billed
+at roughly $0.10 per GB - a dollar or two.
+
+**The server's point-in-time retention is 7 days, not 35 - and it is now a
+parameter.** `az postgres flexible-server show` on 2026-10-21 read
+`backupRetentionDays: 7` and `earliestRestoreDate` of 2026-10-15; if it was
+raised to 35 in the portal, it did not take, or it was raised on something
+else. The template said `7` as a literal, so a template deployment would have
+put 7 back silently even if the portal had held 35 - the drift that put the
+placeholder image back on 2026-10-13, in another property. It is
+`postgresBackupRetentionDays` now, default 7 (the live value), range 7 to 35.
+**Read the live value before every deployment and pass it**, the same way as
+`containerImage`; to go to 35, set it in `infra/main.parameters.json` and
+deploy.
+
+**Why pg_dump runs as the administrator and not a backup role.** The office
+PC's dump runs as `bas_backup`, a member of `pg_read_all_data`
+(*Repointing the collector also repoints the nightly backup*). On an Azure
+Flexible Server at PostgreSQL 16 and later the administrator is **not** a
+superuser and holds `pg_read_all_data` without ADMIN OPTION, so `GRANT
+pg_read_all_data TO backup_role` is refused with *permission denied to grant
+role* (Microsoft Q&A 1767915; azure-service-operator issue 4639). The
+alternative is granting SELECT table by table, and that is the exact shape
+that failed the office backup silently for three weeks: a migration adds a
+table, the role was never granted it, `pg_dump` dies on the first table it
+cannot read. A dump as the owner of every object is complete by construction
+and stays complete through every migration, and turning it on is one flag
+rather than a role, a password and a vault secret first. The cost is that the
+job holds a credential that can write; what bounds it is that the image holds
+`pg_dump`, `pg_restore`, `curl` and the script and nothing else, the secret is
+a Key Vault reference, and the script never prints it.
+
+**No password is on a command line, anywhere.** The job's `command` is the
+script's path and no argument. The script turns `DATABASE_URL` into libpq's
+own `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` and `PGSSLMODE`, unsets
+`DATABASE_URL`, and runs `pg_dump` with **no connection argument at all**.
+The identity header and the bearer token go to `curl` through a config file
+on stdin (`--config -`), never as `-H` arguments. `az containerapp job show`
+shows a `secretRef`; the execution log shows the host, the user and the
+database and never the password. `tests/db-backup-script.test.ts` holds the
+script to each of these.
+
+**The upload is identity-only.** The storage account has
+`allowSharedKeyAccess: false` - there is no account key to leak and no SAS to
+expire. The platform's user-assigned identity holds **Storage Blob Data
+Contributor** on the `dumps` container and nothing on the account, and the
+script gets its token from the Container Apps identity endpoint as that
+identity. Every dump is uploaded with `Content-MD5`, which the storage
+service verifies before accepting the blob, and confirmed with a HEAD
+afterwards. A lifecycle rule deletes a dump after `dbBackupRetentionDays`
+(90); blob soft delete keeps a deleted one recoverable for 14 days after
+that.
+
+**The time.** The cron is UTC - Container Apps has no time-zone setting on a
+job - so `30 8 * * *` is **03:30 America/New_York in winter and 04:30 in
+summer**. The dump's name carries UTC and says so:
+`phb_platform_2026-10-22_0830Z.dump`.
+
+### Turning it on
+
+Four steps, in this order. The job names an image in the platform's
+registry, and a deployment that references an image that is not there fails
+at the job.
+
+1. **Build the image, once.** Nothing in it is application code: `pg_dump`
+   17, `curl`, `openssl` and `infra/db-backup/backup.sh`. It is rebuilt only
+   when the PostgreSQL major changes - the tag is the major, and the template
+   names it from `postgresVersion`, so the client cannot drift from the server.
+   Needs `AcrPush` (or Contributor) on the registry; `az acr build` runs the
+   build in Azure, so Docker is not needed locally.
+
+   ```bash
+   az acr build --registry <registry-name> --image db-backup:pg17 infra/db-backup
+   az acr repository show-tags --name <registry-name> --repository db-backup -o tsv   # pg17
+   ```
+
+2. **In `infra/main.parameters.json`** set `enableDbBackup` to `true`, and set
+   `postgresBackupRetentionDays` to the live value (read it first; 7 on
+   2026-10-21) or to 35 if that is the decision.
+
+3. **Deploy the template** as under *Deploy* in `infra/README.md`: `what-if`
+   first, then `create`, passing `containerImage` (and `cipWorkerImage`, since
+   `enableCipWorker` is on in production) and neither secure parameter.
+   `what-if` should list a storage account, a blob service, a container, a
+   management policy, a role assignment and a job as *Create*, and nothing as
+   *Delete*. The job reads `DATABASE-URL` by reference, so the version already
+   in the vault is the one it gets.
+
+4. **Run it once by hand, and look.**
+
+   ```bash
+   az containerapp job start -n <baseName>-db-backup -g <resource-group>
+   # then, a minute later, the two commands under "Did it run last night"
+   ```
+
+   The first run can fail with `403` on the upload if the role assignment
+   has not propagated yet - Azure RBAC takes up to a few minutes to apply a
+   new assignment on the data plane. Start it again. Record the date of the
+   first successful execution at the top of this section.
+
+A rebuild of the image (`az acr build` again, same tag) takes effect on the
+next execution; nothing else changes. Changing the PostgreSQL major is: raise
+`postgresVersion`, build `db-backup:pg<new>`, deploy.
+
+### Did it run last night?
+
+```bash
+# The executions, newest first. A night that is not here did not run.
+az containerapp job execution list -n <baseName>-db-backup -g <resource-group> \
+  --query "reverse(sort_by([].{name:name, status:properties.status, started:properties.startTime, ended:properties.endTime}, &started))" -o table
+
+# The dumps that exist. Each line is one night; the size should be about the
+# same as the night before and never zero.
+az storage blob list --account-name <storage-account> --container-name dumps --auth-mode login \
+  --query "reverse(sort_by([].{name:name, bytes:properties.contentLength, written:properties.lastModified}, &written))" -o table
+```
+
+`Succeeded` with a blob of yesterday's date is the whole check. The storage
+account name is the `dbBackupStorageAccountName` deployment output, or
+`az storage account list -g <resource-group> --query "[].name" -o tsv`; listing
+blobs needs **Storage Blob Data Reader** on the container or the account, a
+data-plane role that Contributor and Owner on the resource group do not
+include (the same scope-not-role shape as the vault under *Deploying to
+Azure*), and `--auth-mode login` because the account refuses keys.
+
+**An execution shows `Failed`.** The log says which step, in one `FAILED:`
+line:
+
+```bash
+az containerapp job logs show -n <baseName>-db-backup -g <resource-group> \
+  --execution <execution-name> --container db-backup
+```
+
+| The `FAILED:` line | Cause | Fix |
+|---|---|---|
+| `DATABASE_URL is not set` (or any of the other five) | The job's env lost a variable - a by-hand `az containerapp job update` with `--replace-env-vars`, or a template without the flag | Deploy the template with `enableDbBackup` true |
+| `pg_dump exited non-zero` with `password authentication failed` | `DATABASE-URL` was rotated (a deployment that passed `postgresAdminPassword`) and the job's secret reference resolved the old version | Any `az containerapp job update` creates no new execution environment; start an execution (`job start`) - each execution resolves the reference afresh. If it still fails, the vault value is wrong: *A template deployment rotated the database administrator password* |
+| `pg_dump exited non-zero` with `server version mismatch` | The image's `pg_dump` major is older than the server's | Build `db-backup:pg<server major>` and deploy with `postgresVersion` set to it |
+| `pg_dump exited non-zero` with a connection timeout | The server's firewall rule for Azure services is missing, or the server is stopped | `az postgres flexible-server firewall-rule list`; `az postgres flexible-server show --query state` |
+| `the archive holds no _prisma_migrations table` | `DATABASE-URL` names a database that is not the platform's | Check `databaseName` and the vault value's path |
+| `the identity endpoint refused the token request` | The job lost its identity block (a by-hand update that dropped `--mi-user-assigned`) | Deploy the template |
+| `upload returned HTTP 403` | The role assignment is missing or not yet propagated; or the account's network rules changed | `az role assignment list --scope <container resource id>` should show the identity with Storage Blob Data Contributor; wait a few minutes after a fresh deployment and start again |
+| `upload returned HTTP 400` with `Md5Mismatch` | The bytes that arrived are not the bytes that were sent | Start again; if it repeats, the file is being changed under the upload - look at what else runs in the job |
+| `the blob is N bytes, the dump was M` | The upload confirmed but the blob is the wrong size | As above; the dump on this night is not to be trusted |
+| `unexpected error at line N` | Something `set -e` stopped on that the script did not anticipate | Read the line in `infra/db-backup/backup.sh`; the exit code is the command's own |
+| The execution shows `Failed` and the log is empty | The image could not be pulled (`MANIFEST_UNKNOWN`: the tag is not in the registry; or `AcrPull` is missing) | `az containerapp job execution show` names the pull error; build the image, or check the `acrPull` assignment |
+
+**No execution for a night.** The job is paused, or the environment was
+down: `az containerapp job show --query "properties.{trigger:configuration.triggerType, cron:configuration.scheduleTriggerConfig.cronExpression, state:provisioningState}"`.
+A job that exists with the right cron and no execution is worth a support
+ticket; nothing in this platform stops it.
+
+**Nothing in the alerting notices a missed night.** There is no Azure Monitor
+alert on execution status in the template, on purpose: the budget is the one
+notification contact the template carries and an alert rule is another
+resource to maintain. The check above is a person's weekly look until that
+decision is revisited. `HANDOVER.md` lists it.
+
+### Restoring from a dump
+
+A backup nobody has restored is a hypothesis. **Never restore over the live
+database**: restore into a new database beside it, check it, then switch.
+Everything below is done as the server administrator, from a machine with
+`psql` and `pg_restore` 17 that the server's firewall admits - the Cloud Shell
+route with its temporary firewall rule is in the header of
+`scripts/setup-bas-analyze-role.sql`.
+
+1. **Get the dump.** Storage Blob Data Reader on the container, as above.
+
+   ```bash
+   az storage blob download --account-name <storage-account> --container-name dumps \
+     --name phb_platform_2026-10-22_0830Z.dump --file phb_platform_2026-10-22_0830Z.dump --auth-mode login
+   pg_restore --list phb_platform_2026-10-22_0830Z.dump | grep -c " TABLE DATA "    # 32 on 2026-10-21
+   ```
+
+   A deleted dump inside the 14-day soft-delete window:
+   `az storage blob undelete --account-name <storage-account> --container-name dumps --name <name> --auth-mode login`.
+
+2. **Create an empty database to restore into**, with the platform's
+   collation - *The database collation is set explicitly* is why.
+
+   ```bash
+   # The admin URL, with the password read in rather than typed on the line.
+   read -s -p "Administrator password: " PGPASSWORD; echo; export PGPASSWORD
+   export PGHOST=<server>.postgres.database.azure.com PGUSER=<admin-login> PGSSLMODE=require
+   psql -d postgres -c "CREATE DATABASE phb_platform_restore WITH TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'en_US.utf8' LC_CTYPE 'en_US.utf8'"
+   ```
+
+3. **Restore.** `--no-owner --no-privileges` because the dump carries the
+   production administrator as owner and the grants to `bas_collector` and
+   `bas_analyze`; on a different server those roles may not exist, and on
+   the same one the grant scripts are the way to re-assert them.
+   `--exit-on-error` so a restore that skipped something is a failed restore,
+   not a warning nobody read.
+
+   ```bash
+   pg_restore --dbname phb_platform_restore --no-owner --no-privileges --exit-on-error \
+     --jobs 2 phb_platform_2026-10-22_0830Z.dump
+   ```
+
+4. **Check it against what you expect** before anything points at it.
+
+   ```bash
+   psql -d phb_platform_restore -c "SELECT count(*), max(ts) FROM bas_readings" \
+     -c "SELECT count(*) FROM employees" \
+     -c "SELECT migration_name FROM _prisma_migrations ORDER BY finished_at DESC LIMIT 3"
+   ```
+
+   The newest reading should be within an hour of the dump's timestamp, the
+   migrations should be the ones `prisma/migrations` holds, and the counts
+   should be the ones the dashboards showed.
+
+5. **Re-assert the roles' grants on the restored database.** Roles are
+   cluster-wide and already exist on the same server; grants are per database
+   and were dropped in step 3. Run `scripts/setup-bas-collector-role.sql` and
+   `scripts/setup-bas-analyze-role.sql` against the restored database, with
+   the roles' **existing** passwords (the scripts rotate what they are given;
+   `BAS-ASK-DATABASE-URL` and the collector's `.env` must keep matching).
+
+6. **Switch.** The app and the CIP worker read `DATABASE-URL`, which names
+   `phb_platform`; the collector on the office PC and the Analyze role name
+   it too. The switch is a rename, so nothing's URL changes:
+
+   ```bash
+   # Stop every writer first: scale the app to zero and pause the collector's
+   # scheduled task on the office PC. A rename is refused while a session is
+   # open on either database.
+   az containerapp update -n <baseName>-app -g <resource-group> --min-replicas 0 --max-replicas 0
+   psql -d postgres -c "ALTER DATABASE phb_platform RENAME TO phb_platform_broken" \
+                    -c "ALTER DATABASE phb_platform_restore RENAME TO phb_platform"
+   az containerapp update -n <baseName>-app -g <resource-group> --min-replicas 0 --max-replicas 3
+   # Resume the collector. Keep phb_platform_broken until the next verified nightly dump exists.
+   ```
+
+   **The readings between the dump and the failure are gone** unless the
+   JACE still holds them: the collector's first pass against the restored
+   database backfills from each point's checkpoint, which is the dump's, and
+   the JACE keeps about 42 hours - so a restore within a day of the dump
+   loses nothing the station still has. *The BAS collector's first sync takes
+   everything* in `CLAUDE.md` is the mechanism.
+
+**If the server itself is gone**, the template recreates it (*First deployment
+ordering* in `infra/README.md`, with the same `postgresAdminUsername`), and the
+dump is restored into the new, empty `phb_platform` **before** CI's migration
+step runs - the dump carries `_prisma_migrations`, so Prisma then sees every
+migration as applied. Then steps 4 and 5, then the hand-set secrets and the
+role scripts as on the first deployment. The collector's `.env` on the office
+PC needs the new host name.
+
+**Test the restore occasionally, not only in an incident**: steps 1 to 4 into
+`phb_platform_restore`, then `DROP DATABASE phb_platform_restore`. Twenty
+minutes, and it is the only way to know the dumps are restorable rather than
+readable. Note the date here when it is done.
+
+---
+
 ## A run failed with "Credit balance is too low"
 
 **Symptom.** The run is **Failed** with "Claude Code returned an error result:
