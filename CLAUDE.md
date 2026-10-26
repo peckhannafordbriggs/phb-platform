@@ -1256,6 +1256,19 @@ still carries the old value moves sign-in back. `WHY-ITS-BUILT-THIS-WAY.md`
 § 71; `runbook.md` → *The custom domain answers with a certificate warning*;
 `infra/README.md` → *Custom domain*.
 
+**The audit log SCREEN shows account and access events only (2026-10-26).**
+`/admin/audit` and the History panel on an employee's page show first
+sign-ins, module access granted or revoked (module-admin rights included),
+administrators added or removed, accounts disabled or re-enabled, and who did
+each - nine actions, `SCREEN_AUDIT_ACTIONS` in `lib/admin/audit-screen.ts`,
+applied by the service to the list, the count, the *Action* dropdown and the
+two person dropdowns. **Recording is unchanged**: mail edits, sends, moves and
+deletes, Analyze questions and the rest are written exactly as before and read
+with SQL; `mail.sent` is still the only record of who sent a vendor email, and
+`lib/audit.ts` does not know the list exists - a test holds the source to it.
+`WHY-ITS-BUILT-THIS-WAY.md` § 73; `runbook.md` → *The audit log screen does
+not show a mail send, a BAS question or a profile change*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

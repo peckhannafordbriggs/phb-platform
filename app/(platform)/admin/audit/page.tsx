@@ -81,10 +81,12 @@ export default async function AuditPage({
 
       <h1 className="mt-4 text-xl font-semibold">Audit log</h1>
       <p className="mt-2 max-w-2xl text-sm text-[var(--muted)]">
-        Every grant, revoke, status change and profile change, plus what the
-        Change Orders module did to the mailbox. Append-only and enforced by the
-        database — nothing here can be edited or removed, including by an
-        administrator.
+        Accounts and access: first sign-ins, module access granted or revoked,
+        administrators added or removed, accounts disabled or re-enabled, and
+        who did each. Everything else the platform does is still recorded in
+        the same table and read from the database, not here. Append-only and
+        enforced by the database — nothing can be edited or removed, including
+        by an administrator.
       </p>
 
       {filterError !== null && (
@@ -171,7 +173,7 @@ export default async function AuditPage({
             */
             filtered
               ? "No events match these filters. Widen the date range, or clear them."
-              : "Nothing has been recorded yet. Any grant, status change or mailbox action will appear here."
+              : "No account or access changes have been recorded yet. A first sign-in, a grant or revoke, an administrator change or a disable will appear here."
           }
         />
       </div>

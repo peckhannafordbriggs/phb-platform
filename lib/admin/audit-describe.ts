@@ -1,4 +1,5 @@
 import type { AuditAction } from "@/lib/audit";
+import { isShownOnAuditScreen, SCREEN_AUDIT_ACTIONS } from "./audit-screen";
 
 /**
  * Turning an audit row into a sentence a person can read.
@@ -880,16 +881,27 @@ export function knownAuditActions(): { action: AuditAction; label: string }[] {
 /**
  * Modules whose actions the filter offers as one entry. The value `cip.*`
  * matches every action starting `cip.` (listAuditEvents in lib/admin/service.ts).
+ *
+ * A group is offered only while the screen shows at least one of its actions.
+ * Since 2026-10-26 it shows none of them (./audit-screen.ts), so no group is
+ * offered today; the mechanism stays for the day the shown set widens.
  */
 const ACTION_GROUPS = [{ prefix: "cip.", label: "Cost Intelligence" }];
 
-/** What the Action dropdown offers: single actions, with each group's actions folded into one entry. */
+/**
+ * What the Action dropdown offers: the actions the SCREEN shows, with each
+ * group's actions folded into one entry. Never an action the list would
+ * refuse to show - a filter that produces an empty page by construction is
+ * the quiet wrongness Phase 10 exists to remove.
+ */
 export function auditActionFilterOptions(): { value: string; label: string }[] {
   const inGroup = (action: string) => ACTION_GROUPS.some((g) => action.startsWith(g.prefix));
   return [
     ...knownAuditActions()
-      .filter(({ action }) => !inGroup(action))
+      .filter(({ action }) => isShownOnAuditScreen(action) && !inGroup(action))
       .map(({ action, label }) => ({ value: action, label })),
-    ...ACTION_GROUPS.map((g) => ({ value: `${g.prefix}*`, label: g.label })),
+    ...ACTION_GROUPS.filter((g) =>
+      SCREEN_AUDIT_ACTIONS.some((a) => a.startsWith(g.prefix)),
+    ).map((g) => ({ value: `${g.prefix}*`, label: g.label })),
   ].sort((a, b) => a.label.localeCompare(b.label));
 }

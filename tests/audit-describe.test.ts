@@ -347,10 +347,15 @@ describe("the filter dropdown", () => {
     expect([...labels].sort((a, b) => a.localeCompare(b))).toEqual(labels);
   });
 
-  it("folds every Cost Intelligence action into one entry, and keeps the rest as they are", () => {
+  it("offers only what the screen shows, and no group whose actions are all hidden", () => {
+    // Since 2026-10-26 the screen shows account and access events only
+    // (lib/admin/audit-screen.ts; tests/audit-screen-scope.test.ts pins the
+    // set). The Cost Intelligence group is folded into one entry only while
+    // one of its actions is shown, which today is none of them.
     const options = auditActionFilterOptions();
-    expect(options.filter((o) => o.value.startsWith("cip."))).toEqual([{ value: "cip.*", label: "Cost Intelligence" }]);
-    for (const { value } of options.filter((o) => o.value !== "cip.*")) {
+    expect(options.some((o) => o.value.startsWith("cip."))).toBe(false);
+    expect(options.some((o) => o.value.startsWith("mail."))).toBe(false);
+    for (const { value } of options) {
       expect(describeAuditEvent(event({ action: value }), MODULES).known).toBe(true);
     }
     const labels = options.map((o) => o.label);

@@ -98,13 +98,19 @@ describe("filtering by who", () => {
     expect(result.events[0]?.action).toBe("grant.added");
   });
 
-  it("filters by a module's whole group of actions", async () => {
+  it("a module group filter stays inside what the screen shows", async () => {
+    // "cip.*" names a module's whole group. The screen shows account and
+    // access events only (2026-10-26), so the group is empty on screen while
+    // the rows are in the table; "grant.*" is the group that is shown.
     await writeEvent("cip.run_started", sarah.id, null, AT("2026-09-13T09:00:00Z"));
     await writeEvent("cip.run_failed", null, null, AT("2026-09-13T09:30:00Z"));
 
-    const result = await listAuditEvents(query({ action: "cip.*" }));
+    const cip = await listAuditEvents(query({ action: "cip.*" }));
+    expect(cip.total).toBe(0);
+    expect(await testDb.auditEvent.count({ where: { action: { startsWith: "cip." } } })).toBe(2);
 
-    expect(result.events.map((e) => e.action).sort()).toEqual(["cip.run_failed", "cip.run_started"]);
+    const grants = await listAuditEvents(query({ action: "grant.*" }));
+    expect(grants.events.map((e) => e.action).sort()).toEqual(["grant.added", "grant.removed"]);
   });
 
   it("combines filters", async () => {

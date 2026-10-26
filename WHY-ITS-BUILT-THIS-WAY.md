@@ -2697,6 +2697,49 @@ debug, in the execution log. Giving the storage account a key gives the
 platform its first credential that can leak and never expires. Turning the
 flag on before the image is built fails the whole deployment at the job.
 
+## 73 · The audit screen shows account and access events; the table records everything
+
+**The decision.** Since 2026-10-26 `/admin/audit` and the History panel on an
+employee's page show four kinds of event and nothing else: an account created
+(first sign-in), module access granted or revoked, an administrator added or
+removed, an account disabled or re-enabled - each with who did it. Mail
+edits, sends, moves and deletes, BAS Analyze questions, point and station
+changes, Cost Intelligence runs, profile and position changes and denied
+sign-ins are hidden from the screen. Every one of them is still recorded.
+
+**Why.** The admin screens answer one question - who can get in, to what, and
+who decided - and the log had grown to fifty-odd action kinds, most of them a
+module's own operational trail. A platform admin scanning for "when did Sarah
+get Change Orders" was reading past a hundred Analyze questions to find it.
+The operational rows have a different reader and a different tool: an operator
+with a specific question and SQL, which is how `runbook.md` has always
+answered *who sent this* and *who moved that*.
+
+**Why a reader's rule and not a writer's.** `mail.sent` is the only record
+anywhere of which person sent a vendor email, because the mail app sends as
+itself and Exchange records the application. Hiding that row from a screen
+costs nothing; not writing it would destroy the one alibi the system has. So
+the list lives in `lib/admin/audit-screen.ts`, is applied by the service to
+every reader behind the two screens, and `lib/audit.ts` does not import it -
+`tests/audit-screen-scope.test.ts` holds that to the source text, writes one
+of every hidden action through the real writer, and reads it back from the
+table after the screen has declined to show it.
+
+**Why the filters follow the list.** The *Action* dropdown offers only the
+shown actions, and the two person dropdowns offer only people with a shown
+row. Phase 10's rule for the dropdowns was that no option may produce an
+empty page by construction; a dropdown offering *Message sent* over a list
+that never shows one is exactly that. A hand-edited URL asking for a hidden
+action gets an empty page rather than the rows, so the URL is not a side door.
+
+**What breaks if you undo it.** Filtering in the page components instead of
+the service puts the count, the paging and the dropdowns out of step with the
+rows - *"14 events"* over nine lines. Reading the list from `lib/audit.ts`
+makes a display preference capable of losing a record. Widening the list to
+one module's events because that module wants its history on the screen
+reopens the question for every module; the module's own screens, which
+Freeze Protection already has, are where a unit's history belongs.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
