@@ -524,6 +524,26 @@ resource allowAzureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallR
   }
 }
 
+// Extensions a migration may CREATE. Flexible Server refuses CREATE EXTENSION
+// for anything not on this list, and a refused migration stops `migrate
+// deploy` and with it every later deploy of the platform.
+//
+// VECTOR (pgvector) is the Knowledge Base search index -
+// prisma/migrations/20261027120000_add_kb_index. The value REPLACES the whole
+// list: to allow another extension, append to it with a comma, never set it
+// to the new one alone. Deploying this template is not part of CI, so a live
+// server needs the same value set by hand first, and so does any server a
+// backup is restored onto - runbook.md -> *A migration fails with "extension
+// "vector" is not allow-listed"*.
+resource allowedExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
+  parent: postgres
+  name: 'azure.extensions'
+  properties: {
+    value: 'VECTOR'
+    source: 'user-override'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Secrets
 //

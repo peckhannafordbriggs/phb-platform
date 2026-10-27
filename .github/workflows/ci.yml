@@ -22,7 +22,9 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17
+        # PostgreSQL 17 with pgvector, which the Knowledge Base migration
+        # creates. Plain postgres:17 fails `db:test:setup` at that migration.
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

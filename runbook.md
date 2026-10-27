@@ -11050,3 +11050,213 @@ review after any later change.
 **Fix.** Review again: remove the review signature, then a different engineer
 signs. The unit's History, or Admin → Audit filtered to Freeze Protection,
 shows what changed and who changed it.
+
+# Knowledge Base
+
+Module 4. Design and decisions: `docs/KB-P0-P1.md`. The `kb_*` tables are a
+derived index of the SharePoint library *Knowledge Base - Documents*: they can be
+truncated and rebuilt by re-running the sync, and nothing in them exists only here.
+
+## A migration fails with `extension "vector" is not allow-listed`
+
+**Symptom.** `prisma migrate deploy` stops at `20261027120000_add_kb_index` with
+`extension "vector" is not allow-listed for users in Azure Database for PostgreSQL`
+(or, locally, `could not open extension control file ... vector.control`). Every
+later deploy fails at the same place, including deploys that have nothing to do with
+the Knowledge Base.
+
+**Cause.** The migration runs `CREATE EXTENSION vector`. Azure Flexible Server only
+creates extensions named in the server parameter `azure.extensions`; a local
+PostgreSQL only creates extensions that are installed.
+
+**Fix, Azure.** Read the current list first. The value **replaces** the whole list,
+so if anything is already there, keep it and append `,VECTOR`:
+
+```bash
+az postgres flexible-server parameter show \
+  --resource-group <resource-group> --server-name <server> \
+  --name azure.extensions --query value
+
+az postgres flexible-server parameter set \
+  --resource-group <resource-group> --server-name <server> \
+  --name azure.extensions --value VECTOR
+```
+
+No restart is needed. Then re-run the deploy.
+
+**A restore needs it too.** A nightly dump of a database holding the Knowledge
+Base contains `CREATE EXTENSION vector`, so restoring it onto a new server fails
+the same way until that server allows `VECTOR`. Set the parameter on the target
+before `pg_restore`. The migration is all-or-nothing, so a
+failed attempt left nothing behind; if `_prisma_migrations` records it as failed,
+`npx prisma migrate resolve --rolled-back 20261027120000_add_kb_index` first, as in
+*A migration fails* above. `infra/main.bicep` carries the same value, but CI does not
+deploy Bicep, so a live server needs the command above.
+
+**Fix, local or CI.** Install pgvector into the PostgreSQL the URL points at
+(`DEVELOPER-SETUP.md` -> *pgvector*). CI uses the `pgvector/pgvector:pg17` image; a
+CI failure here means the service image was changed back to plain `postgres`.
+
+## Knowledge Base search got slow after a migration
+
+**Symptom.** Searches that were instant take seconds, and get slower as documents
+are added. Results are still correct.
+
+**Cause.** The HNSW index `kb_chunks_embedding_hnsw_idx` is gone, so every search is
+a sequential scan over every vector. Prisma cannot represent an HNSW index, so
+`prisma migrate dev` generates a `DROP INDEX` for it in whatever migration someone
+authors next. `tests/kb-schema.test.ts` is meant to stop that reaching `main`.
+
+**Check.**
+
+```sql
+SELECT indexname, indexdef FROM pg_indexes
+ WHERE tablename = 'kb_chunks' AND indexname = 'kb_chunks_embedding_hnsw_idx';
+```
+
+**Fix.** Recreate it in a new migration (never by hand on production), and delete the
+`DROP INDEX` line from the migration that removed it if that migration is not yet
+applied anywhere:
+
+```sql
+CREATE INDEX "kb_chunks_embedding_hnsw_idx"
+    ON "kb_chunks" USING hnsw ("embedding" vector_cosine_ops);
+```
+
+## A document is in SharePoint but search never finds it
+
+**Check its row first.** Every file the sync saw has one, indexed or not:
+
+```sql
+SELECT path, status, skip_reason, error, chunk_count, indexed_at, last_seen_at
+  FROM kb_documents
+ WHERE file_name ILIKE '%<part of the name>%';
+```
+
+| What you see | Meaning |
+|---|---|
+| No row | The sync has not run since the file was added, or it is outside the library |
+| `skipped`, `restricted_folder` | Deliberate. Folders 2A, 5A and 8 are not indexed because the module has one flat grant. `docs/KB-P0-P1.md` |
+| `skipped`, `drawings_folder` | Deliberate. Drawings and Revit exports, folders 1A and 1D |
+| `skipped`, `archive_prefix` / `draft_prefix` | The file name starts `ARCHIVE_` or `DRAFT_`. Rename it in SharePoint if it should be searchable |
+| `skipped`, `unsupported_type` | Not PDF, DOCX, XLSX or TXT. A legacy `.doc` can be saved as `.docx` |
+| `skipped`, `empty_text` | A scanned PDF with no text layer |
+| `failed` | `error` says why. Re-running the sync retries it |
+| `indexed` with chunks | Indexed. The question is a retrieval problem, not a sync problem |
+
+## The Knowledge Base says embeddings or the source are not configured
+
+**Cause.** The KB variables are read lazily, and a missing one disables only the KB.
+`.env.example` -> *Knowledge Base* lists them. In production, `KB_EMBEDDING_API_KEY`
+must be **absent**: production uses the managed identity, and the reader refuses a
+key there on purpose. `KB_LOCAL_SOURCE_DIR` is likewise refused in production.
+
+## Rebuilding the Knowledge Base index from scratch
+
+**When.** The index is wrong in a way a normal sync will not fix: a change of
+embedding model, a bug in extraction that wrote bad passages, or a test that
+filled a database with fixtures.
+
+**What is safe.** Everything under `kb_projects` is derived from SharePoint and
+comes back on the next sync. The question history is not derived and is **not**
+touched: each question keeps its answer exactly as shown, sources included, and
+only its links into the index go empty.
+
+```sql
+-- Index only. kb_documents and kb_chunks go with kb_projects (ON DELETE CASCADE);
+-- kb_question_sources keeps its rows with document_id and chunk_id set to NULL.
+DELETE FROM kb_projects;
+```
+
+Never `TRUNCATE ... CASCADE` here: TRUNCATE does not run the foreign keys'
+`ON DELETE SET NULL`, it empties every table that references the truncated ones -
+which includes `kb_question_sources`, the history. Then run a sync.
+
+## A Knowledge Base answer was reported as wrong
+
+**Where reports land.** The *Report a wrong answer* button writes a row to
+`kb_answer_reports`, open until the platform admin resolves or dismisses it with
+a note. The open queue, oldest last:
+
+```sql
+SELECT r.created_at, e.email AS reported_by, r.reason, r.citation_n, r.comment,
+       q.question, q.id AS question_id
+  FROM kb_answer_reports r
+  JOIN kb_questions q ON q.id = r.question_id
+  LEFT JOIN employees e ON e.id = r.reported_by_id
+ WHERE r.status = 'open'
+ ORDER BY r.created_at DESC;
+```
+
+**Investigate.** `kb_questions.answer` on that row is exactly what the person saw,
+with every cited passage and its location; `citation_n` names the citation they
+disputed, if any. `kb_question_sources` links each citation number to the
+document and passage in the index, if they still exist. Decide which it is:
+
+| Finding | Cause | Fix |
+|---|---|---|
+| The cited passage does not say what the file says at that location | Extraction | Check the file; re-index it; if the format is the problem, it is an extractor bug |
+| A document that answers it exists and was not cited | Search, or the file was skipped | Check its `kb_documents` row (*A document is in SharePoint but search never finds it*) |
+| The passage is right and the answer overstates it | Answering | Record the question for the evaluation set |
+| A newer version says something else | Versions | Check `family_key` / `is_latest` on both rows |
+
+**Close it.** Resolved means something was fixed; dismissed means the answer was
+right. Either way the note says what was found, and the database refuses a
+closed report without a note and a time.
+
+## Knowledge Base: what to ask IT for
+
+Three requests, in order of need. Vitis Technologies owns Azure and Entra.
+
+### Request KB-1 - allow pgvector on the database server (before the KB branch merges)
+
+> Subject: Allow the pgvector extension on the PH+B platform PostgreSQL server
+>
+> Please add `VECTOR` to the server parameter `azure.extensions` on the PH+B
+> platform's Azure Database for PostgreSQL Flexible Server in resource group
+> `<resource-group>`. If the parameter already lists extensions, append `,VECTOR`
+> rather than replacing them. No restart is required. This lets a database migration
+> create the pgvector extension, which the platform's Knowledge Base search uses.
+
+### Request KB-2 - Azure OpenAI for embeddings
+
+> Subject: Azure OpenAI resource for the PH+B platform Knowledge Base
+>
+> Please create an Azure OpenAI resource in resource group `<resource-group>`
+> (East US 2 or the nearest region offering it) with a deployment of
+> `text-embedding-3-small`, owned by the platform's M365 group rather than a person.
+> Please grant the platform container app's managed identity the role
+> **Cognitive Services OpenAI User** on that resource. No API key is needed in
+> Azure; the platform authenticates with the managed identity. For local
+> development, one key shared over Teams, not email, is enough.
+
+### Request KB-3 - read access to the legacy projects folder
+
+> Subject: Read-only Graph access to the Knowledge Base legacy projects folder
+>
+> Please create a new Entra app registration for the PH+B platform Knowledge Base,
+> owned by the platform's M365 group, separate from the Change Orders and Cost
+> Intelligence registrations. Grant it Microsoft Graph
+> **Files.SelectedOperations.Selected** (Application) with admin consent, then
+> grant it **read** on the legacy projects folder only - the same folder-level
+> grant Cost Intelligence already has on its two folders:
+>
+>     POST https://graph.microsoft.com/v1.0/drives/<drive-id>/items/<folder-item-id>/permissions
+>     { "roles": ["read"],
+>       "grantedTo": { "application": { "id": "<new-app-client-id>",
+>                                       "displayName": "PHB Platform KB" } } }
+>
+> Please also add a federated identity credential on it for the platform's
+> managed identity, matching the one on the Cost Intelligence registration, so no
+> client secret is needed in Azure.
+
+### Request KB-4 - employees can open what the Knowledge Base cites
+
+> Subject: Read access to the legacy projects folder for platform users
+>
+> The platform's Knowledge Base links each answer to the original file in
+> SharePoint. The platform's own identity reads the files to index them, but
+> that gives employees no access: the link opens only for someone SharePoint
+> already lets read the file. Please make sure the employees who will use the
+> Knowledge Base have read access to the legacy projects folder, for example
+> through the group that already reads the project library.

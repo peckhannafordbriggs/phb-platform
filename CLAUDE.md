@@ -1269,6 +1269,25 @@ with SQL; `mail.sent` is still the only record of who sent a vendor email, and
 `WHY-ITS-BUILT-THIS-WAY.md` § 73; `runbook.md` → *The audit log screen does
 not show a mail send, a BAS question or a profile change*.
 
+**Knowledge Base Phases 0 and 1 complete; Phases 2 to 7 not started (2026-10-27).**
+Module 4 is a search index over the legacy project folders in SharePoint, built
+on Cost Intelligence's folder store, sync pattern and worker job. Two kinds of table: the INDEX (`kb_projects`, `kb_documents`, `kb_chunks`,
+`kb_sync_runs`), **derived and rebuildable**, never the files; and the HISTORY
+(`kb_conversations`, `kb_questions`, `kb_question_sources`, `kb_answer_reports`),
+the platform's own record, central and kept indefinitely, which keeps an answer
+snapshot and survives a rebuild. The index uses pgvector `vector(1536)` (Azure OpenAI `text-embedding-3-small`
+assumed), an HNSW cosine index, and a trigger-kept `tsvector`. **The migration
+needs pgvector everywhere it runs** - `azure.extensions` += `VECTOR` on the live
+server before merge (and on any server a backup is restored onto),
+`pgvector/pgvector:pg17` in CI, an install on each developer's PostgreSQL.
+**Prisma cannot express HNSW, so the next `migrate dev` will generate
+`DROP INDEX "kb_chunks_embedding_hnsw_idx"`; delete that line** -
+`tests/kb-schema.test.ts` fails on it. Decided: folders 2A, 5A, 8 and 1A, 1D stay
+excluded; Azure OpenAI embeddings; a report-a-wrong-answer button in the first
+release. Open: the legacy projects root and rule, and who can read history. Access requests
+KB-1 to KB-4 are written, not sent. `docs/KB-P0-P1.md`; `runbook.md` ->
+*Knowledge Base*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -1372,6 +1391,7 @@ either anywhere else — point at them.
 | `docs/09-bas-what-is-built.md` | BAS: what exists, and which of the two repos owns each piece |
 | `docs/10-adding-a-module.md` | **Read before adding a module.** The five pieces, Cost Intelligence as the worked example, and the rule that a module row reaches production only by migration |
 | `docs/11-analyze-voice.md` | **The canonical spec for every sentence Analyze shows a person** — answers, clarifying questions, no-data and error text. The team's voice guideline, verbatim, adopted 2026-10-13; the summariser and planner rules in `lib/modules/bas/analyze/planner.ts` implement it |
+| `docs/KB-P0-P1.md` | **Knowledge Base: decisions, scope, the index schema, the phase plan** and the access still to request |
 | `docs/12-ai-layer-inventory.md` | **Phase 12: what the change-order engine reads, writes and decides.** The input to every later part |
 | `docs/13-needs-review.md` | **The `_needs_review` folder, in plain language:** what a note is, why items land there, the routine for working one, and the 2026-10-21 flow fix. The reference the Needs Review tab is built against |
 | `docs/DESIGN-BRIEF.md` | The redesign brief as issued, plus what the build actually chose where the two differ |

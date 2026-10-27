@@ -87,6 +87,36 @@ nowhere else — the CLI refuses to run it against anything holding BAS readings
 the database `DATABASE_URL` names. Author a migration there, then `migrate deploy` it to
 `phb_platform`. `runbook.md` → *Which command touches which database* has the loop.
 
+### pgvector
+
+The Knowledge Base migration creates the `vector` extension, so your PostgreSQL
+needs pgvector installed **before** `migrate deploy` or `db:test:setup`, or both stop
+at `20261027120000_add_kb_index`. Check with:
+
+```sql
+SELECT name, default_version FROM pg_available_extensions WHERE name = 'vector';
+```
+
+No row means it is not installed. On Windows, pgvector's own instructions build it
+with the Visual Studio C++ build tools, from an *x64 Native Tools Command Prompt*
+run as Administrator:
+
+```cmd
+set "PGROOT=C:\Program Files\PostgreSQL\18"
+git clone --branch v0.8.7 https://github.com/pgvector/pgvector.git pgvector-0.8.7
+cd pgvector-0.8.7
+nmake /F Makefile.win
+nmake /F Makefile.win install
+```
+
+Set `PGROOT` to your installed version, and build a pgvector release that
+supports it: **PostgreSQL 18 needs pgvector 0.8.1 or later** (0.8.0 stops with
+`vacuum_delay_point: too few arguments`). The prompt must be *x64 Native Tools
+Command Prompt for VS*, run as administrator, with the *Desktop development with
+C++* workload installed. On macOS, `brew install pgvector`. Then
+re-run step 5. `runbook.md` -> *A migration fails with "extension "vector" is not
+allow-listed"*.
+
 ## 6 · Run it
 
 ```bash

@@ -79,6 +79,11 @@ model Employee {
   fpProjectsReviewed  FpProject[]   @relation("FpProjectReviewedBy")
   fpEquipmentUpdated  FpEquipment[] @relation("FpEquipmentUpdatedBy")
 
+  kbConversations  KbConversation[] @relation("KbConversations")
+  kbSyncsTriggered KbSyncRun[]      @relation("KbSyncTriggeredBy")
+  kbReportsFiled   KbAnswerReport[] @relation("KbAnswerReportsFiled")
+  kbReportsResolved KbAnswerReport[] @relation("KbAnswerReportsResolved")
+
   @@index([status])
   @@index([departmentId])
   @@index([positionId])
@@ -812,4 +817,331 @@ model FpEquipment {
 
   @@index([projectId])
   @@map("fp_equipment")
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Base (module 4) - Phase 1 schema, 2026-10-27
+//
+// Two kinds of table, with different owners, and the difference matters:
+//
+//   THE INDEX (kb_projects, kb_documents, kb_chunks, kb_sync_runs) is DERIVED
+//   from the SharePoint legacy projects folder. SharePoint is the source of
+//   truth; these can be truncated and rebuilt by re-running the sync with no
+//   loss (docs/05-database-and-sources.md). Never store an original file.
+//
+//   THE HISTORY (kb_conversations, kb_questions, kb_question_sources,
+//   kb_answer_reports) is the PLATFORM's own record of what it told an
+//   employee, kept centrally and indefinitely. It survives a rebuild
+//   of the index: each question keeps a snapshot of the answer and its
+//   sources, and its links into the index go NULL rather than vanish.
+//
+// Half of this is invisible to Prisma, like the BAS views and CHECKs: the
+// pgvector column, the HNSW index, the tsvector trigger, the partial unique
+// index and every CHECK live only in the migration SQL. Prisma cannot express
+// HNSW, so the next `prisma migrate dev` will try to DROP it; delete that line.
+// tests/kb-schema.test.ts fails on it. docs/KB-P0-P1.md.
+// ---------------------------------------------------------------------------
+
+/// `local` is a developer's synced copy of the folder (KB_LOCAL_SOURCE_DIR);
+/// production only ever holds `sharepoint` rows.
+enum KbSourceKind {
+  sharepoint
+  local
+}
+
+/// `pending` seen, not yet processed; `indexed` has its chunks; `skipped`
+/// deliberately left out (see `skip_reason`); `failed` attempted (see `error`).
+enum KbDocumentStatus {
+  pending
+  indexed
+  skipped
+  failed
+}
+
+enum KbSyncRunStatus {
+  running
+  ok
+  partial
+  failed
+}
+
+/// One project folder under the legacy projects root.
+model KbProject {
+  id String @id @default(uuid()) @db.Uuid
+
+  sourceKind KbSourceKind @map("source_kind")
+  /// Graph driveItem id for `sharepoint`, folder name for `local`.
+  sourceId String @map("source_id")
+
+  /// The folder as named, e.g. `221457_MAGNODE`.
+  folderName String @map("folder_name")
+  /// Six-digit job number from `[JOB]_[NAME]`, null when the folder does not
+  /// follow the template.
+  projectNumber String? @map("project_number")
+  /// Readable name from the folder, e.g. `Magnode`. Display only.
+  name   String
+  webUrl String? @map("web_url")
+
+  /// Only legacy projects are searchable. Set by the sync from the legacy rule
+  /// (still to be confirmed, docs/KB-P0-P1.md); a project that stops being
+  /// legacy keeps its rows but drops out of search.
+  isLegacy Boolean @default(false) @map("is_legacy")
+
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  documents KbDocument[]
+
+  @@unique([sourceKind, sourceId])
+  @@index([projectNumber])
+  @@map("kb_projects")
+}
+
+/// One file in a project folder, indexed or not. Skipped files get a row too,
+/// so "why can't search find X" is a query rather than a guess.
+model KbDocument {
+  id String @id @default(uuid()) @db.Uuid
+
+  projectId String    @map("project_id") @db.Uuid
+  project   KbProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  sourceKind KbSourceKind @map("source_kind")
+  /// Graph driveItem id for `sharepoint` (survives renames), path for `local`.
+  sourceId String @map("source_id")
+
+  /// Path below the project folder, e.g. `11 - SUBMITTALS/221457_SUB_Fans_Approved_20220120.pdf`.
+  path     String
+  fileName String @map("file_name")
+  /// Lower-case extension without the dot. Chooses the extractor.
+  fileType String @map("file_type")
+
+  /// The link a citation opens. SharePoint applies the reader's OWN
+  /// permissions on click; the platform never serves the file.
+  webUrl String? @map("web_url")
+
+  etag             String?
+  contentSha256    String?   @map("content_sha256")
+  sizeBytes        BigInt?   @map("size_bytes")
+  sourceModifiedAt DateTime? @map("source_modified_at") @db.Timestamptz(3)
+
+  /// The template folder code the file sits under: `11`, `2B`, `5C`.
+  folderCode String? @map("folder_code")
+
+  /// Versions of one document share a family: same project, folder and
+  /// description, differing only in the `_vNN` or `_YYYYMMDD` suffix. Answers
+  /// prefer `is_latest` and surface older ones only to explain a change.
+  familyKey    String  @map("family_key")
+  versionLabel String? @map("version_label")
+  isLatest     Boolean @default(true) @map("is_latest")
+
+  status KbDocumentStatus @default(pending)
+  /// CHECK: one of KB_SKIP_REASONS (scope.ts); present exactly when skipped.
+  skipReason String? @map("skip_reason")
+  /// Present exactly when failed (CHECK).
+  error      String?
+  chunkCount Int     @default(0) @map("chunk_count")
+
+  /// The model that embedded this document's chunks. A different configured
+  /// model means every vector must be rebuilt.
+  embeddingModel String?   @map("embedding_model")
+  indexedAt      DateTime? @map("indexed_at") @db.Timestamptz(3)
+
+  /// Stamped by every sync that sees the file. A completed sync that did not
+  /// see it means it was deleted or moved out.
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  chunks          KbChunk[]
+  questionSources KbQuestionSource[]
+
+  @@unique([sourceKind, sourceId])
+  @@index([projectId, familyKey])
+  @@index([status])
+  @@map("kb_documents")
+}
+
+/// A passage: the unit that is embedded, searched and cited. Written with raw
+/// SQL, because Prisma cannot write `embedding` or `content_tsv`.
+model KbChunk {
+  id String @id @default(uuid()) @db.Uuid
+
+  documentId String     @map("document_id") @db.Uuid
+  document   KbDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  /// 0-based within the document; a re-index replaces rather than appends.
+  ordinal Int
+  content String
+
+  /// The most precise location the format gave, and never more. Any of these
+  /// may be null; the screen says "location not available" rather than guess.
+  /// PDF: page range. Word/Markdown: section. Excel: sheet and cell range.
+  pageStart Int?    @map("page_start")
+  pageEnd   Int?    @map("page_end")
+  section   String?
+  sheet     String?
+  /// A1-style range on `sheet`, e.g. `B4:F12`.
+  cellRange String? @map("cell_range")
+
+  tokenCount Int? @map("token_count")
+
+  /// vector(1536). NULL between extraction and embedding, so a sync can resume.
+  embedding      Unsupported("vector(1536)")?
+  embeddingModel String?                      @map("embedding_model")
+
+  /// Kept by the kb_chunks_tsv trigger from section, sheet and content.
+  contentTsv Unsupported("tsvector")? @map("content_tsv")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  questionSources KbQuestionSource[]
+
+  @@unique([documentId, ordinal])
+  @@index([contentTsv], type: Gin)
+  @@map("kb_chunks")
+}
+
+/// One sync, run by a person (`npm run kb:sync`) or, from Phase 7, by the
+/// scheduled job. At most one runs at a time (partial unique index).
+model KbSyncRun {
+  id String @id @default(uuid()) @db.Uuid
+
+  sourceKind KbSourceKind    @map("source_kind")
+  status     KbSyncRunStatus @default(running)
+
+  /// CHECK: 'manual' or 'scheduled'.
+  trigger       String
+  triggeredById String?   @map("triggered_by_id") @db.Uuid
+  triggeredBy   Employee? @relation("KbSyncTriggeredBy", fields: [triggeredById], references: [id], onDelete: SetNull)
+
+  startedAt  DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt DateTime? @map("finished_at") @db.Timestamptz(3)
+
+  embeddingModel String? @map("embedding_model")
+
+  projectsSeen   Int @default(0) @map("projects_seen")
+  filesSeen      Int @default(0) @map("files_seen")
+  filesIndexed   Int @default(0) @map("files_indexed")
+  filesUnchanged Int @default(0) @map("files_unchanged")
+  filesSkipped   Int @default(0) @map("files_skipped")
+  filesFailed    Int @default(0) @map("files_failed")
+  filesRemoved   Int @default(0) @map("files_removed")
+  chunksWritten  Int @default(0) @map("chunks_written")
+
+  error String?
+
+  @@index([startedAt(sort: Desc)])
+  @@map("kb_sync_runs")
+}
+
+/// A thread of questions and follow-ups by one employee. History is compact:
+/// questions and final answers, never a transcript.
+model KbConversation {
+  id String @id @default(uuid()) @db.Uuid
+
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation("KbConversations", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// The last question's time; the history list sorts on it.
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  questions KbQuestion[]
+
+  @@index([employeeId, updatedAt(sort: Desc)])
+  @@map("kb_conversations")
+}
+
+/// One question and its final answer.
+model KbQuestion {
+  id String @id @default(uuid()) @db.Uuid
+
+  conversationId String         @map("conversation_id") @db.Uuid
+  conversation   KbConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  /// 0 for the first question, 1.. for follow-ups. Unique per conversation.
+  ordinal  Int
+  question String
+
+  /// The projects searched, and how they were chosen. CHECK on scope_how:
+  /// 'all', 'chosen', 'from_question', 'follow_up'. Ids of kb_projects at the
+  /// time; a rebuilt index may no longer hold them, which is why the answer
+  /// snapshot carries names too.
+  scopeProjectIds String[] @map("scope_project_ids") @db.Uuid
+  scopeHow        String   @map("scope_how")
+
+  /// CHECK: 'answered' or 'no_evidence'.
+  answerKind String @map("answer_kind")
+  /// The answer exactly as shown, sources included: the platform's record of
+  /// what it said, readable after the index has been rebuilt.
+  answer     Json
+
+  /// Which Claude model wrote it, and how long the whole question took.
+  model      String?
+  durationMs Int?    @map("duration_ms")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  sources KbQuestionSource[]
+  reports KbAnswerReport[]
+
+  @@unique([conversationId, ordinal])
+  @@map("kb_questions")
+}
+
+/// One numbered citation in an answer, linked back into the index so an
+/// admin can ask "which answers cited this document". The links go NULL when
+/// the index is rebuilt; the answer snapshot on kb_questions stays complete.
+model KbQuestionSource {
+  questionId String     @map("question_id") @db.Uuid
+  question   KbQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  /// The citation number as shown, 1-based.
+  n Int
+
+  documentId String?     @map("document_id") @db.Uuid
+  document   KbDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  chunkId    String?     @map("chunk_id") @db.Uuid
+  chunk      KbChunk?    @relation(fields: [chunkId], references: [id], onDelete: SetNull)
+
+  @@id([questionId, n])
+  @@index([documentId])
+  @@map("kb_question_sources")
+}
+
+/// An employee's report that an answer is wrong. The platform admin works the
+/// queue: each report is open until someone resolves or dismisses it, with a
+/// note saying what was found. One open report per person per question.
+model KbAnswerReport {
+  id String @id @default(uuid()) @db.Uuid
+
+  questionId String     @map("question_id") @db.Uuid
+  question   KbQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  reportedById String?   @map("reported_by_id") @db.Uuid
+  reportedBy   Employee? @relation("KbAnswerReportsFiled", fields: [reportedById], references: [id], onDelete: SetNull)
+
+  /// CHECK: one of KB_REPORT_REASONS (lib/modules/knowledge-base/types.ts).
+  reason String
+  /// The citation number the report is about, when it is about one.
+  citationN Int?    @map("citation_n")
+  /// In the reporter's words. Up to 2,000 characters (CHECK).
+  comment   String?
+
+  /// CHECK: 'open', 'resolved' or 'dismissed'. Resolver, note and time are
+  /// present exactly when it is no longer open.
+  status         String    @default("open")
+  resolvedById   String?   @map("resolved_by_id") @db.Uuid
+  resolvedBy     Employee? @relation("KbAnswerReportsResolved", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolutionNote String?   @map("resolution_note")
+  resolvedAt     DateTime? @map("resolved_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([questionId])
+  @@map("kb_answer_reports")
 }
