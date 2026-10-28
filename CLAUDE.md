@@ -441,27 +441,27 @@ in `phb-co-engine` reads references with aliases resolved, and
 forbidden to touch its tree. The job and the scratch copy were deleted on
 2026-10-28; the verification record says how to recreate both.
 
-**The two before-cutover items, both decided yes on 2026-10-28 (the plan
-doc's *Before cutover* sections):**
+**The two before-cutover items, both decided yes and both CLOSED on
+2026-10-28 (the plan doc's *Before cutover* sections):**
 
-1. **The intake-selection rule — done, in the repository.** `_find_intake_json`
-   now takes the newest `intake_*.json` by the creation time Gate A stamped
-   into its name, reading the store's mtime only for a legacy `intake.json`
-   or a tie, the exact name last (`phb-co-engine`, `feat/intake-by-name-stamp`;
-   eleven tests; differential still eight of eight). A read-only survey of
-   the live tree found three folders with two intakes and no disagreement
-   between name order and either clock, so no current outcome changes.
+1. **The intake-selection rule — done, in the repository** (merged).
+   `_find_intake_json` takes the newest `intake_*.json` by the creation time
+   Gate A stamped into its name, reading the store's mtime only for a legacy
+   `intake.json` or a tie, the exact name last; eleven tests, differential
+   still eight of eight. A read-only survey of the live tree found no folder
+   where name order and either clock disagree, so no current outcome changes.
    **The laptop's engine keeps the old rule until cutover**, by decision;
    Phase 14's cutover diff must list this function.
-2. **The flow-trigger check — built, not yet run.** `tests/probe_flow_trigger.py`
-   *(phb-co-engine, `feat/flow-trigger-probe`)* writes the engine's two
-   sentinel shapes — one PUT, and PUT-then-rename — as the engine's own
-   identity under non-sentinel names into a scratch folder; a throwaway
-   flow in the owner's account with the sentinel flows' trigger and one
-   Compose is the observer. The flow build steps, the job commands, the
-   filled spec's location and what counts as a pass are in the plan doc.
-   The owner runs it; the outcome is recorded there. A via-tmp write that
-   the trigger sees only under its tmp name is the finding to watch for.
+2. **The flow-trigger check — PASSED, two samples.** A throwaway flow in the
+   owner's account on SharePoint's *When a file is created (properties
+   only)* fired for both files the engine's identity wrote through Graph by
+   the engine's two sentinel shapes (one PUT; PUT then rename), under their
+   final names both times, no `.tmp` ever seen; the job logs and the four
+   Graph items name `phb-co-engine` as creator. Phase 14 is no longer gated
+   on it. The job, the folder and the flow are deleted.
+
+**Part C therefore has nothing left that gates Phase 14.** Open and not
+blocking: the `PnP.Powershell` certificate on the app registration.
 
 A third open decision, not a blocker: the `PnP.Powershell` certificate on the
 `phb-co-engine` app registration (`runbook.md` → *Open decision*).

@@ -157,17 +157,20 @@ failed verification. No `400` recurred on folder creation.
 - **The later gates.** The copies' `CO In Progress` and `CO Finalized` were
   empty, so transfer detection ran only in the negative. Nothing here
   exercises the Gate C/D paths.
-- **Flow triggering.** Whether a file written through Graph by the app, with
-  its metadata (modified by the app, not a person), triggers the eleven
-  flows exactly as a file written by the sync client does. Deferred by the
-  owner; required before Phase 14 (`docs/phase-12-part-c-plan.md` → *Before
-  cutover: the flow-trigger decision*).
-- **The intake-selection rule.** The fourth run showed that the engine's
-  "newest `intake_*.json` by mtime" is an assumption about the store's
-  clock; anything that re-stamps an older intake makes it the newest. The
-  fifth run passed because both halves had one clock, not because the rule
-  is safe. Decision recorded, not made (`docs/phase-12-part-c-plan.md` →
-  *Before cutover: the intake-selection rule*).
+- **Flow triggering — closed later the same day, by observation.** Whether
+  a file written through Graph by the app triggers the sentinel flows'
+  trigger as a sync-written file does was not part of the comparison. It
+  was then observed: a throwaway flow on the same trigger type fired on both
+  of the engine's write shapes under the app identity, final names, two
+  samples (`docs/phase-12-part-c-plan.md` → *Before cutover: the
+  flow-trigger decision*).
+- **The intake-selection rule — closed later the same day, in the
+  repository.** The fourth run showed that "newest `intake_*.json` by mtime"
+  is an assumption about the store's clock. The fifth run passed because
+  both halves had one clock. The engine in the repository now sorts by the
+  creation time in the name; the laptop's copy keeps the old rule until
+  cutover (`docs/phase-12-part-c-plan.md` → *Before cutover: the
+  intake-selection rule*).
 - **Concurrency.** One engine, one CO at a time. `append_bytes` is still a
   read-modify-write; the lock is still a file that fails open.
 - **Speed at volume.** The Graph half took 44 to 54 s per CO against 2 to

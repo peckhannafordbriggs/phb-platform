@@ -272,7 +272,7 @@ period, and the disagreements are understood. **Not when it runs.**
 
 - [x] Container runs against a copy, never live — the store is confined to the root it is given and refuses `CO Managment Process` by name (2026-10-21)
 - [x] `GraphFileStore` output byte-identical to `LocalFileStore` — equivalent once time-derived bytes are normalized, the bar `docs/phase-12-part-e-equivalence.md` set; eight of eight on 2026-10-28
-- [ ] Graph metadata changes verified not to affect flow triggering — **open; the flow-trigger decision, required before Phase 14**
+- [x] Graph metadata changes verified not to affect flow triggering — observed 2026-10-28, two samples: the sentinel flows' trigger fired on app-created items for both write shapes, final names (`docs/phase-12-part-c-plan.md` → *Before cutover: the flow-trigger decision*)
 - [x] The container cannot acquire the live lock — the lock is a file under the live folder, and the store refuses that path at every call (2026-10-21)
 
 **Part D**

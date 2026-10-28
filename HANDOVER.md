@@ -345,8 +345,10 @@ not a file in this repository. Moving them into Azure is Phases 12–14.
 removed, and one file-access interface has been extracted with two implementations. The
 Graph one has run against SharePoint as the engine's own identity, from a container in
 Azure, and produced output equivalent to the local store's on all eight fixture COs
-(2026-10-28; `docs/phase-12-part-c-verification.md`). Parts D and E are not started, and
-two decisions are open before cutover (`docs/phase-12-part-c-plan.md` → *Before cutover*).
+(2026-10-28; `docs/phase-12-part-c-verification.md`). The two before-cutover decisions
+were closed the same day: the intake rule is in the repository, and the sentinel flows'
+trigger was observed firing on files the engine's identity wrote through Graph
+(`docs/phase-12-part-c-plan.md` → *Before cutover*). Parts D and E are not started.
 
 It's the only work in this project that can break a pipeline the business depends on daily,
 so the sequence matters: extract a file-access layer from a ~196 KB Python script,
