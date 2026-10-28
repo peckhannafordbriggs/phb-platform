@@ -136,7 +136,7 @@ resulting diff unreadable.
 | Describe the timezone discrepancy | **done** — measured above |
 | `--store` selection seam | **done** — `--store local\|graph`, defaulting to local |
 | Container cannot reach the live library | **done by construction** — see below |
-| Part E equivalence definitions | not started — desk work, and `PHASE-12.md` says to write them *before* comparisons begin |
+| Part E equivalence definitions | **done** — `docs/phase-12-part-e-equivalence.md`, written 2026-09-22 before any comparison ran, as `PHASE-12.md` requires, and re-checked against the differ and the Part C findings on 2026-10-28 |
 
 ### 2 · Buildable now, verifiable on a substitute drive
 
@@ -731,8 +731,10 @@ changes only how the check decides, not what the store does.
 **What remains for Part C** is now exactly the plan's bucket 3: the
 byte-identical comparison of `GraphFileStore` output against `LocalFileStore`
 on a copy of the tree, and the flow-trigger check. Step 6 (Part E
-equivalence, in writing) is still not started. The job can be re-created from
-the same spec for the next run; the image is in the registry.
+equivalence, in writing) is done: `docs/phase-12-part-e-equivalence.md`,
+recovered on 2026-10-28 from the branch it had been written on. The job can
+be re-created from the same spec for the next run; the image is in the
+registry.
 
 **Later the same day**, the guards were built, the copy was built and the
 comparison was packaged as a job — *Where the copy lives*, *The two guards*
@@ -808,8 +810,9 @@ Record the outcome, or the waiver and its reasoning, here.
    tests/store_conformance.py --store graph --drive-id <id> --root
    "/<scratch>"`; from Git Bash set `MSYS_NO_PATHCONV=1`, or the shell rewrites
    the root into a Windows path and every request is a 400.
-6. Define Part E equivalence for the judgment steps, in writing, first — not
-   started
+6. ~~Define Part E equivalence for the judgment steps, in writing, first~~ —
+   done, `docs/phase-12-part-e-equivalence.md`; written 2026-09-22, before any
+   comparison ran, and re-checked 2026-10-28
 7. **Done through the probe and the harness, 2026-10-21** (*Step 7, third
    pass*): the credential works, the site grant is present and Write, and
    15 of 16 checks pass as the app with the 16th a defect in the check
@@ -824,7 +827,7 @@ Record the outcome, or the waiver and its reasoning, here.
 11. **The flow-trigger decision — deferred, required before Phase 14**
     (*Before cutover*)
 
-Steps 1–4 and 8–9 are complete without anybody granting anything. Step 5 needs
+Steps 1–4, 6 and 8–9 are complete without anybody granting anything. Step 5 needs
 a token from the right client, not a permission. Step 10 needs the owner to run
 one job. Step 11 needs a decision.
 
