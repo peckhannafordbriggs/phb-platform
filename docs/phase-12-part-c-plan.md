@@ -5,8 +5,11 @@
 eight fixture COs, with both halves reading the same intake for each
 two-intake CO. The record — the bar, the five runs including the four that
 failed, what the result proves and does not, what was kept and deleted — is
-`docs/phase-12-part-c-verification.md`. Two decisions remain before Phase 14
-(*Before cutover*, twice, below). This file keeps the reasoning run by run.
+`docs/phase-12-part-c-verification.md`. The two before-cutover decisions were
+both taken and closed the same day: the intake rule is in the repository, and
+the flow-trigger check passed with two samples (*Before cutover*, twice,
+below). Nothing in Part C gates Phase 14 now. This file keeps the reasoning
+run by run.
 
 Companion to `docs/PHASE-12.md`, which is the phase, and
 `docs/phase-12-part-b-verification.md`, which is what Part C inherited.
@@ -1078,7 +1081,7 @@ orders agree, and the engine's recorded choice is the newest by name. The
 rule changes which file would be chosen only after something re-stamps an
 older intake, which nothing in the tree has done.
 
-## Before cutover: the flow-trigger decision (required)
+## Before cutover: the flow-trigger decision — PASSED 2026-10-28, two samples
 
 `PHASE-12.md` Part C: *"writing a file through Graph changes its metadata.
 Power Automate matches on filenames, so this should be irrelevant — verify
@@ -1279,7 +1282,38 @@ group> --yes`, delete the flow (*My flows* → … → *Delete*), and delete the
 `flow-trigger-probe` folder in SharePoint. Save the job log beside the
 comparison logs.
 
-**Outcome:** *(not yet run)*
+**Outcome: PASSED, 2026-10-28, two samples.** Image `phb-co-engine:flow-probe`
+built from `feat/flow-trigger-probe` (merged as PR #7); job
+`phbplat-prod-co-flowprobe` created and started twice by the owner.
+
+| Run id | Execution | Job log | Items (Graph, read back) | Flow runs seen |
+|---|---|---|---|---|
+| `20261028-180408` | `gv2pfh9` | `### PROBE EXIT 0`; both written in 4.8 s | `probe_direct_…` created 18:04:11Z; `probe_via_tmp_…` created 18:04:12Z, modified 18:04:13Z (the rename); both `createdBy.application` = `phb-co-engine (85ca496d-…)`, `createdBy.user` = `SharePoint App` | one run each for `probe_direct_20261028-180408.json` and `probe_via_tmp_20261028-180408.json`, **both under their final names** |
+| `20261028-180729` | `0zdc4x2` | `### PROBE EXIT 0`; both written in 5.5 s | `probe_direct_…` created 18:07:34Z; `probe_via_tmp_…` created 18:07:34Z, modified 18:07:35Z; same creator | one run each, **both final names** |
+
+**No `.tmp` name appeared in any flow run.** So: SharePoint's *When a file is
+created (properties only)* trigger fires on an item an application-only
+principal creates through Graph; it fires for the one-PUT shape
+(`scrub_result.json`'s) and for the PUT-then-rename shape
+(`vendor_drafts.json`'s), and for the latter it reports the final name,
+twice out of two with the rename landing one second after the create. The
+trigger's *Created By* is the app. Four Graph items, two job logs
+(`C:\Users\Msheth\compare-runs\flowprobe-executions.log`, pulled from Log
+Analytics) and the flow's run history as read by the owner agree. This is
+the observation `PHASE-12.md` asked for in place of the inference; Phase 14
+is no longer gated on it.
+
+What two samples do not prove: that the rename can never be polled between
+the create and the rename. The window is about one second against a poll
+interval of a minute or more, and Intake 3 lives with the same window today
+under the sync client; Phase 14's shadow run is where a miss would show, and
+the engine-side cure (write the final name once, as the scrub result does)
+is one call-site change if it ever does.
+
+Cleaned up the same day: the job deleted (ARM `DELETE`, confirmed
+`ResourceNotFound`), the folder `flow-trigger-probe` with its four files
+deleted to the site recycle bin (confirmed `itemNotFound`, parent folder
+empty), the throwaway flow deleted by the owner.
 
 ## Sequence
 
@@ -1312,18 +1346,16 @@ comparison logs.
     between runs 2 and 3 the job was never updated to the fixed image; each
     is written up above and in `docs/phase-12-part-c-verification.md`,
     which is the record. The job and the copy are deleted
-11. **The flow-trigger decision — decided yes 2026-10-28; the probe and
-    the throwaway flow are built and the run is the owner's** (*Before
-    cutover: the flow-trigger decision*)
+11. **The flow-trigger decision — PASSED 2026-10-28, two samples** (*Before
+    cutover: the flow-trigger decision*): the trigger fires on app-created
+    items for both sentinel shapes, final names both times
 12. **The intake-selection rule — decided yes 2026-10-28, done in the
     repository, no current outcome changed** (*Before cutover: the
     intake-selection rule*)
 
-Steps 1 through 10 and 12 are complete. Step 11 is built and waits for one
-run by the owner; its outcome, pass or finding, is recorded under *Before
-cutover: the flow-trigger decision*. The `PnP.Powershell` certificate on the
-app registration is an open decision, not a blocker (`runbook.md` → *Open
-decision*).
+All twelve steps are complete. Part C has nothing left that gates Phase 14.
+The `PnP.Powershell` certificate on the app registration is an open
+decision, not a blocker (`runbook.md` → *Open decision*).
 
 ---
 
