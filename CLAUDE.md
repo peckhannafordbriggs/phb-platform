@@ -501,8 +501,20 @@ resolved and proves it on the shapes it missed; and
 `fs_trap.py` installed - any OS call naming a tree path from an engine frame
 is logged and raised - and reinstates the exact defect for one CO, which must
 be caught. Eight of eight clean, the mutant caught, the Part B differential
-still eight of eight. Image `part-c-compare-5`; the job update and the
-fourth run are the owner's. The twelfth-flow question is deferred by the
+still eight of eight. **The fourth run: the Graph engine ran clean on all
+eight; six EQUIVALENT; the two that DIFFERED (Bulletin 12, ZZ PR-98) had
+been built from different intake files** - the Graph half picked the newer
+`intake_*.json`, as the laptop does, and the local half in the container
+picked the older, on a mtime tie the instrument itself created by writing
+the files back to back on a kernel with per-tick timestamps (inferred; the
+fifth run prints each half's pick). Not a store disagreement. The
+instrument now gives the local tree the Graph copy's mtimes, routes the
+differ's report into the transcript (it had bound `sys.stdout` at import)
+and makes the SUMMARY name classes and files. **The engine's newest-by-mtime
+rule is a real, latent fragility** - anything that re-stamps an older intake
+makes it the newest - recorded as a *Before cutover* decision in the plan
+doc, not changed. Image `part-c-compare-6`; the fifth run is the owner's.
+The twelfth-flow question is deferred by the
 owner and is a **required step before Phase 14** — the plan doc's *Before
 cutover* section has the evidence in hand and the two ways to close it.
 

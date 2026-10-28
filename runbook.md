@@ -2850,6 +2850,34 @@ call in a run that has already failed, read the traceback's last engine
 frame: if it is in `run_workflow.py` or `co_state.py` rather than
 `co_filestore.py`, it is a bypass.
 
+### A comparison CO DIFFERS on the state file's `date_received`, the two trackers and the run report
+
+**Symptom.** `compare_stores.py` reports a CO NOT EQUIVALENT with
+`unlisted time field: state/<CO>__<hash>.json [date_received]` and
+`content differs` on `.Tracking_lastgood.xlsx`, `CO Status Tracker.xlsx`
+and the run report - sometimes also the attempt folder's Review workbook,
+`Review.docx` and `scrub_result.json` (`auto_fixes_applied`). The CO has
+more than one `intake_*.json`. Since 2026-10-28 the block also prints
+`intake    local picked X, graph picked Y  <- NOT THE SAME INTAKE` and the
+SUMMARY carries `intake choice differs`.
+
+**Cause.** The two halves built the CO from different intake files. The
+engine takes the newest intake by the store's mtime; a tie on the second
+falls to directory order, which the two stores do not share, and the
+fourth run's local tree carried fresh back-to-back mtimes that tied on the
+job's kernel. Every differing field comes from the intake JSON - subject,
+date received, ACC link, submitter note. It is not a store disagreement.
+
+**Fix.** Nothing in the stores. Read the `intakes` line above the engine
+runs: since 2026-10-28 the local tree carries the Graph copy's mtimes, so
+the line should show two distinct seconds and both halves the same pick.
+`TIED TO THE SECOND` means the copy itself landed both intakes on one
+second - re-run the CO with `--only "<CO>"` after a minute, or accept that
+the engine's rule is nondeterministic for ties and decide the
+*Before cutover: the intake-selection rule* item in
+`docs/phase-12-part-c-plan.md`. Do not add `date_received` to the differ's
+time-field list to quiet the report: here it is a real difference.
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not
