@@ -574,14 +574,15 @@ coat, and the person who holds these keys leaves in December 2026
 is a personal key, production would stop on the day that account is
 removed — not monthly, but on a schedule all the same.
 
-**Action before anything else in Part D, owner only:** open
-`platform.claude.com/settings/keys`, read the **Linked account** and
-**Expiration** columns for both keys. If either is a personal key, create a
-service account in the company organization, issue a service-account key
-with expiration **Never**, scoped to the workspace, set it as a new version
-of the same vault secret, restart the revision, revoke the old one after.
-That is a key swap through the runbook's existing *Rotating* steps, not a
-design change, and it is the whole of the schedule risk.
+**Checked by the owner in the Console on 2026-10-28:** neither key expires,
+and **both are personal keys linked to Jim.** So the schedule exists and is
+the day that account leaves the organization. **[decision, 2026-10-28]** The
+replacement — a service account in the company organization, a key with
+expiration **Never** scoped to the workspace, set as a new version of the
+same vault secret, a revision restart, the old key revoked after — is a key
+swap through the runbook's existing *Rotating* steps and is now **cutover
+item 0.6 in `docs/PHASE-14.md`**. Part D builds and replays on the key as it
+is; the swap happens before the shadow run goes to a schedule.
 
 ### 11b · What switching `coAnthropicApiKeyInKeyVault` on involves — and why Part D does not need it
 
@@ -699,27 +700,27 @@ D2–D5 each bump `PROMPT_VERSION` and record the replay in
 
 ---
 
-## 14 · Decisions the owner is asked to make before D1 starts
+## 14 · Decisions — made by the owner on 2026-10-28
 
-1. **Approve the shape in § 2**: deterministic rules in code, four model
-   judgments, each behind a switch, undecided steps declining. (The
-   alternative — one call per item returning the whole result — is simpler
-   to write and harder to test, log and stage one at a time; this plan does
-   not recommend it.)
-2. **Bid leader**: model only on ambiguity, as § 2b proposes, or never
-   (deterministic scorer, null on any ambiguity). Either satisfies the spec;
-   the first matches the laptop's behaviour more closely on the fuzzy
-   cases.
-3. **Attachments**: filenames only in Part D (§ 6 item 3), accepting the
+The plan was approved on 2026-10-28 with these answers, and D1 started the
+same day.
+
+1. **The shape in § 2: approved.** Deterministic rules in code, four model
+   judgments, each behind a switch, undecided steps declining.
+2. **Bid leader: model only on ambiguity**, as § 2b proposes.
+3. **Attachments: filenames only** in Part D (§ 6 item 3), accepting the
    named divergence on `amount_detected` for the Part E window.
-4. **Model**: `claude-opus-5-5` at `high`, revisited with Part E data.
-5. **The key**: check both keys' type in the Console (§ 11a); the flag stays
-   false and the job carries the reference (§ 11b); federation after Part E
-   (§ 11c).
-6. **Where the classifier's copy of the Step 2 tree lives** for the replay
-   and later the shadow run: a `phb-co-engine scratch/` root beside the
-   Part C one, built by a sibling of `tests/build_copy.py` that refuses the
-   four sentinel names the same way. Named here so it is not improvised.
+4. **Model: `claude-opus-5-5` at `high`**, revisited with Part E data.
+5. **The key:** checked — both keys are personal keys linked to Jim (§ 11a);
+   replacing both with service-account keys is cutover item 0.6 in
+   `docs/PHASE-14.md`; the flag stays false and the job carries the
+   reference (§ 11b); federation after Part E (§ 11c).
+6. **The classifier's copy of the Step 2 tree** lives under
+   `phb-co-engine scratch/`, beside the Part C one, built by a sibling of
+   `tests/build_copy.py` that refuses the four sentinel names the same way.
+
+What D1 built against these, and what the first replay found, is in
+`docs/phase-12-part-d-verification.md`.
 
 ---
 
