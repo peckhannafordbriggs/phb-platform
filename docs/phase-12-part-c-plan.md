@@ -1032,18 +1032,51 @@ registry.
 comparison was packaged as a job — *Where the copy lives*, *The two guards*
 and *The comparison instrument* above. The comparison itself has not run.
 
-## Before cutover: the intake-selection rule (decide, or decline knowingly)
+## Before cutover: the intake-selection rule — DECIDED YES, 2026-10-28, done in the repository
 
-`_find_intake_json` takes the newest `intake_*.json` by the store's mtime.
+`_find_intake_json` took the newest `intake_*.json` by the store's mtime.
 The fourth comparison run showed what a re-stamped file does to that rule
 (*The fourth run*): the older submission becomes the one the CO is built
-from, silently. Production creates intakes minutes apart and nothing
-re-stamps them in the normal course, so this has not happened there; an
-operator re-saving an older intake, a recycle-bin restore, or a migration
-would do it. The deterministic key is the creation time Gate A put in the
-name. The change is small, the Part B differential is its regression
-check, and it is an engine behaviour change, so it is the owner's: make it,
-or record here that it was declined and why.
+from, silently. The owner decided for the deterministic key the same day.
+
+**The rule now** (`phb-co-engine`, branch `feat/intake-by-name-stamp`,
+`_intakes_newest_first`): the creation time Gate A stamped into the name
+decides — `intake_<yyyymmddhhmmss>.json`, UTC, written once by the flow's
+Create file and never re-stamped. The store's mtime is read only when it
+must be: a legacy `intake.json` has no stamp, two candidates can carry one
+stamp (two spellings), a stamp can fail to parse. The exact name is the
+last key, so the order is total and never the directory's. For distinctly
+stamped names no mtime is read at all, which under Graph is one request
+fewer per candidate. `tests/test_intake_selection.py` holds every branch —
+the re-stamped older file, the tie in both listing orders, a legacy file
+alone and against a stamped one, an unparsable stamp, two spellings of one
+stamp, an unreadable newest — and the end-to-end case on disk through
+`LocalFileStore` with the mtimes set the wrong way round. The Part B
+differential is still eight of eight, the static scanner and the runtime
+trap pass, and `ci_suites` requires the suite.
+
+**Repository only.** The laptop's copy of the engine keeps the old rule
+until cutover, by the same decision; the function's docstring says so. The
+two copies now differ by this one function, and Phase 14's cutover diff
+must list it.
+
+**Does it change any current outcome? No.** Read-only survey of the live
+tree on 2026-10-28 — the synced folder for local mtimes, Graph for
+`lastModifiedDateTime`, the state files for what the engine chose, nothing
+opened but state JSON and nothing written:
+
+| Folder (under `1 - New Requests\Archive`) | Intakes | Newest by name | Newest by local mtime | Newest by Graph | State file says the engine used |
+|---|---|---|---|---|---|
+| CCHMC Bulletin 12 | `…200259`, `…141559` | `…141559` | same | same | same |
+| CCHMC Bulletin 13 | `…171424`, `…172438` | `…172438` | same | same | same |
+| ZZ PR-98 | `…170746`, `…172908` | `…172908` | same | same | same |
+
+Twenty-three folders in the tree hold an intake file; those three hold two.
+In every one the mtimes trail the name stamp by zero to two seconds (the
+flow's Create file, or the sync engine for the synthetic CO), all three
+orders agree, and the engine's recorded choice is the newest by name. The
+rule changes which file would be chosen only after something re-stamps an
+older intake, which nothing in the tree has done.
 
 ## Before cutover: the flow-trigger decision (required)
 
@@ -1087,19 +1120,151 @@ that is reasoning, and the phase doc asks for observation.
 
 1. **A disposable personal flow.** In the owner's own environment and
    connection, trigger *When a file is created (properties only)* on the AI
-   Sandbox library with the folder set to the copy's
-   `…/CMP/Change Order Intake/2 - Returned for Info`, one Compose action,
-   deleted after one observed run on a file the comparison job wrote. It
-   touches none of the eleven, uses no shared connection and sends nothing;
-   whether it sits inside prohibition 2's spirit is the owner's call. It does
-   not need a copy site.
+   Sandbox library, one Compose action, deleted after one observed run on a
+   file the engine's identity wrote. It touches none of the eleven, uses no
+   shared connection and sends nothing; whether it sits inside prohibition
+   2's spirit is the owner's call. It does not need a copy site.
 2. **Observe what the trigger would see.** Query the library's list items the
    way the trigger does (`/sites/{id}/lists/{listId}/items` filtered on
    `Created`, or the drive `delta`) and show an app-created item appears with
    the same shape as a Power Automate-created one. Strong, and still not the
    trigger.
 
-Record the outcome, or the waiver and its reasoning, here.
+### DECIDED YES, 2026-10-28: way 1, built and waiting for the owner to run it
+
+**What the four sentinel flows actually use**, from the specs in
+`phb-co-engine` (`AI Files/CO Intake Engine/specs/power-automate/`):
+Intake 2 (`scrub_result.json`) — SharePoint, *When a file is created
+(properties only)*, subfolders included, a Condition on
+`Name == 'scrub_result.json'` (`GateA_Incomplete_Path_Context.md`); Intake
+3 (`vendor_drafts.json`) — the same trigger on site `AISandbox`, library
+`Documents`, *Include Subfolders: Yes*, Condition
+`@equals(triggerBody()?['{FilenameWithExtension}'], 'vendor_drafts.json')`
+(`Gate_B_SharePoint_Repoint_Fixes_2026-07-09.md`); Intake 4
+(`transfer_ready.json`) — the same trigger (`Gate_C_SharePoint_Repoint_Fixes_2026-07-09.md`).
+Response 2 (`classification_result.json`) is documented only in the
+Response engine's as-built: a SharePoint file-created trigger under
+`_to_classify/` with a trigger condition
+`endsWith(…['body/Name'], 'classification_result.json')` and `splitOn`,
+so the same connector and event with the gate in the trigger rather than
+an action. The throwaway flow uses the first shape, with no condition at
+all, so every item the probe creates shows as a run.
+
+**What the engine writes, and why the probe writes two files.** The two
+sentinels leave the engine by different methods: `scrub_result.json` by
+`FS.write_text`, one PUT of the final name; `vendor_drafts.json` by
+`FS.write_text_via_tmp`, a PUT of `<name>.tmp` then a rename onto the
+final name. A "file created" trigger can see those differently — the
+second creates the item under the tmp name and renames it, and a poll
+between the two sees the tmp name. So the probe,
+`tests/probe_flow_trigger.py` *(phb-co-engine, branch
+`feat/flow-trigger-probe`)*, creates one folder under its root, as the
+engine creates an attempt folder, and writes `probe_direct.json` by the
+first method and `probe_via_tmp.json` by the second, by the same store
+class, the same methods and the same argument shapes — `tests/test_flow_trigger_probe.py`
+ties both to the engine's two write sites, so a change of shape there
+fails there. The sentinel names themselves are refused by construction.
+The root must contain `scratch`, and the store refuses the live folder by
+name whatever the root says. `infra/flow-trigger-job.sh` is the job's
+command; the filled spec is `C:\Users\Msheth\flowprobe-job.filled.yaml`
+on the owner's machine (job `phbplat-prod-co-flowprobe`, image
+`phb-co-engine:flow-probe`, 300 s, the compare job's identity and
+environment, `CO_PROBE_ROOT=/phb-co-engine scratch/flow-trigger-probe`).
+
+**Nothing has been run.** Image not built, folder not created, flow not
+built, job not created — by the owner's instruction. The sequence:
+
+**A. The scratch folder (SharePoint, in the browser).** Open the AI Sandbox
+site → *Documents* → the top-level folder `phb-co-engine scratch` (empty
+since the copy was deleted) → *New* → *Folder* → `flow-trigger-probe`. It
+must exist before the flow is built, because the trigger's folder picker
+only offers folders that exist. It sits beside `CO Managment Process`,
+never inside it.
+
+**B. The throwaway flow (Power Automate, your own account).**
+
+1. `make.powerautomate.com`, your default environment, *My flows* → *New
+   flow* → *Automated cloud flow*. Name it `ZZ flow-trigger probe - delete
+   after 2026-10` so nobody mistakes it for one of the eleven. In the
+   trigger search type `When a file is created (properties only)` and pick
+   the **SharePoint** one. *Create*.
+2. Trigger fields: *Site Address* — pick
+   `https://peckhannafordbriggs.sharepoint.com/sites/AISandbox` (type the
+   URL under *Enter custom value* if it is not listed); *Library Name* —
+   `Documents`; *Folder* — use the picker to choose
+   `/phb-co-engine scratch/flow-trigger-probe`; under *Advanced parameters*
+   set *Include Subfolders* to **Yes**. That is Intake 2 and 3's shape. The
+   connection is your own account; it needs only read on the library, which
+   you have. Leave the trigger's settings at their defaults — do not add a
+   trigger condition, because the point is to see every item.
+3. *New step* → search `Compose` (Data Operation) → *Inputs*: switch to the
+   expression editor and paste, as one expression:
+   ```
+   json(concat('{"name":"', triggerBody()?['{FilenameWithExtension}'], '","path":"', triggerBody()?['{FullPath}'], '","isFolder":"', string(triggerBody()?['{IsFolder}']), '","created":"', triggerBody()?['Created'], '","modified":"', triggerBody()?['Modified'], '","author":"', triggerBody()?['Author']?['DisplayName'], '","editor":"', triggerBody()?['Editor']?['DisplayName'], '","id":"', triggerBody()?['{Identifier}'], '"}'))
+   ```
+   If the editor rejects `json(concat(…))`, put the dynamic-content tokens
+   *Name with extension*, *Full Path*, *Is Folder*, *Created*, *Modified*,
+   *Created By DisplayName*, *Modified By DisplayName* into the Inputs box
+   one per line instead; the run history shows them either way.
+4. *Save*. No other action. It emails nobody and writes nothing. Do not use
+   the *Test* button; the job is the test.
+
+**C. The image, the job, the run — PowerShell, one at a time.** From the
+`phb-co-engine` checkout on `feat/flow-trigger-probe` (or `main` after it
+merges):
+
+```powershell
+$env:PYTHONIOENCODING = 'utf-8'
+```
+```powershell
+az acr build --registry phbplatprodovwzv7 --image phb-co-engine:flow-probe --build-arg INCLUDE_LIBREOFFICE=false .
+```
+```powershell
+az containerapp job create -n phbplat-prod-co-flowprobe -g <resource group> --yaml C:\Users\Msheth\flowprobe-job.filled.yaml
+```
+```powershell
+az containerapp job show -n phbplat-prod-co-flowprobe -g <resource group> --query properties.template.containers[0].image -o tsv
+```
+(must print the `flow-probe` tag)
+```powershell
+az containerapp job start -n phbplat-prod-co-flowprobe -g <resource group>
+```
+```powershell
+az containerapp job execution list -n phbplat-prod-co-flowprobe -g <resource group> -o table
+```
+```powershell
+az containerapp job logs show -n phbplat-prod-co-flowprobe -g <resource group> --container flowprobe --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\flowprobe-run1.log
+```
+
+The log must end `### PROBE EXIT 0` after a `folder now:` line naming
+exactly `probe_direct.json` and `probe_via_tmp.json`, and two `item` lines
+whose `createdBy.application` names `phb-co-engine`. A `.tmp` in the
+folder listing, or `PROBE EXIT 2`, is a finding about the via-tmp shape
+before the flow is even consulted.
+
+**D. What counts as a pass.** Open the flow → *28-day run history*; allow
+up to fifteen minutes (the trigger polls; Intake 2's spec says every
+minute, Intake 3's every five, and a personal flow may be slower).
+
+| You see | It means |
+|---|---|
+| a run whose Compose `name` is `probe_direct.json` | the `scrub_result.json` shape fires on an item the app created through Graph — **pass for Intake 2 and 4's shape** |
+| a run whose Compose `name` is `probe_via_tmp.json` | the `vendor_drafts.json` shape fires with its **final** name — **pass for Intake 3's shape**; together with the line above, **the check passes** |
+| a run showing `probe_via_tmp.json.tmp` and **no** run showing `probe_via_tmp.json` | the rename is invisible to the trigger: under Graph, Gate B's condition would never match. **A finding** — the via-tmp write must become a direct write before Phase 14 (it is a `write_text_via_tmp` → `write_text` change at one site, with the differential as its check) |
+| a run with `isFolder` = `true` for the run folder | noise the real flows' conditions already filter; note and ignore |
+| `author` is the app (`phb-co-engine`) rather than a person | expected; record it — no card in the seven intake flows reads author (inferred, from the card map) |
+| **no run at all** for `probe_direct.json` after fifteen minutes, while the job log shows both items created | the trigger does not see application-created items. **Cutover blocked**; this is the finding the phase doc feared, and it goes to Vitis with the item ids from the log |
+
+Run the job a second time for a second sample before concluding; the via-tmp
+race, if it exists, is a timing race.
+
+**E. Afterwards.** Record the outcome below with the run id from the log.
+Then `az containerapp job delete -n phbplat-prod-co-flowprobe -g <resource
+group> --yes`, delete the flow (*My flows* → … → *Delete*), and delete the
+`flow-trigger-probe` folder in SharePoint. Save the job log beside the
+comparison logs.
+
+**Outcome:** *(not yet run)*
 
 ## Sequence
 
@@ -1132,10 +1297,18 @@ Record the outcome, or the waiver and its reasoning, here.
     between runs 2 and 3 the job was never updated to the fixed image; each
     is written up above and in `docs/phase-12-part-c-verification.md`,
     which is the record. The job and the copy are deleted
-11. **The flow-trigger decision — deferred, required before Phase 14**
-    (*Before cutover*)
+11. **The flow-trigger decision — decided yes 2026-10-28; the probe and
+    the throwaway flow are built and the run is the owner's** (*Before
+    cutover: the flow-trigger decision*)
+12. **The intake-selection rule — decided yes 2026-10-28, done in the
+    repository, no current outcome changed** (*Before cutover: the
+    intake-selection rule*)
 
-Steps 1 through 10 are complete. What remains before Phase 14 is two decisions, neither of them code until it is made: step 11, the flow-trigger question, and the intake-selection rule the fourth run surfaced (*Before cutover*, both). The `PnP.Powershell` certificate on the app registration is a third open decision, not a blocker (`runbook.md` → *Open decision*).
+Steps 1 through 10 and 12 are complete. Step 11 is built and waits for one
+run by the owner; its outcome, pass or finding, is recorded under *Before
+cutover: the flow-trigger decision*. The `PnP.Powershell` certificate on the
+app registration is an open decision, not a blocker (`runbook.md` → *Open
+decision*).
 
 ---
 

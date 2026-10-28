@@ -164,7 +164,7 @@ unless stated. **[observed]** throughout unless tagged.
 
 | Read | Where | Why |
 |---|---|---|
-| `intake.json` / `intake_*.json` | `1 - New Requests\<CO>\` | The queue source Power Automate Gate A writes. Both fixed and timestamped names accepted; newest **by the store's mtime** wins - an assumption about the clock, not the intakes, and a re-stamped older file becomes the newest (`docs/phase-12-part-c-plan.md` → *The fourth run*, and *Before cutover: the intake-selection rule*) |
+| `intake.json` / `intake_*.json` | `1 - New Requests\<CO>\` | The queue source Power Automate Gate A writes. Both fixed and timestamped names accepted. **Repository engine (2026-10-28):** newest by the creation time in the name, the store's mtime only for a legacy `intake.json` or a tie. **Laptop engine until cutover:** newest by the store's mtime, where a re-stamped older file becomes the newest (`docs/phase-12-part-c-plan.md` → *The fourth run*, *Before cutover: the intake-selection rule*) |
 | The intake workbook (`*.xlsx`) | `1 - New Requests\<CO>\` | The 22-field Gate A scrub reads fixed cells |
 | `state\<CO>__<hash>.json` | `state\`, `state\Archive\` | **The work queue and the state record.** Filename is a sanitised CO name plus 8 hex of `sha1(exact name)`, so two CO names that sanitise alike cannot collide |
 | `CO Status Tracker.xlsx` | live root | Legacy pending-row fallback during the JSON transition, and `co_state.py`'s drift diagnostic |
