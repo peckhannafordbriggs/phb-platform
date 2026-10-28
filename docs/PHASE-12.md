@@ -135,9 +135,10 @@ Two constraints that survive the refactor:
 > fifth run: `docs/phase-12-part-c-verification.md` is the record,
 > `docs/phase-12-part-c-plan.md` the reasoning. The "needs `Sites.Selected`"
 > framing below was wrong in a useful way — the permission gated only the
-> last step — and the plan doc says what was actually blocked. Two decisions
-> are open before Phase 14 (the plan doc's *Before cutover* sections); the
-> third checklist item below is one of them.
+> last step — and the plan doc says what was actually blocked. The two
+> decisions Part C left were both closed on 2026-10-28 (the plan doc's
+> *Before cutover* sections); what remains for cutover day is gathered in
+> `docs/PHASE-14.md`.
 
 **Needs: Azure (Phase 7 complete), and `Sites.Selected` Graph permission on the
 AISandbox site — a third request to Vitis.**
