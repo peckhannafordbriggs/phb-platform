@@ -2814,6 +2814,42 @@ PowerShell, pipe through `Out-File -Encoding utf8` rather than `>`. If the
 transcript is absent, the instrument said why on the log - `(could not keep
 …)` - and the run's verdict is unaffected.
 
+### The Graph engine fails with `FileNotFoundError` on a path that exists in SharePoint
+
+**Symptom.** In graph mode the engine gets past the jail and the token, then
+a CO fails with `FileNotFoundError` (or `NotADirectoryError`, `PermissionError`)
+naming a drive-relative path - `…/1 - New Requests/<CO>/intake_….json` - that
+is plainly there in the library. The same CO runs clean in local mode. On the
+third comparison run (2026-10-28) it was every CO, at
+`_find_intake_json`, `sorted(cands, key=os.path.getmtime)`.
+
+**Cause.** A call reached the operating system instead of the store. In
+local mode the store's disk and the OS's disk are the same, so the line is
+invisible; in graph mode the path exists only in SharePoint and the OS says
+not found. Part B routed the engine's I/O through `FS` and its guard test
+scanned *calls*; a function passed as a key, a callback, or stored under
+another name is a *reference* and was not seen, and aliases
+(`import glob as _glob`) were never resolved.
+
+**Fix.** Route the call through `FS` - every operation has a store method
+(`FS.mtime` for `getmtime`, `FS.exists`, `FS.listdir`, `FS.read_bytes`, …).
+Then run both halves of the guard from the `phb-co-engine` checkout:
+
+```
+python tests/test_filestore_interface.py      # static: every reference, aliases resolved
+python tests/test_no_fs_bypass_runtime.py     # runtime: the fixture COs under the trap
+```
+
+The static test names the file, line, function and resolved name of anything
+new, and fails on a stale allow-list entry too; the runtime test prints one
+line per CO and, on a bypass, the `FS BYPASS: <call>(<path>) from
+<file>:<line> in <function>()` lines from the trap log. A new, deliberately
+non-store access (there are five, all in `ALLOWED_RAW_REFERENCES` with a
+reason) is added there, with its reason, and nowhere else. To find such a
+call in a run that has already failed, read the traceback's last engine
+frame: if it is in `run_workflow.py` or `co_state.py` rather than
+`co_filestore.py`, it is a bypass.
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not

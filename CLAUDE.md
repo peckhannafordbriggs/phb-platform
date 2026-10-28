@@ -485,8 +485,24 @@ was found still pointing at `part-c-compare-2` - the spec was never
 updated, so the third run would have repeated the second. The instrument
 now also keeps an ordered `compare-transcript.txt` and both engines' full
 output under `runs/<id>/`, because Log Analytics returns the job log out of
-order. Image `part-c-compare-4`; the job update and the third run are the
-owner's, commands in the plan doc. The twelfth-flow question is deferred by the
+order. **The third run (20261028-142400) ran the Graph engine for the first
+time, and every CO failed at one line**: `sorted(cands,
+key=os.path.getmtime)` in `_find_intake_json` reached the container's own
+disk for a file that lived only in SharePoint - the one call Part B's
+extraction missed, because a key function is a reference and the guard test
+scanned calls (its alias handling was absent too, so its one allow-list
+entry had never matched anything). Every filesystem reference in the engine
+was then inventoried by AST, call or not: that was the only disk access on a
+tree path; everything else is path-string work, the stage directory, or the
+sandbox mount glob graph mode never reaches. Fixed as `key=FS.mtime`;
+`tests/test_filestore_interface.py` now scans references with aliases
+resolved and proves it on the shapes it missed; and
+`tests/test_no_fs_bypass_runtime.py` replays the eight fixture COs with
+`fs_trap.py` installed - any OS call naming a tree path from an engine frame
+is logged and raised - and reinstates the exact defect for one CO, which must
+be caught. Eight of eight clean, the mutant caught, the Part B differential
+still eight of eight. Image `part-c-compare-5`; the job update and the
+fourth run are the owner's. The twelfth-flow question is deferred by the
 owner and is a **required step before Phase 14** — the plan doc's *Before
 cutover* section has the evidence in hand and the two ways to close it.
 

@@ -626,6 +626,220 @@ minutes - the second run spent five with no engine runs at all - and read
 partial `runs/` folders from the first two runs stay until the comparison is
 written up.
 
+### The third run (2026-10-28, `runs/20261028-142400`): the Graph engine ran, and reached the wrong disk
+
+Image `part-c-compare-4`, the job updated and started by the owner. Every
+input verified, every tree built, the local half ran, and the Graph engine
+started for the first time - past the jail, past the token, into the CO -
+and every CO failed at the same line:
+
+```
+run_workflow.py line 3285, in _find_intake_json
+    for p in sorted(cands, key=os.path.getmtime, reverse=True)
+FileNotFoundError: … intake_….json
+```
+
+`os.path.getmtime` is the operating system's call, not the store's. The
+candidates were found through `FS.listdir` and confirmed through
+`FS.is_file`, both Graph requests, and then sorted by the mtime of a path on
+the container's disk, where nothing of the kind exists. In local mode the two
+clocks are the same file and the line is invisible; this was the first run
+in which they were not.
+
+**Why Part B missed it.** `tests/test_filestore_interface.py` has held
+"every read and write goes through the store" since the extraction, and
+`os.path.getmtime` was in its raw-call set. The scan visited `ast.Call`
+nodes and read `node.func`. A key function is an `ast.Attribute` passed as
+an argument; no call node has it as its function, so the scan never saw it.
+The same scan compared spelled names, so `import glob as _glob;
+_glob.glob(...)` never matched its `glob.glob` allow-list entry either - that
+entry had matched nothing since Part B, and the docstring on
+`_glob_session_mount` calling itself "the only filesystem call left" was a
+claim the test could not have checked.
+
+**The inventory, before anything was changed.** An AST walk over
+`run_workflow.py` and `co_state.py` recording every reference to `os`,
+`os.path`, `open`, `glob`, `shutil`, `pathlib`, `tempfile`, `zipfile`,
+`subprocess`, `openpyxl.load_workbook` and `docx.Document` - as a call, a
+key, a stored name or a bare mention - with import aliases resolved, then a
+grep for the method-style writers an AST walk by module name cannot see
+(`.save(`, reportlab, `csv.writer`, `json.dump`):
+
+| where | what | verdict |
+|---|---|---|
+| `_find_intake_json` 3285 | `os.path.getmtime` as a `sorted` key, on a tree path | **the bypass** - fixed |
+| `_glob_session_mount` 410 | `glob.glob("/sessions/*/mnt/…")` | sandbox mount probe; graph mode passes the root in and never reaches it; allowed by name |
+| module level 135, 144 | `os.path.expanduser("~")` | default host paths; reads the environment, touches no disk |
+| `render_xlsx_to_pdf` 1763, 1767 | `openpyxl.load_workbook(stage_xlsx)`, `subprocess.run(libreoffice …)` | the stage directory, local by the interface's contract; allowed by name |
+| `_try_base64_repair` 884 | `openpyxl.load_workbook(BytesIO)` | in memory |
+| `write_summary_docx` 1835 | `Document()` | no path; saved through `FS.save_docx` |
+| `co_state.migrate_legacy_filenames` 185 | `os.path.abspath` twice, in an equality | path-string work; on a drive-relative path under Linux a no-op |
+| everywhere else | `os.path.join / basename / dirname / splitext`, `os.environ`, `os.getpid` | pure |
+| `.save(`, `Canvas(`, `csv.writer`, `json.load/dump` on a path | none outside `FS.*` | - |
+
+So exactly one disk access on a tree path, and it is the one that failed.
+The store module itself was walked too: the base-class helpers load
+workbooks and zips from `BytesIO(self.read_bytes(path))`, and the only
+`open`/`os.*` calls in `GraphFileStore` are its `stage_*` methods.
+
+**The fix** is `key=FS.mtime` - both stores implement it; the Graph store
+reads `lastModifiedDateTime` and the local one calls `getmtime`, so the local
+half's behaviour is unchanged and the Part B differential re-run afterwards
+is still eight of eight.
+
+**The guard, in two halves, because a list of names is what just failed.**
+
+1. *Static.* The scanner in `test_filestore_interface.py` now reads every
+   `Name` and `Attribute` node wherever it sits, resolves `import … as` and
+   `from … import` first, covers `shutil`, `glob`, `pathlib`, `tempfile`
+   wholesale and `os`/`os.path` by function, and holds an allow-list keyed by
+   (module, function, resolved name) with a count, so a stale entry fails as
+   loudly as a new use. `test_the_scanner_sees_references_and_aliases`
+   feeds it seven snippets of the shapes it used to miss - a key function, a
+   callback in `map`, a module alias, a from-import, an aliased from-import,
+   a stored reference, `pathlib` - and the pure helpers under every spelling,
+   which must stay quiet. Run against the pre-fix engine, it reports the
+   3285 site and nothing else.
+2. *Runtime, needing no list.* `tests/fs_trap.py` wraps the functions that
+   can reach a disk - `os.path.exists/isfile/isdir/getmtime/getsize/…`,
+   `os.stat/listdir/scandir/remove/replace/makedirs/…`, `shutil.*`,
+   `glob.*`, `open`, `io.open`, `zipfile.ZipFile`, `openpyxl.load_workbook`,
+   `docx.Document` - and, when one is given a path under the tree from a
+   frame in `run_workflow.py` or `co_state.py`, appends a line to a log AND
+   raises. Both, because the engine wraps whole steps in `except Exception`
+   and a raised error alone could be swallowed. `co_filestore.py`'s own calls
+   pass; the stage directory is outside the tree and passes.
+   `tests/test_no_fs_bypass_runtime.py` replays the eight fixture COs
+   through the real engine in local mode under the trap (eight of eight
+   clean, each writing its state file), then reinstates the exact pre-fix
+   `_find_intake_json` for one CO and asserts the run is caught - it is, on
+   `os.path.getmtime` in that frame. Without the fixture store the replay
+   reports SKIPPED in capitals and the trap's self-test still runs.
+
+**Fourth attempt:** image **`part-c-compare-5`**, built 2026-10-28 and
+checked inside the image the same way as before; the filled spec updated.
+The commands are the third attempt's with the tag changed:
+
+```
+az containerapp job update -n phbplat-prod-co-compare -g <resource group> --image phbplatprodovwzv7.azurecr.io/phb-co-engine:part-c-compare-5
+az containerapp job show   -n phbplat-prod-co-compare -g <resource group> --query properties.template.containers[0].image -o tsv
+az containerapp job start  -n phbplat-prod-co-compare -g <resource group>
+az containerapp job execution list -n phbplat-prod-co-compare -g <resource group> -o table
+az containerapp job logs show -n phbplat-prod-co-compare -g <resource group> --container compare --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\compare-job-run4.log
+```
+
+`job show` must print `-5` before `job start`. Read
+`runs/<id>/compare-transcript.txt` and `_logs/` in the copy folder. The
+`runs/` folders from the first three runs stay until the comparison is
+written up.
+
+### The third run (2026-10-28, `runs/20261028-142400`): the Graph engine ran, and reached the wrong disk
+
+Image `part-c-compare-4`, the job updated and started by the owner. Every
+input verified, every tree built, the local half ran, and the Graph engine
+started for the first time - past the jail, past the token, into the CO -
+and every CO failed at the same line:
+
+```
+run_workflow.py line 3285, in _find_intake_json
+    for p in sorted(cands, key=os.path.getmtime, reverse=True)
+FileNotFoundError: … intake_….json
+```
+
+`os.path.getmtime` is the operating system's call, not the store's. The
+candidates were found through `FS.listdir` and confirmed through
+`FS.is_file`, both Graph requests, and then sorted by the mtime of a path on
+the container's disk, where nothing of the kind exists. In local mode the two
+clocks are the same file and the line is invisible; this was the first run
+in which they were not.
+
+**Why Part B missed it.** `tests/test_filestore_interface.py` has held
+"every read and write goes through the store" since the extraction, and
+`os.path.getmtime` was in its raw-call set. The scan visited `ast.Call`
+nodes and read `node.func`. A key function is an `ast.Attribute` passed as
+an argument; no call node has it as its function, so the scan never saw it.
+The same scan compared spelled names, so `import glob as _glob;
+_glob.glob(...)` never matched its `glob.glob` allow-list entry either - that
+entry had matched nothing since Part B, and the docstring on
+`_glob_session_mount` calling itself "the only filesystem call left" was a
+claim the test could not have checked.
+
+**The inventory, before anything was changed.** An AST walk over
+`run_workflow.py` and `co_state.py` recording every reference to `os`,
+`os.path`, `open`, `glob`, `shutil`, `pathlib`, `tempfile`, `zipfile`,
+`subprocess`, `openpyxl.load_workbook` and `docx.Document` - as a call, a
+key, a stored name or a bare mention - with import aliases resolved, then a
+grep for the method-style writers an AST walk by module name cannot see
+(`.save(`, reportlab, `csv.writer`, `json.dump`):
+
+| where | what | verdict |
+|---|---|---|
+| `_find_intake_json` 3285 | `os.path.getmtime` as a `sorted` key, on a tree path | **the bypass** - fixed |
+| `_glob_session_mount` 410 | `glob.glob("/sessions/*/mnt/…")` | sandbox mount probe; graph mode passes the root in and never reaches it; allowed by name |
+| module level 135, 144 | `os.path.expanduser("~")` | default host paths; reads the environment, touches no disk |
+| `render_xlsx_to_pdf` 1763, 1767 | `openpyxl.load_workbook(stage_xlsx)`, `subprocess.run(libreoffice …)` | the stage directory, local by the interface's contract; allowed by name |
+| `_try_base64_repair` 884 | `openpyxl.load_workbook(BytesIO)` | in memory |
+| `write_summary_docx` 1835 | `Document()` | no path; saved through `FS.save_docx` |
+| `co_state.migrate_legacy_filenames` 185 | `os.path.abspath` twice, in an equality | path-string work; on a drive-relative path under Linux a no-op |
+| everywhere else | `os.path.join / basename / dirname / splitext`, `os.environ`, `os.getpid` | pure |
+| `.save(`, `Canvas(`, `csv.writer`, `json.load/dump` on a path | none outside `FS.*` | - |
+
+So exactly one disk access on a tree path, and it is the one that failed.
+The store module itself was walked too: the base-class helpers load
+workbooks and zips from `BytesIO(self.read_bytes(path))`, and the only
+`open`/`os.*` calls in `GraphFileStore` are its `stage_*` methods.
+
+**The fix** is `key=FS.mtime` - both stores implement it; the Graph store
+reads `lastModifiedDateTime` and the local one calls `getmtime`, so the local
+half's behaviour is unchanged and the Part B differential re-run afterwards
+is still eight of eight.
+
+**The guard, in two halves, because a list of names is what just failed.**
+
+1. *Static.* The scanner in `test_filestore_interface.py` now reads every
+   `Name` and `Attribute` node wherever it sits, resolves `import … as` and
+   `from … import` first, covers `shutil`, `glob`, `pathlib`, `tempfile`
+   wholesale and `os`/`os.path` by function, and holds an allow-list keyed by
+   (module, function, resolved name) with a count, so a stale entry fails as
+   loudly as a new use. `test_the_scanner_sees_references_and_aliases`
+   feeds it seven snippets of the shapes it used to miss - a key function, a
+   callback in `map`, a module alias, a from-import, an aliased from-import,
+   a stored reference, `pathlib` - and the pure helpers under every spelling,
+   which must stay quiet. Run against the pre-fix engine, it reports the
+   3285 site and nothing else.
+2. *Runtime, needing no list.* `tests/fs_trap.py` wraps the functions that
+   can reach a disk - `os.path.exists/isfile/isdir/getmtime/getsize/…`,
+   `os.stat/listdir/scandir/remove/replace/makedirs/…`, `shutil.*`,
+   `glob.*`, `open`, `io.open`, `zipfile.ZipFile`, `openpyxl.load_workbook`,
+   `docx.Document` - and, when one is given a path under the tree from a
+   frame in `run_workflow.py` or `co_state.py`, appends a line to a log AND
+   raises. Both, because the engine wraps whole steps in `except Exception`
+   and a raised error alone could be swallowed. `co_filestore.py`'s own calls
+   pass; the stage directory is outside the tree and passes.
+   `tests/test_no_fs_bypass_runtime.py` replays the eight fixture COs
+   through the real engine in local mode under the trap (eight of eight
+   clean, each writing its state file), then reinstates the exact pre-fix
+   `_find_intake_json` for one CO and asserts the run is caught - it is, on
+   `os.path.getmtime` in that frame. Without the fixture store the replay
+   reports SKIPPED in capitals and the trap's self-test still runs.
+
+**Fourth attempt:** image **`part-c-compare-5`**, built 2026-10-28 and
+checked inside the image the same way as before; the filled spec updated.
+The commands are the third attempt's with the tag changed:
+
+```
+az containerapp job update -n phbplat-prod-co-compare -g <resource group> --image phbplatprodovwzv7.azurecr.io/phb-co-engine:part-c-compare-5
+az containerapp job show   -n phbplat-prod-co-compare -g <resource group> --query properties.template.containers[0].image -o tsv
+az containerapp job start  -n phbplat-prod-co-compare -g <resource group>
+az containerapp job execution list -n phbplat-prod-co-compare -g <resource group> -o table
+az containerapp job logs show -n phbplat-prod-co-compare -g <resource group> --container compare --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\compare-job-run4.log
+```
+
+`job show` must print `-5` before `job start`. Read
+`runs/<id>/compare-transcript.txt` and `_logs/` in the copy folder. The
+`runs/` folders from the first three runs stay until the comparison is
+written up.
+
 ## Step 7, second pass (2026-10-21): the credential is the platform's identity, and the test needs a job
 
 Vitis reported the federated credential added and the site grant made. Read
@@ -873,8 +1087,11 @@ Record the outcome, or the waiver and its reasoning, here.
     failed before comparing anything** (*The second run*): the instrument's
     own layout tripped the root jail, and the exit code was all it printed.
     Fixed and verified inside the image; the job spec in Azure was found
-    still on `-2` on 2026-10-28. Image `phb-co-engine:part-c-compare-4`;
-    the job update and the third run are the owner's (*Third attempt*)
+    still on `-2` on 2026-10-28. **Third run: the Graph engine ran and
+    every CO failed on one `os.path.getmtime` the Part B scan could not
+    see** (*The third run*): fixed, every filesystem reference inventoried,
+    the scan rewritten to read references, and a runtime trap added. Image
+    `phb-co-engine:part-c-compare-5`; the fourth run is the owner's
 11. **The flow-trigger decision — deferred, required before Phase 14**
     (*Before cutover*)
 

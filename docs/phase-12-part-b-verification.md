@@ -27,7 +27,7 @@ rest of this document.
 | | Why |
 |---|---|
 | Path arithmetic (`os.path.join`, `dirname`, `basename`, `splitext`) | String manipulation, not file access. The engine runs on Linux so these already produce forward slashes. Rewriting them would be a large diff buying nothing |
-| `_glob_session_mount` | Finds where the store's root is mounted. Asking the store where the store is would be circular, and a Graph run never reaches it. A test asserts this is the **only** raw filesystem call left |
+| `_glob_session_mount` | Finds where the store's root is mounted. Asking the store where the store is would be circular, and a Graph run never reaches it. A test asserted this was the **only** raw filesystem call left - and was wrong: it scanned calls, and `sorted(cands, key=os.path.getmtime)` in `_find_intake_json` is a reference, found by the third Part C comparison run on 2026-10-28. The scan now reads references with aliases resolved, and a runtime trap replays the fixture COs with the engine forbidden to touch its tree (`docs/phase-12-part-c-plan.md` → *The third run*) |
 | Local scratch (`stage_*`) | Workbook writes stage outside the synced folder because OneDrive will otherwise observe a half-written file and merge the two versions into a corrupt blend; LibreOffice needs a real local file. Both stores need scratch — for Graph it is where a download lands on its way to LibreOffice — so it is store *methods* but explicitly not store *content* |
 | In-memory validation | The base64 repair loads decoded bytes to check openpyxl can read them before writing anything, and the PDF path validates the staged local copy. Neither touches a store path. Both are in the test's `ALLOWED_RAW_CALLS` with reasons |
 

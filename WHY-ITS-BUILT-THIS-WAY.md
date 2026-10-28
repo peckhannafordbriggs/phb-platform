@@ -2740,6 +2740,48 @@ one module's events because that module wants its history on the screen
 reopens the question for every module; the module's own screens, which
 Freeze Protection already has, are where a unit's history belongs.
 
+## 74 · The engine's file-access guard reads references and replays real COs, because a list of calls is what failed
+
+**What.** Phase 12 Part B put one interface, `FileStore`, between the
+change-order engine and its files, and a test held the extraction: no raw
+filesystem call left in `run_workflow.py` or `co_state.py` except the ones
+listed with a reason. The third Part C comparison run (2026-10-28), the
+first in which the engine ran against a Graph-backed tree, failed every CO on
+`sorted(cands, key=os.path.getmtime)`. The guard now has two halves: a static
+scan that reads every `Name` and `Attribute` node with import aliases
+resolved, and a runtime trap (`tests/fs_trap.py`) that replays the eight
+fixture COs through the real engine with every disk-reaching function
+wrapped to log and raise when an engine frame names a tree path.
+
+**Why.** The old scan visited `ast.Call` nodes and read `node.func`. That is
+the natural way to write "find the calls to X", and it is wrong for the
+question being asked, which was "does anything here reach the disk". A key
+function, a callback handed to `map`, a function stored under another name
+and `from os.path import getmtime` all reach the disk without a call node
+whose function is `os.path.getmtime`. The scan also compared spelled names,
+so `import glob as _glob; _glob.glob(...)` never matched its own allow-list
+entry; that entry had matched nothing since the day it was written, and the
+engine's docstring calling the glob "the only filesystem call left" was a
+claim nothing had checked. In local mode none of this shows: the store's
+disk and the OS's disk are one, so a bypass returns the right answer. It
+takes a store whose files are somewhere else to make the line visible, and
+that is why Part C exists.
+
+The runtime half is there because the static half, however widened, is a
+list of names, and a list of names is exactly what just failed. The trap
+needs no list: wrap what can touch a disk, watch the caller's file, and run
+the real engine over real inputs. It is proved on itself - the exact pre-fix
+function is reinstated for one CO and must be caught - and the eight-of-eight
+clean replay is the same evidence the Part B differential rests on.
+
+**What breaks if you undo it.** Narrowing the scanner back to calls lets the
+next `key=` or `map(open, …)` through to the first Graph run, where it fails
+every CO at once and nothing in local testing predicts it. Dropping the
+mutation test lets the trap rot silently: a trap that wraps the wrong
+functions passes every replay. Routing the stage directory through the trap
+would flag every workbook save, because staging is local by the interface's
+own contract, and the first response would be to loosen the trap.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
