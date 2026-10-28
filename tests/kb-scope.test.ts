@@ -13,16 +13,24 @@ import {
 } from "@/lib/modules/knowledge-base/env";
 
 /**
- * Paths are real ones from the 221457_MAGNODE template folder, so a change
- * to the rules is tested against what the library actually holds.
+ * Paths are real ones from the template folders (221457_MAGNODE and the
+ * curated 224070_UC_OLD_CHEM), so a change to the rules is tested against
+ * what the library actually holds. Names only: no document content.
  */
 const ROOT = "221457_MAGNODE";
+const OLD_CHEM = "224070_UC_OLD_CHEM";
 
 describe("classifyPath", () => {
-  it("indexes an approved submittal and reads the job and folder", () => {
+  it("indexes an approved submittal and reads the job, folder and type", () => {
     expect(
       classifyPath(`${ROOT}/11 - SUBMITTALS/221457_SUB_Fans_Approved_20220120.pdf`, 4_792_112),
-    ).toEqual({ include: true, projectNumber: "221457", folderCode: "11" });
+    ).toEqual({
+      include: true,
+      projectNumber: "221457",
+      folderCode: "11",
+      fileType: "pdf",
+      archived: false,
+    });
   });
 
   it("takes the deepest folder code", () => {
@@ -32,18 +40,45 @@ describe("classifyPath", () => {
     expect(decision).toMatchObject({ include: true, folderCode: "2B" });
   });
 
+  it("indexes an ARCHIVE_ file and tags it archived", () => {
+    expect(
+      classifyPath(`${OLD_CHEM}/11 - SUBMITTALS/ARCHIVE_224070_SUB_Air_Valves_Rejected_20240119.pdf`),
+    ).toMatchObject({ include: true, archived: true, folderCode: "11" });
+  });
+
+  it("indexes a macro workbook", () => {
+    expect(
+      classifyPath(`${OLD_CHEM}/10 - CHANGE ORDERS/224070_COR_CO_014_RFI_244_Sheetmetal_Estimate_20240725.xlsm`),
+    ).toMatchObject({ include: true, fileType: "xlsm" });
+  });
+
   it.each([
-    [`${ROOT}/11 - SUBMITTALS/ARCHIVE_221457_SUB_Vents_Rejected_20220124.pdf`, "archive_prefix"],
     [`${ROOT}/12 - CORRESPONDENCE AND RFIS/DRAFT_221457_CORR_note.pdf`, "draft_prefix"],
     [`${ROOT}/11 - SUBMITTALS/README.txt`, "folder_readme"],
-    [`${ROOT}/1 - DWGS AND SPECS/1A - MECHANICAL DRAWINGS/221457_DWGS_MECHANICAL_IFC_20220121.pdf`, "drawings_folder"],
-    [`${ROOT}/1 - DWGS AND SPECS/1D - REVIT EXPORTS/model.pdf`, "drawings_folder"],
+    [`${ROOT}/1 - DWGS AND SPECS/1A - MECHANICAL DRAWINGS/221457_DWGS_MECHANICAL_IFC_20220121.pdf`, "drawings"],
+    [`${ROOT}/1 - DWGS AND SPECS/1D - REVIT EXPORTS/model.pdf`, "drawings"],
+    [`${OLD_CHEM}/1 - DWGS AND SPECS/1E - ADDENDA AND BULLETINS/224070_BUL_12_Drawings_20240605.pdf`, "drawings"],
+    [`${OLD_CHEM}/224070_GAP_LOG.md`, "project_root_file"],
     [`${ROOT}/2 - ESTIMATE/2B - VENDOR AND SUB QUOTES/221457_QUOTE_BLACGLU_PUMPS_20210716.doc`, "unsupported_type"],
     [`${ROOT}/2 - ESTIMATE/2A - ESTIMATE FILE/221457_EST_Master_v01.xlsx`, "restricted_folder"],
     [`${ROOT}/5 - PROJECT METRICS AND BENCHMARKS/5A - PHB COST SUMMARY/x.xlsx`, "restricted_folder"],
     [`${ROOT}/8 - FINANCIAL PERFORMANCE/8B - MARGIN OUTCOME SUMMARY/x.pdf`, "restricted_folder"],
   ])("skips %s as %s", (filePath, reason) => {
     expect(classifyPath(filePath)).toMatchObject({ include: false, reason });
+  });
+
+  it("skips _Drawings_ files only under folder 1", () => {
+    // RFIs and submittals with Drawings in the name are text worth reading.
+    expect(
+      classifyPath(`${OLD_CHEM}/12 - CORRESPONDENCE AND RFIS/224070_CORR_RFI_446_Drawings_Process_CHW_20241223.pdf`).include,
+    ).toBe(true);
+    expect(
+      classifyPath(`${OLD_CHEM}/11 - SUBMITTALS/ARCHIVE_224070_SUB_Louver_Shop_Drawings_Pending_20241108.pdf`).include,
+    ).toBe(true);
+    // Whole token only, even under folder 1.
+    expect(
+      classifyPath(`${OLD_CHEM}/1 - DWGS AND SPECS/1E - ADDENDA AND BULLETINS/224070_BUL_12_DrawingsList_20240605.pdf`).include,
+    ).toBe(true);
   });
 
   it("keeps the specifications and the datasheet, which are not restricted", () => {
@@ -55,26 +90,34 @@ describe("classifyPath", () => {
     expect(classifyPath(`${ROOT}/8 - FINANCIAL PERFORMANCE/README.txt`)).toMatchObject({
       reason: "restricted_folder",
     });
-    expect(classifyPath(`${ROOT}/2 - ESTIMATE/2A - ESTIMATE FILE/ARCHIVE_old.xlsx`)).toMatchObject({
+    expect(classifyPath(`${ROOT}/2 - ESTIMATE/2A - ESTIMATE FILE/DRAFT_old.xlsx`)).toMatchObject({
       reason: "restricted_folder",
     });
   });
 
+  it("does not read a folder code from the project folder itself", () => {
+    // A project named like a template folder must not restrict its contents.
+    expect(classifyPath("8 - SOMETHING/11 - SUBMITTALS/x.pdf")).toMatchObject({
+      include: true,
+      folderCode: "11",
+    });
+  });
+
   it("does not mistake 8 for a prefix of 8 in another code", () => {
-    // 11 and 12 contain no restricted code; only an exact match counts.
     expect(classifyPath(`${ROOT}/12 - CORRESPONDENCE AND RFIS/x.pdf`).include).toBe(true);
   });
 
   it("indexes the curator's notes beside the files", () => {
     expect(
-      classifyPath(`${ROOT}/10 - CHANGE ORDERS/+THIS_FOLDER_IS_MESSED_UP.txt`),
+      classifyPath(`${OLD_CHEM}/10 - CHANGE ORDERS/+ATTENTION_CO_LOG_MISMATCH.txt`),
     ).toMatchObject({ include: true, folderCode: "10" });
   });
 
-  it("skips a file over the size cap", () => {
+  it("skips a file over the size cap, and keeps one at it", () => {
     expect(classifyPath(`${ROOT}/11 - SUBMITTALS/big.pdf`, KB_MAX_FILE_BYTES + 1)).toMatchObject({
       reason: "too_large",
     });
+    expect(classifyPath(`${ROOT}/11 - SUBMITTALS/big.pdf`, KB_MAX_FILE_BYTES).include).toBe(true);
   });
 
   it("accepts Windows separators and an unrecognised top folder", () => {
@@ -82,6 +125,8 @@ describe("classifyPath", () => {
       include: true,
       projectNumber: null,
       folderCode: "11",
+      fileType: "pdf",
+      archived: false,
     });
   });
 });

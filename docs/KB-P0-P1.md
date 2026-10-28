@@ -80,13 +80,25 @@ Answers in P4 use Claude through the existing `ANTHROPIC_API_KEY`.
 | Rule | Reason recorded | Why |
 |---|---|---|
 | Folders `2A` estimate file, `5A` PH+B cost summary, `8` financial performance | `restricted_folder` | One flat grant: indexing them lets every grantee ask about margins and job cost. Lifting this needs a per-folder permission in the module first |
-| Folders `1A` mechanical drawings, `1D` Revit exports | `drawings_folder` | Drawing PDFs extract as scattered labels that match every question and answer none. Revisit after P3 measurements |
-| `ARCHIVE_` prefix | `archive_prefix` | Template rule: rejected or superseded |
+| Folders `1A` mechanical drawings, `1D` Revit exports, and `_Drawings_` files elsewhere under folder `1` (the 1E bulletin sets) | `drawings` | Drawing PDFs extract as scattered labels that match every question and answer none. Only under folder 1: an RFI or submittal with Drawings in its name (12, 11) is text worth reading. Revisit after P3 measurements |
 | `DRAFT_` prefix | `draft_prefix` | Template rule: unreviewed |
 | `README.txt` | `folder_readme` | Filing guidance, not project knowledge |
-| Not `.pdf` `.docx` `.xlsx` `.md` `.txt` | `unsupported_type` | No reader yet. One legacy `.doc` quote in the sample |
-| Over 50 MB | `too_large` | Largest sample file is 19 MB |
+| A file directly in the project folder | `project_root_file` | Curation artefacts such as `224070_GAP_LOG.md`, not project documents |
+| Not `.pdf` `.docx` `.xlsx` `.xlsm` `.md` `.txt` | `unsupported_type` | No reader yet. `.msg` and legacy `.doc` in the samples |
+| Over 250 MB | `too_large` | Largest curated file is 82 MB; specs and contracts pass 1,000 pages |
 | No extractable text | `empty_text` | Set by P2 when a PDF has no text layer |
+
+`ARCHIVE_` files are **indexed**, tagged `is_archived`. They are superseded or
+rejected versions: an answer never leads with one, but can use it to explain
+what changed. A CHECK forbids an archived file being `is_latest`.
+
+**Versions** (`lib/modules/knowledge-base/naming.ts`). The family is the file
+name without `ARCHIVE_`, the status word and the `_YYYYMMDD` / `_vNN` suffix, so
+`ARCHIVE_224070_SUB_Air_Valves_Rejected_20240119.pdf` and
+`224070_SUB_Air_Valves_Approved_20241121.pdf` are one family. The latest is the
+newest non-archived member by date or version; on a tie, Executed or Approved
+beats Pending or Unexecuted beats Rejected (subcontracts file both copies under
+one date). A family whose every member is archived has no latest.
 
 Curator notes such as `+THIS_FOLDER_IS_MESSED_UP.txt` **are** indexed: the
 MAGNODE one explains that the CO numbers on the CO sheets disagree with the log,
@@ -103,7 +115,9 @@ those survive tokenising.
 
 ## The schema (Phase 1)
 
-Prisma models in `prisma/schema.prisma`; migration `20261027120000_add_kb_index`.
+Prisma models in `prisma/schema.prisma`; migrations `20261027120000_add_kb_index`
+and `20261028120000_kb_archived_versions` (archived files indexed, skip reasons
+revised).
 Two kinds of table, with different owners:
 
 **The index - derived from SharePoint, safe to rebuild.**
@@ -190,8 +204,10 @@ Until 2 and 3 land, Phases 1 to 3 can be built and tested against
   indefinitely.
 - **Report a wrong answer:** in the first release (`kb_answer_reports`), not
   deferred.
-- **Scaffold project:** `221457_MAGNODE` is the one complete project to build and
-  test the pipeline against.
+- **Scaffold project:** `224070_UC_OLD_CHEM` (curated) is the project to build
+  and test the pipeline against.
+- **Archived versions (2026-10-28):** `ARCHIVE_` files are indexed and tagged,
+  not skipped. Drawing sets in 1E (`_Drawings_`) are skipped with 1A and 1D.
 
 ## Open questions
 

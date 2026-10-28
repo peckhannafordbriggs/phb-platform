@@ -11137,9 +11137,12 @@ SELECT path, status, skip_reason, error, chunk_count, indexed_at, last_seen_at
 |---|---|
 | No row | The sync has not run since the file was added, or it is outside the library |
 | `skipped`, `restricted_folder` | Deliberate. Folders 2A, 5A and 8 are not indexed because the module has one flat grant. `docs/KB-P0-P1.md` |
-| `skipped`, `drawings_folder` | Deliberate. Drawings and Revit exports, folders 1A and 1D |
-| `skipped`, `archive_prefix` / `draft_prefix` | The file name starts `ARCHIVE_` or `DRAFT_`. Rename it in SharePoint if it should be searchable |
-| `skipped`, `unsupported_type` | Not PDF, DOCX, XLSX or TXT. A legacy `.doc` can be saved as `.docx` |
+| `skipped`, `drawings` | Deliberate. Folders 1A and 1D, and `_Drawings_` files under folder 1 (bulletin sets in 1E) |
+| `skipped`, `draft_prefix` | The file name starts `DRAFT_`. Rename it in SharePoint if it should be searchable |
+| `skipped`, `project_root_file` | It sits directly in the project folder, outside the template folders (a gap log, a curation note). Move it into a template folder if it is project knowledge |
+| `skipped`, `unsupported_type` | Not PDF, DOCX, XLSX, XLSM, MD or TXT. A legacy `.doc` can be saved as `.docx`; `.msg` mail is not read |
+| `skipped`, `too_large` | Over 250 MB |
+| `is_archived` true | An `ARCHIVE_` file. Indexed, but never `is_latest`, so answers cite it only to explain a change. This is expected, not a fault |
 | `skipped`, `empty_text` | A scanned PDF with no text layer |
 | `failed` | `error` says why. Re-running the sync retries it |
 | `indexed` with chunks | Indexed. The question is a retrieval problem, not a sync problem |

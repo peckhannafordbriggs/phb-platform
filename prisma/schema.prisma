@@ -934,6 +934,9 @@ model KbDocument {
   familyKey    String  @map("family_key")
   versionLabel String? @map("version_label")
   isLatest     Boolean @default(true) @map("is_latest")
+  /// An `ARCHIVE_` file: superseded or rejected. Indexed, so an answer can
+  /// explain a change, but never the latest (CHECK).
+  isArchived   Boolean @default(false) @map("is_archived")
 
   status KbDocumentStatus @default(pending)
   /// CHECK: one of KB_SKIP_REASONS (scope.ts); present exactly when skipped.

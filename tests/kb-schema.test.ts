@@ -61,6 +61,8 @@ interface DocOverrides {
   skipReason?: string | null;
   error?: string | null;
   chunkCount?: number;
+  isArchived?: boolean;
+  isLatest?: boolean;
 }
 
 async function insertDocument(tx: Tx, o: DocOverrides = {}): Promise<string> {
@@ -70,9 +72,9 @@ async function insertDocument(tx: Tx, o: DocOverrides = {}): Promise<string> {
     tx.$queryRawUnsafe<Array<{ id: string }>>(
       `INSERT INTO kb_documents
          (id, project_id, source_kind, source_id, path, file_name, file_type, family_key,
-          status, skip_reason, error, chunk_count, updated_at)
+          status, skip_reason, error, chunk_count, is_archived, is_latest, updated_at)
        VALUES (gen_random_uuid(), $1::uuid, 'local', $2, $3, 'zztest.pdf', 'pdf', 'zztest',
-               $4::"KbDocumentStatus", $5, $6, $7, now())
+               $4::"KbDocumentStatus", $5, $6, $7, $8, $9, now())
        RETURNING id::text AS id`,
       projectId,
       `zztest-${n}`,
@@ -81,6 +83,8 @@ async function insertDocument(tx: Tx, o: DocOverrides = {}): Promise<string> {
       o.skipReason ?? null,
       o.error ?? null,
       o.chunkCount ?? 0,
+      o.isArchived ?? false,
+      o.isLatest ?? true,
     ),
   );
   return row.id;
@@ -339,6 +343,19 @@ describe("kb_documents", () => {
       await insertDocument(tx, { status: "skipped", skipReason: "felt_like_it" });
     });
     expect(error.message).toMatch(/kb_documents_skip_reason_valid/);
+  });
+
+  it("refuses an archived document marked latest", async () => {
+    const error = await expectRejection(async (tx) => {
+      await insertDocument(tx, { isArchived: true, isLatest: true });
+    });
+    expect(error.message).toMatch(/kb_documents_archived_never_latest/);
+  });
+
+  it("accepts an archived document that is not latest", async () => {
+    await inRollback(async (tx) => {
+      await insertDocument(tx, { isArchived: true, isLatest: false });
+    });
   });
 
   it("refuses a failed document with no error", async () => {
