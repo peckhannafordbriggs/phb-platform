@@ -441,17 +441,27 @@ in `phb-co-engine` reads references with aliases resolved, and
 forbidden to touch its tree. The job and the scratch copy were deleted on
 2026-10-28; the verification record says how to recreate both.
 
-**Open before Phase 14 — the Part C to-do, both in the plan doc's *Before
-cutover* sections:**
+**The two before-cutover items, both decided yes on 2026-10-28 (the plan
+doc's *Before cutover* sections):**
 
-1. **The intake-selection rule.** `_find_intake_json` takes the newest
-   `intake_*.json` by the store's mtime; anything that re-stamps an older
-   intake makes it the newest, silently. The creation time in the filename is
-   the deterministic key. Make the change, with the Part B differential as
-   the regression check, or decline it knowingly.
-2. **The flow-trigger decision** (the twelfth flow): deferred by the owner,
-   required before cutover; the plan doc has the evidence in hand and the two
-   ways to close it.
+1. **The intake-selection rule — done, in the repository.** `_find_intake_json`
+   now takes the newest `intake_*.json` by the creation time Gate A stamped
+   into its name, reading the store's mtime only for a legacy `intake.json`
+   or a tie, the exact name last (`phb-co-engine`, `feat/intake-by-name-stamp`;
+   eleven tests; differential still eight of eight). A read-only survey of
+   the live tree found three folders with two intakes and no disagreement
+   between name order and either clock, so no current outcome changes.
+   **The laptop's engine keeps the old rule until cutover**, by decision;
+   Phase 14's cutover diff must list this function.
+2. **The flow-trigger check — built, not yet run.** `tests/probe_flow_trigger.py`
+   *(phb-co-engine, `feat/flow-trigger-probe`)* writes the engine's two
+   sentinel shapes — one PUT, and PUT-then-rename — as the engine's own
+   identity under non-sentinel names into a scratch folder; a throwaway
+   flow in the owner's account with the sentinel flows' trigger and one
+   Compose is the observer. The flow build steps, the job commands, the
+   filled spec's location and what counts as a pass are in the plan doc.
+   The owner runs it; the outcome is recorded there. A via-tmp write that
+   the trigger sees only under its tmp name is the finding to watch for.
 
 A third open decision, not a blocker: the `PnP.Powershell` certificate on the
 `phb-co-engine` app registration (`runbook.md` → *Open decision*).
