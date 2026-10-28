@@ -161,11 +161,12 @@ the resulting diff unreadable. Until it is answered, the shift is a known
 pending risk, not a settled non-issue. Record it in every run summary rather
 than filtering it out.
 
-A neighbouring question is **not** this one and has its own gate: whether a
-Power Automate trigger fires on a file an application-only principal wrote
-through Graph. That is the *Before cutover* section of the Part C plan,
-deferred by the owner on 2026-10-21 and required before Phase 14. Part E
-cannot answer it, because a shadow run writes nothing a flow watches.
+A neighbouring question is **not** this one: whether a Power Automate
+trigger fires on a file an application-only principal wrote through Graph.
+That is the *Before cutover* section of the Part C plan — deferred by the
+owner on 2026-10-21, **observed and passed on 2026-10-28** with two samples.
+Part E could not have answered it, because a shadow run writes nothing a
+flow watches.
 
 ---
 
@@ -353,8 +354,8 @@ sustained period and the disagreements are understood. Not when it runs.**
 - `docs/12-ai-layer-inventory.md` § 4 — where judgment actually happens; § 7b,
   the time-derived field list; § 7c, why Office files are compared by structure
 - `docs/phase-12-part-c-plan.md` — what Part C settled: the timezone
-  measurement, the workbook rewrite on upload, and the flow-trigger decision
-  that gates Phase 14
+  measurement, the workbook rewrite on upload, and the flow-trigger check
+  (passed 2026-10-28); `docs/PHASE-14.md` is the cutover checklist
 - `docs/phase-12-part-b-verification.md` — the eight-CO differential and its
   classes
 - `docs/13-needs-review.md` — what a refusal looks like on the live pipeline

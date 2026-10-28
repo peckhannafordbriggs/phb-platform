@@ -451,7 +451,7 @@ forbidden to touch its tree. The job and the scratch copy were deleted on
    still eight of eight. A read-only survey of the live tree found no folder
    where name order and either clock disagree, so no current outcome changes.
    **The laptop's engine keeps the old rule until cutover**, by decision;
-   Phase 14's cutover diff must list this function.
+   it is item 1.1 of the cutover checklist, `docs/PHASE-14.md`.
 2. **The flow-trigger check — PASSED, two samples.** A throwaway flow in the
    owner's account on SharePoint's *When a file is created (properties
    only)* fired for both files the engine's identity wrote through Graph by
@@ -461,10 +461,12 @@ forbidden to touch its tree. The job and the scratch copy were deleted on
    on it. The job, the folder and the flow are deleted.
 
 **Part C therefore has nothing left that gates Phase 14.** Open and not
-blocking: the `PnP.Powershell` certificate on the app registration.
-
-A third open decision, not a blocker: the `PnP.Powershell` certificate on the
-`phb-co-engine` app registration (`runbook.md` → *Open decision*).
+blocking: the `PnP.Powershell` certificate on the `phb-co-engine` app
+registration (`runbook.md` → *Open decision*). **Everything any document
+says must happen at, before or after cutover is gathered in one place,
+`docs/PHASE-14.md`, each item with its source** — the cutover diff, the
+prompts' change of authority, the schedule, rollback, and where the
+documents disagree. Add to it only from a source document.
 
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
@@ -1349,6 +1351,7 @@ either anywhere else — point at them.
 | `docs/04-auth-and-permissions.md` | Login rules, authorization contract, admin security |
 | `docs/05-database-and-sources.md` | Schema ownership, migration vs seed, source of truth |
 | `docs/06-roadmap.md` | Phases 1–14 |
+| `docs/PHASE-14.md` | **The cutover checklist — the one list for cutover day.** Every item any document says must happen at, before or after the cloud engine takes over, with its source; first the cutover diff (the intake rule, the by-name refusal, the Bid Tracker write, the timezone stamps), then prompts, schedule, rollback, and where the documents disagree |
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
 | `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon, headroom |
 | `docs/09-bas-what-is-built.md` | BAS: what exists, and which of the two repos owns each piece |

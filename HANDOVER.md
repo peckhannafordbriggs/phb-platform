@@ -355,7 +355,9 @@ so the sequence matters: extract a file-access layer from a ~196 KB Python scrip
 containerize it, shadow-run against a copy for weeks, and diff the output before cutover.
 Never run both against the live folders at once — the lock file and duplicate detection
 make that actively dangerous. Keep the laptop path documented as rollback for at least a
-month after cutover.
+month after cutover. **When cutover day comes, work from `docs/PHASE-14.md`**: it is the
+one list of everything the documents say must happen then, each item with its source,
+starting with the ways the laptop's engine and the repository's engine differ.
 
 ---
 
