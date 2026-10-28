@@ -2783,6 +2783,37 @@ decided and `tests/test_compare_layout.py` holds it inside the jail. If it is
 a hand-run engine, put `--live-path` and `CO_REPORT_DIR` under
 `--sharepoint-root`. A one-second exit is never a store finding.
 
+If the symptom appears on a run **after** 2026-10-21 and the block still
+shows a bare `rc=1` with no quoted stderr, the job is running an old image:
+`az containerapp job show … --query properties.template.containers[0].image`
+names the tag, and on 2026-10-28 it still named `part-c-compare-2` a week
+after `-3` was built. A tag changed in the filled spec on disk changes
+nothing in Azure until `az containerapp job update --image …` is run; check
+the tag with `job show` before every `job start`.
+
+### The comparison job's log is out of order, or a CO's lines are missing
+
+**Symptom.** `az containerapp job logs show` returns the run with lines
+shuffled: one CO's *only in local* list appears under the next CO's heading,
+`SUMMARY` lines sit between two COs, a block's `graph rc=…` line comes
+before its `tree built by copy` line. Saved to a file from PowerShell with
+`>`, the file is also UTF-16.
+
+**Cause.** Log Analytics orders the lines by ingestion time, not by the
+order the container wrote them, and lines written within the same second
+come back in any order. Nothing is missing; it is unreadable. The UTF-16 is
+PowerShell's `>` redirect.
+
+**Fix.** Read the instrument's own record, not the job log. Since
+2026-10-28 `compare_stores.py` writes `compare-transcript.txt` under the
+run's folder in the copy root (`/phb-co-engine scratch/part-c-copy-<date>/
+runs/<id>/`), stdout and stderr in the order written, rewritten after every
+CO; and `_logs/<tag>-local.log` and `_logs/<tag>-graph.log` beside it, each
+engine's whole output. Open them in SharePoint. When saving the job log from
+PowerShell, pipe through `Out-File -Encoding utf8` rather than `>`. If the
+transcript is absent, the instrument said why on the log - `(could not keep
+…)` - and the run's verdict is unaffected.
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not

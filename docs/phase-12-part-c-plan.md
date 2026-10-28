@@ -576,8 +576,55 @@ seven empty folders — nothing the engine wrote, since it never ran — plus
 the empty `runs/20261021-193816` from the first run. Left in place until the
 comparison is written up.
 
-**Third attempt:** image `phb-co-engine:part-c-compare-3`, the same job spec
-with the tag changed. Not yet run.
+**Third attempt (prepared 2026-10-21, re-checked 2026-10-28):** image
+`part-c-compare-3` was built by `az acr build` twelve seconds after the fix
+commit, and on 2026-10-28 it was pulled and checked rather than trusted:
+`layout()` puts `rep` inside `CMP`, `tests/test_compare_layout.py` is in the
+image, and both it and the root-jail suite pass when run inside it. The
+refusal was reproduced again offline the same day - the second run's
+arguments with a dummy token end in `refusing to run: CO_REPORT_DIR
+'…/rfi238/rep' is outside this store's root '…/rfi238/CMP'`, exit 1, no
+request; with `rep` inside `CMP` the engine reaches its first Graph call.
+
+**But the job was never told.** Read back through the REST API on
+2026-10-28, `phbplat-prod-co-compare` still carried
+`phb-co-engine:part-c-compare-2`, and its only execution is the second run.
+The filled spec on disk said `-3`; the spec in Azure did not. A third start
+would have been the second run again.
+
+**One more thing both logs showed: Log Analytics returns the job log out of
+order.** Both saved logs have one CO's *only in local* list threaded through
+the next CO's heading, because the log is ordered by ingestion time, not by
+the order the lines were written, and a scrambled log is a second way a run
+reads as something it was not. So the instrument now keeps its own record,
+through its own store, inside the copy root:
+
+| path, under `runs/<id>/` | contents |
+|---|---|
+| `compare-transcript.txt` | everything the instrument printed, stdout and stderr in the order written; rewritten after every CO, so a run the 1800 s timeout cuts off still leaves what it had |
+| `_logs/<tag>-local.log`, `_logs/<tag>-graph.log` | each engine's exit code and its **whole** stdout and stderr, not the 40-line tail the log shows |
+
+`_logs` is beside the per-CO trees and never inside one, because
+`download_tree` mirrors a tree whole and the differ would otherwise see a log
+as an engine output; `tests/test_compare_layout.py` holds the record paths
+inside the copy root and outside every tree. A record that cannot be written
+is said on the log and changes no verdict. Image **`part-c-compare-4`**, the
+filled spec updated to match. The commands, one at a time, from PowerShell:
+
+```
+az containerapp job update -n phbplat-prod-co-compare -g <resource group> --image phbplatprodovwzv7.azurecr.io/phb-co-engine:part-c-compare-4
+az containerapp job show   -n phbplat-prod-co-compare -g <resource group> --query properties.template.containers[0].image -o tsv
+az containerapp job start  -n phbplat-prod-co-compare -g <resource group>
+az containerapp job execution list -n phbplat-prod-co-compare -g <resource group> -o table
+az containerapp job logs show -n phbplat-prod-co-compare -g <resource group> --container compare --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\compare-job-run3.log
+```
+
+The second command is the check the second attempt skipped: it must print
+the `-4` tag before `start`. Expect the execution to run ten to fifteen
+minutes - the second run spent five with no engine runs at all - and read
+`runs/<id>/compare-transcript.txt` in the copy folder, not the job log. The
+partial `runs/` folders from the first two runs stay until the comparison is
+written up.
 
 ## Step 7, second pass (2026-10-21): the credential is the platform's identity, and the test needs a job
 
@@ -822,8 +869,12 @@ Record the outcome, or the waiver and its reasoning, here.
    `/phb-co-engine scratch/part-c-copy-2026-10-21` (*Where the copy lives*)
 10. **The byte-identical comparison — first run failed before comparing
     anything** (*The first run*): inputs verified by bytes where SharePoint
-    rewrites workbooks, and a 400 whose body was dropped. Both fixed; image
-    `phb-co-engine:part-c-compare-2`; the second run is the owner's to start
+    rewrites workbooks, and a 400 whose body was dropped. **Second run
+    failed before comparing anything** (*The second run*): the instrument's
+    own layout tripped the root jail, and the exit code was all it printed.
+    Fixed and verified inside the image; the job spec in Azure was found
+    still on `-2` on 2026-10-28. Image `phb-co-engine:part-c-compare-4`;
+    the job update and the third run are the owner's (*Third attempt*)
 11. **The flow-trigger decision — deferred, required before Phase 14**
     (*Before cutover*)
 

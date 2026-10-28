@@ -479,8 +479,14 @@ failing. The second run's inputs verified, but the Graph engine never ran: the
 instrument put the report directory beside `CMP` while the jail root was
 `CMP`, the engine refused in one second eight times, and the instrument
 printed only `rc=1`. Layout fixed and held inside the jail by test, any
-non-zero engine exit now quotes its stderr. Image `part-c-compare-3`; the
-third run has not happened. The twelfth-flow question is deferred by the
+non-zero engine exit now quotes its stderr. **2026-10-28:** the fix was
+verified inside the pushed `part-c-compare-3` image, and the job in Azure
+was found still pointing at `part-c-compare-2` - the spec was never
+updated, so the third run would have repeated the second. The instrument
+now also keeps an ordered `compare-transcript.txt` and both engines' full
+output under `runs/<id>/`, because Log Analytics returns the job log out of
+order. Image `part-c-compare-4`; the job update and the third run are the
+owner's, commands in the plan doc. The twelfth-flow question is deferred by the
 owner and is a **required step before Phase 14** — the plan doc's *Before
 cutover* section has the evidence in hand and the two ways to close it.
 
