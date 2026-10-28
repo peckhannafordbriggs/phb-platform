@@ -1158,12 +1158,29 @@ final name. A "file created" trigger can see those differently — the
 second creates the item under the tmp name and renames it, and a poll
 between the two sees the tmp name. So the probe,
 `tests/probe_flow_trigger.py` *(phb-co-engine, branch
-`feat/flow-trigger-probe`)*, creates one folder under its root, as the
-engine creates an attempt folder, and writes `probe_direct.json` by the
-first method and `probe_via_tmp.json` by the second, by the same store
-class, the same methods and the same argument shapes — `tests/test_flow_trigger_probe.py`
-ties both to the engine's two write sites, so a change of shape there
-fails there. The sentinel names themselves are refused by construction.
+`feat/flow-trigger-probe`)*, writes `probe_direct_<run id>.json` by the
+first method and `probe_via_tmp_<run id>.json` by the second, by the same
+store class, the same methods and the same argument shapes —
+`tests/test_flow_trigger_probe.py` ties both to the engine's two write
+sites, so a change of shape there fails there. The sentinel names
+themselves are refused by construction.
+
+**Straight into the folder, no subfolder — changed 2026-10-28 after the
+flow was built.** The engine writes into a fresh attempt folder it creates
+first, and the probe's first version did the same. The owner's trigger
+turned out to offer four fields — site, library, folder, columns — and no
+subfolder option, and whether *When a file is created (properties only)*
+watches subfolders is not documented either way: Microsoft's page for the
+older folder-scoped trigger says that one does not, third-party pages for
+this one say it does, and forum reports conflict. The test must not be
+able to fail for that reason, so the probe writes directly into
+`flow-trigger-probe` with the run id in each name, because this trigger
+fires on creation and a second run must create new items rather than
+modify the first run's. Depth is not the question being asked: Intake 2
+and 3 fire today on sync-written files two folders below their trigger
+folder with this same trigger type, so depth is established in production
+for this connector; what nobody has observed is the *principal*, and that
+is what the flat probe isolates.
 The root must contain `scratch`, and the store refuses the live folder by
 name whatever the root says. `infra/flow-trigger-job.sh` is the job's
 command; the filled spec is `C:\Users\Msheth\flowprobe-job.filled.yaml`
@@ -1181,33 +1198,24 @@ must exist before the flow is built, because the trigger's folder picker
 only offers folders that exist. It sits beside `CO Managment Process`,
 never inside it.
 
-**B. The throwaway flow (Power Automate, your own account).**
+**B. The throwaway flow (Power Automate, your own account) — as built on
+2026-10-28, which is the record; the steps as first written assumed an
+*Include Subfolders* option this trigger does not have.**
 
 1. `make.powerautomate.com`, your default environment, *My flows* → *New
-   flow* → *Automated cloud flow*. Name it `ZZ flow-trigger probe - delete
-   after 2026-10` so nobody mistakes it for one of the eleven. In the
-   trigger search type `When a file is created (properties only)` and pick
-   the **SharePoint** one. *Create*.
-2. Trigger fields: *Site Address* — pick
-   `https://peckhannafordbriggs.sharepoint.com/sites/AISandbox` (type the
-   URL under *Enter custom value* if it is not listed); *Library Name* —
-   `Documents`; *Folder* — use the picker to choose
-   `/phb-co-engine scratch/flow-trigger-probe`; under *Advanced parameters*
-   set *Include Subfolders* to **Yes**. That is Intake 2 and 3's shape. The
-   connection is your own account; it needs only read on the library, which
-   you have. Leave the trigger's settings at their defaults — do not add a
-   trigger condition, because the point is to see every item.
-3. *New step* → search `Compose` (Data Operation) → *Inputs*: switch to the
-   expression editor and paste, as one expression:
-   ```
-   json(concat('{"name":"', triggerBody()?['{FilenameWithExtension}'], '","path":"', triggerBody()?['{FullPath}'], '","isFolder":"', string(triggerBody()?['{IsFolder}']), '","created":"', triggerBody()?['Created'], '","modified":"', triggerBody()?['Modified'], '","author":"', triggerBody()?['Author']?['DisplayName'], '","editor":"', triggerBody()?['Editor']?['DisplayName'], '","id":"', triggerBody()?['{Identifier}'], '"}'))
-   ```
-   If the editor rejects `json(concat(…))`, put the dynamic-content tokens
-   *Name with extension*, *Full Path*, *Is Folder*, *Created*, *Modified*,
-   *Created By DisplayName*, *Modified By DisplayName* into the Inputs box
-   one per line instead; the run history shows them either way.
-4. *Save*. No other action. It emails nobody and writes nothing. Do not use
-   the *Test* button; the job is the test.
+   flow* → *Automated cloud flow*, named so nobody mistakes it for one of
+   the eleven. Trigger: **SharePoint → When a file is created (properties
+   only)**.
+2. The trigger has exactly four fields, and they are set to: *Site
+   Address* `https://peckhannafordbriggs.sharepoint.com/sites/AISandbox`;
+   *Library Name* `Documents`; *Folder* `/phb-co-engine scratch/flow-trigger-probe`;
+   *Limit Columns by View* `Use all columns (Do not limit)`. There is no
+   subfolder option and no trigger condition. The connection is the owner's
+   own account, which needs only read on the library.
+3. One **Compose** whose inputs are the trigger's *File name with
+   extension*, *Full Path*, *Created*, *Modified*, *Created By* and *ID*.
+4. Saved and **On**. No other action: it emails nobody and writes nothing.
+   The job is the test; the *Test* button is not used.
 
 **C. The image, the job, the run — PowerShell, one at a time.** From the
 `phb-co-engine` checkout on `feat/flow-trigger-probe` (or `main` after it
@@ -1236,11 +1244,12 @@ az containerapp job execution list -n phbplat-prod-co-flowprobe -g <resource gro
 az containerapp job logs show -n phbplat-prod-co-flowprobe -g <resource group> --container flowprobe --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\flowprobe-run1.log
 ```
 
-The log must end `### PROBE EXIT 0` after a `folder now:` line naming
-exactly `probe_direct.json` and `probe_via_tmp.json`, and two `item` lines
-whose `createdBy.application` names `phb-co-engine`. A `.tmp` in the
-folder listing, or `PROBE EXIT 2`, is a finding about the via-tmp shape
-before the flow is even consulted.
+The log must end `### PROBE EXIT 0` after a `this run :` line naming
+exactly `probe_direct_<run id>.json` and `probe_via_tmp_<run id>.json`
+(the `run id` line above it gives the id; `folder now:` also lists any
+earlier runs' files), and two `item` lines whose `createdBy.application`
+names `phb-co-engine`. A `.tmp` for this run in the listing, or `PROBE EXIT
+2`, is a finding about the via-tmp shape before the flow is even consulted.
 
 **D. What counts as a pass.** Open the flow → *28-day run history*; allow
 up to fifteen minutes (the trigger polls; Intake 2's spec says every
@@ -1248,12 +1257,18 @@ minute, Intake 3's every five, and a personal flow may be slower).
 
 | You see | It means |
 |---|---|
-| a run whose Compose `name` is `probe_direct.json` | the `scrub_result.json` shape fires on an item the app created through Graph — **pass for Intake 2 and 4's shape** |
-| a run whose Compose `name` is `probe_via_tmp.json` | the `vendor_drafts.json` shape fires with its **final** name — **pass for Intake 3's shape**; together with the line above, **the check passes** |
-| a run showing `probe_via_tmp.json.tmp` and **no** run showing `probe_via_tmp.json` | the rename is invisible to the trigger: under Graph, Gate B's condition would never match. **A finding** — the via-tmp write must become a direct write before Phase 14 (it is a `write_text_via_tmp` → `write_text` change at one site, with the differential as its check) |
-| a run with `isFolder` = `true` for the run folder | noise the real flows' conditions already filter; note and ignore |
-| `author` is the app (`phb-co-engine`) rather than a person | expected; record it — no card in the seven intake flows reads author (inferred, from the card map) |
-| **no run at all** for `probe_direct.json` after fifteen minutes, while the job log shows both items created | the trigger does not see application-created items. **Cutover blocked**; this is the finding the phase doc feared, and it goes to Vitis with the item ids from the log |
+| a run whose *File name with extension* is `probe_direct_<run id>.json` | the `scrub_result.json` shape fires on an item the app created through Graph — **pass for Intake 2 and 4's shape** |
+| a run whose *File name with extension* is `probe_via_tmp_<run id>.json` | the `vendor_drafts.json` shape fires with its **final** name — **pass for Intake 3's shape**; together with the line above, **the check passes** |
+| a run showing `probe_via_tmp_<run id>.json.tmp` and **no** run showing `probe_via_tmp_<run id>.json` | the rename is invisible to the trigger: under Graph, Gate B's condition would never match. **A finding** — the via-tmp write must become a direct write before Phase 14 (it is a `write_text_via_tmp` → `write_text` change at one site, with the differential as its check) |
+| *Created By* is the app (`phb-co-engine`) rather than a person | expected; record it — no card in the seven intake flows reads author (inferred, from the card map) |
+| **no run at all** for `probe_direct_<run id>.json` after fifteen minutes, while the job log shows both items created | the trigger does not see application-created items. **Cutover blocked**; this is the finding the phase doc feared, and it goes to Vitis with the item ids from the log |
+
+What the flat layout changes in this table: nothing about the two shapes
+or the principal, which is the question; the folder row is gone because no
+folder is created; and a pass here says nothing new about depth, which the
+live flows already demonstrate for this trigger type and which Phase 14's
+first shadow run, writing into real attempt folders, will show for the app
+principal as a matter of course.
 
 Run the job a second time for a second sample before concluding; the via-tmp
 race, if it exists, is a timing race.
