@@ -1,5 +1,13 @@
 # Phase 12 Part C — plan, and what has been settled so far
 
+**Status, 2026-10-28: the comparison acceptance bar is met.** The fifth run,
+`20261028-155543`, produced equivalent output through both stores for all
+eight fixture COs, with both halves reading the same intake for each
+two-intake CO. The record — the bar, the five runs including the four that
+failed, what the result proves and does not, what was kept and deleted — is
+`docs/phase-12-part-c-verification.md`. Two decisions remain before Phase 14
+(*Before cutover*, twice, below). This file keeps the reasoning run by run.
+
 Companion to `docs/PHASE-12.md`, which is the phase, and
 `docs/phase-12-part-b-verification.md`, which is what Part C inherited.
 
@@ -576,8 +584,292 @@ seven empty folders — nothing the engine wrote, since it never ran — plus
 the empty `runs/20261021-193816` from the first run. Left in place until the
 comparison is written up.
 
-**Third attempt:** image `phb-co-engine:part-c-compare-3`, the same job spec
-with the tag changed. Not yet run.
+**Third attempt (prepared 2026-10-21, re-checked 2026-10-28):** image
+`part-c-compare-3` was built by `az acr build` twelve seconds after the fix
+commit, and on 2026-10-28 it was pulled and checked rather than trusted:
+`layout()` puts `rep` inside `CMP`, `tests/test_compare_layout.py` is in the
+image, and both it and the root-jail suite pass when run inside it. The
+refusal was reproduced again offline the same day - the second run's
+arguments with a dummy token end in `refusing to run: CO_REPORT_DIR
+'…/rfi238/rep' is outside this store's root '…/rfi238/CMP'`, exit 1, no
+request; with `rep` inside `CMP` the engine reaches its first Graph call.
+
+**But the job was never told.** Read back through the REST API on
+2026-10-28, `phbplat-prod-co-compare` still carried
+`phb-co-engine:part-c-compare-2`, and its only execution is the second run.
+The filled spec on disk said `-3`; the spec in Azure did not. A third start
+would have been the second run again.
+
+**One more thing both logs showed: Log Analytics returns the job log out of
+order.** Both saved logs have one CO's *only in local* list threaded through
+the next CO's heading, because the log is ordered by ingestion time, not by
+the order the lines were written, and a scrambled log is a second way a run
+reads as something it was not. So the instrument now keeps its own record,
+through its own store, inside the copy root:
+
+| path, under `runs/<id>/` | contents |
+|---|---|
+| `compare-transcript.txt` | everything the instrument printed, stdout and stderr in the order written; rewritten after every CO, so a run the 1800 s timeout cuts off still leaves what it had |
+| `_logs/<tag>-local.log`, `_logs/<tag>-graph.log` | each engine's exit code and its **whole** stdout and stderr, not the 40-line tail the log shows |
+
+`_logs` is beside the per-CO trees and never inside one, because
+`download_tree` mirrors a tree whole and the differ would otherwise see a log
+as an engine output; `tests/test_compare_layout.py` holds the record paths
+inside the copy root and outside every tree. A record that cannot be written
+is said on the log and changes no verdict. Image **`part-c-compare-4`**, the
+filled spec updated to match. The commands, one at a time, from PowerShell:
+
+```
+az containerapp job update -n phbplat-prod-co-compare -g <resource group> --image phbplatprodovwzv7.azurecr.io/phb-co-engine:part-c-compare-4
+az containerapp job show   -n phbplat-prod-co-compare -g <resource group> --query properties.template.containers[0].image -o tsv
+az containerapp job start  -n phbplat-prod-co-compare -g <resource group>
+az containerapp job execution list -n phbplat-prod-co-compare -g <resource group> -o table
+az containerapp job logs show -n phbplat-prod-co-compare -g <resource group> --container compare --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\compare-job-run3.log
+```
+
+The second command is the check the second attempt skipped: it must print
+the `-4` tag before `start`. Expect the execution to run ten to fifteen
+minutes - the second run spent five with no engine runs at all - and read
+`runs/<id>/compare-transcript.txt` in the copy folder, not the job log. The
+partial `runs/` folders from the first two runs stay until the comparison is
+written up.
+
+### The third run (2026-10-28, `runs/20261028-142400`): the Graph engine ran, and reached the wrong disk
+
+Image `part-c-compare-4`, the job updated and started by the owner. Every
+input verified, every tree built, the local half ran, and the Graph engine
+started for the first time - past the jail, past the token, into the CO -
+and every CO failed at the same line:
+
+```
+run_workflow.py line 3285, in _find_intake_json
+    for p in sorted(cands, key=os.path.getmtime, reverse=True)
+FileNotFoundError: … intake_….json
+```
+
+`os.path.getmtime` is the operating system's call, not the store's. The
+candidates were found through `FS.listdir` and confirmed through
+`FS.is_file`, both Graph requests, and then sorted by the mtime of a path on
+the container's disk, where nothing of the kind exists. In local mode the two
+clocks are the same file and the line is invisible; this was the first run
+in which they were not.
+
+**Why Part B missed it.** `tests/test_filestore_interface.py` has held
+"every read and write goes through the store" since the extraction, and
+`os.path.getmtime` was in its raw-call set. The scan visited `ast.Call`
+nodes and read `node.func`. A key function is an `ast.Attribute` passed as
+an argument; no call node has it as its function, so the scan never saw it.
+The same scan compared spelled names, so `import glob as _glob;
+_glob.glob(...)` never matched its `glob.glob` allow-list entry either - that
+entry had matched nothing since Part B, and the docstring on
+`_glob_session_mount` calling itself "the only filesystem call left" was a
+claim the test could not have checked.
+
+**The inventory, before anything was changed.** An AST walk over
+`run_workflow.py` and `co_state.py` recording every reference to `os`,
+`os.path`, `open`, `glob`, `shutil`, `pathlib`, `tempfile`, `zipfile`,
+`subprocess`, `openpyxl.load_workbook` and `docx.Document` - as a call, a
+key, a stored name or a bare mention - with import aliases resolved, then a
+grep for the method-style writers an AST walk by module name cannot see
+(`.save(`, reportlab, `csv.writer`, `json.dump`):
+
+| where | what | verdict |
+|---|---|---|
+| `_find_intake_json` 3285 | `os.path.getmtime` as a `sorted` key, on a tree path | **the bypass** - fixed |
+| `_glob_session_mount` 410 | `glob.glob("/sessions/*/mnt/…")` | sandbox mount probe; graph mode passes the root in and never reaches it; allowed by name |
+| module level 135, 144 | `os.path.expanduser("~")` | default host paths; reads the environment, touches no disk |
+| `render_xlsx_to_pdf` 1763, 1767 | `openpyxl.load_workbook(stage_xlsx)`, `subprocess.run(libreoffice …)` | the stage directory, local by the interface's contract; allowed by name |
+| `_try_base64_repair` 884 | `openpyxl.load_workbook(BytesIO)` | in memory |
+| `write_summary_docx` 1835 | `Document()` | no path; saved through `FS.save_docx` |
+| `co_state.migrate_legacy_filenames` 185 | `os.path.abspath` twice, in an equality | path-string work; on a drive-relative path under Linux a no-op |
+| everywhere else | `os.path.join / basename / dirname / splitext`, `os.environ`, `os.getpid` | pure |
+| `.save(`, `Canvas(`, `csv.writer`, `json.load/dump` on a path | none outside `FS.*` | - |
+
+So exactly one disk access on a tree path, and it is the one that failed.
+The store module itself was walked too: the base-class helpers load
+workbooks and zips from `BytesIO(self.read_bytes(path))`, and the only
+`open`/`os.*` calls in `GraphFileStore` are its `stage_*` methods.
+
+**The fix** is `key=FS.mtime` - both stores implement it; the Graph store
+reads `lastModifiedDateTime` and the local one calls `getmtime`, so the local
+half's behaviour is unchanged and the Part B differential re-run afterwards
+is still eight of eight.
+
+**The guard, in two halves, because a list of names is what just failed.**
+
+1. *Static.* The scanner in `test_filestore_interface.py` now reads every
+   `Name` and `Attribute` node wherever it sits, resolves `import … as` and
+   `from … import` first, covers `shutil`, `glob`, `pathlib`, `tempfile`
+   wholesale and `os`/`os.path` by function, and holds an allow-list keyed by
+   (module, function, resolved name) with a count, so a stale entry fails as
+   loudly as a new use. `test_the_scanner_sees_references_and_aliases`
+   feeds it seven snippets of the shapes it used to miss - a key function, a
+   callback in `map`, a module alias, a from-import, an aliased from-import,
+   a stored reference, `pathlib` - and the pure helpers under every spelling,
+   which must stay quiet. Run against the pre-fix engine, it reports the
+   3285 site and nothing else.
+2. *Runtime, needing no list.* `tests/fs_trap.py` wraps the functions that
+   can reach a disk - `os.path.exists/isfile/isdir/getmtime/getsize/…`,
+   `os.stat/listdir/scandir/remove/replace/makedirs/…`, `shutil.*`,
+   `glob.*`, `open`, `io.open`, `zipfile.ZipFile`, `openpyxl.load_workbook`,
+   `docx.Document` - and, when one is given a path under the tree from a
+   frame in `run_workflow.py` or `co_state.py`, appends a line to a log AND
+   raises. Both, because the engine wraps whole steps in `except Exception`
+   and a raised error alone could be swallowed. `co_filestore.py`'s own calls
+   pass; the stage directory is outside the tree and passes.
+   `tests/test_no_fs_bypass_runtime.py` replays the eight fixture COs
+   through the real engine in local mode under the trap (eight of eight
+   clean, each writing its state file), then reinstates the exact pre-fix
+   `_find_intake_json` for one CO and asserts the run is caught - it is, on
+   `os.path.getmtime` in that frame. Without the fixture store the replay
+   reports SKIPPED in capitals and the trap's self-test still runs.
+
+**Fourth attempt:** image **`part-c-compare-5`**, built 2026-10-28 and
+checked inside the image the same way as before; the filled spec updated.
+The commands are the third attempt's with the tag changed:
+
+```
+az containerapp job update -n phbplat-prod-co-compare -g <resource group> --image phbplatprodovwzv7.azurecr.io/phb-co-engine:part-c-compare-5
+az containerapp job show   -n phbplat-prod-co-compare -g <resource group> --query properties.template.containers[0].image -o tsv
+az containerapp job start  -n phbplat-prod-co-compare -g <resource group>
+az containerapp job execution list -n phbplat-prod-co-compare -g <resource group> -o table
+az containerapp job logs show -n phbplat-prod-co-compare -g <resource group> --container compare --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\compare-job-run4.log
+```
+
+`job show` must print `-5` before `job start`. Read
+`runs/<id>/compare-transcript.txt` and `_logs/` in the copy folder. The
+`runs/` folders from the first three runs stay until the comparison is
+written up.
+
+### The fourth run (2026-10-28, `runs/20261028-150825`): the Graph engine ran clean, and the two halves read different intakes
+
+Image `part-c-compare-5`. The Graph engine exited 0 on all eight COs, in 44
+to 59 seconds each against 2 to 3 seconds for the local half. Six
+EQUIVALENT. Two DIFFERS: **CCHMC Bulletin 12** and **ZZ PR-98**. The
+transcript said only DIFFERS, because the differ's `report()` bound
+`out=sys.stdout` at import time, before the transcript's tee existed, so
+every report went to the job log that Log Analytics scrambles; the classes
+below were recovered by reproduction and from the two halves' engine logs
+under `_logs/`.
+
+**What differed**, reproduced on the laptop by running the engine on each CO
+twice with the other intake made newest, and diffed with the Part C differ:
+
+| CO | class | files |
+|---|---|---|
+| Bulletin 12 | unlisted time field | `state/CCHMC_Bulletin_12__e4ec9335.json` (`date_received`) |
+| | content differs (3) | `.Tracking_lastgood.xlsx`, `CO Status Tracker.xlsx`, the run report's WARN line (which rejected ACC link it names) |
+| ZZ PR-98 | unlisted time field | `state/ZZ_PR-98__7b04f4d3.json` (`date_received`) |
+| | content differs (6) | the two trackers, `…/01/CO Request - PR-98 - … - Review.xlsx`, `…/01/Review.docx`, `…/01/scrub_result.json` (`auto_fixes_applied`: the ACC link merged from the intake), the run report (`Auto-fixes: 1`) |
+
+Every one of those is a field that comes from the intake JSON - subject,
+date received, ACC link, submitter note - or a document built from one.
+
+**The cause: the two halves ran on different intake files.** Both COs have
+two `intake_*.json` (a submission and a resubmission), and `_find_intake_json`
+takes the newest by the store's mtime. Read from the run folder:
+
+| | Bulletin 12 | ZZ PR-98 |
+|---|---|---|
+| Graph half's state file, `extra.intake_json` | `intake_20260730141559.json` (the newer) | `intake_20260722172908.json` (the newer) |
+| Graph half's engine log | WARN names the rejected link whose id decodes to `changeorder@phb1899.com/…` - the newer intake's | no WARN; the newer intake carries the Autodesk link |
+| Local half's engine log | WARN names the link whose id decodes to `amayse@phb1899.com/…` - the **older** intake's | *"has no valid ACC Link"* - only the **older** intake has none |
+
+So the hypothesis as first stated - that the Graph store's
+`lastModifiedDateTime` put the copies in a different order and the Graph
+half picked the wrong one - is the inverse of what happened. **The Graph half
+picked the newer intake, which is what the laptop picks; the local half in
+the container picked the older one.** Not a store disagreement: the Graph
+store did what the local store does on the laptop.
+
+**Why the local half picked the older one** - inferred, and the fifth run is
+built to observe it. The instrument wrote the local tree's files back to
+back from the downloaded bytes, so their mtimes were whatever the job node's
+kernel stamped: on a kernel with per-tick file timestamps, two writes a few
+hundred microseconds apart carry the same value. `sorted(…, reverse=True)`
+is stable, so a tie keeps `os.listdir` order, which on Linux is the
+directory's hash order, not name order. Checked: thirty trials of the same
+two writes inside the same image on this laptop's WSL2 kernel (6.18, which
+has fine-grained file timestamps) never tied and always picked the newer;
+the job runs on an older node kernel. Bulletin 13 also has two intakes with
+different subjects and was EQUIVALENT, which fits a per-folder hash order
+that happened to list its newer name first, and is also why "two intakes"
+alone was not the pattern. The fifth run prints each intake's mtime and the
+intake each half's state file names, so this stops being inference.
+
+**Quirk of the comparison, or a fragility of the engine? Both, and they are
+different sizes.**
+
+- *The comparison's quirk is real and is fixed in the instrument.* The
+  Graph tree is now built first, each inbox file's mtime is read from the
+  copy through `store.mtime`, and the local tree is given those same
+  values, so both halves sort by one clock; two intakes on the same second
+  are printed in capitals, because then the engine's choice falls to a
+  directory order the two stores do not share.
+- *The engine's fragility is real and latent in production.* "Newest by
+  mtime" assumes the store's clock orders the intakes as Gate A created
+  them. In production it does: the flow creates them minutes apart, and
+  both today's OneDrive-synced mtime and the Graph store's
+  `lastModifiedDateTime` follow creation. What breaks the assumption is
+  anything that re-stamps a file - an operator opening and re-saving an
+  older intake, a restore from the recycle bin or version history, a
+  migration or copy exactly like this one - after which the older
+  submission silently becomes the one the CO is built from. The
+  deterministic key is already in the filename: `intake_<yyyymmddhhmmss>`
+  is Gate A's `utcNow()` at creation and never changes, and `date_received`
+  inside agrees with it. **Recommendation: sort by the name's timestamp,
+  with mtime only for a legacy `intake.json` or a tie.** It is an engine
+  behaviour change, with the Part B differential as its regression check,
+  and it is **not made here** - the owner asked for classification before
+  change. It belongs on the *Before cutover* list below, to be made or
+  knowingly declined; the engine's docstring and the inventory's "newest
+  wins" line now say "newest by mtime" and point here.
+
+**Fifth attempt:** image **`part-c-compare-6`**, built 2026-10-28, with the
+instrument changes above plus: `report()` resolves `out` at call time, so
+the differ's full report is in the transcript; the SUMMARY carries, under
+any CO that DIFFERS, one line per class with the files (`content differs
+(3): …`, `unlisted time field (1): … [date_received]`, `only in local …`,
+`could not compare …`) and `intake choice differs: local X, graph Y` when
+the halves' state files disagree. The commands are the fourth attempt's
+with `-6`; `job show` must print `-6` before `job start`. The `runs/`
+folders from the first four runs stay until the comparison is written up.
+
+### The fifth run (2026-10-28, `runs/20261028-155543`): eight of eight EQUIVALENT
+
+Image `part-c-compare-6`, execution `oynbdk3`. The Graph engine exited 0 on
+all eight COs (44 to 54 s each against 2 to 3 s locally), every input
+verified, no `400`, and the differ found nothing that survives
+normalization. The only class reported was *differ only in a timestamp* on
+seven run reports, the two halves having run a minute apart; the two COs
+that ran within one minute reported no class at all. For the three COs with
+two intakes the copies landed one to two seconds apart, the local tree
+carried those same mtimes, and both halves named the newer intake in their
+state files:
+
+```
+intakes   intake_20260729200259.json 2026-10-28T15:57:25Z, intake_20260730141559.json 2026-10-28T15:57:27Z
+intake    local picked intake_20260730141559.json, graph picked intake_20260730141559.json
+```
+
+(Bulletin 12; Bulletin 13 and ZZ PR-98 the same shape.) The verbatim
+SUMMARY, the per-CO table, and what the result does and does not prove are
+in `docs/phase-12-part-c-verification.md`. **That is the Part C acceptance
+bar, met.** The job and the copy were deleted the same day, after the
+record was written; the verification record says what was kept and how to
+re-run.
+
+**The five runs in one table** — the honest version, since the plan above
+reads as if each run were the last:
+
+| # | run id | image | result | fault |
+|---|---|---|---|---|
+| 1 | `20261021-193816` | `part-c-compare` | nothing compared | instrument: byte-checked inputs SharePoint rewrites; a `400` with its body dropped |
+| 2 | `20261021-203211` | `-2` | nothing compared | instrument, setup: report dir outside the engine's jail; `rc=1` read as "ran" |
+| — | — | `-3` built, never run | — | process: the job in Azure was never updated |
+| 3 | `20261028-142400` | `-4` | nothing compared | engine: `os.path.getmtime` as a sort key, past the store |
+| 4 | `20261028-150825` | `-5` | 6 of 8 | instrument, setup: local tree's mtimes tied, the halves read different intakes |
+| 5 | `20261028-155543` | `-6` | **8 of 8** | — |
 
 ## Step 7, second pass (2026-10-21): the credential is the platform's identity, and the test needs a job
 
@@ -740,6 +1032,19 @@ registry.
 comparison was packaged as a job — *Where the copy lives*, *The two guards*
 and *The comparison instrument* above. The comparison itself has not run.
 
+## Before cutover: the intake-selection rule (decide, or decline knowingly)
+
+`_find_intake_json` takes the newest `intake_*.json` by the store's mtime.
+The fourth comparison run showed what a re-stamped file does to that rule
+(*The fourth run*): the older submission becomes the one the CO is built
+from, silently. Production creates intakes minutes apart and nothing
+re-stamps them in the normal course, so this has not happened there; an
+operator re-saving an older intake, a recycle-bin restore, or a migration
+would do it. The deterministic key is the creation time Gate A put in the
+name. The change is small, the Part B differential is its regression
+check, and it is an engine behaviour change, so it is the owner's: make it,
+or record here that it was declined and why.
+
 ## Before cutover: the flow-trigger decision (required)
 
 `PHASE-12.md` Part C: *"writing a file through Graph changes its metadata.
@@ -820,16 +1125,17 @@ Record the outcome, or the waiver and its reasoning, here.
    copied (*The two guards*)
 9. **The copy — built 2026-10-21** at
    `/phb-co-engine scratch/part-c-copy-2026-10-21` (*Where the copy lives*)
-10. **The byte-identical comparison — first run failed before comparing
-    anything** (*The first run*): inputs verified by bytes where SharePoint
-    rewrites workbooks, and a 400 whose body was dropped. Both fixed; image
-    `phb-co-engine:part-c-compare-2`; the second run is the owner's to start
+10. **The byte-identical comparison — DONE 2026-10-28, on the fifth run**
+    (`20261028-155543`: eight of eight EQUIVALENT, both halves reading the
+    same intake for every two-intake CO). Runs 1, 2 and 4 failed in the
+    instrument, run 3 in the engine (`os.path.getmtime` past the store), and
+    between runs 2 and 3 the job was never updated to the fixed image; each
+    is written up above and in `docs/phase-12-part-c-verification.md`,
+    which is the record. The job and the copy are deleted
 11. **The flow-trigger decision — deferred, required before Phase 14**
     (*Before cutover*)
 
-Steps 1–4, 6 and 8–9 are complete without anybody granting anything. Step 5 needs
-a token from the right client, not a permission. Step 10 needs the owner to run
-one job. Step 11 needs a decision.
+Steps 1 through 10 are complete. What remains before Phase 14 is two decisions, neither of them code until it is made: step 11, the flow-trigger question, and the intake-selection rule the fourth run surfaced (*Before cutover*, both). The `PnP.Powershell` certificate on the app registration is a third open decision, not a blocker (`runbook.md` → *Open decision*).
 
 ---
 

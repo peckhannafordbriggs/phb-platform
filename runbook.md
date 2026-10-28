@@ -2714,6 +2714,12 @@ become a trigger-shaped file in the library.
 
 ### The comparison job says `pristine inputs do not match`, naming an `.xlsx`
 
+*(The job `phbplat-prod-co-compare` and the copy it ran against were deleted
+on 2026-10-28, after the fifth run met the bar. This symptom and the five
+after it describe what each earlier run hit; before any of them can recur,
+`docs/phase-12-part-c-verification.md` → *Re-running the comparison* is how
+both are recreated.)*
+
 **Symptom.** `compare_stores.py` prints `INPUT <name>.xlsx: bytes differ from
 the fixture` or, before 2026-10-21, `pristine inputs do not match the
 manifest: ['….xlsx']`, for most COs, never for a JSON, PNG or PDF.
@@ -2782,6 +2788,101 @@ instrument's layout, `compare_stores.layout()` is the one place it is
 decided and `tests/test_compare_layout.py` holds it inside the jail. If it is
 a hand-run engine, put `--live-path` and `CO_REPORT_DIR` under
 `--sharepoint-root`. A one-second exit is never a store finding.
+
+If the symptom appears on a run **after** 2026-10-21 and the block still
+shows a bare `rc=1` with no quoted stderr, the job is running an old image:
+`az containerapp job show … --query properties.template.containers[0].image`
+names the tag, and on 2026-10-28 it still named `part-c-compare-2` a week
+after `-3` was built. A tag changed in the filled spec on disk changes
+nothing in Azure until `az containerapp job update --image …` is run; check
+the tag with `job show` before every `job start`.
+
+### The comparison job's log is out of order, or a CO's lines are missing
+
+**Symptom.** `az containerapp job logs show` returns the run with lines
+shuffled: one CO's *only in local* list appears under the next CO's heading,
+`SUMMARY` lines sit between two COs, a block's `graph rc=…` line comes
+before its `tree built by copy` line. Saved to a file from PowerShell with
+`>`, the file is also UTF-16.
+
+**Cause.** Log Analytics orders the lines by ingestion time, not by the
+order the container wrote them, and lines written within the same second
+come back in any order. Nothing is missing; it is unreadable. The UTF-16 is
+PowerShell's `>` redirect.
+
+**Fix.** Read the instrument's own record, not the job log. Since
+2026-10-28 `compare_stores.py` writes `compare-transcript.txt` under the
+run's folder in the copy root (`/phb-co-engine scratch/part-c-copy-<date>/
+runs/<id>/`), stdout and stderr in the order written, rewritten after every
+CO; and `_logs/<tag>-local.log` and `_logs/<tag>-graph.log` beside it, each
+engine's whole output. Open them in SharePoint. When saving the job log from
+PowerShell, pipe through `Out-File -Encoding utf8` rather than `>`. If the
+transcript is absent, the instrument said why on the log - `(could not keep
+…)` - and the run's verdict is unaffected.
+
+### The Graph engine fails with `FileNotFoundError` on a path that exists in SharePoint
+
+**Symptom.** In graph mode the engine gets past the jail and the token, then
+a CO fails with `FileNotFoundError` (or `NotADirectoryError`, `PermissionError`)
+naming a drive-relative path - `…/1 - New Requests/<CO>/intake_….json` - that
+is plainly there in the library. The same CO runs clean in local mode. On the
+third comparison run (2026-10-28) it was every CO, at
+`_find_intake_json`, `sorted(cands, key=os.path.getmtime)`.
+
+**Cause.** A call reached the operating system instead of the store. In
+local mode the store's disk and the OS's disk are the same, so the line is
+invisible; in graph mode the path exists only in SharePoint and the OS says
+not found. Part B routed the engine's I/O through `FS` and its guard test
+scanned *calls*; a function passed as a key, a callback, or stored under
+another name is a *reference* and was not seen, and aliases
+(`import glob as _glob`) were never resolved.
+
+**Fix.** Route the call through `FS` - every operation has a store method
+(`FS.mtime` for `getmtime`, `FS.exists`, `FS.listdir`, `FS.read_bytes`, …).
+Then run both halves of the guard from the `phb-co-engine` checkout:
+
+```
+python tests/test_filestore_interface.py      # static: every reference, aliases resolved
+python tests/test_no_fs_bypass_runtime.py     # runtime: the fixture COs under the trap
+```
+
+The static test names the file, line, function and resolved name of anything
+new, and fails on a stale allow-list entry too; the runtime test prints one
+line per CO and, on a bypass, the `FS BYPASS: <call>(<path>) from
+<file>:<line> in <function>()` lines from the trap log. A new, deliberately
+non-store access (there are five, all in `ALLOWED_RAW_REFERENCES` with a
+reason) is added there, with its reason, and nowhere else. To find such a
+call in a run that has already failed, read the traceback's last engine
+frame: if it is in `run_workflow.py` or `co_state.py` rather than
+`co_filestore.py`, it is a bypass.
+
+### A comparison CO DIFFERS on the state file's `date_received`, the two trackers and the run report
+
+**Symptom.** `compare_stores.py` reports a CO NOT EQUIVALENT with
+`unlisted time field: state/<CO>__<hash>.json [date_received]` and
+`content differs` on `.Tracking_lastgood.xlsx`, `CO Status Tracker.xlsx`
+and the run report - sometimes also the attempt folder's Review workbook,
+`Review.docx` and `scrub_result.json` (`auto_fixes_applied`). The CO has
+more than one `intake_*.json`. Since 2026-10-28 the block also prints
+`intake    local picked X, graph picked Y  <- NOT THE SAME INTAKE` and the
+SUMMARY carries `intake choice differs`.
+
+**Cause.** The two halves built the CO from different intake files. The
+engine takes the newest intake by the store's mtime; a tie on the second
+falls to directory order, which the two stores do not share, and the
+fourth run's local tree carried fresh back-to-back mtimes that tied on the
+job's kernel. Every differing field comes from the intake JSON - subject,
+date received, ACC link, submitter note. It is not a store disagreement.
+
+**Fix.** Nothing in the stores. Read the `intakes` line above the engine
+runs: since 2026-10-28 the local tree carries the Graph copy's mtimes, so
+the line should show two distinct seconds and both halves the same pick.
+`TIED TO THE SECOND` means the copy itself landed both intakes on one
+second - re-run the CO with `--only "<CO>"` after a minute, or accept that
+the engine's rule is nondeterministic for ties and decide the
+*Before cutover: the intake-selection rule* item in
+`docs/phase-12-part-c-plan.md`. Do not add `date_received` to the differ's
+time-field list to quiet the report: here it is a real difference.
 
 ## Deploy order
 

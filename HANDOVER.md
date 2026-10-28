@@ -339,11 +339,14 @@ app log settles that, and the crons match what `09 Scheduled Task Prompts VERBAT
 recorded — that is a document in the SharePoint `CO Process Handoff` corpus (see § 9),
 not a file in this repository. Moving them into Azure is Phases 12–14.
 
-**Phase 12 Parts A and B are done.** The engine is in version control for the first time
+**Phase 12 Parts A, B and C are done.** The engine is in version control for the first time
 (`phb-co-engine`), the inventory that every later part depends on is written
 (`docs/12-ai-layer-inventory.md`), a dormant `Bid Tracker.xlsx` write was found and
 removed, and one file-access interface has been extracted with two implementations. The
-Graph one has never run. Parts C, D and E are not started.
+Graph one has run against SharePoint as the engine's own identity, from a container in
+Azure, and produced output equivalent to the local store's on all eight fixture COs
+(2026-10-28; `docs/phase-12-part-c-verification.md`). Parts D and E are not started, and
+two decisions are open before cutover (`docs/phase-12-part-c-plan.md` → *Before cutover*).
 
 It's the only work in this project that can break a pipeline the business depends on daily,
 so the sequence matters: extract a file-access layer from a ~196 KB Python script,
