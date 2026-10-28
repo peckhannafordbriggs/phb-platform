@@ -2714,6 +2714,12 @@ become a trigger-shaped file in the library.
 
 ### The comparison job says `pristine inputs do not match`, naming an `.xlsx`
 
+*(The job `phbplat-prod-co-compare` and the copy it ran against were deleted
+on 2026-10-28, after the fifth run met the bar. This symptom and the five
+after it describe what each earlier run hit; before any of them can recur,
+`docs/phase-12-part-c-verification.md` → *Re-running the comparison* is how
+both are recreated.)*
+
 **Symptom.** `compare_stores.py` prints `INPUT <name>.xlsx: bytes differ from
 the fixture` or, before 2026-10-21, `pristine inputs do not match the
 manifest: ['….xlsx']`, for most COs, never for a JSON, PNG or PDF.

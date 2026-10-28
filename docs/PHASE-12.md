@@ -131,6 +131,14 @@ Two constraints that survive the refactor:
 
 ## Part C — Containerize
 
+> **Complete 2026-10-28.** The comparison acceptance bar was met on its
+> fifth run: `docs/phase-12-part-c-verification.md` is the record,
+> `docs/phase-12-part-c-plan.md` the reasoning. The "needs `Sites.Selected`"
+> framing below was wrong in a useful way — the permission gated only the
+> last step — and the plan doc says what was actually blocked. Two decisions
+> are open before Phase 14 (the plan doc's *Before cutover* sections); the
+> third checklist item below is one of them.
+
 **Needs: Azure (Phase 7 complete), and `Sites.Selected` Graph permission on the
 AISandbox site — a third request to Vitis.**
 
@@ -262,10 +270,10 @@ period, and the disagreements are understood. **Not when it runs.**
 
 **Part C**
 
-- [ ] Container runs against a copy, never live
-- [ ] `GraphFileStore` output byte-identical to `LocalFileStore`
-- [ ] Graph metadata changes verified not to affect flow triggering
-- [ ] The container cannot acquire the live lock
+- [x] Container runs against a copy, never live — the store is confined to the root it is given and refuses `CO Managment Process` by name (2026-10-21)
+- [x] `GraphFileStore` output byte-identical to `LocalFileStore` — equivalent once time-derived bytes are normalized, the bar `docs/phase-12-part-e-equivalence.md` set; eight of eight on 2026-10-28
+- [ ] Graph metadata changes verified not to affect flow triggering — **open; the flow-trigger decision, required before Phase 14**
+- [x] The container cannot acquire the live lock — the lock is a file under the live folder, and the store refuses that path at every call (2026-10-21)
 
 **Part D**
 

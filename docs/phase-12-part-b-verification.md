@@ -160,7 +160,24 @@ The fixtures are not in git. `tests/test_filestore_interface.py` and
 
 ## What is NOT verified
 
-**`GraphFileStore` has never run.** It is real code against the Graph Files API
+> **Closed by Part C, 2026-10-28.** Everything in this section was open when
+> it was written and is not now. `GraphFileStore` has run against the real
+> library as the engine's own app registration: step 7's conformance harness
+> exercised each `GRAPH-TODO` below as the app (`docs/phase-12-part-c-plan.md`
+> → *Step 7, third pass*), and the two-store comparison produced equivalent
+> output to `LocalFileStore` for all eight fixture COs on its fifth run
+> (`docs/phase-12-part-c-verification.md`). The engine has run on Linux: the
+> Part B differential inside the container is eight of eight, and the
+> newline inference below was confirmed as an inference — on Linux the class
+> does not appear. Of the four questions: the 409 is real; append is still a
+> read-modify-write with one writer and was equivalent across 40 CO-runs;
+> the copy poll was settled before the next read in every one of them;
+> `rglob` was walked and never measured against a deep tree, which stays a
+> performance question for Phase 14. One thing Part C found that Part B had
+> missed is recorded there too: a filesystem call the extraction's guard
+> could not see (a sort key, not a call), fixed on 2026-10-28.
+
+**`GraphFileStore` had never run** when this was written. It is real code against the Graph Files API
 — upload sessions for large files, server-side copy with the async monitor polled
 to completion, `conflictBehavior=fail` for the exclusive create — and entirely
 unexercised. Every phase of this project that touched an external system found

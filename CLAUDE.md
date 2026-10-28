@@ -394,10 +394,11 @@ competing content, and a vendor's own email is competing content. See
 `WHY-ITS-BUILT-THIS-WAY.md` §§ 38–39, `docs/DESIGN-BRIEF.md`, and the token
 comments in `app/globals.css`, which are the authority on any colour value.
 
-**Phase 12 Parts A and B complete. Part C onward not started.** The change-order
-engine — `run_workflow.py`, ~196 KB, which had no version control at all — is
-now a repository, `phb-co-engine`, with the first commit verified byte-identical
-to the SharePoint copy. `docs/12-ai-layer-inventory.md` is the inventory every
+**Phase 12 Parts A, B and C complete — Part C's acceptance bar met
+2026-10-28. Part D onward not started.** The change-order engine —
+`run_workflow.py`, ~196 KB, which had no version control at all — is now a
+repository, `phb-co-engine`, with the first commit verified byte-identical to
+the SharePoint copy. `docs/12-ai-layer-inventory.md` is the inventory every
 later part depends on, and it distinguishes what was observed from what was
 inferred.
 
@@ -412,111 +413,48 @@ Two findings from it that change what a later part may assume:
   tree is, and its cost was serialisation rather than volume. Measured, fixed,
   and recorded in `runbook.md` → *The Change Orders screen feels slow*.
 
-Part B extracted one file-access interface with two implementations.
-`GraphFileStore` is written and **has never issued an HTTP request** — its open
-questions are marked `GRAPH-TODO` in place.
+**Part C, complete.** The engine is containerised and reaches SharePoint
+through `GraphFileStore` as its own app registration — `Sites.Selected`,
+granted Write on the AI Sandbox site only, with a federated credential that
+names the platform's production identity, so it authenticates only from
+inside Azure and holds no secret. The store is confined to the root it is
+given and refuses `CO Managment Process` by name at every call and at
+construction, before any token is fetched. The two-store comparison
+(`tests/compare_stores.py`, one container, both halves on the same inputs,
+the Part E equivalence definition as the bar) reached **eight of eight
+EQUIVALENT on the fifth run, `20261028-155543`**, both halves reading the
+same intake for every two-intake CO. It took five runs, and the four before
+it failed in the instrument or the engine and never in the store: inputs
+byte-checked where SharePoint rewrites workbooks (run 1); the instrument's
+own report directory outside the engine's jail (run 2); the job never
+updated to the fixed image, and then one `os.path.getmtime` the Part B
+guard could not see because a key function is a reference, not a call (run
+3); the local tree's back-to-back mtimes tying on the job's kernel so the two
+halves read different intakes (run 4). **`docs/phase-12-part-c-verification.md`
+is the record** — the bar, the five runs, what the result proves, what it
+does not (no PDF rendering in the image, the later gates, flow triggering,
+concurrency, speed at volume: the Graph half is about twenty times slower per
+CO), and what was kept and deleted; `docs/phase-12-part-c-plan.md` is the
+reasoning run by run. Two guards later parts inherit: the file-access scan
+in `phb-co-engine` reads references with aliases resolved, and
+`tests/test_no_fs_bypass_runtime.py` replays the fixture COs with the engine
+forbidden to touch its tree. The job and the scratch copy were deleted on
+2026-10-28; the verification record says how to recreate both.
 
-**Part C is underway, and it is far less blocked than `docs/PHASE-12.md`
-implies.** That doc says Part C needs `Sites.Selected`; read literally it
-blocks the whole part on a request to Vitis, and it does not — that permission
-gates talking to one SharePoint site with an *application* identity, which is
-the last step, not the first. The engine is containerised, and running the Part
-B differential inside it settled three things Part B could only infer: the
-engine runs on **Linux** with all eight COs still equivalent; the `NEWLINE`
-prediction holds; and the `Z`-suffixed timestamps are measured — the laptop
-emits local time labelled UTC, the container emits real UTC, so the same event
-stamps four to five hours later after cutover, in three fields, two of which
-are inside `scrub_result.json` and `vendor_drafts.json`.
+**Open before Phase 14 — the Part C to-do, both in the plan doc's *Before
+cutover* sections:**
 
-That run also found a defect in the differ itself: `normalize_text` erases line
-endings **and** timestamps, so a timestamp-only difference was reported as
-*"differs only in line endings"* — in a file with no CR byte. Fixed, with the
-classes split, because Part E is nothing but weeks of difference
-classification. `docs/phase-12-part-c-plan.md` is the reasoning and the
-blocked/not-blocked split; do not re-derive it from `PHASE-12.md` alone.
+1. **The intake-selection rule.** `_find_intake_json` takes the newest
+   `intake_*.json` by the store's mtime; anything that re-stamps an older
+   intake makes it the newest, silently. The creation time in the filename is
+   the deterministic key. Make the change, with the Part B differential as
+   the regression check, or decline it knowingly.
+2. **The flow-trigger decision** (the twelfth flow): deferred by the owner,
+   required before cutover; the plan doc has the evidence in hand and the two
+   ways to close it.
 
-**Step 7 status (2026-10-14).** `Sites.Selected` is **consented** on
-`phb-co-engine` (read live from Entra), the app has **no credential of any
-kind** and no public-client flow, and the **site grant cannot be verified from
-this account** — the site's principal list shows no entry for the app, which
-is consistent with the grant not having been made. Step 5 ran for the first
-time, half of it: writes, `create_exclusive`'s real 409, and path addressing
-hold on the real library; every content read fails because SharePoint refuses
-the Azure CLI's token for content transfer, which the harness now diagnoses
-first. `phb-co-engine/tests/probe_site_grant.py` is the instrument for the
-grant once anything can authenticate as the app. The plan doc's *Step 7*
-section has the three routes and the identifiers. **2026-10-21:** the
-federated credential landed and names the **platform's production
-identity**, so the app authenticates only from inside Azure; the engine
-gained `--graph-auth federated` (the platform's assertion exchange in
-Python, reading the container app's identity endpoint rather than IMDS), the
-image `phb-co-engine:step7` is in the production registry, and the probe and
-harness are packaged as a one-off Container Apps job, created and run by
-the owner the same day: **probe exit 0, the site grant present and Write,
-15 of 16 conformance checks passing as the app** — every `GRAPH-TODO`
-exercised on the real library by the real identity. The 16th was the
-check's own premise (it named `@microsoft.graph.downloadUrl` in `$select`,
-which Graph ignores; it now tests a read). The app also carries a 2029
-certificate from Vitis's PnP tooling; keeping it is an open decision
-recorded in the plan doc and `runbook.md`. **Later on 2026-10-21:** the
-owner chose a **sibling folder in AI Sandbox** for the copy over the plan
-doc's second-site recommendation, and two guards in `GraphFileStore` make
-the fence incapacity rather than configuration — the store is confined to
-the root it is given, and refuses `CO Managment Process` by name at every
-call and at construction, before any token is fetched. 14 offline tests
-including the real engine as a subprocess pointed where the laptop points;
-mutation run; the Part B differential re-run, eight of eight equivalent.
-The copy is built at `/phb-co-engine scratch/part-c-copy-2026-10-21`
-(eight COs' replay inputs, real data by decision, nothing a flow writes),
-the comparison is packaged as `tests/compare_stores.py` and image
-`phb-co-engine:part-c-compare`, and **running the job is the owner's
-action.** The first run failed before comparing anything: SharePoint
-rewrote 7 of the 8 uploaded workbooks (4 with no size change), so Office
-inputs now verify by the differ's structural fingerprint; and a folder
-create answered 400 with the body dropped, so every store error now
-carries Graph's code and request id and `makedirs` looks again before
-failing. The second run's inputs verified, but the Graph engine never ran: the
-instrument put the report directory beside `CMP` while the jail root was
-`CMP`, the engine refused in one second eight times, and the instrument
-printed only `rc=1`. Layout fixed and held inside the jail by test, any
-non-zero engine exit now quotes its stderr. **2026-10-28:** the fix was
-verified inside the pushed `part-c-compare-3` image, and the job in Azure
-was found still pointing at `part-c-compare-2` - the spec was never
-updated, so the third run would have repeated the second. The instrument
-now also keeps an ordered `compare-transcript.txt` and both engines' full
-output under `runs/<id>/`, because Log Analytics returns the job log out of
-order. **The third run (20261028-142400) ran the Graph engine for the first
-time, and every CO failed at one line**: `sorted(cands,
-key=os.path.getmtime)` in `_find_intake_json` reached the container's own
-disk for a file that lived only in SharePoint - the one call Part B's
-extraction missed, because a key function is a reference and the guard test
-scanned calls (its alias handling was absent too, so its one allow-list
-entry had never matched anything). Every filesystem reference in the engine
-was then inventoried by AST, call or not: that was the only disk access on a
-tree path; everything else is path-string work, the stage directory, or the
-sandbox mount glob graph mode never reaches. Fixed as `key=FS.mtime`;
-`tests/test_filestore_interface.py` now scans references with aliases
-resolved and proves it on the shapes it missed; and
-`tests/test_no_fs_bypass_runtime.py` replays the eight fixture COs with
-`fs_trap.py` installed - any OS call naming a tree path from an engine frame
-is logged and raised - and reinstates the exact defect for one CO, which must
-be caught. Eight of eight clean, the mutant caught, the Part B differential
-still eight of eight. **The fourth run: the Graph engine ran clean on all
-eight; six EQUIVALENT; the two that DIFFERED (Bulletin 12, ZZ PR-98) had
-been built from different intake files** - the Graph half picked the newer
-`intake_*.json`, as the laptop does, and the local half in the container
-picked the older, on a mtime tie the instrument itself created by writing
-the files back to back on a kernel with per-tick timestamps (inferred; the
-fifth run prints each half's pick). Not a store disagreement. The
-instrument now gives the local tree the Graph copy's mtimes, routes the
-differ's report into the transcript (it had bound `sys.stdout` at import)
-and makes the SUMMARY name classes and files. **The engine's newest-by-mtime
-rule is a real, latent fragility** - anything that re-stamps an older intake
-makes it the newest - recorded as a *Before cutover* decision in the plan
-doc, not changed. Image `part-c-compare-6`; the fifth run is the owner's.
-The twelfth-flow question is deferred by the
-owner and is a **required step before Phase 14** — the plan doc's *Before
-cutover* section has the evidence in hand and the two ways to close it.
+A third open decision, not a blocker: the `PnP.Powershell` certificate on the
+`phb-co-engine` app registration (`runbook.md` → *Open decision*).
 
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
@@ -1416,4 +1354,5 @@ either anywhere else — point at them.
 | `docs/phase-12-part-b-verification.md` | The file-access extraction: what was measured, and what is still unproven |
 | `docs/bas-plausibility-verification.md` | **The value-plausibility check against live data:** both dead sensors flagged, nothing else, the thresholds defended by the longest healthy runs, the cost measured, four mutations |
 | `docs/phase-12-part-c-plan.md` | **Part C: what `Sites.Selected` actually blocks**, what it does not, and what has already been settled by measurement |
+| `docs/phase-12-part-c-verification.md` | **Part C's record, 2026-10-28:** the bar, the five comparison runs including the four that failed and why, what eight-of-eight proves and does not, what was kept and deleted, and how to re-run |
 | `docs/phase-12-part-e-equivalence.md` | **Part E: what counts as equivalent**, written 2026-09-22 before any comparison ran so the bar cannot be set to fit a disagreement; recovered and re-checked 2026-10-28 |

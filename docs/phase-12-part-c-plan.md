@@ -1,5 +1,13 @@
 # Phase 12 Part C — plan, and what has been settled so far
 
+**Status, 2026-10-28: the comparison acceptance bar is met.** The fifth run,
+`20261028-155543`, produced equivalent output through both stores for all
+eight fixture COs, with both halves reading the same intake for each
+two-intake CO. The record — the bar, the five runs including the four that
+failed, what the result proves and does not, what was kept and deleted — is
+`docs/phase-12-part-c-verification.md`. Two decisions remain before Phase 14
+(*Before cutover*, twice, below). This file keeps the reasoning run by run.
+
 Companion to `docs/PHASE-12.md`, which is the phase, and
 `docs/phase-12-part-b-verification.md`, which is what Part C inherited.
 
@@ -827,6 +835,42 @@ the halves' state files disagree. The commands are the fourth attempt's
 with `-6`; `job show` must print `-6` before `job start`. The `runs/`
 folders from the first four runs stay until the comparison is written up.
 
+### The fifth run (2026-10-28, `runs/20261028-155543`): eight of eight EQUIVALENT
+
+Image `part-c-compare-6`, execution `oynbdk3`. The Graph engine exited 0 on
+all eight COs (44 to 54 s each against 2 to 3 s locally), every input
+verified, no `400`, and the differ found nothing that survives
+normalization. The only class reported was *differ only in a timestamp* on
+seven run reports, the two halves having run a minute apart; the two COs
+that ran within one minute reported no class at all. For the three COs with
+two intakes the copies landed one to two seconds apart, the local tree
+carried those same mtimes, and both halves named the newer intake in their
+state files:
+
+```
+intakes   intake_20260729200259.json 2026-10-28T15:57:25Z, intake_20260730141559.json 2026-10-28T15:57:27Z
+intake    local picked intake_20260730141559.json, graph picked intake_20260730141559.json
+```
+
+(Bulletin 12; Bulletin 13 and ZZ PR-98 the same shape.) The verbatim
+SUMMARY, the per-CO table, and what the result does and does not prove are
+in `docs/phase-12-part-c-verification.md`. **That is the Part C acceptance
+bar, met.** The job and the copy were deleted the same day, after the
+record was written; the verification record says what was kept and how to
+re-run.
+
+**The five runs in one table** — the honest version, since the plan above
+reads as if each run were the last:
+
+| # | run id | image | result | fault |
+|---|---|---|---|---|
+| 1 | `20261021-193816` | `part-c-compare` | nothing compared | instrument: byte-checked inputs SharePoint rewrites; a `400` with its body dropped |
+| 2 | `20261021-203211` | `-2` | nothing compared | instrument, setup: report dir outside the engine's jail; `rc=1` read as "ran" |
+| — | — | `-3` built, never run | — | process: the job in Azure was never updated |
+| 3 | `20261028-142400` | `-4` | nothing compared | engine: `os.path.getmtime` as a sort key, past the store |
+| 4 | `20261028-150825` | `-5` | 6 of 8 | instrument, setup: local tree's mtimes tied, the halves read different intakes |
+| 5 | `20261028-155543` | `-6` | **8 of 8** | — |
+
 ## Step 7, second pass (2026-10-21): the credential is the platform's identity, and the test needs a job
 
 Vitis reported the federated credential added and the site grant made. Read
@@ -1081,29 +1125,17 @@ Record the outcome, or the waiver and its reasoning, here.
    copied (*The two guards*)
 9. **The copy — built 2026-10-21** at
    `/phb-co-engine scratch/part-c-copy-2026-10-21` (*Where the copy lives*)
-10. **The byte-identical comparison — first run failed before comparing
-    anything** (*The first run*): inputs verified by bytes where SharePoint
-    rewrites workbooks, and a 400 whose body was dropped. **Second run
-    failed before comparing anything** (*The second run*): the instrument's
-    own layout tripped the root jail, and the exit code was all it printed.
-    Fixed and verified inside the image; the job spec in Azure was found
-    still on `-2` on 2026-10-28. **Third run: the Graph engine ran and
-    every CO failed on one `os.path.getmtime` the Part B scan could not
-    see** (*The third run*): fixed, every filesystem reference inventoried,
-    the scan rewritten to read references, and a runtime trap added.
-    **Fourth run: six of eight EQUIVALENT; the two that differed had been
-    built from different intake files** - the Graph half picked the newer
-    as the laptop does, the local half in the container the older, on a
-    mtime tie the instrument created (*The fourth run*). Not a store
-    disagreement. Instrument fixed; the engine's newest-by-mtime rule is a
-    recorded fragility (*Before cutover*). Image
-    `phb-co-engine:part-c-compare-6`; the fifth run is the owner's
+10. **The byte-identical comparison — DONE 2026-10-28, on the fifth run**
+    (`20261028-155543`: eight of eight EQUIVALENT, both halves reading the
+    same intake for every two-intake CO). Runs 1, 2 and 4 failed in the
+    instrument, run 3 in the engine (`os.path.getmtime` past the store), and
+    between runs 2 and 3 the job was never updated to the fixed image; each
+    is written up above and in `docs/phase-12-part-c-verification.md`,
+    which is the record. The job and the copy are deleted
 11. **The flow-trigger decision — deferred, required before Phase 14**
     (*Before cutover*)
 
-Steps 1–4, 6 and 8–9 are complete without anybody granting anything. Step 5 needs
-a token from the right client, not a permission. Step 10 needs the owner to run
-one job. Step 11 needs a decision.
+Steps 1 through 10 are complete. What remains before Phase 14 is two decisions, neither of them code until it is made: step 11, the flow-trigger question, and the intake-selection rule the fourth run surfaced (*Before cutover*, both). The `PnP.Powershell` certificate on the app registration is a third open decision, not a blocker (`runbook.md` → *Open decision*).
 
 ---
 
