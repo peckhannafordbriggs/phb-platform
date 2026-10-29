@@ -381,7 +381,7 @@ untouched while employees use the platform as their interface.
 
 ---
 
-## Phase 12 — Centralize the AI Logic — PARTS A, B AND C COMPLETE
+## Phase 12 — Centralize the AI Logic — PARTS A, B, C AND D COMPLETE
 
 Reproduce the current AI behavior in the backend without changing the employee
 experience. **Do not shut down the existing setup during this phase.**

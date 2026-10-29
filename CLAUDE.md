@@ -394,8 +394,8 @@ competing content, and a vendor's own email is competing content. See
 `WHY-ITS-BUILT-THIS-WAY.md` §§ 38–39, `docs/DESIGN-BRIEF.md`, and the token
 comments in `app/globals.css`, which are the authority on any colour value.
 
-**Phase 12 Parts A, B and C complete — Part C's acceptance bar met
-2026-10-28. Part D onward not started.** The change-order engine —
+**Phase 12 Parts A, B, C and D complete — Part D's six steps landed
+2026-10-28/29; Part E not started.** The change-order engine —
 `run_workflow.py`, ~196 KB, which had no version control at all — is now a
 repository, `phb-co-engine`, with the first commit verified byte-identical to
 the SharePoint copy. `docs/12-ai-layer-inventory.md` is the inventory every
@@ -459,6 +459,48 @@ forbidden to touch its tree. The job and the scratch copy were deleted on
    final names both times, no `.tmp` ever seen; the job logs and the four
    Graph items name `phb-co-engine` as creator. Phase 14 is no longer gated
    on it. The job, the folder and the flow are deleted.
+
+**Part D, complete 2026-10-29 — the classifier is code with four model
+judgments.** `phb-co-engine/AI Files/CO Intake Engine/co_classifier/` does
+what the laptop's `co-response-classifier` Cowork task does, and the
+inventory's claim held: the intake engine makes no model call and the
+classifier is the only judgment. What A2 did not say and D1 found: most of
+the classifier's task is a rule the spec states outright (the pm_thread
+first-check, the conversation-id lookup, the duplicate CO Key refusal, the
+received-count derivation, the rename target, the note template) and is
+now tested Python; four judgments go to `claude-opus-5-5` — bid leader on
+ambiguity, classification, Q&A extraction, CO match by body inference —
+each behind a switch (`CO_CLASSIFIER_MODEL_STEPS`), each through one client
+that reads **`CO_ANTHROPIC_API_KEY` only**, sends one turn with structured
+output and no tools, validates the answer against a closed schema and then
+against the candidates code supplied, and logs metadata and never the
+email. **A judgment may always decline**, and every decline is
+`needs_human` through the existing Flow 2 route. Measured, not argued: the
+laptop's twenty live answers were captured read-only as fixtures and every
+step was replayed three times against them under
+`docs/phase-12-part-e-equivalence.md`'s bars — 15 of 17 matches equivalent,
+every item the laptop declined declined by the container too, **no STOP row
+ever**, no instability with all four judgments on. Three things the owner
+decided on the way are **named divergences** from the laptop, recorded in
+the equivalence doc and carried to the live spec at cutover: a
+`@phb1899.com` sender in a vendor thread is never a vendor reply (code,
+before the model; forwarded vendor content goes to a person); one Q&A entry
+per commitment, not per email; `answers_note` for an answer to a
+scope-request note. Two things the first real call found that no fixture
+could: the structured-output grammar refuses `minimum` and `maxItems` (the
+request carries a stripped copy of the schema, our validator keeps the
+full one), and a toy prompt was refused under `reasoning_extraction` while
+the real one was not. The archive sweep runs through the store with a
+differential against the shipped script; the response-side scripts ride in
+the image by name; the job spec is `infra/classify-job.yaml.template`,
+Manual trigger, the key as a Key Vault reference under the platform's
+identity — **`coAnthropicApiKeyInKeyVault` stays false**, because the web
+app never reads it. Both Anthropic keys are **personal keys linked to Jim**
+and are replaced with service-account keys before the shadow run goes on a
+schedule (`docs/PHASE-14.md` item 0.6). The repo's `render_qa_pdf.py` differs
+from the live script (item 1.12). `docs/phase-12-part-d-verification.md` is
+the record, D0 through D6; `runbook.md` → *Running a classifier pass, and
+reading its summary and log*; `WHY-ITS-BUILT-THIS-WAY.md` § 75.
 
 **Part C therefore has nothing left that gates Phase 14.** Open and not
 blocking: the `PnP.Powershell` certificate on the `phb-co-engine` app
@@ -1369,5 +1411,5 @@ either anywhere else — point at them.
 | `docs/phase-12-part-c-plan.md` | **Part C: what `Sites.Selected` actually blocks**, what it does not, and what has already been settled by measurement |
 | `docs/phase-12-part-c-verification.md` | **Part C's record, 2026-10-28:** the bar, the five comparison runs including the four that failed and why, what eight-of-eight proves and does not, what was kept and deleted, and how to re-run |
 | `docs/phase-12-part-d-plan.md` | **Part D, the plan, approved 2026-10-28:** the classifier is the only judgment, most of its task is deterministic rule and becomes code, four model judgments in consequence order behind switches, schema and candidate-list validation, the key's type question and why `coAnthropicApiKeyInKeyVault` stays false; § 14 holds the owner's six decisions |
-| `docs/phase-12-part-d-verification.md` | **Part D's record, step by step:** D0's capture (20 laptop answers, three excluded with evidence); D1's harness and the first replay — every reproducible deterministic item equivalent, no FAIL, no STOP, no model call made; D2's bid leader — the scorer against the live master names, the first real call and the two things it found (the schema keywords the API refuses; a refusal on a toy prompt), the cache read back; D3's classification — the first replay on the real emails, 13 of 15 labels exact three of three, the injection fixture answered as a plain quote, and the internal-sender rule the owner decided the same day — a named divergence from the laptop, decided by code before the model, after which both unstable internal items come out the same way every run; D4's Q&A log — code keeps the record in the laptop's own shape, the model adds the writer's words, one prompt change after a consistent miss, the owner's two Q&A decisions built the same day; D5's match by body inference — 15 of 17 equivalent, every item the laptop declined declined by the container too, no STOP, no instability across three runs, the two gaps both closed COs the container was never offered |
+| `docs/phase-12-part-d-verification.md` | **Part D's record, step by step:** D0's capture (20 laptop answers, three excluded with evidence); D1's harness and the first replay — every reproducible deterministic item equivalent, no FAIL, no STOP, no model call made; D2's bid leader — the scorer against the live master names, the first real call and the two things it found (the schema keywords the API refuses; a refusal on a toy prompt), the cache read back; D3's classification — the first replay on the real emails, 13 of 15 labels exact three of three, the injection fixture answered as a plain quote, and the internal-sender rule the owner decided the same day — a named divergence from the laptop, decided by code before the model, after which both unstable internal items come out the same way every run; D4's Q&A log — code keeps the record in the laptop's own shape, the model adds the writer's words, one prompt change after a consistent miss, the owner's two Q&A decisions built the same day; D5's match by body inference — 15 of 17 equivalent, every item the laptop declined declined by the container too, no STOP, no instability across three runs, the two gaps both closed COs the container was never offered; D6's plumbing — the archive sweep through the store held to the shipped script by a differential, the tracker-unreadable rule, the image with the scripts, the job spec |
 | `docs/phase-12-part-e-equivalence.md` | **Part E: what counts as equivalent**, written 2026-09-22 before any comparison ran so the bar cannot be set to fit a disagreement; recovered and re-checked 2026-10-28 |

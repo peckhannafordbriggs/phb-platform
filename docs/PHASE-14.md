@@ -23,7 +23,7 @@ schedule that cutover repoints.
 
 | # | Item | Source |
 |---|---|---|
-| 0.1 | Phase 12 Part D is done: the Cowork judgment steps replaced one at a time, lowest consequence first, every model response schema-validated, no model output naming a file, choosing a recipient or triggering a send | `docs/PHASE-12.md` → *Part D* |
+| 0.1 | **Done 2026-10-29.** Phase 12 Part D: the Cowork judgment steps replaced one at a time, lowest consequence first, every model response schema-validated, no model output naming a file, choosing a recipient or triggering a send. What Part E inherits from it is in `docs/phase-12-part-d-verification.md` → *D6* | `docs/PHASE-12.md` → *Part D* |
 | 0.2 | Phase 13 is done: the container runs against the **copy** on the laptop's schedule, with failure and silence alerts, and the runbook entries written in that phase | `docs/PHASE-13.md` → *Where this sits in the sequence*, *Part C — Operations* |
 | 0.3 | Phase 12 Part E is done: **weeks** of shadow running against the copy, every disagreement investigated, the laptop right until proven otherwise, equivalence for the judgment steps defined in writing before the window started (it is: `docs/phase-12-part-e-equivalence.md`). "Phase 12 is complete when the container has produced equivalent output for a sustained period, and the disagreements are understood. Not when it runs." | `docs/PHASE-12.md` → *Part E*; `docs/06-roadmap.md` → *Phase 12* |
 | 0.4 | The shadow run never wrote any of the four sentinel files into the live tree, and the one stop-the-window condition in the equivalence doc (the container deciding where the laptop refused) never fired | `docs/phase-12-part-e-equivalence.md` → *Part 2* (the stop-the-window row under `needs_human`), *Part 3 · Structural invariants* |
