@@ -508,14 +508,53 @@ the drift that still fails.
 - The laptop's `secondary_intents` beyond the one item above; the bar does
   not cover them and the scorer does not compare them.
 
-### Open for the spec's owner
+### Open for the spec's owner — decided the same day
 
-- **Internal PH+B mail inside a vendor thread.** The rubric defines the five
-  classes from the vendor's side; the laptop labelled an estimator's
-  question to a vendor `question` and an estimator's note to the PM
-  `answer`, at medium. The container declines them two times out of
-  three. Either reading is defensible; the spec should say which, and
-  then the prompt follows the spec.
+- **Internal PH+B mail inside a vendor thread.** Decided 2026-10-29: never a
+  vendor reply, by code, before the model; see the next section. The live
+  spec and prompt take the rule at cutover (`docs/PHASE-14.md` item 2.3).
+
+### The internal-sender rule, and the rerun (2026-10-29, later the same day)
+
+The owner's decision on the open item above: **a `@phb1899.com` sender in a
+vendor thread never counts as a vendor reply, and code decides it before
+any model call.** Scoped as asked: the pm_thread rule runs first and a PM
+completeness reply is untouched; internal mail that forwards or quotes
+vendor content goes to a person, never silently `other`; the mailbox's own
+address is internal like any other. **[decision]**
+
+**What the fixtures showed before the detection rule was written.** Of the
+ten internal-sender items, one quotes a Trane message (a `From:` line with
+an outside address, twelve outside addresses in the body — the Joel-to-Trane
+email the laptop called `question`); two carry a non-image attachment (the
+copier-scanned sheet-metal PDF the model kept worrying about, and a ZZ test
+"vendor" quoting from an internal address); none carries a forward marker;
+the rest are plain internal chatter with at most a signature image. No
+fixture item is from `changeorder@phb1899.com` itself: Response 1's
+trigger is *When a new email arrives*, and the mailbox's own sends do not
+arrive, so nothing is observed to change for it; under the rule it is
+internal like any other address. **[observed]** The detection
+(`rules.internal_vendor_content`) names what it found: a quoted header from
+an outside address, a forwarded-message marker, a forward subject, a
+non-image attachment; pictures are not evidence.
+
+**The rerun.** Three runs, 18 calls (the nine internal items no longer
+reach the model). **[observed]**
+
+| | |
+|---|---|
+| The two unstable items | **identical in all three runs**: the Joel-to-Trane email is `other` / medium, `needs_human` for quoted vendor content; the sheet-metal email is `other` / medium, `needs_human` for its scanned PDF |
+| Labels | 15 of 15 vendor-path items + 2 pm: **no label not judged, no FAIL** — 10 equivalent, 7 *divergence* (internal senders the laptop had called question, answer or quote) |
+| Totals | equivalent 105, not judged 15, more cautious 7, **divergence 9**, FAIL 0, STOP 0 |
+| Unstable | **1, a different item**: the Trane quote on Bulletin 12. In one run of three the model named a secondary `answer` intent, which sends the item to the Q&A step, which is off, which declines; in the other two it named none. The *secondary intent* on that email is what varies, and it is the same email behind D3's one recorded disagreement. D4 gives the Q&A step the thread's open questions; re-measured there |
+
+The replay reports every row the rule decides as *divergence* — the
+equivalence doc's new *Named divergences* section defines it — and never a
+failure; the STOP row stands unchanged. `docs/PHASE-14.md` items 1.11 and
+2.3 carry the rule to the live spec and prompt at cutover; until then the
+repo mirror stays a mirror and the laptop keeps asking the model.
+`tests/test_classifier_internal_rule.py` (7) holds the rule; 24 of 24
+suites pass.
 
 ### Re-running D3's evidence
 
