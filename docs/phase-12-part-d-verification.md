@@ -655,19 +655,10 @@ reason (a different obligation, price, date or scope is not fine) is met.
 **Nothing was tuned toward the laptop on this**: granularity is not a
 rubric question the spec answers, and one email is not evidence either way.
 
-### Open for the spec's owner
+### Open for the spec's owner — decided the same day
 
-- **One entry per email, or one per commitment?** The laptop folded three
-  commitments into one entry; the container logs each. The handoff PDF
-  lists entries, so the choice is what the bid leader reads. The prompt
-  follows whichever the spec says.
-- **What `resolves` carries for an answer to a scope-request note.** The
-  laptop writes the note's reference as free text; the container writes
-  null and names the note in the entry's text, because `resolves` is
-  reserved for a logged open question the model names by id. If the
-  laptop's convention is wanted, the schema gains an `answers_note` field
-  that code copies into `resolves`; the renderer shows it on the PDF's
-  *Resolves:* line either way.
+- **One entry per commitment**, and **`answers_note`** as a structured
+  field shown on the PDF. Both built and recorded in the next section.
 
 ### What D4 does not prove
 
@@ -680,10 +671,147 @@ rubric question the spec answers, and one email is not evidence either way.
 - The PDF against the laptop's: the renderer is the laptop's own script,
   so the layout is the same by construction; no PDF was compared.
 
+### The two decisions, and the rerun under .5 (2026-10-29, later the same day)
+
+The owner's answers to the two questions above. **[decision]**
+
+1. **One Q&A entry per commitment, not per email.** A deliberate difference
+   from the laptop: named divergence 2 in the equivalence doc, carried to the
+   live spec at cutover (`docs/PHASE-14.md` item 2.4). The handoff PDF must
+   still show which entries came from the same email.
+2. **`answers_note`.** When an answer addresses a numbered note or a
+   condition of the scope request rather than a logged question, the note's
+   reference travels as a structured field and the PDF shows it beside the
+   entry.
+
+What was built, `phb-co-engine` branch `feat/classifier-qa-decisions`:
+prompt version `2026-10-29.5` (only `qa.md` changed: one entry per
+commitment as the rule, `answers_note` defined, an answer carries
+`resolves` or `answers_note` and never both); the Q&A schema and the log
+gain the field and code refuses both-at-once or a question with either;
+**the repository's `render_qa_pdf.py`** groups consecutive answers from one
+email under one heading — *"[date] vendor — 3 answers from the same
+email"* — shows *Note:* beside an answer to a request note the way it shows
+*Q:* beside an answer to a logged question, and escapes vendor text so a
+company called P&G cannot break the page. That renderer now differs from
+the live script on SharePoint, which is recorded as cutover-diff item 1.12;
+the container renders with the repository's copy. The replay's Q&A bar
+reports the same kinds of entry cut differently as the divergence and a
+different kind as a failure. `tests/test_classifier_qa.py` (10) holds all
+of it, including the grouping helper and a real PDF.
+
+**The rerun.** `--steps bid_leader,classify,qa --runs 3` under .5.
+**[observed]**
+
+| | |
+|---|---|
+| Totals | equivalent 106, not judged 13, more cautious 6, **divergence 11**, **FAIL 0, STOP 0**, unstable 0 |
+| Q&A rows | 14 equivalent, 2 not judged (the match step is off), 1 *divergence* — the granularity row, no longer a FAIL |
+| The Trane quote, every run | the exemption to Note 7 logged as an answer **with `answers_note` = the note's reference**, in the vendor's words; the 30-week lead time and the 30-day price hold as their own entries with no note |
+| What varied | run 2 cut the exemption into two entries (the exemption; the supervised-disassembly offer) where runs 1 and 3 kept them together: 4 entries against 3. The stability check keys on class, match and `needs_human`, which were identical; the entry count is reported in the Q&A section and is a person's call |
+
+Against the laptop's one entry for that email — which carried the
+exemption, the disassembly offer, the lead time and the price hold in one
+text, with the note's reference in `resolves` as free text — the
+container's entries carry the same four commitments, nothing reworded,
+with the note's reference where the owner asked for it.
+
 ### Re-running D4's evidence
 
 ```
 cd phb-co-engine
 python tests/ci_suites.py                                                 # 25/25
 python tests/classifier_replay.py --steps bid_leader,classify,qa --runs 3   # ~$1; read the Q&A section
+```
+
+---
+
+## D5 — CO match by body inference, 2026-10-29
+
+`phb-co-engine` branch `feat/classifier-match`, stacked on
+`feat/classifier-qa-decisions`. Prompt version `2026-10-29.6` enables the
+last judgment; all four are on. **The first replay in which the container
+decides which change order a reply belongs to.**
+
+### What the model is asked
+
+Only after the two deterministic signals found nothing — no tracker row
+carries the conversation id, Power Automate resolved nothing. `match.md`
+gives the email as data and an `<open_change_orders>` block with every OPEN
+CO key and its expected respondents, and asks for one key from the block or
+null, `high` or `medium` (there is no `low`: that is a null with a
+decline), every key weighed, and the deciding words. The rubric's close-call
+guard is spelled out: when two keys are within a distinctive word of each
+other and the email does not single one out, null and a decline naming
+both. The rubric is `spec-extract.match.md`, § 2 cut verbatim from the
+mirror, § 2.0 inside it. Closed and cancelled rows are never offered, so
+the model cannot choose a CO the pipeline would not file against; a key not
+in the block is refused by code and the item goes to a person. The wiring
+had been in the orchestrator since D1; `tests/test_classifier_match.py` (8)
+holds it.
+
+### The replay
+
+`--steps bid_leader,classify,qa,match --runs 3`, twice: the first run
+reported two ONE-NULL rows and taught the scorer one more thing about
+today's tracker; the second, with that fix, is the table. 72 calls per
+replay — 42 match (12 resolved, 30 declined), 18 classify, 12 Q&A — no
+retry, no refusal, no schema or semantic failure; median 7.1 s, slowest
+15.4 s; 179 K input tokens, 40 K output, 337 K read from the cache: about
+$3. **[observed]**
+
+| bar | run 1 of 3 | across runs |
+|---|---|---|
+| CO match | **15 of 17 equivalent** — 4 resolved by body inference to the laptop's key (RFI 229 twice, RFI 229 from a reminder, Bulletin 15 from a reminder), 6 by the deterministic signals, **5 both-null**: every item the laptop declined, the container declined; 2 *not comparable* (below) | identical |
+| `needs_human` | 13 equivalent, 2 divergence (internal senders), 2 *more cautious* (the two not-comparable items); **0 STOP** | identical |
+| label | 10 equivalent, 7 divergence (internal senders) | identical |
+| bid leader | 17 equivalent | identical |
+| Q&A | 14 equivalent, 1 divergence (granularity), 2 not judged | identical |
+| count | 11 equivalent, 1 divergence, 5 not comparable (today's *Responded emails*) | identical |
+| Totals | equivalent 114, not judged 9, more cautious 2, divergence 11, **FAIL 0, STOP 0, unstable 0** | |
+
+**The two not-comparable matches.** A handoff reply the laptop filed against
+`P&G|SHARC Laser Exhaust` and a reminder reply it filed against
+`CCHMC|RFI 250`. Both COs are **closed** in the 2026-10-28 tracker
+snapshot, so the container was never offered them and declined, naming the
+open P&G and CCHMC keys it had weighed and why none fit. That is the plan's
+§ 9a limit in its fourth form — after the open-CO set, the deleted ZZ MIG
+row and *Responded emails* — and the scorer now reads the tracker's keys
+and open keys and reports a one-null on a CO that is closed or gone today
+as not comparable, with the cause. A one-null on a CO that **is** open
+today still fails, and the STOP row is untouched. **[observed]**
+
+**The declines are the kind a person can act on.** Each names what it
+weighed: *"RFI 254 … is not on the open change order list; the open CCHMC
+items are RFI 229, RFI 238 and Bulletins 12, 13 and 15"*; *"mentions only a
+'new bulletin at Liberty' with no number; five open CCHMC change orders
+could fit and nothing separates them"*. The five items the laptop had sent
+to a person for the same reason went to a person for the same reason.
+**[observed]**
+
+### What D5 does not prove
+
+- Body inference against the tracker of the laptop's day: the candidate set
+  is today's. Four items resolved to the laptop's key; two could not be
+  compared; the rest the laptop had not resolved by inference either.
+- The close-call guard on a real collision: no fixture email sat between
+  two open COs a word apart. The "five Liberty COs could fit" declines are
+  the guard working on the absence of a number, not on a near-duplicate.
+- The duplicate-CO-Key refusal on a live item: `CCHMC|Bulletin 12` holds one
+  row in today's snapshot.
+
+### What remains in Part D
+
+D6, per the plan: the archive sweep over the store, the Part 5 wrapper
+checklist, the renderer scripts and `co_classifier` in the image, the
+classifier job spec, the runbook entries for every outcome word, the
+`PHASE-12.md` Part D boxes and `PHASE-14.md` item 0.1. Every judgment is
+now on; what D6 adds is the plumbing a pass needs to run unattended.
+
+### Re-running D5's evidence
+
+```
+cd phb-co-engine
+python tests/ci_suites.py                                                         # 26/26
+python tests/classifier_replay.py --steps bid_leader,classify,qa,match --runs 3     # ~$3
 ```

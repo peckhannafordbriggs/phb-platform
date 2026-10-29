@@ -236,6 +236,25 @@ the classifier prompt take the rule at cutover (`docs/PHASE-14.md` items
 1.11 and 2.3); until then the repo mirror stays a mirror and the laptop keeps
 asking the model.
 
+**2. One Q&A entry per commitment (owner's decision, 2026-10-29).** The
+container's Q&A step logs one entry per distinct commitment in a vendor's
+email — an exception to a scope note, a lead time, a price validity are
+three entries — where the laptop folded them into one entry per email. The
+handoff PDF groups the entries from one email under one heading, so what
+arrived together stays visible. On the Q&A bar this means: when both sides
+appended and the entries are **the same kinds of thing cut differently**
+(every laptop entry's type appears among the container's and the reverse),
+the row is *divergence*; a different kind — a question where the laptop
+logged an answer — is still FAIL; and the content comparison by a person
+("the same commitment in different words is fine; a different obligation,
+price, date or scope is not") is unchanged and still every extraction,
+never a sample. One field convention rides with it: an answer to a numbered
+note or condition of the scope request carries the note's reference in a
+structured `answers_note` field and shows it on the PDF, where the laptop
+wrote it into `resolves` as free text; for the shape comparison, an entry
+"addresses something" when it has either. The live spec takes both at
+cutover (`docs/PHASE-14.md` items 1.12 and 2.4).
+
 ### CO match — exact, including both-null
 
 Which change order this reply belongs to. The inventory calls this the highest
