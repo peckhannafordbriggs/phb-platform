@@ -3607,6 +3607,18 @@ a look, one refusal is noise. No fallback model is configured, by decision
 (plan § 10): a second model answering silently is what the log would not
 show.
 
+**Symptom: an item from a `@phb1899.com` address lands in `_needs_review` with
+`needs_human_reason` starting `internal_forwarded_vendor_content`.** The
+internal-sender rule (owner's decision 2026-10-29): internal mail in a vendor
+thread is never a vendor reply, and when it forwards or quotes vendor content
+— the note names what was found: a quoted header from an outside address, a
+forward marker, a forward subject, a non-image attachment — a person decides
+whether that content belongs on the tracker or in the Q&A log. Not an error.
+Plain internal mail with none of those is `other` with no tracker effect and
+no note. A PM completeness reply is matched before this rule and never
+reaches it. The laptop classifier, until cutover, asks the model instead; the
+replay reports the difference as a named divergence.
+
 **Symptom: `tests/classifier_replay.py` exits 1 with `unstable items` above
 zero, or with a FAIL row.** Read the report before touching anything. An
 *unstable* item is one the container answered differently across the runs
