@@ -905,11 +905,17 @@ action, and the copy it reads is Part E's to build.
   guard suites green with the tree guard on.
 - Three named divergences and the two tracker-moved-on limits the scorer
   reports as not comparable — all to be expected on the shadow copy too.
-- Three open operational items, none code: the owner creates the job from
+- Two open operational items, none code: the owner creates the job from
   the template; Part E builds and feeds the Step 2 copy (the scratch root
-  beside the Part C one, decision 6 of the plan); both Anthropic keys are
-  replaced with service-account keys before the job goes on a schedule
-  (`docs/PHASE-14.md` item 0.6).
+  beside the Part C one, decision 6 of the plan).
+- **The Anthropic keys: decided, not open.** On 2026-10-29 the owner decided
+  to keep both keys as they are — personal keys linked to Jim — rather than
+  replace them with service-account keys (`docs/PHASE-14.md` item 0.6).
+  The accepted risk, plainly: the day Jim leaves the organization,
+  Anthropic archives his keys and both the BAS Analyze tab and the
+  classifier stop at the next call. The recovery is a new key and a new
+  version of the vault secret (`runbook.md` → *Both Anthropic keys fail at
+  once as `401 authentication_error`*). **[decision]**
 
 ### Re-running D6's evidence
 

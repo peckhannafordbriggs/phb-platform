@@ -495,9 +495,11 @@ differential against the shipped script; the response-side scripts ride in
 the image by name; the job spec is `infra/classify-job.yaml.template`,
 Manual trigger, the key as a Key Vault reference under the platform's
 identity — **`coAnthropicApiKeyInKeyVault` stays false**, because the web
-app never reads it. Both Anthropic keys are **personal keys linked to Jim**
-and are replaced with service-account keys before the shadow run goes on a
-schedule (`docs/PHASE-14.md` item 0.6). The repo's `render_qa_pdf.py` differs
+app never reads it. Both Anthropic keys are **personal keys linked to Jim**,
+kept that way by the owner's decision of 2026-10-29 as an accepted risk:
+the day Jim leaves the organization, Anthropic archives his keys and both
+the Analyze tab and the classifier stop at the next call (`docs/PHASE-14.md`
+item 0.6; `runbook.md` → *Both Anthropic keys fail at once*). The repo's `render_qa_pdf.py` differs
 from the live script (item 1.12). `docs/phase-12-part-d-verification.md` is
 the record, D0 through D6; `runbook.md` → *Running a classifier pass, and
 reading its summary and log*; `WHY-ITS-BUILT-THIS-WAY.md` § 75.

@@ -1424,8 +1424,8 @@ broken auth callback. **Do not remove the `-p`.**
 |---|---|---|---|
 | SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local sign-in only. Production authenticates with the managed identity — see *Production sign-in authenticates with the managed identity*. **Cannot affect production**, which refuses to boot with it set |
 | Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only. **Cannot affect production** |
-| Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** Revocable in the Anthropic Console, and a revoked key fails as `401 authentication_error` on the next call | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
-| Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** A second, separately issued key, revocable on its own in the Anthropic Console | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
+| Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire, but is a personal key linked to Jim** (checked in the Console 2026-10-28; kept so by decision 2026-10-29, accepted risk): Anthropic archives it the day Jim leaves the organization, and it then fails as `401 authentication_error` on the next call, with no warning beforehand. Also revocable in the Console. *Both Anthropic keys fail at once* has the fix | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
+| Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app and on the classifier job; `.env.local` locally | **Does not expire, but is a personal key linked to Jim**, like the BAS key and with the same ending: archived the day Jim leaves, `401` on the next call. A second, separately issued key, revocable on its own. *Both Anthropic keys fail at once* has the fix | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
 | BAS credential key | Key Vault `BAS-CREDENTIAL-KEY` → `BAS_CREDENTIAL_KEY` on the container app; the collector's `.env` on the office PC; `.env.local` locally | **Does not expire.** Rotated only on purpose - *Station credentials, and the one secret that lives in two places* | Storing and decrypting Niagara station logins in Settings; the collector, wherever it runs. A value that differs from the collector's makes every stored login unreadable |
 | `PnP.Powershell` certificate on `phb-co-engine` | Entra app registration `85ca496d-3af9-4c3a-aa11-a6b7fd51105d` → Certificates & secrets; the private key is on the IT workstation that ran the site grant, not anywhere PH+B controls | **19 October 2029** | **Nothing of ours.** No engine code path presents a certificate, so its expiry breaks nothing and is noticed by nothing — the exposure is the three years it stays *valid*. Whether it is removed is an **open decision**: *Open decision — the `PnP.Powershell` certificate on `phb-co-engine`* |
 
@@ -3574,6 +3574,54 @@ reverse.** One key was revoked or ran out of credit and the other did not;
 that is the separation working. Fix the one named, in the Anthropic Console.
 **Rotating**: set the secret again with the new key, then create a new
 revision; the BAS key is untouched.
+
+### Both Anthropic keys fail at once as `401 authentication_error`
+
+**Symptom.** The Analyze tab answers every question with *The model service
+rejected the API key.*, **and** the change-order classifier's call lines read
+`outcome: "api_error"`, `http_status: 401`, `error_class:
+"AuthenticationError"` — both on the same day, with nothing changed in
+Azure. One module failing alone is the
+separation working (*The Change Orders Anthropic key, the same way*); both
+at once is this.
+
+**Cause.** Both keys are **personal keys linked to Jim**, kept so by the
+owner's decision of 2026-10-29 as an accepted risk (`docs/PHASE-14.md`
+item 0.6). Anthropic archives a personal key the day its owner is removed
+from the organization — *"Personal keys are archived when you are removed
+from the organization. If you are re-invited, create new keys; archived
+keys are not restored"* — and sends no warning beforehand. Jim leaving the
+organization is the day both stop. Nothing in Azure, Key Vault or the code
+has changed and nothing there will show a cause.
+
+**Fix.** A key swap, not a design change, and the same shape as *Rotating*
+under *Secrets set by hand in Key Vault*:
+
+1. In the Claude Console (`platform.claude.com/settings/keys`), create two
+   new keys — one for Analyze, one for Change Orders, so the two modules
+   stay separately billed and revocable (§ 68). Expiration *Never*. Whose
+   account they are linked to is the decision this symptom exists because
+   of: a **service account** created by an organization admin outlives any
+   one person; a personal key linked to whoever creates it carries the same
+   risk forward to that person.
+2. Set each as a new version of the same vault secret, without printing it:
+
+   ```powershell
+   az keyvault secret set --vault-name <vault-name> --name ANTHROPIC-API-KEY --value (Read-Host "Analyze key")
+   az keyvault secret set --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --value (Read-Host "Change Orders key")
+   az keyvault secret show --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --query "{enabled:attributes.enabled, updated:attributes.updated}"
+   ```
+
+3. Restart the web app's revision so Analyze re-reads its reference
+   (`az containerapp revision restart`); the classifier job reads the
+   reference at each execution, so its next run picks the new key up by
+   itself.
+4. Confirm: one Analyze question answers; one classifier call line reads
+   `outcome: "valid"`.
+
+Until step 2 is done, nothing in either module guesses: Analyze reports the
+error, and every classifier item is *left unclassified, will retry next
+pass* with the item still in `_to_classify`.
 
 ### The change-order classifier's model calls: a 400 naming the schema, and a refusal
 
