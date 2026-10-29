@@ -50,6 +50,7 @@ differ, each confirmed on the day.** The known ways:
 | 1.8 | **The `400` on folder creation.** Seen once, on the first comparison run, with the folder present afterwards; never reproduced; every store error now carries Graph's code and request id. If it recurs it is "a finding to understand before Phase 14", because it is the same `POST …:/children` the engine issues for every attempt folder | `docs/phase-12-part-c-plan.md` → *The first run*; `runbook.md` → *The comparison job stops with `HTTP 400` creating a folder*; `co_filestore.py` → `makedirs` comment |
 | 1.9 | **`rglob` at depth.** Walked folder by folder, correct, never measured against a deep tree; "a performance question for Phase 14" | `docs/phase-12-part-b-verification.md` → the 2026-10-28 closure note |
 | 1.10 | **Speed at volume.** The Graph half took 44 to 54 s per CO against 2 to 3 s locally, one round trip per file operation. Not a defect, inside a scheduled run's budget at a handful of COs a day; cutover planning should know the number | `docs/phase-12-part-c-verification.md` → *What this does not prove* |
+| 1.11 | **The internal-sender rule.** The container decides a `@phb1899.com` sender in a vendor thread by code before any model call — `other` with no tracker effect, or `needs_human` when the message forwards or quotes vendor content — where the laptop asks the model. Owner's decision 2026-10-29, a named divergence in the equivalence doc so the shadow run does not call it a failure; after cutover it is simply how the classifier works | `docs/phase-12-part-e-equivalence.md` → *Named divergences*; `docs/phase-12-part-d-verification.md` → *D3*; `phb-co-engine` → `co_classifier/rules.py` → `internal_vendor_content` |
 
 ---
 
@@ -59,6 +60,7 @@ differ, each confirmed on the day.** The known ways:
 |---|---|---|
 | 2.1 | **Prompts move to the repository as source of truth only at cutover**, and the SharePoint copies are re-labelled as mirrors **the same day**. Until then SharePoint is authoritative and the repo copy is the mirror. Two authoritative copies is the defect this project exists to prevent | `docs/06-roadmap.md` → *Phase 12*; `docs/05-database-and-sources.md` → *AI prompts* row; `docs/PHASE-12.md` → *Part D* |
 | 2.2 | The two scheduled-task prompts recorded verbatim in the SharePoint `CO Process Handoff` corpus (`09 Scheduled Task Prompts VERBATIM`) are what the cloud schedule must reproduce; the crons were checked against them in Phase 11 | `HANDOVER.md` § 6 (the paragraph before *Moving the AI layer off the laptop*); `docs/05-database-and-sources.md` |
+| 2.3 | **Update the authoritative live spec and the live classifier prompt with the internal-sender rule at cutover**: in `CO_Response_Agent_SKILL.md` § 1 and in the scheduled-task prompt, a `@phb1899.com` sender in a vendor thread is never a vendor reply, forwarded or quoted vendor content goes to review, PM completeness replies are unchanged. Until cutover SharePoint stays authoritative, the repo mirror stays a mirror, and the laptop keeps using the model for these | `docs/phase-12-part-e-equivalence.md` → *Named divergences*; item 2.1 |
 
 ---
 

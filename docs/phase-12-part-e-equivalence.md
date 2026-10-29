@@ -199,6 +199,43 @@ though it is derived from the label — true for quote and declined only. It mov
 a received count on the Bid Tracker. Checking it independently catches the case
 where labels agree and the derivation has drifted.
 
+### Named divergences — decided, and not failures
+
+A divergence is a place where the container is **built** to answer
+differently from the laptop, by a decision the owner made and dated. The
+laptop's answer is not the bar for that row; the replay and the shadow diff
+report the row as *divergence*, count it, and never fail on it. Everything
+else in this file still applies to the same item: a divergence on the label
+does not excuse a STOP on `needs_human`, and a divergence never widens to
+an item the rule did not decide. Adding one is a commit that names the
+decision, the date and the scope, here and in `docs/PHASE-14.md`.
+
+**1. The internal-sender rule (owner's decision, 2026-10-29).** A sender at
+`@phb1899.com` in a vendor thread never counts as a vendor reply, and code
+decides it before any model call:
+
+- it is `other`, high confidence, with no tracker effect, when the message
+  carries no vendor content;
+- it is `needs_human`, reason `internal_forwarded_vendor_content`, when the
+  message forwards or quotes vendor content — a quoted `From:` header from
+  an outside address, a forwarded-message marker, a subject that is a
+  forward, or a non-image attachment — so a relayed quote is never silently
+  ignored;
+- a PM completeness reply is matched by the pm_thread rule first and is not
+  touched; the mailbox's own address is internal like any other.
+
+The laptop asks the model about every internal email and labelled them
+`question`, `answer` or `other` as it saw fit, at medium confidence for the
+two it was least sure of. So on an internal sender: a label disagreement is
+*divergence*; a count the laptop proposed that the container withholds is
+*divergence*; Q&A the laptop appended that the container does not is
+*divergence*; a `needs_human` the rule raised where the laptop decided is
+*divergence*, not "more cautious". The STOP row — the laptop declined and
+the container decided — stands unchanged, rule or no rule. The live spec and
+the classifier prompt take the rule at cutover (`docs/PHASE-14.md` items
+1.11 and 2.3); until then the repo mirror stays a mirror and the laptop keeps
+asking the model.
+
 ### CO match — exact, including both-null
 
 Which change order this reply belongs to. The inventory calls this the highest
