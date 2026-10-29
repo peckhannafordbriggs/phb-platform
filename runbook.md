@@ -11163,11 +11163,17 @@ only; production refuses it, like the Cost Intelligence secret.
 
 `npm run kb:sync` syncs the configured source once and prints the outcome;
 `npm run kb:sync -- --dir "C:\Users\<you>\OneDrive - Peck Hannaford + Briggs\KB"`
-syncs a local copy instead (refused in production). It lists the library, writes
-`kb_projects` and `kb_documents`, and leaves one `kb_sync_runs` row and one audit
-row (`kb.synced` or `kb.sync_failed`). It reads no file contents: a new or changed
-file is set `pending` for the indexer, and an unchanged indexed file is left alone,
-so a second run right after the first changes nothing but `last_seen_at`.
+syncs a local copy instead (refused in production); `-- --no-index` lists and queues
+without reading any file. It lists the library, writes `kb_projects` and
+`kb_documents`, reads every new or changed file into passages (`kb_chunks`), and
+leaves one `kb_sync_runs` row and one audit row (`kb.synced` or `kb.sync_failed`).
+An unchanged indexed file is not read again, so a second run right after the first
+changes nothing but `last_seen_at`.
+
+**How long.** About 5 seconds per 300-page PDF and 3 seconds for a large estimate
+workbook, one file at a time: the first run over a project of 500 files takes tens
+of minutes, later runs seconds. Passages have no embedding yet (`embedding` NULL
+until Azure OpenAI, request KB-2); keyword search works on them already.
 
 What it decides per file is in *A document is in SharePoint but search never finds
 it* below. Versions: the newest non-archived file of a family is `is_latest`; a
@@ -11191,6 +11197,27 @@ SELECT started_at, status, trigger, source_kind, projects_seen, files_seen,
 | `failed`, *A Knowledge Base sync is already running* | Another sync holds the one `running` slot. A `running` row older than an hour is closed as *Abandoned* by the next sync |
 | `partial` | One or more project folders could not be read; `error` names them. Their rows were kept exactly as they were, and the rest of the library was synced. Fix access to that folder and run the sync again |
 | `failed`, *stopped unexpectedly* | A bug or a database error. Projects saved before it keep their new state, each project being its own transaction; the log has `kb.sync_project_failed` with the detail. Running the sync again is safe |
+| `failed`, *Abandoned: no sign of life for ten minutes* | The process running the sync died (closed terminal, container restart). A running sync stamps `heartbeat_at` after every project and every file, and the next sync closes one silent for ten minutes. Run the sync again: it continues with the files still `pending` |
+
+## A Knowledge Base file is `failed`
+
+```sql
+SELECT path, error FROM kb_documents WHERE status = 'failed' ORDER BY path;
+```
+
+The sync could not read that one file; every other file was indexed. The next sync
+tries it again. What the `error` usually means:
+
+| `error` | Cause and fix |
+|---|---|
+| *The PDF is password-protected* | Save an unprotected copy in SharePoint in its place |
+| *Not a readable PDF* / *Invalid PDF structure* | The file is damaged or is not really a PDF. Open it; if Acrobat repairs it, save the repaired copy |
+| *Reading the file took longer than 5 minutes* | An unusually heavy file. Check it opens; if it is a drawing set, it belongs in 1A or 1E |
+| *unexpected close tag*, or another XML error on `.xlsx` / `.xlsm` | A workbook part exceljs cannot parse. Legacy VML drawings (comments, form buttons) are already removed before parsing; anything else, open and re-save the workbook in Excel |
+| A `403` or `404` from SharePoint | The file moved or the KB app lost its grant between the listing and the read. Run the sync again |
+
+A scanned PDF with no text layer is not a failure: it is `skipped` with
+`empty_text`. OCR is not built.
 
 ## Rebuilding the Knowledge Base index from scratch
 

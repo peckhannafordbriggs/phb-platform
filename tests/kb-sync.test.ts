@@ -10,6 +10,7 @@ import {
   syncKnowledgeBase,
 } from "@/lib/modules/knowledge-base/sync";
 import { readOnly, localStore } from "@/lib/sharepoint/folder-store";
+import { writeDocx, writePdf, writeWorkbook } from "./kb-fixtures";
 import { createEmployee, disconnectDb, resetDb, testDb } from "./db";
 
 /**
@@ -59,8 +60,9 @@ async function write(project: string, files: Record<string, string>, mtime = OLD
   }
 }
 
-const sync = (now = T0, triggeredById: string | null = null, src: KbSource = source) =>
-  syncKnowledgeBase({ trigger: "manual", triggeredById, source: src, now: () => now });
+/** Listing only: these files hold placeholder bytes, not real documents. Indexing has its own tests below. */
+const sync = (now = T0, triggeredById: string | null = null, src: KbSource = source, index = false) =>
+  syncKnowledgeBase({ trigger: "manual", triggeredById, source: src, index, now: () => now });
 
 const doc = (fileName: string) => testDb.kbDocument.findFirstOrThrow({ where: { fileName } });
 
@@ -282,7 +284,7 @@ describe("syncKnowledgeBase", () => {
     expect(outcome.status).toBe("ok");
     expect(await testDb.kbSyncRun.findFirstOrThrow({ where: { startedAt: T0 } })).toMatchObject({
       status: "failed",
-      error: "Abandoned: never finished.",
+      error: "Abandoned: no sign of life for ten minutes.",
     });
   });
 
@@ -298,5 +300,118 @@ describe("syncKnowledgeBase", () => {
     await sync(T1);
 
     expect(await doc("224070_SUB_Air_Valves_Approved_20241121.pdf")).toMatchObject({ status: "pending", skipReason: null });
+  });
+});
+
+describe("syncKnowledgeBase indexes what it queued", () => {
+  const SUB = `${P}/11 - SUBMITTALS`;
+
+  async function library() {
+    await mkdir(path.join(dir, SUB), { recursive: true });
+    await mkdir(path.join(dir, P, "10 - CHANGE ORDERS"), { recursive: true });
+    await mkdir(path.join(dir, P, "1 - DWGS AND SPECS", "1C - SPECIFICATIONS"), { recursive: true });
+    await writePdf(path.join(dir, SUB, "224070_SUB_Air_Valves_Approved_20241121.pdf"), [
+      "Air valves submittal\nAV-1 1200 CFM",
+      "Reviewer stamp: approved as noted",
+    ]);
+    await writePdf(path.join(dir, SUB, "224070_SUB_Fans_Approved_20240130.pdf"), ["", ""]);
+    await writeFile(path.join(dir, SUB, "224070_SUB_Louvers_Approved_20240307.pdf"), "not really a pdf");
+    await writeWorkbook(path.join(dir, P, "10 - CHANGE ORDERS", "224070_COR_Log_20260625.xlsx"), [
+      { name: "Log", rows: [["CO", "Description", "Amount"], ["008", "Bulletin 12", 15400]] },
+    ]);
+    await writeDocx(path.join(dir, P, "1 - DWGS AND SPECS", "1C - SPECIFICATIONS", "224070_SPEC_23_34_00_HVAC_Fans_v01.docx"), [
+      { heading: 1, text: "Part 2 - Products" },
+      { text: "Fans shall be direct drive." },
+    ]);
+  }
+
+  it("reads each file into passages with locations, and records the counts", async () => {
+    const me = await createEmployee();
+    await library();
+
+    const outcome = await sync(T0, me.id, source, true);
+
+    expect(outcome).toMatchObject({
+      status: "ok",
+      filesSeen: 5,
+      filesQueued: 5,
+      filesIndexed: 3,
+      filesEmpty: 1,
+      filesFailed: 1,
+      filesSkipped: 1,
+    });
+    expect(outcome.chunksWritten).toBe(3);
+
+    const valves = await doc("224070_SUB_Air_Valves_Approved_20241121.pdf");
+    expect(valves).toMatchObject({ status: "indexed", chunkCount: 1, indexedAt: T0, error: null });
+    expect(await testDb.kbChunk.findFirstOrThrow({ where: { documentId: valves.id } })).toMatchObject({
+      ordinal: 0,
+      pageStart: 1,
+      pageEnd: 2,
+      embeddingModel: null,
+      content: expect.stringMatching(/AV-1 1200 CFM[\s\S]*approved as noted/),
+    });
+
+    const log = await doc("224070_COR_Log_20260625.xlsx");
+    expect(await testDb.kbChunk.findFirstOrThrow({ where: { documentId: log.id } })).toMatchObject({
+      sheet: "Log",
+      cellRange: "A1:C2",
+    });
+    const spec = await doc("224070_SPEC_23_34_00_HVAC_Fans_v01.docx");
+    expect(await testDb.kbChunk.findFirstOrThrow({ where: { documentId: spec.id } })).toMatchObject({
+      section: "Part 2 - Products",
+    });
+
+    expect(await doc("224070_SUB_Fans_Approved_20240130.pdf")).toMatchObject({ status: "skipped", skipReason: "empty_text" });
+    expect(await doc("224070_SUB_Louvers_Approved_20240307.pdf")).toMatchObject({
+      status: "failed",
+      chunkCount: 0,
+      error: expect.stringMatching(/./),
+    });
+
+    const run = await testDb.kbSyncRun.findFirstOrThrow();
+    expect(run).toMatchObject({ status: "ok", filesIndexed: 3, filesFailed: 1, chunksWritten: 3, filesSkipped: 1 });
+    expect(run.heartbeatAt).toEqual(T0);
+  });
+
+  it("finds the passages by keyword through the trigger-kept tsvector", async () => {
+    await library();
+    await sync(T0, null, source, true);
+    const hits = await testDb.$queryRawUnsafe<Array<{ n: number }>>(
+      `SELECT count(*)::int AS n FROM kb_chunks WHERE content_tsv @@ plainto_tsquery('simple', 'AV-1 1200')`,
+    );
+    expect(hits[0]?.n).toBe(1);
+  });
+
+  it("does not read an unchanged indexed file again, and retries a failed one", async () => {
+    await library();
+    await sync(T0, null, source, true);
+    const before = await doc("224070_SUB_Air_Valves_Approved_20241121.pdf");
+
+    const outcome = await sync(T1, null, source, true);
+
+    expect(outcome).toMatchObject({ filesUnchanged: 3, filesIndexed: 0, filesFailed: 1 });
+    expect(await doc("224070_SUB_Air_Valves_Approved_20241121.pdf")).toMatchObject({ indexedAt: before.indexedAt });
+  });
+
+  it("reindexes a changed file in place", async () => {
+    await library();
+    await sync(T0, null, source, true);
+    await writePdf(path.join(dir, SUB, "224070_SUB_Air_Valves_Approved_20241121.pdf"), ["Revised schedule: AV-2 900 CFM supply"]);
+
+    await sync(T1, null, source, true);
+
+    const valves = await doc("224070_SUB_Air_Valves_Approved_20241121.pdf");
+    expect(valves).toMatchObject({ status: "indexed", indexedAt: T1 });
+    const chunks = await testDb.kbChunk.findMany({ where: { documentId: valves.id } });
+    expect(chunks.map((c) => c.content)).toEqual(["Revised schedule: AV-2 900 CFM supply"]);
+  });
+
+  it("does not take a running sync with a recent heartbeat for abandoned", async () => {
+    await library();
+    await testDb.kbSyncRun.create({
+      data: { sourceKind: "local", trigger: "manual", startedAt: T0, heartbeatAt: new Date(T1.getTime() - 60_000) },
+    });
+    await expect(sync(T1)).rejects.toBeInstanceOf(KbSyncInProgressError);
   });
 });

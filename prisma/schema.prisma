@@ -1021,6 +1021,8 @@ model KbSyncRun {
 
   startedAt  DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
   finishedAt DateTime? @map("finished_at") @db.Timestamptz(3)
+  /// Last sign of life from a running sync; silent for ten minutes is abandoned.
+  heartbeatAt DateTime? @map("heartbeat_at") @db.Timestamptz(3)
 
   embeddingModel String? @map("embedding_model")
 

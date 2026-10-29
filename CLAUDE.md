@@ -1288,8 +1288,11 @@ release; `ARCHIVE_` files indexed and tagged, never latest; history shared, ever
 sees everyone's questions; the source is the Knowledge Base site's Documents library,
 every project in it legacy. **The sync exists** (`lib/modules/knowledge-base/sync.ts`,
 `npm run kb:sync`), on the folder store now shared with Cost Intelligence
-(`lib/sharepoint/folder-store.ts`, the KB takes it read-only); extraction, chunking
-and embedding are not built. Access requests KB-1 to KB-4: IT approved all but KB-2 (Azure OpenAI). `docs/KB-P0-P1.md`; `runbook.md` ->
+(`lib/sharepoint/folder-store.ts`, the KB takes it read-only), and it indexes what
+it finds: PDF by page (pdfjs), Word by heading (mammoth), Excel by sheet and cell
+range (exceljs), Markdown and text, into `kb_chunks` with exact locations
+(`extract.ts`, `chunk.ts`, `indexer.ts`). Embeddings are not written yet (NULL until
+KB-2); the admin Index button and its worker are not built. Access requests KB-1 to KB-4: IT approved all but KB-2 (Azure OpenAI). `docs/KB-P0-P1.md`; `runbook.md` ->
 *Knowledge Base*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.

@@ -218,6 +218,33 @@ Until 2 and 3 land, Phases 1 to 3 can be built and tested against
 - **Archived versions (2026-10-28):** `ARCHIVE_` files are indexed and tagged,
   not skipped. Drawing sets in 1E (`_Drawings_`) are skipped with 1A and 1D.
 
+## Phase 2: sync and indexing (2026-10-29)
+
+One pipeline: `syncKnowledgeBase` lists the library, reconciles `kb_projects` and
+`kb_documents`, then reads every `pending` file into passages. `runbook.md` ->
+*Running a Knowledge Base sync* has the operator's view; this is why it is shaped
+so.
+
+| Type | Reader | A passage's location |
+|---|---|---|
+| PDF | pdfjs-dist 4.10 (pure JS, no native install on Windows or in the container; 5.x and later need Node 22.13) | Page range. Lines repeated on 60% of pages (spec project blocks, letterheads) are kept once |
+| DOCX | mammoth | Heading path, e.g. `Part 2 - Products > 2.3 Fans`; table cells joined with ` | ` |
+| XLSX, XLSM | exceljs (VML drawings stripped first with jszip) | Sheet and cell range, `A30:R34`. A header row names columns; zero-valued formula rows are dropped |
+| MD, TXT | built in | Markdown heading path; a text file is one section |
+
+- **Passage size**: aims at 1,800 characters, never over 2,400, never across a
+  section or sheet; PDF passages may span pages and say so. At most 4,000 per file.
+- **Empty is not failed**: under 20 visible characters is `skipped`/`empty_text`.
+- **No embedding yet**: chunks are written with NULL `embedding`; keyword search
+  (`content_tsv`) works from the start, and embedding will fill the NULLs.
+- **Order**: `is_latest` files first, so a partial run indexes what answers lead with.
+- **Safety**: each file is one transaction, claimed only if its content tag still
+  matches what was read; a running sync stamps `heartbeat_at`, and one silent for
+  ten minutes is abandoned (`20261029120000_kb_sync_heartbeat`).
+- **Measured on UC Old Chem files**: a 299-page spec in 5 s (335 passages), a
+  307-page submittal in 6 s, the CO log in 0.1 s (9 passages), a 20-sheet estimate
+  in 3 s.
+
 ## Open questions
 
 - **Shared history and leavers.** `kb_conversations.employee_id` cascades on

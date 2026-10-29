@@ -540,7 +540,8 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     const failed = n("projectsFailed");
     return (
       `${actor} synced the Knowledge Base: ${n("projectsSeen")} projects, ${n("filesSeen")} files, ` +
-      `${n("filesQueued")} new or changed, ${n("filesSkipped")} skipped, ${n("filesRemoved")} removed` +
+      `${n("filesQueued")} new or changed, ${n("filesIndexed")} indexed, ${n("filesFailed")} could not be read, ` +
+      `${n("filesSkipped")} skipped, ${n("filesRemoved")} removed` +
       (failed > 0 ? `, ${failed} project(s) could not be read` : "")
     );
   },

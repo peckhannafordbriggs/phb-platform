@@ -6,6 +6,7 @@ import { GRAPH_PARALLEL, limiter, type FolderReader, type StoreEntry } from "@/l
 import { KNOWLEDGE_BASE_MODULE_KEY } from "./constants";
 import { parseFileName, pickLatest, type KbParsedName } from "./naming";
 import { classifyPath, type KbScopeDecision } from "./scope";
+import { indexPending, type KbIndexCounts } from "./indexer";
 import { kbSource, type KbSource } from "./source";
 import type { KbSyncTrigger } from "./types";
 
@@ -20,25 +21,26 @@ import type { KbSyncTrigger } from "./types";
  * newest non-archived member of each family is `is_latest`.
  *
  * A file that is new, changed (its content tag differs), failed last time, or
- * was skipped under an older rule becomes `pending` and loses its chunks; the
- * indexer turns `pending` into `indexed`. An unchanged indexed file is left
- * alone, so a sync costs one listing and no reads.
+ * was skipped under an older rule becomes `pending` and loses its chunks.
+ * The sync then runs the indexer (indexer.ts), which reads each `pending`
+ * file into passages. An unchanged indexed file is left alone, so a sync with
+ * nothing new costs one listing and no reads.
  *
  * Safety, from Cost Intelligence's project sync:
- * - One sync at a time (kb_sync_runs_one_running_key). A `running` row older
- *   than KB_SYNC_ABANDONED_AFTER_MS crashed, and is closed.
+ * - One sync at a time (kb_sync_runs_one_running_key). A `running` row with
+ *   no heartbeat for KB_SYNC_ABANDONED_AFTER_MS crashed, and is closed.
  * - Zero projects found fails the sync and changes nothing: a wrong path or an
  *   unsynced OneDrive folder must not empty the index.
  * - A project that could not be read keeps its rows as they were (`partial`).
- * - Each project is saved in its own transaction; removals, the run row and
- *   the audit row are one final transaction.
+ * - Each project is saved in its own transaction, then removals in one, then
+ *   each indexed document in its own; the run row and the audit row last.
  *
  * Removal deletes rows rather than marking them: the index is derived, and
  * question history keeps its snapshot (kb_question_sources goes NULL).
  */
 
-/** Long enough for indexing to run inside the sync once it does. */
-export const KB_SYNC_ABANDONED_AFTER_MS = 60 * 60 * 1000;
+/** A running sync stamps its heartbeat after every project and document. */
+export const KB_SYNC_ABANDONED_AFTER_MS = 10 * 60 * 1000;
 
 /** OS litter, Office and LibreOffice lock files. Never a row. */
 const IGNORED = /^(?:~\$.*|\.~lock\..*#|\.DS_Store|Thumbs\.db|desktop\.ini)$/i;
@@ -69,6 +71,12 @@ export type KbSyncOutcome = {
   filesUnchanged: number;
   filesSkipped: number;
   filesRemoved: number;
+  /** What the indexer did in this sync (all zero with `index: false`). */
+  filesIndexed: number;
+  filesFailed: number;
+  /** Read cleanly with no text: also counted in filesSkipped. */
+  filesEmpty: number;
+  chunksWritten: number;
   errors: KbProjectError[];
   /** Why a failed sync failed, in plain words. */
   message: string | null;
@@ -90,6 +98,10 @@ const EMPTY = {
   filesUnchanged: 0,
   filesSkipped: 0,
   filesRemoved: 0,
+  filesIndexed: 0,
+  filesFailed: 0,
+  filesEmpty: 0,
+  chunksWritten: 0,
 };
 
 export async function syncKnowledgeBase(options: {
@@ -97,6 +109,8 @@ export async function syncKnowledgeBase(options: {
   triggeredById: string | null;
   /** A source instead of the configured one (tests, one-off local runs). */
   source?: KbSource;
+  /** Read new and changed files into passages. Default true; false lists only. */
+  index?: boolean;
   now?: () => Date;
 }): Promise<KbSyncOutcome> {
   const now = options.now ?? (() => new Date());
@@ -108,9 +122,13 @@ export async function syncKnowledgeBase(options: {
   }
   const { source } = choice;
 
+  const silentSince = new Date(now().getTime() - KB_SYNC_ABANDONED_AFTER_MS);
   await prisma.kbSyncRun.updateMany({
-    where: { status: "running", startedAt: { lt: new Date(now().getTime() - KB_SYNC_ABANDONED_AFTER_MS) } },
-    data: { status: "failed", finishedAt: now(), error: "Abandoned: never finished." },
+    where: {
+      status: "running",
+      OR: [{ heartbeatAt: { lt: silentSince } }, { heartbeatAt: null, startedAt: { lt: silentSince } }],
+    },
+    data: { status: "failed", finishedAt: now(), error: "Abandoned: no sign of life for ten minutes." },
   });
 
   let syncId: string;
@@ -158,6 +176,7 @@ export async function syncKnowledgeBase(options: {
       );
     }
 
+    const heartbeat = () => prisma.kbSyncRun.update({ where: { id: syncId }, data: { heartbeatAt: now() } });
     const totals = { ...EMPTY };
     const saved: string[] = [];
     for (const project of listed.projects) {
@@ -165,6 +184,7 @@ export async function syncKnowledgeBase(options: {
         const counts = await saveProject(source.kind, project, now());
         saved.push(project.entry.id);
         for (const key of Object.keys(counts) as (keyof typeof counts)[]) totals[key] += counts[key];
+        await heartbeat();
       } catch (error) {
         // Rolled back: the project keeps its rows as they were.
         logUnexpected("kb.sync_project_failed", error, { moduleKey: KNOWLEDGE_BASE_MODULE_KEY });
@@ -181,8 +201,22 @@ export async function syncKnowledgeBase(options: {
     await prisma.$transaction(async (tx) => {
       totals.filesRemoved += await tx.kbDocument.count({ where: { project: gone } });
       totals.projectsRemoved = (await tx.kbProject.deleteMany({ where: gone })).count;
-      totals.projectsSeen = listed.projects.length + listed.errors.length;
+    });
+    totals.projectsSeen = listed.projects.length + listed.errors.length;
 
+    if (options.index !== false) {
+      const indexed: KbIndexCounts = await indexPending({
+        source,
+        now,
+        onProgress: async () => {
+          await heartbeat();
+        },
+      });
+      Object.assign(totals, indexed);
+      totals.filesSkipped += indexed.filesEmpty;
+    }
+
+    await prisma.$transaction(async (tx) => {
       await tx.kbSyncRun.update({
         where: { id: syncId },
         data: {
@@ -193,6 +227,9 @@ export async function syncKnowledgeBase(options: {
           filesUnchanged: totals.filesUnchanged,
           filesSkipped: totals.filesSkipped,
           filesRemoved: totals.filesRemoved,
+          filesIndexed: totals.filesIndexed,
+          filesFailed: totals.filesFailed,
+          chunksWritten: totals.chunksWritten,
           error: errors.length > 0 ? describeErrors(projectErrors) : null,
         },
       });
@@ -207,7 +244,9 @@ export async function syncKnowledgeBase(options: {
 
     return { syncId, status, ...totals, errors: projectErrors, message: null };
   } catch (error) {
-    await fail("The sync stopped unexpectedly. Projects already saved keep their new state.").catch(() => undefined);
+    await fail(
+      "The sync stopped unexpectedly. Projects and documents already saved keep their new state; running it again continues.",
+    ).catch(() => undefined);
     throw error;
   }
 }
