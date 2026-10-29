@@ -564,3 +564,126 @@ python tests/ci_suites.py                                            # 23/23
 python tests/classifier_replay.py --steps bid_leader,classify --runs 3   # needs CO_ANTHROPIC_API_KEY; ~$1.20
 python tests/classifier_live_smoke.py classify                       # the injection fixture; cents
 ```
+
+---
+
+## D4 — the Q&A log, 2026-10-29
+
+`phb-co-engine` branch `feat/classifier-qa`, stacked on `feat/classifier-classify`.
+Prompt versions `2026-10-29.3` and then `.4` enable `qa` beside the two
+before it.
+
+### What the model is asked, and what code keeps
+
+`qa.md`: what THIS email adds to the change order's running Q&A log — one
+entry per distinct question or answer, in the writer's own words, never
+reworded in a way that changes a commitment, a price, a date or a scope;
+an answer may name the open question it resolves by an id code the context
+assigns; an empty list is a normal answer. The rubric is
+`spec-extract.qa.md`, § 3.1 cut verbatim from the mirror.
+
+`qa_log.py` keeps the record in the laptop's own shape, read from the live
+logs: `qa_log.json` canonical with `{type, status, date, vendor, resolves,
+text, source_item}` entries, the markdown derived from the JSON in full on
+every write so the status flip an answer causes shows in both, the date
+and the vendor label from the email's header, `resolves` carrying the
+resolved question's own words, an item never logged twice, the PDF from
+the shipped `render_qa_pdf.py` on a copy in the stage directory. The
+renderer reads only `type`, `status`, `resolves` and `vendor` **[observed]**.
+`tests/test_classifier_qa.py` (8) holds all of it, including a real PDF
+rendered by the shipped script.
+
+**Two decisions the plan did not make. [decision]**
+
+- **The Q&A step is asked for every resolved vendor reply that is not
+  `other`**, and decides for itself whether the email adds anything. D3 had
+  asked it only when the classify step named a secondary intent, which is
+  the field the model gave inconsistently on the one unstable item; the
+  spec's own words are "append any Q&A content to the log regardless of
+  primary class". One more call per quote or decline; the unstable item is
+  stable.
+- **The replay strips the laptop's own Q&A entries for the replayed items
+  out of the copied logs** — they are its *output* for those items, not the
+  state before it ran — reopens a question a stripped answer had resolved,
+  keeps the stripped entries as the expected Q&A, scores structure (count,
+  order, resolves or not) automatically, and prints every extraction beside
+  the laptop's for a person. Without the strip the container would have
+  found its own answer already logged and appended nothing.
+
+### The first replay under .3, and the one disagreement it found
+
+Three runs, 24 calls (18 classify, 6 Q&A), no decline, no retry, median
+6.6 s. **[observed]** Totals: equivalent 106, not judged 13, more cautious
+6, divergence 10, FAIL 1, STOP 0, unstable 0.
+
+The one FAIL, three runs out of three: the Trane quote on `CCHMC|Bulletin 12`
+again. The laptop logged an answer; the container, given the log's open
+questions (none, after the strip), logged nothing. The email says in so
+many words that Trane "must take exemption to note #7" of the scope
+request. By the equivalence doc's Part 4 — three self-consistent runs, then
+the laptop is right until proven otherwise — and by the rubric's own § 1.1,
+which calls a scope confirmation with no number an `answer`, the container
+was wrong. **Prompt version .4** changed `qa.md` and nothing else: the scope
+request's numbered notes are PH+B's questions even when not written as
+questions; an exception, exclusion, substitution, delivery commitment or
+clarification against them is an answer; such an answer carries
+`resolves: null` and names the note in its text. The README of the version
+records the reasoning.
+
+### The rerun under .4
+
+Three runs, 24 calls, median 6.9 s, 83 K input tokens, 13 K output, 108 K
+read from the cache. **[observed]**
+
+| | |
+|---|---|
+| The Trane quote | the container now logs the Note 7 exemption as an answer, **three runs out of three**, in the vendor's words |
+| Q&A rows | 14 equivalent, 2 not judged (the match step is off), **1 FAIL on structure** |
+| Everything else | as D3's rerun: labels exact, no STOP, 10 divergence rows for internal senders, invariants held |
+| Unstable | 0 |
+
+**The structural FAIL is a granularity difference, and it is the owner's to
+rule on.** For that one email the laptop wrote **one** entry whose text
+carries three commitments — the exemption to the note, the lead time, the
+price hold — and whose `resolves` names the note in free text. The container
+wrote **three** entries, one per commitment, each in the vendor's words,
+with `resolves` null and the note named in the text, as the .4 prompt
+instructs. The report's *Q&A content for a person to compare* section shows
+both; read side by side the commitments are the same and nothing is
+reworded. The bar as written (same number of pairs) fails it; the bar's
+reason (a different obligation, price, date or scope is not fine) is met.
+**Nothing was tuned toward the laptop on this**: granularity is not a
+rubric question the spec answers, and one email is not evidence either way.
+
+### Open for the spec's owner
+
+- **One entry per email, or one per commitment?** The laptop folded three
+  commitments into one entry; the container logs each. The handoff PDF
+  lists entries, so the choice is what the bid leader reads. The prompt
+  follows whichever the spec says.
+- **What `resolves` carries for an answer to a scope-request note.** The
+  laptop writes the note's reference as free text; the container writes
+  null and names the note in the entry's text, because `resolves` is
+  reserved for a logged open question the model names by id. If the
+  laptop's convention is wanted, the schema gains an `answers_note` field
+  that code copies into `resolves`; the renderer shows it on the PDF's
+  *Resolves:* line either way.
+
+### What D4 does not prove
+
+- Q&A on more than one real email: the fixtures hold one resolved vendor
+  reply with Q&A content. The FCx question on RFI 229 is unresolved until
+  the match step lands (D5), and the Joel-to-Trane question is now an
+  internal-sender divergence.
+- Answer-to-question linking by id: no fixture email answers a *logged*
+  open question; the mechanism is held by the unit tests only.
+- The PDF against the laptop's: the renderer is the laptop's own script,
+  so the layout is the same by construction; no PDF was compared.
+
+### Re-running D4's evidence
+
+```
+cd phb-co-engine
+python tests/ci_suites.py                                                 # 25/25
+python tests/classifier_replay.py --steps bid_leader,classify,qa --runs 3   # ~$1; read the Q&A section
+```
