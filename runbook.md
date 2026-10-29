@@ -3575,6 +3575,45 @@ that is the separation working. Fix the one named, in the Anthropic Console.
 **Rotating**: set the secret again with the new key, then create a new
 revision; the BAS key is untouched.
 
+### The change-order classifier's model calls: a 400 naming the schema, and a refusal
+
+The Phase 12 Part D classifier (`phb-co-engine`, `co_classifier/`) calls the
+Claude API through one wrapper, `co_classifier/model.py`, with the key from
+`CO_ANTHROPIC_API_KEY` only. Every call writes one JSON line to the job's
+log with `kind: "call"`: the prompt version and sha256, the model, tokens,
+latency, `stop_reason`, `outcome`, and on an error its class, HTTP status
+and the API's own message cut to 300 characters. Never the email, never a
+body. The two failures below were both met on the first real call,
+2026-10-29 (`docs/phase-12-part-d-verification.md` → *D2*).
+
+**Symptom: a call line reads `outcome: "api_error"`, `http_status: 400`, and
+`error_message` starts `output_config.format.schema:`.** The structured-output
+grammar refused a keyword in the judgment's schema — on 2026-10-29 it was
+`minimum` on an integer and `maxItems` on an array. The request is meant to
+carry `schemas.api_schema(...)`, a copy with the refused keywords stripped
+(`UNSUPPORTED_IN_API` in `co_classifier/schemas.py`); the message names the
+keyword to add to that list. Our own validator keeps the full schema, so
+stripping a keyword from the API copy loses nothing. The item is left
+unwritten and retried on the next pass; nothing is misclassified.
+
+**Symptom: a call line reads `outcome: "refused"`, `stop_reason: "refusal"`,
+with a `refusal_category`.** The model's safety classifier declined the
+request. The classifier treats it as a decline: the item becomes
+`needs_human = true` with reason `model_refused`, a person decides it, and
+nothing is guessed. On 2026-10-29 a diagnostic's toy prompt ("which row is
+alpha?") was refused under `reasoning_extraction` while the real prompt was
+not; a pattern of refusals on real items means the prompt moved and is worth
+a look, one refusal is noise. No fallback model is configured, by decision
+(plan § 10): a second model answering silently is what the log would not
+show.
+
+**Symptom: a call line has `cache_read_input_tokens: 0` on every call of a
+pass.** The system block is meant to be cached for an hour and read back by
+every later call in the pass (the smoke measured 2,516 tokens written once,
+read on the next call). All zeros means the prompt text changed between
+calls — a timestamp or an id in the system text — or the version was
+bumped mid-pass. Cost, not correctness.
+
 ### The BAS credential key, the same way
 
 `BAS-CREDENTIAL-KEY` is the second secret set by hand (2026-10-01): the

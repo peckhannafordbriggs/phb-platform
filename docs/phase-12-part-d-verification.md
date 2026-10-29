@@ -218,3 +218,146 @@ python tests/ci_suites.py                      # 20/20 suites; the replay SKIPS 
 python tests/classifier_replay.py --runs 1     # with the store: the table above
 python tests/capture_classifier_fixtures.py    # re-capture; then re-check excluded.json
 ```
+
+---
+
+## D2 — bid leader, 2026-10-29
+
+`phb-co-engine` branch `feat/classifier-bid-leader`. The first judgment,
+and the first real call. Prompt version `2026-10-29.1` enables `bid_leader`
+and nothing else.
+
+### What is code, and what the model is asked
+
+Spec § 3.3 calls the master-row match "fuzzy" and asks for "a confident
+token-overlap match on the distinctive words". `bid_leader.py` is that much:
+the CO key's project and instance are split into words, the generic
+change-order vocabulary is dropped (`change`, `order`, `bulletin`, `rfi`,
+`pr`, `bid`, `budget`, …), and a master row is **plausible** when it carries
+at least half of what is left and contradicts none of the CO's numbers — a
+row whose name carries a *different* number from the one the CO names is
+out whatever its score. Rows whose Type names a change order are preferred.
+Then:
+
+| plausible rows | who decides |
+|---|---|
+| none | code: both null |
+| one | code: that row |
+| several | **the model**, shown those rows and nothing else; a row number from them, or null; a decline is null |
+
+Only a tracker row whose *Bid leader email* is still blank is resolved at
+all (spec § 3.3, "and any later one where the row's Bid leader email is
+still blank"). A null — from a miss, a model decline, or the step being
+disabled — is never `needs_human`: the spec's own rule for an unresolved
+leader is to leave both fields null and let the handoff go unaddressed.
+
+The thresholds were set against the live master names captured on
+2026-10-28 and `tests/test_classifier_bid_leader.py` (15) walks them: the
+single CCHMC row carries `Bulletin-7` and matches no CCHMC bulletin or RFI
+with another number; `P&G|Permit Pack 4, Bulletin 4` shares only the owner's
+name with two P&G rows and matches neither; the spec's own example,
+`P&G|SHARC Laser Exhaust`, matches the Reece's row and only it; a second
+SHARC row sends both to the model, with a budget-update row dropped by the
+type preference. **[observed]**
+
+### Two things the data said that the spec did not
+
+- **`bid_leaders.json` is not a flat map.** The file holds the leaders under
+  `leaders` (one keyed by a full name), ambiguous first names under
+  `_ambiguous` with their candidates and a rule, and prose beside them. The
+  D1 loader would have read none of it. The D2 loader reads that shape and
+  the flat one, and *Mark* resolves to null even though addresses exist.
+  **[observed]**
+- **Every resolved row in the fixtures already carries a bid-leader email**,
+  except one CO no fixture item resolves to. So the laptop emitted null on
+  all twenty, and the replay cannot exercise the scorer or the model path on
+  real data; it proves only that the container also leaves a filled row
+  alone. The scorer's evidence is the test above; the model path's evidence
+  is the smoke below. **[observed]**
+
+### The prompt, and the extract
+
+`bid_leader.md` tells the model what code has already done and what it is
+being asked; the rubric that follows it is `spec-extract.bid_leader.md`,
+§ 3.3 **cut verbatim** from the mirrored spec by `co_classifier.spec_extract`
+(plan § 3b). A test re-extracts the section from the mirror and compares,
+so a re-captured spec that changed § 3.3 makes the version stale rather
+than silently different. `common.md` is byte-identical to the first
+version's. The system text is 5,860 characters.
+
+### The first real call, and what it found
+
+`tests/classifier_live_smoke.py bid_leader`: one call on a synthetic item
+with two plausible rows (the Reece's row and an invented *Phase 2*). The
+key was read from `CO_ANTHROPIC_API_KEY` in the environment and never
+printed; `ANTHROPIC_API_KEY` was not set. **[observed]**
+
+1. **The first attempt was a 400**, with no message, because the transport
+   dropped the API's body on purpose. A diagnostic that printed only the
+   API's error text found the cause in the schema: the structured-output
+   grammar refuses `minimum` on an integer and `maxItems` on an array —
+   *"For 'integer' type, property 'minimum' is not supported"* — while
+   `maxLength`, `enum`, `const`, nullable `anyOf` and
+   `additionalProperties` pass. No fixture could have shown this. The
+   request now carries a copy of the schema with those keywords stripped
+   (`schemas.api_schema`); our own validator keeps the originals, so a
+   21-item array is still refused on the way in. The transport and the log
+   now carry the API's **message**, cut to 300 characters and never a
+   body: a 400 with no text is undiagnosable in production.
+2. **The diagnostic's trivial prompt was refused**, `stop_reason: refusal`,
+   category `reasoning_extraction`, zero output tokens — on *"which row, 1
+   or 2, is 'alpha'?"* with a two-field schema. The real bid-leader prompt
+   with the real schema answered normally. It is a safety-classifier false
+   positive on a toy request; the classifier already treats a refusal as a
+   decline (`model_refused`), and the log now records the category.
+3. **Then it worked.** Outcome `valid`, `row_index` 9 (the Reece's row),
+   with reasoning that named *Phase 2* as the word the CO key does not
+   carry. 345 input tokens, 2,516 written to the cache, 692 output, 8.6 s.
+   A second call fifty seconds later read 2,516 from the cache and wrote
+   none: the hour-long cache on the system block behaves as the plan
+   assumed. **[observed]**
+
+### The replay
+
+`python tests/classifier_replay.py --steps bid_leader --runs 3`, after the
+schema fix. **[observed]**
+
+| | |
+|---|---|
+| Items scored, three runs | 17 (3 excluded, as in D1) |
+| `bid_leader` rows | **17 of 17 equivalent** (both null) on every run |
+| Model calls | **0** — no fixture item reaches a row with a blank email |
+| Unstable items across runs | 0 |
+| FAIL / STOP | 0 / 0; Part 3 invariants held on every run |
+| Totals | equivalent 87, not judged 39, more cautious 10 |
+
+### The guards
+
+22 of 22 suites pass with the tree guard on, 97 classifier tests among
+them. New or changed: `test_classifier_bid_leader.py` (15); the prompts
+suite now asserts that `bid_leader` is the only step enabled under the
+current version and that the first version still enables nothing; the
+schemas suite asserts the API copy carries none of the refused keywords
+and the original keeps them; the model suite asserts the request carries
+the stripped copy and that the error message travels, cut short. The
+static scanner allow-lists the extractor's read of the mirrored spec and
+the manifest writer, both package data written by a person.
+
+### What D2 does not prove
+
+- The model path on **real** data: no fixture item reaches it. One synthetic
+  pair, twice, is the whole live evidence for the judgment itself.
+- Anything about the laptop's fuzzy matching beyond nulls: it never resolved
+  a leader in these twenty either.
+- The second pattern in the smoke — a decline on two rows a word apart — was
+  tested with the fake transport only.
+
+### Re-running D2's evidence
+
+```
+cd phb-co-engine
+python tests/ci_suites.py                                   # 22/22
+python tests/classifier_replay.py --steps bid_leader --runs 3
+python tests/classifier_live_smoke.py bid_leader            # needs CO_ANTHROPIC_API_KEY; cents
+python -m co_classifier.spec_extract bid_leader             # print the extract; add a version name to write it
+```
