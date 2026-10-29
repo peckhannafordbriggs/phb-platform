@@ -11154,6 +11154,44 @@ SELECT path, status, skip_reason, error, chunk_count, indexed_at, last_seen_at
 must be **absent**: production uses the managed identity, and the reader refuses a
 key there on purpose. `KB_LOCAL_SOURCE_DIR` is likewise refused in production.
 
+The source is `KB_SHAREPOINT_LIBRARY_URL` with the KB app's three
+`PHB_PLATFORM_KB_APP_*` variables, or else `KB_LOCAL_SOURCE_DIR`. The sync's
+message names the variable that is missing. `PHB_PLATFORM_KB_APP_SECRET` is local
+only; production refuses it, like the Cost Intelligence secret.
+
+## Running a Knowledge Base sync
+
+`npm run kb:sync` syncs the configured source once and prints the outcome;
+`npm run kb:sync -- --dir "C:\Users\<you>\OneDrive - Peck Hannaford + Briggs\KB"`
+syncs a local copy instead (refused in production). It lists the library, writes
+`kb_projects` and `kb_documents`, and leaves one `kb_sync_runs` row and one audit
+row (`kb.synced` or `kb.sync_failed`). It reads no file contents: a new or changed
+file is set `pending` for the indexer, and an unchanged indexed file is left alone,
+so a second run right after the first changes nothing but `last_seen_at`.
+
+What it decides per file is in *A document is in SharePoint but search never finds
+it* below. Versions: the newest non-archived file of a family is `is_latest`; a
+family whose files are all `ARCHIVE_` has none, by design.
+
+Office lock files (`~$...`), `Thumbs.db`, `desktop.ini` and files sitting directly
+in the library root get no row at all.
+
+## A Knowledge Base sync failed, or says `partial`
+
+```sql
+SELECT started_at, status, trigger, source_kind, projects_seen, files_seen,
+       files_skipped, files_removed, error
+  FROM kb_sync_runs ORDER BY started_at DESC LIMIT 5;
+```
+
+| What you see | Meaning and fix |
+|---|---|
+| `failed`, *holds no project folders* | The configured folder is empty or wrong, or OneDrive has not synced it. **Nothing was changed**: an empty listing never empties the index. Check the path or URL |
+| `failed`, *Could not read the library* | The folder is missing or the KB app has no grant. `403` names the KB app: request KB-3 below |
+| `failed`, *A Knowledge Base sync is already running* | Another sync holds the one `running` slot. A `running` row older than an hour is closed as *Abandoned* by the next sync |
+| `partial` | One or more project folders could not be read; `error` names them. Their rows were kept exactly as they were, and the rest of the library was synced. Fix access to that folder and run the sync again |
+| `failed`, *stopped unexpectedly* | A bug or a database error. Projects saved before it keep their new state, each project being its own transaction; the log has `kb.sync_project_failed` with the detail. Running the sync again is safe |
+
 ## Rebuilding the Knowledge Base index from scratch
 
 **When.** The index is wrong in a way a normal sync will not fix: a change of
@@ -11233,7 +11271,7 @@ Three requests, in order of need. Vitis Technologies owns Azure and Entra.
 > Azure; the platform authenticates with the managed identity. For local
 > development, one key shared over Teams, not email, is enough.
 
-### Request KB-3 - read access to the legacy projects folder
+### Request KB-3 - read access to the Knowledge Base library
 
 > Subject: Read-only Graph access to the Knowledge Base legacy projects folder
 >

@@ -1269,7 +1269,7 @@ with SQL; `mail.sent` is still the only record of who sent a vendor email, and
 `WHY-ITS-BUILT-THIS-WAY.md` § 73; `runbook.md` → *The audit log screen does
 not show a mail send, a BAS question or a profile change*.
 
-**Knowledge Base Phases 0 and 1 complete; Phases 2 to 7 not started (2026-10-27).**
+**Knowledge Base Phases 0 and 1 complete; Phase 2 (sync and indexing) in progress (2026-10-28).**
 Module 4 is a search index over the legacy project folders in SharePoint, built
 on Cost Intelligence's folder store, sync pattern and worker job. Two kinds of table: the INDEX (`kb_projects`, `kb_documents`, `kb_chunks`,
 `kb_sync_runs`), **derived and rebuildable**, never the files; and the HISTORY
@@ -1284,8 +1284,12 @@ server before merge (and on any server a backup is restored onto),
 `DROP INDEX "kb_chunks_embedding_hnsw_idx"`; delete that line** -
 `tests/kb-schema.test.ts` fails on it. Decided: folders 2A, 5A, 8 and 1A, 1D stay
 excluded; Azure OpenAI embeddings; a report-a-wrong-answer button in the first
-release. Open: the legacy projects root and rule, and who can read history. Access requests
-KB-1 to KB-4 are written, not sent. `docs/KB-P0-P1.md`; `runbook.md` ->
+release; `ARCHIVE_` files indexed and tagged, never latest; history shared, everyone
+sees everyone's questions; the source is the Knowledge Base site's Documents library,
+every project in it legacy. **The sync exists** (`lib/modules/knowledge-base/sync.ts`,
+`npm run kb:sync`), on the folder store now shared with Cost Intelligence
+(`lib/sharepoint/folder-store.ts`, the KB takes it read-only); extraction, chunking
+and embedding are not built. Access requests KB-1 to KB-4: IT approved all but KB-2 (Azure OpenAI). `docs/KB-P0-P1.md`; `runbook.md` ->
 *Knowledge Base*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.

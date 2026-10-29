@@ -201,20 +201,28 @@ Until 2 and 3 land, Phases 1 to 3 can be built and tested against
   stay excluded for the first release.
 - **Embeddings:** Azure OpenAI `text-embedding-3-small`, 1536 dimensions.
 - **History:** central, in the platform database (not per browser), kept
-  indefinitely.
+  indefinitely, and **shared: every KB user sees everyone's questions and
+  answers** (2026-10-28), each with who asked it. One person's answer is
+  another's search result; the grant is already flat, so this exposes no
+  document a grantee could not retrieve themselves.
 - **Report a wrong answer:** in the first release (`kb_answer_reports`), not
   deferred.
 - **Scaffold project:** `224070_UC_OLD_CHEM` (curated) is the project to build
   and test the pipeline against.
+- **Source (2026-10-28):** the Documents library of the Knowledge Base
+  SharePoint site; every project folder in it is legacy. Developed against the
+  OneDrive copy (`KB_LOCAL_SOURCE_DIR`).
+- **Shared SharePoint reader (2026-10-28):** CIP's FolderStore moved to
+  `lib/sharepoint/folder-store.ts` for CIP and the KB; the KB takes
+  `readOnly(...)`, which has no `write`. Change Orders keeps its own Graph code.
 - **Archived versions (2026-10-28):** `ARCHIVE_` files are indexed and tagged,
   not skipped. Drawing sets in 1E (`_Drawings_`) are skipped with 1A and 1D.
 
 ## Open questions
 
-- **Which projects are legacy, and where they live.** The SharePoint root is
-  still to be confirmed. Proposed rule until then: every project folder under the
-  configured root is legacy, so choosing the root is choosing the projects.
-- **Who can read history.** Central storage is decided; whether employees see
-  only their own questions or everyone's is not.
+- **Shared history and leavers.** `kb_conversations.employee_id` cascades on
+  delete, so removing an employee row would remove questions everyone can see.
+  Employees are disabled, not deleted, today; revisit before anything deletes
+  employee rows.
 - Does the folder template ever nest a `2A`, `5A` or `8` code under a different
   parent? The rule matches the code wherever it appears on the path.

@@ -25,7 +25,8 @@
     "bas:plausibility:verify": "tsx scripts/bas-plausibility-verify.ts",
     "db:verify:prod": "tsx scripts/verify-prod-database.ts",
     "db:backup:verify": "tsx scripts/db-backup-verify.ts",
-    "cip:worker": "tsx scripts/cip-worker.ts"
+    "cip:worker": "tsx scripts/cip-worker.ts",
+    "kb:sync": "tsx scripts/kb-sync.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.296",

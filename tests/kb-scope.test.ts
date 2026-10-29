@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   KB_MAX_FILE_BYTES,
   classifyPath,
@@ -7,10 +7,8 @@ import {
   KB_EMBEDDING_DIMENSIONS,
   toVectorLiteral,
 } from "@/lib/modules/knowledge-base/vector";
-import {
-  readKbEmbeddingEnv,
-  readKbSourceEnv,
-} from "@/lib/modules/knowledge-base/env";
+import { readKbEmbeddingEnv } from "@/lib/modules/knowledge-base/env";
+import { kbSource } from "@/lib/modules/knowledge-base/source";
 
 /**
  * Paths are real ones from the template folders (221457_MAGNODE and the
@@ -180,27 +178,58 @@ describe("readKbEmbeddingEnv", () => {
   });
 });
 
-describe("readKbSourceEnv", () => {
-  it("uses a local folder outside production", () => {
-    expect(readKbSourceEnv({ KB_LOCAL_SOURCE_DIR: "C:\\KB" })).toEqual({
-      present: true,
-      values: { kind: "local", directory: "C:\\KB" },
-    });
+describe("kbSource", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const clear = () => {
+    for (const name of [
+      "KB_SHAREPOINT_LIBRARY_URL",
+      "KB_LOCAL_SOURCE_DIR",
+      "PHB_PLATFORM_KB_APP_TENANT_ID",
+      "PHB_PLATFORM_KB_APP_CLIENT_ID",
+      "PHB_PLATFORM_KB_APP_SECRET",
+    ]) {
+      vi.stubEnv(name, "");
+    }
+  };
+
+  it("uses a local folder outside production, read-only", () => {
+    clear();
+    vi.stubEnv("KB_LOCAL_SOURCE_DIR", "C:\\KB");
+    const choice = kbSource();
+    expect(choice.ok && choice.source.kind).toBe("local");
+    expect(choice.ok && "write" in choice.source.store).toBe(false);
   });
 
   it("never uses a local folder in production", () => {
-    const result = readKbSourceEnv({ KB_LOCAL_SOURCE_DIR: "/kb", NODE_ENV: "production" });
-    expect(result.present).toBe(false);
+    clear();
+    vi.stubEnv("KB_LOCAL_SOURCE_DIR", "/kb");
+    vi.stubEnv("NODE_ENV", "production");
+    const choice = kbSource();
+    expect(choice).toMatchObject({ ok: false, message: expect.stringMatching(/not used in production/) });
   });
 
-  it("prefers SharePoint when it is configured", () => {
-    const result = readKbSourceEnv({
-      KB_LOCAL_SOURCE_DIR: "/kb",
-      KB_GRAPH_TENANT_ID: "00000000-0000-0000-0000-000000000001",
-      KB_GRAPH_CLIENT_ID: "00000000-0000-0000-0000-000000000002",
-      KB_SHAREPOINT_SITE_ID: "phb1899.sharepoint.com,a,b",
-      KB_SHAREPOINT_DRIVE_ID: "b!abc",
-    });
-    expect(result.present && result.values.kind).toBe("sharepoint");
+  it("prefers SharePoint when the library is set, with the KB app", () => {
+    clear();
+    vi.stubEnv("KB_LOCAL_SOURCE_DIR", "/kb");
+    vi.stubEnv("KB_SHAREPOINT_LIBRARY_URL", "ids:b!drive");
+    vi.stubEnv("PHB_PLATFORM_KB_APP_TENANT_ID", "00000000-0000-0000-0000-000000000001");
+    vi.stubEnv("PHB_PLATFORM_KB_APP_CLIENT_ID", "00000000-0000-0000-0000-000000000002");
+    vi.stubEnv("PHB_PLATFORM_KB_APP_SECRET", "s");
+    const choice = kbSource();
+    expect(choice.ok && choice.source.kind).toBe("sharepoint");
+  });
+
+  it("names the KB app's variables when they are missing", () => {
+    clear();
+    vi.stubEnv("KB_SHAREPOINT_LIBRARY_URL", "ids:b!drive");
+    expect(kbSource()).toMatchObject({ ok: false, message: expect.stringMatching(/PHB_PLATFORM_KB_APP_TENANT_ID/) });
+  });
+
+  it("says what to set when nothing is", () => {
+    clear();
+    expect(kbSource()).toMatchObject({ ok: false, message: expect.stringMatching(/KB_SHAREPOINT_LIBRARY_URL.*KB_LOCAL_SOURCE_DIR/) });
   });
 });

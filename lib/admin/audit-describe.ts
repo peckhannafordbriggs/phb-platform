@@ -532,6 +532,22 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "cip.workflow_deleted": ({ actor, meta }) =>
     `${actor} deleted the draft Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
 
+  "kb.synced": ({ actor, meta }) => {
+    const n = (key: string) => {
+      const v = meta[key];
+      return typeof v === "number" ? v : 0;
+    };
+    const failed = n("projectsFailed");
+    return (
+      `${actor} synced the Knowledge Base: ${n("projectsSeen")} projects, ${n("filesSeen")} files, ` +
+      `${n("filesQueued")} new or changed, ${n("filesSkipped")} skipped, ${n("filesRemoved")} removed` +
+      (failed > 0 ? `, ${failed} project(s) could not be read` : "")
+    );
+  },
+
+  "kb.sync_failed": ({ actor, meta }) =>
+    `${actor}'s sync of the Knowledge Base failed: ${stringField(meta, "error") ?? "no reason recorded"}`,
+
   // Freeze Protection. Every sentence names the job number, which is how people
   // find a project; the unit tag where there is one.
   "fp.project_created": ({ actor, meta }) =>
@@ -828,6 +844,8 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "cip.workflow_updated": "Cost Intelligence workflow updated",
   "cip.workflow_steps_changed": "Cost Intelligence workflow steps changed",
   "cip.workflow_deleted": "Cost Intelligence workflow deleted",
+  "kb.synced": "Knowledge Base synced",
+  "kb.sync_failed": "Knowledge Base sync failed",
   "fp.project_created": "Freeze Protection project created",
   "fp.project_updated": "Freeze Protection project updated",
   "fp.project_deleted": "Freeze Protection project deleted",

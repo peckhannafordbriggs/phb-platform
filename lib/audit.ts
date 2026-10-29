@@ -167,6 +167,14 @@ export type AuditAction =
   | "cip.workflow_steps_changed"
   | "cip.workflow_deleted"
   /**
+   * Knowledge Base syncs (lib/modules/knowledge-base/sync.ts). A completed
+   * sync carries the sync id, trigger, source kind, status and the project
+   * and file counts; a failed one carries the error. A null actor is the
+   * platform (a scheduled sync).
+   */
+  | "kb.synced"
+  | "kb.sync_failed"
+  /**
    * Freeze Protection. Every write in lib/modules/freeze-protection/ writes one
    * of these in the same transaction. Metadata always carries `projectId` and
    * `jobNumber`, because the job number is what a person searches for. Updates
