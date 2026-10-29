@@ -54,6 +54,7 @@
 export const MODULE_SETTINGS_SURFACES: ReadonlyMap<string, string> = new Map([
   ["bas", "/bas/settings"],
   ["cost-intelligence", "/cost-intelligence/settings"],
+  ["knowledge-base", "/knowledge-base/admin"],
 ]);
 
 /**

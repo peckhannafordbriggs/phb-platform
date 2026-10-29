@@ -5,9 +5,12 @@ import { moduleAccentStyle } from "@/lib/module-accent";
 export function ModulePlaceholder({
   moduleKey,
   title,
+  children,
 }: {
   moduleKey: string;
   title: string;
+  /** Under the message: e.g. a link to a module's admin screen that does exist. */
+  children?: React.ReactNode;
 }) {
   return (
     <div
@@ -25,6 +28,7 @@ export function ModulePlaceholder({
             <p className="mt-2 max-w-sm text-sm text-[var(--muted)]">
               This module has no screens in this build yet.
             </p>
+            {children}
           </div>
         </div>
       </div>

@@ -38,7 +38,9 @@ jobs:
     #   AZURE_RESOURCE_GROUP, AZURE_CONTAINER_APP, AZURE_REGISTRY,
     #   AZURE_POSTGRES_SERVER
     # and, once the Cost Intelligence worker job exists, AZURE_CIP_WORKER_JOB
-    # (the cipWorkerJobName output). Empty means the worker steps are skipped.
+    # (the cipWorkerJobName output); once the Knowledge Base worker job exists,
+    # AZURE_KB_WORKER_JOB (kbWorkerJobName). Empty means that worker's steps are
+    # skipped.
     if: >-
       vars.AZURE_CLIENT_ID != '' &&
       vars.AZURE_TENANT_ID != '' &&
@@ -76,6 +78,15 @@ jobs:
             --registry "${{ vars.AZURE_REGISTRY }}" \
             --image "cip-worker:${{ github.sha }}" \
             --file Dockerfile.cip-worker \
+            .
+
+      - name: Build and push the Knowledge Base worker image
+        if: vars.AZURE_KB_WORKER_JOB != ''
+        run: |
+          az acr build \
+            --registry "${{ vars.AZURE_REGISTRY }}" \
+            --image "kb-worker:${{ github.sha }}" \
+            --file Dockerfile.kb-worker \
             .
 
       # ---------------------------------------------------------------------
@@ -176,6 +187,16 @@ jobs:
             --name "${{ vars.AZURE_CIP_WORKER_JOB }}" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --image "${{ vars.AZURE_REGISTRY }}.azurecr.io/cip-worker:${{ github.sha }}" \
+            --output none
+
+      # Same rule: a sync already running finishes on the image it started with.
+      - name: Deploy the Knowledge Base worker image
+        if: vars.AZURE_KB_WORKER_JOB != ''
+        run: |
+          az containerapp job update \
+            --name "${{ vars.AZURE_KB_WORKER_JOB }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ vars.AZURE_REGISTRY }}.azurecr.io/kb-worker:${{ github.sha }}" \
             --output none
 
       # NOTE: the production seed is NOT run here. It runs once, by hand, on the

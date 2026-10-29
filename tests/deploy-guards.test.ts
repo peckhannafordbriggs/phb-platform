@@ -996,7 +996,7 @@ describe("the two secure parameters are optional, and omitted means unchanged (2
     // gives Bicep the dependency. ARM ignores a dependency on a resource
     // whose condition is false, so an omitted secret does not block a redeploy.
     const databaseUrlRefs = code.match(/secrets\/\$\{databaseUrlSecret\.name\}/g) ?? [];
-    expect(databaseUrlRefs.length).toBe(3); // the app, the CIP worker job, the backup job
+    expect(databaseUrlRefs.length).toBe(4); // the app, the CIP and KB worker jobs, the backup job
     expect(code).toMatch(/secrets\/\$\{authSecretSecret\.name\}/);
   });
 
@@ -1458,4 +1458,64 @@ describe("the nightly database backup is conditional, identity-only, and holds n
       }
     },
   );
+});
+
+/**
+ * The Knowledge Base worker job (2026-10-30): the CIP worker's shape, with
+ * the KB app registration and no secret but the database URL. The mutations
+ * these are for: give the job a `PHB_PLATFORM_KB_APP_SECRET` entry, point its
+ * scaler at a table that is not the KB queue, or let the deploy workflow
+ * build the image when the job does not exist.
+ */
+describe("the Knowledge Base worker job", () => {
+  const read = (relative: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, relative), "utf8"));
+  const jobBlock = async () => {
+    const bicep = (await read("infra/main.bicep")).replace(/\r\n/g, "\n");
+    const start = bicep.indexOf("resource kbWorkerJob");
+    expect(start).toBeGreaterThan(0);
+    return bicep.slice(start, bicep.indexOf("\n}\n", start));
+  };
+
+  it("is off by default, and holds no secret but the database URL", async () => {
+    const bicep = await read("infra/main.bicep");
+    expect(bicep).toMatch(/param enableKbWorker bool = false/);
+    expect(bicep).toMatch(/param kbWorkerImage string = ''/);
+    expect(bicep).not.toContain("PHB_PLATFORM_KB_APP_SECRET");
+    const job = await jobBlock();
+    expect([...job.matchAll(/secretRef:\s*'([\w-]+)'/g)].map((m) => m[1])).toEqual(["database-url", "database-url"]);
+  });
+
+  it("carries the KB app's identifiers as plain values from parameters that default to blank", async () => {
+    const bicep = await read("infra/main.bicep");
+    const job = await jobBlock();
+    for (const [name, param] of [
+      ["PHB_PLATFORM_KB_APP_TENANT_ID", "kbAppTenantId"],
+      ["PHB_PLATFORM_KB_APP_CLIENT_ID", "kbAppClientId"],
+      ["KB_SHAREPOINT_LIBRARY_URL", "kbSharePointLibraryUrl"],
+    ]) {
+      expect(job).toMatch(new RegExp(`name:\\s*'${name}'[\\s\\S]{0,60}value:\\s*${param}\\b`));
+      expect(bicep).toMatch(new RegExp(`param ${param} string = ''`));
+    }
+  });
+
+  it("is started by queued syncs and runs one with --once", async () => {
+    const job = await jobBlock();
+    expect(job).toMatch(/query: 'SELECT count\(\*\) FROM kb_sync_runs WHERE status = \\'queued\\''/);
+    expect(job).toMatch(/'scripts\/kb-worker\.ts'\s+'--once'/);
+    expect(job).toMatch(/maxExecutions: 1\b/);
+  });
+
+  it("is built and updated by the deploy workflow only once the job exists", async () => {
+    const workflow = await read(".github/workflows/deploy.yml");
+    expect(workflow).toMatch(
+      /if: vars\.AZURE_KB_WORKER_JOB != ''\s+run: \|\s+az acr build[\s\S]{0,200}--file Dockerfile\.kb-worker/,
+    );
+    expect(workflow).toMatch(
+      /if: vars\.AZURE_KB_WORKER_JOB != ''\s+run: \|\s+az containerapp job update \\\s+--name "\$\{\{ vars\.AZURE_KB_WORKER_JOB \}\}"/,
+    );
+    const dockerfile = await read("Dockerfile.kb-worker");
+    expect(dockerfile).toMatch(/CMD \["npx", "tsx", "scripts\/kb-worker\.ts"\]/);
+    expect(dockerfile).toMatch(/^USER node$/m);
+  });
 });

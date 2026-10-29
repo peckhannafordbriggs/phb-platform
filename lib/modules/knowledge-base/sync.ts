@@ -26,9 +26,14 @@ import type { KbSyncTrigger } from "./types";
  * file into passages. An unchanged indexed file is left alone, so a sync with
  * nothing new costs one listing and no reads.
  *
+ * Two ways in: `npm run kb:sync` runs one here and now; the admin's Index
+ * button queues one (queueKbSync) for the worker job, which claims it
+ * (claimQueuedKbSync) and runs it with `claimedId`.
+ *
  * Safety, from Cost Intelligence's project sync:
- * - One sync at a time (kb_sync_runs_one_running_key). A `running` row with
- *   no heartbeat for KB_SYNC_ABANDONED_AFTER_MS crashed, and is closed.
+ * - One sync at a time, queued or running (kb_sync_runs_one_active_key). A
+ *   `running` row with no heartbeat for KB_SYNC_ABANDONED_AFTER_MS crashed,
+ *   and is closed; so is a `queued` row nobody claimed within the hour.
  * - Zero projects found fails the sync and changes nothing: a wrong path or an
  *   unsynced OneDrive folder must not empty the index.
  * - A project that could not be read keeps its rows as they were (`partial`).
@@ -104,6 +109,112 @@ const EMPTY = {
   chunksWritten: 0,
 };
 
+/** A queued sync no worker has picked up in this long is closed, so it stops blocking. */
+export const KB_SYNC_QUEUE_EXPIRES_MS = 60 * 60 * 1000;
+
+/** The library is not configured; nothing can be queued or run. A route answers 503. */
+export class KbSourceNotConfiguredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KbSourceNotConfiguredError";
+  }
+}
+
+/**
+ * Closes syncs that will never finish: a running one silent for ten minutes
+ * (its process died) and a queued one no worker picked up within the hour.
+ * Called before anything takes the one active slot.
+ */
+export async function closeStaleKbSyncs(now: Date): Promise<number> {
+  const silentSince = new Date(now.getTime() - KB_SYNC_ABANDONED_AFTER_MS);
+  const running = await prisma.kbSyncRun.updateMany({
+    where: {
+      status: "running",
+      OR: [{ heartbeatAt: { lt: silentSince } }, { heartbeatAt: null, startedAt: { lt: silentSince } }],
+    },
+    data: { status: "failed", finishedAt: now, error: "Abandoned: no sign of life for ten minutes." },
+  });
+  const queued = await prisma.kbSyncRun.updateMany({
+    where: { status: "queued", startedAt: { lt: new Date(now.getTime() - KB_SYNC_QUEUE_EXPIRES_MS) } },
+    data: {
+      status: "failed",
+      finishedAt: now,
+      error: "Never picked up: no Knowledge Base worker took it within an hour.",
+    },
+  });
+  return running.count + queued.count;
+}
+
+/**
+ * Asks the worker for a sync: the admin's Index button. Writes one `queued`
+ * kb_sync_runs row, which the worker job's scaler sees within seconds and
+ * claims (claimQueuedKbSync). One active sync at a time - queued or running
+ * (kb_sync_runs_one_active_key) - so a second press while one is waiting or
+ * working is KbSyncInProgressError, not a second sync.
+ */
+export async function queueKbSync(options: {
+  trigger: KbSyncTrigger;
+  triggeredById: string | null;
+  now?: () => Date;
+}): Promise<{ syncId: string; queuedAt: Date }> {
+  const now = options.now ?? (() => new Date());
+  const choice = kbSource();
+  if (!choice.ok) throw new KbSourceNotConfiguredError(choice.message);
+
+  await closeStaleKbSyncs(now());
+  try {
+    const row = await prisma.kbSyncRun.create({
+      data: {
+        sourceKind: choice.source.kind,
+        status: "queued",
+        trigger: options.trigger,
+        triggeredById: options.triggeredById,
+        startedAt: now(),
+      },
+      select: { id: true, startedAt: true },
+    });
+    return { syncId: row.id, queuedAt: row.startedAt };
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw new KbSyncInProgressError();
+    }
+    throw error;
+  }
+}
+
+export type KbClaimedSync = {
+  id: string;
+  trigger: KbSyncTrigger;
+  triggeredById: string | null;
+  sourceKind: "sharepoint" | "local";
+};
+
+/**
+ * The worker's half: take the oldest queued sync and mark it running, in one
+ * statement, skipping any row another worker has locked. Null when there is
+ * nothing to do. `started_at` becomes the time work began.
+ */
+export async function claimQueuedKbSync(now: Date): Promise<KbClaimedSync | null> {
+  await closeStaleKbSyncs(now);
+  const rows = await prisma.$queryRaw<
+    Array<{ id: string; trigger: KbSyncTrigger; triggered_by_id: string | null; source_kind: "sharepoint" | "local" }>
+  >`
+    UPDATE kb_sync_runs
+       SET status = 'running', started_at = ${now}, heartbeat_at = ${now}
+     WHERE id = (
+       SELECT id FROM kb_sync_runs
+        WHERE status = 'queued'
+        ORDER BY started_at
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+     )
+    RETURNING id::text, trigger, triggered_by_id::text, source_kind::text`;
+  const row = rows[0];
+  return row
+    ? { id: row.id, trigger: row.trigger, triggeredById: row.triggered_by_id, sourceKind: row.source_kind }
+    : null;
+}
+
 export async function syncKnowledgeBase(options: {
   trigger: KbSyncTrigger;
   triggeredById: string | null;
@@ -111,42 +222,50 @@ export async function syncKnowledgeBase(options: {
   source?: KbSource;
   /** Read new and changed files into passages. Default true; false lists only. */
   index?: boolean;
+  /** A sync the worker already claimed (claimQueuedKbSync): run it rather than start a new one. */
+  claimedId?: string;
   now?: () => Date;
 }): Promise<KbSyncOutcome> {
   const now = options.now ?? (() => new Date());
 
   const choice = options.source ? { ok: true as const, source: options.source } : kbSource();
   if (!choice.ok) {
-    await kbAudit("kb.sync_failed", options.triggeredById, { trigger: options.trigger, error: choice.message });
-    return { syncId: null, status: "failed", ...EMPTY, errors: [], message: choice.message };
+    if (options.claimedId) {
+      await prisma.kbSyncRun.update({
+        where: { id: options.claimedId },
+        data: { status: "failed", finishedAt: now(), error: choice.message },
+      });
+    }
+    await kbAudit("kb.sync_failed", options.triggeredById, {
+      ...(options.claimedId ? { syncId: options.claimedId } : {}),
+      trigger: options.trigger,
+      error: choice.message,
+    });
+    return { syncId: options.claimedId ?? null, status: "failed", ...EMPTY, errors: [], message: choice.message };
   }
   const { source } = choice;
 
-  const silentSince = new Date(now().getTime() - KB_SYNC_ABANDONED_AFTER_MS);
-  await prisma.kbSyncRun.updateMany({
-    where: {
-      status: "running",
-      OR: [{ heartbeatAt: { lt: silentSince } }, { heartbeatAt: null, startedAt: { lt: silentSince } }],
-    },
-    data: { status: "failed", finishedAt: now(), error: "Abandoned: no sign of life for ten minutes." },
-  });
-
   let syncId: string;
-  try {
-    ({ id: syncId } = await prisma.kbSyncRun.create({
-      data: {
-        sourceKind: source.kind,
-        trigger: options.trigger,
-        triggeredById: options.triggeredById,
-        startedAt: now(),
-      },
-      select: { id: true },
-    }));
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      throw new KbSyncInProgressError();
+  if (options.claimedId) {
+    syncId = options.claimedId;
+  } else {
+    await closeStaleKbSyncs(now());
+    try {
+      ({ id: syncId } = await prisma.kbSyncRun.create({
+        data: {
+          sourceKind: source.kind,
+          trigger: options.trigger,
+          triggeredById: options.triggeredById,
+          startedAt: now(),
+        },
+        select: { id: true },
+      }));
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        throw new KbSyncInProgressError();
+      }
+      throw error;
     }
-    throw error;
   }
 
   const fail = async (message: string, errors: KbProjectError[] = []): Promise<KbSyncOutcome> => {

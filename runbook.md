@@ -11161,7 +11161,15 @@ only; production refuses it, like the Cost Intelligence secret.
 
 ## Running a Knowledge Base sync
 
-`npm run kb:sync` syncs the configured source once and prints the outcome;
+**From the screen.** A Knowledge Base module admin opens *Knowledge Base* ->
+*Manage the index* (`/knowledge-base/admin`) and presses **Index now**. That only
+asks: it writes one `queued` row in `kb_sync_runs`, and the worker job (*Knowledge
+Base worker in Azure*, below) picks it up within about 15 seconds, runs it, and
+exits. The screen polls while it waits and works. Only one sync can be queued or
+running at a time; a second press says so. Locally, `npm run kb:worker` is the
+worker: leave it running and the button works against your machine.
+
+**From a terminal.** `npm run kb:sync` syncs the configured source once and prints the outcome;
 `npm run kb:sync -- --dir "C:\Users\<you>\OneDrive - Peck Hannaford + Briggs\KB"`
 syncs a local copy instead (refused in production); `-- --no-index` lists and queues
 without reading any file. It lists the library, writes `kb_projects` and
@@ -11198,6 +11206,53 @@ SELECT started_at, status, trigger, source_kind, projects_seen, files_seen,
 | `partial` | One or more project folders could not be read; `error` names them. Their rows were kept exactly as they were, and the rest of the library was synced. Fix access to that folder and run the sync again |
 | `failed`, *stopped unexpectedly* | A bug or a database error. Projects saved before it keep their new state, each project being its own transaction; the log has `kb.sync_project_failed` with the detail. Running the sync again is safe |
 | `failed`, *Abandoned: no sign of life for ten minutes* | The process running the sync died (closed terminal, container restart). A running sync stamps `heartbeat_at` after every project and every file, and the next sync closes one silent for ten minutes. Run the sync again: it continues with the files still `pending` |
+
+## The Index button says "Waiting for the worker" and nothing happens
+
+The sync is queued and no worker has claimed it. In production: `az containerapp
+job execution list --name <baseName>-kb-worker -g <rg>`. No executions means the
+job does not exist (`enableKbWorker` is false, see *Knowledge Base worker in Azure*)
+or its scale rule cannot reach the database (the `database-url` secret, or the
+firewall's Azure-services rule). Executions that fail at once: `az containerapp job
+logs show`; the first lines name what is missing (`PHB_PLATFORM_KB_APP_*`,
+`KB_SHAREPOINT_LIBRARY_URL`). Locally: start `npm run kb:worker`.
+
+A queued sync nobody picks up is closed after an hour as *Never picked up*, so the
+button works again; nothing was changed.
+
+## Knowledge Base worker in Azure
+
+**What it is.** A Container Apps Job, `<baseName>-kb-worker` (`kbWorkerJob` in
+`infra/main.bicep`), the Cost Intelligence worker's shape. Every 15 s its scaler
+counts `queued` rows in `kb_sync_runs` and starts one execution, which runs
+`kb-worker.ts --once`: claims the sync, lists the library, reads every new or
+changed file, and exits. One at a time. Up to four hours per execution
+(`replicaTimeout`); a first index that needs longer stops there, its heartbeat goes
+quiet, and the next press continues with the files still `pending`. It costs
+nothing while idle. Image: `Dockerfile.kb-worker` (Node and the repo; no Python,
+unlike the CIP worker).
+
+**Built 2026-10-30, not yet turned on.** Nothing exists in Azure until the steps
+below are done.
+
+**Turning it on, once, in this order.**
+
+1. Check the KB app registration (request KB-3) has its read grant on the library
+   and a federated credential for the platform's user-assigned identity
+   (`managedIdentityClientId` output). No secret is involved anywhere.
+2. Build the first image: `az acr build --registry <registry> --image
+   kb-worker:<sha> --file Dockerfile.kb-worker .`
+3. In `infra/main.parameters.json` set `enableKbWorker: true`, `kbAppTenantId`,
+   `kbAppClientId` and `kbSharePointLibraryUrl` (`ids:<driveId>` for the whole
+   Documents library). Pass `kbWorkerImage` as the image from step 2 and
+   `containerImage` as the image now running; both have no default.
+4. `az deployment group what-if ...` (see `infra/README.md`), review, then `create`,
+   passing nothing secure, as for the CIP worker.
+5. Set the repository variable `AZURE_KB_WORKER_JOB` to the `kbWorkerJobName`
+   output. From the next push to `main`, `deploy.yml` builds `kb-worker:<sha>` and
+   points the job at it. Until it is set those steps are skipped.
+6. Press **Index now** and watch the first execution:
+   `az containerapp job execution list --name <baseName>-kb-worker -g <rg>`.
 
 ## A Knowledge Base file is `failed`
 

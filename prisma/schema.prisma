@@ -859,6 +859,8 @@ enum KbDocumentStatus {
 }
 
 enum KbSyncRunStatus {
+  /// Asked for (the admin's Index button), waiting for the worker job.
+  queued
   running
   ok
   partial

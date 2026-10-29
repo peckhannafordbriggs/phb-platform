@@ -132,6 +132,19 @@
       "value": "ids:<driveId>/<itemId>"
     },
 
+    "enableKbWorker": {
+      "value": false
+    },
+    "kbAppTenantId": {
+      "value": ""
+    },
+    "kbAppClientId": {
+      "value": ""
+    },
+    "kbSharePointLibraryUrl": {
+      "value": ""
+    },
+
     "coReviewAppTenantId": {
       "value": ""
     },

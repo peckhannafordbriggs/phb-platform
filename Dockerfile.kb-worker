@@ -1,0 +1,35 @@
+# Knowledge Base sync worker image (scripts/kb-worker.ts).
+#
+# Separate from the web image: the web image is Next's standalone output and
+# carries no tsx and no scripts. Separate from the CIP worker image too, which
+# carries Python, poppler and the skills' Node libraries that the KB never
+# uses: text is read with pdfjs, mammoth and exceljs, all from npm.
+#
+# In Azure the Container Apps Job (infra/main.bicep, kbWorkerJob) runs it with
+# --once when the admin's Index button queues a sync. Locally there is no need
+# for the image: `npm run kb:worker` does the same against .env.local.
+
+FROM node:24-bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Same order as the web Dockerfile: postinstall runs `prisma generate`, which
+# needs the schema and config before `npm ci`.
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+RUN npm ci
+
+COPY . .
+RUN npx prisma generate && chown -R node:node /app
+
+ENV NODE_ENV=production
+
+USER node
+
+# Polls for queued syncs. The job runs it with --once: one sync, then exit.
+CMD ["npx", "tsx", "scripts/kb-worker.ts"]

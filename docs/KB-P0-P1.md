@@ -245,6 +245,25 @@ so.
   307-page submittal in 6 s, the CO log in 0.1 s (9 passages), a 20-sheet estimate
   in 3 s.
 
+## The Index button and the worker (2026-10-30)
+
+The admin's button never runs a sync in the web process: a full index takes far
+longer than a request may. It queues (`queueKbSync`: one `queued` kb_sync_runs
+row), and a Container Apps Job, `kbWorkerJob`, started by a PostgreSQL scaler on
+that row, claims it (`claimQueuedKbSync`, `FOR UPDATE SKIP LOCKED`) and runs it
+(`scripts/kb-worker.ts --once`). The CIP worker's pattern, chosen over running in
+the web app (a restart mid-index) and over no button (an operator with a terminal).
+
+- One active sync, queued or running: `kb_sync_runs_one_active_key`. A press while
+  one waits or works is 409; `npm run kb:sync` meanwhile is refused the same way.
+- A queued sync no worker takes within an hour is closed (*Never picked up*), so
+  a missing job cannot block the button for ever.
+- The job holds no secret but the database URL; it reads SharePoint as the KB app
+  through the managed identity's federated credential.
+- The screen is `/knowledge-base/admin`, module admins only (404 otherwise):
+  documents by state, passages and how many are embedded, recent syncs, and the
+  files that could not be read.
+
 ## Open questions
 
 - **Shared history and leavers.** `kb_conversations.employee_id` cascades on

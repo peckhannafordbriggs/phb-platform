@@ -264,6 +264,25 @@ param cipSharePointSkillsFolder string = ''
 @description('SharePoint BID-DOC folder, as ids:<driveId>/<itemId>.')
 param cipSharePointProjectsFolder string = ''
 
+// ---------------------------------------------------------------------------
+// Knowledge Base
+// ---------------------------------------------------------------------------
+
+@description('Create the Knowledge Base sync worker job. Off until a kb-worker image is in the registry - the job cannot be created without one. See runbook.md, "Knowledge Base worker in Azure".')
+param enableKbWorker bool = false
+
+@description('KB worker image. Required when enableKbWorker is true: the image the job runs now (`az containerapp job show`), or on first enable a kb-worker image built with `az acr build`. No placeholder default, so a redeploy cannot reset it.')
+param kbWorkerImage string = ''
+
+@description('Tenant ID of the KB app registration (read on the Knowledge Base library). Not a secret.')
+param kbAppTenantId string = ''
+
+@description('Client ID of the KB app registration. Production signs in as it with the managed identity and a federated credential; no secret.')
+param kbAppClientId string = ''
+
+@description('The Knowledge Base library: ids:<driveId> (the whole Documents library) or ids:<driveId>/<itemId>.')
+param kbSharePointLibraryUrl string = ''
+
 // Change Orders → Needs Review (2026-10-21). A third app registration,
 // phb-platform-co-review, read-only on the automation's _needs_review folder
 // through Files.SelectedOperations.Selected - never the mail app, whose
@@ -1124,6 +1143,131 @@ resource cipWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableCipWorker) {
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge Base sync worker
+//
+// The same shape as the CIP worker: a Container Apps Job that runs only while
+// there is work. The admin's Index button writes a `queued` kb_sync_runs row;
+// every 15 seconds the scaler counts them and starts an execution, which runs
+// `kb-worker.ts --once` - claims the sync with FOR UPDATE SKIP LOCKED, lists
+// the library, reads every new or changed file, and exits. One at a time: the
+// database allows one queued-or-running sync (kb_sync_runs_one_active_key).
+//
+// The first index of a whole library can take hours; replicaTimeout is four.
+// A sync cut off by it stops sending heartbeats, is closed by the next one,
+// and the files it had not reached stay pending for the next press. No retry.
+//
+// Reads SharePoint as the KB app registration through the managed identity's
+// federated credential (request KB-3). No secret: the job holds only the
+// database URL, by reference.
+// ---------------------------------------------------------------------------
+
+resource kbWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableKbWorker) {
+  name: '${baseName}-kb-worker'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Event'
+      replicaTimeout: 14400
+      replicaRetryLimit: 0
+      eventTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+        scale: {
+          minExecutions: 0
+          maxExecutions: 1
+          pollingInterval: 15
+          rules: [
+            {
+              name: 'kb-syncs-queued'
+              type: 'postgresql'
+              metadata: {
+                query: 'SELECT count(*) FROM kb_sync_runs WHERE status = \'queued\''
+                targetQueryValue: '1'
+              }
+              auth: [
+                {
+                  secretRef: 'database-url'
+                  triggerParameter: 'connection'
+                }
+              ]
+            }
+          ]
+        }
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'kb-worker'
+          image: kbWorkerImage
+          command: [
+            'npx'
+            'tsx'
+            'scripts/kb-worker.ts'
+            '--once'
+          ]
+          resources: {
+            cpu: json('2.0')
+            memory: '4Gi'
+          }
+          env: [
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'database-url'
+            }
+            {
+              name: 'NODE_ENV'
+              value: 'production'
+            }
+            {
+              name: 'GRAPH_MANAGED_IDENTITY_CLIENT_ID'
+              value: identity.properties.clientId
+            }
+            {
+              name: 'PHB_PLATFORM_KB_APP_TENANT_ID'
+              value: kbAppTenantId
+            }
+            {
+              name: 'PHB_PLATFORM_KB_APP_CLIENT_ID'
+              value: kbAppClientId
+            }
+            {
+              name: 'KB_SHAREPOINT_LIBRARY_URL'
+              value: kbSharePointLibraryUrl
+            }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Nightly database backup
 //
 // The readings in this database exist nowhere else once the JACE rolls them
@@ -1427,6 +1571,7 @@ output managedIdentityClientId string = identity.properties.clientId
 output managedIdentityPrincipalId string = identity.properties.principalId
 // Set as the AZURE_CIP_WORKER_JOB repository variable so deploys update its image.
 output cipWorkerJobName string = enableCipWorker ? cipWorkerJob.name : ''
+output kbWorkerJobName string = enableKbWorker ? kbWorkerJob.name : ''
 // The backup job and where its dumps land, for `az containerapp job execution
 // list` and `az storage blob list` in runbook.md -> "Nightly database backup".
 output dbBackupJobName string = enableDbBackup ? dbBackupJob.name : ''

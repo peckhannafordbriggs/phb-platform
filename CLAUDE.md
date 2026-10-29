@@ -1292,7 +1292,10 @@ every project in it legacy. **The sync exists** (`lib/modules/knowledge-base/syn
 it finds: PDF by page (pdfjs), Word by heading (mammoth), Excel by sheet and cell
 range (exceljs), Markdown and text, into `kb_chunks` with exact locations
 (`extract.ts`, `chunk.ts`, `indexer.ts`). Embeddings are not written yet (NULL until
-KB-2); the admin Index button and its worker are not built. Access requests KB-1 to KB-4: IT approved all but KB-2 (Azure OpenAI). `docs/KB-P0-P1.md`; `runbook.md` ->
+KB-2). The admin **Index now** button (`/knowledge-base/admin`) queues a sync for
+a Container Apps Job, `kbWorkerJob` (`scripts/kb-worker.ts`, `Dockerfile.kb-worker`),
+built and **not yet turned on** (`enableKbWorker`); `npm run kb:worker` is the
+worker locally. Access requests KB-1 to KB-4: IT approved all but KB-2 (Azure OpenAI). `docs/KB-P0-P1.md`; `runbook.md` ->
 *Knowledge Base*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
