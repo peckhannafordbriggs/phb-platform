@@ -655,19 +655,10 @@ reason (a different obligation, price, date or scope is not fine) is met.
 **Nothing was tuned toward the laptop on this**: granularity is not a
 rubric question the spec answers, and one email is not evidence either way.
 
-### Open for the spec's owner
+### Open for the spec's owner — decided the same day
 
-- **One entry per email, or one per commitment?** The laptop folded three
-  commitments into one entry; the container logs each. The handoff PDF
-  lists entries, so the choice is what the bid leader reads. The prompt
-  follows whichever the spec says.
-- **What `resolves` carries for an answer to a scope-request note.** The
-  laptop writes the note's reference as free text; the container writes
-  null and names the note in the entry's text, because `resolves` is
-  reserved for a logged open question the model names by id. If the
-  laptop's convention is wanted, the schema gains an `answers_note` field
-  that code copies into `resolves`; the renderer shows it on the PDF's
-  *Resolves:* line either way.
+- **One entry per commitment**, and **`answers_note`** as a structured
+  field shown on the PDF. Both built and recorded in the next section.
 
 ### What D4 does not prove
 
@@ -679,6 +670,51 @@ rubric question the spec answers, and one email is not evidence either way.
   open question; the mechanism is held by the unit tests only.
 - The PDF against the laptop's: the renderer is the laptop's own script,
   so the layout is the same by construction; no PDF was compared.
+
+### The two decisions, and the rerun under .5 (2026-10-29, later the same day)
+
+The owner's answers to the two questions above. **[decision]**
+
+1. **One Q&A entry per commitment, not per email.** A deliberate difference
+   from the laptop: named divergence 2 in the equivalence doc, carried to the
+   live spec at cutover (`docs/PHASE-14.md` item 2.4). The handoff PDF must
+   still show which entries came from the same email.
+2. **`answers_note`.** When an answer addresses a numbered note or a
+   condition of the scope request rather than a logged question, the note's
+   reference travels as a structured field and the PDF shows it beside the
+   entry.
+
+What was built, `phb-co-engine` branch `feat/classifier-qa-decisions`:
+prompt version `2026-10-29.5` (only `qa.md` changed: one entry per
+commitment as the rule, `answers_note` defined, an answer carries
+`resolves` or `answers_note` and never both); the Q&A schema and the log
+gain the field and code refuses both-at-once or a question with either;
+**the repository's `render_qa_pdf.py`** groups consecutive answers from one
+email under one heading — *"[date] vendor — 3 answers from the same
+email"* — shows *Note:* beside an answer to a request note the way it shows
+*Q:* beside an answer to a logged question, and escapes vendor text so a
+company called P&G cannot break the page. That renderer now differs from
+the live script on SharePoint, which is recorded as cutover-diff item 1.12;
+the container renders with the repository's copy. The replay's Q&A bar
+reports the same kinds of entry cut differently as the divergence and a
+different kind as a failure. `tests/test_classifier_qa.py` (10) holds all
+of it, including the grouping helper and a real PDF.
+
+**The rerun.** `--steps bid_leader,classify,qa --runs 3` under .5.
+**[observed]**
+
+| | |
+|---|---|
+| Totals | equivalent 106, not judged 13, more cautious 6, **divergence 11**, **FAIL 0, STOP 0**, unstable 0 |
+| Q&A rows | 14 equivalent, 2 not judged (the match step is off), 1 *divergence* — the granularity row, no longer a FAIL |
+| The Trane quote, every run | the exemption to Note 7 logged as an answer **with `answers_note` = the note's reference**, in the vendor's words; the 30-week lead time and the 30-day price hold as their own entries with no note |
+| What varied | run 2 cut the exemption into two entries (the exemption; the supervised-disassembly offer) where runs 1 and 3 kept them together: 4 entries against 3. The stability check keys on class, match and `needs_human`, which were identical; the entry count is reported in the Q&A section and is a person's call |
+
+Against the laptop's one entry for that email — which carried the
+exemption, the disassembly offer, the lead time and the price hold in one
+text, with the note's reference in `resolves` as free text — the
+container's entries carry the same four commitments, nothing reworded,
+with the note's reference where the owner asked for it.
 
 ### Re-running D4's evidence
 
