@@ -3607,6 +3607,21 @@ a look, one refusal is noise. No fallback model is configured, by decision
 (plan § 10): a second model answering silently is what the log would not
 show.
 
+**Symptom: `tests/classifier_replay.py` exits 1 with `unstable items` above
+zero, or with a FAIL row.** Read the report before touching anything. An
+*unstable* item is one the container answered differently across the runs
+of the same replay — on 2026-10-29, two internal emails it declined twice
+and labelled once. The equivalence doc's Part 4 is the rule: three
+self-consistent runs before any investigation, and an unstable judgment is a
+finding that the prompt is under-constrained, never a reason to tune the
+prompt toward the laptop on one disagreement. A *FAIL* row is a consistent
+disagreement; the laptop is right until proven otherwise, and the fix, if
+one is due, is a new prompt version with the reasoning recorded in
+`docs/phase-12-part-d-verification.md`. Two rows the scorer reports as *not
+judged* rather than FAIL are not disagreements: a count withheld because the
+sender's company is in **today's** `Responded emails` (the tracker moved on
+after the laptop's run), and a label the container declined to give.
+
 **Symptom: a call line has `cache_read_input_tokens: 0` on every call of a
 pass.** The system block is meant to be cached for an hour and read back by
 every later call in the pass (the smoke measured 2,516 tokens written once,
