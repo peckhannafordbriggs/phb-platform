@@ -149,6 +149,24 @@ says which item and why.
   an in-place edit is a mismatch; no step is enabled under the first
   version.
 
+**The image job caught the tests writing into the source tree
+(2026-10-29).** The D1 branch's first CI run failed three suites with
+`PermissionError` under `co_classifier/prompts/`: the judgment tests built
+their throwaway prompt version inside the real prompts directory, and the
+manifest test appended to the real `common.md` and restored it. The image
+job mounts the checkout read-only, which is right — a test that crashed
+mid-way would have left a real prompt file corrupted. The fix was to the
+tests, not the mount: `prompts.use_prompts_dir()` is an explicit override
+the tests enter with a temp copy of the directory, both tests work on the
+copy and assert the real directory is untouched afterwards, and
+`tests/ci_suites.py` now fingerprints the repo and the fixture store around
+every suite (size and mtime per file, caches ignored) and fails any suite
+that added, removed or changed a file, whatever its own summary says.
+`tests/test_ci_tree_guard.py` (3) drives the guard and runs the runner over a
+throwaway suite that writes beside itself to see it fail with *WROTE UNDER
+THE REPO*. 21 of 21 suites pass on the laptop with the guard on.
+**[observed]**
+
 ### The replay against the laptop
 
 `python tests/classifier_replay.py --runs 1`, no step enabled, 2026-10-28.
