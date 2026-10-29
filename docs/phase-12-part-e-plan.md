@@ -1,8 +1,10 @@
 # Phase 12 Part E — the shadow run: plan
 
-**Status: PLAN, written 2026-10-29, awaiting the owner's approval. Nothing
-in it is built.** Parts A–D are complete (`docs/phase-12-part-d-verification.md`
-→ *Part D is complete. What Part E inherits*). Phase 13 is not started.
+**Status: APPROVED 2026-10-29, the same day it was written; the owner's
+answers to § 13 are in § 14, and § 15 has the dates.** Parts A–D are complete
+(`docs/phase-12-part-d-verification.md` → *Part D is complete. What Part E
+inherits*). Phase 13 is not started. Delivery began the day of approval with
+every item that does not need the reader's grant (§ 12).
 
 Read first: `docs/PHASE-12.md` → *Part E*, `docs/phase-12-part-e-equivalence.md`
 (the bar, written before any comparison ran, including the two named
@@ -190,12 +192,12 @@ disturb (prohibition 4; `docs/02-existing-co-system.md` → *Excel rules*). So:
 2. the first read of the live file is one run, by hand, with the three
    fields recorded before and after and Phase 11's table-binding check
    (`docs/phase-11-verification.md` § 2e) repeated the same day;
-3. **[decision for the owner, after step 2]** if the workbook API read is
-   shown to touch the file, the fallback is to download the bytes
-   (`/content`) and read the tables with openpyxl in memory, which is how
-   D0 read them and writes nothing — but prohibition 4's wording says *only
-   through the Graph workbook API*, so switching is the owner's call and a
-   one-line change to `CLAUDE.md`'s rule, not a quiet one.
+3. **[decision, 2026-10-29]** the workbook API, measured on the first
+   read. The switch to downloading the bytes (`/content`) and reading the
+   tables with openpyxl in memory — how D0 read them, writing nothing — is
+   made **only if that first read changes anything**, and it is a one-line
+   change to `CLAUDE.md`'s prohibition 4 wording, made in the open, not a
+   quiet one.
 
 Two facts about the workbook API to carry: list operations are not
 paginated and cap around 256 rows (`docs/02`); `COTracker` is 32 rows plus
@@ -368,7 +370,7 @@ specs filled by hand outside the repository (they carry the subscription
 id) and created by the owner. Three scheduled jobs for weeks is the point
 at which they belong in the Bicep behind a flag (`enableCoShadow`, the
 `enableDbBackup` pattern, default false), deployed with the routine template
-command. **[decision for the owner, § 13]** — it is Phase 13 Part A's
+command. **[decision, 2026-10-29: the Bicep]** — Phase 13 Part A's
 acceptance box (*Both jobs defined in Bicep*) arriving early, and it means
 `tests/deploy-guards.test.ts` holds the jobs' env entries the way it holds
 the web app's.
@@ -391,8 +393,11 @@ One more, because it is the one a copy can get wrong quietly: **the copy
 holds vendor and PM content** — emails, intake forms, names — in the library
 the originals already sit in, readable by the same people (the Part C
 decision, *real, not scrambled*). It holds no attachment content and no
-pricing beyond what a vendor wrote in an email body. It is deleted when the
-window is written up, and the record carries the date, as Part C's does.
+pricing beyond what a vendor wrote in an email body. **It is deleted thirty
+days after cutover** — the rollback month, during which a disagreement may
+still need the copy to re-run — and that date is written into the copy's
+`README.txt` on the day the copy is built **[decision, 2026-10-29]**; the
+record carries the deletion when it happens, as Part C's does.
 
 ---
 
@@ -457,9 +462,19 @@ work changes no platform code.
 **Coverage, not elapsed days, with a floor.** The window is done when all
 of the following are true, and not before:
 
-- **at least twenty laptop weekdays** have passed since the first clean
+- **at least ten laptop weekdays** have passed since the first clean
   batch (a batch whose items were all captured before the laptop's run,
-  with a snapshot that preceded it) — four calendar weeks;
+  with a snapshot that preceded it) — two calendar weeks, counting only
+  weekdays on which the collector saw the laptop run at least once. **Ten,
+  not twenty, by the owner's decision of 2026-10-29, for a stated reason:**
+  the Part C and Part D replays already hold the historical equivalence —
+  eight of eight intake COs through both stores, twenty classifier answers
+  three times each with no STOP — so what the window mainly proves is the
+  live plumbing: the reader, the schedule, the Graph store on a timetable,
+  the job, the key reference, the report. The month-long laptop rollback
+  after cutover (`docs/PHASE-14.md` 4.1) is the safety net for what two
+  weeks of traffic will not have shown. The path-coverage condition below
+  is unchanged and is what actually ends the window at this volume;
 - **no STOP row ever** (cutover item 0.4);
 - **every FAIL explained** in the record: unstable, scorer, bar, named
   divergence added by decision, or a container defect fixed with its
@@ -490,13 +505,15 @@ only**, named `ZZSHADOW …` so it can never be mistaken for a capture, run by
 the same job through the same code, and scored **against the spec's rule,
 not against a laptop answer** — there is none. It ticks the path's box as
 *exercised synthetically*, which the record and the cutover checklist carry
-as a weaker word than *observed*. The owner may instead put a real ZZ test
-CO through the live intake, as the operator has before (the tracker's `ZZ`
-rows), so that the laptop produces an answer and the path is *observed*;
-that is an action on the live process, with drafts created that nobody
-sends, and it is the owner's deliberate call each time, never the plan's.
+as a weaker word than *observed*. **[decision, 2026-10-29]** *Exercised
+synthetically* is accepted as the word, recorded honestly. A real ZZ test CO
+through the live intake — the operator's own earlier practice, the tracker's
+`ZZ` rows — is **not** used unless a path cannot be simulated in the copy at
+all; when that happens the agent asks the owner for that one case, and the
+owner decides it, because it acts on the live process and creates drafts
+nobody sends.
 
-**What resets the count.** A prompt-version change resets the twenty days
+**What resets the count.** A prompt-version change resets the ten days
 for the judgment it touches; a scorer or reader fix does not; a STOP that
 is investigated and found to be the laptop's own defect is recorded as
 such and does not reset, by the owner's written decision in the record.
@@ -623,7 +640,7 @@ at the push.
 
 | PR | Contents | Done when |
 |---|---|---|
-| **E0** (no code) | the IT request for `phb-co-engine-reader` — `runbook.md` → *What to ask IT for* → Request 6 (`phb-platform`) | sent; the grant is the one external dependency |
+| **E0** (no code) | the IT request for `phb-co-engine-reader` — `runbook.md` → *What to ask IT for* → Request 6 (`phb-platform`) | **sent 2026-10-29**; the grant is the one external dependency |
 | **E1** reader | `co_livereader.py`: GET-only, own identity, the live folder named here and nowhere else; capture of items (names, request, body, attachment names), snapshots, laptop results renamed by role, intake COs; the per-run change line; the sentinel name walk; `tests/test_livereader.py` | the verb test, the identity test and the name walk pass with a fake transport; the static scanner allow-lists the file |
 | **E2** batch and pass | the batch builder on `GraphFileStore` (the replay's copy builder, generalised), snapshot pairing, the STOP check, `infra/shadow-feed.sh` | a batch built from a captured item runs through the Part D pass on the copy, locally against a fake Graph |
 | **E3** collector and scorer | the replay scorer over live pairs, the report, `WINDOW.md`, STOP, the stability re-run request, spec-drift and laptop-silence lines; `infra/shadow-collect.sh` | the scorer's self-test passes on crafted pairs for every verdict word, including a STOP that writes the file and a feed run that refuses while it exists |
@@ -638,7 +655,7 @@ first clean batch land; read the daily report; decide the § 13 items.
 
 ---
 
-## 13 · Decisions for the owner
+## 13 · Decisions asked of the owner — as written before approval
 
 1. **The reader's identity.** A fourth registration with Read on
    `CO Managment Process` (recommended, § 2a) — or widen
@@ -660,6 +677,91 @@ first clean batch land; read the daily report; decide the § 13 items.
 7. **The report's home.** The copy folder and the job log (§ 7), read
    daily by the owner — or a different reader.
 8. **The copy's deletion date**, written into its README on day one.
+
+## 14 · Decisions — made by the owner on 2026-10-29
+
+The plan was approved on 2026-10-29 with these answers, and delivery
+started the same day.
+
+1. **Reader:** a fourth registration, `phb-co-engine-reader`, Read on
+   `CO Managment Process` (§ 2a as written).
+2. **Bid Tracker:** the workbook API, measured on the first read; switch
+   to download-and-read-in-memory **only if that read changes anything**
+   (§ 2c step 3).
+3. **Scope:** both halves (§ 4).
+4. **Jobs:** in the Bicep behind `enableCoShadow` (§ 5).
+5. **Synthetic:** *exercised synthetically* accepted, recorded honestly;
+   **no real ZZ CO through the live intake unless a path cannot be
+   simulated**, and then the agent asks, case by case (§ 8).
+6. **Floor: ten laptop weekdays** after the first clean batch, not twenty
+   — the Part C and D replays already cover the historical equivalence, the
+   window mainly proves the live plumbing, and the month-long laptop
+   rollback after cutover is the safety net (§ 8, the reason beside the
+   number).
+7. **Report:** the copy folder and the job log, read daily by the owner
+   (§ 7).
+8. **Copy deletion:** thirty days after cutover, in the copy's README on
+   day one (§ 6).
+
+Also decided the same day, from the owner's message: the owner leaves in
+December, so speed matters; every delivery item that does not need the
+grant starts at once; and the work that can run *during* the window —
+Phase 13's alerts and the cutover preparation — is listed in § 15 so
+nothing waits on the window ending.
+
+## 15 · Dates, counting the IT grant
+
+Written 2026-10-29, a Thursday. Every date below is a weekday. The one
+external dependency is the reader's grant (Request 6, sent 2026-10-29).
+Vitis has taken **one day** (the SSO redirect URI, 2026-10-21 → 22),
+**about two days** (the site grant, reported 2026-10-21) and **eleven days**
+(the SSO federated credential, 2026-09-17 → 28) on the three comparable
+requests, so the grant is planned as two to ten business days: **between
+2026-11-02 and 2026-11-12**.
+
+| Milestone | Best | Likely | Worst | Gated by |
+|---|---|---|---|---|
+| E1–E6 built, pushed, reviewed, merged | 2026-11-04 | 2026-11-06 | 2026-11-06 | nothing external — the agent and the owner's reviews |
+| The grant lands | 11-02 | 11-06 | 11-12 | Vitis |
+| First hand-run read of the live tracker, measured; copy root built with its README; `enableCoShadow` deployed | the business day after the grant | 11-09 | 11-13 | the grant, then the owner's deployment |
+| **First clean batch** (the window's day 1) | Tue 11-03 | **Mon 11-09** | Mon 11-16 | the jobs running before a laptop run |
+| Ten laptop weekdays reached | 11-16 | **Fri 11-20** | Tue 12-01 (Thanksgiving, 11-26 and 11-27, is two weekdays the laptop may not run; they do not count) | the laptop running; no STOP; no restart |
+| Window written up, path table closed (observed or exercised) | 11-17 | **Mon 11-23** | 12-02 | the record |
+| Cutover (Phase 14) | week of 11-23 | **week of 11-30** | week of 12-07 | Phase 13 Part B and the cutover prep below, done during the window |
+
+So the window runs **about 2026-11-09 to 2026-11-20**, with 2026-11-16 to
+12-01 as the case where the grant takes its longest. Two things the dates
+make plain:
+
+- **The rollback month runs past the owner's departure.** A cutover in the
+  week of 11-30 puts the end of the laptop-rollback month at the start of
+  January 2027. Rollback needs the laptop and someone who can run it
+  (`docs/PHASE-14.md` 4.2); `HANDOVER.md` must say who that is after
+  December, or the safety net the ten-day floor leans on is a net nobody
+  can lift. This is the one item in Part E that is a person, not a build.
+- **Nothing waits on the window ending.** Built or done *during* the
+  window, in parallel with the daily reports:
+  - **Phase 13 Part B** — the failed-execution alert and the silence query
+    on the three shadow jobs, to a shared mailbox; tested by making each
+    fire (a forced failure, a job disabled for a window). The jobs exist
+    from day 1 of the window, so the alerts can be built against them.
+  - **Phase 13 Part C** — the runbook entries for a failed run, a silence
+    alert, a deliberate pause, and the DST decision (§ 5 holds it for the
+    window; Phase 13 writes it for after).
+  - **Cutover prep, `docs/PHASE-14.md` § 1 and § 2** — the cutover diff
+    confirmed item by item against the laptop's engine (1.1, 1.3, 1.4), the
+    by-name refusal removal written on a branch that is **not merged** until
+    the day (1.2), the LibreOffice image decision (1.7), the live spec and
+    prompt edits drafted for 2.3 and 2.4, the `--trackers graph` path for the
+    classifier exercised by the reader's measured reads (§ 10 item 6), and
+    `HANDOVER.md` → *Moving the AI layer off the laptop* rewritten for the
+    person who inherits the rollback.
+  - **Item 0.5** — whether anything downstream reads `scrub_timestamp` or
+    `drafted_timestamp`, answered from the flow map during the window so
+    1.4 is decided before the day.
+  - **The `PnP.Powershell` certificate request** (6.1), sent to Vitis in
+    the same breath as Request 6 if the owner chooses, since both are
+    tickets.
 
 ---
 
