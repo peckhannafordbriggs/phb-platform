@@ -2806,3 +2806,58 @@ because a laptop was closed.
 
 None of those crashed. When you add something, ask what it looks like when it silently
 doesn't work — and make that state visible.
+
+## 75 · The classifier is code with four judgments, every judgment can decline, and the laptop's answers are the bar
+
+**Decision (Phase 12 Part D, 2026-10-28/29).** The `co-response-classifier`
+Cowork task — a model reading a 65 KB spec and doing the whole job by hand
+each morning — was replaced by `co_classifier/`, in which every rule the
+spec states is Python and only four things go to a model: the bid-leader
+master-row match when code finds more than one plausible row, the
+classification, the Q&A extraction, and the CO match by body inference
+when neither the conversation id nor Power Automate resolved it. Each is
+behind a switch; a switched-off judgment declines; a judgment may always
+decline; every decline is `needs_human` through the Flow 2 route that
+already exists. One client, one key (`CO_ANTHROPIC_API_KEY`, never the
+SDK's default), one turn, structured output, no tools, a closed schema
+and then the candidate-list check — the model picks among what code
+supplied or says null, and can name no file, path, recipient or CO the
+tracker does not hold.
+
+**Why code first.** The plan assumed the judgment was the work. Reading the
+spec judgment by judgment showed that most of the task — the pm_thread
+first-check, the conversation-id lookup, the duplicate-key refusal, the
+received-count and revision rules, the rename target, the note template,
+the locked summary — is a rule written down, which the agent re-read every
+morning. A rule in code is tested; a rule in a prompt is hoped for. It also
+made every model call small and specific, which is what makes a closed
+schema and a candidate list possible at all.
+
+**Why the laptop's own answers are the bar, with three replays each.** The
+only definition of "correct" this phase has is what the laptop produced.
+Twenty live answers were captured read-only; every step was replayed three
+times against them under `docs/phase-12-part-e-equivalence.md` before the
+next began, and the one row that stops a shadow run — the laptop declined,
+the container decided — never appeared. Three runs because a model
+disagreeing with itself is a finding about the prompt, not about the
+laptop (Part 4 of that doc); on the one email where it happened, nothing
+was tuned.
+
+**Why named divergences rather than silent ones.** Three times the owner
+decided the container should answer differently from the laptop (internal
+senders, one Q&A entry per commitment, `answers_note`). Each is a dated
+section in the equivalence doc, a verdict word in the replay, and a cutover
+item in `docs/PHASE-14.md` that updates the live spec and prompt. A shadow
+run that failed on them would be measuring the decision, not the code; a
+scorer that quietly passed them would be hiding a difference a bid leader
+will see on the PDF.
+
+**What breaks if you undo it.** Let a client be built without `api_key=`
+and the pipeline bills to BAS Analyze's key with no error anywhere (§ 68).
+Send the full schema to the API and every array field is a 400 at the
+grammar (`minimum`, `maxItems`: measured on the first real call). Let the
+model name a filename and the next injected email names `Bid Tracker.xlsx`.
+Configure a fallback model and a refusal becomes a second model's answer
+the log does not show. Drop a divergence from the equivalence doc and the
+shadow run's first internal email is a FAIL that is not one. Tune a prompt
+on one disagreement and the next replay is the one that moved.

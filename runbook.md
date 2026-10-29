@@ -3641,6 +3641,85 @@ read on the next call). All zeros means the prompt text changed between
 calls — a timestamp or an id in the system text — or the version was
 bumped mid-pass. Cost, not correctness.
 
+### Running a classifier pass, and reading its summary and log
+
+The Phase 12 Part D classifier (`phb-co-engine`, `co_classifier/`) runs one
+pass with `python -m co_classifier …` — locally against a COPY of a Step 2
+tree with `--store local`, or in Azure as the job the owner creates from
+`infra/classify-job.yaml.template` (Manual trigger; Phase 13 schedules it).
+It refuses the live tree by name on both stores. A pass walks
+`_to_classify`, writes one `classification_result.json` per item through
+the store, appends the Q&A and completeness logs and their PDFs, runs the
+archive sweep, and overwrites `run_summary.md` in the spec's locked format.
+Its stdout is JSON lines: one `kind: "call"` per model call, one
+`kind: "item"` per item, one `kind: "pass"` at the end, plus the sweep's
+`[archive]` lines. To run it by hand in Azure: `az containerapp job start -n
+phbplat-prod-co-classify -g <resource group>`, then `job execution list` and
+`job logs show … --container classify`. To replay the fixtures on the laptop
+with real calls: `python tests/classifier_replay.py --steps
+bid_leader,classify,qa,match --runs 3` with `CO_ANTHROPIC_API_KEY` set (about
+$3; read the report's Q&A section by hand).
+
+**Symptom: `run_summary.md` ends `Archive: not run — …`.** The sweep did not
+run, and the line says why: switched off (`--no-archive`), or it failed with
+the exception named. Nothing was moved; the queue keeps its finished items
+until the next pass that sweeps. Never move items by hand — the sweep is
+idempotent and the next pass will. A failing sweep in Azure is a store
+error (the `[archive]` lines before it name the folder) and the Graph
+folder move is the one store operation Part C exercised least.
+
+**Symptom: `run_summary.md` carries `Bid Tracker not readable (…)`, and every
+vendor reply in the pass went to `_needs_review`.** The tracker snapshot
+(`--bid-tracker-json`) could not be read or parsed; the pass proceeded as
+the live prompt says it should — PM completeness replies still matched the
+pm_thread index, nothing matched by conversation id or body, every vendor
+reply declined with that reason. Fix the snapshot (re-capture with
+`tests/capture_classifier_fixtures.py`, or re-upload it beside the copy)
+and the items re-classify on the next pass once their result files are
+removed by a person. Not a model problem; no call was made for them.
+
+**Symptom: the summary lists `Left unclassified, will retry next pass: <item>
+— <error>`.** The API could not be reached for that item (the call line
+shows `outcome: "api_error"` with the class, status and message). The item
+has no result file and the next pass retries it; the rest of the pass ran.
+A whole pass of these is the key, the network or a rate limit; one is noise.
+
+**Symptom: an item's `needs_human_reason` starts `step_not_enabled`.** The
+judgment that would decide it is not in `CO_CLASSIFIER_MODEL_STEPS` on the
+job. With the variable empty every item declines; `bid_leader,classify,qa,match`
+is all four. Not an error: a disabled step declines rather than guesses.
+
+**Symptom: `needs_human_reason` starts `classifier_output_invalid`.** The
+model's answer failed the schema or the candidate check twice (the call
+lines show `schema_invalid` / `semantic_invalid` with the attempt number).
+The item went to a person with the validation failure in the note; nothing
+from that answer was written. One is noise; a run of them means the prompt
+version or the schema moved — compare the call lines' `prompt_version`.
+
+**Symptom: `needs_human_reason` starts with a model reason —
+`no_unique_match`, `low_confidence`, `conflicting_signals`,
+`ambiguous_candidates`.** The judgment declined, which is what the
+equivalence doc wants it to do rather than guess; the note names what it
+weighed. Work it as any `_needs_review` item (`docs/13-needs-review.md` § 9).
+
+**Symptom: `needs_human_reason` starts `duplicate_co_key`.** More than one
+tracker row carries the resolved key (spec § 2, the 2026-08-04 banner): Flow
+2 would write to the first row. The note names both rows' dates and
+respondents; a person picks. The classifier is the only place this can be
+seen.
+
+**Symptom: a `[archive]` line names a `.dup-<timestamp>` suffix.** A re-run
+collided with an item already in `_archive/`; the script's own rule, kept.
+Nothing lost; the later copy carries the suffix.
+
+**Where the twenty fixtures live, and the three that are excluded.**
+`C:\Users\Msheth\phb-co-engine-fixtures\classifier\` (outside both
+repositories, never committed), captured by
+`tests/capture_classifier_fixtures.py`; `excluded.json` beside them names
+the two synthetic results and the one whose tracker row no longer exists,
+with the evidence. Re-capture replaces the directory; re-check
+`excluded.json` after.
+
 ### The BAS credential key, the same way
 
 `BAS-CREDENTIAL-KEY` is the second secret set by hand (2026-10-01): the

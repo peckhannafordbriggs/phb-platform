@@ -815,3 +815,107 @@ cd phb-co-engine
 python tests/ci_suites.py                                                         # 26/26
 python tests/classifier_replay.py --steps bid_leader,classify,qa,match --runs 3     # ~$3
 ```
+
+---
+
+## D6 — the plumbing a pass needs to run unattended, 2026-10-29
+
+`phb-co-engine` branch `feat/classifier-plumbing`. No judgment changed.
+
+### The archive sweep, through the store, held to the script
+
+`co_classifier/archive.py` is `archive_handed_off_cos.py`'s decisions over
+`FileStore`: a CO is archived once its handoff signal is past the grace
+window (the date in the file's name; the store's mtime only if
+unparseable; the most recent signal per CO), its `_processed` items,
+`_staging` folder, `_index` sidecars and `_reminders`/`_handoff` audit files
+move to `_archive/<co_name>/<bucket>/` with a manifest appended per run, an
+empty staging shell moves to `_archive/_empty_staging/`, key-less
+`_processed` items older than the orphan window move to `_archive/_orphans/`,
+`_to_classify` and `_needs_review` are never touched, a collision gets the
+script's `.dup-<ts>` suffix, and a dry run says so on every line. The
+printed lines keep the script's words, so `run_summary.md`'s locked last
+line is the same text from either: `Archive: 1 CO(s) archived, 1 orphan
+item(s).` — the script's tally, which the spec's own template mis-states as
+`orphan(s)`; the script wins.
+
+**The differential.** `tests/test_classifier_archive.py` builds one tree —
+a CO ten days past handoff, one two days past, an orphan forty days old,
+one of today, an empty staging shell, both untouchable queues — copies it,
+runs the shipped script on one copy and the port on the other, and compares
+what each left: the same files in the same places, the same manifest apart
+from absolute-versus-relative paths (a drive-relative store has no absolute
+local path to record), the same printed lines, the same tally; then a
+second sweep is a no-op on both, a dry run moves nothing, and the sweep
+inside a pass puts its tally on the summary's last line. **[observed]**
+
+The pass runs the sweep at its end, every pass, including an empty one. A
+sweep that raises is said in the summary — `Archive: not run — the sweep
+failed (…)` — and never hand-fixed, the live prompt's rule.
+
+### The Part 5 checklist, judgment by judgment
+
+The equivalence doc's Part 5 lists the Cowork wrapper behaviours the
+container must reproduce. Two are the intake task's and the classifier
+never had them; two are the classifier's and are built:
+
+| behaviour | whose | status |
+|---|---|---|
+| a truncated mount copy is detected and self-healed | the intake scrub task, which copies `run_workflow.py` out of a OneDrive mount; the classifier copies nothing | not applicable to the classifier; Part E's intake half |
+| the hold list is honoured | the intake scrub task's list of CO names to leave alone | not applicable; Part E's intake half |
+| a corrupt tracker is treated as a non-event | the classifier's: "if it is a cloud-only placeholder that won't open, proceed and note that tracker validation was skipped" | **built**: `NullTrackers` — every lookup empty, PM replies still match the pm_thread index, every vendor reply goes to a person with the reason, the summary says so (`tests/test_classifier_pass.py`) |
+| the run summary is written | the classifier's, in the locked format | **built** since D1; the Archive line is the sweep's tally since D6 |
+
+### The image, the scripts, the job
+
+The Dockerfile copies the three response-side scripts **by name** —
+`render_qa_pdf.py`, `render_completeness_pdf.py`, `archive_handed_off_cos.py`
+— and never their folder, which mirrors a library holding the Bid Tracker
+and `bid_leaders.json`; `.dockerignore` allows exactly those three. The
+image's own check imports the package, the SDK and the schema library and
+asserts the renderer is present. **Built locally** without LibreOffice:
+Python 3.12.16, openpyxl 3.1.5, anthropic 2.3.0, `python -m co_classifier
+--help` runs inside it, the three scripts are at `/app/Change Order Step 2/`,
+and the command line defaults `--renderers-dir` to that path. **[observed]**
+`tests/test_classifier_image.py` holds the Dockerfile and ignore file as
+text.
+
+`infra/classify-job.sh` is the pass as the job runs it — Graph store,
+federated identity, the snapshot trackers beside the copy, the image's
+renderers — and `infra/classify-job.yaml.template` is the spec the owner
+fills and creates (Manual trigger; placeholders only; the Change Orders key
+as a Key Vault reference under the platform's identity, the shape plan
+§ 11b described). Neither has run in Azure: creating the job is the owner's
+action, and the copy it reads is Part E's to build.
+
+### What D6 does not prove
+
+- The Graph store moving **folders**: the sweep moves item folders and
+  staging folders, and Part C's conformance run exercised `move` on files.
+  The first sweep on the copy in Azure is the measurement; until then a
+  failing sweep is the symptom the runbook names.
+- The job in Azure at all. The spec is written and tested as text.
+- PDFs in the image: the renderers use reportlab, which is in the image;
+  LibreOffice is the intake engine's and is not needed here.
+
+### Part D is complete. What Part E inherits
+
+- Four judgments on, each replayed three times against the laptop's twenty
+  answers, no STOP row ever, no instability on the final replays, 28 of 28
+  guard suites green with the tree guard on.
+- Three named divergences and the two tracker-moved-on limits the scorer
+  reports as not comparable — all to be expected on the shadow copy too.
+- Three open operational items, none code: the owner creates the job from
+  the template; Part E builds and feeds the Step 2 copy (the scratch root
+  beside the Part C one, decision 6 of the plan); both Anthropic keys are
+  replaced with service-account keys before the job goes on a schedule
+  (`docs/PHASE-14.md` item 0.6).
+
+### Re-running D6's evidence
+
+```
+cd phb-co-engine
+python tests/ci_suites.py                                   # 28/28
+python tests/test_classifier_archive.py                     # the differential against the script
+docker build --build-arg INCLUDE_LIBREOFFICE=false -t phb-co-engine:local . && docker run --rm phb-co-engine:local
+```

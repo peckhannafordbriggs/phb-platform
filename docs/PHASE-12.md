@@ -167,6 +167,17 @@ it, because the flows are the thing that must not break.
 
 ## Part D — Move the judgment to the Claude API
 
+> **Complete 2026-10-29.** Six steps in two days, each its own pull request
+> and each measured against the laptop's own answers before the next began:
+> `docs/phase-12-part-d-verification.md` is the record, `docs/phase-12-part-d-plan.md`
+> the plan as approved. What the inventory predicted held — the classifier
+> is the only judgment — and what it did not: most of the classifier's task
+> is a rule the spec states and is now code, with four model judgments left.
+> Three named divergences from the laptop were decided by the owner on the
+> way (`docs/phase-12-part-e-equivalence.md` → *Named divergences*). The
+> "language review, then classification, then draft composition" ordering
+> below was the plan's guess; A2's was right.
+
 **Needs: a company Anthropic API key — the change-order module's OWN one.** As of
 2026-10-16 the two modules have two keys: `ANTHROPIC_API_KEY` is BAS Analyze's, and
 Change Orders reads **`CO_ANTHROPIC_API_KEY`** (Key Vault `CO-ANTHROPIC-API-KEY`, behind
@@ -278,11 +289,11 @@ period, and the disagreements are understood. **Not when it runs.**
 
 **Part D**
 
-- [ ] Each judgment step replaced individually, lowest consequence first
-- [ ] Every response schema-validated before touching disk
-- [ ] No model output can name a file, choose a recipient, or trigger a send
-- [ ] Prompts versioned in the repo; SharePoint still authoritative
-- [ ] Every call logged with prompt version and outcome
+- [x] Each judgment step replaced individually, lowest consequence first — bid leader (D2), classification (D3), Q&A (D4), CO match (D5), each replayed three times against the laptop's twenty answers before the next (2026-10-29)
+- [x] Every response schema-validated before touching disk — the API's structured output, our own closed schema, the candidate-list check, then the § 4.2 result contract; nothing reaches the store that fails one (D1)
+- [x] No model output can name a file, choose a recipient, or trigger a send — no tool is declared, the sentinel is a constant at one write site, every filename and path is built by code, and the injection fixture holds with the API absent (D1, D3)
+- [x] Prompts versioned in the repo; SharePoint still authoritative — six immutable versions with sha256 manifests, the rubric extracted verbatim from the mirrored spec, the live copies untouched until `docs/PHASE-14.md` items 2.1–2.4 (D2–D5)
+- [x] Every call logged with prompt version and outcome — one metadata line per call: version, sha256, model, tokens, latency, stop reason, outcome, never the email (D1)
 
 **Part E**
 
