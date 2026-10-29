@@ -584,6 +584,12 @@ swap through the runbook's existing *Rotating* steps and is now **cutover
 item 0.6 in `docs/PHASE-14.md`**. Part D builds and replays on the key as it
 is; the swap happens before the shadow run goes to a schedule.
 
+> **Superseded 2026-10-29.** The owner decided to keep both keys as they
+> are — personal keys linked to Jim — as an accepted risk, and item 0.6 now
+> records that decision and the risk rather than a swap. The recovery if
+> the risk lands is in `runbook.md` → *Both Anthropic keys fail at once as
+> `401 authentication_error`*.
+
 ### 11b · What switching `coAnthropicApiKeyInKeyVault` on involves — and why Part D does not need it
 
 The flag wires the secret into **the platform web app's** container
@@ -714,7 +720,9 @@ same day.
 5. **The key:** checked — both keys are personal keys linked to Jim (§ 11a);
    replacing both with service-account keys is cutover item 0.6 in
    `docs/PHASE-14.md`; the flag stays false and the job carries the
-   reference (§ 11b); federation after Part E (§ 11c).
+   reference (§ 11b); federation after Part E (§ 11c). *Revised
+   2026-10-29: the keys stay as they are, an accepted risk; item 0.6 now
+   records the decision and the risk, not a swap (§ 11a).*
 6. **The classifier's copy of the Step 2 tree** lives under
    `phb-co-engine scratch/`, beside the Part C one, built by a sibling of
    `tests/build_copy.py` that refuses the four sentinel names the same way.
