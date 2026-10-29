@@ -723,3 +723,95 @@ cd phb-co-engine
 python tests/ci_suites.py                                                 # 25/25
 python tests/classifier_replay.py --steps bid_leader,classify,qa --runs 3   # ~$1; read the Q&A section
 ```
+
+---
+
+## D5 — CO match by body inference, 2026-10-29
+
+`phb-co-engine` branch `feat/classifier-match`, stacked on
+`feat/classifier-qa-decisions`. Prompt version `2026-10-29.6` enables the
+last judgment; all four are on. **The first replay in which the container
+decides which change order a reply belongs to.**
+
+### What the model is asked
+
+Only after the two deterministic signals found nothing — no tracker row
+carries the conversation id, Power Automate resolved nothing. `match.md`
+gives the email as data and an `<open_change_orders>` block with every OPEN
+CO key and its expected respondents, and asks for one key from the block or
+null, `high` or `medium` (there is no `low`: that is a null with a
+decline), every key weighed, and the deciding words. The rubric's close-call
+guard is spelled out: when two keys are within a distinctive word of each
+other and the email does not single one out, null and a decline naming
+both. The rubric is `spec-extract.match.md`, § 2 cut verbatim from the
+mirror, § 2.0 inside it. Closed and cancelled rows are never offered, so
+the model cannot choose a CO the pipeline would not file against; a key not
+in the block is refused by code and the item goes to a person. The wiring
+had been in the orchestrator since D1; `tests/test_classifier_match.py` (8)
+holds it.
+
+### The replay
+
+`--steps bid_leader,classify,qa,match --runs 3`, twice: the first run
+reported two ONE-NULL rows and taught the scorer one more thing about
+today's tracker; the second, with that fix, is the table. 72 calls per
+replay — 42 match (12 resolved, 30 declined), 18 classify, 12 Q&A — no
+retry, no refusal, no schema or semantic failure; median 7.1 s, slowest
+15.4 s; 179 K input tokens, 40 K output, 337 K read from the cache: about
+$3. **[observed]**
+
+| bar | run 1 of 3 | across runs |
+|---|---|---|
+| CO match | **15 of 17 equivalent** — 4 resolved by body inference to the laptop's key (RFI 229 twice, RFI 229 from a reminder, Bulletin 15 from a reminder), 6 by the deterministic signals, **5 both-null**: every item the laptop declined, the container declined; 2 *not comparable* (below) | identical |
+| `needs_human` | 13 equivalent, 2 divergence (internal senders), 2 *more cautious* (the two not-comparable items); **0 STOP** | identical |
+| label | 10 equivalent, 7 divergence (internal senders) | identical |
+| bid leader | 17 equivalent | identical |
+| Q&A | 14 equivalent, 1 divergence (granularity), 2 not judged | identical |
+| count | 11 equivalent, 1 divergence, 5 not comparable (today's *Responded emails*) | identical |
+| Totals | equivalent 114, not judged 9, more cautious 2, divergence 11, **FAIL 0, STOP 0, unstable 0** | |
+
+**The two not-comparable matches.** A handoff reply the laptop filed against
+`P&G|SHARC Laser Exhaust` and a reminder reply it filed against
+`CCHMC|RFI 250`. Both COs are **closed** in the 2026-10-28 tracker
+snapshot, so the container was never offered them and declined, naming the
+open P&G and CCHMC keys it had weighed and why none fit. That is the plan's
+§ 9a limit in its fourth form — after the open-CO set, the deleted ZZ MIG
+row and *Responded emails* — and the scorer now reads the tracker's keys
+and open keys and reports a one-null on a CO that is closed or gone today
+as not comparable, with the cause. A one-null on a CO that **is** open
+today still fails, and the STOP row is untouched. **[observed]**
+
+**The declines are the kind a person can act on.** Each names what it
+weighed: *"RFI 254 … is not on the open change order list; the open CCHMC
+items are RFI 229, RFI 238 and Bulletins 12, 13 and 15"*; *"mentions only a
+'new bulletin at Liberty' with no number; five open CCHMC change orders
+could fit and nothing separates them"*. The five items the laptop had sent
+to a person for the same reason went to a person for the same reason.
+**[observed]**
+
+### What D5 does not prove
+
+- Body inference against the tracker of the laptop's day: the candidate set
+  is today's. Four items resolved to the laptop's key; two could not be
+  compared; the rest the laptop had not resolved by inference either.
+- The close-call guard on a real collision: no fixture email sat between
+  two open COs a word apart. The "five Liberty COs could fit" declines are
+  the guard working on the absence of a number, not on a near-duplicate.
+- The duplicate-CO-Key refusal on a live item: `CCHMC|Bulletin 12` holds one
+  row in today's snapshot.
+
+### What remains in Part D
+
+D6, per the plan: the archive sweep over the store, the Part 5 wrapper
+checklist, the renderer scripts and `co_classifier` in the image, the
+classifier job spec, the runbook entries for every outcome word, the
+`PHASE-12.md` Part D boxes and `PHASE-14.md` item 0.1. Every judgment is
+now on; what D6 adds is the plumbing a pass needs to run unattended.
+
+### Re-running D5's evidence
+
+```
+cd phb-co-engine
+python tests/ci_suites.py                                                         # 26/26
+python tests/classifier_replay.py --steps bid_leader,classify,qa,match --runs 3     # ~$3
+```
