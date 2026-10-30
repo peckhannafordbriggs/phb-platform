@@ -297,10 +297,10 @@ period, and the disagreements are understood. **Not when it runs.**
 
 **Part E**
 
-- [ ] Shadow running on schedule against a copy
-- [ ] Automated diff of sentinel JSON, state files and run reports
-- [ ] Equivalence defined in writing for the judgment steps before comparison began
-- [ ] A sustained period of equivalent output, with every disagreement investigated
+- [ ] Shadow running on schedule against a copy — built 2026-10-30 (the three jobs behind `enableCoShadow`, the feed and the collector); starts the business day after the reader app's grant lands (Request 6, sent 2026-10-29)
+- [ ] Automated diff of sentinel JSON, state files and run reports — built: the Part E scorer over every item with both sides, and the intake replay with the state-prefix rule; the run reports are not compared, by decision (plan § 4b)
+- [x] Equivalence defined in writing for the judgment steps before comparison began — `docs/phase-12-part-e-equivalence.md`, 2026-09-22, re-checked 2026-10-28, with the two named divergences of 2026-10-29
+- [ ] A sustained period of equivalent output, with every disagreement investigated — the floor is ten laptop weekdays after the first clean batch (owner's decision 2026-10-29) and the exit is path coverage; `docs/phase-12-part-e-verification.md` is the record
 
 ---
 
