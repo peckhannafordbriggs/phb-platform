@@ -11254,6 +11254,25 @@ below are done.
 6. Press **Index now** and watch the first execution:
    `az containerapp job execution list --name <baseName>-kb-worker -g <rg>`.
 
+## Knowledge Base search finds nothing, or the wrong file
+
+Search is **keyword** search for now (`lib/modules/knowledge-base/search.ts`):
+it finds passages holding the question's words, ranks by how many they hold,
+then current versions above older and archived ones. What that means in use:
+
+| Symptom | Why, and what to do |
+|---|---|
+| *Those words are too common to search for* | Every word was a stop word ("what is the"). Use the tag, a number, a product name |
+| A synonym finds nothing ("air handling unit" when the file says "AHU") | Keyword search matches words, not meaning. Search the term the documents use. Embeddings (Azure OpenAI, request KB-2) fix this class |
+| A file you know is there is missing | Check its row (*A document is in SharePoint but search never finds it*, above): it must be `indexed`. A scanned PDF is `skipped`, `empty_text` |
+| *Limited to <project> from the job number* | A six-digit job number in the question scopes the search to that project. Leave it out to search everything |
+| An archived version is listed | Older versions are returned on purpose, labelled, below the current one |
+
+**Measuring it.** `npm run kb:eval` runs the questions in `.kb-eval/questions.json`
+(git-ignored: they name real project files) and prints, for each, the rank of the
+first file that holds the answer, then the share found first and in the top five.
+Run it before and after any change to search, and when embeddings arrive.
+
 ## A Knowledge Base file is `failed`
 
 ```sql

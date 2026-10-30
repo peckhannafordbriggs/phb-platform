@@ -1295,7 +1295,12 @@ range (exceljs), Markdown and text, into `kb_chunks` with exact locations
 KB-2). The admin **Index now** button (`/knowledge-base/admin`) queues a sync for
 a Container Apps Job, `kbWorkerJob` (`scripts/kb-worker.ts`, `Dockerfile.kb-worker`),
 built and **not yet turned on** (`enableKbWorker`); `npm run kb:worker` is the
-worker locally. Access requests KB-1 to KB-4: IT approved all but KB-2 (Azure OpenAI). `docs/KB-P0-P1.md`; `runbook.md` ->
+worker locally. **Keyword search is built** (`search.ts`, the search box at
+`/knowledge-base`, `GET /api/modules/knowledge-base/search`): any-word matching
+ranked by coverage, variants for plurals and tags (AV-1/AV1), quoted phrases, job
+number scoping, current versions first, every result citing page, section or
+sheet and cells. `npm run kb:eval` measures it against `.kb-eval/questions.json`
+(git-ignored). No answers, no history yet. Access requests KB-1 to KB-4: IT approved all but KB-2 (Azure OpenAI). `docs/KB-P0-P1.md`; `runbook.md` ->
 *Knowledge Base*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.

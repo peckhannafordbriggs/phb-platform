@@ -264,6 +264,30 @@ the web app (a restart mid-index) and over no button (an operator with a termina
   documents by state, passages and how many are embedded, recent syncs, and the
   files that could not be read.
 
+## Keyword search (2026-10-30)
+
+Built before embeddings so answers can be tested on real questions while KB-2
+waits. `searchPassages` (`lib/modules/knowledge-base/search.ts`):
+
+- **Any word, ranked by coverage.** The `simple` dictionary keeps identifiers
+  but has no stop words or stemming, so the query side drops stop words, ORs the
+  remaining words, and ranks by how many a passage holds, then `ts_rank_cd`.
+  Requiring every word (`websearch_to_tsquery`) found nothing for natural questions.
+- **Variants** stand in for stemming: plural and singular, `AV-1`/`AV1`,
+  `1,200`/`1200`. `"Quoted words"` must appear as a phrase.
+- **File name and folder count**, normalised first (the parser reads a whole file
+  name with an extension as one token).
+- **Job number scopes**: a six-digit number matching a project limits the search
+  to it and is not itself searched for (`scope.how = from_question`, the same
+  vocabulary as `kb_questions.scope_how`).
+- **Versions**: current first, archived last, all labelled; at most three passages
+  per file.
+
+`npm run kb:eval` measures it against a git-ignored question set
+(`.kb-eval/questions.json`): rank of the first file holding the answer, share
+found first and in the top five, mean reciprocal rank. The same set is the
+before-and-after for embeddings.
+
 ## Open questions
 
 - **Shared history and leavers.** `kb_conversations.employee_id` cascades on
