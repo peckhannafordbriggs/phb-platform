@@ -2861,3 +2861,50 @@ Configure a fallback model and a refusal becomes a second model's answer
 the log does not show. Drop a divergence from the equivalence doc and the
 shadow run's first internal email is a FAIL that is not one. Tune a prompt
 on one disagreement and the next replay is the one that moved.
+
+## 76 · The shadow run reads live with an identity that cannot write, and stops itself on one row
+
+**Decision (Phase 12 Part E, 2026-10-29/30).** The shadow run feeds a copy
+of the change-order tree from the live one, so something has to read
+`CO Managment Process`. It does not read as the engine's app, which holds
+Write on the whole site; it reads as a fourth registration,
+`phb-co-engine-reader`, whose grant is Read on that one folder, through a
+reader (`co_shadow/reader.py`) whose session has no verb but GET, which
+addresses the live folder and nothing else — the mirror image of the
+store's jail — and which refuses to be built with the engine app's client
+id. Every live item it touches is fingerprinted and read again at the end
+of the run; a changed fingerprint writes STOP. The copy is written through
+the engine's store, rooted on the copy, refusing the live folder by name as
+it has since Part C. A STOP file at the copy's root stops the feed before it
+reads anything; the collector writes it on the one row the equivalence doc
+says stops a window — the laptop declined and the container decided — and
+only a person removes it.
+
+**Why.** Every guard in this project is incapacity, not care, and a feeder
+kept off the live tree by its own code would be the weaker kind. The grant
+makes a write a 403 whatever the code asks; the verb wrapper makes it
+unreachable before a request exists; the path rule makes the reader and the
+store incapable of addressing the same tree. Three refusals, each enough on
+its own. The STOP file exists because the window's one unacceptable outcome
+— the container deciding where the laptop refused — must stop the next pass
+without anyone remembering to stop it, and because a stop that a job can
+clear is not a stop: a person reads the reason, records the finding, and
+deletes the file.
+
+**Two smaller decisions that ride with it.** The live tracker workbooks are
+read through the Graph workbook API, as prohibition 4 reads, and their names
+are configuration on the job — the packages spell neither, and the Bid
+Tracker guard would refuse them if they did. And the state-prefix rule in
+the differ is off by default: the Part B and Part C differentials compare a
+state file as the JSON it is, and only the shadow's intake half, where the
+laptop's state has moved on through the flows and the copy's has not, turns
+the rule on.
+
+**What breaks if you undo it.** Read live as the engine app and the fence
+is a line of configuration. Add a verb to the reader and the first bug that
+builds a wrong path writes into the live tree. Let a job clear STOP and the
+inverted row becomes a line in a report nobody read that morning.
+
+`docs/phase-12-part-e-plan.md` § 2, § 6, § 7; `runbook.md` → *The
+change-order shadow run*; `phb-co-engine` → `tests/test_shadow_reader.py`,
+`tests/test_shadow_feed.py`, `tests/test_shadow_collect.py`.

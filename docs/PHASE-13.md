@@ -29,8 +29,15 @@ Phase 13 does not wait for Phase 12 to finish. It **drives** Phase 12 Part E:
 ```
 
 The scheduling built here is what makes the shadow run happen four times a day without
-anyone remembering to trigger it. At cutover, the same job gets repointed — the schedule
-itself doesn't change.
+anyone remembering to trigger it. At cutover the schedule itself doesn't change, but
+cutover is **not** a repoint alone: the Graph store refuses `CO Managment Process` by
+name, and removing that refusal is a code change and a new image first, then the
+repoint (`docs/PHASE-14.md` items 1.2 and 3.1; corrected here 2026-10-30, Part E
+plan § 10). Part E also showed the shadow needs **three** jobs, not two - a feeder,
+the container's passes and a collector - because a comparison reads the laptop's side
+after the laptop has run; they are in `infra/main.bicep` behind `enableCoShadow`, and
+Part A of this phase is the schedule mechanism they already use. Part B, the alerts, is
+what this phase still owes them.
 
 **Everything in this phase runs against the copy.** The laptop remains the only thing
 touching live, until Phase 14.

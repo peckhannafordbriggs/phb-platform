@@ -504,6 +504,25 @@ from the live script (item 1.12). `docs/phase-12-part-d-verification.md` is
 the record, D0 through D6; `runbook.md` → *Running a classifier pass, and
 reading its summary and log*; `WHY-ITS-BUILT-THIS-WAY.md` § 75.
 
+**Part E — built, waiting on one grant (2026-10-30).** The plan was approved
+on 2026-10-29 (`docs/phase-12-part-e-plan.md`, § 14 the owner's eight
+decisions, § 15 the dates) and every delivery item that does not need the
+reader's grant was built the same day and the next, in `phb-co-engine`
+(`co_shadow/`: the read-only reader - GET only by construction, its own
+app registration, the live folder named in one module; the capture renamed
+by role with attachment bytes never read; the batch, the pairing and strip
+rules, the feed, the collector with the Part E scorer lifted unchanged into
+the package, the report and `WINDOW.md`, the STOP file the feed refuses to
+run past; the intake replay as an instrument beside the differ, with the
+state-prefix rule) and in this repository (three jobs behind
+`enableCoShadow` in the template, two identities, one secret; `runbook.md`
+→ *The change-order shadow run*). **The one external dependency is Request
+6**, the reader app registration with Read on the live folder, sent
+2026-10-29. The window starts the business day after it lands; the floor
+is **ten laptop weekdays** after the first clean batch, by decision, and
+the exit is path coverage. `docs/phase-12-part-e-verification.md` is the
+record, to be filled week by week; `WHY-ITS-BUILT-THIS-WAY.md` § 76.
+
 **Part C therefore has nothing left that gates Phase 14.** Open and not
 blocking: the `PnP.Powershell` certificate on the `phb-co-engine` app
 registration (`runbook.md` → *Open decision*). **Everything any document
@@ -1416,3 +1435,4 @@ either anywhere else — point at them.
 | `docs/phase-12-part-d-verification.md` | **Part D's record, step by step:** D0's capture (20 laptop answers, three excluded with evidence); D1's harness and the first replay — every reproducible deterministic item equivalent, no FAIL, no STOP, no model call made; D2's bid leader — the scorer against the live master names, the first real call and the two things it found (the schema keywords the API refuses; a refusal on a toy prompt), the cache read back; D3's classification — the first replay on the real emails, 13 of 15 labels exact three of three, the injection fixture answered as a plain quote, and the internal-sender rule the owner decided the same day — a named divergence from the laptop, decided by code before the model, after which both unstable internal items come out the same way every run; D4's Q&A log — code keeps the record in the laptop's own shape, the model adds the writer's words, one prompt change after a consistent miss, the owner's two Q&A decisions built the same day; D5's match by body inference — 15 of 17 equivalent, every item the laptop declined declined by the container too, no STOP, no instability across three runs, the two gaps both closed COs the container was never offered; D6's plumbing — the archive sweep through the store held to the shipped script by a differential, the tracker-unreadable rule, the image with the scripts, the job spec |
 | `docs/phase-12-part-e-plan.md` | **Part E, the plan, approved 2026-10-29:** a read-only reader identity with Read on the live tree, the state snapshot before each laptop run, both halves (the classifier as a scheduled shadow, the intake engine as a post-hoc replay with the Part C instrument), Phase 13's schedule without its alerts, the STOP file, the daily report, exit by path coverage with a ten-laptop-weekday floor, the cost, what `PHASE-13.md` now gets wrong, the owner's eight decisions (§ 14) and the dates counting the IT grant (§ 15) |
 | `docs/phase-12-part-e-equivalence.md` | **Part E: what counts as equivalent**, written 2026-09-22 before any comparison ran so the bar cannot be set to fit a disagreement; recovered and re-checked 2026-10-28 |
+| `docs/phase-12-part-e-verification.md` | **Part E's record:** what E1–E6 built and where it is held, the one finding from the real engine on the way, then day one, the weeks, every disagreement, the path coverage table at close, what the window proves and does not |
