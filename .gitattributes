@@ -3,3 +3,7 @@
 # "bad interpreter" in the container, and `az acr build` uploads the working
 # tree as it is on disk.
 *.sh text eol=lf
+
+# Font files are binary. autocrlf must never touch them: one rewritten byte
+# and the browser silently falls back to the system face.
+*.woff2 binary

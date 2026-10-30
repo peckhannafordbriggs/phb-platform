@@ -1,12 +1,19 @@
 import type { Metadata } from "next";
-import { Archivo, Figtree, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
 /**
  * Three typefaces, three jobs.
  *
  * Loaded through next/font so nothing renders unstyled and no request leaves the
- * browser for a font at runtime.
+ * browser for a font at runtime - and loaded from FILES IN THIS REPOSITORY
+ * (`app/fonts/`), not from Google. Until 2026-10-30 these came through
+ * `next/font/google`, which fetches Google's CSS at build time; a CI build
+ * failed when Google answered with something the loader could not parse
+ * (`loader.js`: "Cannot read properties of null (reading '1')"), and a deploy
+ * is not allowed to depend on a third party's servers being in a good mood.
+ * The files are the exact latin-subset variable woff2 Google was serving, so
+ * nothing changed visually; `app/fonts/README.md` says where each came from.
  *
  * ARCHIVO — signage. The wordmark, buttons, and module headers: the things that
  * label rather than inform. A hard grotesque against Figtree's soft geometric,
@@ -32,25 +39,53 @@ import "./globals.css";
  * a cosmetic one.
  */
 
-const archivo = Archivo({
-  subsets: ["latin"],
+/**
+ * Google's CSS declared each family for the latin subset only (we asked for
+ * `subsets: ["latin"]`), so the same range is declared on each; a glyph outside
+ * it falls through to the system stack exactly as it did before. Written out
+ * three times because the font loader accepts literals only - a shared constant
+ * fails the build with "Font loader values must be explicitly written literals".
+ */
+const archivo = localFont({
+  src: "./fonts/archivo-latin-wght.woff2",
   variable: "--font-archivo",
-  weight: ["500", "600", "700"],
+  weight: "500 700",
   display: "swap",
+  declarations: [
+    {
+      prop: "unicode-range",
+      value:
+        "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD",
+    },
+  ],
 });
 
-const figtree = Figtree({
-  subsets: ["latin"],
+const figtree = localFont({
+  src: "./fonts/figtree-latin-wght.woff2",
   variable: "--font-figtree",
-  weight: ["400", "500", "600"],
+  weight: "400 600",
   display: "swap",
+  declarations: [
+    {
+      prop: "unicode-range",
+      value:
+        "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD",
+    },
+  ],
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
+const jetbrainsMono = localFont({
+  src: "./fonts/jetbrains-mono-latin-wght.woff2",
   variable: "--font-jetbrains-mono",
-  weight: ["400", "500"],
+  weight: "400 500",
   display: "swap",
+  declarations: [
+    {
+      prop: "unicode-range",
+      value:
+        "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD",
+    },
+  ],
 });
 
 export const metadata: Metadata = {
