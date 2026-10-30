@@ -227,6 +227,18 @@ failure modes.
 - Three plain values for the Needs Review tab (`coReviewAppTenantId`,
   `coReviewAppClientId`, `coReviewSharePointFolder`; blank by default, and blank
   leaves the tab "not connected"; see `runbook.md`, "Needs Review")
+- Optionally the Phase 12 Part E shadow run (`enableCoShadow`, off by default;
+  see `docs/phase-12-part-e-plan.md` and `runbook.md`, "The change-order shadow
+  run"): three Container Apps Jobs from the `phb-co-engine` image
+  (`coEngineImage`, read from the running job before a redeploy like
+  `containerImage`) - the feed on `coShadowFeedCron`, the collector on
+  `coShadowCollectCron`, and the Part D classify job on a manual trigger. The
+  live tree is read as `phb-co-engine-reader` (Read only), the copy is written
+  as `phb-co-engine`, both through the managed identity's federated
+  credentials; the feed alone carries the Change Orders Anthropic key, by
+  reference. Nine plain values name the two apps, the tenant, the drive, the
+  copy's root and the two live tracker workbooks - the workbook paths are
+  configuration here and spelled nowhere in code
 
 ## The backup image is built once, by hand
 

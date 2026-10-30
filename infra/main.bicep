@@ -283,6 +283,82 @@ param coReviewSharePointFolder string = ''
 @description('Model the skills run on. Empty means the default in lib/modules/cost-intelligence/runs.ts.')
 param cipRunModel string = ''
 
+
+// ---------------------------------------------------------------------------
+// Phase 12 Part E - the change-order shadow run
+// ---------------------------------------------------------------------------
+//
+// Three scheduled Container Apps Jobs, all behind enableCoShadow, off by
+// default for the reason enableDbBackup is: they name an image that has to be
+// in the registry first (phb-co-engine:<tag>, built from the phb-co-engine
+// repository with `az acr build`). docs/phase-12-part-e-plan.md section 5 is
+// the schedule; runbook.md "The change-order shadow run" is the operation.
+//
+//   feed      hourly at :45 on weekdays. Reads the LIVE change-order tree as
+//             the READER app (phb-co-engine-reader: Files.SelectedOperations
+//             .Selected, Read on the one folder, GET only by construction),
+//             writes the COPY as the engine app (phb-co-engine: Sites.Selected,
+//             Write on the site, the live folder refused by name in code),
+//             takes the state snapshot at the UTC hours a quarter before the
+//             laptop's two runs, builds the batch and runs the classifier's
+//             pass on it with the Change Orders Anthropic key by reference.
+//   collect   after each laptop run plus three hours and at the end of the
+//             day: the laptop's answers, the comparison, the report, STOP.
+//             No model call, so no key.
+//   classify  the Part D job kept for one batch by hand during an
+//             investigation. Manual trigger. (infra/classify-job.yaml.template
+//             in phb-co-engine is the by-hand spec it replaces.)
+//
+// Container Apps evaluates a cron in UTC. The window runs under Eastern
+// STANDARD time (DST ended 2026-11-01), so the laptop's 08:00 and 13:00 are
+// 13:00 and 18:00 UTC; the feed's snapshot hours are 12 and 17; the collector
+// runs at 16:00, 21:00 and 23:00 UTC. The next shift is March 2027 and is a
+// deliberate change to these defaults in a commit that says so.
+//
+// Every identity below is a plain value: two app registrations' client ids
+// and the tenant, authenticated with the managed identity through federated
+// credentials. Nothing here expires and nothing here is a secret except the
+// one Key Vault reference the feed carries.
+
+@description('Create the three Phase 12 Part E shadow-run jobs: feed, collect and the Part D classify job, against the COPY of the change-order tree, never the live one. Off by default: the jobs name an image that has to be in the registry first (coEngineImage). See docs/phase-12-part-e-plan.md and runbook.md, "The change-order shadow run".')
+param enableCoShadow bool = false
+
+@description('The phb-co-engine image the shadow jobs run, as <registry>/phb-co-engine:<tag>. Required when enableCoShadow is true: the image the jobs run now (`az containerapp job show`), or on first enable the tag built with `az acr build` from the phb-co-engine repository. No placeholder default, so a redeploy cannot reset it.')
+param coEngineImage string = ''
+
+@description('Client ID of the phb-co-engine app registration (Sites.Selected, Write on the AI Sandbox site). The copy is written as it. Not a secret.')
+param coEngineAppClientId string = ''
+
+@description('Client ID of the phb-co-engine-reader app registration (Files.SelectedOperations.Selected, Read on the live folder). The live tree is read as it and only as it. Not a secret.')
+param coReaderAppClientId string = ''
+
+@description('Tenant ID both change-order app registrations live in. Not a secret.')
+param coGraphTenantId string = ''
+
+@description('Drive id of the AI Sandbox library (Documents), which holds both the live tree and the copy.')
+param coShadowDriveId string = ''
+
+@description('Drive-relative root of the shadow copy, a sibling top-level folder outside every watched folder; must contain "scratch", e.g. /phb-co-engine scratch/part-e-shadow-2026-11-09.')
+param coShadowRoot string = ''
+
+@description('Drive-relative path of the live bid tracker workbook, read through the Graph workbook API by the reader app at each snapshot. Configuration on the job, never spelled in code.')
+param coShadowBidTrackerPath string = ''
+
+@description('Drive-relative path of the live master tracker workbook, read the same way.')
+param coShadowMasterPath string = ''
+
+@description('When the feed runs, as a cron in UTC. The default is every weekday hour at :45 from 11:45 to 22:45 UTC; the runs whose hour is in coShadowSnapshotHoursUtc also take the state snapshot.')
+param coShadowFeedCron string = '45 11-22 * * 1-5'
+
+@description('The UTC hours at which a feed run takes the state snapshot: a quarter before each laptop classifier run. 12,17 under Eastern standard time (08:00 and 13:00 ET).')
+param coShadowSnapshotHoursUtc string = '12,17'
+
+@description('When the collector runs, as a cron in UTC. The default is each laptop run plus three hours and the end of the day, under Eastern standard time.')
+param coShadowCollectCron string = '0 16,21,23 * * 1-5'
+
+@description('Which model judgments the shadow classifier runs: a comma-separated subset of bid_leader,classify,qa,match. All four for the window.')
+param coShadowClassifierSteps string = 'bid_leader,classify,qa,match'
+
 // ---------------------------------------------------------------------------
 // Nightly database backup
 // ---------------------------------------------------------------------------
@@ -1356,6 +1432,265 @@ resource dbBackupJob 'Microsoft.App/jobs@2024-03-01' = if (enableDbBackup) {
   ]
 }
 
+
+// ---------------------------------------------------------------------------
+// Phase 12 Part E - the shadow run's three jobs
+// ---------------------------------------------------------------------------
+//
+// One image, three commands. Each command is the script in the phb-co-engine
+// repository by its path in the image, with no argument: everything the
+// script needs is in the environment below, and an argument would be on the
+// command line of every execution's record. The feed is the only job that
+// holds a secret, the Change Orders Anthropic key, by reference under the
+// platform's identity - the same reference the web app carries behind
+// coAnthropicApiKeyInKeyVault, which stays false because the web app never
+// reads it.
+
+var coShadowCommonEnv = [
+  {
+    name: 'CO_GRAPH_AUTH'
+    value: 'federated'
+  }
+  {
+    name: 'CO_GRAPH_MANAGED_IDENTITY_CLIENT_ID'
+    value: identity.properties.clientId
+  }
+  {
+    name: 'CO_GRAPH_APP_CLIENT_ID'
+    value: coEngineAppClientId
+  }
+  {
+    name: 'CO_GRAPH_TENANT_ID'
+    value: coGraphTenantId
+  }
+  {
+    name: 'CO_GRAPH_DRIVE_ID'
+    value: coShadowDriveId
+  }
+  {
+    name: 'CO_READER_GRAPH_AUTH'
+    value: 'federated'
+  }
+  {
+    name: 'CO_READER_APP_CLIENT_ID'
+    value: coReaderAppClientId
+  }
+  {
+    name: 'CO_SHADOW_ROOT'
+    value: coShadowRoot
+  }
+  {
+    name: 'CO_STAGE_DIR'
+    value: '/tmp'
+  }
+]
+
+resource coShadowFeedJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
+  name: '${baseName}-co-shadow-feed'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // Shorter than the hour between runs, so two feeds can never overlap.
+      // The Graph store takes about fifty seconds per intake CO; a pass over
+      // a handful of items with its model calls is minutes.
+      replicaTimeout: 2700
+      replicaRetryLimit: 0
+      scheduleTriggerConfig: {
+        cronExpression: coShadowFeedCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'co-anthropic-api-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${coAnthropicApiKeySecretName}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'feed'
+          image: coEngineImage
+          command: [
+            'sh'
+            '/app/infra/shadow-feed.sh'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: concat(coShadowCommonEnv, [
+            {
+              name: 'CO_ANTHROPIC_API_KEY'
+              secretRef: 'co-anthropic-api-key'
+            }
+            {
+              name: 'CO_CLASSIFIER_MODEL_STEPS'
+              value: coShadowClassifierSteps
+            }
+            {
+              name: 'CO_SHADOW_BID_TRACKER_PATH'
+              value: coShadowBidTrackerPath
+            }
+            {
+              name: 'CO_SHADOW_MASTER_PATH'
+              value: coShadowMasterPath
+            }
+            {
+              name: 'CO_SHADOW_SNAPSHOT_HOURS_UTC'
+              value: coShadowSnapshotHoursUtc
+            }
+          ])
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
+resource coShadowCollectJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
+  name: '${baseName}-co-shadow-collect'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // Hours apart, so overlap is impossible; the intake replays run the
+      // engine through the Graph store, about a minute a CO.
+      replicaTimeout: 5400
+      replicaRetryLimit: 0
+      scheduleTriggerConfig: {
+        cronExpression: coShadowCollectCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'collect'
+          image: coEngineImage
+          command: [
+            'sh'
+            '/app/infra/shadow-collect.sh'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: coShadowCommonEnv
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+  ]
+}
+
+// The Part D classify job, Manual, for re-running one batch by hand during
+// an investigation. Its root and snapshot folder are set at start time
+// (`az containerapp job start --env-vars`), which is why none is here.
+resource coClassifyJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
+  name: '${baseName}-co-classify'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Manual'
+      replicaTimeout: 1800
+      replicaRetryLimit: 0
+      manualTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'co-anthropic-api-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${coAnthropicApiKeySecretName}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'classify'
+          image: coEngineImage
+          command: [
+            'sh'
+            '/app/infra/classify-job.sh'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: concat(coShadowCommonEnv, [
+            {
+              name: 'CO_ANTHROPIC_API_KEY'
+              secretRef: 'co-anthropic-api-key'
+            }
+            {
+              name: 'CO_CLASSIFIER_MODEL_STEPS'
+              value: coShadowClassifierSteps
+            }
+          ])
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
 // ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
@@ -1411,6 +1746,11 @@ output cipWorkerJobName string = enableCipWorker ? cipWorkerJob.name : ''
 // list` and `az storage blob list` in runbook.md -> "Nightly database backup".
 output dbBackupJobName string = enableDbBackup ? dbBackupJob.name : ''
 output dbBackupStorageAccountName string = enableDbBackup ? backupStorage.name : ''
+// The shadow run's three jobs, for `az containerapp job execution list` and
+// `job logs show` in runbook.md -> "The change-order shadow run".
+output coShadowFeedJobName string = enableCoShadow ? coShadowFeedJob.name : ''
+output coShadowCollectJobName string = enableCoShadow ? coShadowCollectJob.name : ''
+output coClassifyJobName string = enableCoShadow ? coClassifyJob.name : ''
 // The redirect URI IT has to add to the SSO app registration in Part B.
 output ssoRedirectUri string = 'https://${containerApp.properties.configuration.ingress.fqdn}/api/auth/callback/microsoft-entra-id'
 // The custom hostname's address and ITS redirect URI, empty when no custom

@@ -1238,12 +1238,19 @@ describe("the nightly database backup is conditional, identity-only, and holds n
       .split(/\r?\n/)
       .filter((line) => !line.trim().startsWith("//"))
       .join("\n");
-  /** The dbBackupJob resource block, from its declaration to the next section rule. */
+  /**
+   * The dbBackupJob resource block, from its declaration to the next
+   * declaration or section rule. `codeOnly` has already dropped the comment
+   * lines, so the section rule is not there to stop at; until the Part E
+   * shadow jobs were added after this one (2026-10-30) the block ran to the
+   * end of the file and happened to hold only this job.
+   */
   const jobBlock = (bicep: string) => {
     const start = bicep.indexOf("resource dbBackupJob ");
     expect(start).toBeGreaterThan(-1);
-    const rest = bicep.slice(start);
-    return rest.slice(0, rest.indexOf("\n// ----"));
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\nvar "), rest.indexOf("\n// ----")].filter((i) => i > 0);
+    return rest.slice(0, ends.length ? Math.min(...ends) : undefined);
   };
   /** One resource block, from its declaration to the next declaration. */
   const resourceBlock = (bicep: string, name: string) => {
@@ -1458,4 +1465,181 @@ describe("the nightly database backup is conditional, identity-only, and holds n
       }
     },
   );
+});
+
+describe("the Phase 12 Part E shadow run: three jobs behind one flag, two identities, one secret (2026-10-30)", () => {
+  /**
+   * docs/phase-12-part-e-plan.md section 5, decided in section 14: the shadow
+   * run's jobs live in the Bicep behind enableCoShadow - off by default, like
+   * enableDbBackup and for the same reason (the image has to be in the
+   * registry first). The feed reads the LIVE tree as the reader app and
+   * writes the COPY as the engine app; only the feed and the by-hand classify
+   * job carry the Change Orders Anthropic key, by reference; the collector
+   * makes no model call and carries no secret. The two live tracker
+   * workbooks are configuration here and spelled nowhere in code.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  /** One resource block, from its declaration to the next declaration or section rule. */
+  const resourceBlock = (bicep: string, name: string) => {
+    const start = bicep.indexOf(`resource ${name} `);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\n// ----")].filter((i) => i > 0);
+    return rest.slice(0, Math.min(...ends));
+  };
+
+  const SHADOW_JOBS = ["coShadowFeedJob", "coShadowCollectJob", "coClassifyJob"];
+
+  it("is off by default, and all three jobs are conditional on the same parameter with ternary outputs", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param enableCoShadow bool = false$/m);
+    for (const name of SHADOW_JOBS) {
+      expect(code, name).toMatch(new RegExp(`^resource ${name} '[^']+' = if \\(enableCoShadow\\) \\{$`, "m"));
+    }
+    const conditional = code.match(/^resource (\w+) '[^']+' = if \(enableCoShadow\)/gm) ?? [];
+    expect(conditional.length).toBe(SHADOW_JOBS.length);
+    const outputs = code.split("\n").filter((line) => /^output (coShadowFeedJobName|coShadowCollectJobName|coClassifyJobName)/.test(line));
+    expect(outputs.length).toBe(3);
+    for (const line of outputs) expect(line).toMatch(/= enableCoShadow \? \w+\.name : ''$/);
+  });
+
+  it("schedules the feed and the collector in UTC with a bounded run and no retry, and keeps the classify job manual", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const feed = resourceBlock(code, "coShadowFeedJob");
+    expect(feed).toMatch(/triggerType: 'Schedule'/);
+    expect(feed).toMatch(/cronExpression: coShadowFeedCron/);
+    expect(feed).toMatch(/parallelism: 1/);
+    expect(feed).toMatch(/replicaCompletionCount: 1/);
+    expect(feed).toMatch(/replicaRetryLimit: 0/);
+    // shorter than the hour between feed runs, so two can never overlap
+    const feedTimeout = Number(/replicaTimeout: (\d+)/.exec(feed)?.[1]);
+    expect(feedTimeout).toBeGreaterThan(0);
+    expect(feedTimeout).toBeLessThan(3600);
+    const collect = resourceBlock(code, "coShadowCollectJob");
+    expect(collect).toMatch(/triggerType: 'Schedule'/);
+    expect(collect).toMatch(/cronExpression: coShadowCollectCron/);
+    expect(collect).toMatch(/replicaRetryLimit: 0/);
+    const classify = resourceBlock(code, "coClassifyJob");
+    expect(classify).toMatch(/triggerType: 'Manual'/);
+    expect(classify).toMatch(/manualTriggerConfig/);
+    // the defaults are the window's crons, in UTC, under Eastern standard time
+    expect(code).toMatch(/^param coShadowFeedCron string = '45 11-22 \* \* 1-5'$/m);
+    expect(code).toMatch(/^param coShadowCollectCron string = '0 16,21,23 \* \* 1-5'$/m);
+    expect(code).toMatch(/^param coShadowSnapshotHoursUtc string = '12,17'$/m);
+    // and the template says what those are in New York, both halves of the year
+    expect(await readFile("infra/main.bicep")).toMatch(/13:00 and 18:00 UTC/);
+  });
+
+  it("gives the feed and the classify job the Change Orders key by reference, and the collector no secret at all", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    for (const name of ["coShadowFeedJob", "coClassifyJob"]) {
+      const job = resourceBlock(code, name);
+      expect(job, name).toMatch(/name:\s*'CO_ANTHROPIC_API_KEY'\s*\n\s*secretRef:\s*'co-anthropic-api-key'/);
+      expect(job, name).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{coAnthropicApiKeySecretName\}'/);
+      expect(job, name).not.toMatch(/ANTHROPIC_API_KEY'\s*\n\s*value:/);
+      expect(job, name).not.toMatch(/anthropicApiKeySecretName\b(?!.*co)/);
+    }
+    const collect = resourceBlock(code, "coShadowCollectJob");
+    expect(collect).not.toMatch(/secrets:/);
+    expect(collect).not.toMatch(/ANTHROPIC/);
+    expect(collect).not.toMatch(/secretRef/);
+    // never the BAS key: the shadow is the change-order module's
+    for (const name of SHADOW_JOBS) expect(resourceBlock(code, name)).not.toMatch(/\banthropicApiKeySecretName\b/);
+  });
+
+  it("names both identities as plain values and never a workbook path in code", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const common = code.slice(code.indexOf("var coShadowCommonEnv"), code.indexOf("resource coShadowFeedJob"));
+    expect(common).toMatch(/name: 'CO_GRAPH_APP_CLIENT_ID'\s*\n\s*value: coEngineAppClientId/);
+    expect(common).toMatch(/name: 'CO_READER_APP_CLIENT_ID'\s*\n\s*value: coReaderAppClientId/);
+    expect(common).toMatch(/name: 'CO_GRAPH_AUTH'\s*\n\s*value: 'federated'/);
+    expect(common).toMatch(/name: 'CO_READER_GRAPH_AUTH'\s*\n\s*value: 'federated'/);
+    expect(common).toMatch(/name: 'CO_SHADOW_ROOT'\s*\n\s*value: coShadowRoot/);
+    // the two workbooks are parameters with blank defaults; the words never appear as values
+    expect(code).toMatch(/^param coShadowBidTrackerPath string = ''$/m);
+    expect(code).toMatch(/^param coShadowMasterPath string = ''$/m);
+    expect(code).not.toMatch(/Bid Tracker\.xlsx/);
+    expect(code).not.toMatch(/Managment/);
+    // the reader's id reaches only the feed and the collector through the common env; the engine app's id too
+    const feed = resourceBlock(code, "coShadowFeedJob");
+    expect(feed).toMatch(/CO_SHADOW_BID_TRACKER_PATH/);
+    expect(feed).toMatch(/CO_SHADOW_SNAPSHOT_HOURS_UTC/);
+    expect(feed).toMatch(/CO_CLASSIFIER_MODEL_STEPS/);
+  });
+
+  it("runs the three scripts by path with no argument, from one image that is a required parameter when the flag is on", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param coEngineImage string = ''$/m);
+    expect(code).not.toMatch(/phb-co-engine:[a-z0-9-]+'/);
+    const scripts: Record<string, string> = {
+      coShadowFeedJob: "/app/infra/shadow-feed.sh",
+      coShadowCollectJob: "/app/infra/shadow-collect.sh",
+      coClassifyJob: "/app/infra/classify-job.sh",
+    };
+    for (const [name, script] of Object.entries(scripts)) {
+      const job = resourceBlock(code, name);
+      expect(job, name).toMatch(/image: coEngineImage/);
+      const command = /command: \[([\s\S]*?)\]/.exec(job)?.[1] ?? "";
+      expect(command.trim().split(/\s+/), name).toEqual(["'sh'", `'${script}'`]);
+    }
+  });
+
+  it("ships the flag off and the nine plain values blank in the example parameters", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    expect(example.parameters.enableCoShadow?.value).toBe(false);
+    for (const name of ["coEngineImage", "coEngineAppClientId", "coReaderAppClientId", "coGraphTenantId",
+      "coShadowDriveId", "coShadowRoot", "coShadowBidTrackerPath", "coShadowMasterPath"]) {
+      expect(example.parameters[name]?.value, name).toBe("");
+    }
+  });
+
+  it("is documented where the other optional pieces are", async () => {
+    expect(await readFile("infra/README.md")).toMatch(/enableCoShadow/);
+    expect(await readFile("runbook.md")).toMatch(/enableCoShadow/);
+  });
+
+  describe("in the compiled ARM, when az is installed", () => {
+    const arm = (() => {
+      const r = spawnSync("az", ["bicep", "build", "--file", "infra/main.bicep", "--stdout"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        shell: true,
+      });
+      if (r.status !== 0 || !r.stdout) return null;
+      return JSON.parse(r.stdout) as {
+        parameters: Record<string, { type: string; defaultValue?: unknown }>;
+        resources: Array<{ type: string; name: string; condition?: string; properties?: Record<string, unknown> }>;
+      };
+    })();
+    const itIfArm = arm ? it : it.skip;
+
+    itIfArm("every shadow job is conditional on enableCoShadow, and the flag defaults to false", () => {
+      expect(arm!.parameters.enableCoShadow).toMatchObject({ type: "bool", defaultValue: false });
+      const jobs = arm!.resources.filter((r) => r.type === "Microsoft.App/jobs" && /co-shadow|co-classify/.test(r.name));
+      expect(jobs.length).toBe(3);
+      for (const j of jobs) expect(j.condition, j.name).toBe("[parameters('enableCoShadow')]");
+    });
+
+    itIfArm("the collector carries no secret and the feed's one secret is the Change Orders key", () => {
+      const byName = (part: string) => arm!.resources.find((r) => r.type === "Microsoft.App/jobs" && r.name.includes(part));
+      const collect = byName("co-shadow-collect")!;
+      const cfg = (collect.properties as { configuration?: { secrets?: unknown[] } }).configuration ?? {};
+      expect(cfg.secrets ?? []).toEqual([]);
+      const feed = byName("co-shadow-feed")!;
+      const fcfg = (feed.properties as { configuration: { secrets: Array<{ name: string; keyVaultUrl: string }> } }).configuration;
+      expect(fcfg.secrets.map((s) => s.name)).toEqual(["co-anthropic-api-key"]);
+      // the compiled reference names the variable, which holds CO-ANTHROPIC-API-KEY
+      expect(fcfg.secrets[0]!.keyVaultUrl).toMatch(/coAnthropicApiKeySecretName/);
+    });
+  });
 });
