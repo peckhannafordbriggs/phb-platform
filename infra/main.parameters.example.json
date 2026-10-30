@@ -146,6 +146,34 @@
       "value": false
     },
 
+    "enableCoShadow": {
+      "value": false
+    },
+    "coEngineImage": {
+      "value": ""
+    },
+    "coEngineAppClientId": {
+      "value": ""
+    },
+    "coReaderAppClientId": {
+      "value": ""
+    },
+    "coGraphTenantId": {
+      "value": ""
+    },
+    "coShadowDriveId": {
+      "value": ""
+    },
+    "coShadowRoot": {
+      "value": ""
+    },
+    "coShadowBidTrackerPath": {
+      "value": ""
+    },
+    "coShadowMasterPath": {
+      "value": ""
+    },
+
     "enableBudget": {
       "value": false
     },

@@ -10968,6 +10968,208 @@ setting is named in the first lines.
 
 ---
 
+## The change-order shadow run (Phase 12 Part E)
+
+**What it is.** For the window `docs/phase-12-part-e-plan.md` describes, the
+containerised change-order engine and classifier run in Azure against a
+**copy** of the SharePoint tree while the laptop keeps running the real
+process, and their answers are compared. Three Container Apps Jobs from the
+`phb-co-engine` image, all behind `enableCoShadow` in `infra/main.bicep`
+(off by default; `coEngineImage` and eight plain values beside it), in the
+pattern of the nightly backup job:
+
+| Job | Trigger (UTC) | Does | Identity it reads live with | Identity it writes the copy with | Secret |
+|---|---|---|---|---|---|
+| `<baseName>-co-shadow-feed` | `45 11-22 * * 1-5` | captures new items and intake COs from the live tree; at 12:45 and 17:45 takes the state snapshot (trackers through the workbook API, index, logs, intake state, the spec's hash); builds a batch; runs the classifier's pass on it; rechecks every live item it touched | `phb-co-engine-reader` (Read only, GET only) | `phb-co-engine` (Write on the scratch root; the live folder refused by name) | `CO-ANTHROPIC-API-KEY` by reference |
+| `<baseName>-co-shadow-collect` | `0 16,21,23 * * 1-5` | collects the laptop's answers wherever Response 2 moved the folders; replays every captured intake attempt and diffs it; scores every item with both sides; writes the report and `reports/WINDOW.md`; writes `STOP` on the one row that stops the window | the same | the same | none |
+| `<baseName>-co-classify` | manual | the Part D job, for one batch by hand during an investigation | - | the engine app | the key, by reference |
+
+The crons are UTC and assume Eastern **standard** time (DST ended
+2026-11-01): the laptop's 08:00 and 13:00 ET are 13:00 and 18:00 UTC, the
+snapshots are a quarter before each, the collections three hours after each
+and at the end of the day. March 2027 moves them by an hour, in a commit
+that says so. Both scheduled jobs' timeouts are shorter than their intervals,
+so two of the same job never overlap.
+
+**Where everything is.** The copy's root (`coShadowRoot`, a sibling of
+`CO Managment Process` in the AI Sandbox library, containing `scratch`):
+
+```
+README.txt            says it is not the live tree and when to delete it
+items/<item_id>/      a captured email: request, body, attachment NAMES, item.json,
+                      and the laptop's answer once collected (renamed by role)
+snapshots/<label>/    the state before a laptop run
+intake/<CO>/          inputs, the laptop's attempt artifacts (renamed), state, replays/
+batches/<id>/         one container pass: step2/, trackers/, results/, pass.json, calls.jsonl
+reports/<utc>.md      one report per collector run; WINDOW.md is the running state
+captures/<run>.json   one manifest per feed or collector run, with the live items it
+                      touched and whether any changed
+STOP                  present = the window is stopped (below)
+```
+
+The job logs carry the same report (`az containerapp job logs show -n
+<baseName>-co-shadow-collect -g <resource group> --container collect`), out
+of order as Log Analytics returns them; the file in the copy is the record.
+
+**Turning it on, once, in this order.**
+
+1. Request 6 has landed (*What to ask IT for*). Check as the app in Graph
+   Explorer: a `GET` of the live folder's children answers 200, a `PUT` of
+   any name under it answers 403.
+2. The first read of the live Bid Tracker through the workbook API, by hand,
+   with `eTag`, `cTag` and `lastModifiedDateTime` recorded before and after,
+   and Phase 11's table-binding check repeated the same day (plan § 2c). If
+   that read changed anything, stop here: the owner's decision 2 (plan
+   § 14) is to switch the tracker read to download-and-parse, and that is a
+   code change first.
+3. Build the image into the registry from the `phb-co-engine` checkout:
+   `az acr build --registry <registry> --image phb-co-engine:<tag> --build-arg INCLUDE_LIBREOFFICE=false .`
+   The tag goes into `coEngineImage` in the gitignored parameters file as
+   `<registry>.azurecr.io/phb-co-engine:<tag>`.
+4. Create the copy's root with its README and the deletion date (thirty
+   days after cutover, decision 8): from a machine with a developer token,
+   `python -m co_shadow.feed --store graph --drive-id <drive> --graph-auth static --root "<coShadowRoot>" --init --delete-after <date>`.
+5. Fill the nine plain values in the parameters file (both app client ids,
+   the tenant, the drive id, the copy's root, the two live tracker workbook
+   paths, the image) and set `enableCoShadow` to `true`; deploy with the
+   routine template command (`infra/README.md` → *Deploy*, `containerImage`
+   read from the running app as always).
+6. Watch the first feed run land at the next :45 (`job execution list`,
+   then the log): `CAPTURED`, `SNAPSHOT` on the first run whatever the hour,
+   `BATCH` if any item was captured, `LIVE ITEMS TOUCHED n  CHANGED DURING
+   THE READ 0`. The first **clean batch** - items captured before a laptop
+   run with a snapshot that preceded it - is the window's day one; write the
+   date in `docs/phase-12-part-e-verification.md`.
+
+**The daily read.** Open the newest `reports/<utc>.md` in the copy (or the
+collector's log). In order: a STOP section if one was written; FAIL rows,
+each with its bar and both answers and, on the next day, *stability over
+4 runs*; *Container more cautious* (never a failure; a pattern of three on
+one reason is called out); named divergences; not-comparable rows with the
+cause; totals; the Q&A content section for a person to compare; intake
+replays with the differ's classes; the path coverage table; housekeeping -
+live items changed during today's reads (expected 0), the laptop's
+`run_summary.md` modified time, spec drift, laptop run days seen. Weekly,
+fold the week into the verification record.
+
+**Pausing the shadow is free; nothing live depends on it.** Set
+`enableCoShadow` to `false` and deploy, or stop the two scheduled jobs
+(`az containerapp job stop` ends a running execution; to stop the schedule,
+redeploy with the flag off). After cutover the same flag will govern the
+live schedule, and pausing it then stops the pipeline (`docs/PHASE-14.md`
+3.2).
+
+### Symptom: the feed exits 3 and its log reads `STOP PRESENT`
+
+The window is stopped. A `STOP` file sits at the copy's root; the feed reads
+it and does nothing - no read of the live tree, no pass. The file holds one
+line per reason with the run that wrote it. Read it, investigate the item or
+the read it names (the two sections below), record the finding in
+`docs/phase-12-part-e-verification.md`, and delete the file from the copy
+in SharePoint. The next feed proceeds. Nothing is lost while it is stopped:
+the laptop runs the real process throughout, and items that arrived
+meanwhile are captured when the feed resumes (paired with a later snapshot
+and reported as not comparable where that matters).
+
+### Symptom: the collector wrote STOP - `the laptop declined and the container decided`
+
+The one row in the equivalence doc that stops a window: on one item the
+laptop said `needs_human` and the container decided. The safety property
+has inverted for that item. Do not remove `STOP` until it is understood.
+Read the item's `response-classification-payload.json` under `items/` (the
+laptop's) beside `batches/<id>/results/<item>.json` (the container's), and
+the item's `review_text` on the laptop's side for why it refused. Then the
+equivalence doc's Part 4: request three re-runs (`rerun/<item>.json` with
+`{"item_id": ..., "runs": 3}` in the copy, or let the collector's FAIL path
+do it) and read the stability line. A consistent container that decided
+where the laptop refused is a finding about the prompt or a rule; the laptop
+is right until proven otherwise, and nothing is tuned to match. Record it;
+if a prompt or rule changes, that is a new prompt version and the window's
+count restarts for that judgment.
+
+### Symptom: a report says `live items changed during the read`, and STOP was written
+
+The reader recorded every live item's `eTag`, `cTag` and
+`lastModifiedDateTime` when it first saw it and read them all again at the
+end of the run; one differed. The reader cannot write - its grant is Read
+and its session has no verb but GET - so something else changed the item
+during the run, and the manifest (`captures/<run>.json`) names it with both
+fingerprints. A `classify_request.json` or a queue folder changing is the
+laptop or a flow at work in the same minute: compare the times, record it,
+remove `STOP`. **The live Bid Tracker's fingerprint changing on a snapshot
+run, with nothing else writing it, is the case plan § 2c predicted would
+not happen**: stop the schedule (the flag off), repeat the hand-run read
+with the fields recorded, and take the owner's decision 2 - the switch to
+downloading the bytes and reading the tables in memory - as a code change
+before the next run.
+
+### Symptom: the feed's log reads `READER APP PRESENT:` with nothing after it, or every read answers 403
+
+`CO_READER_APP_CLIENT_ID` is blank on the job (`coReaderAppClientId` in the
+parameters file), or the reader app has consent for
+`Files.SelectedOperations.Selected` and no grant on the folder yet
+(Request 6). The reader refuses to run as the engine app, by design, so
+there is no fallback: fill the value, or wait for the grant. Nothing has
+been captured; nothing live was touched.
+
+### Symptom: a report says `SPEC DRIFTED`
+
+The live `CO_Response_Agent_SKILL.md` no longer hashes to the repository's
+mirror (`Change Order Step 2/CO_Response_Agent_SKILL.md` in `phb-co-engine`,
+copied into the image). SharePoint is authoritative until cutover, so the
+laptop is now working to a rubric the container's prompts were extracted
+from an older copy of. Re-capture the mirror, re-extract the enabled steps'
+sections (`python -m co_classifier.spec_extract <step> <new version>`), and
+ship the new prompt version; the window's count restarts for the judgments
+whose extract changed. Until then every report carries the line.
+
+### Symptom: a report says `laptop silent today`
+
+The laptop's `run_summary.md` has not been modified for more than 26 hours
+on a weekday. The laptop did not run its classifier, or ran and did not
+write the summary. That is the laptop's problem, not the container's - the
+pipeline's own characteristic failure, which Phase 13's silence alert will
+watch for the cloud job - and the inventory saw it before (§ 5, the morning
+runs). Check the Cowork app on the laptop. Items that arrive meanwhile are
+captured and run by the container; their comparison waits for the laptop.
+
+### Symptom: a FAIL row in a report
+
+A disagreement to investigate, named by bar with both answers. The
+collector requested three re-runs the first time it saw it; the next
+report's line *stability over 4 runs* says `equivalent` (the container is
+self-consistent: now the laptop is right until proven otherwise - read both
+answers and the item) or `unstable` (the container disagreed with itself: a
+prompt or schema under-constrained, which is its own finding and never a
+reason to tune toward the laptop). Nothing is changed on one disagreement;
+a prompt change is a new version and a restart for that judgment.
+
+### Symptom: an intake replay reads `DIFFERS`
+
+The engine's half: the laptop's Gate A artifacts for one CO attempt against
+the container's replay of the same inputs, compared by
+`tests/co_output_diff.py` with the state-prefix rule on. The report lists
+the differ's classes and files. A `content differs` on a workbook, a
+document or the Gate A payload is the laptop's engine and the repository's
+disagreeing on that input: the laptop runs the pre-Part-B engine with the
+operator's in-place edits (`docs/PHASE-14.md` → *The cutover diff*), so first
+check whether the difference is one the cutover diff already names (the
+intake rule, 1.1) or an edit the laptop's engine carries that the repository
+does not - the laptop is right until proven otherwise, and the finding goes
+on the cutover diff. `only on the laptop` of a PDF or a flow-written file is
+set aside and said in the notes; anything else only on one side is a
+finding. `ENGINE FAILED` carries the stderr tail.
+
+### Symptom: a row reads `not comparable`, with a cause
+
+The cause is one of the scorer's named ones: *captured after the laptop's
+run (race window)* - the item arrived in the quarter hour between a
+snapshot and the laptop's run, so its count and Q&A rows are compared
+against a later state; *the sender's company is in today's Responded
+emails*; *that CO is closed or cancelled in today's tracker*; *that CO Key
+is on no row*; *tracker unreadable*. None is a failure; each is counted in
+the report so a pattern is visible.
+
 ## Nightly database backup
 
 **What it is.** A Container Apps Job, `<baseName>-db-backup` (`dbBackupJob` in
