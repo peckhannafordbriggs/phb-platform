@@ -2489,6 +2489,71 @@ below because it is derived from the hostname alone and will not change.
 >
 > Thanks,
 
+### Request 6 — the read-only reader for the shadow run (sent 2026-10-29)
+
+(Six, because the two sections above both carry *Request 5* — the Needs
+Review registration and the redirect URI were sent the same day and
+numbered the same way. They stay as they are; this one takes the next number.)
+
+For Phase 12 Part E (`docs/phase-12-part-e-plan.md` § 2). The shadow run
+feeds a copy of the change-order tree from the live one, and the engine's
+own app holds **Write on the whole site**, so the feeder does not use it:
+it reads as a fourth registration whose grant is Read and nothing else,
+federated to the platform's identity like the other three. Graph refuses a
+write from it with 403 whatever the code asks. It is the one external
+dependency of Part E; the window's start date is the day after this lands.
+
+> **Subject: Read-only app registration for the change-order shadow run**
+>
+> Hi Zac,
+>
+> One more app registration, please, on the pattern of the Needs Review
+> one you did for us on 21 October — the same permission, a different
+> folder, and a wider but still read-only grant.
+>
+> **What it is for.** We are about to run the containerised change-order
+> engine in Azure against a *copy* of the SharePoint tree for a few weeks,
+> alongside the laptop that runs the real process, and compare the two.
+> To keep the copy fed with new items, something has to read the live
+> folder. The engine's own app (`phb-co-engine`) has Write on the site, so
+> we do not want to read with it; we want an identity that can only read.
+>
+>     New app registration:   phb-co-engine-reader
+>     Owner:                  an M365 group, not a person
+>     Graph application permission:
+>                             Files.SelectedOperations.Selected  (admin consent)
+>     Grant, as a separate step after consent:
+>                             Read on  AI Sandbox / Documents / CO Managment Process
+>                             (the folder and everything under it)
+>     Credential:             a federated identity credential for the platform's
+>                             user-assigned managed identity - the same identity,
+>                             issuer and subject as the Change Order Mail app's and
+>                             the Needs Review app's. No client secret in Azure.
+>     For developer machines: one client secret, sent over Teams, not email.
+>
+> The permission grants nothing by itself; the folder grant is what makes
+> it work, and without it the app authenticates and then gets 403 on every
+> request. **Read, not Write** — that is the whole point of this one.
+>
+> Please send the client id and tenant id, and confirm the folder's drive
+> id and item id if that is easy; the browser URL is enough otherwise.
+>
+> This is the one thing the shadow run is waiting on, so if it can be done
+> this week we can start the window on Monday.
+>
+> Thanks,
+> Mahi
+
+**What to check when it lands**, before anything is scheduled: in Graph
+Explorer as the app, `GET /drives/{drive id}/root:/CO Managment Process:/children`
+answers 200 and a `PUT` of any name under it answers 403 — the grant is Read
+and the refusal is the fence. Then the first hand-run read of the live Bid
+Tracker through the workbook API with its `eTag`, `cTag` and
+`lastModifiedDateTime` recorded before and after (plan § 2c step 2), and
+Phase 11's table-binding check repeated the same day.
+
+**Status: sent 2026-10-29.** Nothing has landed yet.
+
 ## Open decision — the `PnP.Powershell` certificate on `phb-co-engine`
 
 **Status: open, as of 2026-10-21.** Nothing below has been asked of Vitis yet.
