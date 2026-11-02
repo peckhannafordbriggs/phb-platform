@@ -536,6 +536,26 @@ LibreOffice changes nothing it writes; cutover item 1.7's premise is
 corrected in `docs/PHASE-14.md`, `docs/12-ai-layer-inventory.md` § 3c and
 `docs/phase-12-part-c-verification.md`.
 
+**Cutover prep is built, on hold (2026-11-02).** Two draft pull requests
+titled `[HOLD until Part E passes]`, one per repository, not to be merged
+until the shadow window passes. In `phb-co-engine`: the one code change that
+is cutover — `GraphFileStore` no longer refuses `CO Managment Process` by
+name, the root jail is its only fence, the shadow package keeps its own
+refusal of a copy root in the live tree, the Part D classify job keeps to
+`scratch`, `tests/test_cutover.py` holds all of it and the real engine
+pointed where the laptop points runs past the old fence — plus the two
+production job scripts and the spec mirror's § 1.5 and § 3.1.1 (items 2.3
+and 2.4, placed so no prompt extract moves). In this repository: the two
+production jobs behind **`enableCoLive`** (off, every live value blank, held
+by the deploy guards in source and compiled ARM), `docs/PHASE-14.md` § 8
+(every item's prep status, item 0.5 answered) and § 9 (the order of
+operations on the day), `runbook.md` → *Cutover: turning the live engine
+on*, `HANDOVER.md` rewritten for the person who inherits the rollback, and
+`docs/phase-14-spec-and-prompt-edits.md`. Three decisions wait on the
+owner: the lock (1.6, recommended unchanged), LibreOffice in the image (1.7,
+recommended off), and who runs the laptop rollback after December (4.1).
+`WHY-ITS-BUILT-THIS-WAY.md` § 77.
+
 **Part C therefore has nothing left that gates Phase 14.** The one item it
 left open, the `PnP.Powershell` certificate on the `phb-co-engine` app
 registration, was **decided on 2026-11-02: it stays**, an accepted exposure

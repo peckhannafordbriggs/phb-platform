@@ -2762,6 +2762,15 @@ override and none should be added. The one legitimate time this message means
 the code must change is the Phase 14 cutover, when the refusal is removed
 deliberately, in `co_filestore.py`, with its test.
 
+**After the Phase 14 cutover this message does not exist.** The refusal is
+removed (the cutover's one code change, `docs/PHASE-14.md` 1.2), because the
+production jobs run the engine on the live tree; the store's only fence is
+then its root. A mistyped root fails as *is outside this store's root* (the
+next entry), and a root inside the live tree runs there - which is why
+`coLiveRoot` is typed once, on the day, and read back from the first run's
+`LIVE TREE` banner (*Cutover: turning the live engine on*). The shadow keeps
+its own refusal of a copy root inside the live folder, by its own check.
+
 ### The engine says `… is outside this store's root`
 
 **Symptom.** `refusing to run: --live-path … is outside this store's root`,
@@ -11061,6 +11070,118 @@ fail at once: `az containerapp job logs show`; a missing ANTHROPIC_API_KEY or CI
 setting is named in the first lines.
 
 ---
+
+## Cutover: turning the live engine on (Phase 14)
+
+**What it is.** The day the cloud engine takes over the real change-order
+process from the laptop. `docs/PHASE-14.md` is the checklist: § 9 is the
+order of operations, § 8 what was prepared on 2026-11-02 and what the owner
+still decides. This section is the operator's half - the commands, what each
+log must say, how to pause, how to roll back. Everything here is behind
+`enableCoLive` in `infra/main.bicep`, **off until the day**, two scheduled
+Container Apps Jobs from the `phb-co-engine` image:
+
+| Job | Trigger (UTC, for Eastern standard time) | Runs | Secret |
+|---|---|---|---|
+| `<baseName>-co-intake-scrub` | `0 12,17 * * 1-5` (07:00 and 12:00 ET) | `infra/co-intake-job.sh`: the intake engine, `--store graph`, rooted on `coLiveRoot`, the report under `<root>/AI Files/CO Intake Engine/run_reports` | none |
+| `<baseName>-co-response-classifier` | `0 13,18 * * 1-5` (08:00 and 13:00 ET) | `infra/co-classifier-job.sh`: the classifier on `<root>/Change Order Step 2`, the two trackers through the Graph workbook API (`--trackers graph`, read-only) | `CO-ANTHROPIC-API-KEY` by reference |
+
+Both: one execution at a time, no retry, a 30-minute timeout. **The laptop's
+two tasks are disabled before the flag goes on** (`docs/PHASE-14.md` 3.4):
+the engine's lock file coordinates one machine and the scheduler's
+`parallelism: 1` coordinates one job; nothing coordinates a laptop and a job.
+
+**The image.** From the `phb-co-engine` checkout at merged `main`, after both
+`[HOLD until Part E passes]` pull requests are in:
+
+```
+az acr build --registry <registry> --image phb-co-engine:cutover-<yyyymmdd> --build-arg INCLUDE_LIBREOFFICE=false .
+docker run --rm <registry>.azurecr.io/phb-co-engine:cutover-<yyyymmdd>
+```
+
+The build argument follows the owner's decision on item 1.7 (nothing in the
+engine calls LibreOffice; `false` is what every image so far was built
+with). The second command is the image's own check and must print
+`phb-co-engine image OK` - it asserts the five job scripts are present. Then
+the suite inside it: `docker run --rm -w /app <image> python
+tests/test_cutover.py`, and `tests/test_intake_selection.py` for item 1.1.
+The tag is not the proof; the tests inside are. The tag goes into
+`coEngineImage`.
+
+**Turning it on, in order** (`docs/PHASE-14.md` § 9 has the reasons):
+
+1. The laptop's last runs have landed, and both tasks are **disabled** in
+   the Cowork app - disabled, not deleted; they are the rollback.
+2. Read the live root once, as the reader app in Graph Explorer: no fresh
+   `.run_workflow.lock` (one older than 30 minutes or marked released is
+   reclaimed by the first run; a fresh one makes the first run exit with
+   *Another run_workflow.py run is already in progress*, and the next
+   schedule tries again), and no `Bid Tracker.xlsx` under `Change Order
+   Intake` (item 1.3).
+3. The gitignored parameters file: `enableCoShadow` **false** (the three
+   shadow jobs go; the copy stays for the rollback month), `enableCoLive`
+   **true**, `coLiveRoot` (the live folder's drive-relative path, with its
+   one A), `coLiveBidTrackerPath` and `coLiveMasterPath` (the shadow's two
+   values), `coEngineImage` the cutover tag, `containerImage` read from the
+   running app as always (`infra/README.md` → *Deploy*). Deploy with the
+   routine command and read the two job names back from the outputs.
+4. Start the intake job by hand, before its schedule:
+   `az containerapp job start -n <baseName>-co-intake-scrub -g <resource group>`,
+   then `job execution list` and `job logs show … --container intake`. The
+   log must read `FileStore : graph`, `root='CO Managment Process'` and
+   **`LIVE TREE: this run is the production engine …`** - if it reads
+   `A COPY`, the root is wrong; stop there. Then `Live folder:`, `Transfer
+   detect:`, one line per CO, `### INTAKE EXIT 0`, and a report under
+   `run_reports` in the live tree. Read the state file of any CO it
+   processed: the intake it names is the newest by name (item 1.1) and the
+   stamps are UTC (item 1.4).
+5. The classifier the same way (`-n <baseName>-co-response-classifier`,
+   `--container classifier`): `### CLASSIFY`, the JSON lines, `### RUN
+   SUMMARY` in the spec's locked format, `### CLASSIFY EXIT 0`, and
+   `run_summary.md` rewritten in `Change Order Step 2`. A `### TRACKER
+   UNREADABLE` line means the workbook paths are wrong: every vendor reply
+   in that pass went to review, correctly, and the fix is the two
+   parameters.
+6. Leave the schedule to it; the next 12:00 UTC run is the first unattended
+   one. Phase 13 Part B's alerts watch for a failed run and for silence.
+
+**Pausing after cutover stops the pipeline.** Before cutover, pausing the
+shadow was free. After it, `enableCoLive` false and a deploy, or
+`az containerapp job stop` on a running execution, means no intake runs and
+no classifier runs: a PM's request sits in `1 - New Requests` and a vendor's
+reply sits in `_to_classify` until the next run. Nothing is lost - both
+queues are files, and the next run drains them - but nothing moves, and the
+reminder and handoff flows keep their own clocks. Say so to whoever is
+waiting on a change order.
+
+**Rolling back** (`docs/PHASE-14.md` 4.1 and 4.2; the laptop stays as it was
+for a month after cutover): `enableCoLive` false in the parameters file and
+deploy (the two jobs are deleted, nothing else changes); confirm no execution
+is still running (`job execution list`); then re-enable the two tasks in the
+Cowork app on the laptop. The laptop's engine is the pre-Part-B engine with
+the laptop's rules, and the state files and queues it finds are the ones the
+cloud left, which it reads the same way. Check the live root for a lock the
+last cloud run may have left; one older than 30 minutes is reclaimed.
+
+### Symptom: an intake log reads `LIVE TREE` while a laptop task is still enabled
+
+Two instances on the live tree - the one situation `docs/PHASE-14.md` 3.4
+exists to prevent. Stop the running execution (`az containerapp job stop`),
+set `enableCoLive` false and deploy, then read both sides' run reports for
+the overlap window before anything else: the lock file is best-effort and
+may not have stopped the second run, and the duplicate detection may have
+marked a real CO a duplicate.
+
+### Symptom: `refusing to run: --live-path '…' is outside this store's root`, from a live job
+
+`coLiveRoot` does not match the folder the job's paths are built under - a
+typo in the parameters file. Nothing ran. Fix the value and redeploy.
+
+### Symptom: `Another run_workflow.py run is already in progress`, on the first cloud run
+
+The laptop's last run left `.run_workflow.lock` fresh (younger than 30
+minutes). The run exited without changes, correctly. Wait for the next
+schedule, or start the job again after 30 minutes.
 
 ## The change-order shadow run (Phase 12 Part E)
 

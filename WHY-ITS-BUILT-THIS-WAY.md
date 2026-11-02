@@ -2908,3 +2908,62 @@ inverted row becomes a line in a report nobody read that morning.
 `docs/phase-12-part-e-plan.md` § 2, § 6, § 7; `runbook.md` → *The
 change-order shadow run*; `phb-co-engine` → `tests/test_shadow_reader.py`,
 `tests/test_shadow_feed.py`, `tests/test_shadow_collect.py`.
+
+## 77 · At cutover the fence moves from the store to the shadow, and the repoint is a flag
+
+**Decision (2026-11-02, built on hold until Part E passes).** Phase 14's one
+code change removes `GraphFileStore`'s by-name refusal of `CO Managment
+Process` — at construction and at every call — and puts nothing in its place
+inside the store. The root jail stays and is the store's only fence. The
+refusal that keeps the *shadow* off the live tree moves into the shadow
+package itself (`co_shadow.capture.copy_root`, now on any path segment), the
+Part D classify job's script refuses a root without `scratch`, and the
+production jobs are two scheduled Container Apps Jobs behind `enableCoLive`,
+off by default, with the live root a parameter filled on the day and spelled
+nowhere in code.
+
+**Why not an override on the store** — an environment variable that unlocks
+the live tree. Because an override is configuration, and the project's rule
+since Part C is that every guard is incapacity. After cutover a store rooted
+on the live tree *is* the pipeline; a store that refuses it unless told not to
+has not made the live tree safer, it has made every production run depend on
+a flag being set, and the first job spec copied without the flag stops the
+pipeline for a reason that reads like a bug. The jail says what a job can
+touch; the job's root says what it is for; the banner (`LIVE TREE` or
+`A COPY`) says which it was, in the log, every run.
+
+**Why the refusal moves to the shadow rather than disappearing.** The
+shadow's copy and the production engine share an identity (the engine app,
+Write on the site) and an image. The one thing that must never happen after
+cutover is a shadow job building its copy inside the live tree — a second
+writer on the live folders. The store cannot know which caller it serves;
+the shadow package can, so the check lives there, tested on both stores and
+in the reader's own suite, and removing it fails four tests by name.
+
+**Why the production jobs are in the Bicep now, off.** Cutover is a code
+change, a new image and the repoint, in that order; the repoint needs
+something to point. Writing the jobs on the day would mean writing
+infrastructure under time pressure with the laptop disabled. Written now, the
+deploy guards hold them — conditional on the flag, the crons an hour apart as
+on the laptop, the classifier's key by reference, the intake job with no
+secret, `CO_BID_TRACKER_PATH` never set, nothing naming the live folder — the
+compiled ARM is checked, and the day is a parameters file and a deploy.
+
+**Why the spec edits are new subsections.** Items 2.3 and 2.4 edit the live
+spec, and the classifier's prompts are verbatim extracts of named spec
+sections with an immutable hash per version. An edit inside § 1.1–1.4 or
+§ 3.1 would change an extract and force a new prompt version at cutover — a
+prompt change with no replay behind it, on the day. § 1.5 and § 3.1.1 say the
+same things where no extract reaches, and a test holds the placement.
+
+**What breaks if you undo it.** Put the by-name refusal back and the
+production jobs refuse to start, by design, with a message that reads like
+the Phase 12 fence working. Drop `copy_root`'s refusal and a mistyped
+`coShadowRoot` is a second writer on the live tree. Turn `enableCoLive` on
+with the laptop's tasks enabled and two engines interleave on the same
+queues — the one thing `docs/PHASE-14.md` 3.4 exists to prevent.
+
+`docs/PHASE-14.md` § 8, § 9; `runbook.md` → *Cutover: turning the live engine
+on*; `phb-co-engine` → `co_filestore.py` (the comment above
+`LIVE_LIBRARY_FOLDER`), `tests/test_cutover.py`, `infra/co-intake-job.sh`,
+`infra/co-classifier-job.sh`.
