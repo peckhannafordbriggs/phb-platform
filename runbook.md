@@ -11119,7 +11119,14 @@ of order as Log Analytics returns them; the file in the copy is the record.
 3. Build the image into the registry from the `phb-co-engine` checkout:
    `az acr build --registry <registry> --image phb-co-engine:<tag> --build-arg INCLUDE_LIBREOFFICE=false .`
    The tag goes into `coEngineImage` in the gitignored parameters file as
-   `<registry>.azurecr.io/phb-co-engine:<tag>`.
+   `<registry>.azurecr.io/phb-co-engine:<tag>`. **From a checkout that
+   carries the fix of 2026-11-02** (`phb-co-engine` → *The image carries
+   the job scripts the Bicep jobs run by path*): before it the image had no
+   `/app/infra` at all, and every job in the table above would have failed
+   on its first line. Prove the image before any job names it:
+   `docker run --rm <registry>.azurecr.io/phb-co-engine:<tag>` runs the
+   image's own check, which prints `phb-co-engine image OK` and now asserts
+   the scripts are present.
 4. Create the copy's root with its README and the deletion date (thirty
    days after cutover, decision 8): from a machine with a developer token,
    `python -m co_shadow.feed --store graph --drive-id <drive> --graph-auth static --root "<coShadowRoot>" --init --delete-after <date>`.
@@ -11152,6 +11159,17 @@ fold the week into the verification record.
 redeploy with the flag off). After cutover the same flag will govern the
 live schedule, and pausing it then stops the pipeline (`docs/PHASE-14.md`
 3.2).
+
+### Symptom: a job execution fails at once with `sh: /app/infra/<script>: not found`
+
+The image the job names predates the fix of 2026-11-02: the Dockerfile
+never copied `infra/` and the deny-by-default `.dockerignore` never let it
+back in, so the image carried no job scripts although the Bicep runs every
+job as `sh /app/infra/<script>`. Nothing ran and nothing live or in the
+copy was touched - the shell stopped before Python started. Rebuild the
+image from a `phb-co-engine` checkout that includes the fix (step 3
+above), confirm with `docker run --rm <image>` that the check prints
+`phb-co-engine image OK`, put the new tag in `coEngineImage` and redeploy.
 
 ### Symptom: the feed exits 3 and its log reads `STOP PRESENT`
 

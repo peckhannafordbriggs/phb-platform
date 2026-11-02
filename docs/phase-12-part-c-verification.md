@@ -154,6 +154,13 @@ failed verification. No `400` recurred on folder creation.
   produced or compared. The laptop's run produces one. Phase 14's image
   decides whether to install it; if it does, the comparison must be re-run
   with it on both sides.
+  **Corrected 2026-11-02: the laptop's run produces no PDF either.**
+  `render_xlsx_to_pdf` has no caller, in `f8645b7` or in the repository,
+  and the A3 fixture store holds no rendered PDF (its one `.pdf` is a PM's
+  attachment copied through), so nothing was skipped on either half and
+  no re-run is owed to LibreOffice. The premise was the inventory's § 3c
+  row, corrected the same day; `docs/PHASE-14.md` 1.7 carries the
+  decision that remains.
 - **The later gates.** The copies' `CO In Progress` and `CO Finalized` were
   empty, so transfer detection ran only in the negative. Nothing here
   exercises the Gate C/D paths.

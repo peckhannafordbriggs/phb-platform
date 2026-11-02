@@ -321,7 +321,7 @@ retired candidate path resolves.
 | `Cleared_Rows_Log.csv` | live root | Append. Timestamp + the 12 tracker columns. **Written before any row is deleted; if the log write fails, the rows are not removed** |
 | `run_reports\Workflow_Run_Report_<YYYY-MM-DD_HHMM>.md` | `CO_REPORT_DIR` | Best-effort — see §5 |
 | `.run_workflow.lock` | live root | See §5 |
-| A rendered `.pdf` | attempt dir | LibreOffice headless, optional |
+| ~~A rendered `.pdf`~~ | ~~attempt dir~~ | **Never written — corrected 2026-11-02.** `render_xlsx_to_pdf` is defined and called from nowhere, in `f8645b7` (the laptop's engine) as in the repository, so the intake engine renders no PDF on either side; the one `.pdf` in the A3 fixture store is a PM's attachment copied through by `copy_misc_attachments`. The row stood from Part A on a reading of the function, not of its callers; found while deciding the cutover image (`docs/PHASE-14.md` 1.7) |
 | `/tmp` staging files | `/tmp` | Every workbook and PDF write stages outside the synced folder first |
 | Archive moves | `…\Archive\` inside each bucket, `state\Archive\` | `shutil.move`, deliberately: on the synced library a plain delete is the risky operation |
 
@@ -405,7 +405,7 @@ non-event, honouring the hold list, and writing the run summary. **[observed]**
 | `openpyxl` (3.1.5 observed in generated file metadata) | Every workbook read and write | Hard requirement |
 | `python-docx` | The human-readable summary | **Optional** — falls back to a plaintext `.txt` |
 | `co_state.py` | The queue itself | **Hard** — `main()` raises `SystemExit` if the import fails |
-| `libreoffice` binary, headless | `xlsx → pdf` | Optional — returns `None`, workflow continues |
+| `libreoffice` binary, headless | `xlsx → pdf`, in `render_xlsx_to_pdf` | **Not a dependency: the function has no caller** (2026-11-02, § 3c). Were it ever called, an absent LibreOffice returns `None` and the workflow continues |
 | `reportlab` | The classifier's Q&A and completeness PDFs | Needed by `render_qa_pdf.py` / `render_completeness_pdf.py` |
 | `/tmp`, writable | Staging for **every** workbook and PDF write | See §6 |
 | The Cowork mount `/sessions/*/mnt/<name>` | Path discovery | Glob; session names change every run, so nothing is hardcoded |
