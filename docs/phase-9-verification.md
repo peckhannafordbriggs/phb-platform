@@ -149,7 +149,7 @@ only work as a pair.
 ## 3. Sync latency
 
 This was the number that decided Part B. **It decided against it** — see
-`docs/PHASE-9.md`, *Part B — evaluated and DECLINED*.
+`runbook.md`, *Part B (Graph change notifications) was evaluated and DECLINED*.
 
 ### Measured: platform write → visible in a folder listing
 
@@ -177,8 +177,8 @@ platform's own poll interval.
 **Acted on.** `POLL_INTERVAL_MS` went from 60 seconds to **20** — 180 requests an
 hour per focused tab, 30 per 10-minute window, 0.3% of the ~10,000-per-10-minutes
 budget Exchange allows per app per mailbox. Part B was declined on the strength of
-this measurement; see `docs/PHASE-9.md` for the reasoning and the conditions that
-would reopen it.
+this measurement; see `runbook.md` → *Part B (Graph change notifications) was evaluated
+and DECLINED* for the reasoning and the conditions that would reopen it.
 
 ### Not measured — needs a person in Outlook
 

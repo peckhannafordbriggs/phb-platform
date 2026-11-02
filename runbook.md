@@ -973,7 +973,7 @@ POST /users/{mailbox}/messages/{id}/move   { "destinationId": "deleteditems" }
 
 **A move, not `DELETE`, and that is a correction the live mailbox forced.**
 
-`docs/03` and `PHASE-8.md` both said `DELETE /messages/{id}` moves a message to
+`docs/03` and the Phase 8 spec both said `DELETE /messages/{id}` moves a message to
 Deleted Items. It does not. Verified twice in Phase 8, on a draft and on a
 received message: after `DELETE`, the message's `parentFolderId` resolves to a
 folder named **`Deletions`** — Recoverable Items \ Deletions, the dumpster, 209
@@ -5359,6 +5359,16 @@ nothing suggests it differs — but if one of them ever comes back in minutes
 rather than milliseconds, that is a genuine reason to reopen this and the numbers
 here do not cover it. `scripts/co-verify-phase9.ts watch` is the instrument.
 
+**If it is ever reinstated**, the requirements the Phase 9 spec set, kept here
+so they do not have to be rediscovered: subscriptions on the mailbox, renewed on
+a schedule, because mail subscriptions expire in roughly three days; lightweight
+notifications only, ids and no encrypted resource data, because the certificate
+management is not worth it; **treat every notification as untrusted** — validate
+`clientState`, return 202 immediately, and use the notification only as a signal
+to go read Graph, never trusting payload content; **keep polling as the floor**,
+because delivery is best-effort and a dropped notification should cost minutes,
+not days; and a reconciliation pass that catches what notifications missed.
+
 ---
 
 # Admin panel (Phase 10)
@@ -5654,7 +5664,8 @@ much as to a mail client.
 ## Has the platform disturbed the automation?
 
 **Run this after any phase that writes to the mailbox, and before trusting a
-release.** It is the check `docs/PHASE-11.md` specifies, and it was first run on
+release.** It is the check Phase 11 specified (the spec is gone; the steps below are
+its requirements), and it was first run on
 2026-08-27/28 — that run is recorded in `docs/phase-11-verification.md`, which is
 also the worked example of what a clean result looks like.
 

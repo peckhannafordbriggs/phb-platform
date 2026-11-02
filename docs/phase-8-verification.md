@@ -66,7 +66,7 @@ Moved fixture 1 Inbox → `Projects / CCHMC Liberty Expansion / CCHMC RFI 229` �
 `Processed CO's` → back to Inbox.
 
 **With an immutable id the id survives exactly**: `idChanged: false`, and the id
-still resolved afterwards with the new `parentFolderId`. That is PHASE-8's claim,
+still resolved afterwards with the new `parentFolderId`. That is the Phase 8 spec's claim,
 confirmed.
 
 **With an id from `$search` it does not** — see finding 2.
@@ -97,7 +97,7 @@ fifth is the design decision that wrong prediction forced.
 
 ### 1. `DELETE /messages/{id}` does not put a message in Deleted Items
 
-`docs/03` and `PHASE-8.md` both said it did. It does not.
+`docs/03` and the Phase 8 spec both said it did. It does not.
 
 Observed, on a draft and again on a received message: after `DELETE`, the
 message's `parentFolderId` resolved to a folder named **`Deletions`** holding 209

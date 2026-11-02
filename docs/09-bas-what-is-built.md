@@ -6,8 +6,24 @@ says *what exists*.
 
 Failure modes are in `runbook.md` under *BAS — Building Automation module*.
 
-B7's plan, as written before it was built, is `docs/B7_settings_and_hierarchy_plan.md`.
-B8's is `docs/B8_point_management_plan.md`; B8.1 (the schema), B8.2 (the
+**B7's five decisions (8 September 2026), from a plan since removed:** a fixed
+Organisation → Project → Building → Station hierarchy rather than a
+self-referencing tree (D11), because explicit levels query and filter cleanly;
+collection through a central station, with other JACEs linked over the
+NiagaraNetwork in Workbench (D12), because direct oBIX to every JACE needs
+`obixDriver-rt` installed and a commissioning firmware upgrade, with downtime,
+on each production controller; station credentials encrypted in the platform
+and write-only through the API (D13), because a config file on the collector
+host fails at thirty stations and defeats the feature; a separate module-admin
+grant for create and edit (D14), because a misconfigured station stops
+collection silently; and the collector reading its targets from the database
+rather than its config file (D15), at the cost of one encryption key held in
+two places. Two cautions from the same plan: a JACE linked in Workbench but
+never placed in the UI should show as discovered and unassigned rather than
+vanish, and the lab station's licence caps at 1,250 points and 26 devices, so
+a large estate implies Supervisors nobody has yet bought.
+
+B8's plan is `docs/B8_point_management_plan.md`; B8.1 (the schema), B8.2 (the
 Points list), B8.3 (show/hide), B8.4 (labels) and B8.5 (roles, equipment,
 bulk assign and suggestions) are built; B8.6 is not started.
 

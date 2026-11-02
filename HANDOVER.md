@@ -1,12 +1,12 @@
 # PHB Internal Platform — Handover
 
 *For whoever owns this after December 2026. Written August 2026 by Mahi Sheth, the
-co-op intern who built it.*
+co-op intern who built it; last revised 2 November 2026.*
 
 Read this first. It is deliberately short and deliberately honest — about what works, what
 doesn't, what will break, and what you can safely ignore.
 
-Three other documents matter, in this order:
+The other documents that matter, in this order:
 
 | When | Read |
 |---|---|
@@ -14,6 +14,8 @@ Three other documents matter, in this order:
 | You are about to change something | `WHY-ITS-BUILT-THIS-WAY.md` |
 | You need to run it locally | `DEVELOPER-SETUP.md` |
 | You are about to build a module | `PLATFORM-CONTEXT.md` |
+| You are working on anything at all | `CLAUDE.md` — the rules, and *Current state* for where things stand |
+| It is cutover day for the change-order engine | `docs/PHASE-14.md` |
 
 ---
 
@@ -29,8 +31,9 @@ change-order automation (eleven Power Automate flows, SharePoint, and two schedu
 tasks) creates draft emails; a human reviews and sends them. This module lets that happen
 in the platform instead of Outlook.
 
-**BAS** — Building Automation. A collector reads sensor history out of a building
-controller every 15 minutes and stores it in the platform database. Two dashboards read it.
+**BAS** — Building Automation. A collector on the office PC reads sensor history out
+of a building controller every 15 minutes and stores it in the platform database — the
+Azure one, since late September 2026. The module's five tabs read it.
 
 **Cost Intelligence** — module 3, in progress, built by Karthik
 (`krachamolla@phb1899.com`) in this same repository. Not in service yet. It is the first
@@ -95,7 +98,7 @@ awake and firing on cadence. See `docs/09-bas-what-is-built.md`, *Proven in oper
 Employee browser
       │  Microsoft sign-in (Entra ID)
       ▼
-Next.js app (Azure Container Apps — once deployed; see below)
+Next.js app (Azure Container Apps, https://platform.phb1899.com)
       │
       ├──► PostgreSQL  ── platform data: employees, grants, audit, BAS readings
       ├──► Microsoft Graph ──► changeorder@phb1899.com mailbox
@@ -108,7 +111,11 @@ Change-order automation (11 Power Automate flows) ──► same mailbox
 ```
 
 **Deployed as of 9 September 2026, in `eastus2`.** That diagram is now the shape of the
-running system rather than a plan. All seven Azure resources are up, the migrations are
+running system rather than a plan. It answers at **`https://platform.phb1899.com`**
+(custom domain and managed certificate since 2026-10-21; the `azurecontainerapps.io`
+address keeps working), and **sending is on**: `PHB_ALLOW_SEND` has been `true` in
+production since 2026-10-14, after a supervised `ZZTEST` send from the deployed platform
+on 2026-09-29. All seven Azure resources are up, the migrations are
 applied, and the production seed has run once. Sign-in to the deployed site works and
 has for weeks: the admins, Mahi and two testers use it. The container app serves
 whatever the last merge to `main` deployed — real images built by CI, not the
@@ -181,7 +188,9 @@ names them):
 |---|---|---|
 | SSO | Employee sign-in | Client ID `220921c1-f23e-4d01-b354-736884ba3d00`. Client secret expires **13 August 2028** |
 | Change Order Mail | Graph access to the mailbox | Client ID `d1795907-d017-4a5e-9da3-033c4bee4ec1`. Scoped by Exchange policy to that one mailbox. **No SharePoint access, by design** |
-| phb-platform-co-review | Read-only Graph access to ONE SharePoint folder, `_needs_review`, for the Needs Review tab | Requested 2026-10-21; client ID goes here when it exists. `Files.SelectedOperations.Selected`, granted Read on that folder only. Production signs in with the managed identity; no secret. `runbook.md` → *What to ask IT for* → Request 5 |
+| phb-platform-co-review | Read-only Graph access to ONE SharePoint folder, `_needs_review`, for the Needs Review tab | Requested 2026-10-21 (`runbook.md` → *What to ask IT for* → Request 5) and **still waiting on Vitis on 2026-11-02**: the folder grant and the developer-machine secret. `Files.SelectedOperations.Selected`, Read on that folder only. Production signs in with the managed identity; no secret. Until it lands the tab says it is not connected |
+| phb-co-engine | The containerised change-order engine's own identity: `Sites.Selected`, **Write** on the AI Sandbox site, a federated credential naming the platform's production identity | Client ID in `runbook.md` → *What expires, and when*. Also carries a `PnP.Powershell` certificate valid to 19 October 2029, the tool credential Vitis used for the site grant; **kept on purpose** by the owner's decision of 2026-11-02 (`runbook.md` → *Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays*) |
+| phb-co-engine-reader | **Read** on the live `CO Managment Process` folder, for the Phase 12 Part E shadow run's feeder, so nothing that can write ever reads the live tree | **Request 6, sent 2026-10-29, not yet landed on 2026-11-02.** The shadow run starts the business day after it does |
 
 **The mailbox fence is load-bearing.** Graph application permissions reach every mailbox in
 the tenant by default. An Exchange ApplicationAccessPolicy restricts this app to
@@ -199,8 +208,10 @@ This is the section to keep. Everything here is a known future failure with a kn
 |---|---|---|---|
 | SSO client secret expires | **13 August 2028** | Local sign-in fails with `AADSTS7000215`. **Production is not affected**: it carries no secret and authenticates the token exchange with the managed identity, matched by a federated identity credential on the SSO app registration — `runbook.md` → *Production sign-in authenticates with the managed identity*. If production ever fails with a secret-shaped error, the fault is that a secret was deployed at all. | Ask IT for a new secret, for developer machines only. `runbook.md` → *What expires, and when* |
 | BAS database stopped | If anyone applies a cost policy that stops it | Silent data destruction at the controller | Restart immediately; check for gaps on the Collection Health screen |
-| Azure spend alert | If misconfigured, or growth | Email at $150/month | Expected spend is $60–100 |
-| Collector host offline | Laptop closed, machine rebooted, network down | Gaps appear on Collection Health | Restart the collector. Anything past ~42 hours is already gone |
+| Azure spend alert | If misconfigured, or growth | Email at $150/month | The resource group measured about $12 a month on 30 September 2026, nearly all of it the database; one warm replica would add about $10 (`runbook.md` → *Keeping one replica warm*) |
+| Collector host offline | The office PC that runs the collector is off, rebooted, or off the building network | Gaps appear on Collection Health | Restart the collector. Anything past ~42 hours is already gone |
+| **Both Anthropic keys** | **The day Jim leaves the organization** — both are personal keys linked to him, kept so by the owner's decision of 2026-10-29 as an accepted risk | The BAS Analyze tab and the change-order classifier both fail at their next call with `401 authentication_error`, with no warning beforehand. Nothing else is affected | Swap in new keys: `runbook.md` → *Both Anthropic keys fail at once as `401 authentication_error`*. `docs/PHASE-14.md` item 0.6 records the decision |
+| `PnP.Powershell` certificate on `phb-co-engine` | Expires 19 October 2029 | Nothing: no code of ours presents it. The exposure is the three years it stays valid | Kept on purpose, 2026-11-02; the conditions that would reopen it are in `runbook.md` → *Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays* |
 | Node or dependency EOL | Eventually | Build or deploy failures | Routine maintenance |
 
 **The Graph client secret is deliberately not in that table.** Production
@@ -226,8 +237,10 @@ message list, reading pane, search, attachments. Draft review, editing and sendi
 verified end to end against the live mailbox. Reply, reply-all, forward, compose, move,
 delete. Conversation grouping.
 
-1,274 automated tests as of 2026-09-14, plus verification records in `docs/` for Phases
-1, 8, 9, 11 and 12 Part B.
+Verification records in `docs/` for Phases 1, 8, 9 and 11, and for Phase 12 Parts B, C,
+D and E. The **Needs Review** tab (2026-10-21) lists the notes the change-order
+classifier leaves in `_needs_review` beside the email each one is about, read-only by
+construction; it waits on Vitis (§ 4) and says *not connected* until then.
 
 **The UI redesign shipped too**, across several phases rather than as one. The palette is
 sampled from the logo and every value carries the WCAG measurement that justifies it;
@@ -276,7 +289,8 @@ data job.
 - **BAS fault rules and anomaly detection** — the second half of the original *Ask*
   design in `docs/08`. B5 shipped as the Analyze tab (one `SELECT` per question, see
   the BAS section) and stopped there.
-- **Moving the change-order AI off the laptop** — see below. Parts A and B are done.
+- **Cutover of the change-order AI to Azure** — see below. Phase 12 Parts A to D are done
+  and Part E is built; cutover is Phase 14 and has not started.
 
 ### Production deployment (Phase 7 Part B) — deployed, CI live, sign-in working
 
@@ -290,7 +304,9 @@ Part A built the Dockerfile, the CI pipeline and the Bicep. Part B deployed them
 | Region | `eastus2`, not `eastus` — PostgreSQL Flexible Server is **offer-restricted** in `eastus` for this subscription. A restriction, not a quota, so more capacity cannot be requested |
 | Sign-in | Works, and has for weeks: the admins, Mahi and two testers use the deployed site. The production redirect URI is therefore in place |
 | Image | Real images built from `main` by CI; the deploy app registration is done (`AZURE_CLIENT_ID` set on 16 September 2026), so a merge to `main` runs a real deploy. The placeholder last appeared in the 13 October incident, `runbook.md` → *A template deployment fails activation* |
-| Remaining | The Graph federated credential, written out in `runbook.md` → *Request 2*; whether it is in place is not recorded here |
+| Address | `https://platform.phb1899.com` since 2026-10-21/22. The new `authUrl` lives **only** in the gitignored parameters file; a template deployment from an old copy moves sign-in back — `runbook.md` → *The custom domain answers with a certificate warning* |
+| Mailbox | Reached from production with the managed identity and the Graph federated credential: a supervised `ZZTEST` send from the deployed platform succeeded on 2026-09-29 and the send gate opened on 2026-10-14 |
+| Not yet on, by choice | The nightly database backup (`enableDbBackup`, § 7). A warm replica (`minReplicas: 1`, about $10 a month) is **undecided** |
 
 Three permission walls were hit getting here, all from *scope* rather than from the role
 names, and all worth knowing before the next Azure task: resource provider registration
@@ -324,8 +340,9 @@ tab answers. If either says it is not configured in production, a flag went back
 false or the revision predates the deployment that turned it on; `infra/README.md` has
 the steps to re-set and confirm each. Change Orders has its **own** Anthropic
 key since 2026-10-16, `CO_ANTHROPIC_API_KEY` (`CO-ANTHROPIC-API-KEY`,
-`coAnthropicApiKeyInKeyVault`), wired the same way; the secret is in the vault, parked,
-and read by nothing until Phase 12 Part D, so its flag stays false. It is a different
+`coAnthropicApiKeyInKeyVault`), wired the same way; the secret is in the vault and the Phase 12
+Part D classifier job reads it by Key Vault reference; the web app never reads it, so its
+flag stays false. It is a different
 key from the BAS one on purpose, and neither falls back to
 the other. All of it is in `runbook.md` → *Moving
 the BAS data to the Azure database* and the sections after it, and *Secrets set by hand
@@ -339,16 +356,30 @@ app log settles that, and the crons match what `09 Scheduled Task Prompts VERBAT
 recorded — that is a document in the SharePoint `CO Process Handoff` corpus (see § 9),
 not a file in this repository. Moving them into Azure is Phases 12–14.
 
-**Phase 12 Parts A, B and C are done.** The engine is in version control for the first time
-(`phb-co-engine`), the inventory that every later part depends on is written
+**Phase 12 Parts A to D are done; Part E is built and waiting.** The engine is in version
+control (`phb-co-engine`), the inventory every later part depends on is written
 (`docs/12-ai-layer-inventory.md`), a dormant `Bid Tracker.xlsx` write was found and
-removed, and one file-access interface has been extracted with two implementations. The
-Graph one has run against SharePoint as the engine's own identity, from a container in
-Azure, and produced output equivalent to the local store's on all eight fixture COs
-(2026-10-28; `docs/phase-12-part-c-verification.md`). The two before-cutover decisions
-were closed the same day: the intake rule is in the repository, and the sentinel flows'
-trigger was observed firing on files the engine's identity wrote through Graph
-(`docs/phase-12-part-c-plan.md` → *Before cutover*). Parts D and E are not started.
+removed, and one file-access interface has two implementations — the Graph one ran
+against SharePoint as the engine's own identity from a container in Azure and matched the
+local store on all eight fixture COs (2026-10-28, `docs/phase-12-part-c-verification.md`).
+Part D (2026-10-29) turned the classifier into code with four model judgments, each
+behind a switch, each able to decline, every answer schema-checked, replayed three times
+against twenty of the laptop's own answers (`docs/phase-12-part-d-verification.md`).
+**Part E**, the shadow run, was built on 2026-10-29/30 — a read-only reader feeds a copy
+of the live tree, the container runs the classifier against it on the laptop's schedule,
+and a collector scores every item against the laptop's answer. It starts the business day
+after **Request 6**, the read-only reader app registration, lands from Vitis (sent
+2026-10-29); the floor is **ten laptop weekdays** after the first clean batch and the
+exit is path coverage. `docs/phase-12-part-e-plan.md` is the plan,
+`docs/phase-12-part-e-equivalence.md` is the bar, written before any comparison ran, and
+`docs/phase-12-part-e-verification.md` is where the weeks go. Phase 13 is not started as
+a phase: its schedule mechanism exists as the three shadow jobs, its failure and silence
+alerts do not.
+
+Two decisions were made on the way and are to be left alone unless something changes:
+both Anthropic keys stay personal keys linked to Jim (2026-10-29; the risk is in § 5),
+and the `PnP.Powershell` certificate on the engine's app registration stays
+(2026-11-02; § 4).
 
 It's the only work in this project that can break a pipeline the business depends on daily,
 so the sequence matters: extract a file-access layer from a ~196 KB Python script,
@@ -358,6 +389,16 @@ make that actively dangerous. Keep the laptop path documented as rollback for at
 month after cutover. **When cutover day comes, work from `docs/PHASE-14.md`**: it is the
 one list of everything the documents say must happen then, each item with its source,
 starting with the ways the laptop's engine and the repository's engine differ.
+
+### Waiting on someone else, and open decisions — as of 2 November 2026
+
+| What | Waiting on | Then what |
+|---|---|---|
+| Phase 12 Part E, the ten-weekday shadow run | **Request 6** from Vitis: the `phb-co-engine-reader` app registration with Read on the live folder (sent 2026-10-29) | `runbook.md` → *The change-order shadow run* has the day-one checks; the window starts the next business day |
+| The Needs Review tab | **Request 5** from Vitis: the folder grant on `_needs_review` and the developer-machine secret (sent 2026-10-21) | Set the three template parameters, redeploy, and the tab connects; `runbook.md` → *Needs Review* |
+| One warm replica (`minReplicas: 1`) | The owner's decision. About $10 a month; buys back a 30 s cold start after five idle minutes | `runbook.md` → *Keeping one replica warm — what `minReplicas: 1` costs* |
+| The nightly database backup | The owner turning `enableDbBackup` on | Then run the restore once, before you need it; § 7 |
+| Phase 13's alerts | Nobody has started them | `docs/PHASE-13.md` → *Part B* |
 
 ---
 
@@ -454,9 +495,13 @@ corpus is about the automation; this repository's `docs/` is about the platform.
    neglect destroys something irrecoverable.
 3. **Read `WHY-ITS-BUILT-THIS-WAY.md` before your first change.** Most of what looks odd is
    odd on purpose.
+4. **If the change-order engine moves to Azure on your watch, work from `docs/PHASE-14.md`.**
+   It is the one list for that day, and nothing on it was invented for it.
 
 ---
 
-*First written 28 August 2026; last revised 14 September 2026, when the platform was
-deployed and a second developer joined. Where I wasn't sure, I said so rather than
+*First written 28 August 2026; last revised 2 November 2026, when the documentation was
+cut down for handover — the specs for finished phases went, after every decision in them
+had been checked into this file, `WHY-ITS-BUILT-THIS-WAY.md`, `runbook.md` or a
+verification record. Where I wasn't sure, I said so rather than
 guessing — that convention runs through the whole `docs/` folder and is worth keeping.*

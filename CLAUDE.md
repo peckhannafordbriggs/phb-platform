@@ -175,6 +175,26 @@ actual behaviour needs the real mailbox.
 
 ## Current state
 
+**Where things stand on 2026-11-02, in one paragraph.** Production answers at
+`https://platform.phb1899.com` (the `azurecontainerapps.io` address still
+works), sign-in works there, **sending is on** (`PHB_ALLOW_SEND` has been `true`
+in production since 2026-10-14), and the BAS collector on the office PC writes
+to the Azure database. Phase 12 Parts A to D are done. Part E, the shadow run
+with its ten-laptop-weekday floor, is built and **waits on Request 6**, the
+read-only reader app registration from Vitis (sent 2026-10-29). The Needs
+Review tab is built, read-only, and **waits on Request 5** from Vitis: the
+folder grant and the developer-machine secret (sent 2026-10-21). Two decisions
+are made and recorded: both Anthropic keys stay personal keys linked to Jim, an
+accepted risk (`docs/PHASE-14.md` item 0.6), and the `PnP.Powershell`
+certificate on `phb-co-engine` stays (item 6.1). Two are open: whether to keep
+one replica warm (`minReplicas: 1`, about $10 a month, `runbook.md` → *Keeping
+one replica warm*) and when to turn on the nightly database backup. Cutover day
+works from `docs/PHASE-14.md`. The paragraphs below are the history, kept
+because the reasoning in them still holds; where one of them states a status
+this paragraph contradicts, this paragraph is current. The specs for finished
+phases 1 to 11 were removed on 2026-11-02; what they decided lives here, in
+`WHY-ITS-BUILT-THIS-WAY.md`, in `runbook.md` and in the verification records.
+
 **Phases 1–6 complete.** Platform shell, Entra SSO with the full login gate,
 self-provisioning and onboarding, employees / grants / audit, authorization middleware,
 admin screen, Graph connection, read-only mailbox with folder tree and search, and draft
@@ -202,9 +222,9 @@ template, each being expensive or impossible to correct later:
   property exists on the resource type at all, and the budget carries contacts
   with no action group
 
-Four employee rows exist, all `is_platform_admin`, all with `entra_oid` null
-until each person's first sign-in stamps it. No module grants: being an admin is
-not a grant.
+Four admin rows were seeded with `entra_oid` null; each person's first sign-in
+stamps it, and the admins have since signed in. No module grants came with the
+seed: being an admin is not a grant.
 
 **Three permission walls were hit in order, all from scope rather than from the
 role names**, and all written up in `runbook.md`: provider registration is
@@ -225,10 +245,9 @@ the `PRODUCTION_DATABASE_URL` **secret** is set, and the `production`
 **environment** exists with no protection rules. `AZURE_CLIENT_ID` was filled in
 on 2026-09-16, so the deploy job's `if:` guard now passes and **a merge to
 `main` runs a real production deploy** — image build, database migration,
-revision rollout — against a container app that still holds the placeholder
-image. Whether that is currently gated is the platform owner's decision; check
-the repository variables and the `production` environment before merging rather
-than assuming either state.
+revision rollout. The app has run CI-built images from `main` since the first
+merge after that date. Check the repository variables and the `production`
+environment before merging rather than assuming either state.
 
 **The OIDC credential is proven, not assumed.** A login-only probe job
 authenticated against live Entra on 2026-09-16, and what it found corrected this
@@ -307,8 +326,10 @@ It went from 60s to **20s** — 180 requests an hour per focused tab, 0.3% of th
 ~10k-per-10-minutes budget — and a subscription lifecycle, a three-day renewal
 job, a public validation endpoint and dropped-notification reconciliation were
 judged not worth the remaining 20 seconds for one to three users. **Do not
-rebuild the case for webhooks without a new measurement**; the reasoning and the
-conditions that would reopen it are in `docs/PHASE-9.md` and `runbook.md`.
+rebuild the case for webhooks without a new measurement**; the reasoning, the
+conditions that would reopen it and the requirements if it is ever reinstated
+are in `runbook.md` → *Part B (Graph change notifications) was evaluated and
+DECLINED*, and the measurement is in `docs/phase-9-verification.md`.
 
 The one design decision that phase turned on: **a grouped listing collects the
 folder to a cap and groups the complete set. It does not group a page and it has
@@ -395,7 +416,7 @@ competing content, and a vendor's own email is competing content. See
 comments in `app/globals.css`, which are the authority on any colour value.
 
 **Phase 12 Parts A, B, C and D complete — Part D's six steps landed
-2026-10-28/29; Part E not started.** The change-order engine —
+2026-10-28/29; Part E built, waiting on one grant (next entries).** The change-order engine —
 `run_workflow.py`, ~196 KB, which had no version control at all — is now a
 repository, `phb-co-engine`, with the first commit verified byte-identical to
 the SharePoint copy. `docs/12-ai-layer-inventory.md` is the inventory every
@@ -1189,9 +1210,10 @@ modules are billed, rate-limited and revoked independently. Name in
 `readChangeOrderAnthropicEnv` in `lib/modules/change-orders/anthropic-env.ts`,
 Key Vault `CO-ANTHROPIC-API-KEY` behind `coAnthropicApiKeyInKeyVault` - the
 fourth hand-set secret, same shape as the other three; the secret exists in
-the production vault, parked, and `coAnthropicApiKeyInKeyVault` stays false.
-**Nothing reads it yet**: no change-order code in this repo or in `phb-co-engine` creates an
-Anthropic client today, and Phase 12 Part D is where it will be used. The rule
+the production vault and `coAnthropicApiKeyInKeyVault` stays false. **The web
+app never reads it**, which is why the flag stays false; the Part D classifier
+job reads it as a Key Vault reference under the platform's identity
+(`infra/classify-job.yaml.template`). The rule
 that matters: `ANTHROPIC_API_KEY` is the SDK's default name, so a client built
 without an explicit `apiKey` runs on the BAS key silently - the CO reader never
 falls back to it and `tests/anthropic-key-per-module.test.ts` walks both module
@@ -1399,8 +1421,9 @@ well it is written.
 | `DEVELOPER-SETUP.md` | **Start here if you are a new developer.** Installs, databases, `.env.local`, seeds, first test run — and the things that bite before they bite | Someone about to write code |
 | `PLATFORM-CONTEXT.md` | **Read before designing a module.** What the platform already provides, the four-part integration contract, and the seven decisions a module makes for itself | Someone about to design one |
 | `HANDOVER.md` | **Start here if you are inheriting this.** What this is, what must not break, what will fail and when, what to do first | Whoever owns it after December 2026 |
-| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 49 decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
+| `WHY-ITS-BUILT-THIS-WAY.md` | **Read before changing something.** 76 numbered decisions, why each was made, and what breaks if you undo it | Anyone changing existing behaviour |
 | `runbook.md` | Failure modes, recovery, what expires and when | Anyone with a broken thing |
+| `README.md` | Commands, database and testing conventions, repository layout — the parts that are neither setup nor rules | Anyone at the keyboard |
 
 Setup instructions live in `DEVELOPER-SETUP.md` and the per-variable detail lives
 in `runbook.md` → *Filling in `.env.local` on a new machine*. Do not restate
@@ -1415,7 +1438,9 @@ either anywhere else — point at them.
 | `docs/03-exchange-and-graph.md` | Exchange as source of truth, Graph rules and gotchas |
 | `docs/04-auth-and-permissions.md` | Login rules, authorization contract, admin security |
 | `docs/05-database-and-sources.md` | Schema ownership, migration vs seed, source of truth |
-| `docs/06-roadmap.md` | Phases 1–14 |
+| `docs/06-roadmap.md` | Phases 1–14, each with its status and where its record is. The specs for finished phases 1–11 were removed on 2026-11-02; their decisions are in this file, `WHY-ITS-BUILT-THIS-WAY.md`, `runbook.md` and the verification records |
+| `docs/PHASE-12.md` | **The Phase 12 plan, Parts A–E.** Parts A–D are ticked off with their records; Part E's boxes are the ones still open. The prime directive and the hard constraints for anything that touches the engine |
+| `docs/PHASE-13.md` | **The schedule and the silence alert, not yet built.** Part A's mechanism exists as the Part E shadow jobs; Part B, the alerts, is what the phase still owes |
 | `docs/PHASE-14.md` | **The cutover checklist — the one list for cutover day.** Every item any document says must happen at, before or after the cloud engine takes over, with its source; first the cutover diff (the intake rule, the by-name refusal, the Bid Tracker write, the timezone stamps), then prompts, schedule, rollback, and where the documents disagree |
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
 | `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon, headroom |
@@ -1431,6 +1456,10 @@ either anywhere else — point at them.
 | `docs/phase-11-verification.md` | Evidence the platform has not disturbed the automation |
 | `docs/phase-12-part-b-verification.md` | The file-access extraction: what was measured, and what is still unproven |
 | `docs/bas-plausibility-verification.md` | **The value-plausibility check against live data:** both dead sensors flagged, nothing else, the thresholds defended by the longest healthy runs, the cost measured, four mutations |
+| `docs/BAS-B5.md` | The Analyze tab's spec: the safety rules the code and ten of its source files cite by name, and the honesty cases it is judged on |
+| `docs/bas-b5-verification.md` | Analyze verified live on 2026-09-21: the three faults the real model showed that a scripted planner could not |
+| `docs/B8_point_management_plan.md` | BAS point management: B8.1–B8.5 built, B8.6 (automatic derivation) not started. Kept for the open step and for *collect everything, filter what you see* |
+| `docs/testing-blind-spots.md` | Claims the suite can only check by reading source text, each with what would make it a real test. Cited by the tests themselves |
 | `docs/phase-12-part-c-plan.md` | **Part C: what `Sites.Selected` actually blocks**, what it does not, and what has already been settled by measurement |
 | `docs/phase-12-part-c-verification.md` | **Part C's record, 2026-10-28:** the bar, the five comparison runs including the four that failed and why, what eight-of-eight proves and does not, what was kept and deleted, and how to re-run |
 | `docs/phase-12-part-d-plan.md` | **Part D, the plan, approved 2026-10-28:** the classifier is the only judgment, most of its task is deterministic rule and becomes code, four model judgments in consequence order behind switches, schema and candidate-list validation, the key's type question and why `coAnthropicApiKeyInKeyVault` stays false; § 14 holds the owner's six decisions |

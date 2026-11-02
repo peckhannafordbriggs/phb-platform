@@ -95,7 +95,10 @@ An email-oriented workspace. Conceptual desktop layout:
 ```
 
 Not a pixel-level requirement. Optimize for the real workflow, which is: open
-Drafts, read a draft the automation produced, edit it, send it.
+Drafts, read a draft the automation produced, edit it, send it. For that reason
+the folder pane opens on **Drafts**, not Inbox, and the empty Drafts folder —
+which is its state most of the day — reads as "nothing to review", never as a
+failure.
 
 ## Frontend principles
 
