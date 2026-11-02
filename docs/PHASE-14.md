@@ -14,8 +14,8 @@ as the shadow's schedule and Parts B and C do not, and **the cutover prep
 is built, on two draft pull requests titled `[HOLD until Part E passes]`,
 one per repository, not to be merged until the shadow window passes.** § 8
 below says, item by item, what is done, what can only happen on the day,
-and what the owner still decides; § 9 is the order of operations on the
-day. What gates the day is the sequence in § 0.
+and the decisions the owner made the same day; § 9 is the order of
+operations on the day. What gates the day is the sequence in § 0.
 
 Read `docs/06-roadmap.md` → *Phase 14* for the goal, `docs/PHASE-12.md` for
 what cutover is not (it is not Phase 12), and `docs/PHASE-13.md` for the
@@ -50,8 +50,8 @@ differ, each confirmed on the day.** The known ways:
 | 1.3 | **The dormant Bid Tracker write.** Removed from the repository lineage in Part B; **still present on the laptop** until cutover. The live mitigation stays in force until then: do not set `CO_BID_TRACKER_PATH`, and do not put a `Bid Tracker.xlsx` into `Change Order Intake`. After cutover the mitigation is no longer needed because the code is gone, and `tests/test_no_bid_tracker_write.py` is the guard. The laptop's own knowledge-base doc still tells a new operator to set `CO_BID_TRACKER_PATH` — an open doc edit the operator never made; it becomes moot when the laptop retires | `docs/12-ai-layer-inventory.md` § 3b (*Two things remain true of production*) and the *Open, and the operator's call* note; `WHY-ITS-BUILT-THIS-WAY.md` § 40 |
 | 1.4 | **The timezone value change.** Three fields carry `datetime.now()` plus a literal `Z`: `scrub_timestamp` in `scrub_result.json`, `drafted_timestamp` in `vendor_drafts.json`, `history[].at` in the state file. On the laptop they are wrong by the UTC offset; in the container they are right. **The same event stamps four to five hours later after cutover**, in two sentinel payloads. Do not correct the `Z` in the same phase as the runtime-timezone change, or the diff becomes unreadable; answer item 0.5 first | `docs/phase-12-part-c-plan.md` → *The timezone discrepancy: measured, and it is three fields*; `docs/phase-12-part-e-equivalence.md` → *The timezone shift* |
 | 1.5 | **The via-tmp sentinel write.** `vendor_drafts.json` is written as `<name>.tmp` then renamed. The sentinel flows' trigger was observed firing on the final name twice out of two with the rename landing one second after the create; two samples do not rule out a poll landing inside that second. If the shadow run ever shows a miss, the cure is one call-site change (write the final name once, as `scrub_result.json` already is), with the differential as its check | `docs/phase-12-part-c-plan.md` → *Before cutover: the flow-trigger decision* → *Outcome* |
-| 1.6 | **The lock.** It is a lock file through the FileStore interface, best-effort, fails open, coordinates one machine, and is not a mutex. "Whether the mechanism should change at all is a Phase 14 question, decided at cutover with the live path in view." Decide it; until then it must not be described as mutual exclusion anywhere | `docs/PHASE-12.md` → *Part C* (the lock paragraph); `WHY-ITS-BUILT-THIS-WAY.md` § 42; `docs/12-ai-layer-inventory.md` → *The lock is best-effort* |
-| 1.7 | **PDF rendering — premise corrected 2026-11-02.** The comparison image carried no LibreOffice and no PDF was compared, but **the laptop's run produces none either**: `render_xlsx_to_pdf` is defined and never called, in `f8645b7` as in the repository, and the A3 fixture store holds no rendered PDF. The only PDFs in the pipeline are the classifier's, drawn by `reportlab` (`render_qa_pdf.py`, `render_completeness_pdf.py`), which need no LibreOffice. So the image decision is about a function nothing calls, and no comparison re-run is owed either way | `docs/phase-12-part-c-verification.md` → *What this does not prove* (corrected the same day); `docs/12-ai-layer-inventory.md` § 3c and § 5 (corrected) |
+| 1.6 | **The lock.** It is a lock file through the FileStore interface, best-effort, fails open, coordinates one machine, and is not a mutex. "Whether the mechanism should change at all is a Phase 14 question, decided at cutover with the live path in view." **Decided 2026-11-02: unchanged.** The lock stays a best-effort lock file through the store; the schedule is the guard (one job, `parallelism: 1`, a timeout shorter than the interval, no retry), and the lock is never described as mutual exclusion | `docs/PHASE-12.md` → *Part C* (the lock paragraph); `WHY-ITS-BUILT-THIS-WAY.md` § 42; `docs/12-ai-layer-inventory.md` → *The lock is best-effort* |
+| 1.7 | **PDF rendering — premise corrected 2026-11-02.** The comparison image carried no LibreOffice and no PDF was compared, but **the laptop's run produces none either**: `render_xlsx_to_pdf` is defined and never called, in `f8645b7` as in the repository, and the A3 fixture store holds no rendered PDF. The only PDFs in the pipeline are the classifier's, drawn by `reportlab` (`render_qa_pdf.py`, `render_completeness_pdf.py`), which need no LibreOffice. So the image decision is about a function nothing calls, and no comparison re-run is owed either way. **Decided 2026-11-02: build without LibreOffice** (`--build-arg INCLUDE_LIBREOFFICE=false`, as every image so far); deleting the unused `render_xlsx_to_pdf` is a later cleanup, not part of cutover | `docs/phase-12-part-c-verification.md` → *What this does not prove* (corrected the same day); `docs/12-ai-layer-inventory.md` § 3c and § 5 (corrected) |
 | 1.8 | **The `400` on folder creation.** Seen once, on the first comparison run, with the folder present afterwards; never reproduced; every store error now carries Graph's code and request id. If it recurs it is "a finding to understand before Phase 14", because it is the same `POST …:/children` the engine issues for every attempt folder | `docs/phase-12-part-c-plan.md` → *The first run*; `runbook.md` → *The comparison job stops with `HTTP 400` creating a folder*; `co_filestore.py` → `makedirs` comment |
 | 1.9 | **`rglob` at depth.** Walked folder by folder, correct, never measured against a deep tree; "a performance question for Phase 14" | `docs/phase-12-part-b-verification.md` → the 2026-10-28 closure note |
 | 1.10 | **Speed at volume.** The Graph half took 44 to 54 s per CO against 2 to 3 s locally, one round trip per file operation. Not a defect, inside a scheduled run's budget at a handful of COs a day; cutover planning should know the number | `docs/phase-12-part-c-verification.md` → *What this does not prove* |
@@ -87,7 +87,7 @@ differ, each confirmed on the day.** The known ways:
 
 | # | Item | Source |
 |---|---|---|
-| 4.1 | **Keep the laptop path documented as rollback for at least a month after cutover.** Retire it only after that | `docs/06-roadmap.md` → *Phase 14*; `HANDOVER.md` → *Moving the AI layer off the laptop* |
+| 4.1 | **Keep the laptop path documented as rollback for at least a month after cutover.** Retire it only after that. The procedure is written for someone with no background — `runbook.md` → *Rolling the change-order engine back to the laptop*: who owns it (whoever currently owns the platform; Jim Schwarz is the person to ask if nobody does), what to have before starting and who to ask for each thing, the steps with what each should show, how to tell it worked, what to do when a step fails — and `HANDOVER.md` links to it | `docs/06-roadmap.md` → *Phase 14*; `HANDOVER.md` → *Moving the AI layer off the laptop*; `runbook.md` → *Rolling the change-order engine back to the laptop* |
 | 4.2 | Rollback is the laptop's engine with the laptop's rules: the old intake rule (1.1), the dormant Bid Tracker write and its mitigation (1.3), the local-time `Z` stamps (1.4). Rolling back re-opens each of those; the month is for deciding not to | items 1.1, 1.3, 1.4 above |
 
 ---
@@ -144,8 +144,8 @@ each item needed, and where it stands:
 | 1.3 | The code is gone from the repository lineage; `tests/test_no_bid_tracker_write.py` runs in the image; the deploy guards now assert the Bicep never sets `CO_BID_TRACKER_PATH` on any job | Confirm no `Bid Tracker.xlsx` sits in `Change Order Intake` (a read, as the reader app). The laptop's knowledge-base doc becomes moot when the laptop retires |
 | 1.4 | Answered by 0.5: harmless to the flows. No code change at cutover, on purpose; the `Z` correction is its own later change | Read the first cloud run's `scrub_result.json` and state file: the stamps are UTC, four or five hours later than the laptop's for the same instant, and the differ's classes name it |
 | 1.5 | Nothing to change unless the window shows a miss. The one call site is `write_vendor_drafts_json` → `FS.write_text_via_tmp(...)`; the cure would be the plain `write_text(..., allow_sentinel=SENTINEL_VENDOR_DRAFTS)` that `scrub_result.json` already uses | Decide from the window's reports |
-| 1.6 | **A decision for the owner**, with a recommendation: keep the lock as it is — a lock file through the store, best-effort, failing open — and record that the schedule is the guard (one job, `parallelism: 1`, a timeout shorter than the interval, no retry), not the lock. The mechanism works unchanged through Graph (`create_exclusive`, exercised in Part C). Changing it would be engine surgery for a property the scheduler already provides | One read before the flag goes on: the live root's `.run_workflow.lock`. Absent, released or older than 30 minutes is fine (the first cloud run reclaims it); a fresh one from a laptop run still in flight makes the first cloud run exit without changes, which is correct, and the next schedule picks up |
-| 1.7 | **Premise corrected** (the row above): no PDF is rendered by the intake engine on either side, so no comparison re-run is owed. **A decision for the owner.** Options: (a) build the production image with `INCLUDE_LIBREOFFICE=false`, as every image so far has been — smaller, faster to pull, the function it serves has no caller; (b) build with the Dockerfile's default, `true` — a much larger image carrying `libreoffice-calc` and fonts for a function nothing calls, kept only in case the dead code is ever wired up. **Recommended: (a)**, and remove `render_xlsx_to_pdf` in a later change of its own, with the Dockerfile's LibreOffice stanza, so the question does not come back | Build the image the way the owner decides; `runbook.md` → *Cutover* carries the command |
+| 1.6 | **Decided 2026-11-02: the lock stays as it is** — a lock file through the store, best-effort, failing open — and the schedule is the guard (one job, `parallelism: 1`, a timeout shorter than the interval, no retry), not the lock. The mechanism works unchanged through Graph (`create_exclusive`, exercised in Part C). Changing it would be engine surgery for a property the scheduler already provides | One read before the flag goes on: the live root's `.run_workflow.lock`. Absent, released or older than 30 minutes is fine (the first cloud run reclaims it); a fresh one from a laptop run still in flight makes the first cloud run exit without changes, which is correct, and the next schedule picks up |
+| 1.7 | **Premise corrected** (the row above): no PDF is rendered by the intake engine on either side, so no comparison re-run is owed. **Decided 2026-11-02: build without LibreOffice** — `INCLUDE_LIBREOFFICE=false`, as every image so far has been: smaller, faster to pull, and the function it would serve has no caller. The alternative, the Dockerfile's default `true`, would carry `libreoffice-calc` and fonts for dead code. Deleting `render_xlsx_to_pdf` and the Dockerfile's LibreOffice stanza is a later cleanup of its own, not part of cutover | Build with `--build-arg INCLUDE_LIBREOFFICE=false`; `runbook.md` → *Cutover* carries the command |
 | 1.8 | Unchanged; every store error carries Graph's code and request id | If the `400` recurs in the window's intake replays, it is a finding to understand before the day |
 | 1.9, 1.10 | Nothing to build: the window's intake replays run the engine through the Graph store on a tree of the live depth, and each report carries the per-CO time | Carry the numbers from the window's record into this file at close |
 | 1.11 | In code since Part D; the spec edit is 2.3 | — |
@@ -158,7 +158,7 @@ each item needed, and where it stands:
 | 3.2 | `runbook.md` → *Cutover: turning the live engine on* says both: pausing the shadow is free; pausing after cutover stops the pipeline | — |
 | 3.3, 3.4 | § 9 is the order that makes it a switch and not an overlap | On the day, in that order |
 | 3.5 | The live crons are written for Eastern standard time, as the shadow's are; the March 2027 change is a commit that says so | Phase 13 Part C's entry, when written, carries the same decision |
-| 4.1, 4.2 | `HANDOVER.md` → *Moving the AI layer off the laptop* is rewritten for the person who inherits the rollback and **names the one thing it cannot: who that person is** | **A decision for the owner**: who runs the laptop rollback after December, and that name goes into `HANDOVER.md` |
+| 4.1, 4.2 | **The rollback is written for someone with no background**: `runbook.md` → *Rolling the change-order engine back to the laptop* (the words it uses, what to have before starting and who to ask, numbered steps each with what it should show, how to tell it worked, what to do when a step fails), linked from `HANDOVER.md`. It belongs to whoever currently owns the platform; Jim Schwarz is the person to ask if nobody does. Decided 2026-11-02: no individual is named | — |
 | 5.1 | After the switch, per the roadmap | — |
 | 5.2 | The owner's switch (`enableDbBackup`); not part of cutover | — |
 | 6.1 | Decided | — |
@@ -196,7 +196,7 @@ overlap (3.4): nothing after step 4 starts until step 4 is done.
    the four pull requests are merged in order — `phb-co-engine`
    `fix/image-carries-job-scripts` then `feat/cutover-prep-HOLD`;
    `phb-platform` `chore/cutover-prep-findings` then `feat/cutover-prep-HOLD`;
-   the image is built from merged `main` with the LibreOffice choice of 1.7
+   the image is built from merged `main` without LibreOffice (1.7, decided)
    and tagged for the day (`runbook.md` → *Cutover*), and `docker run --rm
    <image>` prints `phb-co-engine image OK`; the suite runs inside the image
    (`tests/ci_suites.py`, or at least `tests/test_cutover.py` and
@@ -228,8 +228,9 @@ overlap (3.4): nothing after step 4 starts until step 4 is done.
 8. **Record the day** in § 7 of this file: each item of § 1 as confirmed,
    with what was read.
 9. **The rollback month** (4.1, 4.2): the laptop stays as it is, tasks
-   disabled, nothing deleted; rollback is `enableCoLive` false, deploy,
-   re-enable the two tasks — `runbook.md` → *Cutover* → *Rolling back*.
+   disabled, nothing deleted; rollback is `runbook.md` → *Rolling the
+   change-order engine back to the laptop*, written for someone with no
+   background.
    The copy is deleted thirty days after this day (plan § 6).
 
 ## Where the documents disagree, or have gone stale
@@ -276,8 +277,8 @@ owners.
    laptop's rules". Both cannot hold: a laptop that runs the repository's
    engine runs the new intake rule and no Bid Tracker write, and its task
    prompt copies two files where the repository's engine needs a third
-   (`co_filestore.py`). **Recommendation, for the owner to decide: do not
-   replace the SharePoint copies on the day.** The container carries its own
+   (`co_filestore.py`). **Decided 2026-11-02: no — the SharePoint copies
+   are not replaced on the day.** The container carries its own
    engine and renderer; the SharePoint copies become the rollback engine,
    re-labelled as such and not authoritative (2.1), untouched for the month;
    when the laptop retires they are replaced or deleted with it. Then 1.12
@@ -285,10 +286,8 @@ owners.
 7. **Item 2.3 asks for the scheduled-task prompt to take the internal-sender
    rule at cutover; item 4.2 says rollback runs the laptop's rules.** After
    cutover the Cowork task is disabled and runs only as rollback, so editing
-   it changes what rollback does. The edit is drafted
-   (`docs/phase-14-spec-and-prompt-edits.md` § 2) and the owner decides
-   whether to paste it: pasted, a rollback classifies internal senders by
-   the new rule (the model still asked, but told the rule); not pasted, a
-   rollback is the laptop exactly as it ran through the window, which is
-   what 4.2 promises. **Recommendation: do not paste it; keep the laptop
-   unchanged for the month.**
+   it changes what rollback does. **Decided 2026-11-02: no — the task is
+   not edited.** A rollback is the laptop exactly as it ran through the
+   window, which is what 4.2 promises. The edit stays drafted in
+   `docs/phase-14-spec-and-prompt-edits.md` § 2 so the decision can be
+   reopened with the text in hand.

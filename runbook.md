@@ -11076,8 +11076,8 @@ setting is named in the first lines.
 **What it is.** The day the cloud engine takes over the real change-order
 process from the laptop. `docs/PHASE-14.md` is the checklist: § 9 is the
 order of operations, § 8 what was prepared on 2026-11-02 and what the owner
-still decides. This section is the operator's half - the commands, what each
-log must say, how to pause, how to roll back. Everything here is behind
+decided the same day. This section is the operator's half - the commands,
+what each log must say, how to pause, where the rollback is. Everything here is behind
 `enableCoLive` in `infra/main.bicep`, **off until the day**, two scheduled
 Container Apps Jobs from the `phb-co-engine` image:
 
@@ -11099,9 +11099,9 @@ az acr build --registry <registry> --image phb-co-engine:cutover-<yyyymmdd> --bu
 docker run --rm <registry>.azurecr.io/phb-co-engine:cutover-<yyyymmdd>
 ```
 
-The build argument follows the owner's decision on item 1.7 (nothing in the
-engine calls LibreOffice; `false` is what every image so far was built
-with). The second command is the image's own check and must print
+The build argument is the owner's decision of 2026-11-02 on item 1.7: no
+LibreOffice (nothing in the engine calls it, and `false` is what every image
+so far was built with; deleting the unused function is a later cleanup). The second command is the image's own check and must print
 `phb-co-engine image OK` - it asserts the five job scripts are present. Then
 the suite inside it: `docker run --rm -w /app <image> python
 tests/test_cutover.py`, and `tests/test_intake_selection.py` for item 1.1.
@@ -11155,13 +11155,10 @@ reminder and handoff flows keep their own clocks. Say so to whoever is
 waiting on a change order.
 
 **Rolling back** (`docs/PHASE-14.md` 4.1 and 4.2; the laptop stays as it was
-for a month after cutover): `enableCoLive` false in the parameters file and
-deploy (the two jobs are deleted, nothing else changes); confirm no execution
-is still running (`job execution list`); then re-enable the two tasks in the
-Cowork app on the laptop. The laptop's engine is the pre-Part-B engine with
-the laptop's rules, and the state files and queues it finds are the ones the
-cloud left, which it reads the same way. Check the live root for a lock the
-last cloud run may have left; one older than 30 minutes is reclaimed.
+for a month after cutover) is its own section, written for someone who has
+never seen this project: *Rolling the change-order engine back to the
+laptop*, below. In one line: the Azure jobs off (`enableCoLive` false, deploy,
+no execution still running), then the laptop's two tasks on - never both.
 
 ### Symptom: an intake log reads `LIVE TREE` while a laptop task is still enabled
 
@@ -11182,6 +11179,196 @@ typo in the parameters file. Nothing ran. Fix the value and redeploy.
 The laptop's last run left `.run_workflow.lock` fresh (younger than 30
 minutes). The run exited without changes, correctly. Wait for the next
 schedule, or start the job again after 30 minutes.
+
+## Rolling the change-order engine back to the laptop
+
+Written so that someone who has never seen this project can do it. If you
+are that person, read this whole section once before you start; it takes
+about fifteen minutes to read and about an hour to do.
+
+**Who owns this.** Whoever currently owns the platform. If nobody does, or
+you do not know who does, ask **Jim Schwarz** - he is the person who approves
+a rollback and can tell you who holds the pieces below.
+
+### The words you will meet
+
+- **The change-order engine.** A Python program that reads the change-order
+  requests project managers email in, checks them, and writes the files that
+  Microsoft Power Automate "flows" then turn into emails to vendors. A second
+  program, the **classifier**, reads vendors' replies and sorts them. Together
+  they are the automation the estimating team relies on every day.
+- **The laptop.** One Windows laptop in the office (the platform owner's)
+  that ran both programs until cutover, twice a day each, from the Claude
+  desktop app's **scheduled tasks** (also called Cowork tasks). The two tasks
+  are named `co-intake-scrub` (the engine, 07:00 and 12:00) and
+  `co-response-classifier` (the classifier, 08:00 and 13:00). Their files live
+  under `C:\Users\<owner>\Claude\Scheduled\` on that laptop.
+- **Cutover.** The day the same two programs started running in Azure
+  instead, as two "Container Apps Jobs" named `phbplat-prod-co-intake-scrub`
+  and `phbplat-prod-co-response-classifier`, on the same timetable, and the
+  laptop's two tasks were switched off (not deleted). `docs/PHASE-14.md` in
+  this repository is the record of that day.
+- **The shadow run.** The weeks before cutover when Azure ran against a
+  *copy* of the files while the laptop ran the real thing, to prove they
+  agreed. It is over; you can ignore it.
+- **The live tree.** The SharePoint folder the programs read and write:
+  the `AI Sandbox` library, folder `CO Managment Process` (spelled with one
+  A - never "fix" it; the flows depend on the exact name). On the laptop it is
+  also a normal folder, kept in sync by OneDrive, at
+  `C:\Users\<owner>\Peck Hannaford + Briggs\AI Sandbox - Documents\CO Managment Process\`.
+- **Rollback.** Turning the Azure jobs off and the laptop's two tasks back
+  on, so the laptop runs the real process again. Only one of the two may ever
+  run: both at once would process the same files twice and corrupt the
+  tracking. Every step below is in the order that keeps that true.
+- **The parameters file.** `infra/main.parameters.json` in this repository
+  on the owner's machine - a gitignored file (it is not in Git; each machine
+  has its own) that says how production is configured. One line in it,
+  `enableCoLive`, is the switch for the two Azure jobs.
+
+### Before you begin
+
+Get every one of these first. Nothing below works without all of them.
+
+| You need | Why | Who to ask |
+|---|---|---|
+| **Jim Schwarz's go-ahead** | A rollback stops the Azure jobs and restarts the laptop; it is not reversible by accident but it is a change to the live process | Jim Schwarz |
+| **The laptop itself**, unlocked, signed in as its owner, with the Claude desktop app installed and signed in, and OneDrive running and showing the `AI Sandbox - Documents` folder as synced (green ticks, not clouds) | The laptop's tasks run inside that app and read that folder | The platform owner (it is their machine); if they have left, Jim Schwarz for the machine and Vitis (IT) to sign in to it |
+| **An Azure account** that can change the production resource group (the *Contributor* role on it, and the Azure CLI, `az`, installed on your own machine) | Steps 3-5 turn the jobs off from the command line | Vitis (IT) for the role; `az` is a free install from Microsoft |
+| **A checkout of this repository** (`phb-platform`) with the gitignored `infra/main.parameters.json` filled in | The deploy in step 4 runs from it; the file says how production is configured and is on the owner's machine only | The platform owner for the file (or Jim, who can get it from them); GitHub access to the `peckhannafordbriggs` organisation from whoever administers it |
+| **The production resource-group name and subscription id** | Every `az` command below takes them; they appear in no committed file, on purpose | The platform owner or Jim; or read them yourself as a GitHub repository admin under *Settings → Secrets and variables → Actions → Variables* (`AZURE_RESOURCE_GROUP`, `AZURE_SUBSCRIPTION_ID`), or in the Azure portal |
+| **Read access to the `AI Sandbox` SharePoint site** | To look at the live tree in a browser if the laptop's copy looks wrong | Vitis (IT) |
+| **This runbook open**, and `docs/PHASE-14.md` beside it | So you can check what you see against what is written | - |
+
+Write down, before you start: the resource-group name, the subscription id,
+and today's date and time. Wherever a command below says `<resource group>`
+or `<subscription id>`, type those values.
+
+### Steps
+
+Do them in this order. Do not skip step 4.
+
+1. **Check that Azure is actually running the jobs now.** On your own
+   machine, in a terminal:
+
+   ```
+   az login
+   az containerapp job list -g <resource group> --query "[].name" -o tsv
+   ```
+
+   *What you should see:* a list of job names that includes
+   `phbplat-prod-co-intake-scrub` and `phbplat-prod-co-response-classifier`.
+   If neither is there, the Azure jobs are already off: skip to step 6.
+
+2. **Make sure neither job is in the middle of a run.**
+
+   ```
+   az containerapp job execution list -n phbplat-prod-co-intake-scrub -g <resource group> -o table
+   az containerapp job execution list -n phbplat-prod-co-response-classifier -g <resource group> -o table
+   ```
+
+   *What you should see:* every row's `Status` is `Succeeded` or `Failed`.
+   If one says `Running`, wait for it to finish (a run takes a few minutes;
+   look again in five) rather than stopping it - a run stopped halfway can
+   leave a half-written tracker. Only if it has been `Running` for more than
+   30 minutes, stop it:
+   `az containerapp job stop -n <job name> -g <resource group>`.
+
+3. **Turn the jobs off in the parameters file.** In your checkout of this
+   repository, open `infra/main.parameters.json`, find
+
+   ```
+   "enableCoLive": {
+     "value": true
+   },
+   ```
+
+   and change `true` to `false`. Change nothing else. Save the file.
+
+4. **Read the running app's image, then deploy.** This is the routine
+   deploy from `infra/README.md`; the first command is there because a deploy
+   replaces the whole web app and has to be told which image to keep.
+
+   ```
+   IMAGE="$(az containerapp show -n phbplat-prod-app -g <resource group> --query properties.template.containers[0].image -o tsv)"
+   az deployment group create --subscription <subscription id> --resource-group <resource group> --template-file infra/main.bicep --parameters @infra/main.parameters.json --parameters containerImage="$IMAGE"
+   ```
+
+   *What you should see:* the command runs for several minutes and ends with
+   a block of JSON whose `"provisioningState"` is `"Succeeded"`. Then repeat
+   the command from step 1: the two `co-` job names are **gone** from the
+   list. If they are still there, the deploy did not take the change - check
+   that you saved the file and that `enableCoLive` reads `false` - and do not
+   go on until they are gone. From this moment nothing processes change
+   orders, so do the rest today.
+
+5. **On the laptop, look at the live folder once.** Open
+   `C:\Users\<owner>\Peck Hannaford + Briggs\AI Sandbox - Documents\CO Managment Process\Change Order Intake\`
+   in File Explorer (turn on *View → Show → Hidden items*). Look for a file
+   named `.run_workflow.lock`.
+
+   *What you should see:* no such file, or one whose *Date modified* is more
+   than 30 minutes ago. Either is fine - the laptop's program clears an old
+   one itself. If it is newer than 30 minutes, an Azure run was still
+   writing when you looked: wait until it is older, then go on. Do not
+   delete it by hand.
+
+6. **Turn the laptop's two tasks back on.** On the laptop, open the Claude
+   desktop app and go to its scheduled tasks (the list of tasks; the menu
+   name differs slightly between app versions - look for *Scheduled* or
+   *Tasks*). Find `co-intake-scrub` and `co-response-classifier` and turn each
+   one **on**. Leave `co-response-side-clasification` **off**: it is a
+   duplicate of the classifier task and must never run.
+
+   *What you should see:* both tasks show as enabled, with their schedules
+   (`0 7,12 * * 1-5` and `0 8,13 * * 1-5`). If the app will not let you, or
+   the tasks are missing, stop and ask the platform owner or Jim; the task
+   files themselves are in `C:\Users\<owner>\Claude\Scheduled\` and in this
+   repository's sibling repository `phb-co-engine` under
+   `_live-scheduled-tasks\`, from which they can be recreated.
+
+7. **Leave the laptop on, awake and signed in.** The tasks only fire while
+   the app is running. Plug it in; turn off sleep (*Settings → System →
+   Power → Screen and sleep → Never* while plugged in). This is the
+   laptop's known weakness and the reason the Azure jobs exist.
+
+### How to tell it worked
+
+- **The next weekday morning after 07:00**, on the laptop, a new file
+  appears in
+  `…\CO Managment Process\AI Files\CO Intake Engine\run_reports\` named
+  `Workflow_Run_Report_<today's date>_07xx.md`, and after 08:00 the file
+  `…\CO Managment Process\Change Order Step 2\run_summary.md` has today's
+  date on its first line. Those two files are the proof the laptop is running
+  the process again. (If today is a weekday and it is already past 12:00 or
+  13:00, the afternoon runs give the same proof.)
+- The Claude app's log confirms a task fired: open
+  `C:\Users\<owner>\AppData\Local\Claude\logs\main.log` and look near the
+  end for a line containing `Spawning new session for scheduled task
+  co-intake-scrub`.
+- In Azure, `az containerapp job list` (step 1) still shows no `co-` jobs.
+
+### If a step fails
+
+- **Any step before step 4 fails:** nothing has changed yet. Stop and ask.
+- **Step 4 fails (the deploy errors, or the jobs will not disappear):** the
+  Azure jobs are still running the process, which is the state you started
+  in; nothing is broken. Do **not** turn the laptop's tasks on - that would be
+  both running at once. Ask the platform owner or Jim, with the error text.
+- **Step 6 fails (the tasks will not turn on):** the Azure jobs are off and
+  nothing is processing change orders. Say so to Jim at once, so the
+  estimating team knows requests are waiting; then either get the tasks
+  running with help, or undo the rollback: set `enableCoLive` back to `true`
+  in the parameters file and run step 4 again, which brings the Azure jobs
+  back.
+- **The morning report does not appear:** the laptop was asleep, off, or
+  the app was closed (step 7). Wake it and either wait for the next
+  scheduled time or ask the owner to run the task by hand from the app.
+  Requests are not lost - they sit in `1 - New Requests` until a run picks
+  them up.
+
+Never run the Azure jobs and the laptop's tasks at the same time, even for a
+test. If you are ever unsure which is on, the two checks are step 1 (Azure)
+and step 6 (the laptop).
 
 ## The change-order shadow run (Phase 12 Part E)
 

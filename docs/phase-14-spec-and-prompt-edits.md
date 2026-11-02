@@ -42,11 +42,12 @@ drift check (if the shadow is still running that day) stays quiet.
 **Drafted, and not applied to the repository mirror**:
 `_live-scheduled-tasks/co-response-classifier/SKILL.md` in `phb-co-engine`
 stays a verbatim capture of the laptop's task, as its README requires.
-Whether to paste this at all is disagreement 7 in `docs/PHASE-14.md`: after
-cutover the task is disabled and runs only as rollback, and item 4.2 says
-rollback runs the laptop's rules. **The recommendation is not to paste it**
-and to leave the laptop exactly as it ran through the window. If the owner
-decides otherwise, the two additions are:
+Whether to paste this at all was disagreement 7 in `docs/PHASE-14.md`,
+**decided on 2026-11-02: no.** After cutover the task is disabled and runs
+only as rollback, and item 4.2 says rollback runs the laptop's rules, so the
+laptop stays exactly as it ran through the window. The draft is kept here so
+the decision can be reopened with the text in hand; the two additions would
+be:
 
 In step **1. CLASSIFY**, append:
 

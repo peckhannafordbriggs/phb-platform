@@ -358,12 +358,13 @@ flag goes on, and nothing ever runs both against the live folders at once — th
 and duplicate detection make that actively dangerous, not merely redundant.
 
 **If you inherit this after cutover**, the laptop is the rollback for a month and is then
-retired. Rolling back is `enableCoLive` false, a deploy, and the two Cowork tasks re-enabled
-on the laptop (`runbook.md` → *Cutover* → *Rolling back*). It needs the laptop, its
-OneDrive sync, and someone who can open the Cowork app on it. **Who that person is after
-December is not written here, because it has not been decided** — it is the one item in
-`docs/PHASE-14.md` § 8 (4.1, 4.2) that is a person and not a build, and the rollback month
-runs into January 2027. Until a name is here, assume the rollback needs the platform owner.
+retired. **The rollback is written for someone who has never seen this project:
+`runbook.md` → *Rolling the change-order engine back to the laptop*** — the words it uses,
+what to have before you start and who to ask for each thing, numbered steps each with what
+you should see, how to tell it worked, and what to do when a step fails. Read it on day one,
+before you need it. It belongs to whoever currently owns the platform; if nobody does, or you
+do not know who does, Jim Schwarz is the person to ask. The rollback month runs into
+January 2027.
 
 ---
 

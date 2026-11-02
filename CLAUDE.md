@@ -551,9 +551,13 @@ by the deploy guards in source and compiled ARM), `docs/PHASE-14.md` § 8
 (every item's prep status, item 0.5 answered) and § 9 (the order of
 operations on the day), `runbook.md` → *Cutover: turning the live engine
 on*, `HANDOVER.md` rewritten for the person who inherits the rollback, and
-`docs/phase-14-spec-and-prompt-edits.md`. Three decisions wait on the
-owner: the lock (1.6, recommended unchanged), LibreOffice in the image (1.7,
-recommended off), and who runs the laptop rollback after December (4.1).
+`docs/phase-14-spec-and-prompt-edits.md`. The owner decided the same day:
+the lock stays (1.6), the image is built without LibreOffice (1.7, the
+unused function a later cleanup), the SharePoint engine copies are not
+replaced on the day and the Cowork task is not edited (disagreements 6 and
+7). The rollback is written for someone with no background (`runbook.md` →
+*Rolling the change-order engine back to the laptop*), owned by whoever
+currently owns the platform, Jim Schwarz the person to ask if nobody does.
 `WHY-ITS-BUILT-THIS-WAY.md` § 77.
 
 **Part C therefore has nothing left that gates Phase 14.** The one item it
