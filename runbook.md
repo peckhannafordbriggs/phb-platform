@@ -3015,7 +3015,14 @@ az consumption budget list --query "[].{name:name, amount:amount, notifications:
 
 The budget must have **notification contacts only**. A budget with an action group
 attached can trigger automation, and this server is not something a spending threshold
-may switch off.
+may switch off. **Who gets the budget email:** `budgetContactEmails` in the gitignored
+`infra/main.parameters.json` - since 2026-11-02 both the platform owner
+(`msheth@phb1899.com`) and Jim Schwarz (`jschwarz@phb1899.com`), by the owner's
+decision; before that the owner alone. The list reaches Azure only through a template
+deployment, so a change here is not live until the next one, and `az consumption budget
+list` above is how to read what is live. These are two people's addresses, not a group:
+when either leaves, replace the address in the parameters file and redeploy, or the
+forecast and the 100 % notices go to a mailbox nobody reads.
 
 **2. The collation, by actual values.** This is the step with a deadline: the cheap fix
 is to drop and recreate the database, and it is available only until migrations run.

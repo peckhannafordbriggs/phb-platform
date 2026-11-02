@@ -199,7 +199,7 @@ This is the section to keep. Everything here is a known future failure with a kn
 |---|---|---|---|
 | SSO client secret expires | **13 August 2028** | Local sign-in fails with `AADSTS7000215`. **Production is not affected**: it carries no secret and authenticates the token exchange with the managed identity, matched by a federated identity credential on the SSO app registration — `runbook.md` → *Production sign-in authenticates with the managed identity*. If production ever fails with a secret-shaped error, the fault is that a secret was deployed at all. | Ask IT for a new secret, for developer machines only. `runbook.md` → *What expires, and when* |
 | BAS database stopped | If anyone applies a cost policy that stops it | Silent data destruction at the controller | Restart immediately; check for gaps on the Collection Health screen |
-| Azure spend alert | If misconfigured, or growth | Email at $150/month | Expected spend is $60–100 |
+| Azure spend alert | If misconfigured, or growth | Email at a forecast of 80 % and at 100 % of the $150/month budget, to `msheth@phb1899.com` and `jschwarz@phb1899.com` (`budgetContactEmails` in the gitignored parameters file, both since 2026-11-02) | Expected spend is $60–100. When either person leaves, put a current address in the parameters file and redeploy - `runbook.md` → *Verify the deployment before migrating*, step 1 |
 | Collector host offline | Laptop closed, machine rebooted, network down | Gaps appear on Collection Health | Restart the collector. Anything past ~42 hours is already gone |
 | Node or dependency EOL | Eventually | Build or deploy failures | Routine maintenance |
 
