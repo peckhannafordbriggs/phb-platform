@@ -239,11 +239,27 @@ failure modes.
   reference. Nine plain values name the two apps, the tenant, the drive, the
   copy's root and the two live tracker workbooks - the workbook paths are
   configuration here and spelled nowhere in code
+- Optionally the alerts (`enableAlerts`, off by default; built 2026-11-02 on a
+  held branch, not yet deployed; see `runbook.md`, "Alerts (Phase 13 Part B)"):
+  one action group emailing `alertContactEmails` (a shared mailbox or M365
+  group, never a person - the deployment fails if the flag is on and the list
+  is empty), a failure rule for every job that exists, a silence rule for every
+  scheduled job, the Cost Intelligence scaler rule, and three metric rules on
+  the database (alive, storage) and the web app (5xx). Every threshold and
+  window is a parameter with a default and a reason
+- Optionally the BAS collector check (`enableBasCollectorCheck`, off by
+  default): a half-hourly Container Apps Job from the same `db-backup` image
+  that reads the collector's newest successful run and fails past
+  `basCollectorSilenceMinutes`, so the job-failure alert is the collector's
+  alert. Needs the backup image, like `enableDbBackup`
 
 ## The backup image is built once, by hand
 
 The backup job runs `infra/db-backup/Dockerfile`: the official `postgres:17-alpine`
-image plus `curl`, `openssl` and `infra/db-backup/backup.sh`. No application code
+image plus `curl`, `openssl`, `infra/db-backup/backup.sh` and - since Phase 13
+Part B - `infra/db-backup/collector-check.sh`, the BAS collector check, which the
+check job runs from the same image by its own path (it needs only psql and the
+backup script's URL parser, which it sources). No application code
 is in it, so no merge to `main` builds it; it is built into the registry once and
 rebuilt only when the PostgreSQL major changes. The tag is the major, and the
 template names the image as `db-backup:pg${postgresVersion}`, so the `pg_dump`
@@ -256,7 +272,9 @@ az acr build --registry <registry-name> --image db-backup:pg17 infra/db-backup
 
 Then `enableDbBackup: true` in the parameters file and a template deployment. The
 job references the image, so a deployment with the flag on and no image fails at
-the job - build first. `runbook.md` → *Nightly database backup* → *Turning it on*
+the job - build first. `enableBasCollectorCheck` references the same image and
+needs the same build; a rebuild (a new PostgreSQL major, or a change to either
+script) is one `az acr build` and the next execution of each job picks it up. `runbook.md` → *Nightly database backup* → *Turning it on*
 has the whole sequence, the first-run check, and the restore procedure.
 
 The script was run for real against a throwaway PostgreSQL 17 and a fake of the

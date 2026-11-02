@@ -45,6 +45,14 @@ var identityName = '${baseName}-identity'
 var registryName = toLower(replace('${namePrefix}${environmentName}${uniqueSuffix}', '-', ''))
 var keyVaultName = take('${baseName}-kv-${uniqueSuffix}', 24)
 var postgresServerName = '${baseName}-pg-${uniqueSuffix}'
+// The jobs, named here so that the alert rules (Phase 13 Part B) can name
+// them without reading a resource that may not be deployed.
+var cipWorkerJobName = '${baseName}-cip-worker'
+var dbBackupJobName = '${baseName}-db-backup'
+var basCollectorCheckJobName = '${baseName}-bas-collector-check'
+var coShadowFeedJobName = '${baseName}-co-shadow-feed'
+var coShadowCollectJobName = '${baseName}-co-shadow-collect'
+var coClassifyJobName = '${baseName}-co-classify'
 
 @description('Tags applied to every resource. Cost centre, owner group, and so on.')
 param tags object = {}
@@ -392,6 +400,112 @@ param budgetContactEmails array = []
 
 @description('First day of the budget period, YYYY-MM-01. Azure rejects a start date in the past.')
 param budgetStartDate string = ''
+
+// ---------------------------------------------------------------------------
+// Alerts (Phase 13 Part B) - noticing failure, and noticing silence
+// ---------------------------------------------------------------------------
+//
+// Two different problems, and the second cannot be solved from inside a job.
+// A job that ran and exited non-zero leaves a failure event in the
+// environment's system log; a job that never ran leaves nothing, so the
+// absence check lives outside it as a scheduled query over the same log that
+// fires when an expected window passes with no completed execution. Both
+// kinds of rule, and the three metric rules beside them, email ONE action
+// group, and everything is behind enableAlerts. docs/PHASE-13.md -> Part B
+// is the specification; runbook.md -> "Alerts" is the operation; the live
+// facts the queries rest on (which Reason_s a finished execution logs, which
+// a failed one logs) are in docs/phase-13-verification.md.
+//
+// Every number a person might want to change is a parameter below. Nothing
+// here is specific to PH+B except through the parameters file.
+
+@description('Create the alert rules and the action group they email. Off by default for two reasons: the action group needs an address, and the log-based rules are validated against the Log Analytics workspace when they are deployed, so they need an environment that has written ContainerAppSystemLogs_CL at least once (a fresh environment has not). See runbook.md, "Alerts".')
+param enableAlerts bool = false
+
+@description('Addresses every alert is emailed to. Required when enableAlerts is true - the deployment fails if it is on and this is empty, because an alert that goes nowhere is worse than none. A shared mailbox or an M365 group, NEVER a person: an alert bound to an individual stops being read the day they leave, silently (CLAUDE.md prohibition 6; docs/PHASE-13.md, Dependencies).')
+param alertContactEmails array = []
+
+@minValue(1)
+@description('Server errors (HTTP 5xx) from the container app within fifteen minutes before the alert fires. 5 by observation: a routine revision rollout produced 1-2 in an hour on 2026-10-30, and the one burst worth an email (26 October: 143 in two hours, during a run of revision restarts) is far above it.')
+param alertAppServerErrorsPer15Min int = 5
+
+@minValue(50)
+@maxValue(99)
+@description('Storage percent on the database server above which the alert fires. autoGrow is the guard against a full disk; this is the warning that it is doing its job, or that it was turned off. 13 percent on 2026-11-02.')
+param alertDbStoragePercent int = 85
+
+@minValue(1)
+@description('KEDAScalerFailed events from the Cost Intelligence worker within thirty minutes before the alert fires. The scaler polls the database every 15 s; a server restart of a minute leaves about four (2026-10-23, 03:50 UTC: four, then fine), and a scaler that cannot reach the database at all leaves one every poll - the state in which queued runs stay Queued forever.')
+param alertCipScalerFailuresPer30Min int = 4
+
+@minValue(1)
+@maxValue(47)
+@description('Hours without a completed nightly backup execution before the silence alert fires. The backup runs once a day (dbBackupCron), so 26 gives it two hours of slack. The ceiling is two days, because that is the longest window a log alert rule can look back over.')
+param alertDbBackupSilenceHours int = 26
+
+// --- The BAS collector check: a job whose failure IS the collector's alert --
+//
+// The collector runs on the office PC and writes bas_ingest_runs every
+// fifteen minutes. Azure Monitor cannot read a table, so this job reads it:
+// every half hour it asks for the newest successful collector run and exits
+// non-zero when that run is older than basCollectorSilenceMinutes. The job
+// failure rule above then emails; the job silence rule catches the check
+// itself not running. Same image as the nightly backup (it holds psql), same
+// secret by reference, one more script in that image.
+
+@description('Create the BAS collector check job. Needs the db-backup image in the registry (infra/README.md, "The backup image is built once, by hand"), like enableDbBackup, which is why it is off by default. See runbook.md, "Alerts" -> "The BAS collector is silent".')
+param enableBasCollectorCheck bool = false
+
+@description('When the collector check runs, as a cron in UTC. Every half hour by default; the collector writes every fifteen minutes.')
+param basCollectorCheckCron string = '*/30 * * * *'
+
+@minValue(15)
+@description('Minutes since the newest successful collector run (status ok or partial) after which the check fails and the alert fires. 60 by default: the collector runs every fifteen minutes, so this is four missed passes, and a change-of-value point can roll its history off the JACE in about two hours (runbook.md, "The roll horizon column shows two numbers") - the alert has to arrive before that, not after.')
+param basCollectorSilenceMinutes int = 60
+
+@minValue(1)
+@maxValue(47)
+@description('Hours without a completed collector-check execution before ITS silence alert fires - the check not running is a different failure from the collector not running, and is the one a crashed check cannot report. 3 gives a half-hourly job six missed runs.')
+param alertBasCollectorCheckSilenceHours int = 3
+
+// --- The shadow run's two scheduled jobs (Phase 12 Part E) --------------------
+//
+// Written beside enableCoShadow and NOT YET TESTED: no shadow job has run in
+// Azure as of 2026-11-02 (the reader's grant, Request 6, is pending). The
+// windows below assume the crons in the Part E section, in UTC under Eastern
+// standard time; when those move (March 2027), these move with them in the
+// same commit. docs/phase-13-verification.md says what remains to be done
+// once the jobs exist.
+
+@minValue(1)
+@maxValue(47)
+@description('Hours without a completed feed execution, during the check band, before the alert fires. The feed runs hourly at :45 (coShadowFeedCron); 2 is one missed run plus slack.')
+param alertCoShadowFeedSilenceHours int = 2
+
+@minValue(0)
+@maxValue(23)
+@description('First UTC hour of the band in which the feed silence check is live. 14: by then the 12:45 feed has completed and the 2-hour lookback contains it. Weekdays only, by the feed\'s cron.')
+param alertCoShadowFeedCheckFromHourUtc int = 14
+
+@minValue(0)
+@maxValue(23)
+@description('Last UTC hour of the feed silence band, inclusive. 23: the last feed is at 22:45. Between the end of this band and the start of the next, the feed is not expected and its silence is not alerted on.')
+param alertCoShadowFeedCheckToHourUtc int = 23
+
+@minValue(1)
+@maxValue(47)
+@description('Hours without a completed collector execution, during the check band, before the alert fires. The collector runs at 16:00, 21:00 and 23:00 UTC (coShadowCollectCron); 8 covers the longest gap between two consecutive runs within one weekday (16:00 to 23:00 is seven) with an hour of slack.')
+param alertCoShadowCollectSilenceHours int = 8
+
+@minValue(0)
+@maxValue(23)
+@description('First UTC hour of the collector silence band. The band may wrap midnight: 21 through 7 means 21:00-23:59 and 00:00-07:59, which with an 8-hour lookback expects the 16:00 run from 21:00 and the 23:00 run until 07:59 the next morning. The weekday test is made on the start of the lookback, so a Monday morning does not expect a Sunday run.')
+param alertCoShadowCollectCheckFromHourUtc int = 21
+
+@minValue(0)
+@maxValue(23)
+@description('Last UTC hour of the collector silence band, inclusive. See the parameter above.')
+param alertCoShadowCollectCheckToHourUtc int = 7
 
 // ---------------------------------------------------------------------------
 // Observability
@@ -1056,7 +1170,7 @@ resource managedCertificate 'Microsoft.App/managedEnvironments/managedCertificat
 // ---------------------------------------------------------------------------
 
 resource cipWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableCipWorker) {
-  name: '${baseName}-cip-worker'
+  name: cipWorkerJobName
   location: location
   tags: tags
   identity: {
@@ -1339,7 +1453,7 @@ resource backupBlobWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 }
 
 resource dbBackupJob 'Microsoft.App/jobs@2024-03-01' = if (enableDbBackup) {
-  name: '${baseName}-db-backup'
+  name: dbBackupJobName
   location: location
   tags: tags
   identity: {
@@ -1432,6 +1546,100 @@ resource dbBackupJob 'Microsoft.App/jobs@2024-03-01' = if (enableDbBackup) {
   ]
 }
 
+// ---------------------------------------------------------------------------
+// The BAS collector check (Phase 13 Part B)
+//
+// The one piece of the alerting that is a job and not a rule, because the
+// thing it watches - bas_ingest_runs, written by the collector on the office
+// PC - is a table, and Azure Monitor reads logs and metrics, never a table.
+// Every half hour it runs infra/db-backup/collector-check.sh from the backup
+// image, which holds psql: the newest successful collector run older than
+// basCollectorSilenceMinutes is a non-zero exit, a Failed execution, and the
+// "job failed" rule below emails. The check not running at all is the "job
+// silent" rule's case. It reads one table and writes nothing; the only
+// credential is DATABASE-URL by reference, the same one the backup holds,
+// and the script moves it into libpq's environment so that psql runs with no
+// connection argument.
+// ---------------------------------------------------------------------------
+
+resource basCollectorCheckJob 'Microsoft.App/jobs@2024-03-01' = if (enableBasCollectorCheck) {
+  name: basCollectorCheckJobName
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // One query. Five minutes is generous for a connection and a SELECT;
+      // past it the execution is Failed, which is the right answer for a
+      // database that will not answer.
+      replicaTimeout: 300
+      // No retry: a failed attempt IS the signal, and a retry would only
+      // delay it by the retry.
+      replicaRetryLimit: 0
+      scheduleTriggerConfig: {
+        cronExpression: basCollectorCheckCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'bas-collector-check'
+          image: dbBackupImage
+          // The script, and no argument: the threshold travels in the
+          // environment, and the command line of every execution's record
+          // carries nothing.
+          command: [
+            '/usr/local/bin/phb-bas-collector-check'
+          ]
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: [
+            // By reference, never a plain value - the only secret the job
+            // holds. The script turns it into PGHOST/PGUSER/PGPASSWORD and
+            // unsets it before psql runs.
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'database-url'
+            }
+            // A number, not a secret.
+            {
+              name: 'BAS_COLLECTOR_SILENCE_MINUTES'
+              value: string(basCollectorSilenceMinutes)
+            }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
 
 // ---------------------------------------------------------------------------
 // Phase 12 Part E - the shadow run's three jobs
@@ -1486,7 +1694,7 @@ var coShadowCommonEnv = [
 ]
 
 resource coShadowFeedJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
-  name: '${baseName}-co-shadow-feed'
+  name: coShadowFeedJobName
   location: location
   tags: tags
   identity: {
@@ -1569,7 +1777,7 @@ resource coShadowFeedJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
 }
 
 resource coShadowCollectJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
-  name: '${baseName}-co-shadow-collect'
+  name: coShadowCollectJobName
   location: location
   tags: tags
   identity: {
@@ -1625,7 +1833,7 @@ resource coShadowCollectJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow
 // an investigation. Its root and snapshot folder are set at start time
 // (`az containerapp job start --env-vars`), which is why none is here.
 resource coClassifyJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
-  name: '${baseName}-co-classify'
+  name: coClassifyJobName
   location: location
   tags: tags
   identity: {
@@ -1726,6 +1934,424 @@ resource budget 'Microsoft.Consumption/budgets@2023-05-01' = if (enableBudget) {
 }
 
 // ---------------------------------------------------------------------------
+// Alerts (Phase 13 Part B)
+//
+// One action group, three metric rules, and two families of log rules over
+// ContainerAppSystemLogs_CL - the environment's own system log, which is the
+// execution history of every job in it. What the log actually says was read
+// from the live workspace before any of this was written
+// (docs/phase-13-verification.md): a finished execution logs
+// Reason_s 'Completed' with its ExecutionName_s set, and an execution that
+// failed logs 'BackoffLimitExceeded' (retries exhausted - the two real
+// cip-worker failures of 21 and 22 October) or 'DeadlineExceeded' (the
+// replica timeout). A successful retry is a Completed execution and no
+// alert, which is what replicaRetryLimit: 1 on the backup means.
+//
+// Failure rules are STATELESS (autoMitigate false) with the actions muted
+// for half an hour after a fire: one email per failure, and no "Resolved"
+// email fifteen minutes later for a thing nobody fixed. Silence rules are
+// stateless too, muted for six hours: a reminder four times a day while the
+// job stays silent. The metric rules are stateful, so "the database is back"
+// and "the errors stopped" do arrive as Resolved.
+//
+// Every rule's name carries the job, so the email subject does; every
+// rule's description names the runbook heading for that condition.
+// ---------------------------------------------------------------------------
+
+// The common alert schema, so every email - metric or log - has the same
+// shape: the rule's name in the subject, its description in the body.
+var alertEmailReceivers = [
+  for (email, i) in alertContactEmails: {
+    name: 'email-${i}'
+    emailAddress: email
+    useCommonAlertSchema: true
+  }
+]
+
+resource alertActionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = if (enableAlerts) {
+  name: '${baseName}-alerts'
+  location: 'Global'
+  tags: tags
+  properties: {
+    groupShortName: take(replace(baseName, '-', ''), 12)
+    enabled: true
+    // A deployment with the flag on and no address fails HERE, before any
+    // rule exists, rather than creating rules that email nobody.
+    emailReceivers: empty(alertContactEmails)
+      ? fail('enableAlerts is true but alertContactEmails is empty: the alerts would go nowhere. Give it a shared mailbox or M365 group address - never a person.')
+      : alertEmailReceivers
+  }
+}
+
+// --- Metric rules: the database and the web app ------------------------------
+
+// Sev 0: the one thing in this deployment that must never stop (the note
+// above the server resource). Maximum over five minutes under 1 is five
+// consecutive minutes with the server reporting itself down, which rides
+// through a one-minute maintenance restart and not through an outage. A
+// server somebody STOPPED emits no metric at all, and a metric rule does
+// not fire on no data - the collector check and the cip scaler rule are the
+// two that notice that case, because both try to connect.
+resource dbAliveAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (enableAlerts) {
+  name: 'PHB database is not alive - ${postgresServerName}'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'The database server reports itself down. runbook.md -> Alerts -> "The database is not alive".'
+    severity: 0
+    enabled: true
+    scopes: [
+      postgres.id
+    ]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'is_db_alive'
+          metricNamespace: 'Microsoft.DBforPostgreSQL/flexibleServers'
+          metricName: 'is_db_alive'
+          operator: 'LessThan'
+          threshold: 1
+          timeAggregation: 'Maximum'
+        }
+      ]
+    }
+    actions: [
+      {
+        actionGroupId: alertActionGroup.id
+      }
+    ]
+  }
+}
+
+resource dbStorageAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (enableAlerts) {
+  name: 'PHB database storage is filling - ${postgresServerName}'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'Storage on the database server is past the threshold. autoGrow should be growing it; check that it is Enabled. runbook.md -> Alerts -> "The database storage is filling".'
+    severity: 2
+    enabled: true
+    scopes: [
+      postgres.id
+    ]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT1H'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'storage_percent'
+          metricNamespace: 'Microsoft.DBforPostgreSQL/flexibleServers'
+          metricName: 'storage_percent'
+          operator: 'GreaterThan'
+          threshold: alertDbStoragePercent
+          timeAggregation: 'Average'
+        }
+      ]
+    }
+    actions: [
+      {
+        actionGroupId: alertActionGroup.id
+      }
+    ]
+  }
+}
+
+// The web app's own failure signal: responses the ingress counted as 5xx.
+// This is what a revision that cannot start looks like from outside (every
+// request a 503) and what a crashing route looks like (500s), and it is
+// the only signal this template has for the app being down without an
+// availability test, which was declined for now because a probe every few
+// minutes would keep a scale-to-zero app warm around the clock
+// (docs/phase-13-verification.md, the decisions left open).
+resource appServerErrorsAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (enableAlerts) {
+  name: 'PHB web app server errors - ${containerAppName}'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'The container app returned more than the threshold of 5xx responses in fifteen minutes. runbook.md -> Alerts -> "The web app is returning server errors".'
+    severity: 2
+    enabled: true
+    scopes: [
+      containerApp.id
+    ]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'requests-5xx'
+          metricNamespace: 'Microsoft.App/containerApps'
+          metricName: 'Requests'
+          dimensions: [
+            {
+              name: 'statusCodeCategory'
+              operator: 'Include'
+              values: [
+                '5xx'
+              ]
+            }
+          ]
+          operator: 'GreaterThan'
+          threshold: alertAppServerErrorsPer15Min
+          timeAggregation: 'Total'
+        }
+      ]
+    }
+    actions: [
+      {
+        actionGroupId: alertActionGroup.id
+      }
+    ]
+  }
+}
+
+// --- Log rules: every job that exists gets a failure rule ---------------------
+//
+// The list is built from the same flags that create the jobs, so a job that
+// is not deployed has no rule asking after it, and tests/deploy-guards.test.ts
+// holds every Microsoft.App/jobs resource in this file to a place in it.
+
+var alertFailureJobs = concat(
+  enableCipWorker ? [cipWorkerJobName] : [],
+  enableDbBackup ? [dbBackupJobName] : [],
+  enableBasCollectorCheck ? [basCollectorCheckJobName] : [],
+  enableCoShadow ? [coShadowFeedJobName, coShadowCollectJobName, coClassifyJobName] : []
+)
+
+// The two terminal reasons an execution fails with, read from the live log.
+// Other Warning reasons (OOMKilled, ErrImagePull) are causes that precede
+// one of these two and are in the same log for the person who follows up.
+var jobFailedQuery = '''
+ContainerAppSystemLogs_CL
+| where JobName_s == '__JOB__' and isnotempty(ExecutionName_s)
+| where Reason_s in ('BackoffLimitExceeded', 'DeadlineExceeded')
+| project TimeGenerated, JobName_s, ExecutionName_s, Reason_s, Log_s
+'''
+
+resource jobFailedAlerts 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = [
+  for job in alertFailureJobs: if (enableAlerts) {
+    name: 'PHB job failed - ${job}'
+    location: location
+    tags: tags
+    kind: 'LogAlert'
+    properties: {
+      displayName: 'PHB job failed - ${job}'
+      description: 'An execution of ${job} ended in failure (retries exhausted, or the replica timeout). The log line in the alert names which. runbook.md -> Alerts -> "A job failed".'
+      severity: 1
+      enabled: true
+      scopes: [
+        logAnalytics.id
+      ]
+      // Looked at every five minutes over the last thirty, so a failure
+      // event that reaches the workspace a few minutes late is still seen;
+      // muted for thirty after a fire, so it is emailed once.
+      evaluationFrequency: 'PT5M'
+      windowSize: 'PT30M'
+      autoMitigate: false
+      muteActionsDuration: 'PT30M'
+      skipQueryValidation: false
+      criteria: {
+        allOf: [
+          {
+            query: replace(jobFailedQuery, '__JOB__', job)
+            timeAggregation: 'Count'
+            operator: 'GreaterThan'
+            threshold: 0
+            failingPeriods: {
+              numberOfEvaluationPeriods: 1
+              minFailingPeriodsToAlert: 1
+            }
+          }
+        ]
+      }
+      actions: {
+        actionGroups: [
+          alertActionGroup.id
+        ]
+      }
+    }
+  }
+]
+
+// --- Log rules: every SCHEDULED job gets a silence rule -------------------------
+//
+// The deliverable (docs/PHASE-13.md, "Notes for the implementer"). The query
+// returns exactly one row with `missed` 1 or 0, so that "no rows" can never be
+// mistaken for "nothing missed": a run is missed when the check is live (the
+// hour is in the band, and the start of the lookback was a weekday if the
+// job runs on weekdays only) and no execution of the job completed inside
+// the lookback. The lookback is counted from now, the weekday from the
+// start of the lookback, so a band that wraps midnight on a Monday morning
+// asks about Friday, not Sunday. Each rule looks back two days, the most a
+// log rule may, and the lookback inside the query is the parameter.
+
+var alertSilenceJobs = concat(
+  enableDbBackup
+    ? [
+        {
+          job: dbBackupJobName
+          hours: alertDbBackupSilenceHours
+          fromHour: 0
+          toHour: 23
+          weekdaysOnly: false
+        }
+      ]
+    : [],
+  enableBasCollectorCheck
+    ? [
+        {
+          job: basCollectorCheckJobName
+          hours: alertBasCollectorCheckSilenceHours
+          fromHour: 0
+          toHour: 23
+          weekdaysOnly: false
+        }
+      ]
+    : [],
+  enableCoShadow
+    ? [
+        {
+          job: coShadowFeedJobName
+          hours: alertCoShadowFeedSilenceHours
+          fromHour: alertCoShadowFeedCheckFromHourUtc
+          toHour: alertCoShadowFeedCheckToHourUtc
+          weekdaysOnly: true
+        }
+        {
+          job: coShadowCollectJobName
+          hours: alertCoShadowCollectSilenceHours
+          fromHour: alertCoShadowCollectCheckFromHourUtc
+          toHour: alertCoShadowCollectCheckToHourUtc
+          weekdaysOnly: true
+        }
+      ]
+    : []
+)
+
+var jobSilentQuery = '''
+let lookbackHours = __HOURS__;
+let fromHour = __FROM__;
+let toHour = __TO__;
+let weekdaysOnly = __WEEKDAYS__;
+let due = now() - 1h * lookbackHours;
+let weekday = not(weekdaysOnly) or (dayofweek(due) between (1d .. 5d));
+let h = hourofday(now());
+let inBand = iff(fromHour <= toHour, h >= fromHour and h <= toHour, h >= fromHour or h <= toHour);
+let completed = toscalar(
+  ContainerAppSystemLogs_CL
+  | where TimeGenerated > due
+  | where JobName_s == '__JOB__' and isnotempty(ExecutionName_s) and Reason_s == 'Completed'
+  | count);
+print missed = iff(weekday and inBand and completed == 0, 1, 0), completedRuns = completed, checkedNow = weekday and inBand, lookbackFrom = due
+'''
+
+resource jobSilentAlerts 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = [
+  for item in alertSilenceJobs: if (enableAlerts) {
+    name: 'PHB job silent - ${item.job}'
+    location: location
+    tags: tags
+    kind: 'LogAlert'
+    properties: {
+      displayName: 'PHB job silent - ${item.job}'
+      description: 'No execution of ${item.job} completed in the last ${item.hours} hours while one was due. The job is paused, hung, or the environment is down. runbook.md -> Alerts -> "A job is silent".'
+      severity: 1
+      enabled: true
+      scopes: [
+        logAnalytics.id
+      ]
+      evaluationFrequency: 'PT15M'
+      windowSize: 'P2D'
+      autoMitigate: false
+      muteActionsDuration: 'PT6H'
+      skipQueryValidation: false
+      criteria: {
+        allOf: [
+          {
+            query: replace(replace(replace(replace(replace(jobSilentQuery, '__JOB__', item.job), '__HOURS__', string(item.hours)), '__FROM__', string(item.fromHour)), '__TO__', string(item.toHour)), '__WEEKDAYS__', item.weekdaysOnly ? 'true' : 'false')
+            metricMeasureColumn: 'missed'
+            timeAggregation: 'Total'
+            operator: 'GreaterThan'
+            threshold: 0
+            failingPeriods: {
+              numberOfEvaluationPeriods: 1
+              minFailingPeriodsToAlert: 1
+            }
+          }
+        ]
+      }
+      actions: {
+        actionGroups: [
+          alertActionGroup.id
+        ]
+      }
+    }
+  }
+]
+
+// --- The Cost Intelligence worker's own silence --------------------------------
+//
+// An event-driven job has no schedule to be silent against; its silent
+// failure is the scaler that cannot reach the database, which leaves every
+// queued run Queued forever and logs KEDAScalerFailed every fifteen seconds
+// (runbook.md -> "Runs stay Queued in production"). Seen for real on
+// 2026-10-23 at 03:50 UTC: four events in a minute while the server
+// restarted, then nothing - below the default threshold.
+resource cipScalerFailedAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (enableAlerts && enableCipWorker) {
+  name: 'PHB job scaler cannot reach the database - ${cipWorkerJobName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'PHB job scaler cannot reach the database - ${cipWorkerJobName}'
+    description: 'The Cost Intelligence worker\'s scaler failed to query the database more than the threshold of times in thirty minutes; queued runs are not starting. runbook.md -> Alerts -> "The Cost Intelligence worker cannot see its work".'
+    severity: 1
+    enabled: true
+    scopes: [
+      logAnalytics.id
+    ]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT30M'
+    autoMitigate: false
+    muteActionsDuration: 'PT1H'
+    skipQueryValidation: false
+    criteria: {
+      allOf: [
+        {
+          query: replace('''
+ContainerAppSystemLogs_CL
+| where JobName_s == '__JOB__' and Reason_s == 'KEDAScalerFailed'
+| project TimeGenerated, JobName_s, Reason_s, Log_s
+''', '__JOB__', cipWorkerJobName)
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: alertCipScalerFailuresPer30Min
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [
+        alertActionGroup.id
+      ]
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Outputs. Consumed by CI and by the Part B checklist. No secret is output.
 // ---------------------------------------------------------------------------
 
@@ -1746,6 +2372,11 @@ output cipWorkerJobName string = enableCipWorker ? cipWorkerJob.name : ''
 // list` and `az storage blob list` in runbook.md -> "Nightly database backup".
 output dbBackupJobName string = enableDbBackup ? dbBackupJob.name : ''
 output dbBackupStorageAccountName string = enableDbBackup ? backupStorage.name : ''
+// The collector check job and the action group every alert emails, for
+// `az containerapp job execution list` and `az monitor action-group show`
+// in runbook.md -> "Alerts".
+output basCollectorCheckJobName string = enableBasCollectorCheck ? basCollectorCheckJob.name : ''
+output alertActionGroupName string = enableAlerts ? alertActionGroup.name : ''
 // The shadow run's three jobs, for `az containerapp job execution list` and
 // `job logs show` in runbook.md -> "The change-order shadow run".
 output coShadowFeedJobName string = enableCoShadow ? coShadowFeedJob.name : ''

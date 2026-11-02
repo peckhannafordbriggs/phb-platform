@@ -1,5 +1,6 @@
 # The nightly database backup image: pg_dump of the server's own major
-# version, curl for the blob upload, nothing else. Built ONCE into the
+# version, curl for the blob upload, psql for the BAS collector check that
+# shares it (Phase 13 Part B), nothing else. Built ONCE into the
 # platform's registry and rebuilt only when the PostgreSQL major changes;
 # no application code is in it, so no merge to main touches it.
 #
@@ -21,6 +22,13 @@ RUN apk add --no-cache bash curl openssl
 
 COPY backup.sh /usr/local/bin/phb-db-backup
 RUN chmod 0555 /usr/local/bin/phb-db-backup
+
+# The BAS collector check (Phase 13 Part B): the same image, because the
+# check is one psql query and the backup script's URL parser, which it
+# sources. A second scheduled job in the template runs this path instead
+# of the entrypoint; both read DATABASE-URL by reference.
+COPY collector-check.sh /usr/local/bin/phb-bas-collector-check
+RUN chmod 0555 /usr/local/bin/phb-bas-collector-check
 
 # Not root. The base image's unprivileged user; /tmp is where the dump lives
 # for the seconds between pg_dump and the upload.

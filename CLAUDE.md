@@ -1318,6 +1318,43 @@ with SQL; `mail.sent` is still the only record of who sent a vendor email, and
 `WHY-ITS-BUILT-THIS-WAY.md` § 73; `runbook.md` → *The audit log screen does
 not show a mail send, a BAS question or a profile change*.
 
+**Phase 13 Parts B and C — BUILT 2026-11-02, ON HOLD, not deployed, no
+rule has fired.** On `feat/phase-13-alerts-HOLD`, a draft PR held until
+Phase 12 Part E's shadow run is complete; `enableCoShadow` stays false
+everywhere. Part A's schedule mechanism was delivered by Part E's E5 (the
+three shadow jobs); this is the alerting beside it, all in
+`infra/main.bicep` behind `enableAlerts` (default false): one action group
+emailing `alertContactEmails` (**a group, never a person**; the template
+refuses an empty list with `fail()`), a **failure rule per job** (`PHB job
+failed - <job>`: the execution logged `BackoffLimitExceeded` or
+`DeadlineExceeded`), a **silence rule per scheduled job** (`PHB job silent
+- <job>`: a query that always returns one row saying whether a `Completed`
+execution was due and absent, the weekday decided on the start of the
+lookback so a band wrapping midnight asks about Friday on a Monday
+morning), the cip-worker's `KEDAScalerFailed` rule, and three metric rules
+(`is_db_alive`, `storage_percent`, `Requests` 5xx). **The BAS collector's
+alert is a job**, `<baseName>-bas-collector-check` behind
+`enableBasCollectorCheck`, from the backup image (it holds psql): every half
+hour `infra/db-backup/collector-check.sh` reads the newest `ok`/`partial`
+row of `bas_ingest_runs` and exits non-zero past `basCollectorSilenceMinutes`
+(60, because a change-of-value point rolls off the JACE in about two
+hours), so the job-failure rule is the collector's alert. The job lists are
+built from the flags that create the jobs, and a deploy guard holds every
+`Microsoft.App/jobs` resource to a place in them. **Read from the live
+workspace, not guessed**: a finished execution logs `Reason_s` `Completed`
+with its execution name, a failed one `BackoffLimitExceeded`; the rendered
+failure query returned exactly the two real October failures; the rendered
+silence queries returned one row each with `missed` as the band and weekday
+say; the check script was run for real against an empty, fresh, stale and
+failed `bas_ingest_runs`. **Not verified: nothing has been deployed and no
+rule has fired**, the shadow rules have never seen a shadow job, and
+`DeadlineExceeded` is from documentation. Every number is a parameter.
+`docs/PHASE-13.md` is **not** edited; where it disagrees with the Part E
+plan is tabled in `docs/phase-13-verification.md` § 6 for the owner.
+`runbook.md` → *Alerts (Phase 13 Part B)* is Part C: one entry per email,
+pause, DST, cost, and the tests still to run; `WHY-ITS-BUILT-THIS-WAY.md`
+§ 77.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -1442,3 +1479,4 @@ either anywhere else — point at them.
 | `docs/phase-12-part-e-plan.md` | **Part E, the plan, approved 2026-10-29:** a read-only reader identity with Read on the live tree, the state snapshot before each laptop run, both halves (the classifier as a scheduled shadow, the intake engine as a post-hoc replay with the Part C instrument), Phase 13's schedule without its alerts, the STOP file, the daily report, exit by path coverage with a ten-laptop-weekday floor, the cost, what `PHASE-13.md` now gets wrong, the owner's eight decisions (§ 14) and the dates counting the IT grant (§ 15) |
 | `docs/phase-12-part-e-equivalence.md` | **Part E: what counts as equivalent**, written 2026-09-22 before any comparison ran so the bar cannot be set to fit a disagreement; recovered and re-checked 2026-10-28 |
 | `docs/phase-12-part-e-verification.md` | **Part E's record:** what E1–E6 built and where it is held, the one finding from the real engine on the way, then day one, the weeks, every disagreement, the path coverage table at close, what the window proves and does not |
+| `docs/phase-13-verification.md` | **Phase 13 Parts B and C, built 2026-11-02 and held:** what the alert rules are, the live log facts they rest on (`Completed`, `BackoffLimitExceeded`), the rendered queries run against the workspace, the collector check run for real, what has NOT been verified (no rule has fired), the decisions made and the ones asked, and the table of where `PHASE-13.md` disagrees with the Part E plan |

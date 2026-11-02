@@ -200,7 +200,8 @@ This is the section to keep. Everything here is a known future failure with a kn
 | SSO client secret expires | **13 August 2028** | Local sign-in fails with `AADSTS7000215`. **Production is not affected**: it carries no secret and authenticates the token exchange with the managed identity, matched by a federated identity credential on the SSO app registration — `runbook.md` → *Production sign-in authenticates with the managed identity*. If production ever fails with a secret-shaped error, the fault is that a secret was deployed at all. | Ask IT for a new secret, for developer machines only. `runbook.md` → *What expires, and when* |
 | BAS database stopped | If anyone applies a cost policy that stops it | Silent data destruction at the controller | Restart immediately; check for gaps on the Collection Health screen |
 | Azure spend alert | If misconfigured, or growth | Email at $150/month | Expected spend is $60–100 |
-| Collector host offline | Laptop closed, machine rebooted, network down | Gaps appear on Collection Health | Restart the collector. Anything past ~42 hours is already gone |
+| Collector host offline | Laptop closed, machine rebooted, network down | Gaps appear on Collection Health. Once the Phase 13 alerts are deployed (built 2026-11-02, held with the shadow run), an email `PHB job failed - <baseName>-bas-collector-check` within about ninety minutes - `runbook.md` → *Alerts* → *The BAS collector is silent* | Restart the collector. Anything past ~42 hours is already gone, and a change-of-value point can roll off in two |
+| A scheduled job stops running, or fails | Any night, any weekday | Nothing, until the Phase 13 alerts are deployed; then `PHB job failed - <job>` or `PHB job silent - <job>` by email, to the group in `alertContactEmails` | `runbook.md` → *Alerts (Phase 13 Part B)*, one entry per email. The rules exist on a held branch and have never fired: deploying them and making one fire is the first thing to do with them |
 | Node or dependency EOL | Eventually | Build or deploy failures | Routine maintenance |
 
 **The Graph client secret is deliberately not in that table.** Production
@@ -391,7 +392,8 @@ database and compares. Run it occasionally — an untested backup isn't a backup
 The production database has its own nightly dump to blob storage, outside the
 server, built 2026-10-21 behind `enableDbBackup` and **not yet turned on**:
 `runbook.md` → *Nightly database backup* has the switch-on steps, the weekly
-"did it run" check (nothing alerts on a missed night), and the restore
+"did it run" check (nothing alerts on a missed night until the Phase 13
+alerts are deployed - `runbook.md` → *Alerts (Phase 13 Part B)*), and the restore
 procedure. Turn it on, then run the restore once, before you need it.
 
 **Verifying the platform hasn't disturbed the automation.** `runbook.md` has the full
