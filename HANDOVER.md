@@ -333,31 +333,38 @@ in Key Vault*.
 
 ### Moving the AI layer off the laptop
 
-The two scheduled AI tasks that drive the change-order automation still run on one Windows
-machine — **this one**, under `C:\Users\Msheth`, not the previous operator's. The Cowork
-app log settles that, and the crons match what `09 Scheduled Task Prompts VERBATIM`
-recorded — that is a document in the SharePoint `CO Process Handoff` corpus (see § 9),
-not a file in this repository. Moving them into Azure is Phases 12–14.
+The two scheduled AI tasks that drive the change-order automation run on one Windows
+machine — **this one**, under `C:\Users\Msheth` — until the Phase 14 cutover moves them
+into Azure. The Cowork app log settles which machine, and the crons match what
+`09 Scheduled Task Prompts VERBATIM` recorded (a document in the SharePoint
+`CO Process Handoff` corpus, § 9). `docs/PHASE-14.md` is the one list for cutover day;
+`docs/06-roadmap.md` has the phases.
 
-**Phase 12 Parts A, B and C are done.** The engine is in version control for the first time
-(`phb-co-engine`), the inventory that every later part depends on is written
-(`docs/12-ai-layer-inventory.md`), a dormant `Bid Tracker.xlsx` write was found and
-removed, and one file-access interface has been extracted with two implementations. The
-Graph one has run against SharePoint as the engine's own identity, from a container in
-Azure, and produced output equivalent to the local store's on all eight fixture COs
-(2026-10-28; `docs/phase-12-part-c-verification.md`). The two before-cutover decisions
-were closed the same day: the intake rule is in the repository, and the sentinel flows'
-trigger was observed firing on files the engine's identity wrote through Graph
-(`docs/phase-12-part-c-plan.md` → *Before cutover*). Parts D and E are not started.
+**Where it stands (2026-11-02).** Phase 12 Parts A–D are complete: the engine is in
+version control (`phb-co-engine`), inventoried, containerised, running through SharePoint
+as its own identity with output equivalent to the local store's on every fixture CO, and
+the classifier's judgments are code plus four model calls that every replay matched. Part
+E, the shadow window, is built and waits on one IT request (the read-only reader, Request 6
+in `runbook.md`); it runs for at least ten laptop weekdays against a copy while the laptop
+keeps running the real process. The cutover itself is prepared on two draft pull requests
+titled `[HOLD until Part E passes]` — the one code change the day needs, the two production
+jobs behind `enableCoLive`, the spec edits — and nothing in them merges until the window
+passes.
 
-It's the only work in this project that can break a pipeline the business depends on daily,
-so the sequence matters: extract a file-access layer from a ~196 KB Python script,
-containerize it, shadow-run against a copy for weeks, and diff the output before cutover.
-Never run both against the live folders at once — the lock file and duplicate detection
-make that actively dangerous. Keep the laptop path documented as rollback for at least a
-month after cutover. **When cutover day comes, work from `docs/PHASE-14.md`**: it is the
-one list of everything the documents say must happen then, each item with its source,
-starting with the ways the laptop's engine and the repository's engine differ.
+**If you inherit this before cutover**, the day is `docs/PHASE-14.md` § 9, in order, with
+`runbook.md` → *Cutover: turning the live engine on* for the commands and what each log
+must say. It is a switch, not an overlap: the laptop's two tasks are disabled before the
+flag goes on, and nothing ever runs both against the live folders at once — the lock file
+and duplicate detection make that actively dangerous, not merely redundant.
+
+**If you inherit this after cutover**, the laptop is the rollback for a month and is then
+retired. **The rollback is written for someone who has never seen this project:
+`runbook.md` → *Rolling the change-order engine back to the laptop*** — the words it uses,
+what to have before you start and who to ask for each thing, numbered steps each with what
+you should see, how to tell it worked, and what to do when a step fails. Read it on day one,
+before you need it. It belongs to whoever currently owns the platform; if nobody does, or you
+do not know who does, Jim Schwarz is the person to ask. The rollback month runs into
+January 2027.
 
 ---
 
