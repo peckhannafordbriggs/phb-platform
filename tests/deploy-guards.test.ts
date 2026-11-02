@@ -996,7 +996,7 @@ describe("the two secure parameters are optional, and omitted means unchanged (2
     // gives Bicep the dependency. ARM ignores a dependency on a resource
     // whose condition is false, so an omitted secret does not block a redeploy.
     const databaseUrlRefs = code.match(/secrets\/\$\{databaseUrlSecret\.name\}/g) ?? [];
-    expect(databaseUrlRefs.length).toBe(3); // the app, the CIP worker job, the backup job
+    expect(databaseUrlRefs.length).toBe(4); // the app, the CIP worker job, the backup job, the BAS collector check job
     expect(code).toMatch(/secrets\/\$\{authSecretSecret\.name\}/);
   });
 
@@ -1447,7 +1447,8 @@ describe("the nightly database backup is conditional, identity-only, and holds n
       expect(blobRole[0]!.condition).toBe("[parameters('enableDbBackup')]");
 
       const jobs = ofType("Microsoft.App/jobs");
-      const backup = jobs.find((j) => j.name.includes("db-backup"));
+      // the job's name is a variable since Phase 13 Part B, so the compiled name is [variables('dbBackupJobName')]
+      const backup = jobs.find((j) => /dbBackupJobName/.test(j.name));
       expect(backup).toBeDefined();
       expect(backup!.condition).toBe("[parameters('enableDbBackup')]");
       expect(backup!.properties?.configuration?.triggerType).toBe("Schedule");
@@ -1625,21 +1626,317 @@ describe("the Phase 12 Part E shadow run: three jobs behind one flag, two identi
 
     itIfArm("every shadow job is conditional on enableCoShadow, and the flag defaults to false", () => {
       expect(arm!.parameters.enableCoShadow).toMatchObject({ type: "bool", defaultValue: false });
-      const jobs = arm!.resources.filter((r) => r.type === "Microsoft.App/jobs" && /co-shadow|co-classify/.test(r.name));
+      // the names are variables since Phase 13 Part B: [variables('coShadowFeedJobName')] and so on
+      const jobs = arm!.resources.filter((r) => r.type === "Microsoft.App/jobs" && /coShadow\w*JobName|coClassifyJobName/.test(r.name));
       expect(jobs.length).toBe(3);
       for (const j of jobs) expect(j.condition, j.name).toBe("[parameters('enableCoShadow')]");
     });
 
     itIfArm("the collector carries no secret and the feed's one secret is the Change Orders key", () => {
       const byName = (part: string) => arm!.resources.find((r) => r.type === "Microsoft.App/jobs" && r.name.includes(part));
-      const collect = byName("co-shadow-collect")!;
+      const collect = byName("coShadowCollectJobName")!;
       const cfg = (collect.properties as { configuration?: { secrets?: unknown[] } }).configuration ?? {};
       expect(cfg.secrets ?? []).toEqual([]);
-      const feed = byName("co-shadow-feed")!;
+      const feed = byName("coShadowFeedJobName")!;
       const fcfg = (feed.properties as { configuration: { secrets: Array<{ name: string; keyVaultUrl: string }> } }).configuration;
       expect(fcfg.secrets.map((s) => s.name)).toEqual(["co-anthropic-api-key"]);
       // the compiled reference names the variable, which holds CO-ANTHROPIC-API-KEY
       expect(fcfg.secrets[0]!.keyVaultUrl).toMatch(/coAnthropicApiKeySecretName/);
+    });
+  });
+});
+
+describe("Phase 13 Part B: every job has a failure rule, every scheduled job a silence rule, and all of it emails one group (2026-11-02)", () => {
+  /**
+   * docs/PHASE-13.md -> Part B. Two families of log rule over the
+   * environment's system log - a job that ran and failed leaves
+   * BackoffLimitExceeded or DeadlineExceeded with its execution name; a job
+   * that never ran leaves nothing, so the silence rule is a query that
+   * returns one row saying whether a completed execution was due and absent
+   * - plus three metric rules, all behind enableAlerts and all emailing one
+   * action group that refuses to exist without an address. The BAS
+   * collector check is the one job the phase adds, because Azure Monitor
+   * cannot read the table the collector writes. What the live log actually
+   * says is recorded in docs/phase-13-verification.md; these tests hold the
+   * template to it, and to the rule that no job can be added without a rule
+   * asking after it.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  /** One resource block, from its declaration to the next declaration, variable or section rule. */
+  const resourceBlock = (bicep: string, name: string) => {
+    const start = bicep.indexOf(`resource ${name} `);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\nvar "), rest.indexOf("\n// ----"), rest.indexOf("\noutput ")].filter((i) => i > 0);
+    return rest.slice(0, Math.min(...ends));
+  };
+  /** A multi-line ''' ''' variable's body. */
+  const tripleVar = (bicep: string, name: string) => {
+    const m = new RegExp(`var ${name} = '''\\n([\\s\\S]*?)'''`).exec(bicep);
+    expect(m, name).not.toBeNull();
+    return m![1]!;
+  };
+  /** The job-name variables in the template, keyed by the trigger the resource declares. */
+  const jobsByTrigger = (bicep: string) => {
+    const out: { Schedule: string[]; Manual: string[]; Event: string[] } = { Schedule: [], Manual: [], Event: [] };
+    for (const m of bicep.matchAll(/^resource (\w+) 'Microsoft\.App\/jobs@[^']+' = if \([^)]+\) \{$/gm)) {
+      const block = resourceBlock(bicep, m[1]!);
+      const nameVar = /^\s*name: (\w+)$/m.exec(block)?.[1];
+      const trigger = /triggerType: '(\w+)'/.exec(block)?.[1];
+      expect(nameVar, m[1]).toBeDefined();
+      expect(trigger, m[1]).toBeDefined();
+      out[trigger as keyof typeof out].push(nameVar!);
+    }
+    return out;
+  };
+
+  it("is off by default, and every alert resource is conditional on enableAlerts", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param enableAlerts bool = false$/m);
+    const insights = [...code.matchAll(/^resource (\w+) 'Microsoft\.Insights\/(\w+)@[^']+' = (.*)$/gm)];
+    // the action group, three metric rules, two rule loops and the cip scaler rule - and nothing else of that provider
+    expect(insights.map((m) => m[1]).sort()).toEqual(
+      ["alertActionGroup", "appServerErrorsAlert", "cipScalerFailedAlert", "dbAliveAlert", "dbStorageAlert", "jobFailedAlerts", "jobSilentAlerts"].sort(),
+    );
+    for (const m of insights) {
+      const rest = m[3]!;
+      // `= if (enableAlerts) {` or `= [` for a loop whose body is `if (enableAlerts) {`
+      if (rest === "[") {
+        const block = resourceBlock(code, m[1]!);
+        expect(block, m[1]).toMatch(/^\s*for \w+ in \w+: if \(enableAlerts\) \{$/m);
+      } else {
+        expect(rest, m[1]).toMatch(/^if \(enableAlerts(?: && enableCipWorker)?\) \{$/);
+      }
+    }
+    const outputs = code.split("\n").filter((line) => /^output alertActionGroupName/.test(line));
+    expect(outputs).toEqual(["output alertActionGroupName string = enableAlerts ? alertActionGroup.name : ''"]);
+  });
+
+  it("emails one action group, which refuses to exist with no address, and the address is described as a group and never a person", async () => {
+    const raw = (await readFile("infra/main.bicep")).replace(/\r\n/g, "\n");
+    const code = codeOnly(raw);
+    expect(code).toMatch(/^param alertContactEmails array = \[\]$/m);
+    const group = resourceBlock(code, "alertActionGroup");
+    expect(group).toMatch(/emailReceivers: empty\(alertContactEmails\)\s*\n\s*\? fail\(/);
+    expect(group).toMatch(/useCommonAlertSchema: true|alertEmailReceivers/);
+    expect(code).toMatch(/useCommonAlertSchema: true/);
+    // the description of the parameter carries the rule, in those words
+    const desc = /@description\('([^']*)'\)\nparam alertContactEmails/.exec(raw)?.[1] ?? "";
+    expect(desc).toMatch(/shared mailbox or an M365 group/);
+    expect(desc).toMatch(/NEVER a person/);
+    // every rule names the group and nothing else
+    for (const name of ["dbAliveAlert", "dbStorageAlert", "appServerErrorsAlert"]) {
+      expect(resourceBlock(code, name), name).toMatch(/actions: \[\s*\{\s*actionGroupId: alertActionGroup\.id\s*\}\s*\]/);
+    }
+    for (const name of ["jobFailedAlerts", "jobSilentAlerts", "cipScalerFailedAlert"]) {
+      expect(resourceBlock(code, name), name).toMatch(/actionGroups: \[\s*alertActionGroup\.id\s*\]/);
+    }
+  });
+
+  it("gives every job a failure rule and every scheduled job a silence rule, from the same flags that create the jobs", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const jobs = jobsByTrigger(code);
+    // the six jobs the template holds today; adding one without a rule fails here
+    expect(jobs.Schedule.sort()).toEqual(["basCollectorCheckJobName", "coShadowCollectJobName", "coShadowFeedJobName", "dbBackupJobName"]);
+    expect(jobs.Manual).toEqual(["coClassifyJobName"]);
+    expect(jobs.Event).toEqual(["cipWorkerJobName"]);
+    const failureList = code.slice(code.indexOf("var alertFailureJobs"), code.indexOf("var jobFailedQuery"));
+    const silenceList = code.slice(code.indexOf("var alertSilenceJobs"), code.indexOf("var jobSilentQuery"));
+    for (const name of [...jobs.Schedule, ...jobs.Manual, ...jobs.Event]) {
+      expect(failureList, `${name} has a failure rule`).toContain(name);
+    }
+    for (const name of jobs.Schedule) expect(silenceList, `${name} has a silence rule`).toMatch(new RegExp(`job: ${name}\\b`));
+    for (const name of [...jobs.Manual, ...jobs.Event]) expect(silenceList, `${name} has no schedule to be silent against`).not.toContain(name);
+    // each list is gated by the flag that creates the job
+    expect(failureList).toMatch(/enableCipWorker \? \[cipWorkerJobName\] : \[\]/);
+    expect(failureList).toMatch(/enableDbBackup \? \[dbBackupJobName\] : \[\]/);
+    expect(failureList).toMatch(/enableBasCollectorCheck \? \[basCollectorCheckJobName\] : \[\]/);
+    expect(failureList).toMatch(/enableCoShadow \? \[coShadowFeedJobName, coShadowCollectJobName, coClassifyJobName\] : \[\]/);
+    for (const flag of ["enableDbBackup", "enableBasCollectorCheck", "enableCoShadow"]) expect(silenceList).toContain(flag);
+    // the weekday-only jobs are the shadow's; the daily ones check every day and every hour
+    expect(silenceList).toMatch(/job: coShadowFeedJobName[\s\S]*?weekdaysOnly: true/);
+    expect(silenceList).toMatch(/job: coShadowCollectJobName[\s\S]*?weekdaysOnly: true/);
+    expect(silenceList).toMatch(/job: dbBackupJobName[\s\S]*?fromHour: 0\s*\n\s*toHour: 23\s*\n\s*weekdaysOnly: false/);
+    expect(silenceList).toMatch(/job: basCollectorCheckJobName[\s\S]*?fromHour: 0\s*\n\s*toHour: 23\s*\n\s*weekdaysOnly: false/);
+    // the name every resource carries is the variable the rules name
+    for (const v of ["cipWorkerJobName", "dbBackupJobName", "basCollectorCheckJobName", "coShadowFeedJobName", "coShadowCollectJobName", "coClassifyJobName"]) {
+      expect(code, v).toMatch(new RegExp(`^var ${v} = '\\$\\{baseName\\}-[a-z-]+'$`, "m"));
+    }
+  });
+
+  it("reads failure and completion from the system log the way the live log writes them", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const failed = tripleVar(code, "jobFailedQuery");
+    expect(failed).toMatch(/^ContainerAppSystemLogs_CL$/m);
+    expect(failed).toMatch(/JobName_s == '__JOB__' and isnotempty\(ExecutionName_s\)/);
+    expect(failed).toMatch(/Reason_s in \('BackoffLimitExceeded', 'DeadlineExceeded'\)/);
+    const silent = tripleVar(code, "jobSilentQuery");
+    expect(silent).toMatch(/Reason_s == 'Completed'/);
+    expect(silent).toMatch(/isnotempty\(ExecutionName_s\)/);
+    expect(silent).toMatch(/JobName_s == '__JOB__'/);
+    // one row, always: `missed` is the measure, so "no rows" can never read as "nothing missed"
+    expect(silent).toMatch(/^print missed = iff\(weekday and inBand and completed == 0, 1, 0\)/m);
+    for (const p of ["__HOURS__", "__FROM__", "__TO__", "__WEEKDAYS__"]) expect(silent).toContain(p);
+    // the weekday is decided on the START of the lookback, not on now
+    expect(silent).toMatch(/dayofweek\(due\) between \(1d \.\. 5d\)/);
+    expect(silent).toMatch(/let due = now\(\) - 1h \* lookbackHours;/);
+    // a band may wrap midnight
+    expect(silent).toMatch(/iff\(fromHour <= toHour, h >= fromHour and h <= toHour, h >= fromHour or h <= toHour\)/);
+    const silentRule = resourceBlock(code, "jobSilentAlerts");
+    expect(silentRule).toMatch(/metricMeasureColumn: 'missed'/);
+    expect(silentRule).toMatch(/timeAggregation: 'Total'/);
+    expect(silentRule).toMatch(/operator: 'GreaterThan'\s*\n\s*threshold: 0/);
+    expect(silentRule).toMatch(/windowSize: 'P2D'/);
+    expect(silentRule).toMatch(/replace\(replace\(replace\(replace\(replace\(jobSilentQuery, '__JOB__', item\.job\), '__HOURS__', string\(item\.hours\)\), '__FROM__', string\(item\.fromHour\)\), '__TO__', string\(item\.toHour\)\), '__WEEKDAYS__', item\.weekdaysOnly \? 'true' : 'false'\)/);
+    // every lookback is under the two days a rule can see
+    for (const p of ["alertDbBackupSilenceHours", "alertBasCollectorCheckSilenceHours", "alertCoShadowFeedSilenceHours", "alertCoShadowCollectSilenceHours"]) {
+      expect(code, p).toMatch(new RegExp(`@maxValue\\(47\\)\\n@description\\('[^\\n]*'\\)\\nparam ${p} int = \\d+`));
+    }
+    const failedRule = resourceBlock(code, "jobFailedAlerts");
+    expect(failedRule).toMatch(/query: replace\(jobFailedQuery, '__JOB__', job\)/);
+    expect(failedRule).toMatch(/timeAggregation: 'Count'/);
+    expect(failedRule).toMatch(/operator: 'GreaterThan'\s*\n\s*threshold: 0/);
+  });
+
+  it("emails a failure once and a silence four times a day: stateless rules with muted actions, no Resolved mail for a job", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    for (const [name, mute] of [["jobFailedAlerts", "PT30M"], ["jobSilentAlerts", "PT6H"], ["cipScalerFailedAlert", "PT1H"]] as const) {
+      const block = resourceBlock(code, name);
+      expect(block, name).toMatch(/autoMitigate: false/);
+      expect(block, name).toMatch(new RegExp(`muteActionsDuration: '${mute}'`));
+      expect(block, name).toMatch(/kind: 'LogAlert'/);
+      expect(block, name).toMatch(/scopes: \[\s*logAnalytics\.id\s*\]/);
+      expect(block, name).toMatch(/skipQueryValidation: false/);
+      expect(block, name).toMatch(/severity: 1/);
+    }
+    // the metric rules resolve, because "the database is back" is worth a mail
+    for (const name of ["dbAliveAlert", "dbStorageAlert", "appServerErrorsAlert"]) {
+      expect(resourceBlock(code, name), name).toMatch(/autoMitigate: true/);
+    }
+  });
+
+  it("names the job in every rule name, with no character the resource name forbids, and points every rule at the runbook", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const names = [...code.matchAll(/^\s*name: '(PHB [^']+)'$/gm)].map((m) => m[1]!);
+    expect(names.length).toBe(6);
+    for (const n of names) {
+      // the looped rules carry the loop variable; the single ones the name variable
+      expect(n).toMatch(/\$\{(job|item\.job|\w+JobName|postgresServerName|containerAppName)\}$/);
+      // the ARM name pattern forbids these; the ${} is the interpolation, not the name
+      expect(n.replace(/\$\{[\w.]+\}/g, "x")).not.toMatch(/[#<>%&:?/{}*]/);
+    }
+    const descriptions = [...code.matchAll(/^\s*description: '([^']*(?:\\'[^']*)*)'$/gm)].map((m) => m[1]!).filter((d) => /runbook\.md/.test(d));
+    expect(descriptions.length).toBe(6);
+    for (const d of descriptions) expect(d).toMatch(/runbook\.md -> Alerts -> "/);
+  });
+
+  it("watches the database and the web app by metric: alive, storage, and 5xx responses", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const alive = resourceBlock(code, "dbAliveAlert");
+    expect(alive).toMatch(/scopes: \[\s*postgres\.id\s*\]/);
+    expect(alive).toMatch(/metricName: 'is_db_alive'/);
+    expect(alive).toMatch(/operator: 'LessThan'\s*\n\s*threshold: 1\s*\n\s*timeAggregation: 'Maximum'/);
+    expect(alive).toMatch(/severity: 0/);
+    const storage = resourceBlock(code, "dbStorageAlert");
+    expect(storage).toMatch(/metricName: 'storage_percent'/);
+    expect(storage).toMatch(/threshold: alertDbStoragePercent/);
+    expect(code).toMatch(/^param alertDbStoragePercent int = 85$/m);
+    const errors = resourceBlock(code, "appServerErrorsAlert");
+    expect(errors).toMatch(/scopes: \[\s*containerApp\.id\s*\]/);
+    expect(errors).toMatch(/metricName: 'Requests'/);
+    expect(errors).toMatch(/name: 'statusCodeCategory'\s*\n\s*operator: 'Include'\s*\n\s*values: \[\s*'5xx'\s*\]/);
+    expect(errors).toMatch(/threshold: alertAppServerErrorsPer15Min/);
+    expect(errors).toMatch(/windowSize: 'PT15M'/);
+    expect(code).toMatch(/^param alertAppServerErrorsPer15Min int = 5$/m);
+    const scaler = resourceBlock(code, "cipScalerFailedAlert");
+    expect(scaler).toMatch(/Reason_s == 'KEDAScalerFailed'/);
+    expect(scaler).toMatch(/threshold: alertCipScalerFailuresPer30Min/);
+    expect(scaler).toMatch(/windowSize: 'PT30M'/);
+  });
+
+  it("runs the BAS collector check as a scheduled job from the backup image, with the threshold in the environment and no argument", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param enableBasCollectorCheck bool = false$/m);
+    expect(code).toMatch(/^param basCollectorCheckCron string = '\*\/30 \* \* \* \*'$/m);
+    expect(code).toMatch(/^param basCollectorSilenceMinutes int = 60$/m);
+    expect(code).toMatch(/^resource basCollectorCheckJob 'Microsoft\.App\/jobs@[^']+' = if \(enableBasCollectorCheck\) \{$/m);
+    const job = resourceBlock(code, "basCollectorCheckJob");
+    expect(job).toMatch(/triggerType: 'Schedule'/);
+    expect(job).toMatch(/cronExpression: basCollectorCheckCron/);
+    expect(job).toMatch(/parallelism: 1/);
+    expect(job).toMatch(/replicaCompletionCount: 1/);
+    expect(job).toMatch(/replicaRetryLimit: 0/);
+    expect(job).toMatch(/image: dbBackupImage/);
+    const command = /command: \[([\s\S]*?)\]/.exec(job)?.[1] ?? "";
+    expect(command.trim().split(/\s+/)).toEqual(["'/usr/local/bin/phb-bas-collector-check'"]);
+    expect(job).toMatch(/name: 'DATABASE_URL'\s*\n\s*secretRef: 'database-url'/);
+    expect(job).toMatch(/name: 'BAS_COLLECTOR_SILENCE_MINUTES'\s*\n\s*value: string\(basCollectorSilenceMinutes\)/);
+    expect(job).not.toMatch(/DATABASE_URL'\s*\n\s*value:/);
+    expect(job).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{databaseUrlSecret\.name\}'/);
+    const outputs = code.split("\n").filter((line) => /^output basCollectorCheckJobName/.test(line));
+    expect(outputs).toEqual(["output basCollectorCheckJobName string = enableBasCollectorCheck ? basCollectorCheckJob.name : ''"]);
+  });
+
+  it("ships the three flags off and the address list empty in the example parameters, and is documented", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    expect(example.parameters.enableAlerts?.value).toBe(false);
+    expect(example.parameters.enableBasCollectorCheck?.value).toBe(false);
+    expect(example.parameters.alertContactEmails?.value).toEqual([]);
+    expect(await readFile("infra/README.md")).toMatch(/enableAlerts/);
+    const runbook = await readFile("runbook.md");
+    for (const heading of ["A job failed", "A job is silent", "The database is not alive", "The database storage is filling", "The web app is returning server errors", "The Cost Intelligence worker cannot see its work", "The BAS collector is silent"]) {
+      expect(runbook, heading).toContain(`### ${heading}`);
+    }
+    expect(await readFile("docs/phase-13-verification.md")).toMatch(/BackoffLimitExceeded/);
+  });
+
+  describe("in the compiled ARM, when az is installed", () => {
+    const arm = (() => {
+      const r = spawnSync("az", ["bicep", "build", "--file", "infra/main.bicep", "--stdout"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        shell: true,
+      });
+      if (r.status !== 0 || !r.stdout) return null;
+      return JSON.parse(r.stdout) as {
+        parameters: Record<string, { type: string; defaultValue?: unknown }>;
+        resources: Array<{ type: string; name: string; condition?: string; copy?: { name: string; count: string }; properties?: Record<string, unknown> }>;
+      };
+    })();
+    const itIfArm = arm ? it : it.skip;
+
+    itIfArm("every Insights resource is conditional on enableAlerts, and the two rule families are loops over the job lists", () => {
+      expect(arm!.parameters.enableAlerts).toMatchObject({ type: "bool", defaultValue: false });
+      expect(arm!.parameters.alertContactEmails).toMatchObject({ type: "array", defaultValue: [] });
+      const insights = arm!.resources.filter((r) => r.type.startsWith("Microsoft.Insights/"));
+      expect(insights.length).toBe(7);
+      for (const r of insights) expect(r.condition, r.name).toMatch(/^\[(and\()?parameters\('enableAlerts'\)/);
+      const loops = insights.filter((r) => r.copy);
+      expect(loops.map((r) => r.copy!.count).sort()).toEqual([
+        "[length(variables('alertFailureJobs'))]",
+        "[length(variables('alertSilenceJobs'))]",
+      ]);
+      const scaler = insights.find((r) => /scaler/.test(r.name))!;
+      expect(scaler.condition).toBe("[and(parameters('enableAlerts'), parameters('enableCipWorker'))]");
+    });
+
+    itIfArm("the collector check job is conditional on its own flag and runs the backup image", () => {
+      const job = arm!.resources.find((r) => r.type === "Microsoft.App/jobs" && /basCollectorCheck/.test(r.name))!;
+      expect(job.condition).toBe("[parameters('enableBasCollectorCheck')]");
+      const template = (job.properties as { template: { containers: Array<{ image: string; command: string[] }> } }).template;
+      // the variable is inlined by the compiler: the registry's login server and the server's major
+      expect(template.containers[0]!.image).toMatch(/^\[format\('\{0\}\/db-backup:pg\{1\}', .*loginServer, parameters\('postgresVersion'\)\)\]$/);
+      expect(template.containers[0]!.command).toEqual(["/usr/local/bin/phb-bas-collector-check"]);
     });
   });
 });

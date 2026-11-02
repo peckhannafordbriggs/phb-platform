@@ -22,11 +22,17 @@ machine.
 Phase 13 does not wait for Phase 12 to finish. It **drives** Phase 12 Part E:
 
 ```
-12 A–D   engine in git, FileStore, container, Claude API   (D: key wired 2026-10-01)
-13       schedule the container against the COPY           ← this phase
+12 A–D   engine in git, FileStore, container, classifier   (D: its own key, CO-ANTHROPIC-API-KEY,
+                                                           2026-10-16, on the JOB - never the web app)
+13       schedule the container against the COPY           ← Part A: delivered by Part E as three jobs;
+                                                           Part B and C: the alerts, built 2026-11-02, held
 12 E     weeks of shadow running on that schedule
-14       repoint from copy to live, retire the laptop
+14       new image without the by-name refusal, THEN repoint from copy to live, retire the laptop
 ```
+
+*(Corrected 2026-11-02 against `docs/phase-12-part-e-plan.md` § 10 items 1-3:
+the key date was the BAS key's; cutover is a code change and a new image
+before the repoint.)*
 
 The scheduling built here is what makes the shadow run happen four times a day without
 anyone remembering to trigger it. At cutover the schedule itself doesn't change, but
@@ -54,15 +60,39 @@ touching live, until Phase 14.
 
 ## Part A — The schedule
 
-Two Container Apps Jobs with cron triggers, in the existing environment — one per task,
-mirroring what runs today:
+**Delivered by Phase 12 Part E (E5, 2026-10-30), not as written here.** This
+section was written before Part C ran and before Part D existed, when the plan
+was two jobs mirroring the laptop's two tasks. `docs/phase-12-part-e-plan.md`
+§ 5 and § 10 (items 2 and 5) replaced that: the classifier is `python -m
+co_classifier` in the engine's image rather than a Cowork task to mirror, and a
+shadow comparison has to read the laptop's side *after* the laptop has run, so
+the shadow needs **three** jobs. They are in `infra/main.bicep` behind
+`enableCoShadow` (default false), scheduled Container Apps Jobs on UTC crons,
+`parallelism: 1`, one completion per execution, each scheduled job's timeout
+shorter than its interval:
 
-| Job | Today (America/New_York) | Runs |
+| Job | Cron (UTC, Eastern standard time) | Runs |
+|---|---|---|
+| `<baseName>-co-shadow-feed` | `45 11-22 * * 1-5` | the reader's capture, the state snapshot at 12:45 and 17:45, the batch, the classifier's pass |
+| `<baseName>-co-shadow-collect` | `0 16,21,23 * * 1-5` | the laptop's answers, the intake replays, the comparison, the report, STOP |
+| `<baseName>-co-classify` | manual | the Part D job, for one batch by hand |
+
+The original two-job table is kept below for the record of what was planned,
+and because after cutover the live schedule returns to its shape: the intake
+engine at 07:00 and 12:00 and the classifier at 08:00 and 13:00
+America/New_York, Mon-Fri, intake before classifier. **During the shadow the
+two halves are independent** - the classifier half is tied to the *laptop's*
+runs and the intake half is a post-hoc replay - so the ordering requirement
+below applies after cutover and must not be copied into the shadow's crons.
+
+| Job (after cutover) | Today (America/New_York) | Runs |
 |---|---|---|
 | intake-scrub | 07:00 and 12:00, Mon–Fri | the intake engine |
 | response-classifier | 08:00 and 13:00, Mon–Fri | the classifier |
 
-Requirements:
+Requirements (the first and third are decided for the window - `runbook.md` →
+*Alerts* → *The DST decision* and `docs/phase-12-part-e-plan.md` § 5; the
+second applies after cutover; the last two are met by the Part E jobs):
 
 - **Verify whether the scheduler supports time zones before writing the crons.** If it's
   UTC-only, the local wall-clock time shifts an hour twice a year with DST. Decide
@@ -70,8 +100,9 @@ Requirements:
   clock, so nothing downstream breaks) or handle it. Whichever way, write the decision
   and the reason in the runbook — an operator seeing a 7 a.m. run land at 8 a.m. in
   November should find the explanation, not a mystery.
-- **Preserve the ordering, not just the times.** Intake runs before the classifier on
-  purpose. Keep the gap between them whatever happens with time zones.
+- **Preserve the ordering, not just the times - after cutover.** Intake runs before the
+  classifier on purpose. Keep the gap between them whatever happens with time zones.
+  Not a requirement on the shadow's crons (above).
 - **One instance at a time.** Parallelism 1, one completion per execution. If a run is
   still going when the next trigger fires, the new one must not run alongside it — verify
   what the platform actually does in that case rather than assuming, and note that the
@@ -151,9 +182,9 @@ Runbook entries, written in this phase rather than after:
 
 ## Acceptance criteria
 
-- [ ] Both jobs defined in Bicep, running on schedule against the copy
-- [ ] Time-zone behaviour verified, decided, and documented
-- [ ] Ordering between intake and classifier preserved
+- [x] The jobs defined in Bicep (three, by Part E - E5, 2026-10-30), to run on schedule against the copy once `enableCoShadow` is on
+- [x] Time-zone behaviour verified (UTC only), decided for the window, and documented (`runbook.md` → *Alerts* → *The DST decision*)
+- [ ] Ordering between intake and classifier preserved - after cutover; not applicable to the shadow
 - [ ] Concurrency verified: a second trigger during a running execution does not overlap
 - [ ] A forced failure produces an email alert
 - [ ] A disabled job produces a silence alert within its window

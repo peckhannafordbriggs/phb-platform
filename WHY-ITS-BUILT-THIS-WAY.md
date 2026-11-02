@@ -2908,3 +2908,80 @@ inverted row becomes a line in a report nobody read that morning.
 `docs/phase-12-part-e-plan.md` § 2, § 6, § 7; `runbook.md` → *The
 change-order shadow run*; `phb-co-engine` → `tests/test_shadow_reader.py`,
 `tests/test_shadow_feed.py`, `tests/test_shadow_collect.py`.
+
+## 77 · Silence is the absence of a completed execution, and the collector's alert is a job that fails
+
+**Decision (2026-11-02, Phase 13 Part B, built on a held branch).** Every
+Container Apps job in the template has a failure rule and every scheduled
+one a silence rule, both scheduled queries over the environment's system
+log; the BAS collector - which runs on the office PC and writes a table -
+is watched by a half-hourly job whose failure *is* the alert; all of it
+emails one action group that refuses to exist without an address.
+
+**Why the silence rule is a query that always returns one row.** The
+phase's own note says it: the failure alert is table stakes and the absence
+check is the thing this pipeline has never had. A job that hangs or never
+starts produces no event, so nothing *inside* the job can report it, and a
+metric rule does not fire on missing data - `Executions` with a `state`
+dimension exists on `Microsoft.App/jobs` and is exactly the wrong tool,
+because a job that never ran emits no data point. The query therefore
+computes `missed` itself and `print`s it, 1 or 0, every time: a count of
+zero rows and "nothing was due" are different answers and the rule can tell
+them apart. The weekday test is made on the start of the lookback, not on
+now, so a band that wraps midnight asks about Friday on a Monday morning
+and not about Sunday.
+
+**Why the reasons are read from the live log, not the docs.** Microsoft's
+table reference documents a `Reason` column and nothing about its values.
+Sixty days of the production workspace said what a finished execution logs
+(`Completed`, with the execution name set) and what a failed one logs
+(`BackoffLimitExceeded`, for the two real cip-worker failures in October),
+and the failure query rendered from the template returned exactly those two
+executions and no others. `DeadlineExceeded` is the one string taken from
+documentation, because no job here has timed out yet
+(`docs/phase-13-verification.md` § 2). The rule the platform keeps - *verify
+against the live resource, not fixtures* - applies to Azure's log schema as
+much as to Graph.
+
+**Why the collector's alert is a job.** Azure Monitor reads logs and
+metrics. The collector's heartbeat is `bas_ingest_runs`, a table, and the
+honest alternatives were worse: the server's connection logs through a
+diagnostic setting would prove the collector *connected*, not that it
+*succeeded*, and would bill every line the server writes; `tup_inserted` as
+a metric would be masked by a day of admin edits. A job from the backup
+image (which already holds psql) that reads the newest `ok` or `partial`
+run and exits non-zero past the threshold reuses the one mechanism the
+phase builds - job failure and job silence - and the check not running is
+the silence rule's case. The threshold is sixty minutes because a
+change-of-value point can roll its history off the JACE in about two hours
+(§ 48), so the email has to land inside that, not after.
+
+**Why a failure is one email and a silence is four a day.** The rules are
+stateless with muted actions: a stateful rule resolves when the failure row
+leaves the window and sends *Resolved* fifteen minutes later for a thing
+nobody fixed, which teaches a reader to ignore the second mail and then the
+first. The metric rules are stateful because *the database is back* is a
+fact worth sending.
+
+**Why one rule per job and not one rule with a dimension.** PHASE-13 says
+the subject must name the job. A dimension split puts the job in the body.
+Six rules at about fifty cents a month is the price of a subject that can be
+read on a phone.
+
+**Why the address is a parameter that refuses to be empty.** Prohibition 6,
+and PHASE-13's dependency line: an alert bound to a person stops being read
+the day they leave and nothing says so. The template cannot tell a group
+from a person, so it does what it can - it refuses silence, with `fail()` on
+an empty list - and the parameter's description says the rest.
+
+**What breaks if you undo it.** Replace the `print missed` query with a
+plain count and a job that never ran is indistinguishable from a quiet one.
+Move the silence rules out from behind the jobs' flags and a deliberate
+pause produces an alert every six hours. Point `alertContactEmails` at a
+person and the control expires with their account. Change the collector
+check to count `running` or `failed` as success and a collector that cannot
+reach its station reads as healthy. And the acceptance boxes PHASE-13 cares
+about most - a forced failure and a forced silence, each producing an
+email - are still open: the rules compile, the queries run, and nothing has
+fired, which is the difference between *configured* and *works* that the
+phase exists to close (`docs/phase-13-verification.md` § 4).

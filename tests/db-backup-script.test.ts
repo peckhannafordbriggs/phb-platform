@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { testDb } from "./db";
 
 /**
  * The nightly backup's script and image (infra/db-backup/), held to the
@@ -236,6 +237,138 @@ describe.skipIf(!haveBash)("parse_database_url, in bash", () => {
       expect(output, url).toContain(`FAILED: DATABASE_URL ${reason}`);
       // The refusal never prints the URL it refused.
       expect(output).not.toContain("pw");
+    }
+  });
+});
+
+// --- the BAS collector check, which shares the image and the parser ----------
+
+const CHECK = "infra/db-backup/collector-check.sh";
+
+describe("the collector check script never puts a credential on a command line, and shares the backup's parser", () => {
+  it("runs psql with no connection argument, through the backup script's own parser", async () => {
+    const code = codeOnly(await read(CHECK));
+    const psqlLines = code.split("\n").filter((line) => /\bpsql\b/.test(line));
+    expect(psqlLines.length).toBeGreaterThan(0);
+    for (const line of psqlLines) {
+      expect(line).not.toMatch(/\s(-h|-U|-d|-p|-W|--host|--username|--dbname|--port)\b/);
+      expect(line).not.toMatch(/postgres(ql)?:\/\//);
+      expect(line).not.toMatch(/DATABASE_URL/);
+    }
+    // one parser in the image: this file sources the backup script for it
+    expect(code).toMatch(/^source "\$\{PHB_DB_BACKUP_SCRIPT:-\/usr\/local\/bin\/phb-db-backup\}"$/m);
+    expect(code).not.toMatch(/^parse_database_url\(\)/m);
+    expect(code).toMatch(/parse_database_url "\$DATABASE_URL"\s*\n\s*unset DATABASE_URL/);
+    expect(code).toMatch(/ON_ERROR_STOP=1/);
+  });
+
+  it("judges silence from the newest run that succeeded - ok or partial - and names the newest run of any status when it fails", async () => {
+    const code = codeOnly(await read(CHECK));
+    expect(code).toMatch(/status IN \('ok', 'partial'\) AND finished_at IS NOT NULL/);
+    expect(code).toMatch(/RAISE EXCEPTION 'BAS COLLECTOR SILENT: no successful collector run/);
+    expect(code).toMatch(/RAISE EXCEPTION 'BAS COLLECTOR SILENT: the last successful run finished at/);
+    expect(code).toMatch(/the newest run of any status started at % with status %/);
+    expect(code).toMatch(/RAISE NOTICE 'BAS collector ok/);
+    // reads one table, writes nothing
+    expect(code).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE|CREATE|ALTER|DROP)\b/i);
+  });
+
+  it("has LF line endings, like the backup script and for the same reason", async () => {
+    const raw = await read(CHECK);
+    expect(raw).not.toContain("\r");
+    expect(raw.startsWith("#!/usr/bin/env bash\n")).toBe(true);
+  });
+
+  it("is in the image beside the backup, and the template runs it by that path with no argument", async () => {
+    const dockerfile = await read(DOCKERFILE);
+    const bicep = await read("infra/main.bicep");
+    expect(dockerfile).toMatch(/^COPY collector-check\.sh \/usr\/local\/bin\/phb-bas-collector-check$/m);
+    expect(dockerfile).toMatch(/^RUN chmod 0555 \/usr\/local\/bin\/phb-bas-collector-check$/m);
+    // the entrypoint stays the backup; the check job overrides it with its command
+    expect(dockerfile).toMatch(/^ENTRYPOINT \["\/usr\/local\/bin\/phb-db-backup"\]$/m);
+    expect(bicep).toMatch(/command: \[\s*'\/usr\/local\/bin\/phb-bas-collector-check'\s*\]/);
+  });
+});
+
+// --- the check, for real, against the test database --------------------------
+
+const psqlProbe = spawnSync("psql", ["--version"], { encoding: "utf8", shell: true });
+const havePsql = psqlProbe.status === 0;
+
+/**
+ * The test database as the script wants it: tests/setup.ts has pointed
+ * DATABASE_URL at TEST_DATABASE_URL. A local or CI test server has no TLS,
+ * and the parser's default is `require` (the Azure server's demand), so a
+ * URL that says nothing about sslmode gets `disable` here - the test's own
+ * database, not a change to the script.
+ */
+function testDatabaseUrl(): string {
+  const url = process.env.DATABASE_URL ?? "";
+  if (/[?&]sslmode=/.test(url)) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}sslmode=disable`;
+}
+
+function runCheck(env: Record<string, string>): { status: number | null; output: string } {
+  const result = spawnSync("bash", [CHECK], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: { ...process.env, PHB_DB_BACKUP_SCRIPT: SCRIPT, DATABASE_URL: testDatabaseUrl(), BAS_COLLECTOR_SILENCE_MINUTES: "60", ...env },
+  });
+  return { status: result.status, output: `${result.stdout}${result.stderr}` };
+}
+
+describe.skipIf(!haveBash || !havePsql)("the collector check, run for real against the test database", () => {
+  const run = (sql: string) => testDb.$executeRawUnsafe(sql);
+  beforeEach(async () => {
+    await run("DELETE FROM bas_ingest_runs");
+  });
+  afterAll(async () => {
+    await run("DELETE FROM bas_ingest_runs");
+    await testDb.$disconnect();
+  });
+
+  it("fails when no successful run has ever been recorded", () => {
+    const { status, output } = runCheck({});
+    expect(status).not.toBe(0);
+    expect(output).toContain("BAS COLLECTOR SILENT: no successful collector run is recorded at all");
+    expect(output).toContain("FAILED: the collector check did not pass");
+  });
+
+  it("passes on a run that finished inside the threshold, and says how old it is", async () => {
+    await run("INSERT INTO bas_ingest_runs (started_at, finished_at, status) VALUES (now() - interval '5 minutes', now() - interval '4 minutes', 'ok')");
+    const { status, output } = runCheck({});
+    expect(status).toBe(0);
+    expect(output).toContain("BAS collector ok: the last successful run finished at");
+    expect(output).toContain("OK: the BAS collector has written within the last 60 minutes");
+  });
+
+  it("treats a partial run as a run that happened", async () => {
+    await run("INSERT INTO bas_ingest_runs (started_at, finished_at, status) VALUES (now() - interval '5 minutes', now() - interval '4 minutes', 'partial')");
+    expect(runCheck({}).status).toBe(0);
+  });
+
+  it("fails when the newest successful run is older than the threshold, naming the run, its age and the threshold", async () => {
+    await run("INSERT INTO bas_ingest_runs (started_at, finished_at, status) VALUES (now() - interval '5 minutes', now() - interval '4 minutes', 'ok')");
+    const { status, output } = runCheck({ BAS_COLLECTOR_SILENCE_MINUTES: "3" });
+    expect(status).not.toBe(0);
+    expect(output).toMatch(/BAS COLLECTOR SILENT: the last successful run finished at .* \(00:0[34]:\d\d ago; threshold 00:03:00\)/);
+  });
+
+  it("does not count a failed or still-running run as success, and names it as the newest run", async () => {
+    await run("INSERT INTO bas_ingest_runs (started_at, finished_at, status) VALUES (now() - interval '2 hours', now() - interval '2 hours', 'ok')");
+    await run("INSERT INTO bas_ingest_runs (started_at, finished_at, status) VALUES (now() - interval '1 minute', now(), 'failed')");
+    await run("INSERT INTO bas_ingest_runs (started_at, status) VALUES (now() - interval '30 seconds', 'running')");
+    const { status, output } = runCheck({});
+    expect(status).not.toBe(0);
+    expect(output).toMatch(/the newest run of any status started at .* with status running/);
+  });
+
+  it("refuses a threshold that is not a positive integer before it touches a database", () => {
+    for (const bad of ["abc", "0", "-5", ""]) {
+      const { status, output } = runCheck({ BAS_COLLECTOR_SILENCE_MINUTES: bad, DATABASE_URL: "postgresql://u:p@203.0.113.1:5432/nowhere" });
+      expect(status, bad).not.toBe(0);
+      expect(output, bad).toMatch(/BAS_COLLECTOR_SILENCE_MINUTES (must be a positive integer|is not set)/);
+      expect(output, bad).not.toContain("203.0.113.1");
     }
   });
 });

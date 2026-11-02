@@ -11144,7 +11144,10 @@ fold the week into the verification record.
 (`az containerapp job stop` ends a running execution; to stop the schedule,
 redeploy with the flag off). After cutover the same flag will govern the
 live schedule, and pausing it then stops the pipeline (`docs/PHASE-14.md`
-3.2).
+3.2). The feed's and the collector's alert rules (*Alerts (Phase 13 Part
+B)*, once `enableAlerts` is on) are behind the same flag, so pausing by the
+flag raises no silence alert; a job stopped any other way leaves its rule
+asking after it, which is the point.
 
 ### Symptom: the feed exits 3 and its log reads `STOP PRESENT`
 
@@ -11256,6 +11259,403 @@ against a later state; *the sender's company is in today's Responded
 emails*; *that CO is closed or cancelled in today's tracker*; *that CO Key
 is on no row*; *tracker unreadable*. None is a failure; each is counted in
 the report so a pattern is visible.
+
+## Alerts (Phase 13 Part B): where they go, what each email means, what to do
+
+**What it is.** Azure Monitor alert rules in `infra/main.bicep`, all behind
+`enableAlerts` (off by default), all emailing ONE action group,
+`<baseName>-alerts`, whose addresses are the `alertContactEmails`
+parameter. Two kinds of rule, because a job has two kinds of failure:
+
+| Kind | Rule name (the email subject carries it) | Fires when | Rule in the template |
+|---|---|---|---|
+| Failure | `PHB job failed - <job>` | an execution of that job ended in failure: retries exhausted (`BackoffLimitExceeded`) or the replica timeout (`DeadlineExceeded`) | `jobFailedAlerts`, one per job that exists |
+| Silence | `PHB job silent - <job>` | no execution of that scheduled job **completed** inside its lookback while one was due | `jobSilentAlerts`, one per scheduled job |
+| Silence | `PHB job scaler cannot reach the database - <cip-worker>` | the Cost Intelligence worker's scaler failed to query the database more than `alertCipScalerFailuresPer30Min` times in thirty minutes | `cipScalerFailedAlert` |
+| Metric | `PHB database is not alive - <server>` | `is_db_alive` was 0 for five consecutive minutes | `dbAliveAlert` |
+| Metric | `PHB database storage is filling - <server>` | `storage_percent` averaged above `alertDbStoragePercent` for an hour | `dbStorageAlert` |
+| Metric | `PHB web app server errors - <app>` | more than `alertAppServerErrorsPer15Min` HTTP 5xx responses in fifteen minutes | `appServerErrorsAlert` |
+
+The job rules read the environment's own system log,
+`ContainerAppSystemLogs_CL` in the Log Analytics workspace, which is the
+execution history of every job in the environment. What that log says was
+read from the live workspace before the rules were written
+(`docs/phase-13-verification.md`): a finished execution logs `Reason_s`
+**`Completed`** with its `ExecutionName_s` set; an execution that failed logs
+**`BackoffLimitExceeded`** - the two real cip-worker failures of 21 and 22
+October did - or **`DeadlineExceeded`** on the timeout. A retry that
+succeeds is a `Completed` execution and no alert, which is what
+`replicaRetryLimit: 1` on the backup job means.
+
+**Built 2026-11-02 on `feat/phase-13-alerts-HOLD`, not deployed, and no
+rule has fired.** The branch is held until Phase 12 Part E's shadow run is
+complete. The rules for the shadow jobs are written beside the jobs and have
+never run; *Testing the alerts* below is the list of what remains.
+
+### Where the alerts go
+
+`alertContactEmails` in the gitignored parameters file. **In production it is
+`controlls@phb1899.com`** - the Controls shared mailbox the building-automation
+side already uses, with two L's; set in the parameters file on 2026-11-02 by
+the owner's decision, with `enableAlerts` still off. It is a shared mailbox,
+not a person's inbox, and nothing in the platform reads it: the one mailbox
+the platform reads is `CO_MAILBOX`, `changeorder@phb1899.com`, and the Graph
+app's ApplicationAccessPolicy denies it every other mailbox (*What to ask IT
+for*). **A shared mailbox or an M365 group, never a person** (`CLAUDE.md`
+prohibition 6; `docs/PHASE-13.md` → *Dependencies*): an alert bound to an
+individual stops being read the day they leave, and nothing says so. The
+address is not in the template or the example parameters, which name no
+organisation, and `tests/deploy-guards.test.ts` holds both to that; the
+parameters file is where it lives, and this paragraph is where it is written
+down. The template refuses a deployment with
+`enableAlerts` true and the list empty, because rules that email nobody are
+worse than none. The budget (`budgetContactEmails`) keeps its own list and no
+action group, on purpose - *The database has no auto-stop, and the budget
+cannot stop anything* - and the two are not merged. Every email uses Azure's
+common alert schema: the rule name in the subject, the rule's description -
+which names the runbook heading below - in the body, and for a log rule a
+link to the query's rows.
+
+### Turning the alerts on, once
+
+1. Decide the address (above). It has to exist and be read.
+2. The log rules are validated against the workspace when they are deployed,
+   so the environment must have written `ContainerAppSystemLogs_CL` at least
+   once - true of production since August 2026, not of a fresh resource
+   group. Turn `enableAlerts` on only after the first real revision has run.
+3. In `infra/main.parameters.json`: `enableAlerts: true`, `alertContactEmails:
+   ["<the group address>"]`. For the BAS collector check, also
+   `enableBasCollectorCheck: true` - it runs the backup image, so build that
+   first (`infra/README.md` → *The backup image is built once, by hand*; the
+   same build now carries both scripts).
+4. `what-if`, then the routine template deployment (`infra/README.md` →
+   *Deploy*). Expect one action group, three metric rules, and one failure
+   rule per job plus one silence rule per scheduled job that is enabled.
+5. Confirm: `az monitor action-group show -n <baseName>-alerts -g <resource-group>`
+   lists the address; `az monitor scheduled-query list -g <resource-group> -o table`
+   and `az monitor metrics alert list -g <resource-group> -o table` list the
+   rules, every one `enabled`.
+6. **Make one fire** (*Testing the alerts* below). A rule that has never
+   fired is a hope, not a control.
+
+### A job failed
+
+**Symptom.** An email `PHB job failed - <job>`. The body carries the log row:
+`BackoffLimitExceeded` means the replica exited non-zero and the job's retry
+limit was reached (0 on every job but the backup, which retries once);
+`DeadlineExceeded` means the replica was still running at `replicaTimeout`
+and was killed.
+
+**Where the logs are.**
+
+```bash
+# the execution and its status
+az containerapp job execution list -n <job> -g <resource-group> -o table
+# what the script printed (every script in this platform says what failed before it exits)
+az containerapp job logs show -n <job> -g <resource-group> --container <container> --execution <execution>
+# the platform's side: image pull, OOM, the timeout
+az monitor log-analytics query -w <workspace-id> --analytics-query "
+  ContainerAppSystemLogs_CL
+  | where JobName_s == '<job>' and ExecutionName_s == '<execution>'
+  | project TimeGenerated, Reason_s, Log_s | order by TimeGenerated asc"
+```
+
+**What the common causes look like, by job.**
+
+| Job | First place to look | Seen before |
+|---|---|---|
+| `<baseName>-db-backup` | the script's `FAILED:` line - *Nightly database backup* → *The execution shows `Failed`* has the table | not yet run in Azure |
+| `<baseName>-bas-collector-check` | `BAS COLLECTOR SILENT:` in the log is the collector, not the job - *The BAS collector is silent* below. Anything else (`connection refused`, `password authentication failed`) is the database or the secret | - |
+| `<baseName>-cip-worker` | `OOMKilled` in the system log beside the failure: the run needed more than 4Gi (21 and 22 October, both times); or the first lines of the console log naming a missing variable | 2026-10-21, 2026-10-22 |
+| `<baseName>-co-shadow-feed`, `-collect` | the script's own last line. Exit 3 with `STOP PRESENT` is **not** a failure to act on here - *The change-order shadow run* → *the feed exits 3* | never run |
+| any | the execution shows `Failed` and the log is empty: the image could not be pulled (`MANIFEST_UNKNOWN`, or `AcrPull` missing) - `az containerapp job execution show` names it | - |
+
+**How to re-run once, safely.** `az containerapp job start -n <job> -g
+<resource-group>` starts one execution with the job's own configuration.
+Every scheduled job in this platform is safe to run again: the backup writes
+a new dump under a new name, the collector check reads, the shadow jobs are
+idempotent by item id (`docs/phase-12-part-e-plan.md` § 5). Do not start a
+second execution while one is running - `execution list` shows `Running` -
+because `parallelism: 1` bounds one *execution*, not two started by hand.
+
+### A job is silent
+
+**Symptom.** An email `PHB job silent - <job>`: no execution of that job
+**completed** in the last N hours (the rule's `alertXxxSilenceHours`) while one
+was due. It repeats every six hours until something completes. This is the
+alert the pipeline has never had before and the failure it has already
+suffered (`docs/PHASE-13.md` → *Goal*): a job that hangs, never starts, or
+was quietly switched off produces no failure event, and this is what notices
+it.
+
+**Tell the three cases apart, in this order.**
+
+1. **The job is paused or gone.** `az containerapp job show -n <job> -g
+   <resource-group> --query "properties.{trigger:configuration.triggerType,
+   cron:configuration.scheduleTriggerConfig.cronExpression,
+   state:provisioningState}"`. *Not found*: the job was deleted, or a template
+   deployment ran with its flag off while the alert rule stayed (the rules
+   and the jobs are behind the same flags, so that needs the two to have been
+   deployed from different parameters files). *Found, right cron, no recent
+   execution in `execution list`*: the schedule did not fire - a support
+   ticket, nothing in this platform stops a schedule.
+2. **The job is hung.** `execution list` shows `Running` with a `startTime`
+   older than its `replicaTimeout`: the platform has not yet killed it. Read
+   its log for where it stopped; `az containerapp job stop -n <job> -g
+   <resource-group> --job-execution-name <execution>` ends it, and the next
+   schedule tick runs fresh. A hung feed or collector during the shadow window
+   is a finding for `docs/phase-12-part-e-verification.md`.
+3. **The environment is down.** Every job silent at once, and the web app
+   returning 5xx or nothing: `az containerapp env show -n <env> -g
+   <resource-group> --query properties.provisioningState`, and the Azure
+   status page for the region. Nothing to do from here but wait and then
+   check that the schedules resumed - a tick missed during an outage is not
+   made up.
+
+A fourth case that is not silence: the job ran and **failed** every time in
+the window. Then *A job failed* has already emailed, and this one follows;
+fix the failure.
+
+**What silence means per job.**
+
+| Job | Lookback | When the check is live | What a missed run costs |
+|---|---|---|---|
+| `<baseName>-db-backup` | 26 h (`alertDbBackupSilenceHours`) | always | one night without the off-server copy; the server's own 7-day restore still covers it |
+| `<baseName>-bas-collector-check` | 3 h (`alertBasCollectorCheckSilenceHours`) | always | the collector is **unwatched**, not necessarily stopped - open Collection Health |
+| `<baseName>-co-shadow-feed` | 2 h (`alertCoShadowFeedSilenceHours`) | weekdays, 14:00-23:59 UTC (`alertCoShadowFeedCheckFromHourUtc` / `ToHourUtc`) | a laptop run with no snapshot before it: the items of that run compare as *not comparable* (`docs/phase-12-part-e-plan.md` § 3) |
+| `<baseName>-co-shadow-collect` | 8 h (`alertCoShadowCollectSilenceHours`) | weekdays, 21:00-07:59 UTC, wrapping midnight | no report that day; the laptop's answers are collected by the next run |
+
+The check bands are the crons translated: the feed runs hourly at :45 from
+11:45 UTC, so by 14:00 the 12:45 run is inside a two-hour lookback; the
+collector runs at 16:00, 21:00 and 23:00 UTC, so from 21:00 an eight-hour
+lookback holds the 16:00 run, and until 07:59 the next morning it holds the
+23:00 run. The weekday test is made on the **start** of the lookback, so at
+02:00 on a Monday the rule asks about Sunday, finds no run was due, and stays
+quiet. When the crons move - *The DST decision* below - the bands move in
+the same commit, and the parameter descriptions say which number follows
+which cron.
+
+### The database is not alive
+
+**Symptom.** An email `PHB database is not alive - <server>`, severity 0:
+the server's `is_db_alive` metric read 0 for five consecutive minutes. A
+one-minute maintenance restart does not fire this; five minutes is an
+outage. The BAS collector's writes are failing for the duration, and
+anything past the JACE's buffer is lost (`docs/08-bas-and-niagara.md`).
+
+1. `az postgres flexible-server show -n <server> -g <resource-group> --query
+   "{state:state, ha:highAvailability.state}"`. `Stopped` means a person ran
+   `stop` - start it (`az postgres flexible-server start`) and read *The BAS
+   database must never be stopped* in `HANDOVER.md`. `Updating` is
+   maintenance; `Ready` with the alert still fired is the metric lagging.
+2. Not stopped: the Azure status page, then a support ticket.
+3. Afterwards, Collection Health → the gaps table for what the collector
+   could not write, and `Test-BasRestore.ps1` if the outage was long.
+
+**What this rule cannot see:** a server that was stopped emits no metric at
+all, and a metric rule does not fire on missing data. The collector check
+(*The BAS collector is silent*) and the Cost Intelligence scaler rule both
+try to **connect**, and both fire on a stopped server; that is why there are
+three rules and not one.
+
+### The database storage is filling
+
+**Symptom.** An email `PHB database storage is filling - <server>`:
+`storage_percent` averaged above `alertDbStoragePercent` (85) for an hour.
+13 % on 2026-11-02 against 32 GB. `autoGrow` is `Enabled` in the template
+and should be growing the disk before this fires, so the first question is
+whether it still is: `az postgres flexible-server show ... --query
+storage` reads `autoGrow`. `Disabled` means a template deployment or a
+portal change turned it off - *The server reports the wrong auto-grow
+setting* - and the server will refuse writes at 100 %, which for the
+collector is indistinguishable from the server being down. `Enabled` and
+still climbing: something is growing fast - `bas_readings` is the only table
+that grows on its own, and `database_size_bytes` by day in the portal's
+Metrics shows the slope. Resolves itself when the disk grows.
+
+### The web app is returning server errors
+
+**Symptom.** An email `PHB web app server errors - <app>`: more than
+`alertAppServerErrorsPer15Min` (5) responses the ingress counted as 5xx in
+fifteen minutes; resolves when they stop. Two shapes, told apart by the
+status code in the portal's Metrics (`Requests`, split by `statusCode`):
+
+- **503s, and nobody can sign in.** No healthy replica: the revision failed
+  to start (*A template deployment fails activation*; `az containerapp
+  revision list` shows the newest revision's `healthState`), or every
+  replica is restarting (`ContainerAppSystemLogs_CL` → `ReplicaUnhealthy`,
+  `ContainerStarted` repeating). The 26 October burst - 143 in two hours,
+  all 500s - was a run of revision restarts during the custom-domain binding
+  and sat above this threshold; it is the kind of thing this rule is for.
+- **500s on one route, everything else fine.** An application error.
+  `ContainerAppConsoleLogs_CL` for the app in the window, `Log_s` with
+  `error` - *Production sign-in bounces* has the query shape. A deploy that
+  touched the route is the usual cause; roll the revision back if so
+  (`az containerapp revision activate` the previous one, then `ingress
+  traffic set`).
+
+A routine revision rollout produces one or two 5xx in an hour (2026-10-30)
+and does not fire this. **What this rule cannot see:** the app returning
+nothing at all because the environment is down, or a cold start that times
+out - the ingress metrics do not record a request that never reached a
+replica (*A cold start takes about 30 seconds*). An availability test would,
+and was not added: *Testing the alerts* → *the decisions left open*.
+
+### The Cost Intelligence worker cannot see its work
+
+**Symptom.** An email `PHB job scaler cannot reach the database -
+<cip-worker>`: the worker's KEDA scaler, which counts queued runs every 15 s,
+logged `KEDAScalerFailed` more than `alertCipScalerFailuresPer30Min` (4)
+times in thirty minutes. This is the event-driven job's silence: queued runs
+stay `queued` and no execution ever starts, which is *Runs stay Queued in
+production* under *Cost Intelligence worker in Azure*, now with an email.
+The log line names the cause - `connection refused` is the server down or
+restarting (2026-10-23, 03:50 UTC: four events in a minute, then fine, below
+the threshold); `password authentication failed` is the `DATABASE-URL`
+secret out of step with the server (*A template deployment rotated the
+database administrator password*); a firewall message is the Azure-services
+rule gone from the server. Fix the cause; the scaler recovers on its next
+poll and the queued runs start on their own.
+
+### The BAS collector is silent
+
+**Symptom.** An email `PHB job failed - <baseName>-bas-collector-check`
+whose log reads `BAS COLLECTOR SILENT: the last successful run finished at
+<time> (<age> ago; threshold 01:00:00); the newest run of any status started
+at <time> with status <status>`. The check job
+(`infra/db-backup/collector-check.sh`, every half hour) found no collector
+run with status `ok` or `partial` finished inside `basCollectorSilenceMinutes`
+(60: the collector passes every fifteen minutes, so four missed passes, and a
+change-of-value point can roll its history off the JACE in about two hours -
+*The roll horizon column shows two numbers* - so the alert has to arrive
+before that). It is the alert `HANDOVER.md` → *Collector host offline* never
+had.
+
+**Read the second half of the line first.** The newest run of any status:
+
+| It says | It means | Do |
+|---|---|---|
+| nothing newer than the last successful run, hours old | the collector is not running at all: the office PC is off, asleep, rebooted into a state where the service did not start, or off the network | the PC. `HANDOVER.md` → *Collector host offline*; the collector's own `healthcheck.py` in `phb-bas` once you are on it. Anything past the JACE's buffer is already gone, and Collection Health will show the gap once it resumes |
+| `status failed`, recent | the collector is running and every pass fails | its log on the PC. The station is unreachable, or its stored login no longer decrypts (*Station credentials, and the one secret that lives in two places*), or the database refused it (*The collector's role on the Azure database*) |
+| `status running`, old | a pass hung | restart the collector service on the PC |
+| nothing at all, ever (`no successful collector run is recorded at all`) | a fresh database, or the collector was never repointed at this server | *Moving the BAS data to the Azure database* |
+
+**What it is not.** A `partial` run - a point incomplete or backfilling - is
+a run that happened, and the check accepts it; Collection Health is where a
+partial run is read. One station silent while the other writes is not
+silence either: the check asks whether the **collector** wrote, not whether
+every station did - that is Collection Health's at-risk count. And the check
+itself not running is a different email, `PHB job silent -
+<baseName>-bas-collector-check`, which means the collector is unwatched, not
+stopped.
+
+**The collector keeps the credential it always had.** The check reads
+`bas_ingest_runs` as the server administrator, through the same `DATABASE-URL`
+reference the backup job holds - the collector's own role (`bas_collector`,
+DML on `bas_*` only) is not involved and nothing about the collector changed
+for this.
+
+### How to pause a schedule deliberately
+
+There is no pause switch on a Container Apps schedule. To stop a scheduled
+job for a while: its flag off (`enableDbBackup`, `enableBasCollectorCheck`,
+`enableCoShadow`) in the parameters file and a routine template deployment.
+**The job's alert rules are behind the same flag, so they go with it** and a
+deliberate pause produces no silence alert; a job removed any other way -
+deleted in the portal, or a deployment from a parameters file that disagrees
+with the one the rules came from - leaves its rule asking after it, which is
+the right outcome. To pause only the alerts and keep the jobs:
+`enableAlerts` off and deploy. To stop one running execution: `az containerapp
+job stop`, which ends that execution and nothing else.
+
+**Pausing the shadow is free; pausing after cutover stops the pipeline.**
+During Phase 12 Part E the shadow jobs run against the copy and the laptop
+runs the real process, so `enableCoShadow` off costs nothing but comparison
+days. After Phase 14 the same flag governs the live schedule, and off means
+no intake and no classifier run until it is on again (`docs/PHASE-14.md`
+3.2). The runbook entry does not change at cutover; what it costs does.
+
+### The DST decision
+
+Container Apps evaluates a cron in UTC and has no time-zone setting, so a
+job's local wall-clock time moves an hour twice a year. **Decided for the
+shadow window** (`docs/phase-12-part-e-plan.md` § 5): the crons are written
+for Eastern **standard** time, which the whole window is under, and the
+alert check bands above are written to the same crons. **March 2027 is a
+commit**: the two shadow crons, the snapshot hours and the four band
+parameters move by an hour together, in one change that says so - not a
+portal edit, which the next template deployment would undo. For the backup
+and the collector check the shift does not matter: a nightly job at 03:30 or
+04:30 is equally nightly, and the check runs every half hour. The decision
+for the live schedule after cutover belongs to Phase 14 (`docs/PHASE-14.md`
+3.5) and inherits this one unless somebody writes a different one.
+
+### What the alerts cost, and where the rules live
+
+List prices, which the first month's bill replaces (the figures are from
+third-party summaries of Azure's pricing page on 2026-11-02, not from the
+page itself):
+
+| | Count with everything on | Basis | About, per month |
+|---|---|---|---|
+| Log rules (`PHB job failed`, `PHB job silent`, the scaler rule) | 6 failure + 4 silence + 1 = 11 | roughly $0.50 a rule at 15-minute evaluation, $1.00 at 5-minute | **$6-10** |
+| Metric rules | 3 | $0.10 per monitored time series; the first ten free | **$0** |
+| Emails | a handful | 1,000 a month included | **$0** |
+| The collector check job | 48 runs a day, 0.25 vCPU / 0.5 GiB, seconds each | consumption, inside the environment's free grant | **$0** |
+| The queries | 11 rules reading a small table every 5-15 minutes | query cost is per data scanned; `ContainerAppSystemLogs_CL` is kilobytes a day | **$0** |
+
+Under ten dollars a month with every job enabled, and the log rules are all
+of it. Where everything lives: the rules and the action group are in
+`infra/main.bicep` under *Alerts (Phase 13 Part B)* and nowhere else -
+nothing was clicked together in the portal, and a template deployment
+replaces whatever a portal edit changed. `az monitor scheduled-query list`,
+`az monitor metrics alert list` and `az monitor action-group list` on the
+resource group show what is deployed; the portal's *Monitor → Alerts* shows
+what has fired.
+
+### Testing the alerts (what has and has not been done)
+
+`docs/PHASE-13.md` is explicit: an alert rule that has never fired is a hope.
+**As of 2026-11-02 no rule has been deployed and none has fired.** What has
+been verified, and how, is in `docs/phase-13-verification.md`: the queries
+were run against the live workspace exactly as the template renders them,
+the failure query returned the two real failed executions of October and
+nothing else, the silence query returned one row with `missed` set the way
+the band and the weekday say it should, and the collector check script was
+run for real against a database with no run, a fresh run, a stale run and a
+failed run.
+
+**Still to do, in order, once the branch is merged and `enableAlerts` is on:**
+
+1. **A forced failure.** `az containerapp job start -n
+   <baseName>-bas-collector-check -g <resource-group>` with the threshold
+   overridden to a minute (`--env-vars BAS_COLLECTOR_SILENCE_MINUTES=1`
+   through a template file: *Jobs* → *Start a job execution on demand* in
+   the Azure docs). The execution fails, and `PHB job failed -
+   <baseName>-bas-collector-check` arrives within about ten minutes. Record
+   the time it took.
+2. **A silence.** `enableBasCollectorCheck` off, deploy, wait three hours:
+   `PHB job silent - <baseName>-bas-collector-check` arrives. Then on again.
+   (Pausing by flag removes the rule too, so for this test the rule has to
+   outlive the job: start the job by hand instead, let it complete, and
+   confirm the rule's query reads `completedRuns` 1 and then, three hours
+   later with no run, `missed` 1 - the portal's *Monitor → Alerts* shows the
+   fired state without an email if `alertContactEmails` is pointed at a test
+   mailbox first.)
+3. **The shadow rules**, only once the shadow jobs exist (Request 6 has
+   landed and `enableCoShadow` is on): watch one weekday for a false
+   silence alert - the bands were written from the crons and never observed
+   - and force one feed failure the same way as step 1.
+4. **The metric rules** are not forced: a database outage is not something
+   to arrange. Their thresholds were read against the live values on
+   2026-11-02 (alive 1, storage 13 %, 5xx 146 in seven days of which 143 in
+   one burst) and that is the evidence they would and would not have fired.
+
+**Decided 2026-11-02:** the address is the Controls shared mailbox,
+`controlls@phb1899.com` (above), and there is **no availability test** on
+the web app - it would keep a scale-to-zero app warm around the clock, and
+the 5xx rule plus the two rules that connect to the database are what watch
+it (`docs/phase-13-verification.md` → *Decisions*).
 
 ## Nightly database backup
 
@@ -11444,11 +11844,12 @@ down: `az containerapp job show --query "properties.{trigger:configuration.trigg
 A job that exists with the right cron and no execution is worth a support
 ticket; nothing in this platform stops it.
 
-**Nothing in the alerting notices a missed night.** There is no Azure Monitor
-alert on execution status in the template, on purpose: the budget is the one
-notification contact the template carries and an alert rule is another
-resource to maintain. The check above is a person's weekly look until that
-decision is revisited. `HANDOVER.md` lists it.
+**A missed night is an email, once the alerts are on.** `PHB job failed -
+<baseName>-db-backup` for an execution that failed and `PHB job silent -
+<baseName>-db-backup` for twenty-six hours without a completed one - both
+behind `enableAlerts`, built 2026-11-02 and **not yet deployed**: *Alerts
+(Phase 13 Part B)* above has what each means. Until that flag is on, the
+check above is a person's weekly look, and `HANDOVER.md` says so.
 
 ### Restoring from a dump
 
