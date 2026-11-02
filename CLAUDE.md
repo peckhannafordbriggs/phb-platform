@@ -523,6 +523,19 @@ is **ten laptop weekdays** after the first clean batch, by decision, and
 the exit is path coverage. `docs/phase-12-part-e-verification.md` is the
 record, to be filled week by week; `WHY-ITS-BUILT-THIS-WAY.md` § 76.
 
+**Two findings from cutover prep, 2026-11-02, both true today.** (1) The
+`phb-co-engine` image never carried `infra/`: the three shadow jobs in the
+Bicep run `sh /app/infra/<script>` and every one would have failed on its
+first line. Fixed in `phb-co-engine` (the Dockerfile copies `infra/*.sh`,
+the image's own check asserts them, the image test holds it); **the shadow
+image must be built from a checkout with that fix** — `runbook.md` → *The
+change-order shadow run*, step 3, and the symptom entry beside it. (2)
+`render_xlsx_to_pdf` has no caller, in the laptop's engine or the
+repository's, so the intake engine renders no PDF on either side and
+LibreOffice changes nothing it writes; cutover item 1.7's premise is
+corrected in `docs/PHASE-14.md`, `docs/12-ai-layer-inventory.md` § 3c and
+`docs/phase-12-part-c-verification.md`.
+
 **Part C therefore has nothing left that gates Phase 14.** The one item it
 left open, the `PnP.Powershell` certificate on the `phb-co-engine` app
 registration, was **decided on 2026-11-02: it stays**, an accepted exposure
