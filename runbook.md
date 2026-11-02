@@ -1427,7 +1427,7 @@ broken auth callback. **Do not remove the `-p`.**
 | Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire, but is a personal key linked to Jim** (checked in the Console 2026-10-28; kept so by decision 2026-10-29, accepted risk): Anthropic archives it the day Jim leaves the organization, and it then fails as `401 authentication_error` on the next call, with no warning beforehand. Also revocable in the Console. *Both Anthropic keys fail at once* has the fix | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
 | Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app and on the classifier job; `.env.local` locally | **Does not expire, but is a personal key linked to Jim**, like the BAS key and with the same ending: archived the day Jim leaves, `401` on the next call. A second, separately issued key, revocable on its own. *Both Anthropic keys fail at once* has the fix | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
 | BAS credential key | Key Vault `BAS-CREDENTIAL-KEY` → `BAS_CREDENTIAL_KEY` on the container app; the collector's `.env` on the office PC; `.env.local` locally | **Does not expire.** Rotated only on purpose - *Station credentials, and the one secret that lives in two places* | Storing and decrypting Niagara station logins in Settings; the collector, wherever it runs. A value that differs from the collector's makes every stored login unreadable |
-| `PnP.Powershell` certificate on `phb-co-engine` | Entra app registration `85ca496d-3af9-4c3a-aa11-a6b7fd51105d` → Certificates & secrets; the private key is on the IT workstation that ran the site grant, not anywhere PH+B controls | **19 October 2029** | **Nothing of ours.** No engine code path presents a certificate, so its expiry breaks nothing and is noticed by nothing — the exposure is the three years it stays *valid*. Whether it is removed is an **open decision**: *Open decision — the `PnP.Powershell` certificate on `phb-co-engine`* |
+| `PnP.Powershell` certificate on `phb-co-engine` | Entra app registration `85ca496d-3af9-4c3a-aa11-a6b7fd51105d` → Certificates & secrets; the private key is on the IT workstation that ran the site grant, not anywhere PH+B controls | **19 October 2029** | **Nothing of ours.** No engine code path presents a certificate, so its expiry breaks nothing and is noticed by nothing — the exposure is the three years it stays *valid*. **Kept, by the owner's decision of 2026-11-02** — an accepted exposure, not an oversight: *Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays* |
 
 > **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
 > carries a note reading `Expiry Date of Entra : 8/13/2028`, but the same note
@@ -2554,11 +2554,32 @@ Phase 11's table-binding check repeated the same day.
 
 **Status: sent 2026-10-29.** Nothing has landed yet.
 
-## Open decision — the `PnP.Powershell` certificate on `phb-co-engine`
+## Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays (2026-11-02)
 
-**Status: open, as of 2026-10-21.** Nothing below has been asked of Vitis yet.
-The platform owner decides; this section is so the decision is made on the
-facts rather than rediscovered.
+**Decided 2026-11-02, by the platform owner: the certificate stays.** Nothing
+is asked of Vitis; the credential is not removed. The facts, the risk and the
+options below are kept as they were written while it was open, because they
+are what the decision was made on and what the next owner should read before
+revisiting it. The *What expires, and when* table carries it as a decision,
+not an oversight.
+
+What keeping it means in practice:
+
+- `phb-co-engine` has **two** ways to obtain a token until 2029-10-19: the
+  federated credential production uses, and a certificate whose private key is
+  on the IT workstation that ran the site grant. The platform never presents
+  the certificate and nothing of ours depends on it.
+- The exposure accepted is the one described under *Why it matters*: a key
+  outside PH+B's inventory that can obtain Write on the AI Sandbox site, the
+  site the live `CO Managment Process` lives in, for three years.
+- Nothing watches it. Its expiry breaks nothing and is noticed by nothing,
+  and the date is written here so it is written somewhere PH+B owns.
+- **Revisit** if any of these happens: the IT workstation changes hands or is
+  retired; Vitis's engagement ends; the Part C copy moves to a second site
+  (the certificate is then used once more for the grant, and the question of
+  removing it afterwards is fresh); or the engine's own `co_graph_auth.py`
+  gains a certificate path, which it must not. Removal is the request
+  described at the end of this section, by `keyId`.
 
 ### What is there
 
@@ -2621,7 +2642,7 @@ on the one site that holds the live `CO Managment Process`.
 |---|---|---|
 | **Remove it now** | Vitis deletes the credential; the grant stays, the federated path is unaffected. Verified afterwards by `az ad app list --display-name phb-co-engine --query "[0].keyCredentials"` reading `[]` and the step 7 probe still exiting 0 | **Recommended.** One credential path, the one that cannot leak |
 | Keep it until the Part C copy site exists | The one plausible reason to wait. Record who holds the key, on which machine, and set a reminder to remove it the day the second grant is made | Acceptable if the second site is weeks away, not months |
-| Keep it indefinitely | Three years of a key outside the company's inventory on an app with Write on the live site | Not acceptable; if chosen anyway, record it in *What expires, and when* as the decision rather than as an oversight |
+| **Keep it indefinitely** | Three years of a key outside the company's inventory on an app with Write on the live site | Not recommended here; **chosen by the owner on 2026-11-02**, and recorded in *What expires, and when* as the decision rather than as an oversight |
 
 Removal is an Entra action on the app registration, which this account cannot
 perform — it is a request to Vitis, worded like the others under *What to ask
@@ -2629,8 +2650,8 @@ IT for*. Ask for the credential by its `keyId`
 (`17d6dc07-057e-40af-96ca-35ade2647d97`) rather than by name, so the right one
 goes and the federated credential stays.
 
-**When the decision is made, replace the first line of this section with the
-date and the outcome, and update the table row.**
+**The decision was made on 2026-11-02 (the first lines of this section). If
+it is reopened, the request above is the shape of the ticket.**
 
 ## The engine cannot reach the library (Phase 12 Part C)
 

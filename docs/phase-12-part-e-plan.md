@@ -759,9 +759,9 @@ make plain:
   - **Item 0.5** — whether anything downstream reads `scrub_timestamp` or
     `drafted_timestamp`, answered from the flow map during the window so
     1.4 is decided before the day.
-  - **The `PnP.Powershell` certificate request** (6.1), sent to Vitis in
-    the same breath as Request 6 if the owner chooses, since both are
-    tickets.
+  - **The `PnP.Powershell` certificate request** (6.1) — no longer a
+    request: decided 2026-11-02, the certificate stays (`docs/PHASE-14.md`
+    6.1).
 
 ---
 

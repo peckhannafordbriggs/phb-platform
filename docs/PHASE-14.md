@@ -101,7 +101,7 @@ differ, each confirmed on the day.** The known ways:
 
 | # | Item | Source |
 |---|---|---|
-| 6.1 | **The `PnP.Powershell` certificate on the `phb-co-engine` app registration** — a second way to be the engine app, private key on an IT workstation, valid to 2029-10-19. Production authenticates through the managed identity only. Ask Vitis to remove it, or record why not. Nothing has been asked yet | `runbook.md` → *Open decision — the `PnP.Powershell` certificate*; `docs/phase-12-part-c-plan.md` → *Step 7, second pass* |
+| 6.1 | **DECIDED 2026-11-02: the `PnP.Powershell` certificate on the `phb-co-engine` app registration STAYS.** A second way to be the engine app, private key on an IT workstation, valid to 2029-10-19; production authenticates through the managed identity only and never presents it. Kept by the owner's decision as an accepted exposure; nothing is asked of Vitis. The runbook section keeps the facts and the conditions that would reopen it | `runbook.md` → *Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays*; `docs/phase-12-part-c-plan.md` → *Step 7, second pass* |
 | 6.2 | The engine's `/me/` Graph mail calls in Intake 1, 6 and 7 resolve to whoever owns the flow connection; correct today, silently repoints on a connection swap. Parked by decision 2026-08-04, to be done before any swap, not after — a flow item, not an engine one, listed here because a cutover that also swaps connections would trip it | `phb-co-engine` → `specs/power-automate/FLOW_FACTS_VERIFIED_2026-08-04.md` § 1 |
 
 ---

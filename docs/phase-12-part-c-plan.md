@@ -1354,8 +1354,9 @@ empty), the throwaway flow deleted by the owner.
     intake-selection rule*)
 
 All twelve steps are complete. Part C has nothing left that gates Phase 14.
-The `PnP.Powershell` certificate on the app registration is an open
-decision, not a blocker (`runbook.md` → *Open decision*).
+The `PnP.Powershell` certificate on the app registration, left open here,
+was decided on 2026-11-02: it stays (`runbook.md` → *Decision — the
+`PnP.Powershell` certificate on `phb-co-engine` stays*).
 
 ---
 
