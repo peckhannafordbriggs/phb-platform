@@ -523,9 +523,11 @@ is **ten laptop weekdays** after the first clean batch, by decision, and
 the exit is path coverage. `docs/phase-12-part-e-verification.md` is the
 record, to be filled week by week; `WHY-ITS-BUILT-THIS-WAY.md` § 76.
 
-**Part C therefore has nothing left that gates Phase 14.** Open and not
-blocking: the `PnP.Powershell` certificate on the `phb-co-engine` app
-registration (`runbook.md` → *Open decision*). **Everything any document
+**Part C therefore has nothing left that gates Phase 14.** The one item it
+left open, the `PnP.Powershell` certificate on the `phb-co-engine` app
+registration, was **decided on 2026-11-02: it stays**, an accepted exposure
+(`runbook.md` → *Decision — the `PnP.Powershell` certificate on
+`phb-co-engine` stays*; `docs/PHASE-14.md` 6.1). **Everything any document
 says must happen at, before or after cutover is gathered in one place,
 `docs/PHASE-14.md`, each item with its source** — the cutover diff, the
 prompts' change of authority, the schedule, rollback, and where the
