@@ -183,7 +183,7 @@ Outlook. Recorded because a ZZTEST-only sweep would otherwise leave it unexplain
 | 15:55 | `ZZTEST note fragmentation probe` | Deleted Items |
 | 16:02 | `ZZTEST note fix probe abc` | Deleted Items |
 
-PHASE-11 says "the nine drafts the verification scripts created". **The observed
+The Phase 11 spec said "the nine drafts the verification scripts created". **The observed
 figure is 14**, and the inventory above is the evidence. The discrepancy is
 almost certainly that the scripted `respond` command was run three times, each
 producing three drafts, rather than once — but that is an inference, and the
@@ -202,7 +202,7 @@ the Phase 8 verification scripts leave behind".
 
 That is platform output living inside the `Projects` tree Intake 6 and 7 file
 into. It is ZZTEST-named and the containing folder is explicitly labelled a
-disposable test CO, so this is most likely harmless — but PHASE-11's claim is that
+disposable test CO, so this is most likely harmless — but the Phase 11 spec's claim is that
 platform drafts "left no trace beyond Deleted Items and Recoverable Items", and
 this one did. **Reported, not moved or deleted**, per the phase's instruction to
 stop rather than fix.
@@ -311,7 +311,7 @@ and current as of writing.
 | 2026-08-23 | Sunday | Weekend. Expected. |
 | **2026-08-18** | **Tuesday** | **A genuine weekday gap. Reported, not explained.** |
 
-PHASE-11 says to report a gap rather than investigate it by running anything, so
+The Phase 11 spec said to report a gap rather than investigate it by running anything, so
 this is reported and nothing was run.
 
 **It does not coincide with platform activity.** The platform first connected to
@@ -522,7 +522,7 @@ systems telling the same story is the strongest evidence in this document.
 
 ### Inferred
 
-- That the "nine drafts" figure in PHASE-11 differs from the observed 14 because `respond` was run three times.
+- That the "nine drafts" figure in the Phase 11 spec differs from the observed 14 because `respond` was run three times.
 - That ten Intake 3 runs and one sent message reconcile as a retry loop or a partial per-vendor fan-out. Not established from either side — section 5c.
 - That the four unusual things about 2026-08-18 are related. They may be one event or four; nothing establishes which, and it is pre-platform either way.
 - That the 08-18 ZZTEST `PR-91` test stopped before the tracker write, or its row was cleaned up. Only the absence of the row is observed — section 3c.

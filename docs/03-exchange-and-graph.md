@@ -185,6 +185,13 @@ Never expose `permanentDelete`.
 requests per 10 minutes, ~4 concurrent is the practical ceiling. Not a constraint at
 this user count, but don't poll aggressively.
 
+**Only a draft can be edited**, and the service refuses anything else (`not_draft`)
+before the UI gets a say; a draft's subject tag is preserved byte for byte, never
+parsed or regenerated, because downstream filing depends on the exact string. A
+pending autosave is flushed and confirmed before a send, a failed autosave blocks
+the send, and the send control is disabled while in flight, because a double send
+is not recoverable.
+
 **Concurrent editing.** Outlook and the platform editing one draft is last-write-wins.
 Take an advisory lock in the platform DB, show the user when a draft is locked, and
 accept that Outlook can still overwrite.

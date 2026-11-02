@@ -2,23 +2,24 @@
 
 **Status is on every heading below, and this line says where each status comes
 from.** A phase marked COMPLETE has its work merged; one marked *verified* also
-has a verification record in `docs/`. Nothing here is a plan for a phase already
-marked complete — the plan documents (`docs/PHASE-*.md`) are kept as written,
-including the parts that were declined, because a phase's reasoning is worth
-more than its checklist.
+has a verification record in `docs/`. The specs for finished phases 1 to 11 were
+removed on 2026-11-02, once every decision in them had been checked into a kept
+document: `CLAUDE.md` → *Current state*, `WHY-ITS-BUILT-THIS-WAY.md`,
+`runbook.md` and the verification records below. The Phase 12, 13 and 14
+documents stay because their work is not finished.
 
 | Phase | Status | Where the detail is |
 |---|---|---|
-| 1–3 | Complete | `docs/phase-1-verification.md` |
-| 4–6 | Complete | `docs/PHASE-4.md`, `docs/PHASE-5.md`, `docs/PHASE-6.md` |
-| 7 | Part A complete, **Part B in flight** | `runbook.md` → *Deploying to Azure* |
+| 1–3 | Complete | `docs/phase-1-verification.md`; the login gate and authorization contract in `docs/04-auth-and-permissions.md` |
+| 4–6 | Complete, verified live | `docs/03-exchange-and-graph.md`; `CLAUDE.md` → *Verify against the live mailbox*; `runbook.md` → the Change Orders sections |
+| 7 | Complete — deployed 2026-09-09, custom domain 2026-10-21 | `runbook.md` → *Deploying to Azure (Phase 7 Part B)*; `infra/README.md` |
 | 8 | Complete, verified live | `docs/phase-8-verification.md` |
 | 9 | Part A complete, **Part B declined on a measurement** | `docs/phase-9-verification.md` |
-| 10 | Complete | `docs/PHASE-10.md` |
+| 10 | Complete | `CLAUDE.md` → *Phase 10 complete*; `runbook.md` → *Admin panel (Phase 10)* |
 | 11 | Complete, verified | `docs/phase-11-verification.md` |
-| 12 | **Parts A and B complete** | `docs/12-ai-layer-inventory.md`, `docs/phase-12-part-b-verification.md` |
-| 13 | Not started, planned | `docs/PHASE-13.md` |
-| 14 | Not started | `docs/PHASE-12.md` for the sequencing it depends on |
+| 12 | **Parts A–D complete; Part E built, waiting on Request 6 (the reader app, Vitis)** | `docs/PHASE-12.md`; `docs/12-ai-layer-inventory.md`; the Part B, C, D and E records and plans in `docs/` |
+| 13 | Not started as a phase; Part A's schedule mechanism exists as the Part E shadow jobs, Part B's alerts do not | `docs/PHASE-13.md` |
+| 14 | Not started | **`docs/PHASE-14.md` is the cutover checklist** |
 | B1–B4, B6, B7 | See below | `docs/09-bas-what-is-built.md` |
 | B5 | **Complete** as the Analyze tab, 2026-09-21 — automated criteria met, live runs done with the real model; two spec questions answered with a clarifying question over two buildings, recorded as such. The API key is wired from Key Vault by reference as of 2026-10-01 (`ANTHROPIC-API-KEY`, set by hand) and `BAS_ASK_DATABASE_URL` the same way as of 2026-10-13; the `bas_analyze` role exists on the production server and the deployed tab answers questions end to end (checked 2026-10-21). Spec: `docs/BAS-B5.md`; record: `docs/bas-b5-verification.md` | `docs/08-bas-and-niagara.md` |
 
@@ -162,13 +163,14 @@ end to end and confirm it lands in `changeorder@` Sent Items in Outlook.
 
 ---
 
-## Phase 7 — Deploy to Production — PART A COMPLETE, PART B IN FLIGHT
+## Phase 7 — Deploy to Production — COMPLETE
 
 Somewhere other than one laptop, deployed from CI, reachable at a URL.
 
-**See `docs/PHASE-7.md`** — scope, the Part A / Part B split around the Azure
-subscription, and the acceptance criteria. Kept there rather than duplicated here, so
-there is one source.
+Deployed on 2026-09-09 in `eastus2`; a merge to `main` deploys; the custom domain
+`platform.phb1899.com` carries sign-in since 2026-10-22. The procedure, the
+permission walls and the traps are in `runbook.md` → *Deploying to Azure (Phase 7
+Part B)* and `infra/README.md`, which are kept current.
 
 **Requires:** an Azure subscription owned by a group rather than an individual, plus
 Contributor access on the resource group. Without the second, nothing can be deployed
@@ -196,8 +198,9 @@ Turn the mailbox view into a real client. All against Exchange, never a local co
 ## Phase 9 — Two-Way Sync and Reliability — PART A COMPLETE, PART B DECLINED
 
 **Part A shipped 2026-08-27.** Conversation grouping, concurrent-edit detection,
-and resilience. Details in `docs/PHASE-9.md`; what Exchange actually did is in
-`docs/phase-9-verification.md`.
+and resilience. What Exchange actually did is in `docs/phase-9-verification.md`;
+the operating notes are in `runbook.md` → *Change Orders — conversations, sync and
+reliability (Phase 9)*.
 
 **Part B — Graph change notifications — was evaluated and declined.** This was
 the "pick based on measured need rather than ambition" call below, and the
@@ -214,8 +217,9 @@ public validation endpoint and dropped-notification reconciliation, for a screen
 used by one to three people.
 
 **Do not rebuild the case for webhooks from intuition.** The reasoning, the
-numbers, and the specific circumstances that would legitimately reopen it are in
-`docs/PHASE-9.md` and `runbook.md`. The short version: not user count — the
+numbers, the specific circumstances that would legitimately reopen it, and the
+requirements if it is ever reinstated are in `runbook.md` → *Part B (Graph change
+notifications) was evaluated and DECLINED*. The short version: not user count — the
 budget takes ~300 focused tabs — but a background job that must react to inbound
 mail with no human present, which is the criterion
 `docs/03-exchange-and-graph.md` already sets and which nothing in this roadmap
@@ -288,7 +292,7 @@ larger than it looks. One ZZTEST thread returned **1 message** from the folder-s
 query and **4** from the mailbox-wide one, spread across two folders. Whichever is chosen,
 a within-folder group has to say it is partial, because most of the time it will be.
 
-> **What shipped: within the open folder**, which is what `docs/PHASE-9.md`
+> **What shipped: within the open folder**, which is what the Phase 9 spec
 > scoped. The row therefore reads **"7 in this folder"** rather than "7
 > messages" — the count is true about the folder and would have been a false
 > claim about the thread. Going mailbox-wide is still open, and still needs the
@@ -381,7 +385,13 @@ untouched while employees use the platform as their interface.
 
 ---
 
-## Phase 12 — Centralize the AI Logic — PARTS A, B, C AND D COMPLETE
+## Phase 12 — Centralize the AI Logic — PARTS A–D COMPLETE, PART E BUILT AND WAITING
+
+`docs/PHASE-12.md` is the plan with each part's status. Part E's shadow run was
+built on 2026-10-29/30 and starts the business day after Request 6, the read-only
+reader app registration, lands from Vitis (sent 2026-10-29). The floor is ten
+laptop weekdays after the first clean batch; the exit is path coverage;
+`docs/phase-12-part-e-verification.md` is the record.
 
 Reproduce the current AI behavior in the backend without changing the employee
 experience. **Do not shut down the existing setup during this phase.**
@@ -413,7 +423,11 @@ this project exists to prevent.
 
 ---
 
-## Phase 13 — Centralize the Scheduled Jobs — NOT STARTED
+## Phase 13 — Centralize the Scheduled Jobs — NOT STARTED AS A PHASE
+
+`docs/PHASE-13.md` is the plan. Its Part A, the schedule mechanism, already exists
+as the three Part E shadow jobs behind `enableCoShadow`; its Part B, the failure
+and silence alerts, does not.
 
 Move the two morning tasks off a personal laptop.
 
@@ -439,6 +453,9 @@ point of failure in the current system and costs a day.
 ---
 
 ## Phase 14 — Cutover and Production Hardening — NOT STARTED
+
+**Work from `docs/PHASE-14.md` on the day.** It gathers every item any document
+says must happen at, before or after cutover, each with its source.
 
 Prove the centralized version is correct, then retire the old path.
 

@@ -8,8 +8,10 @@ has no pointer, it does not belong here. When a source document changes, change
 the item; when an item is done, mark it here and leave the source as the
 record of why.
 
-Status as of **2026-10-28**: Phase 12 Parts A, B and C are complete, Part D
-and Part E are not started, Phase 13 is not started, and the two decisions
+Status as of **2026-11-02**: Phase 12 Parts A to D are complete, Part E is
+built and waits on Request 6 (the read-only reader app registration, sent to
+Vitis 2026-10-29), Phase 13 is not started as a phase (its schedule mechanism
+exists as the Part E shadow jobs; its alerts do not), and the two decisions
 Part C left were both closed on 2026-10-28. Nothing in Part C gates this
 phase. What gates it is the sequence below.
 

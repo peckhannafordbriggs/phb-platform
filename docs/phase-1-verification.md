@@ -30,7 +30,9 @@ path is the real one.
 
 ## Manual — authentication
 
-The six criteria in `PHASE-1.md` under **Authentication**.
+The six criteria the Phase 1 spec set under **Authentication** (the spec was
+removed on 2026-11-02; the six are the headings below, and the login gate itself
+is specified in `docs/04-auth-and-permissions.md`).
 
 ### 1. A `@phb1899.com` account signs in successfully — PASS
 
