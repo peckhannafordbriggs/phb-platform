@@ -1346,8 +1346,12 @@ Name the branch for what the change is:
 
 Documentation is `chore/`. There is no `docs/` prefix.
 
-**An agent stops at the push.** Create the branch, commit, push, and report the
-branch name — the human opens the pull request.
+**An agent finishes at the pull request, never at the merge (rule of
+2026-11-02).** When the work on a branch is done: push it, open a pull request
+against `main` with `gh pr create`, and end the report with the PR link. If the
+branch is built on top of another branch that has not merged yet, open its PR
+against *that* branch and say so in the PR description. **Never merge** — the
+platform owner merges everything, in the order the report gives.
 
 **`main` is protected by a repository ruleset** — pull request required, no
 force-push, no deletion — and the ruleset is authoritative. Where this file and
