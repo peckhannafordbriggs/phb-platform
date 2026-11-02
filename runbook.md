@@ -11294,10 +11294,20 @@ never run; *Testing the alerts* below is the list of what remains.
 
 ### Where the alerts go
 
-`alertContactEmails` in the gitignored parameters file. **A shared mailbox or
-an M365 group, never a person** (`CLAUDE.md` prohibition 6; `docs/PHASE-13.md`
-→ *Dependencies*): an alert bound to an individual stops being read the day
-they leave, and nothing says so. The template refuses a deployment with
+`alertContactEmails` in the gitignored parameters file. **In production it is
+`controlls@phb1899.com`** - the Controls shared mailbox the building-automation
+side already uses, with two L's; set in the parameters file on 2026-11-02 by
+the owner's decision, with `enableAlerts` still off. It is a shared mailbox,
+not a person's inbox, and nothing in the platform reads it: the one mailbox
+the platform reads is `CO_MAILBOX`, `changeorder@phb1899.com`, and the Graph
+app's ApplicationAccessPolicy denies it every other mailbox (*What to ask IT
+for*). **A shared mailbox or an M365 group, never a person** (`CLAUDE.md`
+prohibition 6; `docs/PHASE-13.md` → *Dependencies*): an alert bound to an
+individual stops being read the day they leave, and nothing says so. The
+address is not in the template or the example parameters, which name no
+organisation, and `tests/deploy-guards.test.ts` holds both to that; the
+parameters file is where it lives, and this paragraph is where it is written
+down. The template refuses a deployment with
 `enableAlerts` true and the list empty, because rules that email nobody are
 worse than none. The budget (`budgetContactEmails`) keeps its own list and no
 action group, on purpose - *The database has no auto-stop, and the budget
@@ -11641,10 +11651,11 @@ failed run.
    2026-11-02 (alive 1, storage 13 %, 5xx 146 in seven days of which 143 in
    one burst) and that is the evidence they would and would not have fired.
 
-**The decisions left open**, for the owner (`docs/phase-13-verification.md`
-→ *Decisions*): whether an availability test should ping the web app (it
-keeps a scale-to-zero app warm), and whether the alert address should be a
-new group or an existing one.
+**Decided 2026-11-02:** the address is the Controls shared mailbox,
+`controlls@phb1899.com` (above), and there is **no availability test** on
+the web app - it would keep a scale-to-zero app warm around the clock, and
+the 5xx rule plus the two rules that connect to the database are what watch
+it (`docs/phase-13-verification.md` → *Decisions*).
 
 ## Nightly database backup
 

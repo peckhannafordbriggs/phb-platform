@@ -1349,8 +1349,10 @@ say; the check script was run for real against an empty, fresh, stale and
 failed `bas_ingest_runs`. **Not verified: nothing has been deployed and no
 rule has fired**, the shadow rules have never seen a shadow job, and
 `DeadlineExceeded` is from documentation. Every number is a parameter.
-`docs/PHASE-13.md` is **not** edited; where it disagrees with the Part E
-plan is tabled in `docs/phase-13-verification.md` § 6 for the owner.
+The address is **`controlls@phb1899.com`**, the Controls shared mailbox (two
+L's), set in the gitignored parameters file on 2026-11-02 and read by nothing
+in the platform; no availability test, by decision. `docs/PHASE-13.md` is
+corrected on the three items `docs/phase-13-verification.md` § 6 lists.
 `runbook.md` → *Alerts (Phase 13 Part B)* is Part C: one entry per email,
 pause, DST, cost, and the tests still to run; `WHY-ITS-BUILT-THIS-WAY.md`
 § 77.

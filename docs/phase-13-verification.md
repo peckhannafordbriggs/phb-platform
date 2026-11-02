@@ -191,21 +191,27 @@ fifteen minutes fires on the first and not on the second.
    a job without reading a resource that may not be deployed; no name
    changed.
 
-**Asked of the owner, not decided:**
+**Decided by the owner on 2026-11-02:**
 
-1. **The address.** A new M365 group for alerts, or an existing one? The
-   template takes a list and refuses an empty one; which address is a decision
-   that is a person's, and `alertContactEmails` is blank until it is made.
-2. **An availability test on the web app.** The 5xx rule sees errors the
+1. **The address is `controlls@phb1899.com`** - the Controls shared mailbox
+   the building-automation side already uses (two L's). Set in the gitignored
+   `infra/main.parameters.json` as `alertContactEmails`, with `enableAlerts`
+   still off; never in the template or the example file, which name no
+   organisation. It is a shared mailbox, not a person's inbox. **Nothing in
+   the platform reads it** [observed, 2026-11-02]: a search of this
+   repository and `phb-bas` for the address finds nothing, the only mailbox
+   the platform reads is `CO_MAILBOX` (`changeorder@phb1899.com`, by
+   configuration), and the Graph app's ApplicationAccessPolicy denies every
+   other mailbox.
+2. **No availability test on the web app.** The 5xx rule sees errors the
    ingress counted; it cannot see the app returning nothing (environment
    down, a cold start that times out). An Application Insights standard test
    pinging `/api/health` every five minutes would, and would also keep a
    scale-to-zero app warm around the clock - `minReplicas: 0` is a deliberate
-   choice in the template, and a warm replica is roughly a dollar a day at
-   consumption prices. Not added; one `webtests` resource and one more rule
-   if wanted.
-3. **The PHASE-13 items that no longer match the Part E plan** - § 6 below -
-   which this phase did not resolve, by instruction.
+   choice in the template. Left out.
+3. **`docs/PHASE-13.md` corrected** on the three items of § 6 below (the
+   Part A job list, the sequence diagram's cutover line, the key line), each
+   marked in place with the date and the source.
 
 ---
 
@@ -225,8 +231,10 @@ would act on wrongly, left **unchanged in PHASE-13** for the owner:
 | Part C: *the DST decision* | decided for the window by the Part E plan § 5; PHASE-14 3.5 inherits it | wrote it into the runbook as the window's decision, not a new one |
 | *Dependencies: Phase 12 Part C — the container exists* | true, and Part D's image is what the jobs run | nothing |
 
-`docs/PHASE-13.md` itself is not edited on this branch. When it is written up,
-§ 10 of the Part E plan and this table are the list.
+The first three rows were applied to `docs/PHASE-13.md` on 2026-11-02 (the
+sequence diagram, Part A, and the acceptance boxes Part E closed), each with
+the date and `docs/phase-12-part-e-plan.md` § 10 as the source. The rest of
+§ 10 of the Part E plan stands beside it for the write-up.
 
 ---
 
