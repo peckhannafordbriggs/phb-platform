@@ -11313,10 +11313,9 @@ Do them in this order. Do not skip step 4.
    delete it by hand.
 
 6. **Turn the laptop's two tasks back on.** On the laptop, open the Claude
-   desktop app and go to its scheduled tasks (the list of tasks; the menu
-   name differs slightly between app versions - look for *Scheduled* or
-   *Tasks*). Find `co-intake-scrub` and `co-response-classifier` and turn each
-   one **on**. Leave `co-response-side-clasification` **off**: it is a
+   desktop app and click **Scheduled** in the left sidebar. In that list,
+   find `co-intake-scrub` and `co-response-classifier` and turn each one
+   **on**. Leave `co-response-side-clasification` **off**: it is a
    duplicate of the classifier task and must never run.
 
    *What you should see:* both tasks show as enabled, with their schedules
