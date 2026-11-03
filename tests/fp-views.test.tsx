@@ -19,6 +19,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RegisterView } from "@/app/(modules)/freeze-protection/views/register-view";
 import { ReportView } from "@/app/(modules)/freeze-protection/views/report-view";
+import { type ImportResult, ImportSummary } from "@/app/(modules)/freeze-protection/views/import-panel";
 import type { FpHistoryEntry, FpLine, FpProject } from "@/lib/modules/freeze-protection/types";
 
 const PROJECT: FpProject = {
@@ -215,5 +216,50 @@ describe("Report", () => {
     const html = report({ project: { ...PROJECT, completed: null, reviewed: null } });
     expect(html.match(/Sign as me/g)).toHaveLength(2);
     expect(html).toContain("Not signed.");
+  });
+});
+
+describe("Schedule import", () => {
+  const RESULT: ImportResult = {
+    fileName: "Equipment_Schedules.pdf",
+    created: 312,
+    notEquipment: 40,
+    existing: ["AHU-1"],
+    notFound: ["FCU-99"],
+    warnings: ["FAN COIL UNIT SCHEDULE: Found 28 units, but the schedule has at least 29 marked rows. Check for missing units."],
+    failures: [{ title: "PUMP SCHEDULE", message: "The model service could not be reached." }],
+  };
+
+  it("offers Import beside Add equipment, and opens above the equipment list, not instead of it", () => {
+    expect(register({})).toContain(">Import<");
+    const html = register({ panel: "import" });
+    expect(html).toContain("Import equipment schedule");
+    expect(html).toContain("Equipment · 5");
+    expect(html).not.toContain("Review the import");
+  });
+
+  it("New project takes the schedule PDF in the same grid as the verification date", () => {
+    const html = register({ panel: "project" });
+    expect(html).toMatch(/Verification date[\s\S]*Equipment schedule \(PDF, optional\)[\s\S]*<\/div><p/);
+  });
+
+  it("says what was added and, in words, everything left out", () => {
+    const html = renderToStaticMarkup(createElement(ImportSummary, { result: RESULT, doneHref: "/freeze-protection?project=1" }));
+    expect(html).toContain("Added 312 units");
+    expect(html).toContain("40 items on schedules that are not equipment");
+    expect(html).toContain("1 unit already in this project: AHU-1");
+    expect(html).toContain("1 name not found in the PDF text, so possibly misread: FCU-99");
+    expect(html).toContain("at least 29 marked rows");
+    expect(html).toContain("PUMP SCHEDULE (The model service could not be reached.)");
+    expect(html).toContain("Done");
+  });
+
+  it("shows the schedule's exposure reading beside step 3 as a hint, and where the unit came from", () => {
+    const imported = line("6", { coil: "water", exposureSuggestion: "likely", exposureEvidence: "Preheat coil EAT -6.8 °F", source: "M-701-R · AHU SCHEDULE" });
+    const html = register({ lines: [...LINES, imported], selected: imported });
+    expect(html).toContain("Schedule suggests outside air can reach the coil.");
+    expect(html).toContain("Preheat coil EAT -6.8 °F");
+    expect(html).toContain("not an answer");
+    expect(html).toContain("Imported from M-701-R · AHU SCHEDULE");
   });
 });

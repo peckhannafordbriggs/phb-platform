@@ -9,6 +9,7 @@ import {
   COIL_LABEL,
   CONFIRMED_WITH_LABEL,
   EXPOSURE_LABEL,
+  EXPOSURE_SUGGESTION_LABEL,
   PROTECTION_LABEL,
   STATUS_LABEL,
   STEP_OWNER,
@@ -103,6 +104,7 @@ export function StepPane({ line: e, history }: { line: FpLine; history: FpHistor
             <TextField label="Area served (optional)" value={e.areaServed} onSave={save("areaServed")} />
             <SelectField label="Status" value={e.status} options={options(STATUS_LABEL)} onSave={(v) => v !== null && save("status")(v)} required />
           </div>
+          {e.source && <p className="mt-2 text-[0.75rem] text-[var(--muted)]">Imported from {e.source}</p>}
         </section>
 
         <section className={section}>
@@ -123,6 +125,13 @@ export function StepPane({ line: e, history }: { line: FpLine; history: FpHistor
               Outside air intake, mixed air, 100 percent outside air, relief or exhaust that can draw air through a closed damper, or a coil in an
               unconditioned space.
             </p>
+            {e.exposureSuggestion && (
+              <p className="mb-3 rounded-[var(--radius-control)] bg-[var(--neutral-50)] px-3 py-2 text-[0.8125rem]">
+                <span className="font-medium">{EXPOSURE_SUGGESTION_LABEL[e.exposureSuggestion]}.</span>{" "}
+                {e.exposureEvidence && <span className="text-[var(--muted)]">{e.exposureEvidence}. </span>}
+                <span className="text-[var(--muted)]">A reading of the drawings, not an answer: confirm it.</span>
+              </p>
+            )}
             <SelectField label="Could outside air expose this coil to freezing?" value={e.exposure} options={options(EXPOSURE_LABEL)} onSave={save("exposure")} wide />
           </section>
         )}

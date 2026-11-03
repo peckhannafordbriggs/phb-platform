@@ -6,14 +6,22 @@ import type { FpProject } from "@/lib/modules/freeze-protection/types";
 import { call } from "../client";
 import { FieldLabel, INPUT } from "../ui/Field";
 import { Button, Card, Label } from "../ui/kit";
+import { handOff } from "./import-handoff";
+import { PdfField } from "./import-panel";
 
-/** A new project: job number, name, and the date its verification speaks for. Opened by `?new=project`. */
+/**
+ * A new project: job number, name, the date its verification speaks for, and
+ * optionally the equipment schedule PDF. With a PDF, the new project's register
+ * opens with the import already running above its equipment list. Opened by
+ * `?new=project`.
+ */
 export function ProjectForm({ cancelHref, today }: { cancelHref: string; today: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [jobNumber, setJobNumber] = useState("");
   const [name, setName] = useState("");
   const [verificationDate, setVerificationDate] = useState(today);
+  const [schedule, setSchedule] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function submit(e: React.FormEvent) {
@@ -22,7 +30,8 @@ export function ProjectForm({ cancelHref, today }: { cancelHref: string; today: 
     startTransition(async () => {
       const r = await call<FpProject>("POST", "/projects", { jobNumber, name, verificationDate });
       if (!r.ok) return setError(r.message);
-      router.push(`/freeze-protection?project=${r.data.id}`);
+      if (schedule) handOff(r.data.id, schedule);
+      router.push(`/freeze-protection?project=${r.data.id}${schedule ? "&new=import" : ""}`);
       router.refresh();
     });
   }
@@ -41,14 +50,17 @@ export function ProjectForm({ cancelHref, today }: { cancelHref: string; today: 
           <FieldLabel label="Verification date">
             <input type="date" required value={verificationDate} onChange={(e) => setVerificationDate(e.target.value)} className={INPUT + " font-mono"} />
           </FieldLabel>
+          <PdfField file={schedule} onChange={setSchedule} label="Equipment schedule (PDF, optional)" />
         </div>
-        <p className="text-[0.75rem] text-[var(--muted)]">The report speaks for this date. You can change it later.</p>
+        <p className="text-[0.75rem] text-[var(--muted)]">
+          The report speaks for this date. With the schedule PDF, Claude adds the equipment on it to the project.
+        </p>
 
         {error && <p className="text-[0.8125rem] text-[var(--phb-maroon)]">{error}</p>}
         <div className="flex justify-end gap-2">
           <Button href={cancelHref}>Cancel</Button>
           <Button type="submit" variant="primary" disabled={pending}>
-            Create project
+            {schedule ? "Create and import" : "Create project"}
           </Button>
         </div>
       </form>
