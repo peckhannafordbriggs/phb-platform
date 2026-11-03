@@ -1,4 +1,6 @@
-import type { CoilType } from "../types";
+import type { CoilType, ExposureSuggestion } from "../types";
+
+export type { ExposureSuggestion };
 
 /** One run of text on a page, in reading coordinates: x right, y down, y at the baseline. h is the font size. */
 export interface PdfItem {
@@ -30,7 +32,6 @@ export interface ScheduleBlock {
   marks: number;
 }
 
-export type ExposureSuggestion = "likely" | "unlikely";
 
 export const FLAG_NOT_FOUND = "Name not found in the schedule text";
 export const FLAG_FROM_LIST = "From a row naming several units";

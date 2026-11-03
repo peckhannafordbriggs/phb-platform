@@ -52,6 +52,9 @@ function line(id: string, overrides: Partial<FpLine> = {}): FpLine {
     documentation: null,
     notes: null,
     updatedAt: "2026-11-01T15:00:00.000Z",
+    exposureSuggestion: null,
+    exposureEvidence: null,
+    source: null,
     updatedBy: "Dana Whitfield",
     ...overrides,
   };
