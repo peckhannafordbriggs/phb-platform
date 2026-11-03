@@ -235,7 +235,7 @@ describe("commit", () => {
 
     const history = await getHistory(lines[1]!.id);
     expect(history).toHaveLength(1);
-    expect(history[0]!.sentence).toMatch(/imported FCU-1 into the job 26-200 register from "Equipment_Schedules.pdf"/);
+    expect(history[0]!.sentence).toMatch(/imported FCU-1 into the job 26-200 equipment list from "Equipment_Schedules.pdf"/);
 
     const summary = await testDb.auditEvent.findFirstOrThrow({ where: { action: "fp.schedule_imported" } });
     expect(summary.metadata).toMatchObject({ created: 2, skipped: ["fcu-2", "FCU-3"], fileName: "Equipment_Schedules.pdf" });

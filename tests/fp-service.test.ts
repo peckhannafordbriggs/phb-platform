@@ -143,7 +143,7 @@ describe("history", () => {
     const history = await getHistory(e.id);
     expect(history).toHaveLength(2);
     expect(history[0]!.sentence).toContain("recorded outside air exposure for AHU-1 on job 26-104A");
-    expect(history[1]!.sentence).toContain("added AHU-1 to the job 26-104A register");
+    expect(history[1]!.sentence).toContain("added AHU-1 to the job 26-104A equipment list");
     expect(new Date(history[0]!.at) >= new Date(history[1]!.at)).toBe(true);
   });
 

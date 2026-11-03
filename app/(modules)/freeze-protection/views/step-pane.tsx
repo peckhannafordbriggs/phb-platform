@@ -114,7 +114,7 @@ export function StepPane({ line: e, history }: { line: FpLine; history: FpHistor
 
         {e.coil === "none" && (
           <Callout tone="closed" lead="Closed.">
-            No water, glycol or steam coil, so there is nothing to freeze. The line stays in the register as part of the complete record.
+            No water, glycol or steam coil, so there is nothing to freeze. The unit stays in the equipment list as part of the complete record.
           </Callout>
         )}
 
@@ -253,7 +253,7 @@ export function StepPane({ line: e, history }: { line: FpLine; history: FpHistor
             className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--muted)] hover:text-[var(--phb-maroon)]"
           >
             <Trash2 size={13} aria-hidden="true" />
-            Remove from register
+            Remove from equipment list
           </button>
         )}
       </div>

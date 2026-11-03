@@ -11,7 +11,7 @@ import { PdfField } from "./import-panel";
 
 /**
  * A new project: job number, name, the date its verification speaks for, and
- * optionally the equipment schedule PDF. With a PDF, the new project's register
+ * optionally the equipment schedule PDF. With a PDF, the new project's Equipment page
  * opens with the import already running above its equipment list. Opened by
  * `?new=project`.
  */
@@ -53,7 +53,7 @@ export function ProjectForm({ cancelHref, today }: { cancelHref: string; today: 
           <PdfField file={schedule} onChange={setSchedule} label="Equipment schedule (PDF, optional)" />
         </div>
         <p className="text-[0.75rem] text-[var(--muted)]">
-          The verification date is the date shown on the report. Add the equipment schedule PDF to fill in the equipment list for you.
+          The verification date is the date shown on the report. Add the equipment schedule PDF to fill in the equipment that can freeze.
         </p>
 
         {error && <p className="text-[0.8125rem] text-[var(--phb-maroon)]">{error}</p>}

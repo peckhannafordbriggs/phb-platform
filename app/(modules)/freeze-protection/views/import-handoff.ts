@@ -1,5 +1,5 @@
 /**
- * The PDF chosen on New project, carried to the new project's register. A
+ * The PDF chosen on New project, carried to the new project's Equipment page. A
  * File cannot travel in a URL, and client navigation keeps this module alive,
  * so New project leaves it here and the import panel picks it up. A reload
  * loses it, and the panel then asks for the file again.

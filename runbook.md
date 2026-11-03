@@ -11664,7 +11664,7 @@ shows what changed and who changed it.
 
 ## The equipment schedule import (2026-11-03)
 
-New project (or **Import** above a project's equipment list) takes the
+New project (or **Import** on the project's Equipment page) takes the
 mechanical schedule PDF and adds the equipment on it. Three steps, three routes
 under `app/api/modules/freeze-protection/import/`:
 
@@ -11714,10 +11714,16 @@ hand.
 **Symptom.** The summary says some units were left out, or a schedule warns
 *Found 28 units, but the schedule has at least 29 marked rows.*
 
-**Cause.** By design (`import/select.ts`): items on schedules that are not
-equipment (diffusers, grilles, valves, attenuators), names already in the list,
-and names Claude returned that do not appear in the PDF text (possibly misread)
-are not added. The row warning compares Claude's count with the mark-like first
+**Cause.** By design (`import/select.ts`): the module holds freeze protection
+equipment only, meaning a water, glycol or steam coil that outside air can
+reach (2026-11-03). Units with no such coil (exhaust air valves, fans,
+humidifiers, pumps, tanks, heat exchangers, electric heat), coils the schedule
+shows outside air cannot reach (recirculating units, terminal units fed
+conditioned air; a schedule that does not say is treated as exposed), items on schedules that are not equipment
+(diffusers, grilles, valves, attenuators), names already in the list, and names
+Claude returned that do not appear in the PDF text (possibly misread) are not
+added. A coil Claude misread as none is left out the same way; the summary
+gives the count. The row warning compares Claude's count with the mark-like first
 cells in the schedule text, so a short count is worth a look.
 
 **Fix.** The summary names every unit left out. Add the ones that belong with

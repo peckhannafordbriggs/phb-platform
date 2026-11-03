@@ -12,7 +12,7 @@ export function FpShell({
   actions,
   children,
 }: {
-  /** Carried across tabs so Register and Report open on the same project. */
+  /** Carried across tabs so Equipment and Report open on the same project. */
   projectId?: string;
   /** Right-aligned controls on the tab row. */
   actions?: React.ReactNode;
@@ -47,7 +47,7 @@ const BASE = "/freeze-protection";
 function tabs(projectId?: string): Tab[] {
   const query = projectId ? `?project=${encodeURIComponent(projectId)}` : "";
   return [
-    { href: `${BASE}${query}`, label: "Register", path: BASE, exact: true },
+    { href: `${BASE}${query}`, label: "Equipment", path: BASE, exact: true },
     { href: `${BASE}/report${query}`, label: "Report", path: `${BASE}/report` },
   ];
 }

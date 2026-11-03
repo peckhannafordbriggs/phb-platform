@@ -11,18 +11,18 @@ import { Button, Callout, Card, Label } from "../ui/kit";
 import { clearHandOff, pendingFile } from "./import-handoff";
 
 /**
- * The equipment schedule import, straight into the register: no review page.
+ * The equipment schedule import, straight into the equipment list: no review page.
  *
  * 1. The PDF goes to /import/split, which cuts it into schedules (no model).
  * 2. Each schedule goes to /import/analyze, three at a time, so progress shows
  *    and no one request runs long. A schedule that fails is listed and skipped;
  *    a missing key stops the run with the server's sentence.
  * 3. The units on equipment schedules whose names were found in the PDF go to
- *    /import/commit (selectForImport). Names already in the register are never
+ *    /import/commit (selectForImport). Names already in the list are never
  *    touched. The list refreshes behind this panel, and the panel says what was
  *    added and what was left out, so anything skipped can be added by hand.
  *
- * Shown above the register (`?new=import`). From New project, the file is
+ * Shown above the equipment list (`?new=import`). From New project, the file is
  * handed over (import-handoff.ts) and the run starts on its own.
  */
 
@@ -34,6 +34,8 @@ export interface ImportResult {
   fileName: string;
   created: number;
   notEquipment: number;
+  noCoil: number;
+  notExposed: number;
   existing: string[];
   notFound: string[];
   warnings: string[];
@@ -99,6 +101,8 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
       fileName: cut.data.fileName,
       created: 0,
       notEquipment: chosen.notEquipment,
+      noCoil: chosen.noCoil,
+      notExposed: chosen.notExposed,
       existing: chosen.existing,
       notFound: chosen.notFound,
       warnings: schedules.filter((s) => s.isEquipment).flatMap((s) => s.warnings.map((w) => `${s.title}: ${w}`)),
@@ -147,8 +151,8 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
         <Label>Import equipment schedule</Label>
         <div className="flex flex-col gap-3">
           <p className="max-w-3xl text-[0.8125rem] text-[var(--muted)]">
-            Upload the equipment schedule PDF and the equipment on it is added to this project. Equipment already in the list is not changed. A
-            scanned PDF will not work.
+            Upload the equipment schedule PDF. Equipment with a water, glycol or steam coil that outside air can reach is added to this
+            project; everything else is left out. Equipment already in the list is not changed. A scanned PDF will not work.
           </p>
           <div className="flex flex-wrap items-end justify-between gap-3">
             <PdfField file={file} onChange={setFile} />
@@ -216,6 +220,8 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 /** What the import added and, in words, everything it left out. Exported for the view tests. */
 export function ImportSummary({ result: r, doneHref }: { result: ImportResult; doneHref: string }) {
   const left: string[] = [];
+  if (r.notExposed > 0) left.push(`${plural(r.notExposed, "unit")} with a coil that outside air does not reach, by the schedule (recirculating units, terminal units fed conditioned air)`);
+  if (r.noCoil > 0) left.push(`${plural(r.noCoil, "unit")} with no water, glycol or steam coil (exhaust valves, fans, humidifiers, pumps, electric heat), so nothing to freeze`);
   if (r.notEquipment > 0) left.push(`${plural(r.notEquipment, "item")} on schedules that are not equipment (diffusers, grilles, valves and the like)`);
   if (r.existing.length > 0) left.push(`${plural(r.existing.length, "unit")} already in this project: ${r.existing.join(", ")}`);
   if (r.notFound.length > 0) left.push(`${plural(r.notFound.length, "name")} not found in the PDF text, so possibly misread: ${r.notFound.join(", ")}`);
@@ -226,7 +232,7 @@ export function ImportSummary({ result: r, doneHref }: { result: ImportResult; d
           <div>
             <Label>Import equipment schedule</Label>
             <p className="text-[0.875rem]">
-              <strong className="font-semibold">Added {plural(r.created, "unit")}</strong> from {r.fileName}. Check each one against the schedule as you
+              <strong className="font-semibold">Added {plural(r.created, "unit")} at risk of freezing</strong> from {r.fileName}. Check each one against the schedule as you
               verify it.
             </p>
           </div>

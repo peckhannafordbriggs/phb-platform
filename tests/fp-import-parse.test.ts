@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RawSchedule } from "@/lib/modules/freeze-protection/import/analyze";
 import { mergeSchedules } from "@/lib/modules/freeze-protection/import/merge";
+import type { CoilType } from "@/lib/modules/freeze-protection/types";
 import { selectForImport } from "@/lib/modules/freeze-protection/import/select";
 import { MARK, firstCell, layoutText, splitPage } from "@/lib/modules/freeze-protection/import/split";
 import { FLAG_FROM_LIST, FLAG_NOT_FOUND, type PdfItem, type ScheduleBlock } from "@/lib/modules/freeze-protection/import/types";
@@ -165,8 +166,14 @@ describe("choosing what an import adds, with no review step", () => {
     rows: names.map((name) => ({ name, equipmentType: "Fan", areaServed: " Roof ", coil: "water" as const, exposureSuggestion: null, exposureEvidence: "stray", flags })),
   });
 
-  it("adds equipment found in the PDF, and counts what it leaves out", () => {
+  it("adds equipment with a coil found in the PDF, and counts what it leaves out", () => {
+    const fans = sched("EXHAUST FAN SCHEDULE", true, ["EXF-1"]);
+    const noCoil = { ...fans, rows: fans.rows.map((r) => ({ ...r, coil: "none" as CoilType })) };
+    const fcus = sched("FAN COIL UNIT SCHEDULE", true, ["FCU-1"]);
+    const recirculating = { ...fcus, rows: fcus.rows.map((r) => ({ ...r, exposureSuggestion: "unlikely" as const })) };
     const candidates = mergeSchedules([
+      noCoil,
+      recirculating,
       sched("FAN SCHEDULE", true, ["EF-1", "EF-2"]),
       sched("FAN SCHEDULE 2", true, ["EF-9"], [FLAG_NOT_FOUND]),
       sched("GRILLE SCHEDULE", false, ["WS1", "LD1"]),
@@ -175,6 +182,6 @@ describe("choosing what an import adds, with no review step", () => {
     expect(out.rows).toEqual([
       { name: "EF-1", equipmentType: "Fan", areaServed: "Roof", coil: "water", exposureSuggestion: null, exposureEvidence: null, source: "M-701-R · FAN SCHEDULE" },
     ]);
-    expect(out).toMatchObject({ notEquipment: 2, existing: ["EF-2"], notFound: ["EF-9"] });
+    expect(out).toMatchObject({ notEquipment: 2, noCoil: 1, notExposed: 1, existing: ["EF-2"], notFound: ["EF-9"] });
   });
 });

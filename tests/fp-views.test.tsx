@@ -81,7 +81,7 @@ const OPEN = line("5", { coil: "water" });
 const LINES = [NO_PROTECTION, FAILED, VERIFIED, NO_COIL, OPEN];
 const HISTORY: FpHistoryEntry[] = [
   { id: "h2", at: "2026-10-30T18:05:00.000Z", sentence: "Chris Moreno recorded the damper test for AHU-2 on job 26-104A" },
-  { id: "h1", at: "2026-10-29T14:00:00.000Z", sentence: "Dana Whitfield added AHU-2 to the job 26-104A register" },
+  { id: "h1", at: "2026-10-29T14:00:00.000Z", sentence: "Dana Whitfield added AHU-2 to the job 26-104A equipment list" },
 ];
 
 const register = (props: Partial<Parameters<typeof RegisterView>[0]>) =>
@@ -89,7 +89,7 @@ const register = (props: Partial<Parameters<typeof RegisterView>[0]>) =>
     createElement(RegisterView, { project: PROJECT, lines: LINES, selected: null, history: [], panel: null, today: "2026-11-01", ...props }),
   );
 
-describe("Register", () => {
+describe("Equipment page", () => {
   it("offers a new project when there are none", () => {
     const html = register({ project: null, lines: [] });
     expect(html).toContain("No projects yet");
@@ -224,6 +224,8 @@ describe("Schedule import", () => {
     fileName: "Equipment_Schedules.pdf",
     created: 312,
     notEquipment: 40,
+    noCoil: 141,
+    notExposed: 96,
     existing: ["AHU-1"],
     notFound: ["FCU-99"],
     warnings: ["FAN COIL UNIT SCHEDULE: Found 28 units, but the schedule has at least 29 marked rows. Check for missing units."],
@@ -245,7 +247,9 @@ describe("Schedule import", () => {
 
   it("says what was added and, in words, everything left out", () => {
     const html = renderToStaticMarkup(createElement(ImportSummary, { result: RESULT, doneHref: "/freeze-protection?project=1" }));
-    expect(html).toContain("Added 312 units");
+    expect(html).toContain("Added 312 units at risk of freezing");
+    expect(html).toContain("96 units with a coil that outside air does not reach");
+    expect(html).toContain("141 units with no water, glycol or steam coil");
     expect(html).toContain("40 items on schedules that are not equipment");
     expect(html).toContain("1 unit already in this project: AHU-1");
     expect(html).toContain("1 name not found in the PDF text, so possibly misread: FCU-99");
