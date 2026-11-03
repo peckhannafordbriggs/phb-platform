@@ -1214,6 +1214,16 @@ trees for a bare `new Anthropic(`. The Python engine must pass `api_key=`
 explicitly for the same reason. `WHY-ITS-BUILT-THIS-WAY.md` § 68;
 `runbook.md` → *The Change Orders Anthropic key, the same way*.
 
+**Freeze Protection has its own Anthropic key too (2026-11-03).**
+`FP_ANTHROPIC_API_KEY`, a third key, read only by the equipment schedule import
+(`lib/modules/freeze-protection/import/`). Name in `lib/env.ts`
+(`FP_ANTHROPIC_API_KEY_VAR`), reader `readFreezeProtectionAnthropicEnv`, Key
+Vault `FP-ANTHROPIC-API-KEY` behind `fpAnthropicApiKeyInKeyVault`, on the web
+container app only. Same rule: every client passes `apiKey`, never a fallback;
+`tests/fp-anthropic-key.test.ts` holds it. The import reads PDFs with
+`pdfjs-dist` (Apache-2.0), listed in `serverExternalPackages`.
+`runbook.md` → *The equipment schedule import*.
+
 **Needs Review, Phase 1 - visibility, read-only (2026-10-21).** The Change
 Orders module has a tab bar on the BAS pattern (`app/(modules)/change-orders/tabs.ts`,
 `co-shell.tsx`): *Mailbox* at `/change-orders` and *Needs Review* at

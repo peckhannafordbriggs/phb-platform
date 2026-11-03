@@ -147,8 +147,8 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
         <Label>Import equipment schedule</Label>
         <div className="flex flex-col gap-3">
           <p className="max-w-3xl text-[0.8125rem] text-[var(--muted)]">
-            The mechanical schedule sheets as a PDF from the drawing set (with text, not a scan). Claude reads each schedule and adds every unit
-            with its type, area served and coil. Units already in this project are left as they are.
+            Upload the equipment schedule PDF and the equipment on it is added to this project. Equipment already in the list is not changed. A
+            scanned PDF will not work.
           </p>
           <div className="flex flex-wrap items-end justify-between gap-3">
             <PdfField file={file} onChange={setFile} />

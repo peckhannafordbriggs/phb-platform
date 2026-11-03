@@ -53,7 +53,7 @@ export function ProjectForm({ cancelHref, today }: { cancelHref: string; today: 
           <PdfField file={schedule} onChange={setSchedule} label="Equipment schedule (PDF, optional)" />
         </div>
         <p className="text-[0.75rem] text-[var(--muted)]">
-          The report speaks for this date. With the schedule PDF, Claude adds the equipment on it to the project.
+          The verification date is the date shown on the report. Add the equipment schedule PDF to fill in the equipment list for you.
         </p>
 
         {error && <p className="text-[0.8125rem] text-[var(--phb-maroon)]">{error}</p>}

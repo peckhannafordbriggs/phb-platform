@@ -1426,6 +1426,7 @@ broken auth callback. **Do not remove the `-p`.**
 | Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only. **Cannot affect production** |
 | Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire, but is a personal key linked to Jim** (checked in the Console 2026-10-28; kept so by decision 2026-10-29, accepted risk): Anthropic archives it the day Jim leaves the organization, and it then fails as `401 authentication_error` on the next call, with no warning beforehand. Also revocable in the Console. *Both Anthropic keys fail at once* has the fix | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
 | Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app and on the classifier job; `.env.local` locally | **Does not expire, but is a personal key linked to Jim**, like the BAS key and with the same ending: archived the day Jim leaves, `401` on the next call. A second, separately issued key, revocable on its own. *Both Anthropic keys fail at once* has the fix | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
+| Anthropic API key (Freeze Protection) | Key Vault `FP-ANTHROPIC-API-KEY` → `FP_ANTHROPIC_API_KEY` on the web container app only; `.env.local` locally | **Does not expire.** A third, separately issued key, revocable on its own. Not yet issued as of 2026-11-03 | The equipment schedule import only. Adding units by hand and everything else in the module work without it |
 | BAS credential key | Key Vault `BAS-CREDENTIAL-KEY` → `BAS_CREDENTIAL_KEY` on the container app; the collector's `.env` on the office PC; `.env.local` locally | **Does not expire.** Rotated only on purpose - *Station credentials, and the one secret that lives in two places* | Storing and decrypting Niagara station logins in Settings; the collector, wherever it runs. A value that differs from the collector's makes every stored login unreadable |
 | `PnP.Powershell` certificate on `phb-co-engine` | Entra app registration `85ca496d-3af9-4c3a-aa11-a6b7fd51105d` → Certificates & secrets; the private key is on the IT workstation that ran the site grant, not anywhere PH+B controls | **19 October 2029** | **Nothing of ours.** No engine code path presents a certificate, so its expiry breaks nothing and is noticed by nothing — the exposure is the three years it stays *valid*. **Kept, by the owner's decision of 2026-11-02** — an accepted exposure, not an oversight: *Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays* |
 
@@ -11660,3 +11661,77 @@ review after any later change.
 **Fix.** Review again: remove the review signature, then a different engineer
 signs. The unit's History, or Admin → Audit filtered to Freeze Protection,
 shows what changed and who changed it.
+
+## The equipment schedule import (2026-11-03)
+
+New project (or **Import** above a project's equipment list) takes the
+mechanical schedule PDF and adds the equipment on it. Three steps, three routes
+under `app/api/modules/freeze-protection/import/`:
+
+1. `split`: pdfjs-dist reads the text and its positions, and `import/split.ts`
+   cuts each sheet into schedules by their titles. No model, nothing stored.
+2. `analyze`, once per schedule, three at a time from the browser: one Claude
+   call (`import/analyze.ts`, `claude-sonnet-5-5`, key `FP_ANTHROPIC_API_KEY`),
+   then the checks in `import/validate.ts`. Nothing written.
+3. `commit`: the units chosen by `import/select.ts`, in one transaction. Each
+   gets an `fp.equipment_created` row with `source: "import"`, plus one
+   `fp.schedule_imported` row for the import.
+
+There is no review page: the summary card under the progress bar says what was
+added and names everything left out. The import never changes a unit already
+in the list. The schedule's outside air reading is stored as
+`exposure_suggestion` / `exposure_evidence` and shown beside step 3 as a hint;
+step 3 itself stays unanswered until the engineer answers it.
+
+## The import says "Schedule import is not set up"
+
+**Symptom.** The import stops with *Schedule import is not set up:
+FP_ANTHROPIC_API_KEY is missing.* (503 from `/import/analyze`.)
+
+**Cause.** Freeze Protection's own Anthropic key is not set. It is a third key,
+separate from BAS Analyze's and Change Orders', and never falls back to either.
+
+**Fix.** Production: set Key Vault `FP-ANTHROPIC-API-KEY`, set
+`fpAnthropicApiKeyInKeyVault` to true in `infra/main.parameters.json` and
+redeploy (`infra/README.md` → *The Freeze Protection Anthropic key*). Locally:
+`FP_ANTHROPIC_API_KEY` in `.env.local`. Until then, add equipment by hand.
+
+## The import finds no schedules, or says the PDF has no text
+
+**Symptom.** *That PDF has no text layer (it looks scanned)* or *No schedules
+were found in that PDF.*
+
+**Cause.** The import reads text, never pixels. A scanned or flattened PDF has
+no text. A schedule is found by its title: upper case, set noticeably larger
+than the table text, outside the title block on the right edge of the sheet.
+
+**Fix.** Export the schedule sheets from the drawing set (Revit or CAD) as a PDF
+with text, or ask the engineer of record for one. Otherwise add the units by
+hand.
+
+## The import left units out
+
+**Symptom.** The summary says some units were left out, or a schedule warns
+*Found 28 units, but the schedule has at least 29 marked rows.*
+
+**Cause.** By design (`import/select.ts`): items on schedules that are not
+equipment (diffusers, grilles, valves, attenuators), names already in the list,
+and names Claude returned that do not appear in the PDF text (possibly misread)
+are not added. The row warning compares Claude's count with the mark-like first
+cells in the schedule text, so a short count is worth a look.
+
+**Fix.** The summary names every unit left out. Add the ones that belong with
+**Add equipment**. Running the import again is safe: it only adds names that
+are not already in the list.
+
+## A schedule "could not be read"
+
+**Symptom.** The summary lists a schedule under *Not read* with the model
+service's reason.
+
+**Cause.** That schedule's Claude call failed (the service was down or rate
+limited, 502) or the schedule was too long for one answer (422). Other
+schedules are not affected.
+
+**Fix.** Run the import again later; units already added are skipped. A
+schedule that is always too long: add its units by hand.
