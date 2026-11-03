@@ -230,6 +230,12 @@ const anthropicApiKeySchema = blankAsAbsent(z.string().trim().min(1).optional())
 export const ANTHROPIC_API_KEY_VAR = "ANTHROPIC_API_KEY";
 /** Change Orders' own key (2026-10-16). Never the SDK default name - see above. */
 export const CO_ANTHROPIC_API_KEY_VAR = "CO_ANTHROPIC_API_KEY";
+/**
+ * Freeze Protection's own key (2026-11-03): the third, read by the equipment
+ * schedule import. Same rules as the Change Orders key: never the SDK default
+ * name, never a fallback to another module's key.
+ */
+export const FP_ANTHROPIC_API_KEY_VAR = "FP_ANTHROPIC_API_KEY";
 export const BAS_CREDENTIAL_KEY_VAR = "BAS_CREDENTIAL_KEY";
 export const BAS_CREDENTIAL_KEY_VERSION_VAR = "BAS_CREDENTIAL_KEY_VERSION";
 /** The bas_analyze role's URL (2026-10-13): the third secret by reference, same shape. */
@@ -249,6 +255,15 @@ export function readAnthropicApiKey(): string | null {
  */
 export function readChangeOrderAnthropicApiKey(): string | null {
   const result = anthropicApiKeySchema.safeParse(process.env[CO_ANTHROPIC_API_KEY_VAR]);
+  return result.success && result.data ? result.data : null;
+}
+
+/**
+ * Freeze Protection's key. Reads `FP_ANTHROPIC_API_KEY` and nothing else, for
+ * the same reason as the Change Orders reader above.
+ */
+export function readFreezeProtectionAnthropicApiKey(): string | null {
+  const result = anthropicApiKeySchema.safeParse(process.env[FP_ANTHROPIC_API_KEY_VAR]);
   return result.success && result.data ? result.data : null;
 }
 

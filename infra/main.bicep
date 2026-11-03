@@ -233,6 +233,9 @@ param anthropicApiKeyInKeyVault bool = false
 @description('Set to true once the Change Orders module\'s own Anthropic API key exists in Key Vault as CO-ANTHROPIC-API-KEY - a SECOND key, issued separately in the Anthropic Console so the change-order pipeline is billed, rate-limited and revoked independently of BAS Analyze, placed in the vault by hand, never as a template parameter. Read by the container app as CO_ANTHROPIC_API_KEY (lib/env.ts decides the name); nothing reads it until Phase 12 Part D is built, and absent it disables that and nothing else. Same conditional as the Anthropic key above, for the same reason.')
 param coAnthropicApiKeyInKeyVault bool = false
 
+@description('Set to true once the Freeze Protection module\'s own Anthropic API key exists in Key Vault as FP-ANTHROPIC-API-KEY - a THIRD key, issued separately in the Anthropic Console so the equipment schedule import is billed, rate-limited and revoked independently of the other modules, placed in the vault by hand, never as a template parameter. Read by the web container app only, as FP_ANTHROPIC_API_KEY (lib/env.ts decides the name); absent it disables the schedule import and nothing else. Same conditional as the Anthropic key above, for the same reason.')
+param fpAnthropicApiKeyInKeyVault bool = false
+
 @description('Set to true once the BAS credential key exists in Key Vault as BAS-CREDENTIAL-KEY - the 32-byte base64 AES key that encrypts Niagara station passwords in bas_station_credentials, placed there by hand, never as a template parameter. It MUST be byte-identical to the BAS_CREDENTIAL_KEY in the .env of the collector on the office PC: every stored credential was encrypted under that key, and a different one turns them all into unreadable ciphertext. Same conditional as the Anthropic key, for the same reason.')
 param basCredentialKeyInKeyVault bool = false
 
@@ -656,6 +659,11 @@ var anthropicApiKeySecretName = 'ANTHROPIC-API-KEY'
 // name only.
 var coAnthropicApiKeySecretName = 'CO-ANTHROPIC-API-KEY'
 
+// Freeze Protection's key, the same shape and a DIFFERENT key (2026-11-03):
+// read by the web app's equipment schedule import, nothing else. The template
+// knows the name only.
+var fpAnthropicApiKeySecretName = 'FP-ANTHROPIC-API-KEY'
+
 // The BAS credential key is the same shape: issued once (generated on the
 // office PC, where the collector already uses it), pasted into the vault once
 // by hand, never on a deploy's command line. The template knows the name only.
@@ -775,6 +783,15 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               {
                 name: 'co-anthropic-api-key'
                 keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${coAnthropicApiKeySecretName}'
+                identity: identity.id
+              }
+            ]
+          : [])
+        ...(fpAnthropicApiKeyInKeyVault
+          ? [
+              {
+                name: 'fp-anthropic-api-key'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${fpAnthropicApiKeySecretName}'
                 identity: identity.id
               }
             ]
@@ -902,6 +919,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                   {
                     name: 'CO_ANTHROPIC_API_KEY'
                     secretRef: 'co-anthropic-api-key'
+                  }
+                ]
+              : [])
+            // Freeze Protection's key, read lazily by
+            // readFreezeProtectionAnthropicEnv for the equipment schedule
+            // import. A third key, never a fallback to either above. Absent
+            // disables the import and nothing else. By reference only.
+            ...(fpAnthropicApiKeyInKeyVault
+              ? [
+                  {
+                    name: 'FP_ANTHROPIC_API_KEY'
+                    secretRef: 'fp-anthropic-api-key'
                   }
                 ]
               : [])

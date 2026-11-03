@@ -13,7 +13,9 @@ multiple internal systems as modules, admin-controlled access per employee.
 Microsoft 365 mailbox and automation pipeline that already works. We are building
 *around* that system, not rebuilding it. **BAS** (building automation) is module
 #2. **Cost Intelligence** is module #3, in progress, built by Karthik
-(`krachamolla@phb1899.com`) in this repository.
+(`krachamolla@phb1899.com`) in this repository. **Freeze Protection**
+(`freeze-protection`) is module #5, built by Karthik: each job's equipment
+schedule and its one freeze protection verification.
 
 Two people now work in this repo. `DEVELOPER-SETUP.md` is how a new developer
 gets running; `PLATFORM-CONTEXT.md` is the contract a new module satisfies.

@@ -3,7 +3,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // Prisma's engine files are not traceable by the default bundler analysis.
   // Leaving the client external keeps `next build` from inlining it.
-  serverExternalPackages: ["@prisma/client"],
+  // pdfjs-dist (the Freeze Protection schedule import) is the same: it loads
+  // its worker module by path, and bundling it breaks that.
+  serverExternalPackages: ["@prisma/client", "pdfjs-dist"],
   devIndicators: false,
 
   // Emits .next/standalone: server.js plus only the node_modules the traced

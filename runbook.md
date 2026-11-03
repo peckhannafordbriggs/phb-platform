@@ -3016,9 +3016,11 @@ az consumption budget list --query "[].{name:name, amount:amount, notifications:
 The budget must have **notification contacts only**. A budget with an action group
 attached can trigger automation, and this server is not something a spending threshold
 may switch off. **Who gets the budget email:** `budgetContactEmails` in the gitignored
-`infra/main.parameters.json` - since 2026-11-02 both the platform owner
-(`msheth@phb1899.com`) and Jim Schwarz (`jschwarz@phb1899.com`), by the owner's
-decision; before that the owner alone. The list reaches Azure only through a template
+`infra/main.parameters.json` - since 2026-11-02 Mahi Sheth (`msheth@phb1899.com`,
+then the owner) and Jim Schwarz (`jschwarz@phb1899.com`);
+The platform owner is now also Karthik Rachamolla: put `krachamolla@phb1899.com` in the
+list and redeploy the template, or the budget
+email keeps going to someone who no longer owns the platform. The list reaches Azure only through a template
 deployment, so a change here is not live until the next one, and `az consumption budget
 list` above is how to read what is live. These are two people's addresses, not a group:
 when either leaves, replace the address in the parameters file and redeploy, or the
