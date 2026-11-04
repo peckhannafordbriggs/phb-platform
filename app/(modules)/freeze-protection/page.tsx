@@ -15,7 +15,12 @@ export default async function RegisterPage({ searchParams }: { searchParams: Pro
 
   const params = await searchParams;
   const { projects, project, lines, unit, history } = await loadProject(params, { firstUnitByDefault: true });
-  const panel = params.new === "project" ? "project" : params.new === "equipment" && project ? "equipment" : null;
+  const panel =
+    params.new === "project"
+      ? "project"
+      : (params.new === "equipment" || params.new === "import") && project
+        ? params.new
+        : null;
 
   return (
     <FpShell projectId={project?.id} actions={<RegisterActions projects={projects} projectId={project?.id ?? null} />}>

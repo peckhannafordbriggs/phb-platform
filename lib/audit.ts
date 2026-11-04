@@ -196,6 +196,12 @@ export type AuditAction =
   | "fp.verification_signed"
   | "fp.verification_unsigned"
   | "fp.result_updated"
+  /**
+   * The equipment schedule import (2026-11-03): one summary row per import
+   * (fileName, created, skipped names), beside one `fp.equipment_created` per
+   * unit carrying `source: "import"`, so each unit's history starts there.
+   */
+  | "fp.schedule_imported"
   | "position.created"
   | "position.updated"
   | "department.created"

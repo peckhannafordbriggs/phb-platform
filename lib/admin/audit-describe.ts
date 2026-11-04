@@ -158,6 +158,12 @@ const FP_FIELD_WORDS: Record<string, string> = {
   documentedMethod: "the confirmation method",
 };
 
+/** The uploaded schedule's file name, quoted, for import rows. */
+function fpFile(meta: Record<string, unknown>): string {
+  const file = stringField(meta, "fileName");
+  return file === null ? "an equipment schedule" : `"${file}"`;
+}
+
 /** The unit's name. Rows written before 2026-10-23 called it "tag". */
 function fpUnit(meta: Record<string, unknown>): string {
   return stringField(meta, "name") ?? stringField(meta, "tag") ?? "a unit";
@@ -555,11 +561,20 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "fp.building_deleted": ({ actor, meta }) =>
     `${actor} removed the building "${stringField(meta, "name") ?? "(unnamed)"}" from ${fpJob(meta)}`,
   "fp.equipment_created": ({ actor, meta }) =>
-    `${actor} added ${fpUnit(meta)} to the ${fpJob(meta)} register`,
+    stringField(meta, "source") === "import"
+      ? `${actor} imported ${fpUnit(meta)} into the ${fpJob(meta)} equipment list from ${fpFile(meta)}`
+      : `${actor} added ${fpUnit(meta)} to the ${fpJob(meta)} equipment list`,
+  "fp.schedule_imported": ({ actor, meta }) => {
+    const created = typeof meta.created === "number" ? meta.created : 0;
+    const skipped = Array.isArray(meta.skipped) ? meta.skipped.length : 0;
+    return `${actor} imported ${created} unit${created === 1 ? "" : "s"} into the ${fpJob(meta)} equipment list from ${fpFile(meta)}${
+      skipped > 0 ? `, skipping ${skipped} already there` : ""
+    }`;
+  },
   "fp.equipment_updated": ({ actor, meta }) =>
     `${actor} changed ${fpFields(meta)} of ${fpUnit(meta)} on ${fpJob(meta)}`,
   "fp.equipment_deleted": ({ actor, meta }) =>
-    `${actor} removed ${fpUnit(meta)} and its results from the ${fpJob(meta)} register`,
+    `${actor} removed ${fpUnit(meta)} and its results from the ${fpJob(meta)} equipment list`,
   "fp.verification_created": ({ actor, meta }) =>
     `${actor} started the ${stringField(meta, "verificationDate") ?? "?"} freeze protection verification on ${fpJob(meta)}`,
   "fp.verification_updated": ({ actor, meta }) =>
@@ -843,6 +858,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "fp.verification_signed": "Freeze Protection verification signed",
   "fp.verification_unsigned": "Freeze Protection signature removed",
   "fp.result_updated": "Freeze Protection result recorded",
+  "fp.schedule_imported": "Freeze Protection schedule imported",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

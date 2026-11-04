@@ -805,6 +805,11 @@ model FpEquipment {
   documentedDate        DateTime? @map("documented_date") @db.Date
   documentedMethod      String?   @map("documented_method")
   notes                 String?
+  /// The schedule import's reading: likely | unlikely. A hint beside step 3, never the answer
+  exposureSuggestion    String?   @map("exposure_suggestion")
+  exposureEvidence      String?   @map("exposure_evidence")
+  /// Where an imported unit came from, e.g. "M-701-R · FAN SCHEDULE". Null when added by hand
+  source                String?
   updatedById           String?   @map("updated_by_id") @db.Uuid
   updatedBy             Employee? @relation("FpEquipmentUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
