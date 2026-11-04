@@ -81,7 +81,8 @@ nothing else changes.
 each comes from the company Anthropic Console, and the platform owner holds
 them. **They are two different keys, one per module** (since 2026-10-16).
 `ANTHROPIC_API_KEY` is BAS Analyze's - blank disables the Analyze tab and
-nothing else. `CO_ANTHROPIC_API_KEY` is Change Orders' - blank disables the
+nothing else (locally it is also what the CIP worker and Freeze Protection's
+schedule import fall back to). `CO_ANTHROPIC_API_KEY` is Change Orders' - blank disables the
 Phase 12 Part D engine calls and nothing else, and as of 2026-10-16 Part D is
 not built, so nothing reads it yet. Both names are decided in `lib/env.ts`
 (`ANTHROPIC_API_KEY_VAR`, `CO_ANTHROPIC_API_KEY_VAR`); do not introduce a
@@ -1426,7 +1427,6 @@ broken auth callback. **Do not remove the `-p`.**
 | Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only. **Cannot affect production** |
 | Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire, but is a personal key linked to Jim** (checked in the Console 2026-10-28; kept so by decision 2026-10-29, accepted risk): Anthropic archives it the day Jim leaves the organization, and it then fails as `401 authentication_error` on the next call, with no warning beforehand. Also revocable in the Console. *Both Anthropic keys fail at once* has the fix | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
 | Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app and on the classifier job; `.env.local` locally | **Does not expire, but is a personal key linked to Jim**, like the BAS key and with the same ending: archived the day Jim leaves, `401` on the next call. A second, separately issued key, revocable on its own. *Both Anthropic keys fail at once* has the fix | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
-| Anthropic API key (Freeze Protection) | Key Vault `FP-ANTHROPIC-API-KEY` → `FP_ANTHROPIC_API_KEY` on the web container app only; `.env.local` locally | **Does not expire.** A third, separately issued key, revocable on its own. Not yet issued as of 2026-11-03 | The equipment schedule import only. Adding units by hand and everything else in the module work without it |
 | BAS credential key | Key Vault `BAS-CREDENTIAL-KEY` → `BAS_CREDENTIAL_KEY` on the container app; the collector's `.env` on the office PC; `.env.local` locally | **Does not expire.** Rotated only on purpose - *Station credentials, and the one secret that lives in two places* | Storing and decrypting Niagara station logins in Settings; the collector, wherever it runs. A value that differs from the collector's makes every stored login unreadable |
 | `PnP.Powershell` certificate on `phb-co-engine` | Entra app registration `85ca496d-3af9-4c3a-aa11-a6b7fd51105d` → Certificates & secrets; the private key is on the IT workstation that ran the site grant, not anywhere PH+B controls | **19 October 2029** | **Nothing of ours.** No engine code path presents a certificate, so its expiry breaks nothing and is noticed by nothing — the exposure is the three years it stays *valid*. **Kept, by the owner's decision of 2026-11-02** — an accepted exposure, not an oversight: *Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays* |
 
@@ -11671,7 +11671,7 @@ under `app/api/modules/freeze-protection/import/`:
 1. `split`: pdfjs-dist reads the text and its positions, and `import/split.ts`
    cuts each sheet into schedules by their titles. No model, nothing stored.
 2. `analyze`, once per schedule, three at a time from the browser: one Claude
-   call (`import/analyze.ts`, `claude-sonnet-5-5`, key `FP_ANTHROPIC_API_KEY`),
+   call (`import/analyze.ts`, `claude-sonnet-5-5`, Cost Intelligence's key),
    then the checks in `import/validate.ts`. Nothing written.
 3. `commit`: the units chosen by `import/select.ts`, in one transaction. Each
    gets an `fp.equipment_created` row with `source: "import"`, plus one
@@ -11686,15 +11686,25 @@ step 3 itself stays unanswered until the engineer answers it.
 ## The import says "Schedule import is not set up"
 
 **Symptom.** The import stops with *Schedule import is not set up:
-FP_ANTHROPIC_API_KEY is missing.* (503 from `/import/analyze`.)
+CIP_ANTHROPIC_API_KEY is missing.* (503 from `/import/analyze`.)
 
-**Cause.** Freeze Protection's own Anthropic key is not set. It is a third key,
-separate from BAS Analyze's and Change Orders', and never falls back to either.
+**Cause.** The import runs on Cost Intelligence's key (2026-11-04). In
+production the web app gets it from Key Vault `ANTHROPIC-API-KEY-CIP` as
+`CIP_ANTHROPIC_API_KEY`, only when `enableCipWorker` is true; it never falls
+back to `ANTHROPIC_API_KEY`, which in the web app is BAS Analyze's. Locally it
+uses `CIP_ANTHROPIC_API_KEY`, else `ANTHROPIC_API_KEY`.
 
-**Fix.** Production: set Key Vault `FP-ANTHROPIC-API-KEY`, set
-`fpAnthropicApiKeyInKeyVault` to true in `infra/main.parameters.json` and
-redeploy (`infra/README.md` → *The Freeze Protection Anthropic key*). Locally:
-`FP_ANTHROPIC_API_KEY` in `.env.local`. Until then, add equipment by hand.
+**Fix.** Production: `enableCipWorker` true in `infra/main.parameters.json`
+(it already is if CIP runs work) and redeploy so the web app picks up the
+reference. Locally: `ANTHROPIC_API_KEY` (or `CIP_ANTHROPIC_API_KEY`) in
+`.env.local`. If CIP runs also fail with a key error, the CIP key itself was
+revoked or ran out of credit. Until then, add equipment by hand.
+
+**"The model service could not be reached" on every schedule, locally.** On
+the office network, HTTPS is inspected with the company's own certificate,
+which Node does not trust by default. Start the dev server with
+`$env:NODE_USE_SYSTEM_CA="1"` set in the same PowerShell window (it has to be
+in the environment before Node starts, so `.env.local` is too late).
 
 ## The import finds no schedules, or says the PDF has no text
 

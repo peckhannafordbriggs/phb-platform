@@ -106,9 +106,6 @@
     "coAnthropicApiKeyInKeyVault": {
       "value": false
     },
-    "fpAnthropicApiKeyInKeyVault": {
-      "value": false
-    },
     "basCredentialKeyInKeyVault": {
       "value": false
     },

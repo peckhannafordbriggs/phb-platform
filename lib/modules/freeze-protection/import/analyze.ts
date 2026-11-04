@@ -12,9 +12,9 @@ import type { ScheduleBlock } from "./types";
  * text is data from a drawing, never instructions, and the system prompt says
  * so.
  *
- * The key is Freeze Protection's own (FP_ANTHROPIC_API_KEY), passed
- * explicitly: a client built without `apiKey` would read the SDK's default
- * ANTHROPIC_API_KEY, which is BAS Analyze's.
+ * The key comes from readFreezeProtectionAnthropicEnv (Cost Intelligence's
+ * key) and is passed explicitly, so the key a client runs on is always the one
+ * that reader chose, never the SDK's default ANTHROPIC_API_KEY by accident.
  */
 
 export const IMPORT_MODEL = "claude-sonnet-5-5";

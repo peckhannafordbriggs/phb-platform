@@ -25,8 +25,10 @@ import { createProject } from "@/lib/modules/freeze-protection/projects";
 import { createEmployee, disconnectDb, grantModule, resetDb, testDb } from "./db";
 
 const authMock = vi.mocked(auth);
-const KEY_VAR = "FP_ANTHROPIC_API_KEY";
+const KEY_VAR = "CIP_ANTHROPIC_API_KEY";
 const savedKey = process.env[KEY_VAR];
+// Locally the import falls back to ANTHROPIC_API_KEY, so tests clear it too.
+const savedBasKey = process.env.ANTHROPIC_API_KEY;
 
 async function signIn(grant: boolean) {
   const employee = await createEmployee();
@@ -118,6 +120,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   if (savedKey === undefined) delete process.env[KEY_VAR];
   else process.env[KEY_VAR] = savedKey;
+  if (savedBasKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+  else process.env.ANTHROPIC_API_KEY = savedBasKey;
 });
 afterAll(disconnectDb);
 
@@ -171,6 +175,7 @@ describe("analyze", () => {
 
   it("503 naming the variable when the module's key is missing, without calling the model", async () => {
     delete process.env[KEY_VAR];
+    delete process.env.ANTHROPIC_API_KEY;
     const res = await analyze.POST(json(block));
     expect(res.status).toBe(503);
     expect(((await res.json()) as { error: { message: string } }).error.message).toContain(KEY_VAR);

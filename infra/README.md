@@ -309,9 +309,9 @@ references each from the container app behind a boolean parameter. All four
 are read under the managed identity's existing **Key Vault Secrets User**
 grant on the vault; no new role assignment is needed, and
 `tests/deploy-guards.test.ts` asserts that from the template's grants.
-A fifth, Freeze Protection's `FP-ANTHROPIC-API-KEY` (2026-11-03), is wired the
-same way behind `fpAnthropicApiKeyInKeyVault`; its heading follows the Change
-Orders one, and `tests/fp-anthropic-key.test.ts` holds its wiring.
+Freeze Protection's schedule import has no key of its own: the web app reads
+Cost Intelligence's `ANTHROPIC-API-KEY-CIP` as `CIP_ANTHROPIC_API_KEY`, behind
+`enableCipWorker` (2026-11-04). Nothing new to set in the vault.
 
 All four exist in the production vault as of 2026-10-21, and the first three
 flags are on; `coAnthropicApiKeyInKeyVault` stays false until Phase 12 Part D
@@ -382,30 +382,6 @@ az keyvault secret show --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --
 # 4. Set coAnthropicApiKeyInKeyVault to true in infra/main.parameters.json and redeploy.
 ```
 
-## The Freeze Protection Anthropic key is a third key, set the same way
-
-`FP_ANTHROPIC_API_KEY` is the Freeze Protection module's own Anthropic API key
-(2026-11-03), read by the equipment schedule import and nothing else. Issued
-separately in the Anthropic Console so it is billed, rate-limited and revoked
-on its own. Key Vault `FP-ANTHROPIC-API-KEY`, referenced as
-`FP_ANTHROPIC_API_KEY` from the **web container app only** (no job reads it)
-when `fpAnthropicApiKeyInKeyVault` is true. Absent, the import says it is not
-set up and units are added by hand; nothing else changes.
-
-```powershell
-# 1. Same vault as above.
-# 2. Set the secret. A DIFFERENT key from the other two.
-az keyvault secret set --vault-name <vault-name> --name FP-ANTHROPIC-API-KEY --value (Read-Host "Freeze Protection Anthropic API key")
-
-# 3. Confirm it exists WITHOUT printing it.
-az keyvault secret show --vault-name <vault-name> --name FP-ANTHROPIC-API-KEY --query "{enabled:attributes.enabled, updated:attributes.updated}"
-
-# 4. Set fpAnthropicApiKeyInKeyVault to true in infra/main.parameters.json and redeploy.
-```
-
-Set the secret BEFORE the flag: Container Apps resolves every Key Vault
-reference when it creates the revision, and a reference to a missing secret
-fails the whole deployment.
 
 ## The BAS credential key is copied from the collector, byte for byte
 
