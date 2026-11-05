@@ -64,7 +64,7 @@ export default async function AdminPage({
       <header className="flex items-baseline justify-between">
         <h1 className="text-xl font-semibold">Admin</h1>
         <nav className="flex items-baseline gap-4 text-sm">
-          <InviteEmailButton email={buildInviteEmail(access.viewer)} />
+          <InviteEmailButton email={buildInviteEmail()} />
           <Link
             href="/admin/audit"
             className="text-[var(--accent)] underline underline-offset-2"

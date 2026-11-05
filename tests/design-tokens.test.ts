@@ -185,13 +185,15 @@ describe("the palette keeps its measured values", () => {
     expect(css).toMatch(/--phb-red-btn:/);
   });
 
-  it("keeps a focus gold distinct from the fill gold", async () => {
+  it("keeps the focus ring off the bright gold", async () => {
     const css = await declarations();
 
     // The bright gold is 1.17 on a light surface and fails WCAG 2.2's 3:1 for
-    // focus indicators.
+    // focus indicators. Since 2026-11-05 the ring is purple rather than the
+    // darker gold, which read as a stray yellow box on every clicked field.
     expect(css).toMatch(/--phb-gold-ring:/);
-    expect(css).toMatch(/--focus:\s*var\(--phb-gold-ring\)/);
+    expect(css).toMatch(/--focus:\s*var\(--phb-purple\)/);
+    expect(css).not.toMatch(/--focus:\s*var\(--phb-gold\)/);
   });
 });
 

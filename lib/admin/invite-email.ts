@@ -20,11 +20,11 @@ export interface InviteEmail {
   body: string;
 }
 
-export function buildInviteEmail(inviter: {
-  firstName: string;
-  lastName: string;
-}): InviteEmail {
-  const first = inviter.firstName.trim();
+/**
+ * The sign-off is a bare "Thanks," on purpose: the admin's Outlook signature
+ * supplies the name, so the invite takes no inviter details.
+ */
+export function buildInviteEmail(): InviteEmail {
   const signOff = "Thanks,";
 
   const body = [
