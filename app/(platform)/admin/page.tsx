@@ -8,6 +8,8 @@ import {
   type EmployeeListQuery,
 } from "@/lib/validation/admin";
 import { EmployeeTable } from "./employee-table";
+import { InviteEmailButton } from "./invite-email-button";
+import { buildInviteEmail } from "@/lib/admin/invite-email";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +64,7 @@ export default async function AdminPage({
       <header className="flex items-baseline justify-between">
         <h1 className="text-xl font-semibold">Admin</h1>
         <nav className="flex items-baseline gap-4 text-sm">
+          <InviteEmailButton email={buildInviteEmail(access.viewer)} />
           <Link
             href="/admin/audit"
             className="text-[var(--accent)] underline underline-offset-2"

@@ -115,7 +115,7 @@
   --success: var(--phb-teal-ink);
   --warning: var(--phb-orange-ink);
   --danger: var(--phb-maroon);
-  --focus: var(--phb-gold-ring);
+  --focus: var(--phb-purple); /* was gold-ring; gold read as a stray yellow box (2026-11-05) */
 
   /* Set per module by the module header; falls back to chrome. */
   --module-accent: var(--phb-purple);
@@ -217,18 +217,27 @@ body {
 
 /* ---------------------------------------------------------------------------
    Focus.
-   Visible everywhere, and gold - but the LIGHT-SURFACE gold, which is the one
-   that measures 3.07 rather than the 1.17 the bright value manages. On the
-   purple chrome the bright gold is used instead, where it reaches 7.40.
+   No gold (2026-11-05): browsers match :focus-visible on a mouse click into a
+   text field or select, so the gold ring showed up as a stray yellow box every
+   time someone clicked a form. Fields now mark focus with an accent border,
+   the same treatment the newer modules already used. Buttons, links and other
+   controls keep a visible ring for keyboard users, in purple (passes 3:1 on
+   light surfaces) and white on the purple chrome.
    --------------------------------------------------------------------------- */
-:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+:where(a, button, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: 2px;
 }
 
-.chrome :where(a, button, input, select, [tabindex]):focus-visible {
-  outline-color: var(--phb-gold);
+:where(input, select, textarea):focus,
+:where(input, select, textarea):focus-visible {
+  outline: none;
+  border-color: var(--module-accent);
+}
+
+.chrome :where(a, button, summary, [tabindex]):focus-visible {
+  outline-color: var(--chrome-text);
 }
 
 /* ---------------------------------------------------------------------------
