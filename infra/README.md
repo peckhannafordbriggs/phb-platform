@@ -309,9 +309,9 @@ references each from the container app behind a boolean parameter. All four
 are read under the managed identity's existing **Key Vault Secrets User**
 grant on the vault; no new role assignment is needed, and
 `tests/deploy-guards.test.ts` asserts that from the template's grants.
-Freeze Protection's schedule import has no key of its own: the web app reads
-Cost Intelligence's `ANTHROPIC-API-KEY-CIP` as `CIP_ANTHROPIC_API_KEY`, behind
-`enableCipWorker` (2026-11-04). Nothing new to set in the vault.
+A fifth, Freeze Protection's `FP-ANTHROPIC-API-KEY` (2026-11-04), is wired the
+same way behind `fpAnthropicApiKeyInKeyVault`; its heading follows the Change
+Orders one.
 
 All four exist in the production vault as of 2026-10-21, and the first three
 flags are on; `coAnthropicApiKeyInKeyVault` stays false until Phase 12 Part D
@@ -381,6 +381,26 @@ az keyvault secret show --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --
 
 # 4. Set coAnthropicApiKeyInKeyVault to true in infra/main.parameters.json and redeploy.
 ```
+
+## The Freeze Protection Anthropic key is a third key, set the same way
+
+`FP_ANTHROPIC_API_KEY` is the Freeze Protection module's own Anthropic API key
+(2026-11-04), read by the equipment schedule import and nothing else. Key Vault
+`FP-ANTHROPIC-API-KEY`, referenced as `FP_ANTHROPIC_API_KEY` from the **web
+container app only** when `fpAnthropicApiKeyInKeyVault` is true. Absent, the
+import says it is not set up and units are added by hand.
+
+```powershell
+az keyvault secret set --vault-name <vault-name> --name FP-ANTHROPIC-API-KEY --value (Read-Host "Freeze Protection Anthropic API key")
+az keyvault secret show --vault-name <vault-name> --name FP-ANTHROPIC-API-KEY --query "{enabled:attributes.enabled, updated:attributes.updated}"
+# Then fpAnthropicApiKeyInKeyVault: true in infra/main.parameters.json.
+```
+
+Set the secret BEFORE the flag: a reference to a missing secret fails the
+whole revision. `deploy.yml` only swaps images, so until the next template
+deployment, add the same secret reference (`fp-anthropic-api-key`) and env var
+by hand on the container app (runbook → *The import says "Schedule import is
+not set up"*).
 
 
 ## The BAS credential key is copied from the collector, byte for byte

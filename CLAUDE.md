@@ -1214,17 +1214,13 @@ trees for a bare `new Anthropic(`. The Python engine must pass `api_key=`
 explicitly for the same reason. `WHY-ITS-BUILT-THIS-WAY.md` § 68;
 `runbook.md` → *The Change Orders Anthropic key, the same way*.
 
-**Freeze Protection's schedule import runs on Cost Intelligence's key (2026-11-04).**
-The owner's decision: no key of its own. Tied the way CIP ties it: Key Vault
-`ANTHROPIC-API-KEY-CIP` in production, `ANTHROPIC_API_KEY` shared locally. The
-CIP worker job reads that secret as `ANTHROPIC_API_KEY` in its own container;
-the web app, where that name is BAS Analyze's, reads it as
-`CIP_ANTHROPIC_API_KEY` (`lib/env.ts` `CIP_ANTHROPIC_API_KEY_VAR`, behind
-`enableCipWorker` in `infra/main.bicep`). The reader,
-`readFreezeProtectionAnthropicEnv`, falls back to `ANTHROPIC_API_KEY` only
-outside production, never uses the Change Orders key, and the client passes
-`apiKey` explicitly; `tests/fp-anthropic-key.test.ts` holds all of it. A
-revoked or out-of-credit CIP key stops both CIP runs and the import. The import reads PDFs with
+**Freeze Protection has its own Anthropic key (2026-11-04).**
+`FP_ANTHROPIC_API_KEY`, a third key, read only by the equipment schedule import
+(`lib/modules/freeze-protection/import/`). Name in `lib/env.ts`
+(`FP_ANTHROPIC_API_KEY_VAR`), reader `readFreezeProtectionAnthropicEnv`, Key
+Vault `FP-ANTHROPIC-API-KEY` behind `fpAnthropicApiKeyInKeyVault`, on the web
+container app only. Same rule as Change Orders: every client passes `apiKey`,
+never a fallback; `tests/fp-anthropic-key.test.ts` holds it. The import reads PDFs with
 `pdfjs-dist` (Apache-2.0), listed in `serverExternalPackages`.
 `runbook.md` → *The equipment schedule import*.
 
