@@ -64,6 +64,9 @@ function toLine(r: Row): FpLine {
           }
         : null,
     notes: r.notes,
+    exposureSuggestion: r.exposureSuggestion as FpLine["exposureSuggestion"],
+    exposureEvidence: r.exposureEvidence,
+    source: r.source,
     updatedAt: r.updatedAt.toISOString(),
     updatedBy: r.updatedBy ? `${r.updatedBy.firstName} ${r.updatedBy.lastName}` : null,
   };

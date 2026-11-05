@@ -1,7 +1,6 @@
 # PHB Internal Platform — Handover
 
-*For whoever owns this after December 2026. Written August 2026 by Mahi Sheth, the
-co-op intern who built it.*
+*For whoever owns this after December 2026. Built by Karthik and Mahi as of December 2026.
 
 Read this first. It is deliberately short and deliberately honest — about what works, what
 doesn't, what will break, and what you can safely ignore.
@@ -151,10 +150,16 @@ each module per person.
 There is **no create-employee function.** Employees appear in the admin list when they
 first sign in. This is intentional.
 
-### The four admins
+### The five admins
+
+The list below is what production's `BOOTSTRAP_ADMIN_EMAIL` held when this was written,
+not a statement of who should be an admin: to change it, edit the variable on the
+container app and redeploy (the seed adds admins, it never removes them), and
+add or remove the admin flag on the Admin screen. Remember the platform refuses
+to leave zero active admins.
 
 Seeded from the `BOOTSTRAP_ADMIN_EMAIL` environment variable:
-
+- `krachamolla@phb1899.com`
 - `msheth@phb1899.com`
 - `jschwarz@phb1899.com`
 - `jschriner@phb1899.com`

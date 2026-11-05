@@ -81,7 +81,8 @@ nothing else changes.
 each comes from the company Anthropic Console, and the platform owner holds
 them. **They are two different keys, one per module** (since 2026-10-16).
 `ANTHROPIC_API_KEY` is BAS Analyze's - blank disables the Analyze tab and
-nothing else. `CO_ANTHROPIC_API_KEY` is Change Orders' - blank disables the
+nothing else (locally it is also what the CIP worker and Freeze Protection's
+schedule import fall back to). `CO_ANTHROPIC_API_KEY` is Change Orders' - blank disables the
 Phase 12 Part D engine calls and nothing else, and as of 2026-10-16 Part D is
 not built, so nothing reads it yet. Both names are decided in `lib/env.ts`
 (`ANTHROPIC_API_KEY_VAR`, `CO_ANTHROPIC_API_KEY_VAR`); do not introduce a
@@ -3016,9 +3017,11 @@ az consumption budget list --query "[].{name:name, amount:amount, notifications:
 The budget must have **notification contacts only**. A budget with an action group
 attached can trigger automation, and this server is not something a spending threshold
 may switch off. **Who gets the budget email:** `budgetContactEmails` in the gitignored
-`infra/main.parameters.json` - since 2026-11-02 both the platform owner
-(`msheth@phb1899.com`) and Jim Schwarz (`jschwarz@phb1899.com`), by the owner's
-decision; before that the owner alone. The list reaches Azure only through a template
+`infra/main.parameters.json` - since 2026-11-02 Mahi Sheth (`msheth@phb1899.com`,
+then the owner) and Jim Schwarz (`jschwarz@phb1899.com`);
+The platform owner is now also Karthik Rachamolla: put `krachamolla@phb1899.com` in the
+list and redeploy the template, or the budget
+email keeps going to someone who no longer owns the platform. The list reaches Azure only through a template
 deployment, so a change here is not live until the next one, and `az consumption budget
 list` above is how to read what is live. These are two people's addresses, not a group:
 when either leaves, replace the address in the parameters file and redeploy, or the
@@ -11658,3 +11661,93 @@ review after any later change.
 **Fix.** Review again: remove the review signature, then a different engineer
 signs. The unit's History, or Admin → Audit filtered to Freeze Protection,
 shows what changed and who changed it.
+
+## The equipment schedule import (2026-11-03)
+
+New project (or **Import** on the project's Equipment page) takes the
+mechanical schedule PDF and adds the equipment on it. Three steps, three routes
+under `app/api/modules/freeze-protection/import/`:
+
+1. `split`: pdfjs-dist reads the text and its positions, and `import/split.ts`
+   cuts each sheet into schedules by their titles. No model, nothing stored.
+2. `analyze`, once per schedule, three at a time from the browser: one Claude
+   call (`import/analyze.ts`, `claude-sonnet-5-5`, Cost Intelligence's key),
+   then the checks in `import/validate.ts`. Nothing written.
+3. `commit`: the units chosen by `import/select.ts`, in one transaction. Each
+   gets an `fp.equipment_created` row with `source: "import"`, plus one
+   `fp.schedule_imported` row for the import.
+
+There is no review page: the summary card under the progress bar says what was
+added and names everything left out. The import never changes a unit already
+in the list. The schedule's outside air reading is stored as
+`exposure_suggestion` / `exposure_evidence` and shown beside step 3 as a hint;
+step 3 itself stays unanswered until the engineer answers it.
+
+## The import says "Schedule import is not set up"
+
+**Symptom.** The import stops with *Schedule import is not set up:
+CIP_ANTHROPIC_API_KEY is missing.* (503 from `/import/analyze`.)
+
+**Cause.** The import runs on Cost Intelligence's key (2026-11-04). In
+production the web app gets it from Key Vault `ANTHROPIC-API-KEY-CIP` as
+`CIP_ANTHROPIC_API_KEY`, only when `enableCipWorker` is true; it never falls
+back to `ANTHROPIC_API_KEY`, which in the web app is BAS Analyze's. Locally it
+uses `CIP_ANTHROPIC_API_KEY`, else `ANTHROPIC_API_KEY`.
+
+**Fix.** Production: `enableCipWorker` true in `infra/main.parameters.json`
+(it already is if CIP runs work) and redeploy so the web app picks up the
+reference. Locally: `ANTHROPIC_API_KEY` (or `CIP_ANTHROPIC_API_KEY`) in
+`.env.local`. If CIP runs also fail with a key error, the CIP key itself was
+revoked or ran out of credit. Until then, add equipment by hand.
+
+**"The model service could not be reached" on every schedule, locally.** On
+the office network, HTTPS is inspected with the company's own certificate,
+which Node does not trust by default. Start the dev server with
+`$env:NODE_USE_SYSTEM_CA="1"` set in the same PowerShell window (it has to be
+in the environment before Node starts, so `.env.local` is too late).
+
+## The import finds no schedules, or says the PDF has no text
+
+**Symptom.** *That PDF has no text layer (it looks scanned)* or *No schedules
+were found in that PDF.*
+
+**Cause.** The import reads text, never pixels. A scanned or flattened PDF has
+no text. A schedule is found by its title: upper case, set noticeably larger
+than the table text, outside the title block on the right edge of the sheet.
+
+**Fix.** Export the schedule sheets from the drawing set (Revit or CAD) as a PDF
+with text, or ask the engineer of record for one. Otherwise add the units by
+hand.
+
+## The import left units out
+
+**Symptom.** The summary says some units were left out, or a schedule warns
+*Found 28 units, but the schedule has at least 29 marked rows.*
+
+**Cause.** By design (`import/select.ts`): the module holds freeze protection
+equipment only, meaning a water, glycol or steam coil that outside air can
+reach (2026-11-03). Units with no such coil (exhaust air valves, fans,
+humidifiers, pumps, tanks, heat exchangers, electric heat), coils the schedule
+shows outside air cannot reach (recirculating units, terminal units fed
+conditioned air; a schedule that does not say is treated as exposed), items on schedules that are not equipment
+(diffusers, grilles, valves, attenuators), names already in the list, and names
+Claude returned that do not appear in the PDF text (possibly misread) are not
+added. A coil Claude misread as none is left out the same way; the summary
+gives the count. The row warning compares Claude's count with the mark-like first
+cells in the schedule text, so a short count is worth a look.
+
+**Fix.** The summary names every unit left out. Add the ones that belong with
+**Add equipment**. Running the import again is safe: it only adds names that
+are not already in the list.
+
+## A schedule "could not be read"
+
+**Symptom.** The summary lists a schedule under *Not read* with the model
+service's reason.
+
+**Cause.** That schedule's Claude call failed (the service was down or rate
+limited, 502) or the schedule was too long for one answer (422). Other
+schedules are not affected.
+
+**Fix.** Run the import again later; units already added are skipped. A
+schedule that is always too long: add its units by hand.

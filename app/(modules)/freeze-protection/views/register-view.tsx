@@ -1,18 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { FileUp, Plus } from "lucide-react";
 import { disposition } from "@/lib/modules/freeze-protection/disposition";
 import type { FpHistoryEntry, FpLine, FpProject } from "@/lib/modules/freeze-protection/types";
 import { STATUS_LABEL } from "@/lib/modules/freeze-protection/vocab";
 import { Button, Card, Empty, Pill } from "../ui/kit";
 import { EquipmentForm } from "./equipment-form";
+import { ImportPanel } from "./import-panel";
 import { ProjectBar } from "./project-bar";
 import { ProjectForm } from "./project-form";
 import { StepPane } from "./step-pane";
 
 
-export type RegisterPanel = "project" | "equipment" | null;
+export type RegisterPanel = "project" | "equipment" | "import" | null;
 
 type Props = {
   project: FpProject | null;
@@ -58,6 +59,7 @@ function Register({ project, lines, selected, history, panel }: Props & { projec
     <div className="flex flex-col gap-5 lg:min-h-0 lg:flex-1">
       <ProjectBar project={project} lines={lines} />
       {panel === "equipment" && <EquipmentForm projectId={project.id} doneHref={base} />}
+      {panel === "import" && <ImportPanel projectId={project.id} existingNames={lines.map((l) => l.name)} doneHref={base} />}
 
       {/* The selected unit is the work, so it gets the room; the list is the narrow column beside it. */}
       <div className="grid grid-cols-1 gap-5 lg:min-h-[22rem] lg:flex-[1_1_0px] lg:grid-cols-[minmax(0,1fr)_24rem] lg:grid-rows-[minmax(0,1fr)]">
@@ -72,17 +74,24 @@ function Register({ project, lines, selected, history, panel }: Props & { projec
         <Card padding="p-0" className="flex min-h-0 flex-col">
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
             <h3 className="eyebrow text-[var(--muted)]">Equipment · {lines.length}</h3>
-            {panel !== "equipment" && (
-              <Button variant="primary" href={`${base}&new=equipment`} className="h-8! px-3!">
-                <Plus size={14} aria-hidden="true" />
-                Add equipment
-              </Button>
+            {panel === null && (
+              <div className="flex gap-2">
+                <Button href={`${base}&new=import`} className="h-8! px-3!">
+                  <FileUp size={14} aria-hidden="true" />
+                  Import
+                </Button>
+                <Button variant="primary" href={`${base}&new=equipment`} className="h-8! px-3!">
+                  <Plus size={14} aria-hidden="true" />
+                  Add equipment
+                </Button>
+              </div>
             )}
           </div>
 
           {lines.length === 0 ? (
             <p className="px-4 py-6 text-[0.8125rem] text-[var(--muted)]">
-              List every unit on the mechanical equipment schedule, including units not yet installed and systems not yet filled.
+              List every unit on the mechanical equipment schedule, including units not yet installed and systems not yet filled. Import reads
+              them from the schedule PDF.
             </p>
           ) : (
             <ul className="min-h-0 flex-1 overflow-y-auto p-2">

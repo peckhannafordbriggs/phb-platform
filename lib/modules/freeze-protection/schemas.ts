@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isDateOnly } from "./dates";
-import { COIL_VALUES, CONFIRMED_WITH_VALUES, EXPOSURE_VALUES, PROTECTION_VALUES, STATUS_VALUES } from "./vocab";
+import { COIL_VALUES, CONFIRMED_WITH_VALUES, EXPOSURE_SUGGESTION_VALUES, EXPOSURE_VALUES, PROTECTION_VALUES, STATUS_VALUES } from "./vocab";
 import { NAME_MAX, TEXT_MAX } from "./result";
 
 /**
@@ -83,7 +83,45 @@ export const updateEquipmentSchema = z.strictObject({
   documentedMethod: shortText.optional(),
 });
 
+/**
+ * One schedule cut out of the uploaded PDF, sent back by the browser to be
+ * read. The browser holds the cut-out text between the split and the read, so
+ * no upload is stored; the size caps keep one call bounded.
+ */
+export const analyzeScheduleSchema = z.strictObject({
+  key: z.string().max(40),
+  page: z.number().int().min(1).max(1000),
+  sheet: shortText,
+  title: name,
+  part: shortText,
+  text: z.string().min(1).max(200_000),
+  marks: z.number().int().min(0).max(10_000),
+});
+
+/** The units the reviewer kept, saved in one go. */
+export const IMPORT_MAX_ROWS = 1000;
+export const importEquipmentSchema = z.strictObject({
+  projectId: z.string(),
+  fileName: name,
+  rows: z
+    .array(
+      z.strictObject({
+        name,
+        equipmentType: shortText,
+        areaServed: shortText,
+        coil: z.enum(COIL_VALUES),
+        exposureSuggestion: z.enum(EXPOSURE_SUGGESTION_VALUES).nullable(),
+        exposureEvidence: z.string().max(500).nullable(),
+        source: shortText,
+      }),
+    )
+    .min(1)
+    .max(IMPORT_MAX_ROWS),
+});
+
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 export type CreateEquipmentInput = z.infer<typeof createEquipmentSchema>;
 export type UpdateEquipmentInput = z.infer<typeof updateEquipmentSchema>;
+export type AnalyzeScheduleInput = z.infer<typeof analyzeScheduleSchema>;
+export type ImportEquipmentInput = z.infer<typeof importEquipmentSchema>;

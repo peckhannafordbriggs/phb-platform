@@ -139,7 +139,7 @@ export function Callout({ tone, lead, children }: { tone: FpTone; lead: string; 
 export function Funnel({ stages }: { stages: readonly ReturnType<typeof funnel>[number][] }) {
   const total = Math.max(stages[0]?.count ?? 0, 1);
   return (
-    <ol className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-5" aria-label="Register funnel">
+    <ol className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-5" aria-label="Equipment funnel">
       {stages.map((s) => {
         const verified = s.key === "verified";
         return (

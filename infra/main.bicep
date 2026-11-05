@@ -779,6 +779,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               }
             ]
           : [])
+        // Cost Intelligence's key, for Freeze Protection's schedule import.
+        // Behind enableCipWorker because the CIP worker job cannot exist
+        // without this secret, so the flag being on means the secret is there.
+        ...(enableCipWorker
+          ? [
+              {
+                name: 'anthropic-api-key-cip'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/ANTHROPIC-API-KEY-CIP'
+                identity: identity.id
+              }
+            ]
+          : [])
         ...(basCredentialKeyInKeyVault
           ? [
               {
@@ -902,6 +914,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                   {
                     name: 'CO_ANTHROPIC_API_KEY'
                     secretRef: 'co-anthropic-api-key'
+                  }
+                ]
+              : [])
+            // Cost Intelligence's key (ANTHROPIC-API-KEY-CIP), read lazily by
+            // readFreezeProtectionAnthropicEnv for the equipment schedule
+            // import. Not ANTHROPIC_API_KEY: in this container that name is BAS
+            // Analyze's. Absent disables the import and nothing else.
+            ...(enableCipWorker
+              ? [
+                  {
+                    name: 'CIP_ANTHROPIC_API_KEY'
+                    secretRef: 'anthropic-api-key-cip'
                   }
                 ]
               : [])

@@ -63,7 +63,7 @@ comes from. Short version:
 | `BAS_ASK_DATABASE_URL` | **Optional.** Only for the BAS Analyze tab. Run `npm run bas:analyze:role` and paste what it prints; leave it out and the tab says it is not configured while everything else works. Needs `ANTHROPIC_API_KEY` beside it. `runbook.md` → *Analyze says it is not configured* |
 | `CO_MAILBOX` | `changeorder@phb1899.com` |
 
-**Ask Mahi for these** — they're the same for everyone, they're just not in the repo:
+**Ask Karthik (`krachamolla@phb1899.com` or platform admin) for these** — they're the same for everyone, they're just not in the repo:
 
 - `AUTH_MICROSOFT_ENTRA_ID_ID` (client ID, not secret)
 - `AUTH_MICROSOFT_ENTRA_ID_TENANT_ID`
@@ -158,10 +158,7 @@ refusal; read what it says.
 ## How we're working in the repo
 
 One branch per change. Branch from an up-to-date `main`, commit, push, open a pull
-request, and delete the branch once it merges. Mahi reviews and merges. Nothing goes
-straight to `main` — the platform is running change orders and building automation data
-now, so changes get a second pair of eyes. Nobody keeps a long-lived personal branch,
-Mahi included.
+request, and delete the branch once it merges. Platform admin review and approves.
 
 Name the branch for what the change is:
 

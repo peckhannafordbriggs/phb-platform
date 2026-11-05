@@ -309,6 +309,9 @@ references each from the container app behind a boolean parameter. All four
 are read under the managed identity's existing **Key Vault Secrets User**
 grant on the vault; no new role assignment is needed, and
 `tests/deploy-guards.test.ts` asserts that from the template's grants.
+Freeze Protection's schedule import has no key of its own: the web app reads
+Cost Intelligence's `ANTHROPIC-API-KEY-CIP` as `CIP_ANTHROPIC_API_KEY`, behind
+`enableCipWorker` (2026-11-04). Nothing new to set in the vault.
 
 All four exist in the production vault as of 2026-10-21, and the first three
 flags are on; `coAnthropicApiKeyInKeyVault` stays false until Phase 12 Part D
@@ -378,6 +381,7 @@ az keyvault secret show --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --
 
 # 4. Set coAnthropicApiKeyInKeyVault to true in infra/main.parameters.json and redeploy.
 ```
+
 
 ## The BAS credential key is copied from the collector, byte for byte
 
