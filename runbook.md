@@ -11340,6 +11340,13 @@ A scanned PDF with no text layer is not a failure: it is `skipped` with
 embedding model, a bug in extraction that wrote bad passages, or a test that
 filled a database with fixtures.
 
+**From the screen.** `/knowledge-base/admin` -> *Start fresh* -> **Clear index**,
+then type `clear`. Module admins only; refused while a sync is queued or running;
+recorded in the audit log as `kb.index_cleared` with the counts removed
+(`lib/modules/knowledge-base/clear.ts`). Then press **Index now**: every file is
+read and embedded again, which takes as long as the first index did. The SQL
+below is the same thing by hand.
+
 **What is safe.** Everything under `kb_projects` is derived from SharePoint and
 comes back on the next sync. The question history is not derived and is **not**
 touched: each question keeps its answer exactly as shown, sources included, and

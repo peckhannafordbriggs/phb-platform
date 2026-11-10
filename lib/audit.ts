@@ -175,6 +175,12 @@ export type AuditAction =
   | "kb.synced"
   | "kb.sync_failed"
   /**
+   * A module admin emptied the index (lib/modules/knowledge-base/clear.ts).
+   * Metadata carries the project, document and passage counts removed. The
+   * question history is not touched.
+   */
+  | "kb.index_cleared"
+  /**
    * Freeze Protection. Every write in lib/modules/freeze-protection/ writes one
    * of these in the same transaction. Metadata always carries `projectId` and
    * `jobNumber`, because the job number is what a person searches for. Updates

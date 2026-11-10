@@ -215,6 +215,107 @@ export function IndexPanel({ initial }: { initial: KbIndexStatus }) {
           </>
         )}
       </section>
+
+      <ClearIndex disabled={active} total={total} onCleared={refresh} />
     </div>
+  );
+}
+
+/** What the admin types to confirm; lib/modules/knowledge-base/clear.ts checks the same word on the server. */
+const CONFIRM_WORD = "clear";
+
+/**
+ * Empties the index so the next sync rebuilds it. Two steps on purpose: the
+ * button only opens the confirmation, and the confirmation needs the word.
+ */
+function ClearIndex({ disabled, total, onCleared }: { disabled: boolean; total: number; onCleared: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function clear() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/modules/knowledge-base/index/clear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: typed.trim() }),
+      });
+      const body = (await response.json().catch(() => null)) as
+        | { data?: { projects: number; documents: number; chunks: number }; error?: { message?: string } }
+        | null;
+      if (!response.ok || !body?.data) {
+        setMessage(body?.error?.message ?? "The index could not be cleared. Try again.");
+        return;
+      }
+      setMessage(
+        `Cleared ${body.data.projects} projects, ${body.data.documents.toLocaleString()} files and ` +
+          `${body.data.chunks.toLocaleString()} passages. Press Index now to rebuild.`,
+      );
+      setOpen(false);
+      setTyped("");
+      await onCleared();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card p-6">
+      <h2 className="font-display text-base font-semibold">Start fresh</h2>
+      <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">
+        Removes every indexed file, passage and embedding. The library itself is not touched, and the question
+        history is kept. The next sync reads and embeds everything again, which takes as long as the first one did.
+      </p>
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          disabled={disabled || total === 0}
+          className="mt-4 inline-flex h-9 items-center rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-4 text-[0.8125rem] font-medium hover:bg-[var(--neutral-50)] disabled:pointer-events-none disabled:opacity-50"
+        >
+          {disabled ? "Clear index (wait for the sync)" : "Clear index"}
+        </button>
+      ) : (
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-sm">
+            <span>
+              Type <strong>{CONFIRM_WORD}</strong> to remove {total.toLocaleString()} files from the index
+            </span>
+            <input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              autoFocus
+              className="h-9 w-48 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void clear()}
+            disabled={busy || typed.trim() !== CONFIRM_WORD}
+            className="inline-flex h-9 items-center rounded-[var(--radius-control)] bg-[var(--danger)] px-4 text-[0.8125rem] font-medium text-white hover:opacity-90 disabled:pointer-events-none disabled:opacity-50"
+          >
+            {busy ? "Clearing…" : "Clear the index"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setTyped("");
+            }}
+            className="inline-flex h-9 items-center px-2 text-[0.8125rem] font-medium underline underline-offset-2"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {message && (
+        <p role="status" className="mt-3 text-sm">
+          {message}
+        </p>
+      )}
+    </section>
   );
 }

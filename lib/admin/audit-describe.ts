@@ -546,6 +546,17 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     );
   },
 
+  "kb.index_cleared": ({ actor, meta }) => {
+    const n = (key: string) => {
+      const v = meta[key];
+      return typeof v === "number" ? v : 0;
+    };
+    return (
+      `${actor} cleared the Knowledge Base index: ${n("projects")} projects, ${n("documents")} files and ` +
+      `${n("chunks")} passages removed, to be rebuilt by the next sync`
+    );
+  },
+
   "kb.sync_failed": ({ actor, meta }) =>
     `${actor}'s sync of the Knowledge Base failed: ${stringField(meta, "error") ?? "no reason recorded"}`,
 
@@ -847,6 +858,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "cip.workflow_deleted": "Cost Intelligence workflow deleted",
   "kb.synced": "Knowledge Base synced",
   "kb.sync_failed": "Knowledge Base sync failed",
+  "kb.index_cleared": "Knowledge Base index cleared",
   "fp.project_created": "Freeze Protection project created",
   "fp.project_updated": "Freeze Protection project updated",
   "fp.project_deleted": "Freeze Protection project deleted",
