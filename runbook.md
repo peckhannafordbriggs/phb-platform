@@ -10864,8 +10864,9 @@ before the pool is touched. A new revision starts with an empty window.
 `bas_report_questions`, `bas_library_questions`, `bas_personal_questions`,
 `bas_report_recipients`, `bas_site_occupancy`. A report is configured -
 building, questions, window, schedule, recipients, budget - and stored.
-**Nothing runs.** No scheduler, no worker, no engine, no email, no PDF. The
-entries below are the ways Phase 1 can surprise someone; the plan is
+**Nothing fires on its own.** No scheduler, no worker, no email, no PDF;
+the engine and the dev script that drives it are Phase 2, the next section.
+The entries below are the ways Phase 1 can surprise someone; the plan is
 `docs/bas-reports-tab-plan.md` and the record is `docs/09-bas-what-is-built.md`
 → *Reports*.
 
@@ -10940,9 +10941,12 @@ list learns the six names: withhold `bas_report_definitions`,
 `bas_personal_questions` (configuration people typed, email addresses, an
 employee's own words - not for Grafana), and allow `bas_site_occupancy`.
 `bas_v_data_dictionary` already excludes the five by name, so the Analyze
-planner is told nothing about them; Phase 2's `bas_report_runs`,
-`bas_report_findings` and `bas_report_deliveries` will need the same decision
-in every list.
+planner is told nothing about them. **Phase 2 added `bas_report_runs` and
+`bas_report_findings` to every list in this repository the same way** - both
+withheld, because a run holds the rendered report and the model's own
+sentences - so `phb-bas`'s script has eight names to learn: seven withheld
+and `bas_site_occupancy` allowed. Phase 4's `bas_report_deliveries` will be
+a ninth.
 
 ### A report's next run is an hour off after the clocks change, or runs on the wrong clock
 
@@ -10981,9 +10985,11 @@ and resume from the screen, which recomputes the next run.
 
 **Symptom.** *No reports have been generated yet* / *No usage to show*.
 
-**Cause.** True. Runs are Phase 2 and 3; both screens say so rather than
-offering a button that does nothing. *Run now* and *History* are not on the
-list for the same reason.
+**Cause.** Usage: true until Phase 6. Generated: true until a run is made,
+which in Phase 2 is the dev script (*Reports (Phase 2)* → *Making a run
+today*) and from Phase 3 the scheduler; the list shows the runs of the
+reports you own, or of every report if you are a module admin. *Run now*
+and *History* are not on the list until then.
 
 ### Reading what was done to a report
 
@@ -10995,6 +11001,165 @@ preset), `bas.report_recipient_added` and `_removed` (with `isExternal`),
 and `bas.personal_question_created` / `_updated` / `_deleted`. None of them is
 on the audit SCREEN (*The audit log screen does not show a mail send, a BAS
 question or a profile change*); read them with SQL on `metadata->>'reportId'`.
+
+---
+
+## Reports (Phase 2): running the engine by hand, and reading what it says
+
+**What exists, as of 2026-11-10.** The engine core
+(`lib/modules/bas/reports/engine/`), two more tables (`bas_report_runs`,
+`bas_report_findings`), the *Generated* sub-tab, the *Occupied hours* form
+on a building's row in Settings, and a dev script. **Still nothing fires on
+its own**: no scheduler, no worker, no PDF, no email. What the engine did on
+the office and the lab is `docs/bas-reports-phase-2-verification.md`; the
+build record is `docs/09-bas-what-is-built.md` → *Reports — Phase 2*.
+
+### Making a run today
+
+There is one way, from a checkout with `.env.local` filled in:
+
+```
+npm run bas:report:run -- --definition <report id> --period-end <ISO instant> [--as <employee email>] [--no-narrative | --fixed-narrative]
+```
+
+- `--definition` is the `report_id`, the number in the editor's URL.
+- `--period-end` is the instant the analysis window ends; the window is the
+  definition's (`7d` for the weekly preset) counted back from it. Pick an
+  end the database has readings up to - on a copy of the data, the last
+  full week it holds.
+- `--as` records who started the run (`started_by_id`); absent, nobody.
+- The model is called with `ANTHROPIC_API_KEY` - **the BAS key**, the one
+  Analyze uses - at about a cent per section. `--no-narrative` skips it and
+  the run finishes `partial` saying so; `--fixed-narrative` uses a canned
+  narrator at a fixed cost per call, for a dry run of the budget logic.
+
+The script prints the run's status, the building status, the inventory,
+every question's outcome, every finding with its two model sentences, and
+the cost. The run is then on the *Generated* sub-tab for the owner and
+every module admin, and in `bas_report_runs` / `bas_report_findings`. Run
+it twice on the same period to see the comparison: the second run marks
+the first's findings *Still open*.
+
+### A section reads Not Applicable, or a question reads Not Monitored, and what the words mean
+
+**Symptom.** The office report shows Hot Water and Chilled Water as *Not
+Applicable* and fourteen questions as *Not Monitored*, each with a list
+such as *missing airflow; airflow setpoint*.
+
+**Cause.** Two different decisions, by design. **Not Applicable** is about
+what the building *has*: no equipment row of a type the question applies
+to (hydronic heating wants a boiler or hot-water plant row, or a water-side
+role on some point; DX wants an RTU, split system, CRAC or VRF row, or a
+compressor role; reheat and economizer are sub-types read from the roles a
+VAV or RTU carries). **Not Monitored** is about what the building
+*trends*: the question applies to at least one unit, but no applicable
+unit has every required group at 80 % coverage or better, and the list
+names the groups. A group that is present but short reads *(coverage
+72 %)* rather than being lumped in with absent. The building-wide list is
+what *every* skipped unit lacks; one unit's own lack (a sensor Data Health
+excluded, say) is on that unit's skipped line on the run page.
+
+**Fix.** Not Applicable when the building has the plant: add the equipment
+row in Settings - type decides. Not Monitored: trend the named roles on the
+station and classify the points; the next run picks them up. *(coverage
+N %)*: look at the point on Collection Health; a genuine hole is a
+collector or station matter. A point that logs on change but reads low
+coverage should no longer happen: a point with more readings than its
+declared interval allows (1.5×) is treated as change-of-value and judged
+by recorded gaps. If it does happen, the point logs on change *and* under
+1.5× its declared rate, and the honest fix is to clear
+`collection_interval_s` on that point.
+
+### Occupancy reads `none`, or comes from the wrong source
+
+**Symptom.** The run page's inventory says *Occupancy: none (no occupancy
+point trended and no occupied hours entered for the building)*, and Space
+Comfort and Schedules are Not Monitored for *occupancy*.
+
+**Cause.** Per station, in this order: a trended `occupancy_status` point
+with a reading in or before the period; else an `occupancy_cmd` point;
+else the building's occupied hours (`bas_site_occupancy`); else none. The
+report records which it used, by name.
+
+**Fix.** Trend and classify an occupancy point on the station - that is
+the right source, and the office has one (`Occupied`). Until then, a module
+admin enters the hours: Settings → the building's row → *Occupied hours*,
+one start and end per weekday, saved as a whole (the form replaces every
+row for the building) and audited as `bas.building_occupancy_updated` with
+the hours before and after. A station with a trended point ignores the
+manual hours.
+
+### A run finished `partial`
+
+**Symptom.** *Partial* on the Generated list, and a reason at the top of
+the run page.
+
+**Cause.** One of four, each named in `partial_reason`:
+
+- *Narrative not generated: no model key is configured* -
+  `ANTHROPIC_API_KEY` unset, or `--no-narrative`. The evidence is complete;
+  only the sentences are missing.
+- *Budget of $N reached after M of K sections had narrative; the rest show
+  their evidence only* - the definition's `budget_usd` would have been
+  passed by the next call's estimate. Raise the budget on the report, or
+  accept the evidence-only sections.
+- *<Section>: <reason>* - the model declined or refused the section, or
+  its answer failed the schema. Run again; if it repeats, the section's
+  findings are in the audit row.
+- *Qn could run but has no analysis yet* - the question's points are
+  trended and the building qualifies, and the analysis is Phase 5's.
+  Nothing to fix; the inventory decision is correct.
+
+A partial run is a stored, readable report. It is never a failed one.
+
+### A run finished `failed`
+
+**Symptom.** *Failed* on the list, `error` on the row, no document.
+
+**Cause.** An exception in the engine; the row keeps the message and the
+log line `bas.report_run` has the same. One seen on 2026-11-10 and fixed:
+`React is not defined`, from running the template under `tsx` without the
+automatic JSX runtime; the pragma at the top of `render.tsx` is the fix and
+must stay.
+
+**Fix.** Read the error, fix the cause, run again. A failed run has no
+findings, and the next run compares with the last run that *finished*,
+succeeded or partial.
+
+### A finding is Still open after the fault was fixed, or New when it is old
+
+**Symptom.** A sensor was replaced and the next report still says *Still
+open*; or a finding the previous report carried reads *New*.
+
+**Cause.** The comparison is by fingerprint - the question, the subject
+(`equipment:<id>` or `point:<id>`) and the issue code - against the
+previous finished run of the same definition, whatever its period. *Still
+open* means the issue was found again in this period; a sensor that was
+flat last week and reads properly this week clears on the first run whose
+period is after the fix. *New* for an old fault means the subject's id
+changed - a point re-discovered under a new `point_id`, or equipment
+deleted and recreated - because names are not in the fingerprint, on
+purpose.
+
+### A report cannot be deleted: "has N runs and its history is kept"
+
+**Symptom.** `409 report_has_runs` from the editor's delete.
+
+**Cause.** By design: a run is a record someone may have acted on. Pause
+the report instead; a paused report keeps its history and never runs.
+
+**Fix.** If the history really is disposable (a test definition), delete
+the runs first - `DELETE FROM bas_report_runs WHERE report_id = <n>;`, the
+findings cascade - then delete the report from the screen.
+
+### Reading what a run did
+
+Each run writes two audit rows: `bas.report_run_started` as it begins and
+`bas.report_run_finished` with the report, the run, the status, the partial
+reason, the building status, the finding and cleared counts and the cost.
+Neither is on the audit screen; read them with SQL on `metadata->>'runId'`. The log line is `event: "bas.report_run"`
+with `outcome` and `reason`. The run page itself is the record a person
+reads.
 
 ---
 

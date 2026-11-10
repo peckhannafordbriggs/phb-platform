@@ -23,6 +23,8 @@ const TABLES = [
   // Reports (Phase 1). All of them reference employees, so TRUNCATE employees
   // CASCADE would empty them anyway - including the shared library, whose
   // seeded rows a test therefore re-installs with seedBasReportLibrary.
+  "bas_report_findings",
+  "bas_report_runs",
   "bas_report_recipients",
   "bas_report_questions",
   "bas_report_definitions",

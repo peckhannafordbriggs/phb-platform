@@ -152,6 +152,20 @@ export type AuditAction =
   | "bas.personal_question_updated"
   | "bas.personal_question_deleted"
   /**
+   * Reports, Phase 2. A run is started (by the dev script, or by the worker
+   * from Phase 3) and finished - succeeded, partial with the reason, or
+   * failed with the error - with its cost in tokens and dollars on the
+   * finished row. The actor is the person who asked for a manual run, or
+   * null for a scheduled one: the platform acted.
+   *
+   * `bas.building_occupancy_updated` is the Settings tab's occupied-hours
+   * field: the fallback occupancy source a report uses when no occupancy
+   * point is trended, so the previous and new hours are both recorded.
+   */
+  | "bas.report_run_started"
+  | "bas.report_run_finished"
+  | "bas.building_occupancy_updated"
+  /**
    * The Cost Intelligence skill catalog was synced from the skills folder.
    * Carries the sync id, trigger and counts. One row per completed sync; a
    * sync that failed changed nothing and is recorded only in cip_skill_syncs.

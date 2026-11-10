@@ -97,6 +97,18 @@ export const ANALYZE_WITHHELD: ReadonlyArray<{ name: string; reason: string }> =
     name: "bas_personal_questions",
     reason: "An employee's own saved questions. Theirs, not the model's.",
   },
+  // Reports, Phase 2 (2026-11-11). A run and its findings are documents the
+  // platform wrote, with the model's own prose in them. Not building data,
+  // and a model answering from a report would be reading its earlier words
+  // back as evidence.
+  {
+    name: "bas_report_runs",
+    reason: "A report run: period, cost, status, the rendered document. Platform-side.",
+  },
+  {
+    name: "bas_report_findings",
+    reason: "A run's findings, with the model's two sentences on each. Platform-side.",
+  },
 ];
 
 /**
@@ -279,6 +291,11 @@ export function analyzeRoleProofs(): RoleProof[] {
       sql: "SELECT count(*) FROM bas_report_definitions",
       mustSucceed: false,
       why: "report configuration is withheld (Reports, Phase 1)",
+    },
+    {
+      sql: "SELECT count(*) FROM bas_report_runs",
+      mustSucceed: false,
+      why: "report runs are withheld (Reports, Phase 2)",
     },
     {
       sql: "SELECT count(*) FROM employees",

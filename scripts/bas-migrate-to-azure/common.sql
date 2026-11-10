@@ -93,7 +93,9 @@ INSERT INTO mig_excluded (table_name, reason) VALUES
     ('bas_report_recipients',  'Reports, Phase 1: email addresses, created after the move'),
     ('bas_library_questions',  'Reports, Phase 1: the shared library, seeded by migration on every database'),
     ('bas_personal_questions', 'Reports, Phase 1: an employee''s own questions, created after the move'),
-    ('bas_site_occupancy',     'Reports, Phase 1: occupied hours a person enters, created after the move');
+    ('bas_site_occupancy',     'Reports, Phase 1: occupied hours a person enters, created after the move'),
+    ('bas_report_runs',        'Reports, Phase 2: run records, created after the move'),
+    ('bas_report_findings',    'Reports, Phase 2: run findings, created after the move');
 
 
 -- --- the gate ---------------------------------------------------------------

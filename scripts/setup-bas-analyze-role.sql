@@ -33,10 +33,10 @@
 -- WHAT IT CANNOT DO
 --
 --   Read bas_station_credentials (withheld by name - the Niagara logins).
---   Read the five report-configuration tables (withheld by name - Reports,
---   Phase 1: definitions, questions, recipients, the shared library, personal
---   questions). bas_site_occupancy, the sixth table of that phase, is building
---   data and IS readable.
+--   Read the seven report tables (withheld by name - Reports, Phase 1 and 2:
+--   definitions, questions, recipients, the shared library, personal
+--   questions, runs, findings). bas_site_occupancy is building data and IS
+--   readable.
 --   Read any platform table: employees, audit_events, module_grants, modules,
 --   positions, departments, draft_locks, _prisma_migrations (revoked by name).
 --   INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES or TRIGGER anywhere.
@@ -153,7 +153,10 @@ INSERT INTO analyze_hold (relname, reason) VALUES
     ('bas_report_questions',    'a report''s question list, including typed text'),
     ('bas_report_recipients',   'email addresses'),
     ('bas_library_questions',   'the shared question library - platform configuration'),
-    ('bas_personal_questions',  'an employee''s own saved questions');
+    ('bas_personal_questions',  'an employee''s own saved questions'),
+    -- Reports, Phase 2 (2026-11-11): documents the platform wrote.
+    ('bas_report_runs',         'a report run - period, cost, status, the rendered document'),
+    ('bas_report_findings',     'a run''s findings, with the model''s sentences on each');
 
 CREATE TEMP TABLE analyze_platform (relname text PRIMARY KEY);
 INSERT INTO analyze_platform (relname) VALUES
@@ -304,6 +307,8 @@ BEGIN
     IF has_table_privilege(role, 'public.bas_report_recipients', 'SELECT')           THEN fail := fail || 'CAN SELECT bas_report_recipients'; END IF;
     IF has_table_privilege(role, 'public.bas_report_definitions', 'SELECT')          THEN fail := fail || 'CAN SELECT bas_report_definitions'; END IF;
     IF has_table_privilege(role, 'public.bas_personal_questions', 'SELECT')          THEN fail := fail || 'CAN SELECT bas_personal_questions'; END IF;
+    IF has_table_privilege(role, 'public.bas_report_runs', 'SELECT')                 THEN fail := fail || 'CAN SELECT bas_report_runs'; END IF;
+    IF has_table_privilege(role, 'public.bas_report_findings', 'SELECT')             THEN fail := fail || 'CAN SELECT bas_report_findings'; END IF;
     IF has_table_privilege(role, 'public.employees', 'SELECT')                      THEN fail := fail || 'CAN SELECT employees'; END IF;
     IF has_table_privilege(role, 'public.audit_events', 'SELECT')                   THEN fail := fail || 'CAN SELECT audit_events'; END IF;
     IF has_table_privilege(role, 'public.module_grants', 'SELECT')                  THEN fail := fail || 'CAN SELECT module_grants'; END IF;
