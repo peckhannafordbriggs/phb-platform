@@ -162,6 +162,7 @@ page, and a test will check the route resolves.
 | Admin screen and grant toggles | Its own audit action strings |
 | Sidebar rendering | Its own credentials, separate from other modules |
 | Audit log infrastructure | |
+| The UI kit, `components/ui/` (`docs/07-conventions.md` → *UI*) | Its own components, built from the kit |
 
 Credentials are per-module deliberately. A future module must not be able to reach
 another module's external system.

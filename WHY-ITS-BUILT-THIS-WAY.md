@@ -2948,3 +2948,62 @@ read-only role script will stop at its gate until it learns the six names
 
 `docs/bas-reports-tab-plan.md` §A, §D1, §D7; `lib/modules/bas/reports/`;
 `tests/bas-reports-routes.test.ts`, `tests/bas-schema.test.ts`.
+
+## 78 · One UI kit for every module, and the kit knows no colour
+
+**What I did.** Cost Intelligence arrived (PR #64) with a component kit of its
+own under `app/(modules)/cost-intelligence/ui/`, and Freeze Protection (#78,
+#108) copied most of it and added form fields, an empty state and a callout.
+On 2026-11-10 the two became one kit at `components/ui/` - the Cost
+Intelligence components verbatim, Freeze Protection's additions folded in -
+and the module paths became re-exports, so neither module's views moved and
+both render what they rendered before. `tests/ui-kit.test.tsx` pins that at
+the markup: the module path IS the kit's function, not a copy; the class sets
+of every default are the strings the module shipped with; Freeze Protection's
+five tone words render the kit's five tones byte for byte.
+
+Change Orders' chrome was then moved onto it: the tab bar, the pane headers,
+every button, the Draft pill, the Conversations / All messages control, the
+three dialogs, the review list. Its reading pane, the draft editor, the body
+renderer and the attachment flow were not touched - the same test refuses the
+kit in those four files - and neither was any of its colours.
+
+The kit has two properties, both enforced by that test. It carries no
+behaviour: a component takes values and callbacks, and the view owns the
+handlers. And it carries no colour: every value is a platform token or
+`--module-accent`; no kit file holds a hex value, a Tailwind palette colour,
+a module key or an import from `lib/modules`. The one exception is
+deliberate and small: the three fills a button may take (the platform's button
+red, white, the danger ink) and the five tones a state may take (ok, warn, bad,
+draft, muted) are platform decisions, recorded once, in the kit.
+
+**Why.** Three modules had three buttons, two pills and two eyebrows, each a
+little different, and the next module was about to add a fourth set. A
+module-local kit is right for a module's own vocabulary - Freeze Protection's
+funnel, the Change Orders folder tree - and wrong for a button, because a
+button that differs between modules says nothing except that two people wrote
+it. The two-register rule (§ 39) is about *content*: the reading pane stays
+quiet because a vendor's email competes with it. It was never a reason for the
+module's own furniture to differ from the next module's.
+
+Colour stays out of the kit for the reason the module header exists
+(`components/module-header.tsx`): a control reads `--module-accent` and never
+learns which module it is in. The moment a kit component took a `module` prop,
+every colour decision would be made twice, and § 38's separation of decorative
+from semantic colour would have a second place to go wrong.
+
+Change Orders kept its colours because the request was a physical restyle, and
+because the one place the kit's palette and the module's disagree is a
+distinction worth keeping: the confirm in its three dialogs is the platform
+accent, or maroon for a delete, never the red of the Send button. Nothing in
+that module that is not Send may look like Send, so those three buttons take
+the kit's shape by hand and keep their own fill.
+
+**What breaks if you undo it.** Write a button in a view and it drifts the
+first time the kit changes. Name a colour in a kit file and the build fails.
+Delete a module's `ui/` re-exports and its views stop compiling - the path is
+a courtesy, not a second kit. Put a `module` prop on a kit component and the
+module header's rule is gone.
+
+`components/ui/`; `docs/07-conventions.md` → *UI*; `tests/ui-kit.test.tsx`;
+the before/after screenshots in `docs/design/shared-ui-kit/`.
