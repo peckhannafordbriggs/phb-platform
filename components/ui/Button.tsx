@@ -44,6 +44,9 @@ export function Button({
   disabled = false,
   fullWidth = false,
   title,
+  ariaExpanded,
+  ariaLabel,
+  testId,
   className = "",
 }: {
   children: React.ReactNode;
@@ -56,13 +59,19 @@ export function Button({
   fullWidth?: boolean;
   /** The native tooltip, for an action whose label is a verb and whose effect needs a sentence. */
   title?: string;
+  /** For a button that opens and closes something beneath it. */
+  ariaExpanded?: boolean;
+  /** An accessible name when the visible label is not one, e.g. "Apply the suggestion X to Y". */
+  ariaLabel?: string;
+  /** `data-testid`, for a test that finds the button by what it is rather than by its words. */
+  testId?: string;
   className?: string;
 }) {
   const classes = `${BASE} ${SIZES[size]} ${VARIANTS[variant]} ${fullWidth ? "w-full" : ""} ${className}`;
 
   if (href && !disabled) {
     return (
-      <Link href={href} className={classes} title={title}>
+      <Link href={href} className={classes} title={title} aria-label={ariaLabel} data-testid={testId}>
         {children}
         <LinkPending />
       </Link>
@@ -70,7 +79,16 @@ export function Button({
   }
 
   return (
-    <button type={type} onClick={onClick} disabled={disabled} title={title} className={classes}>
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-expanded={ariaExpanded}
+      aria-label={ariaLabel}
+      data-testid={testId}
+      className={classes}
+    >
       {children}
     </button>
   );
