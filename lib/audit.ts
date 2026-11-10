@@ -127,6 +127,31 @@ export type AuditAction =
    */
   | "bas.question_asked"
   /**
+   * Reports, Phase 1. Every write to a report definition, its questions,
+   * its recipients, and an employee's personal library. Metadata always
+   * carries `reportId` (a string) and `name` where a report is the subject,
+   * because the row it describes may since have been renamed or deleted.
+   *
+   * `bas.report_recipient_added` carries `email`, `isExternal` and
+   * `confirmed`: the plan asks for the external decision to be on the audit
+   * row, so that "who sent this building's report outside the company" is
+   * answerable from the log alone. The owner is never a recipient row and
+   * so never appears here as one.
+   *
+   * `bas.report_state_changed` carries `from` and `to`; one action for
+   * activate, pause and resume, because the sentence is the transition.
+   */
+  | "bas.report_created"
+  | "bas.report_updated"
+  | "bas.report_deleted"
+  | "bas.report_state_changed"
+  | "bas.report_questions_changed"
+  | "bas.report_recipient_added"
+  | "bas.report_recipient_removed"
+  | "bas.personal_question_created"
+  | "bas.personal_question_updated"
+  | "bas.personal_question_deleted"
+  /**
    * The Cost Intelligence skill catalog was synced from the skills folder.
    * Carries the sync id, trigger and counts. One row per completed sync; a
    * sync that failed changed nothing and is recorded only in cip_skill_syncs.

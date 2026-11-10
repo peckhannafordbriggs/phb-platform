@@ -436,6 +436,86 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     return `${actor} asked Building Automation "${question}"${suffix}`;
   },
 
+  // Reports (Phase 1). The report is named from metadata, never joined: it
+  // may since have been renamed or deleted, and the log says what happened
+  // at the time.
+  "bas.report_created": ({ actor, meta }) =>
+    `${actor} created the report ${stringField(meta, "name") ?? "(unnamed)"}` +
+    `${stringField(meta, "siteName") !== null ? ` for ${stringField(meta, "siteName")}` : ""}`,
+
+  "bas.report_updated": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const previous = stringField(meta, "previousName");
+    return previous !== null && previous !== name
+      ? `${actor} renamed the report ${previous} to ${name}`
+      : `${actor} updated the report ${name}`;
+  },
+
+  "bas.report_deleted": ({ actor, meta }) =>
+    `${actor} deleted the report ${stringField(meta, "name") ?? "(unnamed)"}`,
+
+  // The transition is the sentence: "activated", "paused", "resumed".
+  "bas.report_state_changed": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const to = stringField(meta, "to");
+    const from = stringField(meta, "from");
+    const verb =
+      to === "active" && from === "paused"
+        ? "resumed"
+        : to === "active"
+          ? "activated"
+          : to === "paused"
+            ? "paused"
+            : `moved to ${to ?? "an unknown state"}`;
+    return `${actor} ${verb} the report ${name}`;
+  },
+
+  "bas.report_questions_changed": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const change = stringField(meta, "change");
+    const count = typeof meta.count === "number" ? meta.count : null;
+    switch (change) {
+      case "added":
+        return `${actor} added a ${stringField(meta, "kind") ?? ""} question to the report ${name}`.replace("  ", " ");
+      case "removed":
+        return `${actor} removed a question from the report ${name}`;
+      case "reordered":
+        return `${actor} reordered the questions on the report ${name}`;
+      case "preset":
+        return `${actor} set the report ${name} to the preset ${stringField(meta, "presetKey") ?? "(none)"}` +
+          `${count !== null ? ` (${count} questions)` : ""}`;
+      default:
+        return `${actor} changed the questions on the report ${name}`;
+    }
+  },
+
+  // "outside the company" is said every time it is true: that is the fact
+  // the row exists to record.
+  "bas.report_recipient_added": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const email = stringField(meta, "email") ?? "(address not recorded)";
+    return meta.isExternal === true
+      ? `${actor} added ${email}, an address outside the company, to the report ${name}`
+      : `${actor} added ${email} to the report ${name}`;
+  },
+
+  "bas.report_recipient_removed": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const email = stringField(meta, "email") ?? "(address not recorded)";
+    return meta.isExternal === true
+      ? `${actor} removed ${email}, an address outside the company, from the report ${name}`
+      : `${actor} removed ${email} from the report ${name}`;
+  },
+
+  "bas.personal_question_created": ({ actor, meta }) =>
+    `${actor} saved a question to their library: "${clip(stringField(meta, "text") ?? "", 100)}"`,
+
+  "bas.personal_question_updated": ({ actor, meta }) =>
+    `${actor} edited a question in their library: "${clip(stringField(meta, "text") ?? "", 100)}"`,
+
+  "bas.personal_question_deleted": ({ actor, meta }) =>
+    `${actor} deleted a question from their library: "${clip(stringField(meta, "text") ?? "", 100)}"`,
+
   // Counts rather than names: a sync can touch every skill, and the sync row
   // in cip_skill_syncs holds the detail.
   "cip.skills_synced": ({ actor, meta }) => {
@@ -826,6 +906,16 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.equipment_updated": "BAS equipment updated",
   "bas.equipment_deleted": "BAS equipment deleted",
   "bas.question_asked": "BAS question asked",
+  "bas.report_created": "BAS report created",
+  "bas.report_updated": "BAS report updated",
+  "bas.report_deleted": "BAS report deleted",
+  "bas.report_state_changed": "BAS report activated, paused or resumed",
+  "bas.report_questions_changed": "BAS report questions changed",
+  "bas.report_recipient_added": "BAS report recipient added",
+  "bas.report_recipient_removed": "BAS report recipient removed",
+  "bas.personal_question_created": "BAS personal question saved",
+  "bas.personal_question_updated": "BAS personal question edited",
+  "bas.personal_question_deleted": "BAS personal question deleted",
   "cip.skills_synced": "Cost Intelligence skills synced",
   "cip.projects_synced": "Cost Intelligence projects synced",
   "cip.run_started": "Cost Intelligence run started",

@@ -69,6 +69,19 @@ export const BAS_TABS: readonly BasTab[] = [
       "Ask a question of the sensor data. Every answer shows the rows, the points and period it covered, and the hours of the period nobody was watching.",
   },
   {
+    // Reports (Phase 1, 2026-11-10). Between Analyze and Collection Health:
+    // a report is a standing question of the data, so it sits beside the
+    // tab that asks one. Sub-tabs (Reports, Generated, Library, Usage) are
+    // app/(modules)/bas/reports/subtabs.ts; this entry matches all of them
+    // by prefix.
+    href: "/bas/reports",
+    label: "Reports",
+    // What the list cannot show until a report exists: that a report is a
+    // fixed set of questions asked on a schedule, so weeks compare.
+    blurb:
+      "A fixed set of questions asked of a building's data on a schedule, so one week compares with the last. The owner always receives it.",
+  },
+  {
     href: "/bas/health",
     label: "Collection Health",
     // The roll horizon is the one fact that makes this screen make sense and it

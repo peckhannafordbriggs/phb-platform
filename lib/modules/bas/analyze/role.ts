@@ -47,6 +47,9 @@ export const ANALYZE_ALLOWLIST: readonly string[] = [
   "bas_sync_checkpoints",
   "bas_ingest_runs",
   "bas_data_gaps",
+  // Occupied hours a person entered per building (Reports, Phase 1).
+  // Building data: "was the building occupied at 3am" is a fair question.
+  "bas_site_occupancy",
   // The six views.
   "bas_v_point",
   "bas_v_reading",
@@ -68,6 +71,31 @@ export const ANALYZE_WITHHELD: ReadonlyArray<{ name: string; reason: string }> =
     reason:
       "AES-256-GCM ciphertext of the Niagara logins. Being a separate table is " +
       "the whole mechanism by which a read-only role can be refused it.",
+  },
+  // Reports, Phase 1 (2026-11-10). Five platform-side tables that match the
+  // bas_ prefix and hold no building data: configuration people typed, email
+  // addresses, an employee's own words. The model is told nothing about them
+  // either - bas_v_data_dictionary excludes them by name - because a model
+  // told about a table it is then refused writes a query that fails.
+  {
+    name: "bas_report_definitions",
+    reason: "Report configuration a person typed. Not building data.",
+  },
+  {
+    name: "bas_report_questions",
+    reason: "A report's question list, including text a person typed. Not building data.",
+  },
+  {
+    name: "bas_report_recipients",
+    reason: "Email addresses. Not building data, and not for a prompt.",
+  },
+  {
+    name: "bas_library_questions",
+    reason: "The shared question library. Platform configuration, not building data.",
+  },
+  {
+    name: "bas_personal_questions",
+    reason: "An employee's own saved questions. Theirs, not the model's.",
   },
 ];
 
@@ -236,6 +264,21 @@ export function analyzeRoleProofs(): RoleProof[] {
       sql: "SELECT count(*) FROM bas_station_credentials",
       mustSucceed: false,
       why: "the credentials table is withheld",
+    },
+    {
+      sql: "SELECT count(*) FROM bas_site_occupancy",
+      mustSucceed: true,
+      why: "occupied hours are building data (Reports, Phase 1)",
+    },
+    {
+      sql: "SELECT count(*) FROM bas_report_recipients",
+      mustSucceed: false,
+      why: "report recipients are email addresses, withheld (Reports, Phase 1)",
+    },
+    {
+      sql: "SELECT count(*) FROM bas_report_definitions",
+      mustSucceed: false,
+      why: "report configuration is withheld (Reports, Phase 1)",
     },
     {
       sql: "SELECT count(*) FROM employees",

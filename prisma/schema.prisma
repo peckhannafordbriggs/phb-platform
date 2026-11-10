@@ -79,6 +79,12 @@ model Employee {
   fpProjectsReviewed  FpProject[]   @relation("FpProjectReviewedBy")
   fpEquipmentUpdated  FpEquipment[] @relation("FpEquipmentUpdatedBy")
 
+  basReportsOwned          BasReportDefinition[] @relation("BasReportOwner")
+  basLibraryQuestionsAdded BasLibraryQuestion[]  @relation("BasLibraryQuestionAddedBy")
+  basPersonalQuestions     BasPersonalQuestion[] @relation("BasPersonalQuestionOwner")
+  basRecipientsAdded       BasReportRecipient[]  @relation("BasRecipientAddedBy")
+  basRecipientsConfirmed   BasReportRecipient[]  @relation("BasRecipientConfirmedBy")
+
   @@index([status])
   @@index([departmentId])
   @@index([positionId])
@@ -279,6 +285,9 @@ model BasSite {
 
   stations  BasStation[]
   equipment BasEquipment[]
+
+  reportDefinitions BasReportDefinition[]
+  occupancy         BasSiteOccupancy[]
 
   @@unique([projectId, name])
   @@index([projectId])
@@ -551,6 +560,166 @@ model BasDataGap {
   @@unique([pointId, gapStart, cause])
   @@index([pointId, gapStart])
   @@map("bas_data_gaps")
+}
+
+/// A configured BAS health report (Reports, Phase 1): which building, which questions, how often, and who receives it.
+model BasReportDefinition {
+  reportId BigInt @id @default(autoincrement()) @map("report_id")
+
+  ownerEmployeeId String   @map("owner_employee_id") @db.Uuid
+  owner           Employee @relation("BasReportOwner", fields: [ownerEmployeeId], references: [id], onDelete: Restrict)
+
+  name        String
+  description String?
+
+  siteId BigInt  @map("site_id")
+  site   BasSite @relation(fields: [siteId], references: [siteId], onDelete: Restrict)
+
+  /// Empty means every station on the building. Prisma lists cannot be NULL, so the empty list is the "all" spelling.
+  stationIds BigInt[] @default([]) @map("station_ids")
+
+  presetKey String? @map("preset_key")
+
+  /// Not `window`: that word is reserved in PostgreSQL.
+  analysisWindow String @default("7d") @map("analysis_window")
+
+  scheduleKind   String @map("schedule_kind")
+  scheduleParams Json   @default("{}") @map("schedule_params")
+  /// Local wall-clock time in the building's zone, as HH:MM.
+  timeOfDay      String @map("time_of_day")
+
+  nextRunAt DateTime? @map("next_run_at") @db.Timestamptz()
+
+  state String @default("draft")
+
+  budgetUsd Decimal @map("budget_usd") @db.Decimal(8, 2)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  questions  BasReportQuestion[]
+  recipients BasReportRecipient[]
+
+  /// A person does not get two reports with one name; the service also refuses a case-insensitive clash.
+  @@unique([ownerEmployeeId, name])
+  @@index([siteId])
+  @@index([state, nextRunAt])
+  @@map("bas_report_definitions")
+}
+
+/// One question on a report, in order. Exactly one of the three sources is set, decided by kind.
+model BasReportQuestion {
+  questionId BigInt @id @default(autoincrement()) @map("question_id")
+
+  reportId BigInt              @map("report_id")
+  report   BasReportDefinition @relation(fields: [reportId], references: [reportId], onDelete: Cascade)
+
+  position Int
+  kind     String
+
+  libraryQuestionId BigInt?             @map("library_question_id")
+  libraryQuestion   BasLibraryQuestion? @relation(fields: [libraryQuestionId], references: [libraryQuestionId], onDelete: Restrict)
+
+  personalQuestionId BigInt?              @map("personal_question_id")
+  personalQuestion   BasPersonalQuestion? @relation(fields: [personalQuestionId], references: [personalQuestionId], onDelete: Restrict)
+
+  inlineText String? @map("inline_text")
+
+  @@index([reportId, position])
+  @@index([libraryQuestionId])
+  @@index([personalQuestionId])
+  @@map("bas_report_questions")
+}
+
+/// The shared question library: the twenty computed questions of the build spec, plus planner-kind questions added later.
+model BasLibraryQuestion {
+  libraryQuestionId BigInt @id @default(autoincrement()) @map("library_question_id")
+
+  key      String @unique
+  section  String
+  /// Order within the standard report; the two presets expand in this order.
+  position Int
+  text     String
+  kind     String
+
+  analysisFn String? @map("analysis_fn")
+
+  /// The spec's own "Applies to" wording, e.g. "VAV with reheat" - shown beside the keys below.
+  appliesToLabel     String   @map("applies_to_label")
+  /// Equipment type keys (bas_equipment_types). Empty means every equipment type, or the whole building.
+  appliesToEquipment String[] @default([]) @map("applies_to_equipment")
+  /// Point role keys (bas_point_roles) the question needs, as requirement groups. See lib/modules/bas/reports/library.ts.
+  requiredRoles      Json     @default("[]") @map("required_roles")
+  minCoverage        Decimal  @default(0.8) @map("min_coverage") @db.Decimal(4, 3)
+
+  enabled Boolean @default(true)
+
+  addedById String?   @map("added_by_id") @db.Uuid
+  addedBy   Employee? @relation("BasLibraryQuestionAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  usedBy BasReportQuestion[]
+
+  @@index([section, position])
+  @@map("bas_library_questions")
+}
+
+/// A question an employee wrote and saved for reuse. Theirs alone; nobody else's reports can see it.
+model BasPersonalQuestion {
+  personalQuestionId BigInt @id @default(autoincrement()) @map("personal_question_id")
+
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation("BasPersonalQuestionOwner", fields: [employeeId], references: [id], onDelete: Restrict)
+
+  text String
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  usedBy BasReportQuestion[]
+
+  @@index([employeeId])
+  @@map("bas_personal_questions")
+}
+
+/// An ADDITIONAL recipient of a report. The owner is never a row here: the sender adds the owner's address at send time.
+model BasReportRecipient {
+  recipientId BigInt @id @default(autoincrement()) @map("recipient_id")
+
+  reportId BigInt              @map("report_id")
+  report   BasReportDefinition @relation(fields: [reportId], references: [reportId], onDelete: Cascade)
+
+  /// Stored lower-cased; the unique key below is on this column.
+  email      String
+  /// Anything that is not a company address. An external row must carry a confirmation.
+  isExternal Boolean @map("is_external")
+
+  confirmedById String?   @map("confirmed_by_id") @db.Uuid
+  confirmedBy   Employee? @relation("BasRecipientConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  confirmedAt   DateTime? @map("confirmed_at") @db.Timestamptz()
+
+  addedById String?   @map("added_by_id") @db.Uuid
+  addedBy   Employee? @relation("BasRecipientAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@unique([reportId, email])
+  @@map("bas_report_recipients")
+}
+
+/// Manual occupied hours for a building, one range per weekday (ISO 1 = Monday), in minutes from local midnight.
+/// The occupancy fallback for a station that trends no occupancy point. Nothing writes it in Phase 1.
+model BasSiteOccupancy {
+  siteId BigInt  @map("site_id")
+  site   BasSite @relation(fields: [siteId], references: [siteId], onDelete: Cascade)
+
+  weekday     Int
+  startMinute Int @map("start_minute")
+  endMinute   Int @map("end_minute")
+
+  @@id([siteId, weekday])
+  @@map("bas_site_occupancy")
 }
 
 /// A record of all claude skills for the cost intelligence platform

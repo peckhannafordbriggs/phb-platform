@@ -109,6 +109,21 @@ INSERT INTO collector_ro (relname, reason) VALUES
     ('bas_v_collection_health',   'view; healthcheck.py reads it'),
     ('bas_v_data_dictionary',     'view');
 
+-- Withheld by name: bas_* objects the collector must not see at all. Listed
+-- so the gate can tell "decided to withhold" from "nobody has looked", and
+-- REVOKEd below so a re-run removes a grant an earlier hand-run may have made.
+CREATE TEMP TABLE collector_none (relname text PRIMARY KEY, reason text);
+INSERT INTO collector_none (relname, reason) VALUES
+    -- Reports, Phase 1 (2026-11-10): platform-side configuration a person
+    -- types through the Reports tab. The collector reads occupancy from the
+    -- station, never from bas_site_occupancy, and has no business with the rest.
+    ('bas_report_definitions',  'report configuration'),
+    ('bas_report_questions',    'report configuration, including typed text'),
+    ('bas_report_recipients',   'email addresses'),
+    ('bas_library_questions',   'the shared question library'),
+    ('bas_personal_questions',  'an employee''s own saved questions'),
+    ('bas_site_occupancy',      'occupied hours a person entered; the collector reads occupancy from the station');
+
 CREATE TEMP TABLE collector_seq (relname text PRIMARY KEY);
 INSERT INTO collector_seq (relname) VALUES
     ('bas_orgs_org_id_seq'),
@@ -144,22 +159,31 @@ BEGIN
     IF array_length(conflicted, 1) > 0 THEN
         RAISE EXCEPTION 'These objects are both read-write and read-only: %. Pick one.', conflicted;
     END IF;
+    SELECT coalesce(array_agg(x ORDER BY x), '{}')
+      INTO conflicted
+      FROM (SELECT relname FROM collector_rw UNION ALL SELECT relname FROM collector_ro) l(x)
+      JOIN collector_none n ON n.relname = l.x;
+    IF array_length(conflicted, 1) > 0 THEN
+        RAISE EXCEPTION 'These objects are both granted and withheld: %. Pick one.', conflicted;
+    END IF;
 
     SELECT coalesce(array_agg(p ORDER BY p), '{}')
       INTO unclassified
       FROM unnest(present) AS p
      WHERE p NOT IN (SELECT relname FROM collector_rw)
-       AND p NOT IN (SELECT relname FROM collector_ro);
+       AND p NOT IN (SELECT relname FROM collector_ro)
+       AND p NOT IN (SELECT relname FROM collector_none);
     IF array_length(unclassified, 1) > 0 THEN
         RAISE EXCEPTION 'Unclassified bas_* object(s): %. Nothing has been granted or revoked. '
             'Decide whether the collector writes it, reads it, or must not see it, and add '
-            'each name to collector_rw or collector_ro in this file (or leave it out and note why).',
+            'each name to collector_rw, collector_ro or collector_none in this file.',
             unclassified;
     END IF;
 
     SELECT coalesce(array_agg(x ORDER BY x), '{}')
       INTO missing
-      FROM (SELECT relname FROM collector_rw UNION ALL SELECT relname FROM collector_ro) l(x)
+      FROM (SELECT relname FROM collector_rw UNION ALL SELECT relname FROM collector_ro
+            UNION ALL SELECT relname FROM collector_none) l(x)
      WHERE x <> ALL (present);
     IF array_length(missing, 1) > 0 THEN
         RAISE EXCEPTION 'Listed object(s) not found in this database: %. A typo, or the migration '
@@ -174,10 +198,11 @@ BEGIN
         RAISE EXCEPTION 'Listed sequence(s) not found in this database: %.', missing;
     END IF;
 
-    RAISE NOTICE 'Gate passed: % bas_* object(s) present, % read-write, % read-only, % sequences.',
+    RAISE NOTICE 'Gate passed: % bas_* object(s) present, % read-write, % read-only, % withheld, % sequences.',
         coalesce(array_length(present, 1), 0),
         (SELECT count(*) FROM collector_rw),
         (SELECT count(*) FROM collector_ro),
+        (SELECT count(*) FROM collector_none),
         (SELECT count(*) FROM collector_seq);
 END
 $gate$;
@@ -221,8 +246,12 @@ BEGIN
     FOR r IN SELECT relname FROM collector_seq ORDER BY relname LOOP
         EXECUTE format('GRANT USAGE ON SEQUENCE public.%I TO bas_collector', r.relname);
     END LOOP;
-    RAISE NOTICE 'Granted: read-write on % tables, read-only on % objects, usage on % sequences.',
-        (SELECT count(*) FROM collector_rw), (SELECT count(*) FROM collector_ro), (SELECT count(*) FROM collector_seq);
+    FOR r IN SELECT relname FROM collector_none ORDER BY relname LOOP
+        EXECUTE format('REVOKE ALL ON public.%I FROM bas_collector', r.relname);
+    END LOOP;
+    RAISE NOTICE 'Granted: read-write on % tables, read-only on % objects, usage on % sequences; withheld % by name.',
+        (SELECT count(*) FROM collector_rw), (SELECT count(*) FROM collector_ro), (SELECT count(*) FROM collector_seq),
+        (SELECT count(*) FROM collector_none);
 END
 $grant$;
 
@@ -277,6 +306,9 @@ BEGIN
     IF has_table_privilege('bas_collector', 'public.bas_station_credentials', 'INSERT')      THEN fail := fail || 'CAN INSERT bas_station_credentials'; END IF;
     IF has_table_privilege('bas_collector', 'public.bas_station_credentials', 'UPDATE')      THEN fail := fail || 'CAN UPDATE bas_station_credentials'; END IF;
     IF has_table_privilege('bas_collector', 'public.employees', 'SELECT')                    THEN fail := fail || 'CAN SELECT employees'; END IF;
+    IF has_table_privilege('bas_collector', 'public.bas_report_recipients', 'SELECT')        THEN fail := fail || 'CAN SELECT bas_report_recipients'; END IF;
+    IF has_table_privilege('bas_collector', 'public.bas_report_definitions', 'SELECT')       THEN fail := fail || 'CAN SELECT bas_report_definitions'; END IF;
+    IF has_table_privilege('bas_collector', 'public.bas_site_occupancy', 'SELECT')           THEN fail := fail || 'CAN SELECT bas_site_occupancy'; END IF;
     IF has_table_privilege('bas_collector', 'public.audit_events', 'SELECT')                 THEN fail := fail || 'CAN SELECT audit_events'; END IF;
     IF has_table_privilege('bas_collector', 'public._prisma_migrations', 'SELECT')           THEN fail := fail || 'CAN SELECT _prisma_migrations'; END IF;
     IF has_table_privilege('bas_collector', 'public.module_grants', 'SELECT')                THEN fail := fail || 'CAN SELECT module_grants'; END IF;
@@ -293,7 +325,7 @@ BEGIN
 END
 $proof$;
 
-DROP TABLE collector_rw, collector_ro, collector_seq;
+DROP TABLE collector_rw, collector_ro, collector_none, collector_seq;
 
 \echo ''
 \echo 'Created/updated role: bas_collector on this database.'

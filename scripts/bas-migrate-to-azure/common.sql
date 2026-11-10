@@ -75,12 +75,34 @@ UPDATE mig_tables
  WHERE table_name = 'bas_station_credentials';
 
 
+-- --- tables that do NOT move -------------------------------------------------
+--
+-- Created after the move (it ran once, on 2026-09-29) and platform-side:
+-- report configuration a person enters through the Reports tab (Phase 1,
+-- 2026-11-10), not data the office PC ever held. They stay where they are.
+-- Named here so the gate can still refuse a bas_* table NOBODY has decided
+-- about, and fingerprinted with the protected tables so an import is proved
+-- not to have touched them. bas_migrate_tmp is granted nothing on them.
+CREATE TEMP TABLE mig_excluded (
+    table_name text PRIMARY KEY,
+    reason     text NOT NULL
+);
+INSERT INTO mig_excluded (table_name, reason) VALUES
+    ('bas_report_definitions', 'Reports, Phase 1: platform-side configuration, created after the move'),
+    ('bas_report_questions',   'Reports, Phase 1: platform-side configuration, created after the move'),
+    ('bas_report_recipients',  'Reports, Phase 1: email addresses, created after the move'),
+    ('bas_library_questions',  'Reports, Phase 1: the shared library, seeded by migration on every database'),
+    ('bas_personal_questions', 'Reports, Phase 1: an employee''s own questions, created after the move'),
+    ('bas_site_occupancy',     'Reports, Phase 1: occupied hours a person enters, created after the move');
+
+
 -- --- the gate ---------------------------------------------------------------
 --
--- Every bas_* base table in this database must be listed above, and every
--- table listed must exist. A table this file has never heard of stops the run:
--- copying a subset and calling it a migration is the failure this exists to
--- prevent, and a typo in the list is the other one.
+-- Every bas_* base table in this database must be listed above - as a table
+-- that moves, or as one that deliberately does not - and every table listed
+-- must exist. A table this file has never heard of stops the run: copying a
+-- subset and calling it a migration is the failure this exists to prevent,
+-- and a typo in the list is the other one.
 
 CREATE FUNCTION pg_temp.mig_gate() RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -101,12 +123,14 @@ BEGIN
     SELECT coalesce(array_agg(p ORDER BY p), '{}')
       INTO unlisted
       FROM unnest(present) AS p
-     WHERE p NOT IN (SELECT table_name FROM mig_tables);
+     WHERE p NOT IN (SELECT table_name FROM mig_tables)
+       AND p NOT IN (SELECT table_name FROM mig_excluded);
 
     IF array_length(unlisted, 1) > 0 THEN
         RAISE EXCEPTION 'bas_* table(s) this migration does not know about: %. '
             'Add each one to mig_tables in common.sql, in dependency order, '
-            'and decide its kind. Nothing has been written.', unlisted;
+            'and decide its kind - or to mig_excluded, with the reason it does '
+            'not move. Nothing has been written.', unlisted;
     END IF;
 
     SELECT coalesce(array_agg(m.table_name ORDER BY m.table_name), '{}')
@@ -120,7 +144,8 @@ BEGIN
             missing;
     END IF;
 
-    RAISE NOTICE 'gate: % bas_* table(s) present, all % listed', array_length(present, 1), (SELECT count(*) FROM mig_tables);
+    RAISE NOTICE 'gate: % bas_* table(s) present, % move, % stay by decision',
+        array_length(present, 1), (SELECT count(*) FROM mig_tables), (SELECT count(*) FROM mig_excluded);
 END
 $$;
 
@@ -172,6 +197,9 @@ BEGIN
           FROM pg_constraint c
          WHERE c.contype = 'f'
            AND c.conrelid::regclass::text LIKE 'bas\_%'
+           -- Only the tables this run wrote can have gained an orphan, and the
+           -- import role is granted nothing on the ones that stay.
+           AND c.conrelid::regclass::text IN (SELECT m.table_name FROM mig_tables m)
          ORDER BY c.conrelid::regclass::text, c.conname
     LOOP
         SELECT string_agg(format('ch.%I', a.attname), ', ' ORDER BY k.ord)
@@ -245,7 +273,10 @@ BEGIN
           JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE n.nspname = 'public'
            AND c.relkind IN ('r', 'p')
-           AND c.relname NOT LIKE 'bas\_%'
+           -- x.table_name, qualified: this function RETURNS TABLE (table_name ...)
+           -- and a bare table_name here is ambiguous with that output column.
+           AND (c.relname NOT LIKE 'bas\_%'
+                OR c.relname IN (SELECT x.table_name FROM mig_excluded x))
          ORDER BY c.relname
     LOOP
         RETURN QUERY EXECUTE format(

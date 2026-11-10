@@ -130,6 +130,7 @@ building is not recorded.
 | **Value plausibility** | Does the data mean anything: a run of identical readings past a per-kind threshold is flagged, by role, never by a bad-value list; a card on Collection Health and a *Value* column on the Points list; both known dead sensors flagged live, nothing else | `feat/bas-value-plausibility` (2026-09-28), landed from `feat/bas-value-plausibility-reland` (2026-10-01) under the quiet-UI rules |
 | **Value kinds on the chart** | The Point Explorer reads the column a point's readings live in, from `data_type`; a boolean point is a stepped line between two labelled states with no numeric axis; string points recognised and left alone | `feat/bas-chart-value-kinds` (2026-10-06) |
 | **Readings table and CSV** | A *Chart / Table* toggle on Point Explorer shows the raw rows behind the chart, newest first, paged in SQL, never bucketed; *Download CSV* streams every row in the range with an honest 500,000-row cap; nothing fetched until used | `feat/bas-readings-table` (2026-10-09) |
+| **Reports, Phase 1** | A Reports tab: six `bas_*` tables, the spec's twenty questions seeded as the shared library, report definitions with questions, schedule in the building's zone, recipients (owner never a row) and a stored budget; no runs, no jobs, no email, no PDF | `feat/bas-reports-phase-1` (2026-11-10) |
 
 ### Test count
 
@@ -143,7 +144,9 @@ building is not recorded.
 ## The database
 
 **Fourteen** tables under `public` with a `bas_` prefix, managed by Prisma.
-Counted from `@@map("bas_*")` in `prisma/schema.prisma`.
+Counted from `@@map("bas_*")` in `prisma/schema.prisma`. **Twenty since
+2026-11-10**: the Reports tab added six (*Reports*, under *The screens*), five
+of them platform configuration rather than building data.
 
 ```
 bas_orgs
@@ -235,7 +238,7 @@ constraints and triggers.
 
 ## The screens
 
-One module, **five** tabs — real routes, not client-side state, so each is
+One module, **six** tabs — real routes, not client-side state, so each is
 bookmarkable and each guards itself independently. Listed in
 `app/(modules)/bas/tabs.ts`, which is the one place that knows they exist. The
 module opens on Projects (2026-09-30); Collection Health, which opened it
@@ -571,6 +574,63 @@ carried into the unfiltered comparison. Not in the at-risk hero: that tile is
 about lagging a horizon, and this is about a history that is gone. The four
 deliberate reasons stay out. `runbook.md` → *Collection Health says a point
 is no longer reported by the station*.
+
+### Reports — `/bas/reports` (Phase 1, 2026-11-10)
+
+**What exists.** A tab between Analyze and Collection Health, with four
+sub-tabs on the same underline pattern: *Reports* (the list, and the editor
+at `/bas/reports/new` and `/bas/reports/<id>`), *Generated* and *Usage*
+(honest placeholders: there are no runs), and *Library*. The plan is
+`docs/bas-reports-tab-plan.md`; the spec it serves is `docs/BAS Health
+Report Build Spec.md` (Jim, 27 October 2026). Phase 1 is schema, library,
+definitions and screens. **Nothing runs**: no scheduler, no worker, no
+engine, no email, no PDF. A report activated today is scheduled -
+`next_run_at` is computed - and nothing fires until Phase 3.
+
+**Six tables** (`add_bas_reports`): `bas_report_definitions`,
+`bas_report_questions`, `bas_library_questions`, `bas_personal_questions`,
+`bas_report_recipients`, `bas_site_occupancy`. Twenty-six CHECK constraints of
+their own (`tests/bas-reports-schema.test.ts`). **The owner is never a
+recipient row**: the sender adds the owner's address at send time, and the
+recipients API refuses the owner's address on the way in and on the way
+out. An address outside `phb1899.com` is refused until the client sends
+`confirmed: true`, and the audit row (`bas.report_recipient_added`)
+carries `isExternal`. **Five of the six are platform-side**, not building
+data: they are excluded from `bas_v_data_dictionary` by name, withheld
+from `bas_analyze`, withheld from `bas_collector`, and listed as not
+moving in `scripts/bas-migrate-to-azure/common.sql`; `bas_site_occupancy`
+is building data and visible to all three. `runbook.md` → *Reports (Phase
+1)* has the consequence for `phb-bas`'s own read-only role script.
+
+**The shared library** is the spec's twenty questions as rows, kind
+`computed`, each with its section, the spec's *Applies to* wording beside
+equipment-type keys, the *Points required* column as role-key requirement
+groups (`lib/modules/bas/reports/library.ts`), `min_coverage` 0.800, and
+`analysis_fn` naming the function Phase 2 implements. One TypeScript
+source, installed by the seed and by the migration (`ON CONFLICT DO
+NOTHING`), held to each other by `tests/bas-reports-library.test.ts`. Two
+locked presets as data (`presets.ts`): `health_weekly`, all twenty in the
+spec's order; `health_daily`, Summary, Space Comfort and Data Health. A
+preset report's questions are materialised into `bas_report_questions` and
+the question routes refuse to edit them (`preset_locked`); clearing the
+preset keeps them as a starting point. Custom reports take library,
+personal (the owner's own, nobody else's) and typed questions, reordered
+with buttons, one audit row per change.
+
+**The schedule** is a local time of day plus the building's zone; the
+instant is derived (`schedule.ts`, pure, used by the editor's preview and
+the service alike) and recomputed on activation and on any change to the
+clock inputs, never by adding a day to an instant. Four kinds: daily,
+every N days from an anchor date, weekly on weekdays, monthly on a day
+clamped to the month. `tests/bas-reports-schedule.test.ts` walks the
+November 2026 change both ways. **Visibility**: owner or module admin,
+everyone else 404, decided in the service per row. State machine: draft →
+active ↔ paused; `paused_owner_disabled` is in the CHECK for Phase 3 and
+nothing sets it yet. The budget is stored and not enforced. API under
+`app/api/modules/bas/reports/**`, every route through `withBas`
+(`tests/bas-reports-routes.test.ts` walks them). Not built, by decision:
+the Settings tab's occupied-hours field (the table exists; Phase 2 reads
+it), admin promotion to the shared library, *Run now*, *History*.
 
 ### Filters
 
