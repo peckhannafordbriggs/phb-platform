@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import type { KbSearchHit, KbSearchResult } from "@/lib/modules/knowledge-base/search";
+import type { KbSearchCopy, KbSearchHit, KbSearchResult } from "@/lib/modules/knowledge-base/search";
 
 /**
- * The Knowledge Base search box: keyword search over indexed passages, every
- * result citing the file and the exact place in it. No answer is written yet;
+ * The Knowledge Base search box: words and meaning over indexed passages, every
+ * result citing the file and the exact place in it, and any other files holding
+ * the same text. No answer is written yet;
  * this is the evidence an answer will be built from.
  */
 
@@ -16,7 +17,7 @@ const MARK_END = "\u0003";
 
 type Project = { id: string; folderName: string; projectNumber: string | null; name: string };
 
-function location(hit: KbSearchHit): string {
+function location(hit: KbSearchCopy): string {
   if (hit.sheet) return hit.cellRange ? `Sheet "${hit.sheet}", ${hit.cellRange}` : `Sheet "${hit.sheet}"`;
   if (hit.pageStart !== null) {
     return hit.pageEnd !== null && hit.pageEnd !== hit.pageStart ? `Pages ${hit.pageStart}-${hit.pageEnd}` : `Page ${hit.pageStart}`;
@@ -50,6 +51,33 @@ function Snippet({ text }: { text: string }) {
     rest = end < 0 ? "" : rest.slice(end + 1);
   }
   return <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{parts}</p>;
+}
+
+/** Other files holding the same text, so one passage is listed once. */
+function AlsoIn({ copies }: { copies: KbSearchCopy[] }) {
+  if (copies.length === 0) return null;
+  return (
+    <div className="mt-2 text-xs text-[var(--muted)]">
+      Same text also in:
+      <ul className="mt-1 space-y-0.5">
+        {copies.map((copy) => {
+          const where = `${location(copy)}${copy.isArchived ? " · archived" : copy.isLatest ? "" : " · older version"}`;
+          return (
+            <li key={copy.chunkId} className="break-all">
+              {copy.webUrl ? (
+                <a href={copy.webUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                  {copy.fileName}
+                </a>
+              ) : (
+                copy.fileName
+              )}{" "}
+              · {where}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }
 
 function Version({ hit }: { hit: KbSearchHit }) {
@@ -185,6 +213,7 @@ export function SearchPanel({ projects }: { projects: Project[] }) {
                       : `Holds every word`}
                   {hit.matchedBy === "both" && ", and close in meaning"}
                 </p>
+                <AlsoIn copies={hit.alsoIn} />
               </li>
             ))}
           </ol>

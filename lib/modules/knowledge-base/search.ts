@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { logUnexpected } from "@/lib/logger";
 import { KNOWLEDGE_BASE_MODULE_KEY } from "./constants";
+import { isSamePassage, passageShingles } from "./duplicates";
 import { azureEmbedder } from "./embed";
 import { readKbEmbeddingEnv } from "./env";
 import { toVectorLiteral } from "./vector";
@@ -37,9 +38,12 @@ import { toVectorLiteral } from "./vector";
  *     ARCHIVE_ one; older versions are still returned, and say so.
  *
  * FUSION: reciprocal rank fusion (KB_RRF_K), so a passage both searches rank
- * well beats one only a single search found; then at most
- * KB_SEARCH_PER_DOCUMENT passages from one document, so one long spec cannot
- * fill the page.
+ * well beats one only a single search found. Then, walking down that order:
+ * a passage that is the same text as one already chosen (duplicates.ts: a
+ * spec section copied into a submittal, a page carried into the next version)
+ * is listed under it as `alsoIn` instead of taking a place of its own; and at
+ * most KB_SEARCH_PER_DOCUMENT passages from one document, so one long spec
+ * cannot fill the page.
  */
 
 export const KB_SEARCH_LIMIT = 20;
@@ -150,7 +154,33 @@ export type KbSearchHit = {
   /** Cosine similarity to the question, when the meaning search found it. */
   similarity: number | null;
   score: number;
+  /** The same text found in other places, lower in the results; best ranked first. */
+  alsoIn: KbSearchCopy[];
 };
+
+/** Where else a hit's text was found: enough to name and open it. */
+export type KbSearchCopy = Pick<
+  KbSearchHit,
+  | "chunkId"
+  | "documentId"
+  | "projectFolder"
+  | "fileName"
+  | "path"
+  | "webUrl"
+  | "versionLabel"
+  | "isLatest"
+  | "isArchived"
+  | "pageStart"
+  | "pageEnd"
+  | "section"
+  | "sheet"
+  | "cellRange"
+>;
+
+/** Copies listed under one hit, at most. */
+export const KB_SEARCH_MAX_COPIES = 10;
+/** Passages whose text is read per step while choosing. */
+const CONTENT_BATCH = 60;
 
 export const KB_MARK_START = "\u0002";
 export const KB_MARK_END = "\u0003";
@@ -319,19 +349,32 @@ export async function searchPassages(options: {
   }
   const ranked = [...byId.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 
+  // Walk down the fused order: a copy of a chosen passage goes under it, then
+  // the per-document cap. Text is read a batch at a time, only as far as needed.
   const perDocument = new Map<string, number>();
-  const chosen: Ranked[] = [];
-  for (const r of ranked) {
-    const n = perDocument.get(r.documentId) ?? 0;
-    if (n >= KB_SEARCH_PER_DOCUMENT) continue;
-    perDocument.set(r.documentId, n + 1);
-    chosen.push(r);
-    if (chosen.length >= limit) break;
+  const chosen: { ranked: Ranked; shingles: Set<string> | null; copies: Ranked[] }[] = [];
+  choosing: for (let at = 0; at < ranked.length && chosen.length < limit; at += CONTENT_BATCH) {
+    const batch = ranked.slice(at, at + CONTENT_BATCH);
+    const contents = await passageContents(batch.map((r) => r.id));
+    for (const r of batch) {
+      const shingles = passageShingles(contents.get(r.id) ?? "");
+      const original = chosen.find((c) => isSamePassage(c.shingles, shingles));
+      if (original) {
+        if (original.copies.length < KB_SEARCH_MAX_COPIES) original.copies.push(r);
+        continue;
+      }
+      const n = perDocument.get(r.documentId) ?? 0;
+      if (n >= KB_SEARCH_PER_DOCUMENT) continue;
+      perDocument.set(r.documentId, n + 1);
+      chosen.push({ ranked: r, shingles, copies: [] });
+      if (chosen.length >= limit) break choosing;
+    }
   }
 
-  const rows = chosen.length > 0 ? await hydrate(chosen.map((c) => c.id), termSql) : new Map<string, HitRow>();
+  const ids = chosen.flatMap((c) => [c.ranked.id, ...c.copies.map((copy) => copy.id)]);
+  const rows = ids.length > 0 ? await hydrate(ids, termSql) : new Map<string, HitRow>();
   const hits: KbSearchHit[] = [];
-  for (const c of chosen) {
+  for (const { ranked: c, copies } of chosen) {
     const r = rows.get(c.id);
     if (!r) continue; // re-indexed between the two queries
     hits.push({
@@ -357,6 +400,10 @@ export async function searchPassages(options: {
       matchedBy: c.keywordRank !== null && c.vectorRank !== null ? "both" : c.vectorRank !== null ? "meaning" : "words",
       similarity: c.similarity,
       score: c.score,
+      alsoIn: copies.flatMap((copy) => {
+        const row = rows.get(copy.id);
+        return row ? [copyOf(row)] : [];
+      }),
     });
   }
 
@@ -432,6 +479,32 @@ async function vectorCandidates(
   return rows
     .filter((r) => r.similarity >= KB_MIN_SIMILARITY)
     .map((r) => ({ id: r.id, documentId: r.document_id, isLatest: r.is_latest, isArchived: r.is_archived, similarity: r.similarity }));
+}
+
+async function passageContents(ids: string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<Array<{ id: string; content: string }>>`
+    SELECT id::text AS id, content FROM kb_chunks WHERE id = ANY(${ids}::uuid[])`;
+  return new Map(rows.map((r) => [r.id, r.content]));
+}
+
+function copyOf(r: HitRow): KbSearchCopy {
+  return {
+    chunkId: r.chunk_id,
+    documentId: r.document_id,
+    projectFolder: r.folder_name,
+    fileName: r.file_name,
+    path: r.path,
+    webUrl: r.web_url,
+    versionLabel: r.version_label,
+    isLatest: r.is_latest,
+    isArchived: r.is_archived,
+    pageStart: r.page_start,
+    pageEnd: r.page_end,
+    section: r.section,
+    sheet: r.sheet,
+    cellRange: r.cell_range,
+  };
 }
 
 /** What the screen shows for each chosen passage, with its snippet and the words it holds. */

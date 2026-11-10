@@ -17,7 +17,8 @@ import "./load-env";
  *
  * A question is FOUND at rank N when the Nth distinct file in the results
  * starts with (or equals) one of `expect`, ignoring case and an ARCHIVE_
- * prefix. Reported: found in the top 1, top 5, and mean reciprocal rank.
+ * prefix. A file listed under a result as holding the same text ("also in")
+ * counts at that result's rank. Reported: found in the top 1, top 5, and mean reciprocal rank.
  *
  * The question set describes real projects, so it lives in .kb-eval/, which
  * git ignores. Run it before and after a change to search (and when
@@ -46,9 +47,10 @@ async function main() {
   const questions = JSON.parse(await readFile(file, "utf8")) as Question[];
 
   const totals = Object.fromEntries(modes.map((m) => [m, { top1: 0, top5: 0, rr: 0, ran: m as string }]));
-  const rankIn = (files: string[], q: Question) => {
+  // One entry per distinct result file: its name, then the files holding the same text.
+  const rankIn = (files: string[][], q: Question) => {
     const wanted = q.expect.map(normal);
-    return files.findIndex((f) => wanted.some((w) => normal(f).startsWith(w))) + 1;
+    return files.findIndex((names) => names.some((f) => wanted.some((w) => normal(f).startsWith(w)))) + 1;
   };
   const label = (rank: number) => (rank === 0 ? "missed" : `rank ${rank}`).padEnd(8);
 
@@ -56,11 +58,15 @@ async function main() {
     console.log(`     ${modes.map((m) => m.padEnd(8)).join(" ")} question`);
     for (const [i, q] of questions.entries()) {
       const ranks: number[] = [];
-      const lists: string[][] = [];
+      const lists: string[][][] = [];
       for (const mode of modes) {
         const result = await searchPassages({ query: q.question, limit: 50, mode });
-        const files: string[] = [];
-        for (const hit of result.hits) if (!files.includes(hit.fileName)) files.push(hit.fileName);
+        const files: string[][] = [];
+        for (const hit of result.hits) {
+          if (!files.some((names) => names[0] === hit.fileName)) {
+            files.push([hit.fileName, ...hit.alsoIn.map((c) => c.fileName)]);
+          }
+        }
         const rank = rankIn(files, q);
         const t = totals[mode]!;
         if (rank === 1) t.top1 += 1;
@@ -73,7 +79,9 @@ async function main() {
       console.log(`${String(i + 1).padStart(2)}.  ${ranks.map(label).join(" ")} ${q.question}`);
       const last = lists.at(-1) ?? [];
       if (show > 0 || ranks.at(-1) === 0) {
-        for (const f of last.slice(0, Math.max(show, ranks.at(-1) === 0 ? 3 : 0))) console.log(`        ${f}`);
+        for (const [first, ...copies] of last.slice(0, Math.max(show, ranks.at(-1) === 0 ? 3 : 0))) {
+          console.log(`        ${first}${copies.length > 0 ? ` (same text also in ${copies.length} more)` : ""}`);
+        }
         if (last.length === 0) console.log("        (nothing found)");
       }
     }

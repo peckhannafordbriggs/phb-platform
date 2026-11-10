@@ -13,12 +13,12 @@ worker loop and its Container Apps Job, and the worker image's text tools.
 |---|---|---|
 | 0 | Branch setup: port the decisions, schema and tests below onto current `main` | **Done** |
 | 1 | Schema v2: projects, sheet/cell locations, document versions, conversations, question history | **Done** |
-| 2 | Source sync: legacy projects and files from SharePoint (or a local copy), new/changed/deleted detection | Not started |
-| 3 | Extraction and chunking with page, section and cell locations | Not started |
-| 4 | Embeddings | Not started. Needs request KB-2 |
-| 5 | Retrieval: hybrid vector + keyword, project ranking, evaluation set | Not started |
+| 2 | Source sync: legacy projects and files from SharePoint (or a local copy), new/changed/deleted detection | **Done** |
+| 3 | Extraction and chunking with page, section and cell locations | **Done**. No OCR: a scanned PDF is `skipped`, `empty_text` |
+| 4 | Embeddings | **Done** (2026-11-10) |
+| 5 | Retrieval: hybrid vector + keyword, project ranking, evaluation set | **Built** (2026-11-10): hybrid, copies collapsed, `npm run kb:eval`. Not yet tuned on a real question set |
 | 6 | Answers with Claude: citations, conflicts, versions, missing evidence, follow-ups | Not started |
-| 7 | Automatic sync job, admin view of indexing issues and reported answers | Not started |
+| 7 | Automatic sync job, admin view of indexing issues and reported answers | Partly: Index now button, worker job (built, `enableKbWorker` off), clear index. No schedule, no issue or report views |
 
 ---
 
@@ -328,6 +328,12 @@ as `model`), so no `api-version` has to be chosen or kept current. `embed.ts`:
 - **Fallback, said out loud**: not configured, or the embedding call fails, and the
   search answers by words with a `notice` the screen shows. A passage with no vector
   yet is still found by words. `mode=keyword` on the route never calls Azure.
+- **Copies collapse**: walking down the fused order, a passage that is the same text
+  as one already chosen (Jaccard >= 0.8 on three-word runs, both at least 30 words;
+  `duplicates.ts`) goes under it as `alsoIn` (up to 10) and takes no place, and does
+  not count against its document's cap. Found on real data: one spec section copied
+  into three RTU submittals filled the top four results. Jaccard, not containment,
+  so a page with the boilerplate plus a schedule of its own stays a result.
 - Each hit carries `matchedBy` (`words`, `meaning`, `both`) and `similarity`.
   `tests/kb-hybrid.test.ts` writes hand-built vectors so every similarity is exact.
 - **Not tuned yet.** The threshold and K are defaults from the literature; tune them

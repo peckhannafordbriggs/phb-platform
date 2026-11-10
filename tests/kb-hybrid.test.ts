@@ -213,3 +213,74 @@ describe("hybrid search", () => {
     expect(hits).toHaveLength(KB_SEARCH_PER_DOCUMENT);
   });
 });
+
+const BOILERPLATE =
+  "SECTION 237388.11 PACKAGED ROOFTOP AIR CONDITIONERS. PART 1 GENERAL. 1.1 SECTION INCLUDES: packaged rooftop " +
+  "air conditioners tagged on drawing MH-650 and 651. 1.2 REFERENCES: AFBMA 9 load ratings and fatigue life for " +
+  "ball bearings; SMACNA HVAC duct construction standards; UL 900 test performance of air filter units. 1.3 " +
+  "SUBMITTALS: shop drawings indicate assembly, unit dimensions, weight loading, required clearances, construction " +
+  "details, field connection details, electrical characteristics and connection requirements.";
+
+describe("the same text in more than one file", () => {
+  it("is listed once, under the best-ranked copy, with where else it is", async () => {
+    const p = await project("221457_MAGNODE");
+    await doc(p.id, "221457_SPEC_Div23_20210602.pdf", [{ content: BOILERPLATE, vector: vec(13) }]);
+    await doc(p.id, "221457_SUB_Packaged_RTU_9_Approved_20220203.pdf", [
+      { content: `Project Silver, New Manufacturing Facility, Trenton OH. ${BOILERPLATE}`, vector: vec(13, 0.99) },
+    ]);
+    await doc(
+      p.id,
+      "ARCHIVE_221457_SUB_Packaged_RTUs_1_and_2_Rejected_20220107.pdf",
+      [{ content: `Project Silver, New Manufacturing Facility. ${BOILERPLATE} Page 2`, vector: vec(13, 0.98) }],
+      { isLatest: false, isArchived: true },
+    );
+    await doc(p.id, "221457_SUB_Packaged_RTUs_1_and_2_Approved_20220125.pdf", [
+      { content: "UNIT TAG: RTU-3. Dimensions in inches 172.5 by 48.4. Approx. weight 375 LBS.", vector: vec(13, 0.9) },
+    ]);
+
+    const hits = (
+      await searchPassages({ query: "unit dimensions weight", queryEmbedder: embedderFor({ "unit dimensions weight": vec(13) }) })
+    ).hits;
+
+    expect(hits.map((h) => h.fileName)).toEqual([
+      "221457_SPEC_Div23_20210602.pdf",
+      "221457_SUB_Packaged_RTUs_1_and_2_Approved_20220125.pdf",
+    ]);
+    expect(hits[0]?.alsoIn.map((c) => [c.fileName, c.isArchived, c.pageStart])).toEqual([
+      ["221457_SUB_Packaged_RTU_9_Approved_20220203.pdf", false, 1],
+      ["ARCHIVE_221457_SUB_Packaged_RTUs_1_and_2_Rejected_20220107.pdf", true, 1],
+    ]);
+    expect(hits[1]?.alsoIn).toEqual([]);
+  });
+
+  it("keeps a page that holds the boilerplate and a good deal of its own", async () => {
+    const p = await project("221457_MAGNODE");
+    await doc(p.id, "spec.pdf", [{ content: BOILERPLATE, vector: vec(14) }]);
+    const own =
+      "ROOFTOP UNITS SCHEDULE: RTU-1 supply fan 12,000 CFM, gas heat 400 MBH, operating weight 4,200 LBS, " +
+      "dimensions 180 by 88 by 64 inches; RTU-2 supply fan 9,500 CFM, gas heat 300 MBH, operating weight 3,650 LBS, " +
+      "dimensions 160 by 88 by 60 inches; RTU-3 supply fan 6,000 CFM, operating weight 2,100 LBS.";
+    await doc(p.id, "submittal.pdf", [{ content: `${BOILERPLATE} ${own}`, vector: vec(14, 0.95) }]);
+
+    const hits = (
+      await searchPassages({ query: "unit dimensions weight", queryEmbedder: embedderFor({ "unit dimensions weight": vec(14) }) })
+    ).hits;
+
+    expect(hits.map((h) => h.fileName).sort()).toEqual(["spec.pdf", "submittal.pdf"]);
+    expect(hits.every((h) => h.alsoIn.length === 0)).toBe(true);
+  });
+
+  it("does not let copies use up a document's places", async () => {
+    const p = await project("221457_MAGNODE");
+    await doc(p.id, "original.pdf", [{ content: BOILERPLATE, vector: vec(15) }]);
+    // One file holding the boilerplate on four pages: one hit, three copies, no cap reached.
+    await doc(
+      p.id,
+      "copies.pdf",
+      Array.from({ length: 4 }, (_, i) => ({ content: `Page ${i + 10}. ${BOILERPLATE}`, vector: vec(15, 0.97) })),
+    );
+    const hits = (await searchPassages({ query: "rooftop", queryEmbedder: embedderFor({ rooftop: vec(15) }) })).hits;
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.alsoIn).toHaveLength(4);
+  });
+});
