@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { createElement, type ReactElement } from "react";
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -32,6 +32,12 @@ import * as FpKit from "@/app/(modules)/freeze-protection/ui/kit";
  *
  * Render-level, not screenshot-level: the before/after screenshots in the
  * promoting PR are the visual record, this is what keeps it true afterwards.
+ *
+ * Rendered with JSX rather than createElement, unlike the older rendering
+ * tests: every kit component declares `children` as required, createElement's
+ * overloads want it inside the props object, and react/no-children-prop
+ * refuses it there. JSX is the one form the type and the rule both accept,
+ * with no cast at the call site.
  */
 
 const ROOT = path.resolve(__dirname, "..");
@@ -91,11 +97,9 @@ describe("the module paths are the kit", () => {
       ["closed", "muted"],
     ];
     for (const [fp, shared] of pairs) {
-      expect(html(createElement(FpKit.Pill, { tone: fp }, "x"))).toBe(
-        html(createElement(kit.Pill, { tone: shared }, "x")),
-      );
-      expect(html(createElement(FpKit.Callout, { tone: fp, lead: "Lead." }, "x"))).toBe(
-        html(createElement(kit.Callout, { tone: shared, lead: "Lead." }, "x")),
+      expect(html(<FpKit.Pill tone={fp}>x</FpKit.Pill>)).toBe(html(<kit.Pill tone={shared}>x</kit.Pill>));
+      expect(html(<FpKit.Callout tone={fp} lead="Lead.">x</FpKit.Callout>)).toBe(
+        html(<kit.Callout tone={shared} lead="Lead.">x</kit.Callout>),
       );
     }
   });
@@ -111,28 +115,26 @@ describe("the kit renders what Cost Intelligence rendered", () => {
     "border border-[var(--border)] bg-white text-[var(--foreground)] hover:bg-[var(--neutral-50)]";
 
   it("a secondary button, the default, and a primary one", () => {
-    expect(classSet(html(createElement(kit.Button, null, "Go")))).toEqual(
-      tokens(`${CIP_BUTTON_BASE} ${CIP_BUTTON_SECONDARY}`),
-    );
-    expect(classSet(html(createElement(kit.Button, { variant: "primary" }, "Go")))).toEqual(
+    expect(classSet(html(<kit.Button>Go</kit.Button>))).toEqual(tokens(`${CIP_BUTTON_BASE} ${CIP_BUTTON_SECONDARY}`));
+    expect(classSet(html(<kit.Button variant="primary">Go</kit.Button>))).toEqual(
       tokens(`${CIP_BUTTON_BASE} ${CIP_BUTTON_PRIMARY}`),
     );
-    expect(classSet(html(createElement(kit.Button, { fullWidth: true }, "Go")))).toEqual(
+    expect(classSet(html(<kit.Button fullWidth>Go</kit.Button>))).toEqual(
       tokens(`${CIP_BUTTON_BASE} ${CIP_BUTTON_SECONDARY} w-full`),
     );
     // A button with no title renders no title attribute, as before.
-    expect(html(createElement(kit.Button, null, "Go"))).not.toContain("title=");
+    expect(html(<kit.Button>Go</kit.Button>)).not.toContain("title=");
     // An href renders a link, the pending spinner inside it idle.
-    const link = html(createElement(kit.Button, { href: "/x" }, "Go"));
+    const link = html(<kit.Button href="/x">Go</kit.Button>);
     expect(link).toMatch(/^<a [^>]*href="\/x"/);
     expect(link).toContain(">Go</a>");
   });
 
   it("the small size and the danger variant are additions, not changes", () => {
-    const small = classSet(html(createElement(kit.Button, { size: "sm" }, "Go")));
+    const small = classSet(html(<kit.Button size="sm">Go</kit.Button>));
     expect(small.has("h-7")).toBe(true);
     expect(small.has("h-9")).toBe(false);
-    const danger = classSet(html(createElement(kit.Button, { variant: "danger" }, "Go")));
+    const danger = classSet(html(<kit.Button variant="danger">Go</kit.Button>));
     expect(danger.has("text-[var(--danger)]")).toBe(true);
     expect(danger.has("bg-white")).toBe(true);
   });
@@ -147,17 +149,15 @@ describe("the kit renders what Cost Intelligence rendered", () => {
       bad: "bg-[color-mix(in_srgb,var(--phb-maroon)_12%,transparent)] text-[var(--phb-maroon)]",
     };
     for (const tone of Object.keys(tones) as kit.Tone[]) {
-      expect(classSet(html(createElement(kit.Pill, { tone }, "x")))).toEqual(tokens(`${base} ${tones[tone]}`));
+      expect(classSet(html(<kit.Pill tone={tone}>x</kit.Pill>))).toEqual(tokens(`${base} ${tones[tone]}`));
     }
   });
 
   it("a card, a label and an empty state", () => {
-    expect(html(createElement(kit.Card, null, "x"))).toBe('<div class="card p-5 ">x</div>');
-    expect(html(createElement(kit.Card, { padding: "p-3", className: "flex" }, "x"))).toBe(
-      '<div class="card p-3 flex">x</div>',
-    );
-    expect(html(createElement(kit.Label, null, "x"))).toBe('<p class="eyebrow mb-3 text-[var(--muted)]">x</p>');
-    expect(classSet(html(createElement(kit.Empty, null, "x")))).toEqual(
+    expect(html(<kit.Card>x</kit.Card>)).toBe('<div class="card p-5 ">x</div>');
+    expect(html(<kit.Card padding="p-3" className="flex">x</kit.Card>)).toBe('<div class="card p-3 flex">x</div>');
+    expect(html(<kit.Label>x</kit.Label>)).toBe('<p class="eyebrow mb-3 text-[var(--muted)]">x</p>');
+    expect(classSet(html(<kit.Empty>x</kit.Empty>))).toEqual(
       tokens("flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center text-[0.8125rem] text-[var(--muted)]"),
     );
   });
@@ -167,7 +167,7 @@ describe("the kit renders what Cost Intelligence rendered", () => {
       { value: "a", label: "A" },
       { value: "b", label: "B" },
     ];
-    const dark = html(createElement(kit.Segmented, { options, value: "a", onChange: () => {}, label: "Pick" }));
+    const dark = html(<kit.Segmented options={options} value="a" onChange={() => {}} label="Pick" />);
     expect(classSet(dark)).toEqual(tokens("inline-flex rounded-[var(--radius-control)] p-0.5 border border-[var(--border)] bg-white"));
     expect(dark).toContain('role="radiogroup"');
     expect(dark).toContain('aria-checked="true"');
@@ -177,7 +177,7 @@ describe("the kit renders what Cost Intelligence rendered", () => {
     );
 
     const wide = html(
-      createElement(kit.Segmented, { options, value: "a", onChange: () => {}, label: "Pick", tone: "light", fullWidth: true }),
+      <kit.Segmented options={options} value="a" onChange={() => {}} label="Pick" tone="light" fullWidth />,
     );
     expect(classSet(wide)).toEqual(tokens("flex w-full rounded-[var(--radius-control)] p-0.5 bg-[var(--neutral-100)]"));
     expect(wide.match(/flex-1/g)).toHaveLength(2);
@@ -191,14 +191,14 @@ describe("the kit renders what Cost Intelligence rendered", () => {
 
   it("a tab bar: the nav, one link per tab, aria-current on the active one, actions on the right", () => {
     const markup = html(
-      createElement(kit.TabBar, {
-        label: "Example sections",
-        tabs: [
+      <kit.TabBar
+        label="Example sections"
+        tabs={[
           { href: "/a", label: "A", active: true },
           { href: "/b", label: "B (3)", active: false },
-        ],
-        actions: createElement("span", { id: "act" }, "act"),
-      }),
+        ]}
+        actions={<span id="act">act</span>}
+      />,
     );
     expect(markup).toContain('<nav aria-label="Example sections"');
     expect(markup.match(/<a /g)).toHaveLength(2);
@@ -207,7 +207,7 @@ describe("the kit renders what Cost Intelligence rendered", () => {
     expect(markup).toContain(">B (3)</a>");
     expect(markup).toContain('<span id="act">act</span>');
     // No actions, no empty actions box.
-    const bare = html(createElement(kit.TabBar, { label: "X", tabs: [] }));
+    const bare = html(<kit.TabBar label="X" tabs={[]} />);
     expect(bare).not.toContain("gap-2");
   });
 });
