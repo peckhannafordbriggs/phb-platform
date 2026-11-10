@@ -13,9 +13,8 @@ import {
   fetchReports,
   reportStateTone,
 } from "./reports-client";
+import { Button } from "@/components/ui";
 import { TONE_INK, TONE_STYLE } from "./tone";
-
-const BUTTON = "rounded border border-[var(--border)] px-2.5 py-1 text-xs disabled:opacity-50";
 
 /**
  * The Reports sub-tab: the reports the viewer may see, one row each, with
@@ -67,7 +66,7 @@ export function ReportsListView() {
   return (
     <div className="space-y-4">
       {error !== null && (
-        <p className="rounded-md border p-4 text-sm" style={TONE_STYLE.bad} role="alert">
+        <p className="rounded-[var(--radius-row)] border p-4 text-sm" style={TONE_STYLE.bad} role="alert">
           {error.message}
         </p>
       )}
@@ -75,9 +74,9 @@ export function ReportsListView() {
         <p className="text-sm text-[var(--muted)]">
           {data.canAdminister ? "Every report, as a module admin." : "Your reports."}
         </p>
-        <Link href="/bas/reports/new" className={BUTTON + " bg-[var(--surface)] font-medium"}>
+        <Button size="sm" href="/bas/reports/new" className="font-medium">
           New report
-        </Link>
+        </Button>
       </div>
       <ReportsTable
         data={data}
@@ -123,24 +122,24 @@ export function ReportsTable({
   return (
     <section className="card p-0">
       {data.reports.length !== data.reportsInDatabase && (
-        <p className="m-4 rounded-md border p-3 text-sm" style={TONE_STYLE.bad} role="alert">
+        <p className="m-4 rounded-[var(--radius-row)] border p-3 text-sm" style={TONE_STYLE.bad} role="alert">
           This list shows {data.reports.length} of the {data.reportsInDatabase} reports you may see. Report
           this - a report missing here may still be scheduled.
         </p>
       )}
       <div className="max-h-[32rem] overflow-auto">
-        <table className="w-full text-xs">
+        <table className="w-full text-[0.8125rem]">
           <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left text-[var(--muted)]">
             <tr>
-              <th className="px-4 py-2 font-medium">Report</th>
-              <th className="py-2 pr-3 font-medium">Building</th>
-              <th className="py-2 pr-3 font-medium">Schedule</th>
-              <th className="py-2 pr-3 font-medium">Questions</th>
-              <th className="py-2 pr-3 font-medium">Next run</th>
-              <th className="py-2 pr-3 font-medium">Last run</th>
-              <th className="py-2 pr-3 font-medium">Recipients</th>
-              <th className="py-2 pr-3 font-medium">State</th>
-              <th className="py-2 pr-4 font-medium">
+              <th className="eyebrow px-4 py-2.5 text-[var(--muted)]">Report</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Building</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Schedule</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Questions</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Next run</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Last run</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Recipients</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">State</th>
+              <th className="eyebrow py-2.5 pr-4 text-[var(--muted)]">
                 <span className="sr-only">Actions</span>
               </th>
             </tr>
@@ -182,49 +181,49 @@ function ReportRow({
   const tone = reportStateTone(r.state);
   return (
     <tr className="border-t border-[var(--divider-soft)] align-top">
-      <td className="px-4 py-2">
+      <td className="px-4 py-3">
         <Link href={`/bas/reports/${encodeURIComponent(r.reportId)}`} className="font-medium hover:underline">
           {r.name}
         </Link>
         {r.presetLabel !== null && <div className="text-[var(--muted)]">{r.presetLabel}</div>}
         {showOwner && !r.isOwner && <div className="text-[var(--muted)]">Owner: {r.ownerName}</div>}
       </td>
-      <td className="py-2 pr-3">
+      <td className="py-3 pr-3">
         {r.site.name}
         <div className="text-[var(--muted)]">{describeStations(r.stationsSelected, r.stationsOnSite)}</div>
       </td>
-      <td className="py-2 pr-3">{r.scheduleText}</td>
-      <td className="py-2 pr-3 tabular-nums">{r.questionCount}</td>
-      <td className="py-2 pr-3">{r.state === "active" ? describeNextRun(r.nextRunAt, r.site.timezone) : "—"}</td>
-      <td className="py-2 pr-3 text-[var(--muted)]">No runs yet</td>
-      <td className="py-2 pr-3">{describeRecipients(r.recipientCount)}</td>
-      <td className="py-2 pr-3">
+      <td className="py-3 pr-3">{r.scheduleText}</td>
+      <td className="py-3 pr-3 tabular-nums">{r.questionCount}</td>
+      <td className="py-3 pr-3">{r.state === "active" ? describeNextRun(r.nextRunAt, r.site.timezone) : "—"}</td>
+      <td className="py-3 pr-3 text-[var(--muted)]">No runs yet</td>
+      <td className="py-3 pr-3">{describeRecipients(r.recipientCount)}</td>
+      <td className="py-3 pr-3">
         <span
-          className="inline-block rounded border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+          className="inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium"
           style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
         >
           {REPORT_STATE_LABELS[r.state]}
         </span>
       </td>
-      <td className="py-2 pr-4">
+      <td className="py-3 pr-4">
         <div className="flex flex-wrap gap-1">
-          <Link href={`/bas/reports/${encodeURIComponent(r.reportId)}`} className={BUTTON}>
+          <Button size="sm" href={`/bas/reports/${encodeURIComponent(r.reportId)}`}>
             Edit
-          </Link>
+          </Button>
           {r.state === "active" && onPause !== undefined && (
-            <button type="button" className={BUTTON} disabled={busy} onClick={() => onPause(r.reportId)}>
+            <Button size="sm"  disabled={busy} onClick={() => onPause(r.reportId)}>
               Pause
-            </button>
+            </Button>
           )}
           {r.state === "paused" && onResume !== undefined && (
-            <button type="button" className={BUTTON} disabled={busy} onClick={() => onResume(r.reportId)}>
+            <Button size="sm"  disabled={busy} onClick={() => onResume(r.reportId)}>
               Resume
-            </button>
+            </Button>
           )}
           {onDelete !== undefined && (
-            <button type="button" className={BUTTON} disabled={busy} onClick={() => onDelete(r.reportId, r.name)}>
+            <Button size="sm"  disabled={busy} onClick={() => onDelete(r.reportId, r.name)}>
               Delete
-            </button>
+            </Button>
           )}
         </div>
       </td>

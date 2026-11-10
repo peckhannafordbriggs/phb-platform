@@ -499,7 +499,7 @@ function ErrorTurn({ asked, message }: { asked: string; message: string }) {
 
 function NotConfigured({ missing }: { missing: string[] }) {
   return (
-    <div className="mt-4 rounded-md border p-4" style={TONE_STYLE.neutral}>
+    <div className="mt-4 rounded-[var(--radius-row)] border p-4" style={TONE_STYLE.neutral}>
       <p className="text-sm font-medium">Analyze is not configured on this server.</p>
       <p className="mt-1 text-xs text-[var(--muted)]">
         The rest of Building Automation is unaffected.{" "}
@@ -633,7 +633,7 @@ export function Result({
                             answer's SQL is recorded, not rendered (see the file
                             header). */}
                         {attempt.sql.length > 0 && (
-                          <pre className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--neutral-50,var(--surface))] p-3 text-[0.75rem] leading-relaxed">
+                          <pre className="overflow-x-auto rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--neutral-50,var(--surface))] p-3 text-[0.75rem] leading-relaxed">
                             <code>{attempt.sql}</code>
                           </pre>
                         )}
@@ -968,12 +968,12 @@ function RowsTable({
         {label}
       </Label>
       {/* The module's one scroll pattern: up to 200 rows, sticky header, count above. */}
-      <div className="mt-1.5 max-h-72 overflow-auto rounded-md border border-[var(--phb-teal-tint-line)]">
+      <div className="mt-1.5 max-h-72 overflow-auto rounded-[var(--radius-control)] border border-[var(--phb-teal-tint-line)]">
         <table className="w-full text-xs">
           <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
             <tr className="border-b border-[var(--phb-teal-tint-line)] text-left">
               {table.columns.map((column, i) => (
-                <th key={`${column}-${i}`} className="px-3 py-2 font-medium">
+                <th key={`${column}-${i}`} className="px-3 py-2.5 text-[0.6875rem] font-semibold text-[var(--muted)]">
                   {column}
                 </th>
               ))}

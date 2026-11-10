@@ -36,6 +36,8 @@ import {
   updatePointVisibility,
 } from "./health-client";
 import { planSuggestionBatches } from "@/lib/modules/bas/suggestions";
+import { Pencil } from "lucide-react";
+import { Button, Dropdown, FieldLabel, INPUT, SearchBar, Segmented } from "@/components/ui";
 import { TONE_INK, TONE_STYLE } from "./tone";
 import { HorizonCell } from "./collection-health";
 
@@ -59,10 +61,8 @@ import { HorizonCell } from "./collection-health";
  * keep offering a suggestion the database has already accepted.
  */
 
-const FIELD =
-  "rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-xs";
-const BUTTON =
-  "rounded border border-[var(--border)] px-1.5 py-0.5 text-xs disabled:opacity-50";
+/** The kit's input; buttons are the kit's `Button` (2026-11-10). */
+const FIELD = INPUT;
 const EMPTY = <span className="text-[var(--muted)]">—</span>;
 
 // ---------------------------------------------------------------- filters
@@ -104,13 +104,27 @@ export function pointMatchesFilters(point: SettingsPoint, filters: PointFilters)
 }
 
 /** The rows the search AND the filters leave: what "select all shown" selects. */
+/**
+ * The Points list's search (2026-11-10): the three names, as everywhere else
+ * on the module, and here also the role's name and the equipment's - "zone
+ * temp" or "RTU-1" finds the points that carry them.
+ */
+export function pointMatchesQuery(point: SettingsPoint, term: string): boolean {
+  if (pointMatchesSearch(point, term)) return true;
+  const needle = term.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  return [point.roleName, point.pointRole, point.equipmentName].some(
+    (name) => name !== null && name.toLowerCase().includes(needle),
+  );
+}
+
 export function shownPoints(
   points: readonly SettingsPoint[],
   query: string,
   filters: PointFilters,
 ): SettingsPoint[] {
   return points.filter(
-    (point) => pointMatchesSearch(point, query) && pointMatchesFilters(point, filters),
+    (point) => pointMatchesQuery(point, query) && pointMatchesFilters(point, filters),
   );
 }
 
@@ -476,7 +490,7 @@ export function StationPoints({
 
   if (error !== null) {
     return (
-      <p className="mt-3 rounded-md border p-3 text-xs" style={TONE_STYLE.bad} role="alert">
+      <p className="mt-3 rounded-[var(--radius-row)] border p-3 text-xs" style={TONE_STYLE.bad} role="alert">
         {error.message}
       </p>
     );
@@ -492,13 +506,13 @@ export function StationPoints({
   return (
     <>
       {saveError !== null && (
-        <p className="mt-3 rounded-md border p-3 text-xs" style={TONE_STYLE.bad} role="alert">
+        <p className="mt-3 rounded-[var(--radius-row)] border p-3 text-xs" style={TONE_STYLE.bad} role="alert">
           Could not save that change: {saveError} The list shows what the database
           still holds.
         </p>
       )}
       {notice !== null && (
-        <p className="mt-3 rounded-md border p-3 text-xs" style={TONE_STYLE.ok} role="status">
+        <p className="mt-3 rounded-[var(--radius-row)] border p-3 text-xs" style={TONE_STYLE.ok} role="status">
           {notice}
         </p>
       )}
@@ -684,66 +698,57 @@ function ClassificationToolbar({
   const noun = (n: number) => (n === 1 ? "point" : "points");
 
   return (
-    <div className="mt-3 space-y-2 rounded border border-[var(--border)] p-2">
+    <div className="mt-3 space-y-3 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] p-3">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-[var(--muted)]">Filter</span>
-        <select
-          className={FIELD}
-          aria-label="Filter by role"
+        <Dropdown
+          label="Filter by role"
           value={filters.role}
-          onChange={(e) => onFiltersChange({ ...filters, role: e.target.value })}
-        >
-          <option value="any">Any role</option>
-          <option value="none">No role</option>
-          {rolesInUse.map(([key, name]) => (
-            <option key={key} value={key}>
-              {name}
-            </option>
-          ))}
-        </select>
-        <select
-          className={FIELD}
-          aria-label="Filter by equipment"
+          onChange={(role) => onFiltersChange({ ...filters, role })}
+          options={[
+            { value: "any", label: "Any role" },
+            { value: "none", label: "No role" },
+            ...rolesInUse.map(([key, name]) => ({ value: key, label: name })),
+          ]}
+          className="min-w-40"
+        />
+        <Dropdown
+          label="Filter by equipment"
           value={filters.equipment}
-          onChange={(e) => onFiltersChange({ ...filters, equipment: e.target.value })}
-        >
-          <option value="any">Any equipment</option>
-          <option value="none">No equipment</option>
-          {equipmentInUse.map(([id, name]) => (
-            <option key={id} value={id}>
-              {name}
-            </option>
-          ))}
-        </select>
-        <select
-          className={FIELD}
-          aria-label="Filter by collected"
+          onChange={(equipment) => onFiltersChange({ ...filters, equipment })}
+          options={[
+            { value: "any", label: "Any equipment" },
+            { value: "none", label: "No equipment" },
+            ...equipmentInUse.map(([id, name]) => ({ value: id, label: name })),
+          ]}
+          className="min-w-44"
+        />
+        <Dropdown
+          label="Filter by collected"
           value={filters.collected}
-          onChange={(e) =>
-            onFiltersChange({ ...filters, collected: e.target.value as PointFilters["collected"] })
+          onChange={(collected) =>
+            onFiltersChange({ ...filters, collected: collected as PointFilters["collected"] })
           }
-        >
-          <option value="any">Collected or not</option>
-          <option value="yes">Collected</option>
-          <option value="no">Not collected</option>
-        </select>
+          options={[
+            { value: "any", label: "Collected or not" },
+            { value: "yes", label: "Collected" },
+            { value: "no", label: "Not collected" },
+          ]}
+          className="min-w-40"
+        />
         <span className="text-[var(--muted)]">·</span>
-        <button
-          type="button"
-          className={BUTTON}
+        <Button size="sm"
           disabled={busy || shown.length === 0}
           onClick={() => onSelectionChange(new Set(shown.map((p) => p.pointId)))}
         >
           Select all {shown.length} shown
-        </button>
-        <button
-          type="button"
-          className={BUTTON}
+        </Button>
+        <Button size="sm"
           disabled={busy || selected.size === 0}
           onClick={() => onSelectionChange(new Set())}
         >
           Select none
-        </button>
+        </Button>
         <span aria-live="polite">
           {selected.size} selected
         </span>
@@ -792,25 +797,23 @@ function ClassificationToolbar({
           ))}
           <option value="__new__">New equipment…</option>
         </select>
-        <button
-          type="button"
-          className={BUTTON}
+        <Button size="sm"
           disabled={busy || selected.size === 0 || (bulk.role === "" && bulk.equipment === "")}
           onClick={onStageBulk}
         >
           Apply to {selected.size} {noun(selected.size)}
-        </button>
+        </Button>
       </div>
 
       {pending !== null && (
-        <p className="flex flex-wrap items-center gap-2 rounded border p-2 text-xs" style={TONE_STYLE.warn} role="alertdialog">
+        <p className="flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border px-3 py-2 text-xs" style={TONE_STYLE.warn} role="alertdialog">
           <span>{pending.sentence}</span>
-          <button type="button" className={BUTTON} disabled={busy} onClick={onConfirmBulk}>
+          <Button size="sm"  disabled={busy} onClick={onConfirmBulk}>
             Confirm
-          </button>
-          <button type="button" className={BUTTON} disabled={busy} onClick={onCancelBulk}>
+          </Button>
+          <Button size="sm"  disabled={busy} onClick={onCancelBulk}>
             Cancel
-          </button>
+          </Button>
         </p>
       )}
 
@@ -825,26 +828,24 @@ function ClassificationToolbar({
           {suggestionCount} {suggestionCount === 1 ? "suggestion" : "suggestions"} from name
           patterns, applied only when clicked.
         </span>
-        <button
-          type="button"
-          className={BUTTON}
+        <Button size="sm"
           disabled={busy || suggestionCount === 0}
           onClick={onStageSuggestions}
         >
           Apply all {suggestionCount}
-        </button>
+        </Button>
         {pendingSuggestions !== null && (
-          <span className="flex flex-wrap items-center gap-2 rounded border p-1" style={TONE_STYLE.warn} role="alertdialog">
+          <span className="flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border px-2 py-1" style={TONE_STYLE.warn} role="alertdialog">
             <span>
               Apply {pendingSuggestions} {pendingSuggestions === 1 ? "suggestion" : "suggestions"}
               , creating any equipment they name?
             </span>
-            <button type="button" className={BUTTON} disabled={busy} onClick={onConfirmSuggestions}>
+            <Button size="sm"  disabled={busy} onClick={onConfirmSuggestions}>
               Confirm
-            </button>
-            <button type="button" className={BUTTON} disabled={busy} onClick={onCancelSuggestions}>
+            </Button>
+            <Button size="sm"  disabled={busy} onClick={onCancelSuggestions}>
               Cancel
-            </button>
+            </Button>
           </span>
         )}
       </div>
@@ -924,11 +925,12 @@ export function PointsTable({
   const noun = (n: number) => (n === 1 ? "point" : "points");
   const searching = query.trim().length > 0;
   const shown = list.points.filter(
-    (point) => pointMatchesSearch(point, query) && (rowFilter === undefined || rowFilter(point)),
+    (point) => pointMatchesQuery(point, query) && (rowFilter === undefined || rowFilter(point)),
   );
   const narrowed = shown.length !== list.points.length;
   const selectable = selected !== undefined && onSelectionChange !== undefined;
   const columns = 11 + (selectable ? 1 : 0);
+  const [editing, setEditing] = useState<SettingsPoint | null>(null);
 
   return (
     <div className="mt-3 space-y-2">
@@ -938,7 +940,7 @@ export function PointsTable({
         query returned.
       */}
       {alarm && (
-        <p className="rounded-md border p-3 text-xs" style={TONE_STYLE.bad} role="alert">
+        <p className="rounded-[var(--radius-row)] border p-3 text-xs" style={TONE_STYLE.bad} role="alert">
           This list shows {rendered} of the {inDatabase} {noun(inDatabase)} the
           database holds for this station, so {missing} could not be placed and{" "}
           {missing === 1 ? "is" : "are"} not on this screen. Report this - a
@@ -968,14 +970,13 @@ export function PointsTable({
       ) : (
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-3">
-            <input
-              className="w-full max-w-md rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
-              type="search"
+            <SearchBar
+              label="Search this station's points by any of their names, their role or their equipment"
+              placeholder="Search by label, station name, Niagara name, role or equipment (e.g. VAV$2d8)"
               value={query}
-              readOnly={onQueryChange === undefined}
-              placeholder="Search by label, station name, or Niagara name (e.g. VAV$2d8)"
-              aria-label="Search this station's points by any of their names"
-              onChange={(event) => onQueryChange?.(event.target.value)}
+              onChange={(next) => onQueryChange?.(next)}
+              hotkey={false}
+              className="w-full max-w-md"
             />
             {narrowed && (
               <span className="text-xs text-[var(--muted)]">
@@ -988,62 +989,62 @@ export function PointsTable({
               <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
                 <tr className="text-left text-[var(--muted)]">
                   {selectable && (
-                    <th className="py-1 pr-2 font-medium">
+                    <th className="eyebrow py-2 pr-2 text-[var(--muted)]">
                       <span className="sr-only">Select</span>
                     </th>
                   )}
                   <th
-                    className="py-1 pr-3 font-medium"
+                    className="eyebrow py-2 pr-3 text-[var(--muted)]"
                     title="What a person calls this point. Shown in Point Explorer and Collection Health in place of the station's name, and nowhere else. Blank means the station's name is used. A label replaces the station's name on those screens; it never changes what the collector asks the station for."
                   >
                     Label
                   </th>
                   <th
-                    className="py-1 pr-3 font-medium"
+                    className="eyebrow py-2 pr-3 text-[var(--muted)]"
                     title="The oBIX history key, exactly as the station spells it. This is what the collector asks the station for, so the Niagara name is never editable."
                   >
                     Niagara name
                   </th>
                   <th
-                    className="py-1 pr-3 font-medium"
+                    className="eyebrow py-2 pr-3 text-[var(--muted)]"
                     title="What the station reports for this history. Not the person's label - that is the Label column."
                   >
                     Station name
                   </th>
                   <th
-                    className="py-1 pr-3 font-medium"
+                    className="eyebrow py-2 pr-3 text-[var(--muted)]"
                     title="What the point measures or commands, from the vocabulary. Not cosmetic: the setpoint and command/status pairings, the unclassified count and the Analyze catalogue all judge a point by its role, so a wrong role is judged by the wrong rule. Blank means nobody has looked."
                   >
                     Role
                   </th>
                   <th
-                    className="py-1 pr-3 font-medium"
+                    className="eyebrow py-2 pr-3 text-[var(--muted)]"
                     title="The equipment this point belongs to. A point pairs with its setpoint only through shared equipment, so a point with none is outside every cross-equipment comparison."
                   >
                     Equipment
                   </th>
                   <th
-                    className="py-1 pr-3 font-medium"
+                    className="eyebrow py-2 pr-3 text-[var(--muted)]"
                     title="What a name pattern would classify this point as. Never applied on its own: nothing is written until the button is clicked. A point with no confident pattern shows none."
                   >
                     Suggestion
                   </th>
-                  <th className="py-1 pr-3 font-medium">Collected</th>
-                  <th className="py-1 pr-3 font-medium">Completeness</th>
+                  <th className="eyebrow py-2 pr-3 text-[var(--muted)]">Collected</th>
+                  <th className="eyebrow py-2 pr-3 text-[var(--muted)]">Completeness</th>
                   <th
-                    className="py-1 pr-3 font-medium"
+                    className="eyebrow py-2 pr-3 text-[var(--muted)]"
                     title="How long the station keeps this history before overwriting it. Measured from the shortest span its full buffer has been seen to hold, or configured from capacity x interval. A buffer that has never filled has overwritten nothing and reads Not full yet."
                   >
                     Roll horizon
                   </th>
                   <th
-                    className="py-1 pr-3 font-medium"
+                    className="eyebrow py-2 pr-3 text-[var(--muted)]"
                     title="Whether the value is still changing. A measured quantity - a temperature, a pressure, a damper position - is judged against a threshold for its kind; a setpoint, a status or command point, or a point with no role is not judged and says so. A flag means go and look, not that the sensor is confirmed dead."
                   >
                     Value
                   </th>
                   <th
-                    className="py-1 font-medium"
+                    className="eyebrow py-2 text-[var(--muted)]"
                     title="Whether the point appears in Point Explorer and the Collection Health table. Unticking hides it from those two screens only: it is still collected and still counts in every risk figure."
                   >
                     Shown
@@ -1070,6 +1071,7 @@ export function PointsTable({
                     }
                     onToggleVisible={onToggleVisible}
                     onSaveLabel={onSaveLabel}
+                    onEdit={onSaveLabel === undefined ? undefined : setEditing}
                     onSetRole={onSetRole}
                     onSetEquipment={onSetEquipment}
                     onNewEquipment={onNewEquipment}
@@ -1078,10 +1080,10 @@ export function PointsTable({
                   />
                 ))}
                 {narrowed && shown.length === 0 && (
-                  <tr className="border-t border-[var(--border)]">
+                  <tr className="border-t border-[var(--divider-soft)]">
                     <td className="py-2 text-[var(--muted)]" colSpan={columns}>
                       {searching
-                        ? `No point on this station matches "${query.trim()}" by label, station name or Niagara name`
+                        ? `No point on this station matches "${query.trim()}" by label, station name, Niagara name, role or equipment`
                         : "No point on this station matches the filters"}
                       . Clear {searching ? "the search" : "them"} to see all{" "}
                       {list.points.length}.
@@ -1092,6 +1094,20 @@ export function PointsTable({
             </table>
           </div>
         </div>
+      )}
+      {editing !== null && (
+        <PointDrawer
+          key={editing.pointId}
+          point={list.points.find((p) => p.pointId === editing.pointId) ?? editing}
+          vocabularies={vocabularies}
+          equipment={equipment}
+          onSaveLabel={onSaveLabel}
+          onSetRole={onSetRole}
+          onSetEquipment={onSetEquipment}
+          onToggleVisible={onToggleVisible}
+          onNewEquipment={onNewEquipment}
+          onClose={() => setEditing(null)}
+        />
       )}
     </div>
   );
@@ -1105,6 +1121,7 @@ function PointRow({
   onSelect,
   onToggleVisible,
   onSaveLabel,
+  onEdit,
   onSetRole,
   onSetEquipment,
   onNewEquipment,
@@ -1119,6 +1136,7 @@ function PointRow({
   onSelect?: (checked: boolean) => void;
   onToggleVisible?: (point: SettingsPoint, visible: boolean) => void;
   onSaveLabel?: (point: SettingsPoint, label: string | null) => Promise<void>;
+  onEdit?: (point: SettingsPoint) => void;
   onSetRole?: (point: SettingsPoint, role: string | null) => Promise<void>;
   onSetEquipment?: (point: SettingsPoint, equipmentId: string | null) => Promise<void>;
   onNewEquipment?: (point: SettingsPoint) => void;
@@ -1139,9 +1157,9 @@ function PointRow({
     point.plausibility.notCheckedReason === "no_role";
 
   return (
-    <tr className="border-t border-[var(--border)] align-top">
+    <tr className="group border-t border-[var(--divider-soft)] align-top">
       {selected !== null && (
-        <td className="py-1 pr-2">
+        <td className="py-2 pr-2">
           <input
             type="checkbox"
             checked={selected}
@@ -1151,15 +1169,15 @@ function PointRow({
           />
         </td>
       )}
-      <td className="py-1 pr-3">
-        <LabelCell point={point} onSave={onSaveLabel} />
+      <td className="py-2 pr-3">
+        <LabelCell point={point} editable={onSaveLabel !== undefined} onEdit={onEdit} />
       </td>
-      <td className="py-1 pr-3 font-mono">{point.niagaraHistoryName}</td>
-      <td className="py-1 pr-3">{point.niagaraDisplayName ?? EMPTY}</td>
-      <td className="py-1 pr-3">
+      <td className="py-2 pr-3 font-mono">{point.niagaraHistoryName}</td>
+      <td className="py-2 pr-3">{point.niagaraDisplayName ?? EMPTY}</td>
+      <td className="py-2 pr-3">
         <RoleCell point={point} vocabularies={vocabularies} onSet={onSetRole} busy={busy} />
       </td>
-      <td className="py-1 pr-3">
+      <td className="py-2 pr-3">
         <EquipmentCell
           point={point}
           equipment={equipment}
@@ -1168,22 +1186,22 @@ function PointRow({
           busy={busy}
         />
       </td>
-      <td className="py-1 pr-3">
+      <td className="py-2 pr-3">
         <SuggestionCell point={point} onApply={onApplySuggestion} busy={busy} />
       </td>
-      <td className="py-1 pr-3">
+      <td className="py-2 pr-3">
         <span style={{ color: TONE_INK[collected.tone] }}>{collected.label}</span>
         {collected.detail !== null && (
           <span className="text-[var(--muted)]"> · {collected.detail}</span>
         )}
       </td>
-      <td className="py-1 pr-3" style={{ color: TONE_INK[completeness.tone] }}>
+      <td className="py-2 pr-3" style={{ color: TONE_INK[completeness.tone] }}>
         {completeness.label}
       </td>
-      <td className="py-1 pr-3 tabular-nums">
+      <td className="py-2 pr-3 tabular-nums">
         <HorizonCell horizon={point.horizon} />
       </td>
-      <td className="py-1 pr-3 tabular-nums">
+      <td className="py-2 pr-3 tabular-nums">
         <span style={{ color: TONE_INK[plausibility.tone] }}>{plausibility.label}</span>
         {plausibility.detail !== null &&
           (pointsAtRolePicker ? (
@@ -1198,7 +1216,7 @@ function PointRow({
             <span className="text-[var(--muted)]"> · {plausibility.detail}</span>
           ))}
       </td>
-      <td className="py-1">
+      <td className="py-2">
         <label className="inline-flex items-center gap-1.5">
           <input
             type="checkbox"
@@ -1225,37 +1243,34 @@ function roleSelectId(point: SettingsPoint): string {
  * - a select has no half-typed state worth a Save button - and the list is
  * refetched, so the cell shows what the database holds.
  */
-function RoleCell({
-  point,
+/** The role picker: the 91 roles in their four groups, or "No role". The same control in the row and the drawer. */
+function RoleSelect({
+  id,
+  value,
   vocabularies,
-  onSet,
-  busy,
+  disabled,
+  ariaLabel,
+  title,
+  onChange,
 }: {
-  point: SettingsPoint;
-  vocabularies: BasVocabularies | null;
-  onSet?: (point: SettingsPoint, role: string | null) => Promise<void>;
-  busy: boolean;
+  id?: string;
+  value: string | null;
+  vocabularies: BasVocabularies;
+  disabled: boolean;
+  ariaLabel: string;
+  title?: string;
+  onChange: (role: string | null) => void;
 }) {
-  const groups = useMemo(
-    () => (vocabularies === null ? [] : groupRoles(vocabularies.roles)),
-    [vocabularies],
-  );
-  if (onSet === undefined || vocabularies === null) {
-    return (
-      <span title={point.pointRole ?? undefined}>
-        {point.roleName ?? point.pointRole ?? EMPTY}
-      </span>
-    );
-  }
+  const groups = useMemo(() => groupRoles(vocabularies.roles), [vocabularies.roles]);
   return (
     <select
-      id={roleSelectId(point)}
-      className={FIELD}
-      value={point.pointRole ?? ""}
-      disabled={busy}
-      aria-label={`Role for ${pointDisplayName(point)}`}
-      title={point.pointRole ?? "No role. Nobody has looked at this point yet."}
-      onChange={(event) => void onSet(point, event.target.value === "" ? null : event.target.value)}
+      id={id}
+      className={FIELD + " min-w-[11rem]"}
+      value={value ?? ""}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      title={title}
+      onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
     >
       <option value="">No role</option>
       {groups.map((group) => (
@@ -1271,11 +1286,85 @@ function RoleCell({
   );
 }
 
+function RoleCell({
+  point,
+  vocabularies,
+  onSet,
+  busy,
+}: {
+  point: SettingsPoint;
+  vocabularies: BasVocabularies | null;
+  onSet?: (point: SettingsPoint, role: string | null) => Promise<void>;
+  busy: boolean;
+}) {
+  if (onSet === undefined || vocabularies === null) {
+    return (
+      <span title={point.pointRole ?? undefined}>
+        {point.roleName ?? point.pointRole ?? EMPTY}
+      </span>
+    );
+  }
+  return (
+    <RoleSelect
+      id={roleSelectId(point)}
+      value={point.pointRole}
+      vocabularies={vocabularies}
+      disabled={busy}
+      ariaLabel={`Role for ${pointDisplayName(point)}`}
+      title={point.pointRole ?? "No role. Nobody has looked at this point yet."}
+      onChange={(role) => void onSet(point, role)}
+    />
+  );
+}
+
 /**
  * The equipment picker (B8.5): the building's equipment, "None", and "New
  * equipment…", which opens the inline form. Text when there is no handler.
  * A station with no building has no equipment to offer and the cell says so.
  */
+/** The equipment picker: the building's equipment, "None", and "New equipment…" when a form can open. */
+function EquipmentSelect({
+  value,
+  equipment,
+  disabled,
+  ariaLabel,
+  onChange,
+  onNew,
+}: {
+  value: string | null;
+  equipment: SettingsEquipment[];
+  disabled: boolean;
+  ariaLabel: string;
+  onChange: (equipmentId: string | null) => void;
+  onNew?: () => void;
+}) {
+  return (
+    <select
+      className={FIELD + " min-w-[11rem]"}
+      value={value ?? ""}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      onChange={(event) => {
+        const next = event.target.value;
+        if (next === "__new__") {
+          onNew?.();
+          return;
+        }
+        onChange(next === "" ? null : next);
+      }}
+    >
+      <option value="">None</option>
+      {equipment.map((item) => (
+        <option key={item.equipmentId} value={item.equipmentId}>
+          {item.name}
+          {item.equipTypeName !== null ? ` (${item.equipTypeName})` : ""}
+        </option>
+      ))}
+      {onNew !== undefined && <option value="__new__">New equipment…</option>}
+    </select>
+  );
+}
+
 function EquipmentCell({
   point,
   equipment,
@@ -1303,29 +1392,14 @@ function EquipmentCell({
     );
   }
   return (
-    <select
-      className={FIELD}
-      value={point.equipmentId ?? ""}
+    <EquipmentSelect
+      value={point.equipmentId}
+      equipment={equipment}
       disabled={busy}
-      aria-label={`Equipment for ${pointDisplayName(point)}`}
-      onChange={(event) => {
-        const value = event.target.value;
-        if (value === "__new__") {
-          onNew?.(point);
-          return;
-        }
-        void onSet(point, value === "" ? null : value);
-      }}
-    >
-      <option value="">None</option>
-      {equipment.map((item) => (
-        <option key={item.equipmentId} value={item.equipmentId}>
-          {item.name}
-          {item.equipTypeName !== null ? ` (${item.equipTypeName})` : ""}
-        </option>
-      ))}
-      {onNew !== undefined && <option value="__new__">New equipment…</option>}
-    </select>
+      ariaLabel={`Equipment for ${pointDisplayName(point)}`}
+      onChange={(equipmentId) => void onSet(point, equipmentId)}
+      onNew={onNew === undefined ? undefined : () => onNew(point)}
+    />
   );
 }
 
@@ -1349,15 +1423,13 @@ function SuggestionCell({
     <span className="inline-flex flex-wrap items-center gap-1" title={point.suggestion.confidence}>
       <span>{text}</span>
       {onApply !== undefined && (
-        <button
-          type="button"
-          className={BUTTON}
+        <Button size="sm"
           disabled={busy}
-          aria-label={`Apply the suggestion ${text} to ${pointDisplayName(point)}`}
+          ariaLabel={`Apply the suggestion ${text} to ${pointDisplayName(point)}`}
           onClick={() => void onApply(point)}
         >
           Apply
-        </button>
+        </Button>
       )}
     </span>
   );
@@ -1373,89 +1445,43 @@ function SuggestionCell({
  * pre-filling it with the fallback would invite people to save the station's
  * own name as a label, which is a copy that stops tracking discover.
  */
+/**
+ * The point's display name, with the pencil that opens its drawer (2026-11-10).
+ *
+ * The name is what the browsing screens call the point - the label when one
+ * is set, Niagara's name otherwise - and the pencil appears on hover and on
+ * focus, so renaming is discoverable from the row rather than from a column
+ * heading. An unlabelled point says so beneath its name. Read-only renders
+ * (no handler) show the name and nothing else.
+ */
 function LabelCell({
   point,
-  onSave,
+  editable,
+  onEdit,
 }: {
   point: SettingsPoint;
-  onSave?: (point: SettingsPoint, label: string | null) => Promise<void>;
+  editable: boolean;
+  onEdit?: (point: SettingsPoint) => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(point.label ?? "");
-  const [saving, setSaving] = useState(false);
-
-  if (onSave === undefined) {
-    return point.label ?? EMPTY;
+  const name = pointDisplayName(point);
+  if (!editable) {
+    return <span className="font-medium">{name}</span>;
   }
-
-  if (!editing) {
-    return (
-      <button
-        type="button"
-        className="rounded px-1 text-left hover:underline"
-        title={
-          point.label === null
-            ? "Add a label. Until one is set, the browsing screens use the station's name."
-            : "Edit the label"
-        }
-        aria-label={`Edit the label for ${pointDisplayName(point)}`}
-        onClick={() => {
-          setDraft(point.label ?? "");
-          setEditing(true);
-        }}
-      >
-        {point.label ?? <span className="text-[var(--muted)]">Add label</span>}
-      </button>
-    );
-  }
-
-  const commit = async () => {
-    const next = draft.trim().length === 0 ? null : draft.trim();
-    setSaving(true);
-    try {
-      await onSave(point, next);
-      setEditing(false);
-    } catch {
-      // The list-level banner has the message; the cell stays open so
-      // nothing typed is lost.
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
-    <span className="inline-flex flex-wrap items-center gap-1">
-      <input
-        className="w-44 rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-xs"
-        type="text"
-        value={draft}
-        maxLength={120}
-        disabled={saving}
-        autoFocus
-        aria-label={`Label for ${point.niagaraHistoryName}`}
-        placeholder={point.niagaraDisplayName ?? point.niagaraHistoryName}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            void commit();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            setEditing(false);
-          }
-        }}
-      />
-      <button
-        type="button"
-        className={BUTTON}
-        disabled={saving}
-        onClick={() => void commit()}
-      >
-        {draft.trim().length === 0 && point.label !== null ? "Clear label" : "Save"}
-      </button>
-      <button type="button" className={BUTTON} disabled={saving} onClick={() => setEditing(false)}>
-        Cancel
-      </button>
+    <span className="inline-flex flex-col gap-0.5">
+      <span className="inline-flex items-center gap-1.5">
+        <span className="font-medium">{name}</span>
+        <button
+          type="button"
+          aria-label={`Edit the label for ${name}`}
+          title={point.label === null ? "Add a label, set the role and equipment, or hide the point" : "Edit this point"}
+          onClick={() => onEdit?.(point)}
+          className="rounded p-0.5 text-[var(--muted)] opacity-0 transition-opacity hover:text-[var(--foreground)] focus:opacity-100 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+        >
+          <Pencil size={13} aria-hidden="true" />
+        </button>
+      </span>
+      {point.label === null && <span className="text-[0.6875rem] text-[var(--muted)]">Add label</span>}
     </span>
   );
 }
@@ -1490,15 +1516,15 @@ function EquipmentPanel({
   return (
     <div className="mt-3 space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={BUTTON} aria-expanded={open} onClick={onToggle}>
+        <Button size="sm"  ariaExpanded={open} onClick={onToggle}>
           {open ? "Hide equipment" : `Equipment in this building (${count})`}
-        </button>
-        <button type="button" className={BUTTON} disabled={busy} onClick={onNew}>
+        </Button>
+        <Button size="sm"  disabled={busy} onClick={onNew}>
           New equipment
-        </button>
+        </Button>
       </div>
       {alarm && equipment !== null && (
-        <p className="rounded-md border p-3 text-xs" style={TONE_STYLE.bad} role="alert">
+        <p className="rounded-[var(--radius-row)] border p-3 text-xs" style={TONE_STYLE.bad} role="alert">
           This list shows {equipment.equipmentAccountedFor.rendered} of the{" "}
           {equipment.equipmentAccountedFor.inDatabase} pieces of equipment the database
           holds for this building. Report this.
@@ -1515,34 +1541,32 @@ function EquipmentPanel({
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left text-[var(--muted)]">
                 <tr>
-                  <th className="py-1 pr-3 font-medium">Name</th>
-                  <th className="py-1 pr-3 font-medium">Type</th>
-                  <th className="py-1 pr-3 font-medium" title="The equipment this one is served by: a VAV box under its rooftop unit.">
+                  <th className="eyebrow py-2 pr-3 text-[var(--muted)]">Name</th>
+                  <th className="eyebrow py-2 pr-3 text-[var(--muted)]">Type</th>
+                  <th className="eyebrow py-2 pr-3 text-[var(--muted)]" title="The equipment this one is served by: a VAV box under its rooftop unit.">
                     Under
                   </th>
-                  <th className="py-1 pr-3 font-medium">Notes</th>
-                  <th className="py-1 pr-3 font-medium">Points</th>
-                  <th className="py-1 font-medium">
+                  <th className="eyebrow py-2 pr-3 text-[var(--muted)]">Notes</th>
+                  <th className="eyebrow py-2 pr-3 text-[var(--muted)]">Points</th>
+                  <th className="eyebrow py-2 text-[var(--muted)]">
                     <span className="sr-only">Actions</span>
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {equipment.equipment.map((item) => (
-                  <tr key={item.equipmentId} className="border-t border-[var(--border)] align-top">
-                    <td className="py-1 pr-3">{item.name}</td>
-                    <td className="py-1 pr-3">{item.equipTypeName ?? item.equipType ?? EMPTY}</td>
-                    <td className="py-1 pr-3">{item.parentName ?? EMPTY}</td>
-                    <td className="py-1 pr-3">{item.notes ?? EMPTY}</td>
-                    <td className="py-1 pr-3 tabular-nums">{item.pointCount}</td>
-                    <td className="py-1">
+                  <tr key={item.equipmentId} className="border-t border-[var(--divider-soft)] align-top">
+                    <td className="py-2 pr-3">{item.name}</td>
+                    <td className="py-2 pr-3">{item.equipTypeName ?? item.equipType ?? EMPTY}</td>
+                    <td className="py-2 pr-3">{item.parentName ?? EMPTY}</td>
+                    <td className="py-2 pr-3">{item.notes ?? EMPTY}</td>
+                    <td className="py-2 pr-3 tabular-nums">{item.pointCount}</td>
+                    <td className="py-2">
                       <span className="inline-flex gap-1">
-                        <button type="button" className={BUTTON} disabled={busy} onClick={() => onEdit(item)}>
+                        <Button size="sm"  disabled={busy} onClick={() => onEdit(item)}>
                           Edit
-                        </button>
-                        <button
-                          type="button"
-                          className={BUTTON}
+                        </Button>
+                        <Button size="sm"
                           disabled={busy || item.pointCount > 0}
                           title={
                             item.pointCount > 0
@@ -1552,7 +1576,7 @@ function EquipmentPanel({
                           onClick={() => onDelete(item)}
                         >
                           Delete
-                        </button>
+                        </Button>
                       </span>
                     </td>
                   </tr>
@@ -1616,7 +1640,7 @@ function EquipmentForm({
 
   return (
     <form
-      className="mt-3 space-y-2 rounded border border-[var(--border)] p-3"
+      className="mt-3 space-y-2 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] p-4"
       onSubmit={(event) => {
         event.preventDefault();
         void onSubmit(values);
@@ -1687,13 +1711,204 @@ function EquipmentForm({
             onChange={(e) => set({ notes: e.target.value })}
           />
         </label>
-        <button type="submit" className={BUTTON} disabled={busy || values.name.trim() === "" || values.equipType === ""}>
+        <Button size="sm" type="submit"  disabled={busy || values.name.trim() === "" || values.equipType === ""}>
           {state.mode === "edit" ? "Save" : "Create"}
-        </button>
-        <button type="button" className={BUTTON} disabled={busy} onClick={onCancel}>
+        </Button>
+        <Button size="sm"  disabled={busy} onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * One point, in a drawer (2026-11-10): the display name, the role and
+ * equipment pickers the row already had, Shown or Hidden, and the Niagara
+ * name as the one thing that cannot change. Save writes only what changed,
+ * through the same four single-field requests the row uses - label, role,
+ * equipment, visibility - so the audit rows are the ones those requests
+ * already write. Nothing here is a new endpoint.
+ */
+function PointDrawer({
+  point,
+  vocabularies,
+  equipment,
+  onSaveLabel,
+  onSetRole,
+  onSetEquipment,
+  onToggleVisible,
+  onNewEquipment,
+  onClose,
+}: {
+  point: SettingsPoint;
+  vocabularies: BasVocabularies | null;
+  equipment: SettingsEquipment[] | null;
+  onSaveLabel?: (point: SettingsPoint, label: string | null) => Promise<void>;
+  onSetRole?: (point: SettingsPoint, role: string | null) => Promise<void>;
+  onSetEquipment?: (point: SettingsPoint, equipmentId: string | null) => Promise<void>;
+  onToggleVisible?: (point: SettingsPoint, visible: boolean) => void;
+  onNewEquipment?: (point: SettingsPoint) => void;
+  onClose: () => void;
+}) {
+  const [label, setLabel] = useState(point.label ?? "");
+  const [role, setRole] = useState<string | null>(point.pointRole);
+  const [equipmentId, setEquipmentId] = useState<string | null>(point.equipmentId);
+  const [visible, setVisible] = useState(point.visible);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const nextLabel = label.trim().length === 0 ? null : label.trim();
+  const dirty =
+    nextLabel !== point.label ||
+    role !== point.pointRole ||
+    equipmentId !== point.equipmentId ||
+    visible !== point.visible;
+  const name = pointDisplayName(point);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      if (nextLabel !== point.label && onSaveLabel !== undefined) await onSaveLabel(point, nextLabel);
+      if (role !== point.pointRole && onSetRole !== undefined) await onSetRole(point, role);
+      if (equipmentId !== point.equipmentId && onSetEquipment !== undefined) {
+        await onSetEquipment(point, equipmentId);
+      }
+      if (visible !== point.visible && onToggleVisible !== undefined) onToggleVisible(point, visible);
+      onClose();
+    } catch (cause: unknown) {
+      setError(cause instanceof ApiError ? cause.message : "Something went wrong.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-30 flex justify-end">
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="flex-1 cursor-default bg-black/20"
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Edit ${name}`}
+        data-testid="bas-point-drawer"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") onClose();
+        }}
+        className="flex h-full w-[26rem] max-w-full flex-col overflow-y-auto border-l border-[var(--border)] bg-[var(--neutral-0)] p-6 shadow-[var(--shadow-soft)]"
+      >
+        <p className="eyebrow text-[var(--muted)]">Point</p>
+        <h2 className="mt-1 font-display text-lg font-semibold leading-tight">{name}</h2>
+        {point.niagaraDisplayName !== null && point.niagaraDisplayName !== name && (
+          <p className="mt-1 text-xs text-[var(--muted)]">Station name: {point.niagaraDisplayName}</p>
+        )}
+
+        <div className="mt-5 space-y-4">
+          <div>
+            <FieldLabel label="Display name">
+              <input
+                type="text"
+                className={INPUT}
+                value={label}
+                maxLength={120}
+                autoFocus
+                disabled={saving || onSaveLabel === undefined}
+                aria-label={`Label for ${point.niagaraHistoryName}`}
+                placeholder={point.niagaraDisplayName ?? point.niagaraHistoryName}
+                onChange={(event) => setLabel(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    if (dirty && !saving) void save();
+                  }
+                }}
+              />
+            </FieldLabel>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Shown in Point Explorer and Collection Health in place of the station&apos;s name. Blank
+              uses the station&apos;s name.
+            </p>
+          </div>
+
+          <FieldLabel label="Role">
+            {vocabularies === null || onSetRole === undefined ? (
+              <span className="text-[0.8125rem]">{point.roleName ?? point.pointRole ?? "No role"}</span>
+            ) : (
+              <RoleSelect
+                value={role}
+                vocabularies={vocabularies}
+                disabled={saving}
+                ariaLabel={`Role for ${name}`}
+                onChange={setRole}
+              />
+            )}
+          </FieldLabel>
+
+          <FieldLabel label="Equipment">
+            {equipment === null || onSetEquipment === undefined ? (
+              <span className="text-[0.8125rem] text-[var(--muted)]">{point.equipmentName ?? "No building"}</span>
+            ) : (
+              <EquipmentSelect
+                value={equipmentId}
+                equipment={equipment}
+                disabled={saving}
+                ariaLabel={`Equipment for ${name}`}
+                onChange={setEquipmentId}
+                onNew={onNewEquipment === undefined ? undefined : () => onNewEquipment(point)}
+              />
+            )}
+          </FieldLabel>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.75rem] text-[var(--muted)]">Browsing screens</span>
+            <Segmented
+              tone="light"
+              label="Shown on the browsing screens"
+              options={[
+                { value: "shown", label: "Shown" },
+                { value: "hidden", label: "Hidden" },
+              ]}
+              value={visible ? "shown" : "hidden"}
+              onChange={(next) => setVisible(next === "shown")}
+            />
+            <p className="text-xs text-[var(--muted)]">
+              Hidden leaves Point Explorer and the Collection Health table only. The point is still
+              collected and still counts in every risk figure.
+            </p>
+          </div>
+
+          <div className="rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs">
+            <p>
+              <span className="text-[var(--muted)]">Niagara name: </span>
+              <span className="font-mono">{point.niagaraHistoryName}</span>
+            </p>
+            <p className="mt-1 text-[var(--muted)]">
+              This is the collector&apos;s key and cannot change. It is what the collector asks the
+              station for.
+            </p>
+          </div>
+        </div>
+
+        {error !== null && (
+          <p className="mt-4 rounded-[var(--radius-control)] border p-3 text-xs" style={TONE_STYLE.bad} role="alert">
+            Could not save that change: {error}
+          </p>
+        )}
+
+        <div className="mt-auto flex gap-2 pt-6">
+          <Button onClick={() => void save()} disabled={saving || !dirty} className="font-medium">
+            {saving ? "Saving…" : "Save"}
+          </Button>
+          <Button onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+        </div>
+      </aside>
+    </div>
   );
 }

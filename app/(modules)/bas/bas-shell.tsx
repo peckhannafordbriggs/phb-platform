@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { ModuleHeader } from "@/components/module-header";
+import { TabBar } from "@/components/ui";
 import { moduleAccentStyle } from "@/lib/module-accent";
 import { activeTabHref, tabHref, visibleBasTabs, type BasTab } from "./tabs";
 
@@ -46,13 +46,11 @@ export function BasShell({
       The accent scope wraps the whole module, not just its header. The tabs, the
       tiles and the trend line all sit outside <header>, and a chart asking for
       var(--module-accent) from out there would silently get the platform purple.
-    */
-    /*
+
       Capped width. A dashboard stretched edge to edge on a 34-inch monitor puts
       a tile's label and its number a foot apart, and the five-across tile row
       becomes a line nobody can scan in one go.
-    */
-    /*
+
       The tinted ground, bled to the edges of the shell's <main> so the cards sit
       ON something. The negative margins undo that padding and the positive ones
       put it back inside the tint - a panel that stopped at the content's edge
@@ -63,17 +61,17 @@ export function BasShell({
       style={moduleAccentStyle(BAS_MODULE_KEY)}
     >
       <div className="mx-auto max-w-[104rem]">
-      <ModuleHeader moduleKey={BAS_MODULE_KEY} title="Building Automation" blurb={blurb}>
-        {/*
-          useSearchParams needs a Suspense boundary to be renderable in any
-          context. The fallback is the same bar without the carried query string,
-          so a tab is never missing while it resolves - it just briefly forgets
-          the filters, which is a link that still goes to the right screen.
-        */}
-        <Suspense fallback={<TabBar carryQuery={false} tabs={tabs} />}>
-          <TabBar carryQuery tabs={tabs} />
-        </Suspense>
-      </ModuleHeader>
+        <ModuleHeader moduleKey={BAS_MODULE_KEY} title="Building Automation" blurb={blurb}>
+          {/*
+            useSearchParams needs a Suspense boundary to be renderable in any
+            context. The fallback is the same bar without the carried query string,
+            so a tab is never missing while it resolves - it just briefly forgets
+            the filters, which is a link that still goes to the right screen.
+          */}
+          <Suspense fallback={<Tabs carryQuery={false} tabs={tabs} />}>
+            <Tabs carryQuery tabs={tabs} />
+          </Suspense>
+        </ModuleHeader>
 
         <div className="mt-6">{children}</div>
       </div>
@@ -81,42 +79,30 @@ export function BasShell({
   );
 }
 
-function TabBar({
-  carryQuery,
-  tabs,
-}: {
-  carryQuery: boolean;
-  tabs: readonly BasTab[];
-}) {
-  return carryQuery ? <LiveTabBar tabs={tabs} /> : <StaticTabBar tabs={tabs} />;
+function Tabs({ carryQuery, tabs }: { carryQuery: boolean; tabs: readonly BasTab[] }) {
+  return carryQuery ? <LiveTabs tabs={tabs} /> : <StaticTabs tabs={tabs} />;
 }
 
-function LiveTabBar({ tabs }: { tabs: readonly BasTab[] }) {
+function LiveTabs({ tabs }: { tabs: readonly BasTab[] }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const active = activeTabHref(pathname);
 
-  return (
-    <Tabs
-      tabs={tabs}
-      active={active}
-      hrefFor={(href) => tabHref(href, searchParams)}
-    />
-  );
+  return <Bar tabs={tabs} active={active} hrefFor={(href) => tabHref(href, searchParams)} />;
 }
 
-function StaticTabBar({ tabs }: { tabs: readonly BasTab[] }) {
-  return <Tabs tabs={tabs} active={null} hrefFor={(href) => href} />;
+function StaticTabs({ tabs }: { tabs: readonly BasTab[] }) {
+  return <Bar tabs={tabs} active={null} hrefFor={(href) => href} />;
 }
 
 /**
- * A bottom-border underline on the active tab, and nothing else.
- *
- * No animated indicator, no sliding underline. docs/01: professional internal
- * software, clarity over decoration. The pattern is GitHub's repo nav, which
- * people already know how to read.
+ * The shared kit's tab bar (components/ui/TabBar, 2026-11-10). Which tab is
+ * active is decided here, by longest prefix, and the query string is carried
+ * across; the bar only draws. The active tab's underline is the module's own
+ * colour, the same cyan as its diamond in the sidebar and its header rule -
+ * unless the tab names its own accent (Analyze: purple).
  */
-function Tabs({
+function Bar({
   tabs,
   active,
   hrefFor,
@@ -126,39 +112,14 @@ function Tabs({
   hrefFor: (href: string) => string;
 }) {
   return (
-    <nav
-      aria-label="Building Automation sections"
-      className="mt-3 border-b border-[var(--border)]"
-    >
-      <ul className="-mb-px flex gap-1">
-        {tabs.map((tab) => {
-          const isActive = tab.href === active;
-          return (
-            <li key={tab.href}>
-              <Link
-                href={hrefFor(tab.href)}
-                aria-current={isActive ? "page" : undefined}
-                className={
-                  "inline-block border-b-2 px-3 py-2 text-[0.8125rem] transition-colors " +
-                  (isActive
-                    ? "font-medium text-[var(--foreground)]"
-                    : "border-transparent text-[var(--muted)] hover:border-[var(--neutral-300)] hover:text-[var(--foreground)]")
-                }
-                // The active tab's underline is the module's own colour, the
-                // same cyan as its diamond in the sidebar and its header rule -
-                // unless the tab names its own accent (Analyze: purple).
-                style={
-                  isActive
-                    ? { borderColor: tab.accent ?? "var(--module-accent, var(--phb-cyan))" }
-                    : undefined
-                }
-              >
-                {tab.label}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
+    <TabBar
+      label="Building Automation sections"
+      tabs={tabs.map((tab) => ({
+        href: hrefFor(tab.href),
+        label: tab.label,
+        active: tab.href === active,
+        accent: tab.accent,
+      }))}
+    />
   );
 }

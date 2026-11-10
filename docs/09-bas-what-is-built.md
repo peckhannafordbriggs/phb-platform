@@ -525,6 +525,31 @@ asserts it first, on every screen, with the fixture's labels all NULL; the
 same file asserts the station-name fallback (`bas_stations.display_name` is
 NULL on both real stations too). The oBIX key is editable nowhere.
 
+**Points editing (2026-11-10).** Changing a point's display name was not
+discoverable: the *Label* cell was an inline editor that looked like text.
+Now every row shows its display name - the label, or Niagara's name until
+one is set - with a pencil that appears on hover and on focus, and an
+unlabelled row says *Add label* beneath the name. The pencil opens a side
+drawer for that one point: the display name, the role picker and the
+equipment picker the row already had, *Shown* or *Hidden*, and a read-only
+line *Niagara name: `<niagara_history_name>`* saying that this is the
+collector's key and cannot change. Save writes only what changed, through
+the same four single-field `PATCH /settings/points/{id}` requests the row
+uses - `{ label }`, `{ role }`, `{ equipmentId }`, `{ visible }` - so the
+audit rows are the ones those requests already write
+(`bas.point_label_changed`, `bas.point_role_changed`,
+`bas.point_equipment_changed`, `bas.point_visibility_changed`); there is no
+new endpoint and no new audit action. The row's own role and equipment
+pickers, the *Shown* checkbox, bulk assign and the suggestions all stay.
+The search box over the Points list is the shared kit's and now matches the
+role's name and the equipment's as well as the three names, so *zone temp*
+or *RTU-1* finds the points that carry them; the Settings tree's box still
+matches the five things it always did. The module's screens moved onto the
+shared UI kit the same day (`docs/07-conventions.md` → *UI*): the kit's tab
+bar, buttons, dropdowns, segmented strips and search boxes, with every
+colour, filter, guard and counting check exactly as before.
+`runbook.md` → *How do I rename a point*; `tests/bas-points-drawer.test.tsx`.
+
 **Value plausibility (built 28 September, landed 1 October).** The
 third check: a measured quantity whose value has held still past the
 threshold for its kind, by role. One phrase on the *Checks:* line when

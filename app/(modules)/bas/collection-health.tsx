@@ -82,6 +82,7 @@ import {
 import { describeHiddenRisk, scopeSuffix } from "@/lib/modules/bas/types";
 import { unitSymbol } from "@/lib/modules/bas/units";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
+import { Dropdown, Segmented } from "@/components/ui";
 
 /**
  * Collection Health - is data arriving, and is any of it about to be lost.
@@ -285,7 +286,7 @@ export function CollectionHealth() {
 
   if (error !== null && health === null) {
     return (
-      <section className="rounded border border-red-300 bg-red-50 p-6">
+      <section className="rounded-[var(--radius-pane)] border border-red-300 bg-red-50 p-6">
         <h2 className="text-sm font-medium text-red-900">
           {error.code === "bas_unavailable"
             ? "Building automation data is not available"
@@ -297,7 +298,7 @@ export function CollectionHealth() {
           onClick={() =>
             void load({ days: windowDays, siteId, projectId, stationId })
           }
-          className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm hover:bg-red-100"
+          className="mt-4 inline-flex h-9 items-center rounded-[var(--radius-control)] border border-red-300 bg-white px-4 text-[0.8125rem] font-medium hover:bg-red-100"
         >
           Try again
         </button>
@@ -346,30 +347,16 @@ export function CollectionHealth() {
             options={health.stations.map((row) => [row.stationId, row.name])}
           />
 
-          <div
-            className="flex items-center gap-2 text-sm"
-            role="group"
-            aria-label="Run history range"
-          >
+          <div className="flex items-center gap-2 text-sm">
             <span className="text-[var(--muted)]">Range</span>
-            <div className="flex overflow-hidden rounded border border-[var(--border)]">
-              {WINDOW_PRESETS.map((preset) => (
-                <button
-                  key={preset.days}
-                  type="button"
-                  aria-pressed={health.windowDays === preset.days}
-                  onClick={() => setParam(DAYS_PARAM, String(preset.days))}
-                  className={
-                    "border-l border-[var(--border)] px-2.5 py-1 text-sm first:border-l-0 " +
-                    (health.windowDays === preset.days
-                      ? "bg-[var(--accent)] text-white"
-                      : "bg-white hover:bg-[var(--surface)]")
-                  }
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              semantics="pressed"
+              tone="accent"
+              label="Run history range"
+              options={WINDOW_PRESETS.map((preset) => ({ value: String(preset.days), label: preset.label }))}
+              value={String(health.windowDays)}
+              onChange={(next) => setParam(DAYS_PARAM, next)}
+            />
           </div>
         </div>
 
@@ -414,7 +401,7 @@ export function CollectionHealth() {
       */}
       {hiddenRisk !== null && (
         <p
-          className="rounded-md border px-4 py-2.5 text-sm"
+          className="rounded-[var(--radius-row)] border px-4 py-2.5 text-sm"
           style={{ ...TONE_STYLE.warn, color: TONE_INK.warn }}
           role="status"
         >
@@ -576,7 +563,8 @@ export function CollectionHealth() {
  * sits here instead is whatever is genuinely live about that tile - headroom,
  * a reporting ratio, an expected cadence. Never a manufactured percentage.
  */
-function Badge({ children, tone }: { children: React.ReactNode; tone: Tone }) {
+/** A tone in a pill: the headroom badge, a state chip on a row. Shared with Settings and Reports. */
+export function ToneBadge({ children, tone }: { children: React.ReactNode; tone: Tone }) {
   return (
     <span
       className="shrink-0 rounded-full px-2.5 py-1 text-[0.6875rem] font-medium tabular-nums"
@@ -644,10 +632,10 @@ function Tile({
       )}
 
       <div className="flex items-start justify-between gap-3">
-        <p className="text-[0.625rem] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
+        <p className="eyebrow text-[var(--muted)]">
           {label}
         </p>
-        {badge !== undefined && <Badge tone={tone}>{badge}</Badge>}
+        {badge !== undefined && <ToneBadge tone={tone}>{badge}</ToneBadge>}
       </div>
 
       <p
@@ -706,10 +694,10 @@ function HeroTile({
       />
 
       <div className="flex flex-wrap items-start justify-between gap-4 pl-2">
-        <p className="text-[0.6875rem] font-medium uppercase tracking-[0.12em] text-[var(--muted)]">
+        <p className="eyebrow text-[var(--muted)]">
           {label}
         </p>
-        <Badge tone={tone}>{badge}</Badge>
+        <ToneBadge tone={tone}>{badge}</ToneBadge>
       </div>
 
       <div className="mt-3 flex flex-wrap items-end gap-x-5 gap-y-1 pl-2">
@@ -887,7 +875,7 @@ function VanishedCard({
       className="card p-5 text-sm"
       style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
     >
-      <p className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+      <p className="eyebrow">
         No longer reported by the station{suffix}
       </p>
       <p className="mt-1 font-medium">{describeVanished(count, suffix)}</p>
@@ -961,7 +949,7 @@ export function StuckCard({
       className="card p-5 text-sm"
       style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
     >
-      <p className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+      <p className="eyebrow">
         Values that have stopped changing{suffix}
       </p>
       <p className="mt-1 font-medium">{describeStuck(summary, suffix)}</p>
@@ -1044,7 +1032,7 @@ function CompletenessCard({
       className="card p-5 text-sm"
       style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
     >
-      <p className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+      <p className="eyebrow">
         Station count against ours{suffix}
       </p>
       <p className="mt-1 font-medium">{describeCompleteness(counts)}</p>
@@ -1093,7 +1081,7 @@ function CompletenessBadge({ completeness }: { completeness: Completeness }) {
   return (
     <span
       title={COMPLETENESS_EXPLANATION[completeness]}
-      className="inline-block rounded-[2px] border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+      className="inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium"
       style={{
         ...TONE_STYLE[completenessTone(completeness)],
         color: TONE_INK[completenessTone(completeness)],
@@ -1125,7 +1113,7 @@ function RiskBadge({ risk }: { risk: RollRisk }) {
   return (
     <span
       title={RISK_EXPLANATION[risk]}
-      className="inline-block rounded-[2px] border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+      className="inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium"
       style={{
         ...TONE_STYLE[basRiskTone(risk)],
         color: TONE_INK[basRiskTone(risk)],
@@ -1155,7 +1143,7 @@ function Panel({
   return (
     <section className="card overflow-hidden">
       <header className="px-5 pb-3 pt-4">
-        <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+        <h2 className="eyebrow text-[var(--muted)]">
           {title}
           {count !== undefined && (
             <span className="font-normal text-[var(--muted)]"> ({formatCount(count)})</span>
@@ -1188,7 +1176,7 @@ function Th({
   return (
     <th
       className={
-        "px-3 py-2 font-medium " + (align === "right" ? "text-right" : "")
+        "eyebrow px-3 py-2.5 text-[var(--muted)] " + (align === "right" ? "text-right" : "")
       }
     >
       {children}
@@ -1250,7 +1238,7 @@ export function PointTable({
           Collection Health is slow".
         */
         <div className="max-h-72 overflow-auto">
-          <table className="w-full min-w-[52rem] border-collapse text-sm">
+          <table className="w-full min-w-[52rem] border-collapse text-[0.8125rem]">
             {/*
               Sticky, so the column headings stay put while the body scrolls.
               Its own background or the rows show through; z-10 so the tone
@@ -1273,7 +1261,7 @@ export function PointTable({
               {points.map((point) => (
                 <tr
                   key={point.pointId}
-                  className="border-t border-[var(--border)]"
+                  className="border-t border-[var(--divider-soft)]"
                 >
                   <td className="px-3 py-2 font-medium">{point.pointName}</td>
                   <td className="px-3 py-2 text-[var(--muted)]">
@@ -1439,7 +1427,7 @@ function RunTable({ health }: { health: CollectionHealthData }) {
         // The one scroll pattern: about seven rows, sticky header, the count
         // in the heading. Same box as the per-point and data-gaps tables.
         <div className="max-h-72 overflow-auto">
-          <table className="w-full min-w-[34rem] border-collapse text-sm">
+          <table className="w-full min-w-[34rem] border-collapse text-[0.8125rem]">
             <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
               <tr>
                 <Th>Started</Th>
@@ -1451,13 +1439,13 @@ function RunTable({ health }: { health: CollectionHealthData }) {
             </thead>
             <tbody>
               {runs.map((run) => (
-                <tr key={run.runId} className="border-t border-[var(--border)]">
+                <tr key={run.runId} className="border-t border-[var(--divider-soft)]">
                   <td className="px-3 py-2 text-[var(--muted)]">
                     {formatTimestamp(run.startedAt)}
                   </td>
                   <td className="px-3 py-2">
                     <span
-                      className="inline-block rounded-[2px] border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+                      className="inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium"
                       style={{
                         ...TONE_STYLE[RUN_STATUS_TONE[run.status]],
                         color: TONE_INK[RUN_STATUS_TONE[run.status]],
@@ -1537,7 +1525,7 @@ function DataGapTable({
             max-h-72 is about seven rows plus the header at this row height.
           */}
           <div className="max-h-72 overflow-auto">
-            <table className="w-full min-w-[46rem] border-collapse text-sm">
+            <table className="w-full min-w-[46rem] border-collapse text-[0.8125rem]">
               {/*
                 Sticky, so you can still tell which column you are reading
                 halfway down. Needs its own background or the rows show through,
@@ -1557,7 +1545,7 @@ function DataGapTable({
                 {gaps.map((gap) => (
                   <tr
                     key={gap.gapId}
-                    className="border-t border-[var(--border)]"
+                    className="border-t border-[var(--divider-soft)]"
                   >
                     <td className="px-3 py-2 font-medium">{gap.pointName}</td>
                     <td className="px-3 py-2 text-[var(--muted)]">
@@ -1574,7 +1562,7 @@ function DataGapTable({
                     </td>
                     <td className="px-3 py-2">
                       <span
-                        className="inline-block rounded-[2px] border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+                        className="inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium"
                         style={{
                           ...TONE_STYLE[gap.cause === "roll_overwrite" ? "bad" : "warn"],
                           color: TONE_INK[gap.cause === "roll_overwrite" ? "bad" : "warn"],
@@ -1605,17 +1593,17 @@ function HealthSkeleton() {
         {Array.from({ length: 5 }, (_, i) => (
           <div
             key={i}
-            className="rounded border border-[var(--border)] bg-[var(--surface)] p-4"
+            className="card p-4"
           >
             <div className="h-2.5 w-2/3 animate-pulse rounded bg-[var(--border)]" />
             <div className="mt-3 h-6 w-1/3 animate-pulse rounded bg-[var(--border)]" />
           </div>
         ))}
       </div>
-      <div className="rounded border border-[var(--border)]">
+      <div className="card overflow-hidden">
         <div className="h-10 border-b border-[var(--border)] bg-[var(--surface)]" />
         {Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="border-t border-[var(--border)] px-3 py-3">
+          <div key={i} className="border-t border-[var(--divider-soft)] px-3 py-3">
             <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--border)]" />
           </div>
         ))}
@@ -1646,23 +1634,19 @@ function Picker({
   onChange: (value: string | null) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm">
+    <div className="flex items-center gap-2 text-sm">
       <span className="text-[var(--muted)]">{label}</span>
-      <select
+      <Dropdown
+        label={label}
         value={value ?? ALL_SITES}
-        onChange={(event) =>
-          onChange(event.target.value === ALL_SITES ? null : event.target.value)
-        }
+        onChange={(next) => onChange(next === ALL_SITES ? null : next)}
         disabled={options.length === 0}
-        className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
-      >
-        <option value={ALL_SITES}>All</option>
-        {options.map(([key, text]) => (
-          <option key={key} value={key}>
-            {text}
-          </option>
-        ))}
-      </select>
-    </label>
+        options={[
+          { value: ALL_SITES, label: "All" },
+          ...options.map(([key, text]) => ({ value: key, label: text })),
+        ]}
+        className="min-w-44"
+      />
+    </div>
   );
 }

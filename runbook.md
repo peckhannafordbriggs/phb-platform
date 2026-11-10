@@ -8739,6 +8739,38 @@ collected and still in every Collection Health figure.
 
 ---
 
+## How do I rename a point
+
+**Symptom.** A point is called `VAV$2d8$20104$2d105_ZoneTemperature` in
+Point Explorer and on Collection Health, and somebody wants it to read
+*Zone Temp 104-105*. Or a point already has a label and it is wrong.
+
+**Cause.** Not a fault. The name those screens show is the point's
+**label** when one has been set, and Niagara's name until then (the
+precedence is the entry *A point has one name in Point Explorer and another
+in Settings*). Nobody has set one, or somebody set the wrong one. The oBIX
+key - the `$2d`-spelled name - is never the thing to change: it is what the
+collector asks the station for, and editing it would stop collection.
+
+**Fix.** Settings → the station → *Points (N)*. Find the row (the search box
+above the list matches the label, the station's name, the Niagara name, the
+role and the equipment), hover or tab to it, and click the pencil beside the
+name. In the drawer that opens, type the new name under *Display name* and
+press *Save*; leave it blank to go back to Niagara's name. The same drawer
+sets the role, the equipment and *Shown* / *Hidden*, each saved only if it
+changed, and shows the Niagara name as the one thing it will not edit. Point
+Explorer and Collection Health show the new name on their next load; the
+Settings row shows all three names, because the key is what you match
+against Workbench.
+
+What it does not change: the collector's URL (the key), Grafana and the
+`bas_v_*` views (they keep Niagara's name on purpose), and whether the point
+is collected. Each save is one audit row - `bas.point_label_changed` with
+the previous and new label and the key - so a label that "disappeared" is
+answered by `/admin/audit` or the previous entry. The drawer uses the same
+`PATCH /settings/points/{id}` route as the row, one field per request;
+nothing new was added for it (2026-11-10).
+
 ## The Points list says it could not place N points
 
 **Symptom.** Under a station in BAS Settings, the Points list carries a red

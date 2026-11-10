@@ -45,12 +45,11 @@ import {
   updateReport,
   type ScheduleForm,
 } from "./reports-client";
+import { Button, Dropdown, INPUT, SearchBar, Segmented } from "@/components/ui";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
-const FIELD =
-  "mt-1 w-full rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm";
-const BUTTON = "rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50";
-const SMALL = "rounded border border-[var(--border)] px-2 py-0.5 text-xs disabled:opacity-50";
+/** The kit's input, with the gap under its label. Buttons are the kit's `Button` (2026-11-10). */
+const FIELD = `${INPUT} mt-1`;
 
 const WEEKDAYS: Array<{ n: number; label: string }> = [
   { n: 1, label: "Mon" },
@@ -255,12 +254,12 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
       </div>
 
       {error !== null && (
-        <p className="rounded-md border p-4 text-sm" style={TONE_STYLE.bad} role="alert">
+        <p className="rounded-[var(--radius-row)] border p-4 text-sm" style={TONE_STYLE.bad} role="alert">
           {error.message}
         </p>
       )}
       {notice !== null && (
-        <p className="rounded-md border p-3 text-sm" style={TONE_STYLE.ok} role="status">
+        <p className="rounded-[var(--radius-row)] border p-3 text-sm" style={TONE_STYLE.ok} role="status">
           {notice}
         </p>
       )}
@@ -271,21 +270,20 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
           <input className={FIELD} value={form.name} maxLength={120} onChange={(e) => set({ name: e.target.value })} required />
         </Field>
         <Field label="Description" hint="Optional.">
-          <textarea className={FIELD} rows={2} maxLength={2000} value={form.description} onChange={(e) => set({ description: e.target.value })} />
+          <textarea className={FIELD + " h-auto py-2"} rows={2} maxLength={2000} value={form.description} onChange={(e) => set({ description: e.target.value })} />
         </Field>
         <Field label="Building">
-          <select
-            className={FIELD}
+          <Dropdown
+            label="Building"
             value={form.siteId}
-            onChange={(e) => set({ siteId: e.target.value, stationIds: [] })}
-          >
-            {options.sites.length === 0 && <option value="">No buildings are registered</option>}
-            {options.sites.map((s) => (
-              <option key={s.siteId} value={s.siteId}>
-                {s.projectName} → {s.name} ({s.timezone})
-              </option>
-            ))}
-          </select>
+            onChange={(siteId) => set({ siteId, stationIds: [] })}
+            placeholder="No buildings are registered"
+            options={options.sites.map((s) => ({
+              value: s.siteId,
+              label: `${s.projectName} → ${s.name} (${s.timezone})`,
+            }))}
+            className="mt-1"
+          />
         </Field>
         {site !== null && site.stations.length > 1 && (
           <Field label="Stations" hint="None ticked means every station on the building.">
@@ -343,19 +341,13 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
 
       {/* 3. Analysis window */}
       <Section title="Analysis window" n={3}>
-        <div className="flex flex-wrap gap-2">
-          {ANALYSIS_WINDOWS.map((w) => (
-            <button
-              key={w}
-              type="button"
-              className={SMALL + (form.analysisWindow === w ? " bg-[var(--surface)] font-medium" : "")}
-              aria-pressed={form.analysisWindow === w}
-              onClick={() => set({ analysisWindow: w })}
-            >
-              {WINDOW_LABELS[w]}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          tone="light"
+          label="Analysis window"
+          options={ANALYSIS_WINDOWS.map((w) => ({ value: w, label: WINDOW_LABELS[w] }))}
+          value={form.analysisWindow}
+          onChange={(analysisWindow) => set({ analysisWindow })}
+        />
         <p className="mt-2 text-xs text-[var(--muted)]">
           How far back each run looks. Independent of how often it runs.
         </p>
@@ -435,28 +427,24 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
           <dd>{report === null ? "Not saved" : REPORT_STATE_LABELS[report.state]}</dd>
         </dl>
         <div className="mt-4 flex flex-wrap gap-2">
-          <button type="button" className={BUTTON + " font-medium"} disabled={busy || options.sites.length === 0} onClick={() => void saveDetails()}>
+          <Button className="font-medium" disabled={busy || options.sites.length === 0} onClick={() => void saveDetails()}>
             {reportId === null ? "Save as draft" : "Save changes"}
-          </button>
+          </Button>
           {report !== null && (report.state === "draft" || report.state === "paused") && (
-            <button
-              type="button"
-              className={BUTTON}
+            <Button
               disabled={busy}
               onClick={() => run(() => changeReportState(report.reportId, report.state === "paused" ? "resume" : "activate"), "Activated. Runs begin when the next phase switches them on.")}
             >
               {report.state === "paused" ? "Resume" : "Activate"}
-            </button>
+            </Button>
           )}
           {report !== null && report.state === "active" && (
-            <button type="button" className={BUTTON} disabled={busy} onClick={() => run(() => changeReportState(report.reportId, "pause"), "Paused.")}>
+            <Button  disabled={busy} onClick={() => run(() => changeReportState(report.reportId, "pause"), "Paused.")}>
               Pause
-            </button>
+            </Button>
           )}
           {report !== null && (
-            <button
-              type="button"
-              className={BUTTON}
+            <Button
               disabled={busy}
               onClick={() => {
                 if (window.confirm(`Delete the report "${report.name}"?`)) {
@@ -468,7 +456,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
               }}
             >
               Delete report
-            </button>
+            </Button>
           )}
         </div>
         {report !== null && report.state === "active" && (
@@ -499,7 +487,7 @@ function Section({ title, n, children }: { title: string; n: number; children: R
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="mb-3 block text-sm">
-      <span className="font-medium">{label}</span>
+      <span className="text-[0.75rem] text-[var(--muted)]">{label}</span>
       {children}
       {hint !== undefined && <span className="mt-1 block text-xs text-[var(--muted)]">{hint}</span>}
     </label>
@@ -509,7 +497,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 export function StateChip({ state }: { state: ReportDetail["state"] }) {
   const tone = reportStateTone(state);
   return (
-    <span className="inline-block rounded border px-2 py-0.5 text-xs font-medium" style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}>
+    <span className="inline-block rounded-full border px-2.5 py-0.5 text-[0.6875rem] font-medium" style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}>
       {REPORT_STATE_LABELS[state]}
     </span>
   );
@@ -518,7 +506,7 @@ export function StateChip({ state }: { state: ReportDetail["state"] }) {
 /** Owner first, locked, labelled required. Not a row anywhere - a fact rendered. */
 export function OwnerRow({ name, email }: { name: string; email: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm">
+    <div className="flex items-center justify-between gap-3 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm">
       <span>
         <span className="font-medium">{name}</span> <span className="text-[var(--muted)]">{email}</span>
       </span>
@@ -529,29 +517,22 @@ export function OwnerRow({ name, email }: { name: string; email: string }) {
 
 function PresetButtons({ value, onChange }: { value: PresetKey | null; onChange: (key: PresetKey | null) => void }) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {PRESET_KEYS.map((key) => (
-        <button
-          key={key}
-          type="button"
-          className={SMALL + (value === key ? " bg-[var(--surface)] font-medium" : "")}
-          aria-pressed={value === key}
-          title={REPORT_PRESETS[key].description}
-          onClick={() => onChange(key)}
-        >
-          {REPORT_PRESETS[key].label} (locked)
-        </button>
-      ))}
-      <button
-        type="button"
-        className={SMALL + (value === null ? " bg-[var(--surface)] font-medium" : "")}
-        aria-pressed={value === null}
-        title="Pick questions from the library, your own library, or type them."
-        onClick={() => onChange(null)}
-      >
-        Custom
-      </button>
-    </div>
+    <Segmented
+      tone="light"
+      label="Questions"
+      options={[
+        ...PRESET_KEYS.map((key) => ({
+          value: key as string,
+          label: <span title={REPORT_PRESETS[key].description}>{REPORT_PRESETS[key].label} (locked)</span>,
+        })),
+        {
+          value: "custom",
+          label: <span title="Pick questions from the library, your own library, or type them.">Custom</span>,
+        },
+      ]}
+      value={value ?? "custom"}
+      onChange={(next) => onChange(next === "custom" ? null : (next as PresetKey))}
+    />
   );
 }
 
@@ -600,7 +581,7 @@ function QuestionsSection({
   return (
     <div className="mt-4 space-y-4">
       {presetPending && (
-        <p className="rounded-md border p-3 text-sm" style={TONE_STYLE.warn}>
+        <p className="rounded-[var(--radius-row)] border p-3 text-sm" style={TONE_STYLE.warn}>
           The preset choice above is applied when you save changes.
         </p>
       )}
@@ -610,7 +591,7 @@ function QuestionsSection({
         </p>
       )}
 
-      <ol className="divide-y divide-[var(--divider-soft)] rounded border border-[var(--border)]" aria-label="Questions on this report">
+      <ol className="divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]" aria-label="Questions on this report">
         {report.questions.length === 0 && (
           <li className="px-3 py-3 text-sm text-[var(--muted)]">No questions yet. Add some below.</li>
         )}
@@ -625,9 +606,9 @@ function QuestionsSection({
             </span>
             {!locked && (
               <span className="flex shrink-0 gap-1">
-                <button type="button" className={SMALL} disabled={busy || i === 0} aria-label="Move up" onClick={() => move(i, -1)}>↑</button>
-                <button type="button" className={SMALL} disabled={busy || i === report.questions.length - 1} aria-label="Move down" onClick={() => move(i, 1)}>↓</button>
-                <button type="button" className={SMALL} disabled={busy} onClick={() => void onRemove(q.questionId)}>Remove</button>
+                <Button size="sm"  disabled={busy || i === 0} ariaLabel="Move up" onClick={() => move(i, -1)}>↑</Button>
+                <Button size="sm"  disabled={busy || i === report.questions.length - 1} ariaLabel="Move down" onClick={() => move(i, 1)}>↓</Button>
+                <Button size="sm"  disabled={busy} onClick={() => void onRemove(q.questionId)}>Remove</Button>
               </span>
             )}
           </li>
@@ -639,9 +620,9 @@ function QuestionsSection({
           <div>
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-sm font-medium">Shared library</h3>
-              <input className="rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs" placeholder="Search" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <SearchBar label="Search the shared library" placeholder="Search" value={search} onChange={setSearch} hotkey={false} className="w-56" />
             </div>
-            <div className="mt-2 max-h-72 overflow-auto rounded border border-[var(--border)]">
+            <div className="mt-2 max-h-72 overflow-auto rounded-[var(--radius-row)] border border-[var(--border)]">
               {LIBRARY_SECTIONS.map((section) => {
                 const rows = offered.filter((q) => q.section === section.key);
                 if (rows.length === 0) return null;
@@ -652,17 +633,15 @@ function QuestionsSection({
                       <div key={q.libraryQuestionId} className="flex items-start gap-3 border-t border-[var(--divider-soft)] px-3 py-2 text-sm">
                         <span className="min-w-0 flex-1">
                           {q.text}
-                          <span className="ml-2 inline-block rounded border border-[var(--border)] px-1 text-[0.6875rem] text-[var(--muted)]">{q.kind}</span>
+                          <span className="ml-2 inline-block rounded-full border border-[var(--border)] px-2 py-0.5 text-[0.6875rem] text-[var(--muted)]">{q.kind}</span>
                           <span className="ml-2 text-xs text-[var(--muted)]">applies to: {q.appliesToLabel}</span>
                         </span>
-                        <button
-                          type="button"
-                          className={SMALL}
+                        <Button size="sm"
                           disabled={busy || onReport.has(q.libraryQuestionId)}
                           onClick={() => void onAdd({ kind: "library", libraryQuestionId: q.libraryQuestionId })}
                         >
                           {onReport.has(q.libraryQuestionId) ? "Added" : "Add"}
-                        </button>
+                        </Button>
                       </div>
                     ))}
                   </div>
@@ -675,18 +654,16 @@ function QuestionsSection({
           {canUsePersonal && personal.length > 0 && (
             <div>
               <h3 className="text-sm font-medium">My library</h3>
-              <ul className="mt-2 divide-y divide-[var(--divider-soft)] rounded border border-[var(--border)]">
+              <ul className="mt-2 divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]">
                 {personal.map((p) => (
                   <li key={p.personalQuestionId} className="flex items-start gap-3 px-3 py-2 text-sm">
                     <span className="min-w-0 flex-1">{p.text}</span>
-                    <button
-                      type="button"
-                      className={SMALL}
+                    <Button size="sm"
                       disabled={busy || onReport.has(`p:${p.personalQuestionId}`)}
                       onClick={() => void onAdd({ kind: "personal", personalQuestionId: p.personalQuestionId })}
                     >
                       {onReport.has(`p:${p.personalQuestionId}`) ? "Added" : "Add"}
-                    </button>
+                    </Button>
                   </li>
                 ))}
               </ul>
@@ -695,18 +672,16 @@ function QuestionsSection({
 
           <div>
             <h3 className="text-sm font-medium">Write a question</h3>
-            <textarea className={FIELD} rows={2} maxLength={1000} value={inline} placeholder="e.g. Which VAVs were above setpoint for more than two hours while occupied?" onChange={(e) => setInline(e.target.value)} />
+            <textarea className={FIELD + " h-auto py-2"} rows={2} maxLength={1000} value={inline} placeholder="e.g. Which VAVs were above setpoint for more than two hours while occupied?" onChange={(e) => setInline(e.target.value)} />
             <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
-              <button
-                type="button"
-                className={SMALL}
+              <Button size="sm"
                 disabled={busy || inline.trim().length === 0}
                 onClick={() => {
                   void onAdd({ kind: "inline", text: inline.trim(), saveToLibrary: save && canUsePersonal }).then(() => setInline(""));
                 }}
               >
                 Add question
-              </button>
+              </Button>
               {canUsePersonal && (
                 <label className="flex items-center gap-1.5 text-xs">
                   <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />
@@ -736,12 +711,18 @@ function ScheduleFields({
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <Field label="Frequency">
-        <select className={FIELD} value={form.kind} onChange={(e) => onChange({ ...form, kind: e.target.value as ScheduleForm["kind"] })}>
-          <option value="daily">Daily</option>
-          <option value="every_n_days">Every N days</option>
-          <option value="weekly">Weekly, on chosen weekdays</option>
-          <option value="monthly">Monthly, on a day</option>
-        </select>
+        <Dropdown
+          label="Frequency"
+          value={form.kind}
+          onChange={(kind) => onChange({ ...form, kind: kind as ScheduleForm["kind"] })}
+          options={[
+            { value: "daily", label: "Daily" },
+            { value: "every_n_days", label: "Every N days" },
+            { value: "weekly", label: "Weekly, on chosen weekdays" },
+            { value: "monthly", label: "Monthly, on a day" },
+          ]}
+          className="mt-1"
+        />
       </Field>
       <Field label="Time of day" hint="24-hour, in the building's zone.">
         <input className={FIELD} type="time" value={timeOfDay} onChange={(e) => onTime(e.target.value)} required />
@@ -766,7 +747,7 @@ function ScheduleFields({
                 <button
                   key={d.n}
                   type="button"
-                  className={SMALL + (on ? " bg-[var(--surface)] font-medium" : "")}
+                  className={"rounded-full border border-[var(--border)] px-3 py-1 text-xs transition-colors" + (on ? " bg-[var(--surface)] font-medium" : "")}
                   aria-pressed={on}
                   onClick={() => onChange({ ...form, weekdays: on ? form.weekdays.filter((n) => n !== d.n) : [...form.weekdays, d.n] })}
                 >
@@ -821,19 +802,19 @@ function RecipientsSection({
 
   return (
     <div className="mt-3 space-y-3">
-      <ul className="divide-y divide-[var(--divider-soft)] rounded border border-[var(--border)]" aria-label="Additional recipients">
+      <ul className="divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]" aria-label="Additional recipients">
         {report.recipients.length === 0 && <li className="px-3 py-2 text-sm text-[var(--muted)]">No additional recipients.</li>}
         {report.recipients.map((r) => (
           <li key={r.email} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
             <span>
               {r.email}
               {r.isExternal && (
-                <span className="ml-2 inline-block rounded border px-1.5 py-0.5 text-[0.6875rem] font-medium" style={{ ...TONE_STYLE.warn, color: TONE_INK.warn }}>
+                <span className="ml-2 inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium" style={{ ...TONE_STYLE.warn, color: TONE_INK.warn }}>
                   {EXTERNAL_CHIP}
                 </span>
               )}
             </span>
-            <button type="button" className={SMALL} disabled={busy} onClick={() => void onRemove(r.email)}>Remove</button>
+            <Button size="sm"  disabled={busy} onClick={() => void onRemove(r.email)}>Remove</Button>
           </li>
         ))}
       </ul>
@@ -843,24 +824,24 @@ function RecipientsSection({
           <span className="font-medium">Add an address</span>
           <input className={FIELD + " min-w-[18rem]"} type="email" value={email} onChange={(e) => { setEmail(e.target.value); setPendingExternal(null); }} />
         </label>
-        <button type="button" className={BUTTON} disabled={busy || email.trim().length === 0} onClick={() => void submit(false)}>
+        <Button  disabled={busy || email.trim().length === 0} onClick={() => void submit(false)}>
           Add
-        </button>
+        </Button>
       </div>
 
       {pendingExternal !== null && (
-        <div className="rounded-md border p-4 text-sm" style={TONE_STYLE.warn} role="alertdialog" aria-label="Confirm an external recipient">
+        <div className="rounded-[var(--radius-row)] border p-4 text-sm" style={TONE_STYLE.warn} role="alertdialog" aria-label="Confirm an external recipient">
           <p className="font-medium">{pendingExternal} is outside {companyDomain}.</p>
           <p className="mt-1">
             This building&apos;s health report, with its equipment names and readings, will be emailed there on every run. The addition is recorded in the audit log as an external recipient.
           </p>
           <div className="mt-3 flex gap-2">
-            <button type="button" className={BUTTON} disabled={busy} onClick={() => void submit(true)}>
+            <Button  disabled={busy} onClick={() => void submit(true)}>
               Add external recipient
-            </button>
-            <button type="button" className={BUTTON} disabled={busy} onClick={() => setPendingExternal(null)}>
+            </Button>
+            <Button  disabled={busy} onClick={() => setPendingExternal(null)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}

@@ -64,6 +64,7 @@ import {
 } from "./value-axis";
 import { unitSymbol } from "@/lib/modules/bas/units";
 import { stateWord, type BooleanStates } from "@/lib/modules/bas/value-kind";
+import { Button, Dropdown, Segmented } from "@/components/ui";
 
 /**
  * Point Explorer - what one point has been doing.
@@ -226,7 +227,7 @@ export function PointExplorer() {
   if (error !== null && data === null) {
     const refusedRange = error.code === "validation_failed" && range !== null;
     return (
-      <section className="rounded border border-red-300 bg-red-50 p-6">
+      <section className="rounded-[var(--radius-pane)] border border-red-300 bg-red-50 p-6">
         <h2 className="text-sm font-medium text-red-900">
           {error.code === "bas_unavailable"
             ? "Building automation data is not available"
@@ -239,7 +240,7 @@ export function PointExplorer() {
           <button
             type="button"
             onClick={() => setRange({ days: windowDays })}
-            className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm hover:bg-red-100"
+            className="mt-4 inline-flex h-9 items-center rounded-[var(--radius-control)] border border-red-300 bg-white px-4 text-[0.8125rem] font-medium hover:bg-red-100"
           >
             Back to the last {windowDays === 1 ? "24 hours" : `${windowDays} days`}
           </button>
@@ -249,7 +250,7 @@ export function PointExplorer() {
             onClick={() =>
               void load({ days: windowDays, range, siteId, pointId, projectId, stationId })
             }
-            className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm hover:bg-red-100"
+            className="mt-4 inline-flex h-9 items-center rounded-[var(--radius-control)] border border-red-300 bg-white px-4 text-[0.8125rem] font-medium hover:bg-red-100"
           >
             Try again
           </button>
@@ -301,34 +302,27 @@ export function PointExplorer() {
           options={data.stations.map((row) => [row.stationId, row.name])}
         />
 
-        <label className="flex items-center gap-2 text-sm">
+        <div className="flex items-center gap-2 text-sm">
           <span className="text-[var(--muted)]">Point</span>
-          <select
+          {/*
+            Arrived from a Projects card (`?point=none`): the list is there
+            and nothing is chosen, so the picker shows its placeholder rather
+            than the first point as though it were selected. Choosing one
+            writes `point=<id>`.
+          */}
+          <Dropdown
+            label="Point"
             value={selectedPoint?.pointId ?? ""}
-            onChange={(event) => setParam(POINT_PARAM, event.target.value)}
+            onChange={(next) => setParam(POINT_PARAM, next)}
             disabled={data.points.length === 0}
-            className="min-w-56 rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
-          >
-            {data.points.length === 0 && <option value="">No points</option>}
-            {/*
-              Arrived from a Projects card (`?point=none`): the list is
-              there and nothing is chosen. A disabled placeholder holds the
-              empty value so the select does not display the first point as
-              though it were selected. Choosing one writes `point=<id>`.
-            */}
-            {data.points.length > 0 && selectedPoint === null && (
-              <option value="" disabled>
-                Choose a point
-              </option>
-            )}
-            {data.points.map((point) => (
-              <option key={point.pointId} value={point.pointId}>
-                {point.pointName}
-                {point.pointRole === null ? "" : ` (${point.pointRole})`}
-              </option>
-            ))}
-          </select>
-        </label>
+            placeholder={data.points.length === 0 ? "No points" : "Choose a point"}
+            options={data.points.map((point) => ({
+              value: point.pointId,
+              label: `${point.pointName}${point.pointRole === null ? "" : ` (${point.pointRole})`}`,
+            }))}
+            className="min-w-64"
+          />
+        </div>
 
         <RangePicker
           range={data.range}
@@ -383,7 +377,7 @@ export function PointExplorer() {
           // Nothing loaded, by request: a Projects card lands here. Points
           // exist and the person picks one; nothing is drawn until they do.
           <section
-            className="rounded border border-[var(--border)] p-8 text-center"
+            className="card p-8 text-center"
             data-testid="bas-choose-point"
           >
             <p className="text-sm font-medium">Choose a point</p>
@@ -393,7 +387,7 @@ export function PointExplorer() {
             </p>
           </section>
         ) : (
-          <section className="rounded border border-[var(--border)] p-8 text-center">
+          <section className="card p-8 text-center">
             <p className="text-sm font-medium">No active points</p>
             <p className="mt-1 text-sm text-[var(--muted)]">
               {data.sites.length === 0
@@ -503,7 +497,7 @@ export function Tile({
       className="card tile-wash px-5 py-4"
       style={{ ...TONE_STYLE[tone], ...TONE_WASH[tone] }}
     >
-      <p className="text-[0.625rem] font-medium uppercase tracking-[0.1em] text-[var(--muted)]">
+      <p className="eyebrow text-[var(--muted)]">
         {label}
       </p>
       <p
@@ -538,7 +532,7 @@ function Panel({
     <section className="card overflow-hidden">
       <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-5 pb-3 pt-4">
         <div>
-          <h2 className="font-display text-[0.8125rem] font-semibold uppercase tracking-[0.07em]">
+          <h2 className="eyebrow text-[var(--muted)]">
             {title}
             {count !== undefined && (
               <span className="font-normal text-[var(--muted)]"> ({formatCount(count)})</span>
@@ -558,36 +552,20 @@ function Panel({
 /** The trend panel's two faces. `chart` is the default and the URL's absent value. */
 export type TrendView = "chart" | "table";
 
-/** The Reset-zoom button's styling, shared by the view toggle and the download. */
-const SMALL_BUTTON =
-  "rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)] disabled:cursor-default disabled:opacity-40";
-
-/**
- * Chart / Table. A pair of pressed-state buttons rather than a tab bar or a
- * checkbox: two words, no sentence, and the pressed one says where you are.
- */
-function ViewToggle({
-  view,
-  onChange,
-}: {
-  view: TrendView;
-  onChange: (view: TrendView) => void;
-}) {
-  const option = (value: TrendView, label: string) => (
-    <button
-      type="button"
-      aria-pressed={view === value}
-      onClick={() => onChange(value)}
-      className={SMALL_BUTTON + (view === value ? " bg-[var(--neutral-100)] font-medium" : "")}
-    >
-      {label}
-    </button>
-  );
+/** Chart or table: the kit's segmented strip, announcing itself as the toggle group it always was. */
+function ViewToggle({ view, onChange }: { view: TrendView; onChange: (view: TrendView) => void }) {
   return (
-    <div role="group" aria-label="Show as" className="flex items-center gap-1">
-      {option("chart", "Chart")}
-      {option("table", "Table")}
-    </div>
+    <Segmented
+      semantics="pressed"
+      tone="light"
+      label="Show as"
+      options={[
+        { value: "chart", label: "Chart" },
+        { value: "table", label: "Table" },
+      ]}
+      value={view}
+      onChange={onChange}
+    />
   );
 }
 
@@ -735,15 +713,9 @@ export function TrendPanel({
     data.selectedPoint === null ? undefined : (
       <>
         <ViewToggle view={view} onChange={(next) => onViewChange?.(next)} />
-        <button
-          type="button"
-          onClick={() => void downloadCsv()}
-          disabled={downloading}
-          className={SMALL_BUTTON}
-          data-testid="bas-download-csv"
-        >
+        <Button size="sm" onClick={() => void downloadCsv()} disabled={downloading} testId="bas-download-csv">
           {downloading ? "Downloading…" : "Download CSV"}
-        </button>
+        </Button>
       </>
     );
 
@@ -864,13 +836,9 @@ export function TrendPanel({
                 {formatTimestamp(new Date(zoom.from).toISOString(), undefined, timeZone ?? undefined)} –{" "}
                 {formatTimestamp(new Date(zoom.to).toISOString(), undefined, timeZone ?? undefined)}
               </span>
-              <button
-                type="button"
-                onClick={() => setZoom(null)}
-                className="rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)]"
-              >
+              <Button size="sm" onClick={() => setZoom(null)}>
                 Reset zoom
-              </button>
+              </Button>
             </div>
           )}
 
@@ -908,7 +876,7 @@ export function TrendPanel({
             carries the cause and a tooltip, and the table below lists them.
           */}
           {data.trendGaps.length > 0 && (
-            <ul className="border-t border-[var(--border)] px-4 py-2.5 text-xs text-[var(--muted)]">
+            <ul className="border-t border-[var(--divider-soft)] px-4 py-2.5 text-xs text-[var(--muted)]">
               {data.trendGaps.map((gap) => (
                 <li key={gap.fromMs}>
                   No readings from{" "}
@@ -1364,19 +1332,19 @@ function GapTable({
             stays outside the box so it cannot scroll away from the rows.
           */}
           <div className="max-h-72 overflow-auto">
-            <table className="w-full min-w-[42rem] border-collapse text-sm">
+            <table className="w-full min-w-[42rem] border-collapse text-[0.8125rem]">
               <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
                 <tr>
-                  <th className="px-3 py-2 font-medium">From</th>
-                  <th className="px-3 py-2 font-medium">To</th>
-                  <th className="px-3 py-2 text-right font-medium">Hours lost</th>
-                  <th className="px-3 py-2 font-medium">Cause</th>
-                  <th className="px-3 py-2 font-medium">Notes</th>
+                  <th className="eyebrow px-3 py-2.5 text-[var(--muted)]">From</th>
+                  <th className="eyebrow px-3 py-2.5 text-[var(--muted)]">To</th>
+                  <th className="eyebrow px-3 py-2.5 text-right text-[var(--muted)]">Hours lost</th>
+                  <th className="eyebrow px-3 py-2.5 text-[var(--muted)]">Cause</th>
+                  <th className="eyebrow px-3 py-2.5 text-[var(--muted)]">Notes</th>
                 </tr>
               </thead>
               <tbody>
                 {gaps.map((gap) => (
-                  <tr key={gap.gapId} className="border-t border-[var(--border)]">
+                  <tr key={gap.gapId} className="border-t border-[var(--divider-soft)]">
                     <td className="px-3 py-2 text-[var(--muted)]">
                       {formatTimestamp(gap.gapStart)}
                     </td>
@@ -1389,7 +1357,7 @@ function GapTable({
                     <td className="px-3 py-2">
                       <span
                         className={
-                          "inline-block rounded border px-1.5 py-0.5 text-xs font-medium " +
+                          "inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium " +
                           (gap.cause === "roll_overwrite"
                             ? "border-red-300 bg-red-50 text-red-900"
                             : "border-amber-300 bg-amber-50 text-amber-900")
@@ -1419,14 +1387,14 @@ function ExplorerSkeleton() {
         {Array.from({ length: 5 }, (_, i) => (
           <div
             key={i}
-            className="rounded border border-[var(--border)] bg-[var(--surface)] p-4"
+            className="card p-4"
           >
             <div className="h-2.5 w-2/3 animate-pulse rounded bg-[var(--border)]" />
             <div className="mt-3 h-6 w-1/3 animate-pulse rounded bg-[var(--border)]" />
           </div>
         ))}
       </div>
-      <div className="rounded border border-[var(--border)]">
+      <div className="card overflow-hidden">
         <div className="h-10 border-b border-[var(--border)] bg-[var(--surface)]" />
         <div className="h-72 animate-pulse bg-[var(--surface)]" />
       </div>
@@ -1455,23 +1423,19 @@ function Picker({
   onChange: (value: string | null) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm">
+    <div className="flex items-center gap-2 text-sm">
       <span className="text-[var(--muted)]">{label}</span>
-      <select
+      <Dropdown
+        label={label}
         value={value ?? ALL_SITES}
-        onChange={(event) =>
-          onChange(event.target.value === ALL_SITES ? null : event.target.value)
-        }
+        onChange={(next) => onChange(next === ALL_SITES ? null : next)}
         disabled={options.length === 0}
-        className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm disabled:opacity-50"
-      >
-        <option value={ALL_SITES}>All</option>
-        {options.map(([key, text]) => (
-          <option key={key} value={key}>
-            {text}
-          </option>
-        ))}
-      </select>
-    </label>
+        options={[
+          { value: ALL_SITES, label: "All" },
+          ...options.map(([key, text]) => ({ value: key, label: text })),
+        ]}
+        className="min-w-44"
+      />
+    </div>
   );
 }

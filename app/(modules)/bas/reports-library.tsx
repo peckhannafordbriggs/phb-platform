@@ -5,10 +5,11 @@ import { LIBRARY_SECTIONS } from "@/lib/modules/bas/reports/library";
 import type { LibraryQuestionView, PersonalQuestionView } from "@/lib/modules/bas/reports/types";
 import { ApiError } from "./health-client";
 import { createPersonal, deletePersonal, fetchLibrary, fetchPersonal, updatePersonal } from "./reports-client";
+import { Button, INPUT } from "@/components/ui";
 import { TONE_STYLE } from "./tone";
 
-const FIELD = "mt-1 w-full rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm";
-const SMALL = "rounded border border-[var(--border)] px-2 py-0.5 text-xs disabled:opacity-50";
+/** The kit's input, with the gap under its label and room for a textarea. */
+const FIELD = `${INPUT} mt-1 h-auto py-2`;
 
 /**
  * The Library sub-tab: the shared library, read-only, grouped by section;
@@ -66,7 +67,7 @@ export function ReportsLibraryView() {
   return (
     <div className="space-y-6">
       {error !== null && (
-        <p className="rounded-md border p-4 text-sm" style={TONE_STYLE.bad} role="alert">
+        <p className="rounded-[var(--radius-row)] border p-4 text-sm" style={TONE_STYLE.bad} role="alert">
           {error.message}
         </p>
       )}
@@ -78,7 +79,7 @@ export function ReportsLibraryView() {
         <p className="mt-2 text-sm text-[var(--muted)]">
           Questions you wrote and saved. Yours alone; they go on your own reports.
         </p>
-        <ul className="mt-3 divide-y divide-[var(--divider-soft)] rounded border border-[var(--border)]">
+        <ul className="mt-3 divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]">
           {personal.length === 0 && <li className="px-3 py-3 text-sm text-[var(--muted)]">Nothing saved yet.</li>}
           {personal.map((p) => (
             <PersonalRow
@@ -97,9 +98,8 @@ export function ReportsLibraryView() {
             <span className="font-medium">Save a new question</span>
             <textarea className={FIELD} rows={2} maxLength={1000} value={draft} onChange={(e) => setDraft(e.target.value)} />
           </label>
-          <button
-            type="button"
-            className={SMALL + " mt-2"}
+          <Button size="sm"
+            className="mt-2"
             disabled={busy || draft.trim().length === 0}
             onClick={() => {
               void run(() => createPersonal(draft.trim())).then((ok) => {
@@ -108,7 +108,7 @@ export function ReportsLibraryView() {
             }}
           >
             Save to my library
-          </button>
+          </Button>
         </div>
       </section>
     </div>
@@ -128,16 +128,16 @@ export function SharedLibraryTable({ library }: { library: LibraryQuestionView[]
         </p>
       </div>
       <div className="max-h-[36rem] overflow-auto">
-        <table className="w-full text-xs">
+        <table className="w-full text-[0.8125rem]">
           <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left text-[var(--muted)]">
             <tr>
-              <th className="px-5 py-2 font-medium">#</th>
-              <th className="py-2 pr-3 font-medium">Question</th>
-              <th className="py-2 pr-3 font-medium">Kind</th>
-              <th className="py-2 pr-3 font-medium">Applies to</th>
-              <th className="py-2 pr-3 font-medium">Points required</th>
-              <th className="py-2 pr-3 font-medium">Coverage</th>
-              <th className="py-2 pr-5 font-medium">Enabled</th>
+              <th className="eyebrow px-5 py-2.5 text-[var(--muted)]">#</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Question</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Kind</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Applies to</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Points required</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Coverage</th>
+              <th className="eyebrow py-2.5 pr-5 text-[var(--muted)]">Enabled</th>
             </tr>
           </thead>
           <tbody>
@@ -153,7 +153,7 @@ export function SharedLibraryTable({ library }: { library: LibraryQuestionView[]
                     <td className="px-5 py-2 tabular-nums text-[var(--muted)]">{q.position}</td>
                     <td className="py-2 pr-3">{q.text}</td>
                     <td className="py-2 pr-3">
-                      <span className="inline-block rounded border border-[var(--border)] px-1 text-[0.6875rem]">{q.kind}</span>
+                      <span className="inline-block rounded-full border border-[var(--border)] px-2 py-0.5 text-[0.6875rem]">{q.kind}</span>
                     </td>
                     <td className="py-2 pr-3">{q.appliesToLabel}</td>
                     <td className="py-2 pr-3 text-[var(--muted)]">{q.requiredRolesText}</td>
@@ -189,12 +189,12 @@ function PersonalRow({
       <li className="px-3 py-2 text-sm">
         <textarea className={FIELD} rows={2} maxLength={1000} value={text} onChange={(e) => setText(e.target.value)} />
         <div className="mt-2 flex gap-2">
-          <button type="button" className={SMALL} disabled={busy || text.trim().length === 0} onClick={() => void onSave(text.trim()).then((ok) => ok && setEditing(false))}>
+          <Button size="sm"  disabled={busy || text.trim().length === 0} onClick={() => void onSave(text.trim()).then((ok) => ok && setEditing(false))}>
             Save
-          </button>
-          <button type="button" className={SMALL} disabled={busy} onClick={() => { setText(question.text); setEditing(false); }}>
+          </Button>
+          <Button size="sm"  disabled={busy} onClick={() => { setText(question.text); setEditing(false); }}>
             Cancel
-          </button>
+          </Button>
         </div>
       </li>
     );
@@ -209,10 +209,10 @@ function PersonalRow({
         </span>
       </span>
       <span className="flex shrink-0 gap-1">
-        <button type="button" className={SMALL} disabled={busy} onClick={() => setEditing(true)}>Edit</button>
-        <button type="button" className={SMALL} disabled={busy || question.usedInReports > 0} title={question.usedInReports > 0 ? "Remove it from the reports that use it first." : undefined} onClick={onDelete}>
+        <Button size="sm"  disabled={busy} onClick={() => setEditing(true)}>Edit</Button>
+        <Button size="sm"  disabled={busy || question.usedInReports > 0} title={question.usedInReports > 0 ? "Remove it from the reports that use it first." : undefined} onClick={onDelete}>
           Delete
-        </button>
+        </Button>
       </span>
     </li>
   );

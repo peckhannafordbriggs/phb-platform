@@ -91,22 +91,22 @@ export function RunsTable({ data }: { data: RunsList }) {
   return (
     <section className="card p-0">
       {data.runs.length !== data.runsInDatabase && (
-        <p className="m-4 rounded-md border p-3 text-sm" style={TONE_STYLE.bad} role="alert">
+        <p className="m-4 rounded-[var(--radius-row)] border p-3 text-sm" style={TONE_STYLE.bad} role="alert">
           This list shows {data.runs.length} of the {data.runsInDatabase} runs you may see.
         </p>
       )}
       <div className="max-h-[36rem] overflow-auto">
-        <table className="w-full text-xs">
+        <table className="w-full text-[0.8125rem]">
           <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left text-[var(--muted)]">
             <tr>
-              <th className="px-4 py-2 font-medium">Report</th>
-              <th className="py-2 pr-3 font-medium">Period</th>
-              <th className="py-2 pr-3 font-medium">Status</th>
-              <th className="py-2 pr-3 font-medium">Building status</th>
-              <th className="py-2 pr-3 font-medium">Findings</th>
-              <th className="py-2 pr-3 font-medium">Duration</th>
-              <th className="py-2 pr-3 font-medium">Cost</th>
-              <th className="py-2 pr-4 font-medium">Delivery</th>
+              <th className="eyebrow px-4 py-2.5 text-[var(--muted)]">Report</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Period</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Status</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Building status</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Findings</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Duration</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Cost</th>
+              <th className="eyebrow py-2.5 pr-4 text-[var(--muted)]">Delivery</th>
             </tr>
           </thead>
           <tbody>
@@ -114,7 +114,7 @@ export function RunsTable({ data }: { data: RunsList }) {
               const tone = runStatusTone(r.status);
               return (
                 <tr key={r.runId} className="border-t border-[var(--divider-soft)] align-top">
-                  <td className="px-4 py-2">
+                  <td className="px-4 py-3">
                     <Link href={`/bas/reports/generated/${encodeURIComponent(r.runId)}`} className="font-medium hover:underline">
                       {r.reportName}
                     </Link>
@@ -123,10 +123,10 @@ export function RunsTable({ data }: { data: RunsList }) {
                       {r.startedBy !== null ? ` · ${r.startedBy}` : ""}
                     </div>
                   </td>
-                  <td className="py-2 pr-3">{describePeriod(r)}</td>
-                  <td className="py-2 pr-3">
+                  <td className="py-3 pr-3">{describePeriod(r)}</td>
+                  <td className="py-3 pr-3">
                     <span
-                      className="inline-block rounded border px-1.5 py-0.5 text-[0.6875rem] font-medium"
+                      className="inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium"
                       style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
                       title={r.partialReason ?? r.error ?? undefined}
                     >
@@ -135,13 +135,13 @@ export function RunsTable({ data }: { data: RunsList }) {
                     {r.partialReason !== null && <div className="mt-1 max-w-[18rem] text-[var(--muted)]">{r.partialReason}</div>}
                     {r.error !== null && <div className="mt-1 max-w-[18rem] text-[var(--muted)]">{r.error}</div>}
                   </td>
-                  <td className="py-2 pr-3">{r.buildingStatus ?? "—"}</td>
-                  <td className="py-2 pr-3 tabular-nums">{r.findings}</td>
-                  <td className="py-2 pr-3">{describeRunDuration(r.durationS)}</td>
-                  <td className="py-2 pr-3 tabular-nums">
+                  <td className="py-3 pr-3">{r.buildingStatus ?? "—"}</td>
+                  <td className="py-3 pr-3 tabular-nums">{r.findings}</td>
+                  <td className="py-3 pr-3">{describeRunDuration(r.durationS)}</td>
+                  <td className="py-3 pr-3 tabular-nums">
                     {money(r.costUsd)} <span className="text-[var(--muted)]">of ${r.budgetUsd.toFixed(2)}</span>
                   </td>
-                  <td className="py-2 pr-4 text-[var(--muted)]">Not sent: email is a later phase</td>
+                  <td className="py-3 pr-4 text-[var(--muted)]">Not sent: email is a later phase</td>
                 </tr>
               );
             })}
