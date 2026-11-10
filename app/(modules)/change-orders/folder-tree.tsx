@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { FolderTreeNode } from "./mailbox-client";
 
 /**
@@ -79,9 +80,9 @@ function FolderRow({
             aria-label={expanded ? `Collapse ${node.displayName}` : `Expand ${node.displayName}`}
             aria-expanded={expanded}
             onClick={() => onToggle(node.id)}
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[0.6rem] text-[var(--muted)] transition-colors hover:bg-[var(--neutral-100)]"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--muted)] transition-colors hover:bg-[var(--neutral-100)]"
           >
-            {expanded ? "▾" : "▸"}
+            {expanded ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
           </button>
         ) : (
           <span className="h-6 w-6 shrink-0" />
