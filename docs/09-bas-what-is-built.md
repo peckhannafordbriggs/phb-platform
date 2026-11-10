@@ -131,6 +131,7 @@ building is not recorded.
 | **Value kinds on the chart** | The Point Explorer reads the column a point's readings live in, from `data_type`; a boolean point is a stepped line between two labelled states with no numeric axis; string points recognised and left alone | `feat/bas-chart-value-kinds` (2026-10-06) |
 | **Readings table and CSV** | A *Chart / Table* toggle on Point Explorer shows the raw rows behind the chart, newest first, paged in SQL, never bucketed; *Download CSV* streams every row in the range with an honest 500,000-row cap; nothing fetched until used | `feat/bas-readings-table` (2026-10-09) |
 | **Reports, Phase 1** | A Reports tab: six `bas_*` tables, the spec's twenty questions seeded as the shared library, report definitions with questions, schedule in the building's zone, recipients (owner never a row) and a stored budget; no runs, no jobs, no email, no PDF | `feat/bas-reports-phase-1` (2026-11-10) |
+| **Reports, Phase 2** | The engine core: scope, coverage in SQL, the occupancy source, Jim's Step 1 classification, Not Applicable against Not Monitored, four analyses (Data Health, zone comfort, overrides, run outside schedule), fingerprints and New / Still open / Cleared, the roll-up, one narrative call per section under the budget, the HTML template, the Generated sub-tab, the Settings occupied-hours form and a dev script; proven on the office and the lab; no scheduler, PDF or email | `feat/bas-reports-phase-2` (2026-11-10) |
 
 ### Test count
 
@@ -144,9 +145,10 @@ building is not recorded.
 ## The database
 
 **Fourteen** tables under `public` with a `bas_` prefix, managed by Prisma.
-Counted from `@@map("bas_*")` in `prisma/schema.prisma`. **Twenty since
+Counted from `@@map("bas_*")` in `prisma/schema.prisma`. **Twenty-two since
 2026-11-10**: the Reports tab added six (*Reports*, under *The screens*), five
-of them platform configuration rather than building data.
+of them platform configuration rather than building data, and its engine two
+more, `bas_report_runs` and `bas_report_findings`, both platform-side.
 
 ```
 bas_orgs
@@ -579,13 +581,15 @@ is no longer reported by the station*.
 
 **What exists.** A tab between Analyze and Collection Health, with four
 sub-tabs on the same underline pattern: *Reports* (the list, and the editor
-at `/bas/reports/new` and `/bas/reports/<id>`), *Generated* and *Usage*
-(honest placeholders: there are no runs), and *Library*. The plan is
+at `/bas/reports/new` and `/bas/reports/<id>`), *Generated* (a placeholder
+in Phase 1; the runs since Phase 2, below), *Usage* (an honest placeholder
+until Phase 6), and *Library*. The plan is
 `docs/bas-reports-tab-plan.md`; the spec it serves is `docs/BAS Health
 Report Build Spec.md` (Jim, 27 October 2026). Phase 1 is schema, library,
-definitions and screens. **Nothing runs**: no scheduler, no worker, no
-engine, no email, no PDF. A report activated today is scheduled -
-`next_run_at` is computed - and nothing fires until Phase 3.
+definitions and screens; the engine is Phase 2, below. **Nothing fires on
+its own**: no scheduler, no worker, no email, no PDF. A report activated
+today is scheduled - `next_run_at` is computed - and nothing fires until
+Phase 3.
 
 **Six tables** (`add_bas_reports`): `bas_report_definitions`,
 `bas_report_questions`, `bas_library_questions`, `bas_personal_questions`,
@@ -628,9 +632,116 @@ everyone else 404, decided in the service per row. State machine: draft →
 active ↔ paused; `paused_owner_disabled` is in the CHECK for Phase 3 and
 nothing sets it yet. The budget is stored and not enforced. API under
 `app/api/modules/bas/reports/**`, every route through `withBas`
-(`tests/bas-reports-routes.test.ts` walks them). Not built, by decision:
-the Settings tab's occupied-hours field (the table exists; Phase 2 reads
-it), admin promotion to the shared library, *Run now*, *History*.
+(`tests/bas-reports-routes.test.ts` walks them). Not built in Phase 1:
+the Settings tab's occupied-hours field (built in Phase 2, below), admin
+promotion to the shared library, *Run now*, *History*.
+
+### Reports — Phase 2 (2026-11-10): the engine core
+
+**What exists.** `lib/modules/bas/reports/engine/` turns one definition
+and one period end into a stored run: `run.ts` (`executeReportRun`) owns
+the sequence, `scope.ts` loads it, `inventory.ts` decides it, `analysis/`
+judges it, `compare.ts` and `rollup.ts` summarise it, `narrative.ts` words
+it, `render.tsx` draws it. Two more tables (`add_bas_report_runs`):
+`bas_report_runs` - status (`queued`, `running`, `succeeded`, `partial`,
+`failed`), trigger, period, zone, budget, metered cost and tokens, timing,
+`partial_reason`, `error`, the report as JSON and as standalone HTML,
+`previous_run_id` - and `bas_report_findings`, one row per finding with
+its evidence, fingerprint, state and the run it was first seen in.
+Sixteen CHECKs between them (`partial` must carry a reason, `failed` an
+error, a finished run a document, a run is never its own previous).
+**Both are platform-side**: excluded from `bas_v_data_dictionary`,
+withheld from `bas_analyze` and `bas_collector`, not moved by the Azure
+script - a run holds the rendered report and the model's sentences, and
+the model that answers Analyze questions must not read its own prose back
+as data. `runbook.md` → *Reports (Phase 2)*.
+
+**The sequence, in the order the code runs it.**
+
+1. *Scope.* Site → stations (the definition's subset, or all) → equipment
+   → active points with roles. Per point: the readings in the period (raw,
+   or `date_bin`-bucketed above 20,000), the last reading before the
+   period as the carry-in value, the recorded gaps, and **coverage in
+   SQL** - for an interval trend, the share of the period within a hold
+   of three intervals (at least 15 minutes) of a reading; for a
+   change-of-value trend, the period minus the collector's recorded gaps.
+   **A point with more readings than its declared interval allows (1.5×,
+   `COV_LIKE_FACTOR`) is change-of-value in practice and is treated so
+   everywhere**: the office's damper and static points declare 900 s and
+   log on change, and the first live run read a 47-hour quiet stretch as
+   a hole.
+2. *Occupancy per station*, recorded on the report: a trended
+   `occupancy_status` point, else `occupancy_cmd`, else the building's
+   occupied hours from `bas_site_occupancy` - the new *Occupied hours*
+   form on a building's row in Settings, `PUT
+   /settings/buildings/{siteId}/occupancy`, module admin, one start and
+   end per weekday, audited as `bas.building_occupancy_updated` - else
+   none; a question that needs occupancy is then Not Monitored for it.
+3. *Data Health first* (q20): offline (an interval trend with no reading
+   in the period), stale (last reading more than six intervals, at least
+   two hours, before the end), out of physical range (per role and unit,
+   `PHYSICAL_RANGES`, under the persistence rule), flat (the plausibility
+   thresholds and `MIN_READINGS`, the longest identical run). **Every
+   flagged point is excluded from every equipment question.** A
+   change-of-value point is never offline or stale for keeping quiet; a
+   setpoint, a status or a state point is never judged for flatness.
+4. *Classification* (Jim's Step 1) and *applicability*: hydronic from
+   plant equipment types or water-side roles, DX from unit type or
+   compressor roles, staged heat from the role; reheat and economizer
+   sub-types from the roles a VAV or RTU carries. **Not Applicable is
+   decided by what the building has** (no unit of the type); **Not
+   Monitored by what it trends** (no applicable unit has every required
+   group at 80 % coverage or better; the missing groups named, a present
+   but short one as *(coverage N %)*). The building-wide missing list is
+   what every skipped unit lacks, falling back to the union; a unit's own
+   lack is on its own skipped line.
+5. *Analysis*, pure functions over sample-and-hold series (`series.ts`):
+   q03/q04 zone comfort (percent of occupied minutes within ±2 °F of the
+   active setpoint or the heating/cooling pair; Watch past 10 %, Action
+   Needed past 50 % or 5 °F; the worst ten with their busiest two-hour
+   window), q05 overrides (`occupancy_override`, the one override role
+   the vocabulary has), q19 run outside schedule (eight status roles;
+   hours and days; Action Needed past twenty hours). The spec's
+   persistence rule throughout: 30 minutes in one stretch, or two days of
+   more than a spike. Q6-Q18 are decided (NA / NM / could run) and not
+   analysed until Phase 5; a question that could run makes the run
+   partial and says so.
+6. *Comparison*: fingerprint `sha256(question|subject|issue)` with the
+   subject `equipment:<id>` or `point:<id>`; New / Still open / Cleared
+   against the previous finished run of the same definition; open Action
+   Needed items carried forward with their first-seen run and date.
+7. *Roll-up*: section status from its findings' priorities, building
+   status from the sections; NA and NM never move either.
+8. *Narrative*: one `claude-opus-5-5` call per rendered section with the
+   findings as a data block, returning only the status sentence and, per
+   finding by index, a likely cause (worded as likely) and a next check,
+   in the `docs/11` voice; validated against a closed schema; metered at
+   the price table in `pricing.ts`; estimated before each call and stopped
+   at `budget_usd` with the reason. A declined call leaves the section's
+   evidence standing and the run partial.
+9. *Render and persist*: `ReportView` is the Generated page and, through
+   `renderReportHtml`, the standalone HTML on the run; it follows the
+   spec's template - point inventory (types found, Not Monitored with the
+   missing points, Not Applicable dropped and listed), summary, sections,
+   Data Health, Open Items Carried Forward - and **every number on it is
+   read from a finding's evidence, never from the prose**.
+
+**Screens.** The *Generated* sub-tab lists runs (status, period, duration,
+cost) for the reports the viewer owns or, as a module admin, all, and
+opens one at `/bas/reports/generated/<runId>`. Visibility is the
+definition's (owner or module admin, everyone else 404), decided in
+`runs-service.ts`. A report with runs cannot be deleted
+(`report_has_runs`, 409). The dev script `npm run bas:report:run --
+--definition <id> --period-end <iso>` is the only trigger; `--as`,
+`--no-narrative` and `--fixed-narrative` are its options.
+
+**Tested** with synthetic series (`tests/bas-reports-analysis.test.ts`),
+the template and the prompt (`tests/bas-reports-render.test.tsx`), and a
+synthetic building run end to end against the real schema
+(`tests/bas-reports-engine.test.ts`); and **run on the office and the
+lab**, `docs/bas-reports-phase-2-verification.md`. Not built, by the
+phase's scope: scheduler, worker, PDF, email, *Run now*, the Usage tab,
+Q6-Q18's analyses. `WHY-ITS-BUILT-THIS-WAY.md` §§ 78-79.
 
 ### Filters
 

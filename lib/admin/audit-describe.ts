@@ -516,6 +516,26 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "bas.personal_question_deleted": ({ actor, meta }) =>
     `${actor} deleted a question from their library: "${clip(stringField(meta, "text") ?? "", 100)}"`,
 
+  "bas.report_run_started": ({ actor, meta }) =>
+    `${actor} started a ${stringField(meta, "trigger") ?? "manual"} run of the report ${stringField(meta, "name") ?? "(unnamed)"}`,
+
+  // The outcome is the sentence, and a partial run says why.
+  "bas.report_run_finished": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const status = stringField(meta, "status");
+    const cost = typeof meta.costUsd === "number" ? ` ($${meta.costUsd.toFixed(4)})` : "";
+    if (status === "failed") {
+      return `${actor}: the run of the report ${name} failed - ${stringField(meta, "error") ?? "no error recorded"}`;
+    }
+    if (status === "partial") {
+      return `${actor}: the run of the report ${name} finished partial${cost} - ${stringField(meta, "partialReason") ?? "no reason recorded"}`;
+    }
+    return `${actor}: the run of the report ${name} succeeded${cost}`;
+  },
+
+  "bas.building_occupancy_updated": ({ actor, meta }) =>
+    `${actor} set the occupied hours for the building ${stringField(meta, "name") ?? "(unnamed)"}: ${stringField(meta, "hours") ?? "none"}`,
+
   // Counts rather than names: a sync can touch every skill, and the sync row
   // in cip_skill_syncs holds the detail.
   "cip.skills_synced": ({ actor, meta }) => {
@@ -916,6 +936,9 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.personal_question_created": "BAS personal question saved",
   "bas.personal_question_updated": "BAS personal question edited",
   "bas.personal_question_deleted": "BAS personal question deleted",
+  "bas.report_run_started": "BAS report run started",
+  "bas.report_run_finished": "BAS report run finished",
+  "bas.building_occupancy_updated": "BAS building occupied hours set",
   "cip.skills_synced": "Cost Intelligence skills synced",
   "cip.projects_synced": "Cost Intelligence projects synced",
   "cip.run_started": "Cost Intelligence run started",

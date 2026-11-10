@@ -657,6 +657,15 @@ export async function updateReport(
 
 export async function deleteReport(viewer: Viewer, reportIdText: string): Promise<{ deleted: boolean }> {
   const { row } = await loadVisibleReport(viewer, reportIdText);
+  // Runs are kept indefinitely (plan §A, Limits). A report with history is
+  // paused, not deleted; the foreign key is RESTRICT and this says why.
+  const runs = await prisma.basReportRun.count({ where: { reportId: row.reportId } });
+  if (runs > 0) {
+    throw new BasError(
+      "report_has_runs",
+      `This report has ${runs} run${runs === 1 ? "" : "s"} and its history is kept. Pause it instead of deleting it.`,
+    );
+  }
   await prisma.$transaction(async (tx) => {
     // Questions and recipients cascade from the definition.
     await tx.basReportDefinition.delete({ where: { reportId: row.reportId } });

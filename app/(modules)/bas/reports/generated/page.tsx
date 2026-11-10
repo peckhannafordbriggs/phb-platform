@@ -2,13 +2,13 @@ import { notFound } from "next/navigation";
 import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { BasShell } from "../../bas-shell";
-import { GeneratedPlaceholder } from "../../reports-placeholders";
+import { GeneratedView } from "../../reports-generated";
 import { ReportsShell } from "../../reports-shell";
 import { basTab } from "../../tabs";
 
 export const dynamic = "force-dynamic";
 
-/** Generated - every run, once there are runs (Phase 2). Says so until then. */
+/** Generated - every run the viewer may see, newest first (Phase 2). */
 export default async function BasReportsGeneratedPage() {
   const access = await requireModuleAccess(BAS_MODULE_KEY);
   if (!access.ok) notFound();
@@ -18,7 +18,7 @@ export default async function BasReportsGeneratedPage() {
   return (
     <BasShell blurb={basTab("/bas/reports").blurb} canAdminister={canAdminister}>
       <ReportsShell>
-        <GeneratedPlaceholder />
+        <GeneratedView />
       </ReportsShell>
     </BasShell>
   );
