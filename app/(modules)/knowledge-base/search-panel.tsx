@@ -141,14 +141,15 @@ export function SearchPanel({ projects }: { projects: Project[] }) {
       {result && (
         <section aria-live="polite">
           <p className="text-sm text-[var(--muted)]">
-            {result.terms.length === 0
-              ? "Those words are too common to search for. Try the equipment tag, a number or a product name."
-              : result.hits.length === 0
-                ? `No passage holds any of: ${result.terms.join(", ")}.`
-                : `${result.hits.length} passage${result.hits.length === 1 ? "" : "s"} for ${result.terms.join(", ")}`}
+            {result.hits.length > 0
+              ? `${result.hits.length} passage${result.hits.length === 1 ? "" : "s"}`
+              : result.terms.length === 0 && result.mode === "keyword"
+                ? "Those words are too common to search for. Try the equipment tag, a number or a product name."
+                : "Nothing in the indexed documents matches that closely enough."}
             {result.scope.how === "from_question" &&
               ` · limited to ${result.scope.projectIds.map(projectName).join(", ")} from the job number`}
           </p>
+          {result.notice && <p className="mt-1 text-sm text-[var(--muted)]">{result.notice}</p>}
 
           <ol className="mt-3 space-y-3">
             {result.hits.map((hit) => (
@@ -176,11 +177,14 @@ export function SearchPanel({ projects }: { projects: Project[] }) {
                   <Version hit={hit} />
                 </div>
                 <Snippet text={hit.snippet} />
-                {hit.matched.length < result.terms.length && (
-                  <p className="mt-2 text-xs text-[var(--muted)]">
-                    Holds {hit.matched.length} of {result.terms.length} words: {hit.matched.join(", ")}
-                  </p>
-                )}
+                <p className="mt-2 text-xs text-[var(--muted)]">
+                  {hit.matchedBy === "meaning"
+                    ? "Found by meaning: none of the words, but close in subject"
+                    : hit.matched.length < result.terms.length
+                      ? `Holds ${hit.matched.length} of ${result.terms.length} words: ${hit.matched.join(", ")}`
+                      : `Holds every word`}
+                  {hit.matchedBy === "both" && ", and close in meaning"}
+                </p>
               </li>
             ))}
           </ol>

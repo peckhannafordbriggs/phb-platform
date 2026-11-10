@@ -307,8 +307,31 @@ as `model`), so no `api-version` has to be chosen or kept current. `embed.ts`:
 - **Identity**: an API key locally; the managed identity in production (scope
   `https://ai.azure.com/.default`, role *Cognitive Services OpenAI User*), which the
   app also gets so that search can embed a question.
-- **Search does not use the vectors yet.** Hybrid retrieval (keyword plus vector,
-  merged) is the next step, measured with `npm run kb:eval` before and after.
+- **Search uses them (next section).**
+
+## Hybrid search (2026-11-10)
+
+`searchPassages` runs two searches over the same scope and merges them:
+
+- **Words**: the keyword search above, unchanged, as one candidate list (up to 200).
+- **Meaning**: the question is embedded (same deployment, 2 tries, 5 s timeout,
+  an in-process cache of the last 500 questions) and compared with passage vectors
+  by cosine. Up to 100 nearest, and only those with similarity >= 0.3
+  (`KB_MIN_SIMILARITY`): a nearest neighbour is not evidence by itself. All
+  projects: the HNSW index with `hnsw.ef_search = 200`. A chosen project: an exact
+  scan (`ORDER BY ... + 0`), because filtering an approximate top-k after the fact
+  can return too few.
+- **Fusion**: reciprocal rank, `1 / (60 + rank)` from each list, summed; a passage
+  both found outranks one only a single list found. A small nudge (0.0005) puts a
+  current version above an archived one that scored the same. At most 3 passages
+  per document, 20 results.
+- **Fallback, said out loud**: not configured, or the embedding call fails, and the
+  search answers by words with a `notice` the screen shows. A passage with no vector
+  yet is still found by words. `mode=keyword` on the route never calls Azure.
+- Each hit carries `matchedBy` (`words`, `meaning`, `both`) and `similarity`.
+  `tests/kb-hybrid.test.ts` writes hand-built vectors so every similarity is exact.
+- **Not tuned yet.** The threshold and K are defaults from the literature; tune them
+  on `npm run kb:eval` (keyword and hybrid side by side) with real questions.
 
 ## Open questions
 

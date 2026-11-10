@@ -60,10 +60,20 @@ describe("GET /api/modules/knowledge-base/search", () => {
     expect((await response.json()).data.hits).toHaveLength(1);
   });
 
+  it("searches by words alone when asked, and says what ran", async () => {
+    await signIn(true);
+    const body = (await (await get("q=AV-1&mode=keyword")).json()).data;
+    expect(body).toMatchObject({ mode: "keyword", notice: null });
+    // Hybrid with embeddings unconfigured (tests clear them) falls back and says so.
+    const hybrid = (await (await get("q=AV-1")).json()).data;
+    expect(hybrid).toMatchObject({ mode: "keyword", notice: expect.stringMatching(/not configured/) });
+  });
+
   it("422 for an empty, over-long or badly scoped query", async () => {
     await signIn(true);
     expect((await get("q=%20%20")).status).toBe(422);
     expect((await get(`q=${"x".repeat(301)}`)).status).toBe(422);
     expect((await get("q=AV-1&project=not-a-uuid")).status).toBe(422);
+    expect((await get("q=AV-1&mode=vector")).status).toBe(422);
   });
 });

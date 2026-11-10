@@ -60,8 +60,13 @@ export function azureEmbedder(
     /** Production: a bearer token from the managed identity. */
     getToken?: () => Promise<string>;
     sleep?: (ms: number) => Promise<void>;
+    /** Tries per batch. The sync waits out quota (6); a person searching should not (search uses 2). */
+    maxAttempts?: number;
+    /** Abandon one request after this long. Unset: no limit beyond the platform's. */
+    timeoutMs?: number;
   } = {},
 ): KbEmbedder {
+  const attempts = options.maxAttempts ?? RETRIES;
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const url = embeddingsUrl(env.endpoint);
@@ -82,12 +87,17 @@ export function azureEmbedder(
 
       let response: Response;
       try {
-        response = await fetchImpl(url, { method: "POST", headers, body });
+        response = await fetchImpl(url, {
+          method: "POST",
+          headers,
+          body,
+          ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
+        });
       } catch (error) {
         const reason = networkReason(error);
         // A name that does not resolve or a certificate Node will not trust
         // does not fix itself in a minute; say so at once.
-        if (reason.permanent || attempt >= RETRIES) {
+        if (reason.permanent || attempt >= attempts) {
           throw new KbEmbeddingError(`Could not reach ${url}: ${reason.text}`, 0);
         }
         await sleep(Math.min(2 ** attempt, MAX_WAIT_S) * 1000);
@@ -95,7 +105,7 @@ export function azureEmbedder(
       }
 
       const retry = response.status === 429 || response.status >= 500;
-      if (retry && attempt < RETRIES) {
+      if (retry && attempt < attempts) {
         // Azure says how long the quota needs; otherwise back off.
         const header = Number(response.headers.get("retry-after") ?? Number.NaN);
         await sleep(Math.min(Number.isFinite(header) ? header : 2 ** attempt, MAX_WAIT_S) * 1000);

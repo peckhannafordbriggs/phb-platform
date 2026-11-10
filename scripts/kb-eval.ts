@@ -6,6 +6,8 @@ import "./load-env";
  *   npm run kb:eval                          .kb-eval/questions.json
  *   npm run kb:eval -- --file <path>         another set
  *   npm run kb:eval -- --show 3              also print the top 3 files per question
+ *   npm run kb:eval -- --mode keyword        one search only (keyword | hybrid);
+ *                                            the default runs both, side by side
  *
  * The file is a JSON array:
  *
@@ -38,26 +40,41 @@ async function main() {
 
   const file = arg("--file") ?? ".kb-eval/questions.json";
   const show = Number(arg("--show") ?? "0");
+  const only = arg("--mode");
+  if (only !== null && only !== "keyword" && only !== "hybrid") throw new Error("--mode is keyword or hybrid.");
+  const modes = (only ? [only] : ["keyword", "hybrid"]) as ("keyword" | "hybrid")[];
   const questions = JSON.parse(await readFile(file, "utf8")) as Question[];
 
-  let top1 = 0;
-  let top5 = 0;
-  let rr = 0;
+  const totals = Object.fromEntries(modes.map((m) => [m, { top1: 0, top5: 0, rr: 0, ran: m as string }]));
+  const rankIn = (files: string[], q: Question) => {
+    const wanted = q.expect.map(normal);
+    return files.findIndex((f) => wanted.some((w) => normal(f).startsWith(w))) + 1;
+  };
+  const label = (rank: number) => (rank === 0 ? "missed" : `rank ${rank}`).padEnd(8);
+
   try {
+    console.log(`     ${modes.map((m) => m.padEnd(8)).join(" ")} question`);
     for (const [i, q] of questions.entries()) {
-      const result = await searchPassages({ query: q.question, limit: 50 });
-      const files: string[] = [];
-      for (const hit of result.hits) if (!files.includes(hit.fileName)) files.push(hit.fileName);
-      const wanted = q.expect.map(normal);
-      const rank = files.findIndex((f) => wanted.some((w) => normal(f).startsWith(w))) + 1;
-      if (rank === 1) top1 += 1;
-      if (rank >= 1 && rank <= 5) top5 += 1;
-      if (rank >= 1) rr += 1 / rank;
-      const verdict = rank === 0 ? "MISSED " : `rank ${String(rank).padEnd(3)}`;
-      console.log(`${String(i + 1).padStart(2)}. ${verdict} ${q.question}`);
-      if (show > 0 || rank === 0) {
-        for (const f of files.slice(0, Math.max(show, rank === 0 ? 3 : 0))) console.log(`        ${f}`);
-        if (files.length === 0) console.log(`        (nothing matched: ${result.terms.join(", ") || "no searchable words"})`);
+      const ranks: number[] = [];
+      const lists: string[][] = [];
+      for (const mode of modes) {
+        const result = await searchPassages({ query: q.question, limit: 50, mode });
+        const files: string[] = [];
+        for (const hit of result.hits) if (!files.includes(hit.fileName)) files.push(hit.fileName);
+        const rank = rankIn(files, q);
+        const t = totals[mode]!;
+        if (rank === 1) t.top1 += 1;
+        if (rank >= 1 && rank <= 5) t.top5 += 1;
+        if (rank >= 1) t.rr += 1 / rank;
+        if (result.mode !== mode) t.ran = `${mode} (ran as ${result.mode}: ${result.notice ?? ""})`;
+        ranks.push(rank);
+        lists.push(files);
+      }
+      console.log(`${String(i + 1).padStart(2)}.  ${ranks.map(label).join(" ")} ${q.question}`);
+      const last = lists.at(-1) ?? [];
+      if (show > 0 || ranks.at(-1) === 0) {
+        for (const f of last.slice(0, Math.max(show, ranks.at(-1) === 0 ? 3 : 0))) console.log(`        ${f}`);
+        if (last.length === 0) console.log("        (nothing found)");
       }
     }
   } finally {
@@ -65,10 +82,14 @@ async function main() {
   }
 
   const n = questions.length || 1;
-  console.log(
-    `\n${questions.length} questions · top 1: ${top1} (${Math.round((100 * top1) / n)}%) · ` +
-      `top 5: ${top5} (${Math.round((100 * top5) / n)}%) · MRR ${(rr / n).toFixed(2)}`,
-  );
+  console.log("");
+  for (const mode of modes) {
+    const t = totals[mode]!;
+    console.log(
+      `${t.ran.padEnd(8)} ${questions.length} questions · top 1: ${t.top1} (${Math.round((100 * t.top1) / n)}%) · ` +
+        `top 5: ${t.top5} (${Math.round((100 * t.top5) / n)}%) · MRR ${(t.rr / n).toFixed(2)}`,
+    );
+  }
 }
 
 main().catch((error: unknown) => {

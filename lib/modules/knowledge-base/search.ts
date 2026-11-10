@@ -1,10 +1,23 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/lib/generated/prisma/client";
+import { logUnexpected } from "@/lib/logger";
+import { KNOWLEDGE_BASE_MODULE_KEY } from "./constants";
+import { azureEmbedder } from "./embed";
+import { readKbEmbeddingEnv } from "./env";
+import { toVectorLiteral } from "./vector";
 
 /**
- * Keyword search over the indexed passages: the half of retrieval that does
- * not need embeddings, and the half that finds exact identifiers (AV-1,
- * RFI 446, 224070) which embeddings blur.
+ * Search over the indexed passages: two searches, fused by rank.
+ *
+ * MEANING: the question is embedded (text-embedding-3-small, the model that
+ * embedded the passages) and the nearest passages by cosine distance are
+ * taken from the HNSW index. This is what finds "air handling units" in a
+ * file that only says "AHU". When it cannot run - not configured, or Azure
+ * does not answer - the search says so and uses words alone; it never fails
+ * because of it.
+ *
+ * WORDS: the half that finds exact identifiers (AV-1, RFI 446, 224070) which
+ * embeddings blur. As follows.
  *
  * PostgreSQL full-text search on kb_chunks.content_tsv, built with the
  * 'simple' dictionary: no stemming and no stop words, so identifiers survive
@@ -23,8 +36,10 @@ import { Prisma } from "@/lib/generated/prisma/client";
  *   - The current version of a document (is_latest) ranks above an older or
  *     ARCHIVE_ one; older versions are still returned, and say so.
  *
- * At most KB_SEARCH_PER_DOCUMENT passages come from one document, so one long
- * spec cannot fill the page.
+ * FUSION: reciprocal rank fusion (KB_RRF_K), so a passage both searches rank
+ * well beats one only a single search found; then at most
+ * KB_SEARCH_PER_DOCUMENT passages from one document, so one long spec cannot
+ * fill the page.
  */
 
 export const KB_SEARCH_LIMIT = 20;
@@ -130,23 +145,67 @@ export type KbSearchHit = {
   snippet: string;
   /** Which of the query's terms this passage (or its file name) holds. */
   matched: string[];
+  /** Found by its words, by its meaning, or by both searches. */
+  matchedBy: "words" | "meaning" | "both";
+  /** Cosine similarity to the question, when the meaning search found it. */
+  similarity: number | null;
   score: number;
 };
 
 export const KB_MARK_START = "\u0002";
 export const KB_MARK_END = "\u0003";
 
+export type KbSearchMode = "hybrid" | "keyword";
+
 export type KbSearchResult = {
   query: string;
   terms: string[];
   /** Projects the search was limited to, and how they were chosen. */
   scope: { how: "all" | "chosen" | "from_question"; projectIds: string[] };
+  /** What actually ran: "keyword" when asked for, or when the meaning search could not. */
+  mode: KbSearchMode;
+  /** Why the meaning search did not run, in plain words; null when it did or was not asked for. */
+  notice: string | null;
   hits: KbSearchHit[];
-  /** Passages that matched at all, before the per-document cap and the limit. */
+  /** Passages either search found, before the per-document cap and the limit. */
   candidates: number;
 };
 
-type Row = {
+/** Turns the question into a vector. Null: the meaning search is not available here. */
+export type KbQueryEmbedder = (text: string) => Promise<number[]>;
+
+/**
+ * Reciprocal rank fusion: a passage scores 1/(K + rank) in each list it is
+ * in, summed. Ranks, not raw scores, because a keyword score and a cosine
+ * similarity are on different scales; 60 is the constant from the original
+ * paper and the common default, and it lets a passage near the top of BOTH
+ * lists beat one at the very top of one.
+ */
+export const KB_RRF_K = 60;
+
+/** Nearest passages taken from the vector index before fusion. */
+export const KB_VECTOR_CANDIDATES = 100;
+
+/**
+ * Below this cosine similarity a nearest neighbour is not evidence, only the
+ * least unrelated passage there is. text-embedding-3-small puts related
+ * construction text at roughly 0.4-0.8 and unrelated at 0.1-0.3. A starting
+ * value; `npm run kb:eval` is how to move it.
+ */
+export const KB_MIN_SIMILARITY = 0.3;
+
+/**
+ * A small nudge, not a rule: among passages that rank alike, the current
+ * version of a document goes first and an archived one last. Smaller than
+ * the gap between neighbouring ranks near the top, so it reorders ties and
+ * near-ties only.
+ */
+const VERSION_NUDGE = 0.0005;
+
+type Candidate = { id: string; documentId: string; isLatest: boolean; isArchived: boolean };
+type Ranked = Candidate & { keywordRank: number | null; vectorRank: number | null; similarity: number | null; score: number };
+
+type HitRow = {
   chunk_id: string;
   document_id: string;
   project_id: string;
@@ -165,15 +224,20 @@ type Row = {
   sheet: string | null;
   cell_range: string | null;
   snippet: string;
-  matched: boolean[];
-  score: number;
+  matched: boolean[] | null;
 };
+
+const HEADLINE = `StartSel=${KB_MARK_START}, StopSel=${KB_MARK_END}, MaxWords=45, MinWords=20, ShortWord=1, MaxFragments=2, FragmentDelimiter=" … "`;
 
 export async function searchPassages(options: {
   query: string;
   /** Limit to these projects. Empty or absent: a job number in the question, else all. */
   projectIds?: string[];
   limit?: number;
+  /** Default "hybrid": keyword and meaning together, falling back to keyword alone. */
+  mode?: KbSearchMode;
+  /** Instead of Azure OpenAI from the environment (tests). Null: no meaning search. */
+  queryEmbedder?: KbQueryEmbedder | null;
 }): Promise<KbSearchResult> {
   const limit = Math.min(options.limit ?? KB_SEARCH_LIMIT, 50);
   const parsed = parseQuery(options.query);
@@ -194,10 +258,10 @@ export async function searchPassages(options: {
     }
   }
 
-  const empty: KbSearchResult = { query: options.query, terms: terms.map((t) => t.label), scope, hits: [], candidates: 0 };
-  if (terms.length === 0) return empty;
-
-  // One tsquery per term (its variants ORed), and their OR for the GIN probe.
+  const projectFilter =
+    scope.projectIds.length > 0
+      ? Prisma.sql`AND d.project_id IN (${Prisma.join(scope.projectIds.map((id) => Prisma.sql`${id}::uuid`))})`
+      : Prisma.empty;
   const termSql = terms.map((t) =>
     Prisma.join(
       t.variants.map((v) =>
@@ -206,55 +270,70 @@ export async function searchPassages(options: {
       " || ",
     ),
   );
-  const anyTerm = Prisma.join(termSql.map((q) => Prisma.sql`(${q})`), " || ");
-  const inContent = termSql.map((q) => Prisma.sql`(c.content_tsv @@ (${q}))`);
-  const inName = termSql.map((q) => Prisma.sql`(n.name_tsv @@ (${q}))`);
-  const matchedArray = Prisma.sql`ARRAY[${Prisma.join(
-    terms.map((_, i) => Prisma.sql`(${inContent[i]!} OR ${inName[i]!})`),
-  )}]`;
-  const count = (parts: Prisma.Sql[]) => Prisma.join(parts.map((p) => Prisma.sql`(${p})::int`), " + ");
-  const projectFilter =
-    scope.projectIds.length > 0 ? Prisma.sql`AND d.project_id IN (${Prisma.join(scope.projectIds.map((id) => Prisma.sql`${id}::uuid`))})` : Prisma.empty;
 
-  const rows = await prisma.$queryRaw<Row[]>`
-    WITH q AS (SELECT (${anyTerm}) AS any_term),
-    hits AS (
-      SELECT c.id, c.document_id
-        FROM kb_chunks c, q
-       WHERE c.content_tsv @@ q.any_term
-    )
-    SELECT c.id::text AS chunk_id, d.id::text AS document_id, p.id::text AS project_id,
-           p.folder_name, p.project_number, d.file_name, d.path, d.folder_code, d.web_url,
-           d.version_label, d.is_latest, d.is_archived,
-           c.page_start, c.page_end, c.section, c.sheet, c.cell_range,
-           ts_headline('simple', c.content, q.any_term,
-             ${`StartSel=${KB_MARK_START}, StopSel=${KB_MARK_END}, MaxWords=45, MinWords=20, ShortWord=1, MaxFragments=2, FragmentDelimiter=" … "`}) AS snippet,
-           ${matchedArray} AS matched,
-           ( (${count(terms.map((_, i) => Prisma.sql`${inContent[i]!} OR ${inName[i]!}`))}) * 10.0
-           + (${count(inName)}) * 2.0
-           + ts_rank_cd(c.content_tsv, q.any_term, 32) * 5.0
-           + CASE WHEN d.is_latest THEN 3.0 ELSE 0.0 END
-           - CASE WHEN d.is_archived THEN 3.0 ELSE 0.0 END )::float8 AS score
-      FROM hits h
-      JOIN kb_chunks c ON c.id = h.id
-      JOIN kb_documents d ON d.id = c.document_id
-      JOIN kb_projects p ON p.id = d.project_id
-      CROSS JOIN q
-      CROSS JOIN LATERAL (
-        -- Underscores, dots and slashes to spaces first: the parser reads
-        -- "224070_SUB_Fans_Approved_20240130.pdf" as ONE file-name token.
-        SELECT to_tsvector('simple', regexp_replace(concat_ws(' ', d.file_name, d.path), '[_./]+', ' ', 'g')) AS name_tsv
-      ) n
-     WHERE d.status = 'indexed' AND p.is_legacy ${projectFilter}
-     ORDER BY score DESC, d.path, c.ordinal
-     LIMIT ${CANDIDATES}`;
+  // The meaning search, unless asked not to or not available.
+  let mode: KbSearchMode = options.mode ?? "hybrid";
+  let notice: string | null = null;
+  let vector: (Candidate & { similarity: number })[] = [];
+  if (mode === "hybrid") {
+    const embedder = options.queryEmbedder === undefined ? defaultQueryEmbedder() : options.queryEmbedder;
+    if (embedder === null) {
+      mode = "keyword";
+      notice = "Searched by words only: meaning-based search is not configured here.";
+    } else {
+      try {
+        vector = await vectorCandidates(await embedder(options.query), projectFilter, scope.projectIds.length > 0);
+      } catch (error) {
+        mode = "keyword";
+        notice = "Searched by words only: meaning-based search did not answer this time.";
+        logUnexpected("kb.query_embedding_failed", error, { moduleKey: KNOWLEDGE_BASE_MODULE_KEY });
+      }
+    }
+  }
+
+  const keyword = termSql.length > 0 ? await keywordCandidates(termSql, projectFilter) : [];
+
+  // Fuse by rank.
+  const byId = new Map<string, Ranked>();
+  const entry = (c: Candidate) => {
+    const existing = byId.get(c.id);
+    if (existing) return existing;
+    const created: Ranked = { ...c, keywordRank: null, vectorRank: null, similarity: null, score: 0 };
+    byId.set(c.id, created);
+    return created;
+  };
+  keyword.forEach((c, i) => {
+    const r = entry(c);
+    r.keywordRank = i + 1;
+    r.score += 1 / (KB_RRF_K + i + 1);
+  });
+  vector.forEach((c, i) => {
+    const r = entry(c);
+    r.vectorRank = i + 1;
+    r.similarity = c.similarity;
+    r.score += 1 / (KB_RRF_K + i + 1);
+  });
+  for (const r of byId.values()) {
+    if (r.isLatest) r.score += VERSION_NUDGE;
+    if (r.isArchived) r.score -= VERSION_NUDGE;
+  }
+  const ranked = [...byId.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 
   const perDocument = new Map<string, number>();
-  const hits: KbSearchHit[] = [];
-  for (const r of rows) {
-    const n = perDocument.get(r.document_id) ?? 0;
+  const chosen: Ranked[] = [];
+  for (const r of ranked) {
+    const n = perDocument.get(r.documentId) ?? 0;
     if (n >= KB_SEARCH_PER_DOCUMENT) continue;
-    perDocument.set(r.document_id, n + 1);
+    perDocument.set(r.documentId, n + 1);
+    chosen.push(r);
+    if (chosen.length >= limit) break;
+  }
+
+  const rows = chosen.length > 0 ? await hydrate(chosen.map((c) => c.id), termSql) : new Map<string, HitRow>();
+  const hits: KbSearchHit[] = [];
+  for (const c of chosen) {
+    const r = rows.get(c.id);
+    if (!r) continue; // re-indexed between the two queries
     hits.push({
       chunkId: r.chunk_id,
       documentId: r.document_id,
@@ -274,13 +353,162 @@ export async function searchPassages(options: {
       sheet: r.sheet,
       cellRange: r.cell_range,
       snippet: r.snippet,
-      matched: terms.filter((_, i) => r.matched[i]).map((t) => t.label),
-      score: r.score,
+      matched: terms.filter((_, i) => r.matched?.[i]).map((t) => t.label),
+      matchedBy: c.keywordRank !== null && c.vectorRank !== null ? "both" : c.vectorRank !== null ? "meaning" : "words",
+      similarity: c.similarity,
+      score: c.score,
     });
-    if (hits.length >= limit) break;
   }
 
-  return { ...empty, hits, candidates: rows.length };
+  return {
+    query: options.query,
+    terms: terms.map((t) => t.label),
+    scope,
+    mode,
+    notice,
+    hits,
+    candidates: byId.size,
+  };
+}
+
+/** Passages holding any term, best first: coverage, file-name matches, then ts_rank_cd. */
+async function keywordCandidates(termSql: Prisma.Sql[], projectFilter: Prisma.Sql): Promise<Candidate[]> {
+  const anyTerm = Prisma.join(termSql.map((q) => Prisma.sql`(${q})`), " || ");
+  const inContent = termSql.map((q) => Prisma.sql`(c.content_tsv @@ (${q}))`);
+  const inName = termSql.map((q) => Prisma.sql`(n.name_tsv @@ (${q}))`);
+  const count = (parts: Prisma.Sql[]) => Prisma.join(parts.map((p) => Prisma.sql`(${p})::int`), " + ");
+
+  const rows = await prisma.$queryRaw<Array<{ id: string; document_id: string; is_latest: boolean; is_archived: boolean }>>`
+    WITH q AS (SELECT (${anyTerm}) AS any_term)
+    SELECT c.id::text AS id, d.id::text AS document_id, d.is_latest, d.is_archived
+      FROM kb_chunks c
+      JOIN kb_documents d ON d.id = c.document_id
+      JOIN kb_projects p ON p.id = d.project_id
+      CROSS JOIN q
+      CROSS JOIN LATERAL (
+        -- Underscores, dots and slashes to spaces first: the parser reads
+        -- "224070_SUB_Fans_Approved_20240130.pdf" as ONE file-name token.
+        SELECT to_tsvector('simple', regexp_replace(concat_ws(' ', d.file_name, d.path), '[_./]+', ' ', 'g')) AS name_tsv
+      ) n
+     WHERE c.content_tsv @@ q.any_term
+       AND d.status = 'indexed' AND p.is_legacy ${projectFilter}
+     ORDER BY ( (${count(termSql.map((_, i) => Prisma.sql`${inContent[i]!} OR ${inName[i]!}`))}) * 10.0
+              + (${count(inName)}) * 2.0
+              + ts_rank_cd(c.content_tsv, q.any_term, 32) * 5.0
+              + CASE WHEN d.is_latest THEN 3.0 ELSE 0.0 END
+              - CASE WHEN d.is_archived THEN 3.0 ELSE 0.0 END ) DESC, d.path, c.ordinal
+     LIMIT ${CANDIDATES}`;
+  return rows.map((r) => ({ id: r.id, documentId: r.document_id, isLatest: r.is_latest, isArchived: r.is_archived }));
+}
+
+/**
+ * The passages nearest the question by cosine distance, above
+ * KB_MIN_SIMILARITY. Across the whole library the HNSW index answers (with a
+ * wider search than its default, ef_search 200, so filtering leaves enough).
+ * Within chosen projects the distance is computed exactly over just their
+ * passages instead: an approximate index filtered down to one project can
+ * return too few.
+ */
+async function vectorCandidates(
+  question: number[],
+  projectFilter: Prisma.Sql,
+  scoped: boolean,
+): Promise<(Candidate & { similarity: number })[]> {
+  const q = toVectorLiteral(question);
+  const order = scoped ? Prisma.sql`(c.embedding <=> ${q}::vector) + 0` : Prisma.sql`c.embedding <=> ${q}::vector`;
+  const rows = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('hnsw.ef_search', '200', true)`;
+    return tx.$queryRaw<Array<{ id: string; document_id: string; is_latest: boolean; is_archived: boolean; similarity: number }>>`
+      SELECT c.id::text AS id, d.id::text AS document_id, d.is_latest, d.is_archived,
+             (1 - (c.embedding <=> ${q}::vector))::float8 AS similarity
+        FROM kb_chunks c
+        JOIN kb_documents d ON d.id = c.document_id
+        JOIN kb_projects p ON p.id = d.project_id
+       WHERE c.embedding IS NOT NULL
+         AND d.status = 'indexed' AND p.is_legacy ${projectFilter}
+       ORDER BY ${order}
+       LIMIT ${KB_VECTOR_CANDIDATES}`;
+  });
+  return rows
+    .filter((r) => r.similarity >= KB_MIN_SIMILARITY)
+    .map((r) => ({ id: r.id, documentId: r.document_id, isLatest: r.is_latest, isArchived: r.is_archived, similarity: r.similarity }));
+}
+
+/** What the screen shows for each chosen passage, with its snippet and the words it holds. */
+async function hydrate(ids: string[], termSql: Prisma.Sql[]): Promise<Map<string, HitRow>> {
+  const hasTerms = termSql.length > 0;
+  const anyTerm = hasTerms ? Prisma.join(termSql.map((q) => Prisma.sql`(${q})`), " || ") : Prisma.sql`NULL::tsquery`;
+  const matched = hasTerms
+    ? Prisma.sql`ARRAY[${Prisma.join(
+        termSql.map((q) => Prisma.sql`((c.content_tsv @@ (${q})) OR (n.name_tsv @@ (${q})))`),
+      )}]`
+    : Prisma.sql`NULL::boolean[]`;
+  // With no words to mark, the snippet is the passage's opening.
+  const snippet = hasTerms
+    ? Prisma.sql`ts_headline('simple', c.content, q.any_term, ${HEADLINE})`
+    : Prisma.sql`left(c.content, 320)`;
+
+  const rows = await prisma.$queryRaw<HitRow[]>`
+    WITH q AS (SELECT (${anyTerm}) AS any_term)
+    SELECT c.id::text AS chunk_id, d.id::text AS document_id, p.id::text AS project_id,
+           p.folder_name, p.project_number, d.file_name, d.path, d.folder_code, d.web_url,
+           d.version_label, d.is_latest, d.is_archived,
+           c.page_start, c.page_end, c.section, c.sheet, c.cell_range,
+           ${snippet} AS snippet,
+           ${matched} AS matched
+      FROM kb_chunks c
+      JOIN kb_documents d ON d.id = c.document_id
+      JOIN kb_projects p ON p.id = d.project_id
+      CROSS JOIN q
+      CROSS JOIN LATERAL (
+        SELECT to_tsvector('simple', regexp_replace(concat_ws(' ', d.file_name, d.path), '[_./]+', ' ', 'g')) AS name_tsv
+      ) n
+     WHERE c.id = ANY(${ids}::uuid[])`;
+  return new Map(rows.map((r) => [r.chunk_id, r]));
+}
+
+// ---------------------------------------------------------------------------
+// The question's vector
+// ---------------------------------------------------------------------------
+
+const QUERY_CACHE_SIZE = 500;
+const queryCache = new Map<string, number[]>();
+let configuredEmbedder: { key: string; embed: KbQueryEmbedder | null } | null = null;
+
+/**
+ * Azure OpenAI from the environment, or null when it is not configured. A
+ * person is waiting, so one retry and a five-second limit, unlike the sync,
+ * which waits out quota. Repeated questions are answered from a small
+ * in-process cache: the same text always gets the same vector.
+ */
+function defaultQueryEmbedder(): KbQueryEmbedder | null {
+  let env;
+  try {
+    env = readKbEmbeddingEnv();
+  } catch {
+    return null; // a key in production: refused there, so not available
+  }
+  if (!env.present) return null;
+  const key = `${env.values.endpoint}|${env.values.deployment}|${env.values.apiKey ?? ""}`;
+  if (configuredEmbedder?.key !== key) {
+    let embed: KbQueryEmbedder | null;
+    try {
+      const batch = azureEmbedder(env.values, { maxAttempts: 2, timeoutMs: 5_000 });
+      embed = async (text) => {
+        const cached = queryCache.get(text);
+        if (cached) return cached;
+        const { vectors } = await batch([text]);
+        const vector = vectors[0]!;
+        if (queryCache.size >= QUERY_CACHE_SIZE) queryCache.delete(queryCache.keys().next().value!);
+        queryCache.set(text, vector);
+        return vector;
+      };
+    } catch {
+      embed = null; // e.g. no key outside production
+    }
+    configuredEmbedder = { key, embed };
+  }
+  return configuredEmbedder.embed;
 }
 
 /** The projects a person can search, for the scope picker. */

@@ -137,10 +137,7 @@ export function IndexPanel({ initial }: { initial: KbIndexStatus }) {
         </dl>
         <p className="mt-3 text-sm text-[var(--muted)]">
           {chunks.total.toLocaleString()} passages, {chunks.embedded.toLocaleString()} embedded.
-          {chunks.embedded < chunks.total &&
-            (status.embeddingConfigured
-              ? " The rest are embedded by the next sync."
-              : " Embedding is not configured here; keyword search works on all of them.")}
+          {chunks.embedded < chunks.total}
         </p>
       </section>
 

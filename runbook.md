@@ -11297,14 +11297,21 @@ In every case the passages embedded so far keep their vectors, the rest stay NUL
 
 ## Knowledge Base search finds nothing, or the wrong file
 
-Search is **keyword** search for now (`lib/modules/knowledge-base/search.ts`):
-it finds passages holding the question's words, ranks by how many they hold,
-then current versions above older and archived ones. What that means in use:
+Search is **hybrid** (`lib/modules/knowledge-base/search.ts`): a keyword search
+(passages holding the question's words, ranked by how many) and a meaning search
+(the question embedded, nearest passage vectors by cosine) run side by side and
+are merged by rank, so a passage both find comes first. Current versions sit above
+older and archived ones. Each result says how it was found: *Holds X of Y words*,
+*Found by meaning*, or both. What that means in use:
 
 | Symptom | Why, and what to do |
 |---|---|
 | *Those words are too common to search for* | Every word was a stop word ("what is the"). Use the tag, a number, a product name |
-| A synonym finds nothing ("air handling unit" when the file says "AHU") | Keyword search matches words, not meaning. Search the term the documents use. Embeddings (Azure OpenAI, request KB-2) fix this class |
+| A synonym finds nothing ("air handling unit" when the file says "AHU") | The meaning half should find it. If the line *Searched by words only* shows, the meaning half did not run (next two rows). If it did run, the passage may have no vector yet: the sync embeds last, so check the admin page's embedded count |
+| *Searched by words only: meaning-based search is not configured here* | `KB_EMBEDDING_ENDPOINT` / `KB_EMBEDDING_DEPLOYMENT` unset (locally also `KB_EMBEDDING_API_KEY`). See *Knowledge Base embeddings* |
+| *Searched by words only: meaning-based search did not answer this time* | The question could not be embedded within 2 tries / 5 s (quota, network). Search still answered by words. The log has `kb.query_embedding_failed` with Azure's reason |
+| Unrelated files listed as *Found by meaning* | The similarity threshold (`KB_MIN_SIMILARITY`, 0.3) is too low for this corpus. Measure with `npm run kb:eval` before raising it |
+| *Nothing in the indexed documents matches that closely enough* | Neither half found anything above the threshold. Try the term the documents use |
 | A file you know is there is missing | Check its row (*A document is in SharePoint but search never finds it*, above): it must be `indexed`. A scanned PDF is `skipped`, `empty_text` |
 | *Limited to <project> from the job number* | A six-digit job number in the question scopes the search to that project. Leave it out to search everything |
 | An archived version is listed | Older versions are returned on purpose, labelled, below the current one |
@@ -11312,7 +11319,9 @@ then current versions above older and archived ones. What that means in use:
 **Measuring it.** `npm run kb:eval` runs the questions in `.kb-eval/questions.json`
 (git-ignored: they name real project files) and prints, for each, the rank of the
 first file that holds the answer, then the share found first and in the top five.
-Run it before and after any change to search, and when embeddings arrive.
+It runs every question twice, words only and hybrid, side by side, with totals
+for each (`--mode keyword` or `--mode hybrid` runs one). Run it before and after
+any change to search; a mode that fell back to words is said so in the output.
 
 ## A Knowledge Base file is `failed`
 
