@@ -17,6 +17,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describeAuditEvent } from "@/lib/admin/audit-describe";
 import type { LibraryQuestionView, ReportsList } from "@/lib/modules/bas/reports/types";
 import { ReportsShell } from "@/app/(modules)/bas/reports-shell";
+
+/**
+ * `children` is supplied positionally, which React accepts and the prop type
+ * does not describe - the bas-tab-bar test's cast, for the same reason: the
+ * component is right, and react/no-children-prop refuses `children:` in props.
+ */
+const Shell = ReportsShell as unknown as (props: { pathname?: string }) => React.ReactNode;
 import { ReportsTable } from "@/app/(modules)/bas/reports-list";
 import { OwnerRow, StateChip } from "@/app/(modules)/bas/reports-editor";
 import { SharedLibraryTable } from "@/app/(modules)/bas/reports-library";
@@ -159,7 +166,7 @@ describe("the placeholders and the sub-tabs", () => {
   });
 
   it("render the four sub-tabs with the current one marked", () => {
-    const html = renderToStaticMarkup(createElement(ReportsShell, { pathname: "/bas/reports/library", children: "body" }));
+    const html = renderToStaticMarkup(createElement(Shell, { pathname: "/bas/reports/library" }, "body"));
     const nav = /<nav[^>]*aria-label="Reports sections"[\s\S]*?<\/nav>/.exec(html);
     expect(nav).not.toBeNull();
     const labels = [...nav![0].matchAll(/<a[^>]*>([^<]+)<\/a>/g)].map((m) => m[1]);
@@ -167,7 +174,7 @@ describe("the placeholders and the sub-tabs", () => {
     // next/link writes href last; the active tab carries aria-current.
     expect(nav![0]).toMatch(/<a[^>]*aria-current="page"[^>]*href="\/bas\/reports\/library"/);
     // An editor path belongs to the Reports sub-tab.
-    const editor = renderToStaticMarkup(createElement(ReportsShell, { pathname: "/bas/reports/42", children: "body" }));
+    const editor = renderToStaticMarkup(createElement(Shell, { pathname: "/bas/reports/42" }, "body"));
     expect(editor).toMatch(/<a[^>]*aria-current="page"[^>]*href="\/bas\/reports"/);
   });
 });
