@@ -239,6 +239,18 @@ failure modes.
   reference. Nine plain values name the two apps, the tenant, the drive, the
   copy's root and the two live tracker workbooks - the workbook paths are
   configuration here and spelled nowhere in code
+- Optionally the Phase 14 production jobs (`enableCoLive`, **off until
+  cutover day** and turned on only after the laptop's two scheduled tasks are
+  disabled; see `docs/PHASE-14.md` and `runbook.md`, "Cutover: turning the
+  live engine on"): two scheduled Container Apps Jobs from the same
+  `coEngineImage` - the intake engine on `coLiveIntakeCron` and the response
+  classifier on `coLiveClassifierCron`, an hour apart as on the laptop -
+  against the LIVE change-order tree, whose root is `coLiveRoot` (blank until
+  the day, spelled nowhere in code). The classifier alone carries the Change
+  Orders Anthropic key, by reference, and reads the two live tracker
+  workbooks through the Graph workbook API (`coLiveBidTrackerPath`,
+  `coLiveMasterPath`, the shadow's values). After cutover, turning the flag
+  off stops the pipeline
 
 ## The backup image is built once, by hand
 

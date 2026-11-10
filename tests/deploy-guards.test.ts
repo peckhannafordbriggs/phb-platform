@@ -1643,3 +1643,157 @@ describe("the Phase 12 Part E shadow run: three jobs behind one flag, two identi
     });
   });
 });
+
+describe("the Phase 14 production jobs: two scheduled jobs behind enableCoLive, off until cutover day (2026-11-02)", () => {
+  /**
+   * docs/PHASE-14.md items 1.2, 3.1 to 3.4: cutover is a code change in the
+   * engine, a new image and the repoint. The repoint is this flag. The two
+   * jobs run the intake engine and the response classifier against the LIVE
+   * change-order tree on the laptop's own schedule, replacing its two
+   * scheduled tasks, and must never run beside them - so the flag is off,
+   * the live root is blank, and both stay that way until the day. The
+   * classifier carries the Change Orders key by reference; the intake job
+   * carries no secret. Nothing in the template spells the live folder or a
+   * workbook: those are the parameters file's, on the day.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  const resourceBlock = (bicep: string, name: string) => {
+    const start = bicep.indexOf(`resource ${name} `);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\n// ----")].filter((i) => i > 0);
+    return rest.slice(0, Math.min(...ends));
+  };
+  const LIVE_JOBS: Record<string, string> = {
+    coLiveIntakeJob: "/app/infra/co-intake-job.sh",
+    coLiveClassifierJob: "/app/infra/co-classifier-job.sh",
+  };
+
+  it("is off by default, with the live root and both workbook paths blank, and every live job conditional on the flag", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param enableCoLive bool = false$/m);
+    for (const name of ["coLiveRoot", "coLiveBidTrackerPath", "coLiveMasterPath"]) {
+      expect(code, name).toMatch(new RegExp(`^param ${name} string = ''$`, "m"));
+    }
+    for (const name of Object.keys(LIVE_JOBS)) {
+      expect(resourceBlock(code, name).split("\n")[0], name).toMatch(/'Microsoft\.App\/jobs@[\d-]+' = if \(enableCoLive\) \{$/);
+    }
+    for (const name of Object.keys(LIVE_JOBS)) {
+      expect(code).toMatch(new RegExp(`^output ${name}Name string = enableCoLive \\? ${name}\\.name : ''$`, "m"));
+    }
+  });
+
+  it("runs the laptop's two tasks on the laptop's schedule, UTC for Eastern standard time, the classifier an hour after the intake", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param coLiveIntakeCron string = '0 12,17 \* \* 1-5'$/m);
+    expect(code).toMatch(/^param coLiveClassifierCron string = '0 13,18 \* \* 1-5'$/m);
+    const hours = (cron: string) => cron.split(" ")[1]!.split(",").map(Number);
+    const intake = hours(/^param coLiveIntakeCron string = '([^']+)'$/m.exec(code)![1]!);
+    const classifier = hours(/^param coLiveClassifierCron string = '([^']+)'$/m.exec(code)![1]!);
+    expect(classifier).toEqual(intake.map((h) => h + 1));
+    for (const [name, cron] of [["coLiveIntakeJob", "coLiveIntakeCron"], ["coLiveClassifierJob", "coLiveClassifierCron"]]) {
+      const job = resourceBlock(code, name!);
+      expect(job, name).toMatch(/triggerType: 'Schedule'/);
+      expect(job, name).toMatch(new RegExp(`cronExpression: ${cron}`));
+      expect(job, name).toMatch(/parallelism: 1/);
+      expect(job, name).toMatch(/replicaCompletionCount: 1/);
+      expect(job, name).toMatch(/replicaRetryLimit: 0/);
+      expect(job, name).toMatch(/replicaTimeout: 1800/);
+    }
+    expect(await readFile("infra/main.bicep")).toMatch(/12:00 and 17:00, 13:00 and 18:00 UTC/);
+  });
+
+  it("runs the two production scripts by path from the one engine image, with the live root from the job and the live folder spelled nowhere", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    for (const [name, script] of Object.entries(LIVE_JOBS)) {
+      const job = resourceBlock(code, name);
+      expect(job, name).toMatch(/image: coEngineImage/);
+      const command = /command: \[([\s\S]*?)\]/.exec(job)?.[1] ?? "";
+      expect(command.trim().split(/\s+/), name).toEqual(["'sh'", `'${script}'`]);
+    }
+    const common = code.slice(code.indexOf("var coLiveCommonEnv"), code.indexOf("resource coLiveIntakeJob"));
+    expect(common).toMatch(/name: 'CO_LIVE_ROOT'\s*\n\s*value: coLiveRoot/);
+    expect(common).toMatch(/name: 'CO_GRAPH_APP_CLIENT_ID'\s*\n\s*value: coEngineAppClientId/);
+    expect(common).toMatch(/name: 'CO_GRAPH_AUTH'\s*\n\s*value: 'federated'/);
+    expect(common).toMatch(/name: 'CO_GRAPH_DRIVE_ID'\s*\n\s*value: coShadowDriveId/);
+    expect(common).not.toMatch(/CO_READER/); // the production engine never reads as the reader app
+    expect(code).not.toMatch(/Managment/);
+    expect(code).not.toMatch(/Bid Tracker\.xlsx/);
+    // the live mitigation for the dormant Bid Tracker write (docs/PHASE-14.md 1.3): the variable is never set on a job
+    expect(code).not.toMatch(/CO_BID_TRACKER_PATH/);
+  });
+
+  it("gives the classifier the Change Orders key by reference and the intake job no secret at all", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const classifier = resourceBlock(code, "coLiveClassifierJob");
+    expect(classifier).toMatch(/name:\s*'CO_ANTHROPIC_API_KEY'\s*\n\s*secretRef:\s*'co-anthropic-api-key'/);
+    expect(classifier).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{coAnthropicApiKeySecretName\}'/);
+    expect(classifier).toMatch(/name: 'CO_CLASSIFIER_MODEL_STEPS'\s*\n\s*value: coLiveClassifierSteps/);
+    expect(classifier).toMatch(/name: 'CO_LIVE_BID_TRACKER_PATH'\s*\n\s*value: coLiveBidTrackerPath/);
+    expect(classifier).toMatch(/name: 'CO_LIVE_MASTER_PATH'\s*\n\s*value: coLiveMasterPath/);
+    expect(classifier).not.toMatch(/\banthropicApiKeySecretName\b/);
+    const intake = resourceBlock(code, "coLiveIntakeJob");
+    expect(intake).not.toMatch(/secrets:/);
+    expect(intake).not.toMatch(/ANTHROPIC/);
+    expect(intake).not.toMatch(/secretRef/);
+  });
+
+  it("ships the flag off and the three live values blank in the example parameters, and is documented where the shadow is", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    expect(example.parameters.enableCoLive?.value).toBe(false);
+    expect(example.parameters.enableCoShadow?.value).toBe(false);
+    for (const name of ["coLiveRoot", "coLiveBidTrackerPath", "coLiveMasterPath"]) {
+      expect(example.parameters[name]?.value, name).toBe("");
+    }
+    expect(await readFile("infra/README.md")).toMatch(/enableCoLive/);
+    expect(await readFile("runbook.md")).toMatch(/enableCoLive/);
+    expect(await readFile("docs/PHASE-14.md")).toMatch(/enableCoLive/);
+  });
+
+  describe("in the compiled ARM, when az is installed", () => {
+    const arm = (() => {
+      const r = spawnSync("az", ["bicep", "build", "--file", "infra/main.bicep", "--stdout"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        shell: true,
+      });
+      if (r.status !== 0 || !r.stdout) return null;
+      return JSON.parse(r.stdout) as {
+        parameters: Record<string, { type: string; defaultValue?: unknown }>;
+        resources: Array<{ type: string; name: string; condition?: string; properties?: Record<string, unknown> }>;
+      };
+    })();
+    const itIfArm = arm ? it : it.skip;
+
+    itIfArm("both live jobs are conditional on enableCoLive, the flag defaults to false, and the shadow's three jobs are untouched", () => {
+      expect(arm!.parameters.enableCoLive).toMatchObject({ type: "bool", defaultValue: false });
+      const live = arm!.resources.filter((r) => r.type === "Microsoft.App/jobs" && /co-intake-scrub|co-response-classifier/.test(r.name));
+      expect(live.length).toBe(2);
+      for (const j of live) expect(j.condition, j.name).toBe("[parameters('enableCoLive')]");
+      const shadow = arm!.resources.filter((r) => r.type === "Microsoft.App/jobs" && /co-shadow|co-classify/.test(r.name));
+      expect(shadow.length).toBe(3);
+      for (const j of shadow) expect(j.condition, j.name).toBe("[parameters('enableCoShadow')]");
+    });
+
+    itIfArm("the intake job carries no secret and the classifier's one secret is the Change Orders key", () => {
+      const byName = (part: string) => arm!.resources.find((r) => r.type === "Microsoft.App/jobs" && r.name.includes(part));
+      const intake = byName("co-intake-scrub")!;
+      const cfg = (intake.properties as { configuration?: { secrets?: unknown[] } }).configuration ?? {};
+      expect(cfg.secrets ?? []).toEqual([]);
+      const classifier = byName("co-response-classifier")!;
+      const ccfg = (classifier.properties as { configuration: { secrets: Array<{ name: string; keyVaultUrl: string }> } }).configuration;
+      expect(ccfg.secrets.map((s) => s.name)).toEqual(["co-anthropic-api-key"]);
+      expect(ccfg.secrets[0]!.keyVaultUrl).toMatch(/coAnthropicApiKeySecretName/);
+    });
+  });
+});

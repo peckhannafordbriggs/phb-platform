@@ -177,6 +177,19 @@
       "value": ""
     },
 
+    "enableCoLive": {
+      "value": false
+    },
+    "coLiveRoot": {
+      "value": ""
+    },
+    "coLiveBidTrackerPath": {
+      "value": ""
+    },
+    "coLiveMasterPath": {
+      "value": ""
+    },
+
     "enableBudget": {
       "value": false
     },

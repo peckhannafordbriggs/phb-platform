@@ -363,6 +363,60 @@ param coShadowCollectCron string = '0 16,21,23 * * 1-5'
 param coShadowClassifierSteps string = 'bid_leader,classify,qa,match'
 
 // ---------------------------------------------------------------------------
+// The change-order engine on the LIVE tree (Phase 14)
+// ---------------------------------------------------------------------------
+//
+// Two scheduled Container Apps Jobs behind enableCoLive, off by default and
+// OFF UNTIL CUTOVER DAY: the intake engine and the response classifier on
+// the laptop's own schedule, against the real change-order tree. They
+// replace the laptop's two scheduled tasks (docs/PHASE-14.md 3.1 and 3.3)
+// and must never run beside them (3.4): turning this flag on IS the
+// repoint, made only after the laptop's tasks are disabled, on the day,
+// from the checklist. The image is the phb-co-engine image the shadow runs
+// (coEngineImage), built from a commit that carries the cutover change -
+// the store addresses the live tree when its root says so (1.2). Nothing
+// here spells the live folder: coLiveRoot is filled in the gitignored
+// parameters file on the day, and the drive is the shadow's (one library
+// holds the live tree and the copy).
+//
+//   intake      the laptop's co-intake-scrub: 07:00 and 12:00 America/New_York
+//   classifier  the laptop's co-response-classifier: 08:00 and 13:00, an
+//               hour after the intake on purpose (docs/PHASE-13.md: preserve
+//               the ordering, not just the times)
+//
+// Container Apps evaluates a cron in UTC. The defaults are Eastern STANDARD
+// time (12:00 and 17:00, 13:00 and 18:00 UTC); March 2027 moves them by an
+// hour in a commit that says so, or the DST decision Phase 13 records
+// governs. One execution at a time, no retry: a retry would be a second
+// run against the live tree, and a failed run is for a person to re-run
+// once after reading the log (Phase 13 Part B alerts it).
+//
+// After cutover, pausing these jobs - the flag off, or `az containerapp
+// job stop` - STOPS THE PIPELINE, the opposite of the shadow, which was
+// free to pause (docs/PHASE-14.md 3.2; runbook.md, "Cutover").
+
+@description('Create the two Phase 14 production jobs, the intake engine and the response classifier, against the LIVE change-order tree on the laptop schedule. OFF until cutover day, and turned on only after the laptop two scheduled tasks are disabled (docs/PHASE-14.md 3.1 to 3.4): two instances on the live tree is the one thing this template must never produce. Needs coEngineImage, coEngineAppClientId, coGraphTenantId and coShadowDriveId as the shadow does.')
+param enableCoLive bool = false
+
+@description('Drive-relative root of the live change-order tree in the AI Sandbox library: the top-level folder every flow depends on, with its one A. Configuration on the day, spelled nowhere in code; blank until cutover.')
+param coLiveRoot string = ''
+
+@description('Drive-relative path of the live Bid Tracker workbook, read through the Graph workbook API by the classifier (read-only, prohibition 4). The same value the shadow read at every snapshot (coShadowBidTrackerPath).')
+param coLiveBidTrackerPath string = ''
+
+@description('Drive-relative path of the live master tracker, read the same way (the same value as coShadowMasterPath).')
+param coLiveMasterPath string = ''
+
+@description('When the intake engine runs, as a cron in UTC. Default: the laptop 07:00 and 12:00 ET under Eastern standard time.')
+param coLiveIntakeCron string = '0 12,17 * * 1-5'
+
+@description('When the response classifier runs, as a cron in UTC. Default: the laptop 08:00 and 13:00 ET under Eastern standard time, an hour after the intake.')
+param coLiveClassifierCron string = '0 13,18 * * 1-5'
+
+@description('Which model judgments the live classifier runs: a comma-separated subset of bid_leader,classify,qa,match. All four, as the shadow window ran them.')
+param coLiveClassifierSteps string = 'bid_leader,classify,qa,match'
+
+// ---------------------------------------------------------------------------
 // Nightly database backup
 // ---------------------------------------------------------------------------
 
@@ -1721,6 +1775,174 @@ resource coClassifyJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
 }
 
 // ---------------------------------------------------------------------------
+// The two production jobs (Phase 14) - the parameters' comment block above
+// says when this flag may be turned on
+// ---------------------------------------------------------------------------
+
+var coLiveCommonEnv = [
+  {
+    name: 'CO_GRAPH_AUTH'
+    value: 'federated'
+  }
+  {
+    name: 'CO_GRAPH_MANAGED_IDENTITY_CLIENT_ID'
+    value: identity.properties.clientId
+  }
+  {
+    name: 'CO_GRAPH_APP_CLIENT_ID'
+    value: coEngineAppClientId
+  }
+  {
+    name: 'CO_GRAPH_TENANT_ID'
+    value: coGraphTenantId
+  }
+  {
+    name: 'CO_GRAPH_DRIVE_ID'
+    value: coShadowDriveId
+  }
+  {
+    name: 'CO_LIVE_ROOT'
+    value: coLiveRoot
+  }
+  {
+    name: 'CO_STAGE_DIR'
+    value: '/tmp'
+  }
+]
+
+resource coLiveIntakeJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoLive) {
+  name: '${baseName}-co-intake-scrub'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // The Graph store takes about fifty seconds per intake CO (Part C,
+      // 44 to 54 s); a handful of COs is minutes, and the next run is five
+      // hours away. No retry: a retry is a second run on the live tree.
+      replicaTimeout: 1800
+      replicaRetryLimit: 0
+      scheduleTriggerConfig: {
+        cronExpression: coLiveIntakeCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'intake'
+          image: coEngineImage
+          command: [
+            'sh'
+            '/app/infra/co-intake-job.sh'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: coLiveCommonEnv
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+  ]
+}
+
+resource coLiveClassifierJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoLive) {
+  name: '${baseName}-co-response-classifier'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // A pass is a few items and up to three model calls each; the next
+      // run is five hours away. No retry, as above.
+      replicaTimeout: 1800
+      replicaRetryLimit: 0
+      scheduleTriggerConfig: {
+        cronExpression: coLiveClassifierCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'co-anthropic-api-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${coAnthropicApiKeySecretName}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'classifier'
+          image: coEngineImage
+          command: [
+            'sh'
+            '/app/infra/co-classifier-job.sh'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: concat(coLiveCommonEnv, [
+            {
+              name: 'CO_ANTHROPIC_API_KEY'
+              secretRef: 'co-anthropic-api-key'
+            }
+            {
+              name: 'CO_CLASSIFIER_MODEL_STEPS'
+              value: coLiveClassifierSteps
+            }
+            {
+              name: 'CO_LIVE_BID_TRACKER_PATH'
+              value: coLiveBidTrackerPath
+            }
+            {
+              name: 'CO_LIVE_MASTER_PATH'
+              value: coLiveMasterPath
+            }
+          ])
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
 
@@ -1780,6 +2002,8 @@ output dbBackupStorageAccountName string = enableDbBackup ? backupStorage.name :
 output coShadowFeedJobName string = enableCoShadow ? coShadowFeedJob.name : ''
 output coShadowCollectJobName string = enableCoShadow ? coShadowCollectJob.name : ''
 output coClassifyJobName string = enableCoShadow ? coClassifyJob.name : ''
+output coLiveIntakeJobName string = enableCoLive ? coLiveIntakeJob.name : ''
+output coLiveClassifierJobName string = enableCoLive ? coLiveClassifierJob.name : ''
 // The redirect URI IT has to add to the SSO app registration in Part B.
 output ssoRedirectUri string = 'https://${containerApp.properties.configuration.ingress.fqdn}/api/auth/callback/microsoft-entra-id'
 // The custom hostname's address and ITS redirect URI, empty when no custom
