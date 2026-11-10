@@ -10857,6 +10857,147 @@ before the pool is touched. A new revision starts with an empty window.
 
 ---
 
+## Reports (Phase 1): the tables, the owner-recipient rule, and the scripts that gate on them
+
+**What exists, as of 2026-11-10.** A Reports tab in the BAS module and six
+`bas_*` tables (`add_bas_reports`): `bas_report_definitions`,
+`bas_report_questions`, `bas_library_questions`, `bas_personal_questions`,
+`bas_report_recipients`, `bas_site_occupancy`. A report is configured -
+building, questions, window, schedule, recipients, budget - and stored.
+**Nothing runs.** No scheduler, no worker, no engine, no email, no PDF. The
+entries below are the ways Phase 1 can surprise someone; the plan is
+`docs/bas-reports-tab-plan.md` and the record is `docs/09-bas-what-is-built.md`
+→ *Reports*.
+
+### The report owner cannot be added or removed as a recipient
+
+**Symptom.** Adding the owner's own address to a report answers `409
+owner_is_recipient` - *"The report's owner always receives it and is not added
+or removed here."* - and so does removing it, even though no such recipient is
+listed.
+
+**Cause.** By design, and the whole safety of the recipient list. The owner is
+**never a row** in `bas_report_recipients`: the sender (Phase 4) adds the
+owner's address from the employee record at send time, so no screen, no API
+call and no bulk delete can leave a report with nobody who asked for it
+receiving it. The API refuses the owner's address in both directions so that
+the absence of a row can never be read as "removed".
+
+**Fix.** None needed. To change who always receives a report, change its
+owner; that is a module-admin action in Phase 3 (*Transfer owner*) and is not
+built yet. Until then: `UPDATE bas_report_definitions SET owner_employee_id =
+'<uuid>' WHERE report_id = <n>;` and, if the new owner was a recipient row,
+delete that row.
+
+### Adding an address outside the company is refused the first time
+
+**Symptom.** `409 external_unconfirmed` - *"vendor@example.com is outside
+phb1899.com. Confirm that this building's report should go there."* The editor
+shows the same as an amber panel with *Add external recipient*.
+
+**Cause.** The warn-and-confirm step (plan §A, Recipients). Anything that is
+not `@phb1899.com` is external, decided by `isExternalAddress` in
+`lib/modules/bas/reports/recipients.ts`; the service wants `confirmed: true`
+in the body before it stores the row, and the row cannot be stored without a
+confirmation (`bas_report_recipients_external_confirmed`).
+
+**Fix.** Confirm in the dialog. The audit row `bas.report_recipient_added`
+carries `isExternal: true` and `confirmed: true`, so "which buildings' reports
+go outside the company, added by whom" is one query:
+
+```sql
+SELECT a.occurred_at, e.email AS added_by, a.metadata->>'name' AS report,
+       a.metadata->>'email' AS recipient
+  FROM audit_events a
+  LEFT JOIN employees e ON e.id = a.actor_employee_id
+ WHERE a.action = 'bas.report_recipient_added'
+   AND (a.metadata->>'isExternal')::boolean
+ ORDER BY a.occurred_at;
+```
+
+### A role script refuses to run: "Unclassified bas_* object(s): bas_report_definitions, ..."
+
+**Symptom.** `scripts/setup-bas-analyze-role.sql`,
+`scripts/setup-bas-collector-role.sql` or `scripts/bas-migrate-to-azure` stops
+at its gate naming one or more of the six Reports tables. Or, in `phb-bas`,
+`setup_readonly_role_platform.sql` (the `bas_readonly_platform` role for Grafana
+and the MCP server) stops the same way.
+
+**Cause.** Every one of those scripts holds an **explicit** list of `bas_*`
+objects and refuses an object it has not been told about, by design (*The
+read-only grant script will hand out the credentials table*). Six new tables
+match the prefix.
+
+**Fix.** In this repository all three were updated on 2026-11-10 and their
+tests run them against the real schema: `bas_analyze` reads
+`bas_site_occupancy` and is withheld the other five by name;
+`bas_collector` is withheld all six (it reads occupancy from the station,
+never from a table a person typed); the Azure migration lists all six as
+`mig_excluded` - created after the one-shot move and never moved.
+**`phb-bas` has not been updated** and will refuse on its next run until its
+list learns the six names: withhold `bas_report_definitions`,
+`bas_report_questions`, `bas_report_recipients`, `bas_library_questions` and
+`bas_personal_questions` (configuration people typed, email addresses, an
+employee's own words - not for Grafana), and allow `bas_site_occupancy`.
+`bas_v_data_dictionary` already excludes the five by name, so the Analyze
+planner is told nothing about them; Phase 2's `bas_report_runs`,
+`bas_report_findings` and `bas_report_deliveries` will need the same decision
+in every list.
+
+### A report's next run is an hour off after the clocks change, or runs on the wrong clock
+
+**Symptom.** A report at 06:00 shows a next run of 10:00 UTC one week and
+11:00 UTC the next; or two buildings with the same schedule show different
+UTC instants.
+
+**Cause.** Not a fault. `time_of_day` is a **local** wall-clock time and
+`bas_sites.timezone` is the clock; `next_run_at` is derived from the two on
+every activation and on any change to the schedule or the building, never by
+adding 24 hours to the previous instant (`lib/modules/bas/reports/schedule.ts`,
+tested across the November 2026 change in `tests/bas-reports-schedule.test.ts`).
+The editor shows both clocks beside the schedule. A local time that happens
+twice on the autumn morning runs once, at its first occurrence; one the spring
+morning skips runs at the first instant after the gap.
+
+**Fix.** If the building's zone is wrong, fix it in Settings and save the
+report again - the next run follows the zone. Remember that nothing fires
+before Phase 3; `next_run_at` is a promise about the future, not a record of
+anything that happened.
+
+### A report reads "Paused - owner disabled" and will not resume
+
+**Symptom.** `409 invalid_state` on resume: *"A module admin has to reassign
+the owner before it can run again."*
+
+**Cause.** The state `paused_owner_disabled` is in the CHECK for Phase 3's
+scheduler, which pauses a report whose owner's account was disabled. **Nothing
+writes it in Phase 1**; a report in that state got there by hand.
+
+**Fix.** Reassign the owner (SQL above, until *Transfer owner* exists), then
+`UPDATE bas_report_definitions SET state = 'paused' WHERE report_id = <n>;`
+and resume from the screen, which recomputes the next run.
+
+### The Generated and Usage sub-tabs say there is nothing
+
+**Symptom.** *No reports have been generated yet* / *No usage to show*.
+
+**Cause.** True. Runs are Phase 2 and 3; both screens say so rather than
+offering a button that does nothing. *Run now* and *History* are not on the
+list for the same reason.
+
+### Reading what was done to a report
+
+Every write is an audit row in the same transaction, named by action:
+`bas.report_created`, `bas.report_updated` (with `changes`, field by field),
+`bas.report_deleted`, `bas.report_state_changed` (`from`, `to`),
+`bas.report_questions_changed` (`change`: added / removed / reordered /
+preset), `bas.report_recipient_added` and `_removed` (with `isExternal`),
+and `bas.personal_question_created` / `_updated` / `_deleted`. None of them is
+on the audit SCREEN (*The audit log screen does not show a mail send, a BAS
+question or a profile change*); read them with SQL on `metadata->>'reportId'`.
+
+---
+
 # Cost Intelligence runs
 
 A run is one workflow against one project. The web app only queues it

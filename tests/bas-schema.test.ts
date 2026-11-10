@@ -55,13 +55,16 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
     "bas_points",
     "bas_projects",
     "bas_readings",
+    // Reports (Phase 1): occupied hours a person enters. Building data, so
+    // the model is told about it.
+    "bas_site_occupancy",
     "bas_sites",
     "bas_stations",
     "bas_sync_checkpoints",
   ];
 
   /**
-   * The one bas_ table that must NOT be in the dictionary.
+   * The bas_ tables that must NOT be in the dictionary.
    *
    * The predicate matches `bas\_%`, so this table qualifies on its name and is
    * excluded by an explicit `<> 'bas_station_credentials'`. Without that, the
@@ -73,7 +76,18 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
    * No password leaks either way. That is not the bar: telling a model there is
    * a password_ciphertext column is the first half of asking for it.
    */
-  const EXCLUDED_BAS_TABLES = ["bas_station_credentials"];
+  const EXCLUDED_BAS_TABLES = [
+    "bas_station_credentials",
+    // Reports (Phase 1): configuration people typed, email addresses, an
+    // employee's own questions. Not building data; the bas_analyze role is
+    // refused them by name, and a model told about a table it is then
+    // refused writes a query that fails.
+    "bas_report_definitions",
+    "bas_report_questions",
+    "bas_report_recipients",
+    "bas_library_questions",
+    "bas_personal_questions",
+  ];
 
   const BAS_VIEWS = [
     "bas_v_collection_health",
@@ -126,7 +140,7 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
     const rows = await testDb.$queryRaw<Array<{ column_name: string }>>`
       SELECT DISTINCT column_name FROM bas_v_data_dictionary`;
     const columns = new Set(rows.map((r) => r.column_name));
-    for (const forbidden of ["password_ciphertext", "key_version"]) {
+    for (const forbidden of ["password_ciphertext", "key_version", "owner_employee_id", "is_external", "inline_text"]) {
       expect(columns.has(forbidden), `${forbidden} must not be exposed`).toBe(
         false,
       );

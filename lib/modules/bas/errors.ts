@@ -117,7 +117,60 @@ export type BasErrorCode =
    * equipment: there is no building to look the equipment up on. Attach the
    * station first. 409.
    */
-  | "station_unassigned";
+  | "station_unassigned"
+  // --- Reports (Phase 1) ---
+  /**
+   * No such report, or one this employee may not see. Owner or module admin
+   * sees it; everyone else gets this, which the route renders as 404 - the
+   * same conflation as every other not-found here, and the one the plan
+   * asks for by name.
+   */
+  | "report_not_found"
+  /** A station in the subset is on a different building from the report. 409. */
+  | "station_other_building"
+  /** A schedule that can never fire, or carries a value outside its range. 422. */
+  | "invalid_schedule"
+  /**
+   * The report carries a preset, so its questions are the preset's and are
+   * not edited one by one. Clear the preset to vary them. 409.
+   */
+  | "preset_locked"
+  /** Activation refused: no questions, or a schedule that cannot be read. 409. */
+  | "report_not_ready"
+  /** The action does not apply in the report's current state. 409. */
+  | "invalid_state"
+  /** A question that is not on this report. 404. */
+  | "question_not_found"
+  /** The same library or personal question twice on one report. 409. */
+  | "question_exists"
+  | "library_question_not_found"
+  /** In the library, but turned off by a module admin. 409. */
+  | "library_question_disabled"
+  /** A personal question that is not the viewer's. 404. */
+  | "personal_question_not_found"
+  /**
+   * A personal question is the owner's alone: it goes on the owner's own
+   * reports and nobody else's, so an admin working on another person's
+   * report types the question in instead. 409.
+   */
+  | "personal_question_not_owner"
+  /** Still on a report. Refused, never cascaded. 409. */
+  | "personal_question_in_use"
+  /** A reorder that is not a permutation of the report's questions. 422. */
+  | "invalid_reorder"
+  /**
+   * The owner's address. The owner is always a recipient and never a row,
+   * so it can be neither added nor removed. 409.
+   */
+  | "owner_is_recipient"
+  | "recipient_exists"
+  | "recipient_not_found"
+  /**
+   * An address outside the company, sent without `confirmed: true`. The
+   * client shows the warning and sends again. 409: well-formed, needs a
+   * second deliberate step.
+   */
+  | "external_unconfirmed";
 
 export class BasError extends Error {
   constructor(

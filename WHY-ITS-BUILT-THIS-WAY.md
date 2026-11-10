@@ -2908,3 +2908,43 @@ inverted row becomes a line in a report nobody read that morning.
 `docs/phase-12-part-e-plan.md` § 2, § 6, § 7; `runbook.md` → *The
 change-order shadow run*; `phb-co-engine` → `tests/test_shadow_reader.py`,
 `tests/test_shadow_feed.py`, `tests/test_shadow_collect.py`.
+
+
+## 77 · The report owner is never a recipient row, and five `bas_` tables the model is never told about
+
+**What I did.** Reports (Phase 1, 2026-11-10) stores who receives a report in
+`bas_report_recipients` - **additional** recipients only. The owner is not a
+row. The sender adds the owner's address from the employee record at send
+time, and the recipients API refuses the owner's address whether you try to
+add it or remove it (`owner_is_recipient`). The owner always receives the
+report, and there is no row whose deletion could change that.
+
+Five of the phase's six tables - definitions, questions, recipients, the
+shared library, personal questions - match the `bas_` prefix and hold no
+building data: configuration people typed, email addresses, an employee's own
+words. They are excluded from `bas_v_data_dictionary` by name, withheld from
+`bas_analyze` and `bas_collector` by name, and listed as not moving in the
+Azure migration script. `bas_site_occupancy`, the sixth, is building data and
+visible to all three.
+
+**Why.** A row-based "owner recipient" is exactly the thing a bulk delete, a
+reassign or a careless edit removes, and a report nobody asked for receiving
+is a report nobody reads when it says *Action Needed*. The plan asked for the
+owner to be "enforced server-side"; a fact derived at send time cannot be
+un-enforced by any client, because no client holds it.
+
+The exclusion is the credentials-table lesson applied a fourth time: the
+dictionary view is pasted into a prompt, the role scripts refuse an object
+they have not been told about, and every `bas_` table is therefore a decision
+to make rather than a pattern to match. A model told about a table it is then
+refused writes a query that fails and reports it could not answer; telling it
+nothing is the honest schema.
+
+**What breaks if you undo it.** Make the owner a row and the first "clear
+recipients" removes them. Drop a table from any one of the lists and that
+script refuses to run - which is the point, and the reason `phb-bas`'s own
+read-only role script will stop at its gate until it learns the six names
+(`runbook.md` → *Reports (Phase 1)*).
+
+`docs/bas-reports-tab-plan.md` §A, §D1, §D7; `lib/modules/bas/reports/`;
+`tests/bas-reports-routes.test.ts`, `tests/bas-schema.test.ts`.

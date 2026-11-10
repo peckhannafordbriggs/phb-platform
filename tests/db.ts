@@ -20,6 +20,15 @@ export const testDb = new PrismaClient({
 // TRUNCATE does not fire row-level triggers, so the audit append-only trigger
 // does not block cleanup.
 const TABLES = [
+  // Reports (Phase 1). All of them reference employees, so TRUNCATE employees
+  // CASCADE would empty them anyway - including the shared library, whose
+  // seeded rows a test therefore re-installs with seedBasReportLibrary.
+  "bas_report_recipients",
+  "bas_report_questions",
+  "bas_report_definitions",
+  "bas_personal_questions",
+  "bas_library_questions",
+  "bas_site_occupancy",
   "fp_equipment",
   "fp_projects",
   "cip_run_transcripts",

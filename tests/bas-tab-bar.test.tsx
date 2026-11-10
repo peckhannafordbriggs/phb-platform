@@ -68,6 +68,7 @@ describe("the rendered tab bar", () => {
       "Projects",
       "Point Explorer",
       "Analyze",
+      "Reports",
       "Collection Health",
     ]);
 
@@ -84,6 +85,7 @@ describe("the rendered tab bar", () => {
       "Projects",
       "Point Explorer",
       "Analyze",
+      "Reports",
       "Collection Health",
       "Settings",
     ]);
@@ -105,7 +107,8 @@ describe("the rendered tab bar", () => {
     expect(tabs[tabs.length - 1]).toBe("Settings");
     expect(tabs.indexOf("Projects")).toBeLessThan(tabs.indexOf("Point Explorer"));
     expect(tabs.indexOf("Point Explorer")).toBeLessThan(tabs.indexOf("Analyze"));
-    expect(tabs.indexOf("Analyze")).toBeLessThan(tabs.indexOf("Collection Health"));
+    expect(tabs.indexOf("Analyze")).toBeLessThan(tabs.indexOf("Reports"));
+    expect(tabs.indexOf("Reports")).toBeLessThan(tabs.indexOf("Collection Health"));
     expect(tabs.indexOf("Collection Health")).toBeLessThan(tabs.indexOf("Settings"));
   });
 
