@@ -122,7 +122,10 @@ INSERT INTO collector_none (relname, reason) VALUES
     ('bas_report_recipients',   'email addresses'),
     ('bas_library_questions',   'the shared question library'),
     ('bas_personal_questions',  'an employee''s own saved questions'),
-    ('bas_site_occupancy',      'occupied hours a person entered; the collector reads occupancy from the station');
+    ('bas_site_occupancy',      'occupied hours a person entered; the collector reads occupancy from the station'),
+    -- Reports, Phase 2 (2026-11-11): documents the platform wrote.
+    ('bas_report_runs',         'report runs'),
+    ('bas_report_findings',     'report findings');
 
 CREATE TEMP TABLE collector_seq (relname text PRIMARY KEY);
 INSERT INTO collector_seq (relname) VALUES

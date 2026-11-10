@@ -87,6 +87,9 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
     "bas_report_recipients",
     "bas_library_questions",
     "bas_personal_questions",
+    // Reports (Phase 2): documents the platform wrote, with the model's prose.
+    "bas_report_runs",
+    "bas_report_findings",
   ];
 
   const BAS_VIEWS = [
@@ -140,7 +143,7 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
     const rows = await testDb.$queryRaw<Array<{ column_name: string }>>`
       SELECT DISTINCT column_name FROM bas_v_data_dictionary`;
     const columns = new Set(rows.map((r) => r.column_name));
-    for (const forbidden of ["password_ciphertext", "key_version", "owner_employee_id", "is_external", "inline_text"]) {
+    for (const forbidden of ["password_ciphertext", "key_version", "owner_employee_id", "is_external", "inline_text", "report_html", "likely_cause"]) {
       expect(columns.has(forbidden), `${forbidden} must not be exposed`).toBe(
         false,
       );

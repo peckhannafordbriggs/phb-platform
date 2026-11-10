@@ -84,6 +84,7 @@ model Employee {
   basPersonalQuestions     BasPersonalQuestion[] @relation("BasPersonalQuestionOwner")
   basRecipientsAdded       BasReportRecipient[]  @relation("BasRecipientAddedBy")
   basRecipientsConfirmed   BasReportRecipient[]  @relation("BasRecipientConfirmedBy")
+  basReportRunsStarted     BasReportRun[]        @relation("BasReportRunStartedBy")
 
   @@index([status])
   @@index([departmentId])
@@ -379,6 +380,8 @@ model BasEquipment {
 
   points BasPoint[]
 
+  reportFindings BasReportFinding[]
+
   @@unique([siteId, name])
   @@index([siteId])
   @@index([equipType])
@@ -599,6 +602,7 @@ model BasReportDefinition {
 
   questions  BasReportQuestion[]
   recipients BasReportRecipient[]
+  runs       BasReportRun[]
 
   /// A person does not get two reports with one name; the service also refuses a case-insensitive clash.
   @@unique([ownerEmployeeId, name])
@@ -720,6 +724,93 @@ model BasSiteOccupancy {
 
   @@id([siteId, weekday])
   @@map("bas_site_occupancy")
+}
+
+/// One execution of a report (Reports, Phase 2): the period it covered, what it cost, and the result it produced.
+model BasReportRun {
+  runId BigInt @id @default(autoincrement()) @map("run_id")
+
+  reportId BigInt              @map("report_id")
+  report   BasReportDefinition @relation(fields: [reportId], references: [reportId], onDelete: Restrict)
+
+  status  String @default("queued")
+  trigger String
+
+  periodStart DateTime @map("period_start") @db.Timestamptz()
+  periodEnd   DateTime @map("period_end") @db.Timestamptz()
+  /// The building's zone at run time, so the report's local times are reproducible after a zone change.
+  timezone    String
+
+  startedById String?   @map("started_by_id") @db.Uuid
+  startedBy   Employee? @relation("BasReportRunStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
+
+  budgetUsd    Decimal @map("budget_usd") @db.Decimal(8, 2)
+  costUsd      Decimal @default(0) @map("cost_usd") @db.Decimal(10, 6)
+  inputTokens  Int     @default(0) @map("input_tokens")
+  outputTokens Int     @default(0) @map("output_tokens")
+
+  startedAt   DateTime? @map("started_at") @db.Timestamptz()
+  heartbeatAt DateTime? @map("heartbeat_at") @db.Timestamptz()
+  finishedAt  DateTime? @map("finished_at") @db.Timestamptz()
+
+  error         String?
+  /// Why a run finished partial: the budget, a missing key, a declined call. Required when status is partial.
+  partialReason String? @map("partial_reason")
+
+  reportJson Json?   @map("report_json")
+  reportHtml String? @map("report_html")
+
+  previousRunId BigInt?        @map("previous_run_id")
+  previousRun   BasReportRun?  @relation("BasReportRunPrevious", fields: [previousRunId], references: [runId], onDelete: SetNull)
+  nextRuns      BasReportRun[] @relation("BasReportRunPrevious")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  findings          BasReportFinding[]
+  firstSeenFindings BasReportFinding[] @relation("BasReportFindingFirstSeen")
+
+  @@index([reportId, createdAt(sort: Desc)])
+  @@index([status])
+  @@map("bas_report_runs")
+}
+
+/// One structured finding of a run (Reports, Phase 2). The numbers live here; the model only words them.
+model BasReportFinding {
+  findingId BigInt @id @default(autoincrement()) @map("finding_id")
+
+  runId BigInt       @map("run_id")
+  run   BasReportRun @relation(fields: [runId], references: [runId], onDelete: Cascade)
+
+  position    Int
+  questionKey String @map("question_key")
+  section     String
+
+  /// `equipment:<id>` or `point:<id>`: what the finding is about, as the fingerprint keys it.
+  subjectKey String @map("subject_key")
+  /// The exact name at run time, kept after a rename or a delete.
+  subjectName String @map("subject_name")
+
+  equipmentId BigInt?       @map("equipment_id")
+  equipment   BasEquipment? @relation(fields: [equipmentId], references: [equipmentId], onDelete: SetNull)
+
+  issueCode String @map("issue_code")
+  priority  String
+  evidence  Json
+
+  likelyCause       String? @map("likely_cause")
+  recommendedAction String? @map("recommended_action")
+
+  /// sha256 of question_key | subject_key | issue_code, hex.
+  fingerprint String
+  state       String
+
+  firstSeenRunId BigInt?       @map("first_seen_run_id")
+  firstSeenRun   BasReportRun? @relation("BasReportFindingFirstSeen", fields: [firstSeenRunId], references: [runId], onDelete: SetNull)
+
+  @@index([runId, position])
+  @@index([fingerprint])
+  @@index([equipmentId])
+  @@map("bas_report_findings")
 }
 
 /// A record of all claude skills for the cost intelligence platform

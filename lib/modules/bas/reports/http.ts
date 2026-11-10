@@ -24,6 +24,8 @@ type ReportsErrorCode = Extract<
   | "recipient_exists"
   | "recipient_not_found"
   | "external_unconfirmed"
+  | "report_has_runs"
+  | "run_not_found"
 >;
 
 /**
@@ -59,6 +61,8 @@ const STATUS: Record<ReportsErrorCode, number> = {
   recipient_exists: 409,
   recipient_not_found: 404,
   external_unconfirmed: 409,
+  report_has_runs: 409,
+  run_not_found: 404,
 };
 
 function isReportsError(code: BasErrorCode): code is ReportsErrorCode {

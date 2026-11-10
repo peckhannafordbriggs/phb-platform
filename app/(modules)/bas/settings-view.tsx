@@ -27,6 +27,7 @@ import {
   fetchBasSettings,
   formatTimestamp,
   setStationCredential,
+  setBuildingOccupancy,
   updateBuilding,
   updateProject,
   updateStation,
@@ -604,6 +605,7 @@ function BuildingRow({
   run: Run;
 }) {
   const [editing, setEditing] = useState(false);
+  const [editingHours, setEditingHours] = useState(false);
   const [addingStation, setAddingStation] = useState(false);
 
   if (editing) {
@@ -635,6 +637,15 @@ function BuildingRow({
             {building.timezone}
             {building.address !== null && ` · ${building.address}`}
           </p>
+          {/*
+            The occupied hours (Reports, Phase 2): what a report falls back to
+            when no station on the building trends an occupancy point. Said
+            plainly when there are none, because a report of this building
+            then judges comfort and schedules against nothing.
+          */}
+          <p className="mt-0.5 text-xs text-[var(--muted)]">
+            Occupied hours: {describeOccupancyDays(building.occupancy)}
+          </p>
         </div>
         <div className="flex gap-2">
           <button
@@ -649,12 +660,33 @@ function BuildingRow({
             type="button"
             className={BUTTON}
             disabled={busy}
+            onClick={() => setEditingHours((v) => !v)}
+          >
+            Occupied hours
+          </button>
+          <button
+            type="button"
+            className={BUTTON}
+            disabled={busy}
             onClick={() => void run(() => deleteBuilding(building.siteId))}
           >
             Delete
           </button>
         </div>
       </div>
+
+      {editingHours && (
+        <OccupancyForm
+          initial={building.occupancy}
+          busy={busy}
+          onCancel={() => setEditingHours(false)}
+          onSubmit={async (days) => {
+            const ok = await run(() => setBuildingOccupancy(building.siteId, days));
+            if (ok) setEditingHours(false);
+            return ok;
+          }}
+        />
+      )}
 
       {building.stations.length === 0 ? (
         <p className="mt-3 text-sm text-[var(--muted)]">
@@ -811,6 +843,81 @@ function BuildingForm({
   );
 }
 
+const WEEKDAYS: Array<{ n: number; label: string }> = [
+  { n: 1, label: "Mon" },
+  { n: 2, label: "Tue" },
+  { n: 3, label: "Wed" },
+  { n: 4, label: "Thu" },
+  { n: 5, label: "Fri" },
+  { n: 6, label: "Sat" },
+  { n: 7, label: "Sun" },
+];
+
+/** "Mon 08:00-18:00, Tue 08:00-18:00", or "none entered". */
+export function describeOccupancyDays(days: ReadonlyArray<{ weekday: number; start: string; end: string }>): string {
+  if (days.length === 0) return "none entered";
+  return [...days]
+    .sort((a, b) => a.weekday - b.weekday)
+    .map((d) => `${WEEKDAYS[d.weekday - 1]?.label ?? d.weekday} ${d.start}-${d.end}`)
+    .join(", ");
+}
+
+/**
+ * The occupied-hours form (Reports, Phase 2): a row per weekday, ticked
+ * when occupied, with the start and end in the building's zone. The whole
+ * week is saved at once.
+ */
+function OccupancyForm({
+  initial,
+  busy,
+  onSubmit,
+  onCancel,
+}: {
+  initial: ReadonlyArray<{ weekday: number; start: string; end: string }>;
+  busy: boolean;
+  onSubmit: (days: Array<{ weekday: number; start: string; end: string }>) => Promise<boolean>;
+  onCancel: () => void;
+}) {
+  const [rows, setRows] = useState(() =>
+    WEEKDAYS.map((d) => {
+      const found = initial.find((i) => i.weekday === d.n);
+      return { weekday: d.n, on: found !== undefined, start: found?.start ?? "08:00", end: found?.end ?? "18:00" };
+    }),
+  );
+  const set = (weekday: number, patch: Partial<{ on: boolean; start: string; end: string }>) =>
+    setRows((current) => current.map((r) => (r.weekday === weekday ? { ...r, ...patch } : r)));
+
+  return (
+    <form
+      className="mt-3 space-y-2 rounded border border-[var(--border)] p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSubmit(rows.filter((r) => r.on).map((r) => ({ weekday: r.weekday, start: r.start, end: r.end })));
+      }}
+    >
+      <h4 className="text-sm font-medium text-[var(--foreground)]">Occupied hours</h4>
+      <p className="text-xs text-[var(--muted)]">
+        Used by a health report only when no station on this building trends an occupancy point. In the building&apos;s zone; 24:00 is the end of the day.
+      </p>
+      {rows.map((r) => (
+        <div key={r.weekday} className="flex items-center gap-3 text-sm">
+          <label className="flex w-16 items-center gap-1.5">
+            <input type="checkbox" checked={r.on} onChange={(e) => set(r.weekday, { on: e.target.checked })} />
+            {WEEKDAYS[r.weekday - 1]?.label}
+          </label>
+          <input className={`${FIELD} mt-0 w-28`} value={r.start} disabled={!r.on} onChange={(e) => set(r.weekday, { start: e.target.value })} placeholder="08:00" />
+          <span className="text-[var(--muted)]">to</span>
+          <input className={`${FIELD} mt-0 w-28`} value={r.end} disabled={!r.on} onChange={(e) => set(r.weekday, { end: e.target.value })} placeholder="18:00" />
+        </div>
+      ))}
+      <div className="flex gap-2 pt-1">
+        <button type="submit" className={BUTTON} disabled={busy}>Save hours</button>
+        <button type="button" className={BUTTON} disabled={busy} onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
 function StationRow({
   station,
   tree,
@@ -896,6 +1003,10 @@ function StationRow({
           {!station.isActive && (
             <span className="text-xs text-[var(--muted)]">inactive</span>
           )}
+          {/* Reports (Phase 2): which occupancy source a report of this building gets. */}
+          <span className="text-xs text-[var(--muted)]">
+            {station.hasOccupancyPoint ? "occupancy point trended" : "no occupancy point"}
+          </span>
         </div>
         <div className="flex gap-2">
           {/*

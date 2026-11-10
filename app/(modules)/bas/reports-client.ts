@@ -9,6 +9,7 @@ import type {
   ReportsList,
 } from "@/lib/modules/bas/reports/types";
 import type { ScheduleSpec } from "@/lib/modules/bas/reports/schedule";
+import type { RunsList } from "@/lib/modules/bas/reports/runs-service";
 import { formatInZone } from "@/lib/modules/bas/reports/schedule";
 import type {
   AddRecipientInput,
@@ -64,6 +65,8 @@ export const fetchReport = (reportId: string, signal?: AbortSignal) =>
 export const fetchReportOptions = (signal?: AbortSignal) => call<ReportOptions>("/options", { signal });
 export const fetchLibrary = (signal?: AbortSignal) => call<LibraryQuestionView[]>("/library", { signal });
 export const fetchPersonal = (signal?: AbortSignal) => call<PersonalQuestionView[]>("/personal", { signal });
+export const fetchRuns = (reportId: string | null, signal?: AbortSignal) =>
+  call<RunsList>(reportId === null ? "/runs" : `/runs?report=${encodeURIComponent(reportId)}`, { signal });
 
 export const createReport = (body: CreateReportInput) => call<{ reportId: string }>("", json("POST", body));
 export const updateReport = (reportId: string, body: UpdateReportInput) =>

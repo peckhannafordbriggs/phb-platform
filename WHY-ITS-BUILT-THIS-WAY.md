@@ -2948,3 +2948,86 @@ read-only role script will stop at its gate until it learns the six names
 
 `docs/bas-reports-tab-plan.md` §A, §D1, §D7; `lib/modules/bas/reports/`;
 `tests/bas-reports-routes.test.ts`, `tests/bas-schema.test.ts`.
+
+## 78 · Code computes, the model narrates: every number on a report page is read from a finding, and a flagged sensor is a Data Health row and nothing else
+
+**What I did.** Reports (Phase 2, 2026-11-10) splits a report's work in
+two. The engine - TypeScript, deterministic, tested with synthetic series
+whose answers are known - resolves the scope, measures coverage, decides
+what applies and what is monitored, runs the analyses, compares with the
+previous run and rolls the status up. Every finding it produces carries its
+evidence: the actual value, the expected one, the duration or the percent,
+and when. The model is called once per rendered section, is handed those
+findings as a data block, and returns a status sentence and, per finding by
+index, a likely cause worded as likely and a next check. Its answer is
+validated against a closed schema and matched to the findings by index; it
+cannot add a finding, drop one or change a number, because the renderer
+(`render.tsx`) reads every number from the finding's evidence and never
+from the prose. The call is estimated before it is made and the run stops
+at the budget, partial and saying so; a declined call leaves the section's
+evidence standing.
+
+Before any equipment question runs, Data Health runs, and every point it
+flags - offline, stale, flat, outside its physical range - is withheld from
+every other question. A flat sensor is one row under Data Health, not a
+zone that was in band all week.
+
+**Why.** A report is read by someone who may send a truck. The spec's whole
+structure is numbers under persistence rules and thresholds, and numbers
+are the thing a language model is worst at keeping straight across a page:
+a model asked to write the report would, sooner or later, state a percent
+that is not in the data, and nobody would know which one. Giving it only
+the wording of a finding the code already made bounds the damage to a
+wrong *cause* - which the page labels as likely and the reader checks - and
+never a wrong *fact*. It also makes the model optional: the run with no key
+is the same report without sentences, and the suite proves the engine with
+a fixed narrator and no model at all.
+
+The exclusion is the plausibility lesson applied to a second consumer. On
+the office, VAV-8's zone temperature has read exactly 70.5 °F for weeks.
+Offered to the comfort question it is a perfect zone; it is a dead sensor,
+and the comfort question was built never to see it. Data Health first is
+the ordering that makes every later "in band" a claim about a live reading.
+
+**What breaks if you undo it.** Let the renderer take a number from the
+narrative and the first transposed digit is on a page with the company's
+name on it. Let a flagged point through to the equipment questions and a
+dead sensor becomes the best-behaved zone in the building. Call the model
+per finding instead of per section and a weekly report at nine sections
+costs many times more for the same words. Drop the estimate before the
+call and a mis-set budget is discovered by the bill.
+
+`lib/modules/bas/reports/engine/` (`run.ts`, `narrative.ts`, `render.tsx`,
+`analysis/data-health.ts`); `tests/bas-reports-render.test.tsx` (*takes
+every number from the evidence*), `tests/bas-reports-engine.test.ts`
+(*keeps the flat point out of the comfort section*);
+`docs/bas-reports-phase-2-verification.md`.
+
+## 79 · Not Applicable is what the building has; Not Monitored is what it trends
+
+**What I did.** The plan's wording was "classify equipment from roles
+present: hydronic if `*_valve_cmd`, DX if `compressor_*`". The engine
+decides *applicability* from equipment type first - a boiler, chiller or
+plant row makes the hydronic questions apply; an RTU, split system, CRAC or
+VRF row makes the DX questions apply - and from roles only as a second way
+in. Whether an applicable question is *monitored* is then decided from
+roles and coverage, the missing groups named, a present but short one
+labelled *(coverage N %)*. Both outcomes are on the run page; neither
+touches the status.
+
+**Why.** The office has a rooftop unit with no compressor point trended.
+By roles alone the DX questions would be Not Applicable there, which reads
+as "this building has no DX cooling" - false, and the kind of false that
+hides an unmonitored unit forever, because Not Applicable is the one
+outcome nobody is asked to fix. Not Monitored with *compressor status or
+stage command* named is a work order.
+
+**What breaks if you undo it.** Classify by roles alone and every
+unmonitored unit leaves the report as Not Applicable, which is the opposite
+of what Jim's checklist asks the first remote building to show. Fold a
+coverage shortfall into "missing" and the next person trends a point that
+is already trended.
+
+`lib/modules/bas/reports/engine/inventory.ts`;
+`tests/bas-reports-analysis.test.ts` (*applies the hydronic questions to
+nothing on a DX-only building*, *a coverage shortfall is a miss*).

@@ -170,7 +170,14 @@ export type BasErrorCode =
    * client shows the warning and sends again. 409: well-formed, needs a
    * second deliberate step.
    */
-  | "external_unconfirmed";
+  | "external_unconfirmed"
+  /**
+   * The report has runs (Phase 2), which are kept indefinitely. Pause it
+   * instead; deleting would take its history with it. 409.
+   */
+  | "report_has_runs"
+  /** A run that does not exist, or whose report the viewer may not see. 404. */
+  | "run_not_found";
 
 export class BasError extends Error {
   constructor(

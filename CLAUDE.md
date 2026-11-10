@@ -1343,6 +1343,65 @@ with SQL; `mail.sent` is still the only record of who sent a vendor email, and
 `WHY-ITS-BUILT-THIS-WAY.md` § 73; `runbook.md` → *The audit log screen does
 not show a mail send, a BAS question or a profile change*.
 
+**Reports, Phase 1 - the tab, the library and the schedule; nothing runs
+(2026-11-10, PR #109).** A *Reports* tab in the BAS module between Analyze
+and Collection Health, four sub-tabs (Reports, Generated, Usage, Library),
+six `bas_*` tables (`add_bas_reports`), the spec's twenty questions
+(`docs/BAS Health Report Build Spec.md`, Jim, 27 October) seeded as the
+shared library with their sections, applies-to types and required roles,
+two locked presets as data (`health_weekly`, `health_daily`), definitions
+with questions, a schedule as a local time of day in the building's zone
+(`next_run_at` derived, never a day added to an instant, tested across the
+November change), recipients and a stored budget. **The owner is never a
+recipient row**: the sender adds the owner at send time and the API refuses
+the owner's address both ways. An address outside `phb1899.com` is refused
+until confirmed, and the audit row says `isExternal`. **Five of the six
+tables are platform configuration, not building data**: excluded from
+`bas_v_data_dictionary`, withheld from `bas_analyze` and `bas_collector`,
+not moved by the Azure migration script; `bas_site_occupancy` is building
+data and visible to all three. `WHY-ITS-BUILT-THIS-WAY.md` § 77;
+`runbook.md` → *Reports (Phase 1)*; `docs/bas-reports-tab-plan.md`.
+
+**Reports, Phase 2 - the engine core, proven on the office and the lab
+(2026-11-10).** `lib/modules/bas/reports/engine/` turns a definition and a
+period end into a stored run: scope (site → stations → equipment → points
+with roles), per-point coverage in SQL, the occupancy source per station
+(a trended `occupancy_status` point, else `occupancy_cmd`, else the
+building's occupied hours from the new Settings field, else none - and the
+report says which), Jim's Step 1 classification, Not Applicable (no unit
+of the type) against Not Monitored (the missing roles named, a shortfall
+labelled *(coverage N%)*), four analyses - Data Health (q20: offline,
+stale, flat by the plausibility thresholds, outside the physical range),
+zone comfort (q03/q04), overrides (q05, `occupancy_override`, the one
+override role the vocabulary has), run outside schedule (q19) - as pure
+functions over sample-and-hold series under the spec's persistence rule,
+fingerprints `sha256(question|subject|issue)` for New / Still open /
+Cleared and the carry-forward, a status roll-up that NA and NM never touch,
+one `claude-opus-5-5` call per rendered section writing ONLY the status
+sentence and each finding's likely cause and next check in the `docs/11`
+voice, estimated before each call and stopped at `budget_usd` (partial,
+with the reason), and a server-rendered React template that is both the
+Generated sub-tab's page and the standalone HTML stored on the run. **Code
+computes, the model narrates**: every number on the page is read from a
+finding and never from prose, and every point Data Health flags is
+withheld from every equipment question. Two tables, `bas_report_runs` and
+`bas_report_findings`, both platform-side and in every gated list;
+`bas_analyze` cannot read them. `npm run bas:report:run -- --definition
+<id> --period-end <iso>` is the only trigger: no scheduler, worker, PDF or
+email (Phases 3 and 4), and Q6-Q18 are decided but not analysed (Phase 5).
+**Measured on the office and the lab, not argued**: the office run stores
+one finding (VAV-8's zone temperature flat at 70.5 °F, under Data Health
+only), the hydronic sections Not Applicable, fourteen questions Not
+Monitored naming airflow, setpoint, compressor and fan-status roles, and a
+second run marks it still open; the lab run puts `points_RoomT` (-40 °F)
+under Data Health only. Each cost under a cent. Found on the way, now a
+rule: the office's damper and static points declare a 900 s interval and
+log on change (1,454 readings a week, one 47-hour silence), so **a point
+with more readings than its interval allows is change-of-value everywhere**
+(`COV_LIKE_FACTOR`) and its silences are held values, not holes.
+`docs/bas-reports-phase-2-verification.md` is the record;
+`WHY-ITS-BUILT-THIS-WAY.md` §§ 78-79; `runbook.md` → *Reports (Phase 2)*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -1467,3 +1526,6 @@ either anywhere else — point at them.
 | `docs/phase-12-part-e-plan.md` | **Part E, the plan, approved 2026-10-29:** a read-only reader identity with Read on the live tree, the state snapshot before each laptop run, both halves (the classifier as a scheduled shadow, the intake engine as a post-hoc replay with the Part C instrument), Phase 13's schedule without its alerts, the STOP file, the daily report, exit by path coverage with a ten-laptop-weekday floor, the cost, what `PHASE-13.md` now gets wrong, the owner's eight decisions (§ 14) and the dates counting the IT grant (§ 15) |
 | `docs/phase-12-part-e-equivalence.md` | **Part E: what counts as equivalent**, written 2026-09-22 before any comparison ran so the bar cannot be set to fit a disagreement; recovered and re-checked 2026-10-28 |
 | `docs/phase-12-part-e-verification.md` | **Part E's record:** what E1–E6 built and where it is held, the one finding from the real engine on the way, then day one, the weeks, every disagreement, the path coverage table at close, what the window proves and does not |
+| `docs/BAS Health Report Build Spec.md` | **Jim's spec for the BAS health report** (27 October 2026): the twenty questions with their sections, applies-to and points required, the persistence rules, the Not Applicable / Not Monitored rule and the template every report follows |
+| `docs/bas-reports-tab-plan.md` | **The Reports tab plan:** the decisions from the clarifying round, the data model, the engine's twelve steps, the seven phases and what each is done when |
+| `docs/bas-reports-phase-2-verification.md` | **Reports Phase 2's record:** the office and the lab runs verbatim, the bar item by item, the change-of-value coverage finding, what the tests prove with synthetic series, what the phase does not prove, and the deviations from the plan with their reasons |
