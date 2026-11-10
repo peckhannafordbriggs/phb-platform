@@ -1036,6 +1036,9 @@ model KbSyncRun {
   filesFailed    Int @default(0) @map("files_failed")
   filesRemoved   Int @default(0) @map("files_removed")
   chunksWritten  Int @default(0) @map("chunks_written")
+  /// Passages this sync gave a vector to, and the tokens Azure counted for them.
+  chunksEmbedded  Int @default(0) @map("chunks_embedded")
+  embeddingTokens Int @default(0) @map("embedding_tokens")
 
   error String?
 

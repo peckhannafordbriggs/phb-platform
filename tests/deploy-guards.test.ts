@@ -1506,6 +1506,20 @@ describe("the Knowledge Base worker job", () => {
     expect(job).toMatch(/maxExecutions: 1\b/);
   });
 
+  it("gives the app and the job the embedding endpoint and deployment as plain values, and never a key", async () => {
+    const bicep = (await read("infra/main.bicep")).replace(/\r\n/g, "\n");
+    expect(bicep).not.toContain("KB_EMBEDDING_API_KEY");
+    expect(bicep).not.toMatch(/KB-EMBEDDING/);
+    for (const [name, param] of [
+      ["KB_EMBEDDING_ENDPOINT", "kbEmbeddingEndpoint"],
+      ["KB_EMBEDDING_DEPLOYMENT", "kbEmbeddingDeployment"],
+    ]) {
+      expect(bicep.match(new RegExp(`name:\\s*'${name}'\\s*\\n\\s*value:\\s*${param}\\b`, "g"))).toHaveLength(2);
+      expect(bicep).toMatch(new RegExp(`param ${param} string = ''`));
+    }
+    expect(await jobBlock()).toMatch(/name:\s*'KB_EMBEDDING_ENDPOINT'/);
+  });
+
   it("is built and updated by the deploy workflow only once the job exists", async () => {
     const workflow = await read(".github/workflows/deploy.yml");
     expect(workflow).toMatch(

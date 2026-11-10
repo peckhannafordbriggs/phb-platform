@@ -6,6 +6,9 @@ import { GRAPH_PARALLEL, limiter, type FolderReader, type StoreEntry } from "@/l
 import { KNOWLEDGE_BASE_MODULE_KEY } from "./constants";
 import { parseFileName, pickLatest, type KbParsedName } from "./naming";
 import { classifyPath, type KbScopeDecision } from "./scope";
+import { azureEmbedder, KB_EMBEDDING_MODEL, type KbEmbedder } from "./embed";
+import { embedPending } from "./embedder";
+import { readKbEmbeddingEnv } from "./env";
 import { indexPending, type KbIndexCounts } from "./indexer";
 import { kbSource, type KbSource } from "./source";
 import type { KbSyncTrigger } from "./types";
@@ -82,6 +85,11 @@ export type KbSyncOutcome = {
   /** Read cleanly with no text: also counted in filesSkipped. */
   filesEmpty: number;
   chunksWritten: number;
+  /** Passages given a vector this sync, and the tokens Azure counted. */
+  chunksEmbedded: number;
+  embeddingTokens: number;
+  /** Why embedding did not run or did not finish; null when it completed or was not asked for. */
+  embedding: { state: "done" | "not_configured" | "stopped" | "skipped"; message: string | null };
   errors: KbProjectError[];
   /** Why a failed sync failed, in plain words. */
   message: string | null;
@@ -107,6 +115,8 @@ const EMPTY = {
   filesFailed: 0,
   filesEmpty: 0,
   chunksWritten: 0,
+  chunksEmbedded: 0,
+  embeddingTokens: 0,
 };
 
 /** A queued sync no worker has picked up in this long is closed, so it stops blocking. */
@@ -222,6 +232,10 @@ export async function syncKnowledgeBase(options: {
   source?: KbSource;
   /** Read new and changed files into passages. Default true; false lists only. */
   index?: boolean;
+  /** Embed passages that have no vector. Default true; skipped when embeddings are not configured. */
+  embed?: boolean;
+  /** An embedder instead of Azure OpenAI from the environment (tests). */
+  embedder?: KbEmbedder;
   /** A sync the worker already claimed (claimQueuedKbSync): run it rather than start a new one. */
   claimedId?: string;
   now?: () => Date;
@@ -241,7 +255,14 @@ export async function syncKnowledgeBase(options: {
       trigger: options.trigger,
       error: choice.message,
     });
-    return { syncId: options.claimedId ?? null, status: "failed", ...EMPTY, errors: [], message: choice.message };
+    return {
+      syncId: options.claimedId ?? null,
+      status: "failed",
+      ...EMPTY,
+      embedding: { state: "skipped", message: null },
+      errors: [],
+      message: choice.message,
+    };
   }
   const { source } = choice;
 
@@ -274,7 +295,15 @@ export async function syncKnowledgeBase(options: {
       data: { status: "failed", finishedAt: now(), projectsSeen: errors.length, error: message },
     });
     await kbAudit("kb.sync_failed", options.triggeredById, { syncId, trigger: options.trigger, error: message });
-    return { syncId, status: "failed", ...EMPTY, projectsSeen: errors.length, errors, message };
+    return {
+      syncId,
+      status: "failed",
+      ...EMPTY,
+      projectsSeen: errors.length,
+      embedding: { state: "skipped", message: null },
+      errors,
+      message,
+    };
   };
 
   try {
@@ -335,11 +364,18 @@ export async function syncKnowledgeBase(options: {
       totals.filesSkipped += indexed.filesEmpty;
     }
 
+    const embedding = await embedStep(options, heartbeat, totals);
+    const finalStatus = status === "ok" && embedding.state === "stopped" ? "partial" : status;
+    const problems = [
+      ...(errors.length > 0 ? [describeErrors(projectErrors)] : []),
+      ...(embedding.state === "stopped" && embedding.message ? [embedding.message] : []),
+    ];
+
     await prisma.$transaction(async (tx) => {
       await tx.kbSyncRun.update({
         where: { id: syncId },
         data: {
-          status,
+          status: finalStatus,
           finishedAt: now(),
           projectsSeen: totals.projectsSeen,
           filesSeen: totals.filesSeen,
@@ -349,7 +385,10 @@ export async function syncKnowledgeBase(options: {
           filesIndexed: totals.filesIndexed,
           filesFailed: totals.filesFailed,
           chunksWritten: totals.chunksWritten,
-          error: errors.length > 0 ? describeErrors(projectErrors) : null,
+          chunksEmbedded: totals.chunksEmbedded,
+          embeddingTokens: totals.embeddingTokens,
+          embeddingModel: totals.chunksEmbedded > 0 ? KB_EMBEDDING_MODEL : null,
+          error: problems.length > 0 ? problems.join(" ") : null,
         },
       });
 
@@ -357,16 +396,68 @@ export async function syncKnowledgeBase(options: {
         action: "kb.synced",
         actorEmployeeId: options.triggeredById,
         moduleKey: KNOWLEDGE_BASE_MODULE_KEY,
-        metadata: { syncId, trigger: options.trigger, source: source.kind, status, ...totals, projectsFailed: errors.length },
+        metadata: {
+          syncId,
+          trigger: options.trigger,
+          source: source.kind,
+          status: finalStatus,
+          ...totals,
+          embedding: embedding.state,
+          projectsFailed: errors.length,
+        },
       });
     });
 
-    return { syncId, status, ...totals, errors: projectErrors, message: null };
+    return { syncId, status: finalStatus, ...totals, embedding, errors: projectErrors, message: null };
   } catch (error) {
     await fail(
       "The sync stopped unexpectedly. Projects and documents already saved keep their new state; running it again continues.",
     ).catch(() => undefined);
     throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Embedding
+// ---------------------------------------------------------------------------
+
+/**
+ * The sync's last step. Not configured is not a failure: the index works on
+ * keyword search alone, and says so. A refusal from Azure (quota, key, role)
+ * stops embedding, makes the sync `partial`, and leaves the rest for the next.
+ */
+async function embedStep(
+  options: { embed?: boolean; embedder?: KbEmbedder },
+  heartbeat: () => Promise<unknown>,
+  totals: { chunksEmbedded: number; embeddingTokens: number },
+): Promise<KbSyncOutcome["embedding"]> {
+  if (options.embed === false) return { state: "skipped", message: null };
+  try {
+    let embedder = options.embedder;
+    if (!embedder) {
+      const env = readKbEmbeddingEnv();
+      if (!env.present) {
+        return { state: "not_configured", message: `Embedding is not configured (${env.missing.join(", ")}).` };
+      }
+      embedder = azureEmbedder(env.values);
+    }
+    const counts = await embedPending({
+      embedder,
+      onProgress: async (c) => {
+        totals.chunksEmbedded = c.chunksEmbedded;
+        totals.embeddingTokens = c.embeddingTokens;
+        await heartbeat();
+      },
+    });
+    totals.chunksEmbedded = counts.chunksEmbedded;
+    totals.embeddingTokens = counts.embeddingTokens;
+    return { state: "done", message: null };
+  } catch (error) {
+    logUnexpected("kb.embedding_stopped", error, { moduleKey: KNOWLEDGE_BASE_MODULE_KEY });
+    return {
+      state: "stopped",
+      message: `Embedding stopped after ${totals.chunksEmbedded} passages: ${errorText(error)} The next sync continues.`,
+    };
   }
 }
 

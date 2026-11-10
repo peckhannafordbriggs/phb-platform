@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { readKbEmbeddingEnv } from "./env";
 
 /**
  * What the Knowledge Base admin screen shows: the recent syncs, how many
@@ -48,13 +49,25 @@ export async function getKbIndexStatus() {
       filesFailed: s.filesFailed,
       filesRemoved: s.filesRemoved,
       chunksWritten: s.chunksWritten,
+      chunksEmbedded: s.chunksEmbedded,
+      embeddingTokens: s.embeddingTokens,
       error: s.error,
     })),
     documents,
     chunks: { total: chunks, embedded: embedded[0]?.n ?? 0 },
+    /** Whether this process could embed: the variables are present (not that Azure accepts them). */
+    embeddingConfigured: safeEmbeddingConfigured(),
     failed: failed.map((d) => ({ id: d.id, path: `${d.project.folderName}/${d.path}`, error: d.error ?? "" })),
   };
 }
 
 export type KbIndexStatus = Awaited<ReturnType<typeof getKbIndexStatus>>;
 export type KbSyncSummary = KbIndexStatus["syncs"][number];
+
+function safeEmbeddingConfigured(): boolean {
+  try {
+    return readKbEmbeddingEnv().present;
+  } catch {
+    return false; // a key in production: misconfigured, so not usable
+  }
+}

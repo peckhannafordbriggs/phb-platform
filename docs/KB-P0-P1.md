@@ -288,6 +288,28 @@ waits. `searchPassages` (`lib/modules/knowledge-base/search.ts`):
 found first and in the top five, mean reciprocal rank. The same set is the
 before-and-after for embeddings.
 
+## Embeddings (2026-11-10)
+
+`text-embedding-3-small` on the KB's Foundry resource, called through the
+OpenAI-compatible **v1 API** (`<host>/openai/v1/embeddings`, the deployment name
+as `model`), so no `api-version` has to be chosen or kept current. `embed.ts`:
+
+- **Written by the sync, last.** `embedPending` embeds every indexed passage with a
+  NULL vector, current versions first, 64 per request, and writes a vector only
+  where there is still none. It reads the backlog from the database, not from the
+  sync's list, so everything indexed before KB-2 is covered by the first sync after.
+- **What is embedded**: file name, project and location, then the passage. The
+  name carries what a page often lacks ("Air Valves submittal, page 14").
+- **Failure is partial, never fatal.** Not configured: the sync is `ok` and says
+  so. A refusal: the sync is `partial` with the reason, the index is untouched,
+  the next sync continues. Tests never reach Azure: `tests/setup.ts` clears the
+  `KB_EMBEDDING_*` variables, and the suite uses a fake embedder.
+- **Identity**: an API key locally; the managed identity in production (scope
+  `https://ai.azure.com/.default`, role *Cognitive Services OpenAI User*), which the
+  app also gets so that search can embed a question.
+- **Search does not use the vectors yet.** Hybrid retrieval (keyword plus vector,
+  merged) is the next step, measured with `npm run kb:eval` before and after.
+
 ## Open questions
 
 - **Shared history and leavers.** `kb_conversations.employee_id` cascades on

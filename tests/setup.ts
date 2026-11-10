@@ -78,6 +78,14 @@ delete process.env.GRAPH_MANAGED_IDENTITY_CLIENT_ID;
 // Cost Intelligence reads SharePoint when these are set; tests use local folders.
 delete process.env.CIP_SHAREPOINT_SKILLS_FOLDER;
 delete process.env.CIP_SHAREPOINT_PROJECTS_FOLDER;
+// The Knowledge Base reads SharePoint and calls Azure OpenAI when these are
+// set. A test sync must never index the real library or spend embedding
+// quota: tests pass a local source and a fake embedder themselves.
+delete process.env.KB_SHAREPOINT_LIBRARY_URL;
+delete process.env.KB_LOCAL_SOURCE_DIR;
+delete process.env.KB_EMBEDDING_ENDPOINT;
+delete process.env.KB_EMBEDDING_DEPLOYMENT;
+delete process.env.KB_EMBEDDING_API_KEY;
 
 // The send gate must be off unless a test turns it on.
 process.env.PHB_ALLOW_SEND = "false";

@@ -144,6 +144,12 @@
     "kbSharePointLibraryUrl": {
       "value": ""
     },
+    "kbEmbeddingEndpoint": {
+      "value": ""
+    },
+    "kbEmbeddingDeployment": {
+      "value": ""
+    },
 
     "coReviewAppTenantId": {
       "value": ""

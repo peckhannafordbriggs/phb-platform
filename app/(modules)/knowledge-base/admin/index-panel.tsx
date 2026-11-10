@@ -137,7 +137,10 @@ export function IndexPanel({ initial }: { initial: KbIndexStatus }) {
         </dl>
         <p className="mt-3 text-sm text-[var(--muted)]">
           {chunks.total.toLocaleString()} passages, {chunks.embedded.toLocaleString()} embedded.
-          {chunks.embedded < chunks.total && " Embedding waits for Azure OpenAI; keyword search works now."}
+          {chunks.embedded < chunks.total &&
+            (status.embeddingConfigured
+              ? " The rest are embedded by the next sync."
+              : " Embedding is not configured here; keyword search works on all of them.")}
         </p>
       </section>
 
@@ -156,7 +159,8 @@ export function IndexPanel({ initial }: { initial: KbIndexStatus }) {
                   <th className="py-1.5 pr-4 text-right font-medium">Files</th>
                   <th className="py-1.5 pr-4 text-right font-medium">Indexed</th>
                   <th className="py-1.5 pr-4 text-right font-medium">Failed</th>
-                  <th className="py-1.5 text-right font-medium">Passages</th>
+                  <th className="py-1.5 pr-4 text-right font-medium">Passages</th>
+                  <th className="py-1.5 text-right font-medium">Embedded</th>
                 </tr>
               </thead>
               <tbody>
@@ -171,7 +175,10 @@ export function IndexPanel({ initial }: { initial: KbIndexStatus }) {
                     <td className="py-1.5 pr-4 text-right tabular-nums">{s.filesSeen.toLocaleString()}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{s.filesIndexed.toLocaleString()}</td>
                     <td className="py-1.5 pr-4 text-right tabular-nums">{s.filesFailed.toLocaleString()}</td>
-                    <td className="py-1.5 text-right tabular-nums">{s.chunksWritten.toLocaleString()}</td>
+                    <td className="py-1.5 pr-4 text-right tabular-nums">{s.chunksWritten.toLocaleString()}</td>
+                    <td className="py-1.5 text-right tabular-nums" title={`${s.embeddingTokens.toLocaleString()} tokens`}>
+                      {s.chunksEmbedded.toLocaleString()}
+                    </td>
                   </tr>
                 ))}
               </tbody>

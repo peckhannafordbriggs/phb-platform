@@ -11254,6 +11254,47 @@ below are done.
 6. Press **Index now** and watch the first execution:
    `az containerapp job execution list --name <baseName>-kb-worker -g <rg>`.
 
+## Knowledge Base embeddings
+
+**What they are.** Every passage gets a vector of 1,536 numbers from Azure
+OpenAI's `text-embedding-3-small` (Foundry), stored in `kb_chunks.embedding`.
+They are written by the **sync's last step** (`lib/modules/knowledge-base/embedder.ts`),
+after indexing, for every indexed passage that has none - so the first sync after
+configuring them embeds everything indexed before, and a sync that stops half way
+is finished by the next. What is embedded is the file name and location, then the
+passage text (`embeddingInput` in `embed.ts`).
+
+**Turning them on locally.** In `.env.local`: `KB_EMBEDDING_ENDPOINT` (the
+resource URL or the deployment's Target URI; only the host is used),
+`KB_EMBEDDING_DEPLOYMENT` (the deployment's name) and `KB_EMBEDDING_API_KEY`. Then
+`npm run kb:embed:check`: one request, no database, prints the URL, the vector width
+(must be 1536), tokens and time. Then restart `kb:worker` and press **Index now**.
+
+**In production** there is no key: the app and the worker sign in with the managed
+identity, which needs the role *Cognitive Services OpenAI User* on the Foundry
+resource (request KB-2), and the template parameters `kbEmbeddingEndpoint` and
+`kbEmbeddingDeployment`. `KB_EMBEDDING_API_KEY` set in production is refused.
+
+**How long and how much.** Batches of 64 passages. Azure's quota on the deployment
+(tokens per minute) sets the pace: a 429 is waited out for as long as Azure says,
+up to six tries per batch. Tokens per run are on the admin screen (hover the
+*Embedded* count) and in `kb_sync_runs.embedding_tokens`.
+
+| What you see | Cause and fix |
+|---|---|
+| *Could not reach ... : ... (UNABLE_TO_GET_ISSUER_CERT_LOCALLY)* or another certificate code | A proxy on the network is inspecting HTTPS and Node does not trust its certificate (Node keeps its own list, not Windows'). Set `NODE_OPTIONS=--use-system-ca` before starting the process, or `NODE_EXTRA_CA_CERTS` to the proxy's root certificate. `curl.exe` working while Node fails is the sign |
+| *Could not reach ... : ... ENOTFOUND* | The host name does not resolve: the endpoint is misspelt, or the network or VPN cannot see it |
+| *Could not reach ... : fetch failed* with no code | Run `npm run kb:embed:check` again on the current code, which prints the code; then the two rows above |
+| Admin: *Embedding is not configured here* | The three variables above are missing in the process that runs the sync. Not an error: keyword search works on every passage |
+| Sync `partial`, *Embedding stopped after N passages: ... 401* | The key (locally) or token (production) was refused. Check `KB_EMBEDDING_API_KEY`, or the managed identity |
+| ... *403* | The identity has no *Cognitive Services OpenAI User* role on the resource |
+| ... *404* | No deployment by that name on that host, or the endpoint is a different resource |
+| ... *429* after six tries | The deployment's tokens-per-minute quota is too low for the backlog. Raise it in Foundry, or let successive syncs finish it |
+| ... *N-dimension vectors* | The deployment is not `text-embedding-3-small`. Changing model is a migration plus a full re-embed, never a variable change |
+
+In every case the passages embedded so far keep their vectors, the rest stay NULL
+(keyword search still finds them), and the next sync continues.
+
 ## Knowledge Base search finds nothing, or the wrong file
 
 Search is **keyword** search for now (`lib/modules/knowledge-base/search.ts`):

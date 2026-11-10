@@ -283,6 +283,12 @@ param kbAppClientId string = ''
 @description('The Knowledge Base library: ids:<driveId> (the whole Documents library) or ids:<driveId>/<itemId>.')
 param kbSharePointLibraryUrl string = ''
 
+@description('Azure OpenAI (Foundry) endpoint for Knowledge Base embeddings: the resource URL or the deployment\'s Target URI; only its host is used. Not a secret. Both the app and the KB worker read it; they sign in with the managed identity (role Cognitive Services OpenAI User on the resource), never a key.')
+param kbEmbeddingEndpoint string = ''
+
+@description('Name of the text-embedding-3-small deployment on that resource.')
+param kbEmbeddingDeployment string = ''
+
 // Change Orders → Needs Review (2026-10-21). A third app registration,
 // phb-platform-co-review, read-only on the automation's _needs_review folder
 // through Files.SelectedOperations.Selected - never the mail app, whose
@@ -931,6 +937,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'CO_REVIEW_SHAREPOINT_FOLDER'
               value: coReviewSharePointFolder
             }
+            {
+              name: 'KB_EMBEDDING_ENDPOINT'
+              value: kbEmbeddingEndpoint
+            }
+            {
+              name: 'KB_EMBEDDING_DEPLOYMENT'
+              value: kbEmbeddingDeployment
+            }
           ]
           probes: [
             {
@@ -1255,6 +1269,14 @@ resource kbWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableKbWorker) {
             {
               name: 'KB_SHAREPOINT_LIBRARY_URL'
               value: kbSharePointLibraryUrl
+            }
+            {
+              name: 'KB_EMBEDDING_ENDPOINT'
+              value: kbEmbeddingEndpoint
+            }
+            {
+              name: 'KB_EMBEDDING_DEPLOYMENT'
+              value: kbEmbeddingDeployment
             }
           ]
         }
