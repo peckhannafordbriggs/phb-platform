@@ -85,6 +85,33 @@ Do not introduce microservices, event buses, Kubernetes, custom auth, custom ema
 infrastructure, workflow engines, or plugin frameworks. If a task seems to require one,
 stop and ask.
 
+## UI
+
+Every screen is drawn with the shared kit in `components/ui/`: buttons, cards,
+pills, the segmented control, the tab bar, tables, dropdowns, form fields, the
+empty state and the callout. **For new UI the kit is the rule, not a suggestion.**
+A module does not write its own button. If the kit lacks a piece, add it to the
+kit, with the two properties the rest of it has:
+
+- **No behaviour.** A component takes values and callbacks; handlers and data
+  live in the view that renders it.
+- **No colour of its own.** It reads the platform tokens in `app/globals.css` and
+  the module header's `--module-accent`, so the same button is red in Change
+  Orders and teal in Cost Intelligence without either module telling it so. The
+  three fills a button may take and the five tones a state may take are
+  platform decisions recorded in the kit; a tone is a state (ok, warn, bad,
+  draft, muted), never decoration.
+
+What the kit decides is the *physical* style: the control radius, the card
+surface and its shadow, the 36px button, the pill, through the `--radius-*` and
+`--shadow-*` tokens. What a module decides is its palette and its own
+components (a funnel, a chart, a folder tree). A module-local `ui/` directory,
+where one still exists, only re-exports the kit at the path the module's views
+import from; it holds no styles.
+
+Promoted from the Cost Intelligence kit on 2026-11-10. `WHY-ITS-BUILT-THIS-WAY.md`
+§ 78 has the reasoning; `tests/ui-kit.test.tsx` holds the kit to these rules.
+
 ## Definition of done
 
 A phase is not complete because code exists. Completion is demonstrated behavior.

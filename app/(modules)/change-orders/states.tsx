@@ -1,3 +1,5 @@
+import { Button } from "@/components/ui";
+
 /**
  * The four states every pane needs, in one place so they read identically
  * wherever they appear.
@@ -144,24 +146,12 @@ export function MailErrorState({
 }) {
   const retry =
     onRetry === undefined ? null : (
-      <button
-        type="button"
-        onClick={onRetry}
-        className="rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3.5 py-2 text-sm transition-colors hover:bg-[var(--neutral-50)]"
-      >
-        Try again
-      </button>
+      <Button onClick={onRetry}>Try again</Button>
     );
 
   const back =
     onBack === undefined ? null : (
-      <button
-        type="button"
-        onClick={onBack}
-        className="rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3.5 py-2 text-sm transition-colors hover:bg-[var(--neutral-50)]"
-      >
-        {backLabel}
-      </button>
+      <Button onClick={onBack}>{backLabel}</Button>
     );
 
   const actions =

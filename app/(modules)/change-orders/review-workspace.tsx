@@ -25,6 +25,7 @@ import {
   type ReviewNoteResult,
 } from "./review-client";
 import { MessageListSkeleton, PaneMessage, ReadingPaneSkeleton } from "./states";
+import { Pill } from "@/components/ui";
 
 /**
  * The Needs Review tab: the notes in `_needs_review`, grouped by subject, and
@@ -295,9 +296,7 @@ function GroupRows({
         <p className="min-w-0 truncate text-sm font-medium" title={group.subject}>
           {group.subject}
         </p>
-        <p className="shrink-0 text-xs text-[var(--muted)]">
-          {group.notes.length === 1 ? "1 note" : `${group.notes.length} notes`}
-        </p>
+        <Pill tone="muted">{group.notes.length === 1 ? "1 note" : `${group.notes.length} notes`}</Pill>
       </div>
       <ul>
         {group.notes.map((note) => {
@@ -309,12 +308,24 @@ function GroupRows({
                 onClick={() => onSelect(note.id)}
                 aria-current={active ? "true" : undefined}
                 className={
-                  "block w-full rounded-[var(--radius-row)] px-3.5 py-2.5 text-left transition-colors " +
+                  "relative block w-full overflow-hidden rounded-[var(--radius-row)] px-3.5 py-2.5 text-left transition-shadow " +
                   (active
-                    ? "bg-[var(--neutral-100)]"
+                    ? "bg-white shadow-[var(--shadow-row)] ring-1 ring-[var(--neutral-200)]"
                     : "hover:bg-[var(--neutral-50)]")
                 }
               >
+                {/*
+                  The selected note reads as a selected message does in the
+                  Mailbox tab: a rule in the module's colour, never a filled
+                  row (2026-11-10).
+                */}
+                {active && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-y-0 left-0 w-[3px]"
+                    style={{ background: "var(--module-accent, var(--phb-purple))" }}
+                  />
+                )}
                 <div className="flex items-baseline justify-between gap-3 text-xs text-[var(--muted)]">
                   <span className="min-w-0 truncate">{describeFrom(note)}</span>
                   <span className="shrink-0 font-mono tabular-nums">{formatStamp(note)}</span>
@@ -342,9 +353,7 @@ export function NoteView({ note }: { note: ReviewNote }) {
 
   return (
     <article className="border-b border-[var(--border)] px-6 py-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-        {note.reason ?? "Needs review"}
-      </p>
+      <p className="eyebrow text-[var(--muted)]">{note.reason ?? "Needs review"}</p>
       <h2 className="mt-1 text-base font-semibold" title={note.subject ?? undefined}>
         {note.subject ?? fileNameHint(note.itemId)}
       </h2>
@@ -405,7 +414,7 @@ export function NoteView({ note }: { note: ReviewNote }) {
 function Section({ heading, text }: { heading: string; text: string | null }) {
   return (
     <section>
-      <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">{heading}</h3>
+      <h3 className="eyebrow text-[var(--muted)]">{heading}</h3>
       {text === null ? (
         <p className="mt-1 text-sm italic text-[var(--muted)]">Not stated in the note.</p>
       ) : (

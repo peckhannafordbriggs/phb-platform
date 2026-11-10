@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Button, INPUT } from "@/components/ui";
 import type { DerivedDraftMode } from "@/lib/modules/change-orders/mail/types";
 import { FolderTree } from "./folder-tree";
 import { buildFolderTree, type FolderNode, type FolderTreeNode } from "./mailbox-client";
@@ -59,37 +60,18 @@ export function MessageActions({
     <div className="flex flex-wrap items-center gap-2">
       {canRespond &&
         RESPOND_LABELS.map(({ mode, label, title }) => (
-          <button
-            key={mode}
-            type="button"
-            disabled={busy}
-            onClick={() => onRespond(mode)}
-            title={title}
-            className="rounded border border-[var(--border)] px-2.5 py-1 text-xs hover:bg-[var(--surface)] disabled:opacity-50"
-          >
+          <Button key={mode} size="sm" disabled={busy} onClick={() => onRespond(mode)} title={title}>
             {label}
-          </button>
+          </Button>
         ))}
 
-      <button
-        type="button"
-        disabled={busy}
-        onClick={onMove}
-        title="File this message into another folder"
-        className="rounded border border-[var(--border)] px-2.5 py-1 text-xs hover:bg-[var(--surface)] disabled:opacity-50"
-      >
+      <Button size="sm" disabled={busy} onClick={onMove} title="File this message into another folder">
         Move…
-      </button>
+      </Button>
 
-      <button
-        type="button"
-        disabled={busy}
-        onClick={onDelete}
-        title="Move this message to Deleted Items"
-        className="rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--phb-maroon)] hover:bg-[var(--neutral-100)] disabled:opacity-50"
-      >
+      <Button size="sm" variant="danger" disabled={busy} onClick={onDelete} title="Move this message to Deleted Items">
         Delete…
-      </button>
+      </Button>
     </div>
   );
 }
@@ -144,7 +126,7 @@ export function FolderPicker({
         too.
       </p>
 
-      <div className="mt-3 max-h-72 overflow-y-auto rounded border border-[var(--border)] bg-[var(--surface)]">
+      <div className="mt-3 max-h-72 overflow-y-auto rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--surface)]">
         <FolderTree
           nodes={tree}
           selectedId={selected?.id ?? null}
@@ -282,7 +264,7 @@ export function ComposePrompt({
           onKeyDown={(event) => {
             if (event.key === "Enter" && !busy) onCreate(subject);
           }}
-          className="w-full rounded border border-[var(--border)] px-2 py-1.5 text-sm disabled:bg-[var(--surface)]"
+          className={INPUT}
         />
       </label>
       <p className="mt-1 text-xs text-[var(--muted)]">
@@ -329,7 +311,7 @@ function Dialog({
         onKeyDown={(event) => {
           if (event.key === "Escape") onCancel?.();
         }}
-        className="w-full max-w-md rounded border border-[var(--border)] bg-white p-5 shadow-lg"
+        className="card w-full max-w-md p-5"
       >
         {children}
       </div>
@@ -354,22 +336,21 @@ function DialogButtons({
 }) {
   return (
     <div className="mt-4 flex justify-end gap-2">
-      <button
-        type="button"
-        onClick={onCancel}
-        disabled={busy}
-        className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50"
-      >
+      <Button onClick={onCancel} disabled={busy}>
         Cancel
-      </button>
+      </Button>
       {/* Disabled the instant it is clicked, like the send button: a second
-          click while the first is in flight is a second write. */}
+          click while the first is in flight is a second write.
+
+          The kit's shape with the module's own colours (2026-11-10): the
+          platform accent for an ordinary confirm, maroon for a destructive one,
+          exactly as before the kit - neither is the red of a Send button. */}
       <button
         type="button"
         onClick={onConfirm}
         disabled={busy || confirmDisabled}
         className={
-          "rounded px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50 " +
+          "inline-flex h-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] px-4 text-[0.8125rem] font-medium text-white transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-50 " +
           (confirmTone === "danger"
             ? "bg-[var(--phb-maroon)]"
             : "bg-[var(--phb-purple)]")
