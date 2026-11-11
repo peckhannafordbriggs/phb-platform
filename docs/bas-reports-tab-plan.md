@@ -90,7 +90,7 @@ The owner is never a recipient *row*; the worker always adds the owner's employe
 
 ### D2. Jobs (Container Apps, same patterns as CIP and the backup)
 
-- **`bas-reports-scheduler`** — cron every 15 minutes (UTC). For each active definition with `next_run_at <= now`: insert one `queued` run and advance `next_run_at` in the same transaction (missed ticks collapse into one run). Pauses definitions whose owner is inactive.
+- **`bas-reports-scheduler`** (Azure job `<baseName>-bas-reports-sched` since 2026-11-11: the full word made the name 34 characters against Azure's cap of 32, and the first deployment failed on it; the worker is `<baseName>-bas-reports-worker`) — cron every 15 minutes (UTC). For each active definition with `next_run_at <= now`: insert one `queued` run and advance `next_run_at` in the same transaction (missed ticks collapse into one run). Pauses definitions whose owner is inactive.
 - **`bas-reports-worker`** — KEDA PostgreSQL scaler on `count(*) where status='queued' or (running and heartbeat stale)`, exactly like `cip-worker`; claims a run with `FOR UPDATE SKIP LOCKED`, heartbeats, executes, writes results, sends mail. Max 2 parallel; 30-minute replica timeout.
 - Both use one image (`bas-reports:<sha>`, Node + Playwright Chromium), built by `deploy.yml` on merge like `cip-worker`, behind `enableBasReports` in `main.bicep` with the image passed as `basReportsImage`. Secrets by reference: `DATABASE-URL` (writes) and `BAS-ASK-DATABASE-URL` (the read-only role for planner SQL), `ANTHROPIC-API-KEY`.
 - "Run now" from the UI inserts a `queued` row; the worker's scaler picks it up within its polling interval.

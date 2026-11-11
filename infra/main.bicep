@@ -1253,7 +1253,13 @@ resource cipWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableCipWorker) {
 // ---------------------------------------------------------------------------
 
 resource basReportsSchedulerJob 'Microsoft.App/jobs@2024-03-01' = if (enableBasReports) {
-  name: '${baseName}-bas-reports-scheduler'
+  // 30 characters with the production baseName. Azure caps a Container Apps
+  // Job name at 32 and '-bas-reports-scheduler' took this one to 34: the first
+  // deployment (2026-11-11) failed on it with ContainerAppInvalidName after
+  // the worker below had already been created. The worker keeps its name (31)
+  // because it exists. tests/deploy-guards.test.ts computes every app and job
+  // name with the production values and holds each to the rule.
+  name: '${baseName}-bas-reports-sched'
   location: location
   tags: tags
   identity: {
