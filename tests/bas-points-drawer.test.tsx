@@ -107,12 +107,17 @@ const equipment: SettingsEquipment[] = [
 
 const roots: Array<{ root: Root; host: HTMLDivElement }> = [];
 
+/**
+ * The row's handlers, typed as the drawer declares them so a test can read a
+ * call's arguments (`mock.calls[0][1]`) - an untyped `vi.fn()` has no
+ * parameters, and `tsc` refuses the index.
+ */
 function handlers() {
   return {
-    onSaveLabel: vi.fn(async () => undefined),
-    onSetRole: vi.fn(async () => undefined),
-    onSetEquipment: vi.fn(async () => undefined),
-    onToggleVisible: vi.fn(),
+    onSaveLabel: vi.fn<(point: SettingsPoint, label: string | null) => Promise<void>>(async () => undefined),
+    onSetRole: vi.fn<(point: SettingsPoint, role: string | null) => Promise<void>>(async () => undefined),
+    onSetEquipment: vi.fn<(point: SettingsPoint, equipmentId: string | null) => Promise<void>>(async () => undefined),
+    onToggleVisible: vi.fn<(point: SettingsPoint, visible: boolean) => void>(),
   };
 }
 
@@ -242,7 +247,7 @@ describe("the drawer", () => {
 
   it("stays open and says so when the label save fails", async () => {
     const h = handlers();
-    h.onSaveLabel = vi.fn(async () => {
+    h.onSaveLabel.mockImplementation(async () => {
       throw new Error("refused");
     });
     const { host } = await render([point()], h);
