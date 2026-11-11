@@ -11,10 +11,15 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * The runs - the Reports bar's first item and the tab's default view since
  * 2026-11-11, the Generated sub-tab before (Reports, Phase 2): every run the viewer may see,
  * newest first, with its period, status, duration and cost. Opening one
- * shows the rendered report. No Resend, no Download PDF, no Re-run: those
- * are Phase 4 and 3, and a button that does nothing would be worse than
- * none.
+ * shows the rendered report. Reloaded every ten seconds while the tab is
+ * visible (Phase 3), so a run queued from Scheduled is seen to start and
+ * finish; Queued and Running are states a row can hold now. No Resend and
+ * no Download PDF: those are Phase 4, and a button that does nothing would
+ * be worse than none.
  */
+
+/** How often the list reloads while the tab is visible. */
+export const RUNS_POLL_MS = 10_000;
 
 export const RUN_STATUS_LABELS: Record<RunSummary["status"], string> = {
   queued: "Queued",
@@ -68,6 +73,13 @@ export function GeneratedView() {
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
+  }, [load]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, RUNS_POLL_MS);
+    return () => clearInterval(timer);
   }, [load]);
 
   if (data === null) {

@@ -1,5 +1,7 @@
 import type {
+  LastRunView,
   LibraryQuestionView,
+  OwnerTransfer,
   PersonalQuestionView,
   RecipientView,
   ReportDetail,
@@ -73,6 +75,12 @@ export const updateReport = (reportId: string, body: UpdateReportInput) =>
   call<{ changed: boolean; nextRunAt: string | null }>(`/${encodeURIComponent(reportId)}`, json("PATCH", body));
 export const deleteReport = (reportId: string) =>
   call<{ deleted: boolean }>(`/${encodeURIComponent(reportId)}`, { method: "DELETE" });
+/** Run now (Phase 3): queue a run; 202 with the run id, or 409 run_in_flight. */
+export const requestRun = (reportId: string) =>
+  call<{ runId: string }>(`/${encodeURIComponent(reportId)}/runs`, { method: "POST" });
+/** Transfer the report to another owner (Phase 3, module admin). */
+export const transferOwner = (reportId: string, ownerEmployeeId: string) =>
+  call<OwnerTransfer>(`/${encodeURIComponent(reportId)}/owner`, json("PATCH", { ownerEmployeeId }));
 export const changeReportState = (reportId: string, action: ReportStateAction) =>
   call<ReportStateChange>(`/${encodeURIComponent(reportId)}/state`, json("POST", { action }));
 
@@ -194,6 +202,27 @@ export function describeStations(selected: number, onSite: number): string {
 /** "2 + owner" - the recipient column never forgets the one recipient who is not a row. */
 export function describeRecipients(additional: number): string {
   return additional === 0 ? "owner only" : `${additional} + owner`;
+}
+
+/**
+ * The newest run in the Scheduled list's words (Phase 3): the state, and
+ * when - queued and running say when they were queued or started, the rest
+ * when they finished - as the viewer's clock reads it. Null is the honest
+ * "No runs yet".
+ */
+export function describeLastRun(run: LastRunView | null, now: Date = new Date()): string {
+  if (run === null) return "No runs yet";
+  const at = run.status === "queued" ? run.createdAt : run.status === "running" ? (run.startedAt ?? run.createdAt) : (run.finishedAt ?? run.createdAt);
+  const label = run.status === "queued" ? "Queued" : run.status === "running" ? "Running" : run.status === "succeeded" ? "Succeeded" : run.status === "partial" ? "Partial" : "Failed";
+  return `${label} ${describeAgo(new Date(at), now)}`;
+}
+
+function describeAgo(at: Date, now: Date): string {
+  const s = Math.max(0, Math.round((now.getTime() - at.getTime()) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86_400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86_400)} d ago`;
 }
 
 export const OWNER_ROW_LABEL = "Report owner · required";

@@ -26,6 +26,9 @@ type ReportsErrorCode = Extract<
   | "external_unconfirmed"
   | "report_has_runs"
   | "run_not_found"
+  | "run_in_flight"
+  | "admin_required"
+  | "owner_not_eligible"
 >;
 
 /**
@@ -63,6 +66,11 @@ const STATUS: Record<ReportsErrorCode, number> = {
   external_unconfirmed: 409,
   report_has_runs: 409,
   run_not_found: 404,
+  run_in_flight: 409,
+  // The one 403 here: the report is visible to the person (they own it), so
+  // 404 would be a lie, and what they lack is the admin flag, not access.
+  admin_required: 403,
+  owner_not_eligible: 409,
 };
 
 function isReportsError(code: BasErrorCode): code is ReportsErrorCode {

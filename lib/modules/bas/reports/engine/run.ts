@@ -10,8 +10,9 @@ import { carriedForward, compareFindings, type PreviousFinding } from "./compare
 import { decideQuestion, equipmentTypesFound } from "./inventory";
 import type { Narrator, NarrativeInput } from "./narrative";
 import { renderReportHtml } from "./html";
+import { ReportRunError, enqueueRun } from "./queue";
 import { buildingStatus, sectionStatus, topFindings } from "./rollup";
-import { WINDOW_MS, loadDefinition, resolveScope, type DefinitionForRun } from "./scope";
+import { loadDefinition, resolveScope, type DefinitionForRun } from "./scope";
 import type {
   Finding,
   Interval,
@@ -37,9 +38,22 @@ import type {
  * Status is decided at the end: `succeeded` when everything ran and every
  * section with findings has its narrative; `partial` with a reason when the
  * narrative was cut short - by the budget, by a missing key, by a declined
- * call - or when a question that could have run has no analysis yet;
- * `failed` with the error when the run threw. A failed run is stored too,
- * so the Generated tab can show it.
+ * call - or when a question that could have run has no analysis yet, or
+ * when the run's time cap was reached (Phase 3); `failed` with the error
+ * when the run threw. A failed run is stored too, so the Reports list can
+ * show it.
+ *
+ * THE RUN ROW COMES FIRST (Phase 3). A run is a row in `queued` before it
+ * is anything else: the scheduler and Run now insert one with `enqueueRun`,
+ * the worker claims it (`running`, heartbeat) and calls `executeQueuedRun`.
+ * The dev script's `executeReportRun` is the same three steps in one call,
+ * so there is one execution path and the worker is on it.
+ *
+ * TWO CAPS. The cost budget stops narrative calls at `budget_usd`. The time
+ * cap, `max_minutes`, is a deadline read from the clock before every
+ * question and every narrative call; past it, what is left is skipped and
+ * named in the reason. Neither cap aborts: the comparison, the roll-up and
+ * the page are always produced from whatever was computed.
  */
 
 export interface RunOptions {
@@ -50,6 +64,16 @@ export interface RunOptions {
   /** Null means no model is configured; the run finishes partial and says so. */
   narrator: Narrator | null;
   now?: Date;
+  /** The clock the time cap reads, in epoch milliseconds. Tests move it. */
+  clock?: () => number;
+}
+
+export interface ExecuteOptions {
+  narrator: Narrator | null;
+  now?: Date;
+  clock?: () => number;
+  /** Which claim of the run this is: 1 normally, 2 after a reclaim. In the audit row. */
+  attempt?: number;
 }
 
 export interface RunOutcome {
@@ -60,66 +84,82 @@ export interface RunOutcome {
   findings: number;
 }
 
-export class ReportRunError extends Error {
-  constructor(
-    readonly code: "report_not_found" | "run_failed",
-    message: string,
-  ) {
-    super(message);
-    this.name = "ReportRunError";
-  }
-}
+/** A question the time cap stopped before it was analysed. */
+export const TIME_CAP_NOTE = "Not analysed: the run reached its time cap before this question.";
 
+// The queue side lives in queue.ts, which imports no React: the service and
+// the scheduler queue runs through it without pulling in the renderer.
+export { ReportRunError, enqueueRun };
+
+/**
+ * Queue, claim and execute in one call - the dev script's path, and the
+ * tests'. The worker does the same three things through `claimNextRun` and
+ * `executeQueuedRun`.
+ */
 export async function executeReportRun(reportIdText: string | bigint, options: RunOptions): Promise<RunOutcome> {
   const reportId = typeof reportIdText === "bigint" ? reportIdText : BigInt(reportIdText);
-  const def = await loadDefinition(reportId);
-  if (def === null) throw new ReportRunError("report_not_found", `No report definition ${reportId}.`);
+  const now = options.now ?? new Date();
+  const { runId } = await enqueueRun(prisma, {
+    reportId,
+    trigger: options.trigger,
+    periodEnd: options.periodEnd,
+    startedById: options.startedById,
+  });
+  await prisma.basReportRun.update({
+    where: { runId },
+    data: { status: "running", startedAt: now, heartbeatAt: now, attempts: { increment: 1 } },
+  });
+  return executeQueuedRun(runId, { narrator: options.narrator, now, clock: options.clock, attempt: 1 });
+}
+
+/**
+ * Execute a run that has been claimed (`running`). Reads the period and the
+ * trigger from the row, loads the definition as it is now, marks the previous
+ * finished run for the comparison, and stores the result - or the failure.
+ */
+export async function executeQueuedRun(runIdInput: bigint | string, options: ExecuteOptions): Promise<RunOutcome> {
+  const runId = typeof runIdInput === "bigint" ? runIdInput : BigInt(runIdInput);
+  const row = await prisma.basReportRun.findUnique({
+    where: { runId },
+    select: { reportId: true, status: true, trigger: true, periodStart: true, periodEnd: true, startedById: true, attempts: true },
+  });
+  if (row === null) throw new ReportRunError("run_not_found", `No run ${runId}.`);
+  if (row.status !== "running") throw new ReportRunError("run_not_claimed", `Run ${runId} is ${row.status}; it has to be claimed before it is executed.`);
+
+  const def = await loadDefinition(row.reportId);
+  if (def === null) throw new ReportRunError("report_not_found", `No report definition ${row.reportId}.`);
 
   const now = options.now ?? new Date();
-  const range: Interval = { start: options.periodEnd.getTime() - WINDOW_MS[def.analysisWindow], end: options.periodEnd.getTime() };
+  const clock = options.clock ?? Date.now;
+  const range: Interval = { start: row.periodStart.getTime(), end: row.periodEnd.getTime() };
+  const trigger: "manual" | "scheduled" = row.trigger === "scheduled" ? "scheduled" : "manual";
 
   const previous = await prisma.basReportRun.findFirst({
-    where: { reportId, status: { in: ["succeeded", "partial"] } },
+    where: { reportId: row.reportId, status: { in: ["succeeded", "partial"] }, runId: { not: runId } },
     orderBy: [{ finishedAt: "desc" }, { runId: "desc" }],
     select: { runId: true },
   });
 
-  const run = await prisma.$transaction(async (tx) => {
-    const created = await tx.basReportRun.create({
-      data: {
-        reportId,
-        status: "running",
-        trigger: options.trigger,
-        periodStart: new Date(range.start),
-        periodEnd: new Date(range.end),
-        timezone: def.site.timezone,
-        startedById: options.startedById,
-        budgetUsd: new Prisma.Decimal(def.budgetUsd.toFixed(2)),
-        startedAt: now,
-        heartbeatAt: now,
-        previousRunId: previous?.runId ?? null,
-      },
-      select: { runId: true },
-    });
+  await prisma.$transaction(async (tx) => {
+    await tx.basReportRun.update({ where: { runId }, data: { previousRunId: previous?.runId ?? null } });
     await writeAuditEvent(tx, {
       action: "bas.report_run_started",
-      actorEmployeeId: options.startedById,
+      actorEmployeeId: row.startedById,
       moduleKey: BAS_MODULE_KEY,
       metadata: {
-        reportId: reportId.toString(),
-        runId: created.runId.toString(),
+        reportId: row.reportId.toString(),
+        runId: runId.toString(),
         name: def.name,
-        trigger: options.trigger,
-        periodStart: new Date(range.start).toISOString(),
-        periodEnd: new Date(range.end).toISOString(),
+        trigger,
+        attempt: options.attempt ?? row.attempts,
+        periodStart: row.periodStart.toISOString(),
+        periodEnd: row.periodEnd.toISOString(),
       },
     });
-    return created;
   });
-  const runId = run.runId;
 
   try {
-    const result = await produce(def, range, runId, previous?.runId ?? null, options, now);
+    const result = await produce(def, range, runId, previous?.runId ?? null, options.narrator, now, clock);
     await prisma.$transaction(async (tx) => {
       await tx.basReportRun.update({
         where: { runId },
@@ -158,10 +198,10 @@ export async function executeReportRun(reportIdText: string | bigint, options: R
       }
       await writeAuditEvent(tx, {
         action: "bas.report_run_finished",
-        actorEmployeeId: options.startedById,
+        actorEmployeeId: row.startedById,
         moduleKey: BAS_MODULE_KEY,
         metadata: {
-          reportId: reportId.toString(),
+          reportId: row.reportId.toString(),
           runId: runId.toString(),
           name: def.name,
           status: result.status,
@@ -177,7 +217,7 @@ export async function executeReportRun(reportIdText: string | bigint, options: R
     });
     logger.info("bas.report_run", {
       outcome: result.status,
-      reason: `run ${runId} of report ${reportId}: $${result.document.cost.costUsd.toFixed(4)}, ${result.rows.length} findings`,
+      reason: `run ${runId} of report ${row.reportId}: $${result.document.cost.costUsd.toFixed(4)}, ${result.rows.length} findings`,
     });
     return {
       runId: runId.toString(),
@@ -195,12 +235,12 @@ export async function executeReportRun(reportIdText: string | bigint, options: R
       });
       await writeAuditEvent(tx, {
         action: "bas.report_run_finished",
-        actorEmployeeId: options.startedById,
+        actorEmployeeId: row.startedById,
         moduleKey: BAS_MODULE_KEY,
-        metadata: { reportId: reportId.toString(), runId: runId.toString(), name: def.name, status: "failed", error: message },
+        metadata: { reportId: row.reportId.toString(), runId: runId.toString(), name: def.name, status: "failed", error: message },
       });
     });
-    logger.error("bas.report_run_failed", { outcome: "failed", reason: `run ${runId} of report ${reportId}: ${message}` });
+    logger.error("bas.report_run_failed", { outcome: "failed", reason: `run ${runId} of report ${row.reportId}: ${message}` });
     throw new ReportRunError("run_failed", message);
   }
 }
@@ -218,9 +258,18 @@ async function produce(
   range: Interval,
   runId: bigint,
   previousRunId: bigint | null,
-  options: RunOptions,
+  narrator: Narrator | null,
   now: Date,
+  clock: () => number,
 ): Promise<Produced> {
+  // The time cap: a deadline on the clock, read before every question and
+  // every narrative call. Past it, nothing new is started.
+  const startedMs = clock();
+  const deadlineMs = startedMs + def.maxMinutes * 60_000;
+  const pastDeadline = () => clock() > deadlineMs;
+  const skippedQuestions: number[] = [];
+  const skippedNarrative: string[] = [];
+
   const scope = await resolveScope(def, range);
   const tz = def.site.timezone;
 
@@ -256,6 +305,7 @@ async function produce(
       metrics: {},
     };
 
+    // Data Health is already computed above, so the cap never skips it.
     if (q.key === "q20_data_health") {
       rawFindings.push(...health.findings);
       results.push({ ...base, metrics: { judged: health.judged, flagged: health.findings.length } });
@@ -263,6 +313,11 @@ async function produce(
     }
     if (availability === "derived") {
       results.push({ ...base, metrics: {} });
+      continue;
+    }
+    if (pastDeadline()) {
+      results.push({ ...base, outcome: "not_run", reason: TIME_CAP_NOTE });
+      skippedQuestions.push(q.position);
       continue;
     }
 
@@ -428,19 +483,21 @@ async function produce(
         : questions.every((q) => q.outcome === "not_run" || q.outcome === "not_applicable")
           ? "not_run"
           : "not_monitored";
+    const notRunSentence = questions.filter((q) => q.outcome === "not_run").every((q) => q.reason === TIME_CAP_NOTE)
+      ? TIME_CAP_NOTE
+      : NOT_BUILT_NOTE;
     sections.push({
       key: s.key,
       label: s.label,
       status,
-      statusSentence: status === "good" ? "Everything judged was within tolerance." : status === "not_monitored" ? "The points this section needs are not trended, or not trended enough; see the inventory." : status === "not_run" ? NOT_BUILT_NOTE : "",
+      statusSentence: status === "good" ? "Everything judged was within tolerance." : status === "not_monitored" ? "The points this section needs are not trended, or not trended enough; see the inventory." : status === "not_run" ? notRunSentence : "",
       questions,
       findings,
     });
   }
 
-  // The narrative, within the budget.
+  // The narrative, within the budget and the time cap.
   const cost = { inputTokens: 0, outputTokens: 0, costUsd: 0, calls: 0 };
-  const narrator = options.narrator;
   const toNarrate = sections.filter((s) => (s.status === "watch" || s.status === "action_needed") && s.findings.some((f) => f.state !== "cleared"));
   let narrated = 0;
   if (narrator === null) {
@@ -448,6 +505,10 @@ async function produce(
   } else {
     const periodLabel = `${new Date(range.start).toISOString().slice(0, 10)} to ${new Date(range.end).toISOString().slice(0, 10)}`;
     for (const section of toNarrate) {
+      if (pastDeadline()) {
+        skippedNarrative.push(section.label);
+        continue;
+      }
       const live = section.findings.filter((f) => f.state !== "cleared");
       const input: NarrativeInput = {
         buildingName: def.site.name,
@@ -482,6 +543,15 @@ async function produce(
         f.fixLocation = out.fixLocation === "unknown" ? null : out.fixLocation;
       }
     }
+  }
+
+  if (skippedQuestions.length > 0 || skippedNarrative.length > 0) {
+    const elapsedMin = Math.max(1, Math.round((clock() - startedMs) / 60_000));
+    const parts = [
+      skippedQuestions.length > 0 ? `${skippedQuestions.map((p) => `Q${p}`).join(", ")} not analysed` : null,
+      skippedNarrative.length > 0 ? `narrative skipped for ${skippedNarrative.join(", ")}` : null,
+    ].filter((p): p is string => p !== null);
+    partialReasons.unshift(`Time cap of ${def.maxMinutes} min reached after ${elapsedMin} min: ${parts.join("; ")}`);
   }
 
   const liveFindings = comparison.findings;

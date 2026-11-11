@@ -11258,6 +11258,227 @@ A run is one workflow against one project. The web app only queues it
 `cip-worker` image from `Dockerfile.cip-worker`). Every run works on a copy of the
 project and only ever adds files to the project's `AI FILES` folder.
 
+## Reports: turning the jobs on
+
+**What they are.** Two Container Apps Jobs from one image, `bas-reports:<sha>`
+(`Dockerfile.bas-reports`, Node only until Phase 4 adds Chromium), both behind
+`enableBasReports` in `infra/main.bicep`:
+
+| Job | Trigger | Runs | Needs |
+|---|---|---|---|
+| `<baseName>-bas-reports-scheduler` (`basReportsSchedulerJob`) | cron, `basReportsSchedulerCron`, default `*/15 * * * *` (UTC) | `scripts/bas-reports-scheduler.ts`, one pass: for every active report whose `next_run_at` has passed, ONE queued run and the next run time advanced in the same transaction; active reports whose owner's account is disabled are paused as *Paused - owner disabled* with the reason on the row | `DATABASE-URL` by reference, nothing else |
+| `<baseName>-bas-reports-worker` (`basReportsWorkerJob`) | a PostgreSQL scaler counting queued runs and stalled ones, every 15 s, two executions at most | `scripts/bas-reports-worker.ts`: claims runs with `FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the Phase 2 engine, exits when the queue is empty or after its four-minute drain window | `DATABASE-URL`, `BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` (the BAS key) by reference |
+
+Same identity (`<baseName>-identity`), same registry pull and vault read; **no
+role assignment is added**, so a Contributor deploys this exactly as the CIP
+worker was deployed. The worker's replica timeout is 30 minutes, above the
+longest time cap a report may set (25) plus the drain window (4). A report
+that missed several ticks - the job was off, the platform was down - gets one
+run for the latest occurrence and never a backfill.
+
+**Built 2026-11-12, not yet turned on.** Nothing exists in Azure until the
+steps below are done. Both scripts were run end to end against the
+development database the same day (the record is in the pull request), and
+`tests/bas-reports-jobs.test.ts` holds every rule above against the real
+test database, including the two scripts as child processes under tsx.
+`tests/deploy-guards.test.ts` pins the template, the workflow and the
+Dockerfile. The date of the first execution in Azure goes here when it has
+run.
+
+### Turning it on, once, in this order
+
+The jobs name an image in the platform's registry, and a deployment that
+references an image that is not there fails at the job - the same shape as
+`enableCipWorker` and `enableDbBackup`.
+
+1. **Build the image, once, by hand**, from a checkout of `main` at the
+   commit you mean to run (afterwards `deploy.yml` rebuilds it on every merge,
+   step 5). Needs `AcrPush` or Contributor on the registry; `az acr build`
+   runs the build in Azure, so Docker is not needed locally.
+
+   ```bash
+   SHA="$(git rev-parse --short HEAD)"
+   az acr build --registry <registry-name> --image "bas-reports:$SHA" --file Dockerfile.bas-reports .
+   az acr repository show-tags --name <registry-name> --repository bas-reports -o tsv
+   ```
+
+2. **In `infra/main.parameters.json`** add, beside `enableCipWorker`:
+
+   ```json
+   "enableBasReports": { "value": true },
+   "basReportsSchedulerCron": { "value": "*/15 * * * *" }
+   ```
+
+   `basReportsImage` is **not** in the file: like `containerImage` and
+   `cipWorkerImage` it is passed on the command line, read from the running
+   job on every later deployment so a redeploy cannot reset it.
+
+3. **Deploy the template**, `what-if` first, then `create`, as under *Deploy*
+   in `infra/README.md`, passing the three images and neither secure parameter:
+
+   ```bash
+   IMAGE="$(az containerapp show -n <app> -g <resource-group> --query properties.template.containers[0].image -o tsv)"
+   CIP="$(az containerapp job show -n <baseName>-cip-worker -g <resource-group> --query properties.template.containers[0].image -o tsv)"
+   REPORTS="<registry-name>.azurecr.io/bas-reports:$SHA"     # from step 1; later, read it from the worker job the same way as CIP
+
+   az deployment group what-if --subscription <subscription-id> --resource-group <resource-group> \
+     --template-file infra/main.bicep --parameters @infra/main.parameters.json \
+     --parameters containerImage="$IMAGE" cipWorkerImage="$CIP" basReportsImage="$REPORTS"
+   # Expect exactly two resources as Create - the two jobs - nothing as Delete,
+   # and NO Microsoft.Authorization/roleAssignments anywhere in the list.
+   az deployment group create ... (the same arguments)
+   ```
+
+   The three secrets the jobs reference (`DATABASE-URL`, `BAS-ASK-DATABASE-URL`,
+   `ANTHROPIC-API-KEY`) all exist in the production vault (set 2026-10-13 and
+   2026-10-16); a vault without one of them fails the worker job at creation,
+   which is the right time to find out.
+
+4. **Run the scheduler once by hand, and look.** On the Scheduled list,
+   activate a report (or use one that is active) and note its next run; set
+   nothing else. Then:
+
+   ```bash
+   az containerapp job start -n <baseName>-bas-reports-scheduler -g <resource-group>
+   az containerapp job execution list -n <baseName>-bas-reports-scheduler -g <resource-group> -o table   # one execution, Succeeded
+   az containerapp job logs show -n <baseName>-bas-reports-scheduler -g <resource-group> --container bas-reports-scheduler
+   # "[bas-reports-scheduler] 0 queued, 0 paused, 0 skipped" is the expected line
+   # when no report is due yet; a due report prints "queued run <id> of report <id>".
+   ```
+
+   To see a run happen without waiting for a schedule: *Run now* on the
+   Scheduled list. The run shows *Queued* in its Last run cell; within fifteen
+   seconds the worker job starts an execution
+   (`az containerapp job execution list -n <baseName>-bas-reports-worker ...`),
+   the cell reads *Running*, and then *Succeeded* or *Partial* with the run
+   on the Reports list and its page. The worker's log names the run:
+   `[bas-reports-worker] run <id> of report <id>: done`. In the database:
+
+   ```sql
+   SELECT run_id, report_id, status, trigger, attempts, created_at, started_at, finished_at, partial_reason, error
+     FROM bas_report_runs ORDER BY run_id DESC LIMIT 10;
+   ```
+
+   The first worker execution can fail to pull the image or to resolve a
+   secret while RBAC on the new job settles; start *Run now* again a minute
+   later. Record the date of the first successful execution at the top of
+   this section.
+
+5. **Set the two repository variables** `AZURE_BAS_REPORTS_SCHEDULER_JOB` and
+   `AZURE_BAS_REPORTS_WORKER_JOB` to the `basReportsSchedulerJobName` and
+   `basReportsWorkerJobName` outputs. From the next push to `main`,
+   `deploy.yml` builds `bas-reports:<sha>` and points both jobs at it, after
+   the web app answers. Until they are set those steps are skipped, and the
+   jobs keep running the image from step 1.
+
+**Turning it off.** `enableBasReports: false` and a template deployment
+removes both jobs; queued runs stay queued in the table until a worker
+exists again, and `Run now` keeps queueing them. Pausing every report from
+the Scheduled list is the gentler stop: the scheduler then queues nothing.
+
+**What it costs, roughly, per month.** The scheduler: 96 executions a day of
+a few seconds each on 0.5 vCPU, inside the environment's free grant. The
+worker: one execution per run, about ten seconds of 1 vCPU for a building the
+size of the office, plus the model - about a cent a run on the office and the
+lab (`docs/bas-reports-phase-2-verification.md`). A weekly report on three
+buildings is under a dollar a month all in.
+
+## Reports: a run is stuck or failed
+
+**Symptom.** A run on the Reports list, or in a report's Last run cell, reads
+*Queued* or *Running* for longer than it should, or *Failed*.
+
+**Queued for more than fifteen minutes.** The worker job is not starting
+executions. `az containerapp job execution list -n <baseName>-bas-reports-worker -g <rg> -o table`:
+none at all means the scaler cannot count - the `database-url` secret on the
+job, or the database firewall's Azure-services rule (the same two causes as
+*A Cost Intelligence run stays Queued*); executions that start and fail at
+once mean the container cannot boot - `az containerapp job logs show` names a
+missing variable or an image that will not pull. Nothing is lost: the run is
+a row, and the first execution that works takes it. Locally, `npm run
+bas:reports:worker` drains the same queue.
+
+**Running, and the Reports list shows no change for ten minutes.** The worker
+that held it stopped - killed by the platform, out of memory, or the
+execution's 30-minute timeout. After ten minutes without a heartbeat the next
+worker execution **reclaims it once** (`attempts` goes to 2, `started_at`
+restarts) and runs it from the beginning; nothing from the first attempt was
+stored, because a run's results are written in one transaction at the end.
+If it stalls again it is **failed**, with the error *The worker stopped twice
+while running this report. Run it again from Scheduled; if it stops again,
+see the runbook entry "Reports: a run is stuck or failed"* - this entry.
+Twice is a pattern, not bad luck: look at the worker's execution logs for the
+two attempts (`az containerapp job execution list`, then `logs show` for each),
+and at the run's period and building. A building with far more points than
+the office may be hitting the execution timeout before the engine's own time
+cap; lower the report's time cap (*Reports: what the caps do*) so the engine
+stops itself and stores a partial report rather than being killed.
+
+**Failed, with the engine's own error.** The text under *Failed* is the
+exception the engine threw, stored verbatim; the run's page says the same
+and has no report. *React is not defined* is its own entry (*A run failed
+with "React is not defined"*). Anything else: the error names the point,
+the query or the step; `bas.report_run_finished` in the audit table carries
+it too. Fix the cause, then *Run now*.
+
+**Run now says a run is already queued or running.** One run in flight per
+report, by design: a second would produce two reports for the same period
+and mark the first's findings *still open* an hour after they were new.
+Wait for the one in flight, which the Reports list shows; if it is stuck,
+this entry.
+
+**The report reads "Paused - owner disabled".** The scheduler paused it
+because its owner's account is disabled; the reason under the state chip
+names the account and the date. It runs again when a module admin transfers
+it to another owner: the report's editor, *Recipients* → *Transfer to
+another owner* (admins only). The transfer resumes it with the next run
+computed from now; `bas.report_owner_transferred` records who did it and
+that it resumed.
+
+## Reports: what the caps do
+
+Every run carries two caps, both set on the report in its editor under
+*Limits* (and the module defaults for a new report in
+`lib/modules/bas/reports/service.ts`: `DEFAULT_REPORT_BUDGET_USD`, $2, and
+`DEFAULT_REPORT_MAX_MINUTES`, 20). Neither aborts a run. When either is
+reached the engine finishes the sections it has, renders the page from them,
+stores the run as **Partial**, and the reason - which cap, and what was left
+out - is on the run's row (under *Partial* on the Reports list) and at the
+top of the report page (*Partial report: ...*).
+
+**The cost budget** (`budget_usd`). Before every narrative call the engine
+estimates the call and stops asking the model when the run's spend would
+pass the budget; the sections after that show their evidence with code's
+status sentence and no likely cause or next check. The reason reads *Budget
+of $2.00 reached after 3 of 5 sections had narrative; the rest show their
+evidence only*. Every number on the page is already final: the budget never
+changes a finding, only the prose beside it.
+
+**The time cap** (`max_minutes`, 1 to 25). A deadline on the clock from the
+moment the engine starts the run. Before every question and before every
+narrative call the engine reads the clock; past the deadline, the questions
+still waiting are recorded as *Not analysed: the run reached its time cap
+before this question* and the narrative calls still waiting are skipped,
+then the comparison, the roll-up and the page are produced from what was
+computed. The reason reads *Time cap of 20 min reached after 21 min: Q6, Q7,
+Q9 not analysed; narrative skipped for Space Comfort*. Data Health is
+computed before any question and is never the cap's victim. The cap counts
+work, not waiting: a run Queued for an hour has used none of it.
+
+**Why 25 is the most a report may set.** The worker job's replica timeout is
+30 minutes (`infra/main.bicep`); above the cap plus the worker's four-minute
+drain window (`lib/modules/bas/reports/worker.ts`), so the engine always
+stops itself and stores a partial report before the platform kills the
+execution. A killed execution stores nothing and the run is reclaimed from
+the start (the entry above). Raising the cap past 25 means raising the
+timeout first, and `tests/deploy-guards.test.ts` holds the three numbers to
+each other.
+
+**A partial run is not a failed one.** It has a report, its findings are
+stored and compared, and the next run compares against it. What it lacks is
+named. If every run of a report is partial on the time cap, the building is
+bigger than the cap: raise the cap, or narrow the report to a station subset.
+
 ## A Cost Intelligence run stays Queued
 
 **Symptom.** New run works and the run page says **Queued**, and nothing in the

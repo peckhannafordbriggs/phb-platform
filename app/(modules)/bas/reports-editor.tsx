@@ -17,6 +17,7 @@ import {
 import {
   REPORT_STATE_LABELS,
   type LibraryQuestionView,
+  type OwnerOption,
   type PersonalQuestionView,
   type ReportDetail,
   type ReportOptions,
@@ -42,6 +43,7 @@ import {
   reorderQuestions,
   reportStateTone,
   scheduleFromForm,
+  transferOwner,
   updateReport,
   type ScheduleForm,
 } from "./reports-client";
@@ -76,6 +78,7 @@ interface DetailsForm {
   schedule: ScheduleForm;
   timeOfDay: string;
   budgetUsd: string;
+  maxMinutes: string;
 }
 
 /**
@@ -142,6 +145,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
                 schedule: formFromSchedule(null, todayIn(timezone)),
                 timeOfDay: "06:00",
                 budgetUsd: opts.defaultBudgetUsd.toFixed(2),
+                maxMinutes: String(opts.defaultMaxMinutes),
               }
             : {
                 name: detail.name,
@@ -153,6 +157,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
                 schedule: formFromSchedule(detail.schedule, todayIn(timezone)),
                 timeOfDay: detail.timeOfDay,
                 budgetUsd: detail.budgetUsd.toFixed(2),
+                maxMinutes: String(detail.maxMinutes),
               },
         );
         setError(null);
@@ -211,6 +216,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
   const detailsBody = (): CreateReportInput | null => {
     if (spec === null) return null;
     const budget = Number(form.budgetUsd);
+    const minutes = Number(form.maxMinutes);
     return {
       name: form.name,
       description: form.description.length === 0 ? null : form.description,
@@ -221,6 +227,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
       schedule: spec,
       timeOfDay: form.timeOfDay,
       budgetUsd: Number.isFinite(budget) && budget > 0 ? Math.round(budget * 100) / 100 : undefined,
+      maxMinutes: Number.isInteger(minutes) && minutes > 0 ? minutes : undefined,
     };
   };
 
@@ -381,6 +388,13 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
       {/* 5. Recipients */}
       <Section title="Recipients" n={5}>
         <OwnerRow name={ownerName} email={ownerEmail} />
+        {report !== null && options.canAdminister && (
+          <TransferOwner
+            owners={options.owners.filter((o) => o.employeeId !== report.ownerEmployeeId)}
+            busy={busy}
+            onTransfer={(employeeId) => run(() => transferOwner(report.reportId, employeeId), "Owner transferred.")}
+          />
+        )}
         {report === null ? (
           <p className="mt-3 text-sm text-[var(--muted)]">Save the draft to add more recipients.</p>
         ) : (
@@ -399,8 +413,11 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
 
       {/* 6. Limits */}
       <Section title="Limits" n={6}>
-        <Field label="Cost budget per run (USD)" hint="Stored now; enforced from the phase that runs reports. A run that reaches the cap finishes with what it has and says so.">
+        <Field label="Cost budget per run (USD)" hint="The model stops being asked for narrative when a run's spend would pass it. The run finishes with what it has and says so.">
           <input className={FIELD + " max-w-[10rem]"} inputMode="decimal" value={form.budgetUsd} onChange={(e) => set({ budgetUsd: e.target.value })} />
+        </Field>
+        <Field label="Time cap per run (minutes)" hint={`Questions and narrative still waiting when a run has taken this long are skipped and named; the run finishes partial. 1 to ${options.maxMinutesLimit}.`}>
+          <input className={FIELD + " max-w-[10rem]"} inputMode="numeric" value={form.maxMinutes} onChange={(e) => set({ maxMinutes: e.target.value })} />
         </Field>
       </Section>
 
@@ -500,6 +517,41 @@ export function StateChip({ state }: { state: ReportDetail["state"] }) {
     <span className="inline-block rounded-full border px-2.5 py-0.5 text-[0.6875rem] font-medium" style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}>
       {REPORT_STATE_LABELS[state]}
     </span>
+  );
+}
+
+/**
+ * A module admin hands the report to another owner (Phase 3). The one way a
+ * report the scheduler paused for a disabled owner runs again, so the form
+ * says so. The owner row above stays as it is: the transfer is a separate,
+ * deliberate act, not an edit of a field.
+ */
+function TransferOwner({
+  owners,
+  busy,
+  onTransfer,
+}: {
+  owners: OwnerOption[];
+  busy: boolean;
+  onTransfer: (employeeId: string) => Promise<boolean>;
+}) {
+  const [to, setTo] = useState("");
+  return (
+    <div className="mt-3 flex flex-wrap items-end gap-2">
+      <Field label="Transfer to another owner" hint="Module admins only. A report paused because its owner's account was disabled is resumed by this.">
+        <Dropdown
+          label="New owner"
+          value={to}
+          onChange={setTo}
+          placeholder="Choose an employee"
+          options={owners.map((o) => ({ value: o.employeeId, label: `${o.name} (${o.email})` }))}
+          className="mt-1 min-w-[18rem]"
+        />
+      </Field>
+      <Button size="sm" disabled={busy || to.length === 0} onClick={() => void onTransfer(to).then((ok) => ok && setTo(""))}>
+        Transfer owner
+      </Button>
+    </div>
   );
 }
 

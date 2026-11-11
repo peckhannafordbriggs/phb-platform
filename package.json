@@ -25,6 +25,8 @@
     "bas:plausibility:verify": "tsx scripts/bas-plausibility-verify.ts",
     "bas:report:run": "tsx scripts/bas-report-run.ts",
     "bas:report:render": "tsx scripts/bas-report-render.ts",
+    "bas:reports:scheduler": "tsx scripts/bas-reports-scheduler.ts",
+    "bas:reports:worker": "tsx scripts/bas-reports-worker.ts",
     "db:verify:prod": "tsx scripts/verify-prod-database.ts",
     "db:backup:verify": "tsx scripts/db-backup-verify.ts",
     "cip:worker": "tsx scripts/cip-worker.ts"

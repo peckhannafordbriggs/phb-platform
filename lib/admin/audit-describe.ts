@@ -459,6 +459,9 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     const name = stringField(meta, "name") ?? "a report";
     const to = stringField(meta, "to");
     const from = stringField(meta, "from");
+    if (to === "paused_owner_disabled") {
+      return `${actor} paused the report ${name} because its owner's account (${stringField(meta, "ownerEmail") ?? "unknown"}) is disabled`;
+    }
     const verb =
       to === "active" && from === "paused"
         ? "resumed"
@@ -518,6 +521,20 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
 
   "bas.report_run_started": ({ actor, meta }) =>
     `${actor} started a ${stringField(meta, "trigger") ?? "manual"} run of the report ${stringField(meta, "name") ?? "(unnamed)"}`,
+
+  // Queued, not started: the worker starts it. The scheduler names the
+  // period; a person's request is just that.
+  "bas.report_run_requested": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "(unnamed)";
+    if (stringField(meta, "trigger") === "scheduled") {
+      const end = stringField(meta, "periodEnd");
+      return `The scheduler queued a run of the report ${name}${typeof end === "string" ? ` for the period ending ${end.slice(0, 10)}` : ""}`;
+    }
+    return `${actor} queued a run of the report ${name}`;
+  },
+
+  "bas.report_owner_transferred": ({ actor, meta }) =>
+    `${actor} transferred the report ${stringField(meta, "name") ?? "(unnamed)"} to ${stringField(meta, "toEmail") ?? "a new owner"}${meta !== null && typeof meta === "object" && (meta as { resumed?: unknown }).resumed === true ? ", which resumed it" : ""}`,
 
   // The outcome is the sentence, and a partial run says why.
   "bas.report_run_finished": ({ actor, meta }) => {
@@ -938,6 +955,8 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.personal_question_deleted": "BAS personal question deleted",
   "bas.report_run_started": "BAS report run started",
   "bas.report_run_finished": "BAS report run finished",
+  "bas.report_run_requested": "BAS report run queued",
+  "bas.report_owner_transferred": "BAS report owner transferred",
   "bas.building_occupancy_updated": "BAS building occupied hours set",
   "cip.skills_synced": "Cost Intelligence skills synced",
   "cip.projects_synced": "Cost Intelligence projects synced",

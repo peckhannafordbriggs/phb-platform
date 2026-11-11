@@ -62,6 +62,10 @@ describe("bas_report_definitions", () => {
       // The one that matters most: active means scheduled, and scheduled means a next run.
       { constraint: "bas_report_definitions_active_has_next_run", over: { state: "active", nextRunAt: null } },
       { constraint: "bas_report_definitions_budget_positive", over: { budgetUsd: new Prisma.Decimal("0") } },
+      // Phase 3: the time cap's range, and a pause reason only in the state the scheduler pauses into.
+      { constraint: "bas_report_definitions_max_minutes_range", over: { maxMinutes: 0 } },
+      { constraint: "bas_report_definitions_max_minutes_range", over: { maxMinutes: 26 } },
+      { constraint: "bas_report_definitions_paused_reason_matches_state", over: { pausedReason: "owner disabled" } },
     ];
     for (const c of cases) {
       const error = await expectRejection(async (tx) => {

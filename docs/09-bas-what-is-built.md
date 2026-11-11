@@ -798,6 +798,98 @@ the template without the pragma and expecting the stored run's error.
 `report_json` to HTML by hand. `runbook.md` → *A run failed with "React
 is not defined"*.
 
+### Reports — Phase 3 (2026-11-12): the jobs
+
+**What exists.** Reports run unattended. A **scheduler**
+(`lib/modules/bas/reports/scheduler.ts`, `scripts/bas-reports-scheduler.ts`,
+`npm run bas:reports:scheduler`) runs one pass: for every active definition
+whose `next_run_at` has passed it inserts ONE `queued` run - trigger
+`scheduled`, the period the definition's window ending at the occurrence
+that was due - and advances `next_run_at` in the same transaction on the
+locked row, so two passes cannot queue the same occurrence. A definition
+that missed several ticks gets one run for the latest occurrence that has
+passed, never a backfill (`collapseMissedTicks`, pure, built on Phase 1's
+`computeNextRun`; the DST cases are that file's tests and are not
+repeated). Before any of that, every active definition whose owner's
+account is disabled is moved to `paused_owner_disabled` with the reason on
+the new `paused_reason` column and a `bas.report_state_changed` audit row;
+a module admin's **transfer of the owner** (`transferReportOwner`,
+`PATCH /api/modules/bas/reports/<id>/owner`, the editor's *Transfer to
+another owner* control for admins) is what resumes it - that path did not
+exist before this phase, and the runbook's SQL workaround is retired.
+
+A **worker** (`lib/modules/bas/reports/worker.ts`,
+`scripts/bas-reports-worker.ts`, `npm run bas:reports:worker`) claims the
+oldest run that needs one with `FOR UPDATE SKIP LOCKED` - queued, or
+running with no heartbeat for ten minutes and a reclaim left - heartbeats
+every 30 s, executes the engine through `executeQueuedRun` and goes back
+for the next until the queue is empty or its four-minute drain window
+closes. A stalled run is reclaimed once (`bas_report_runs.attempts`, 1 → 2,
+`started_at` restarted) and failed with a clear error if it stalls again;
+the Container Apps scaler counts by the same predicate the claim uses.
+**The run row comes first**: the engine was split into `enqueueRun`
+(queued row), the claim, and `executeQueuedRun` (reads the period and the
+trigger from the row); the dev script's `executeReportRun` is the three in
+one call, so the laptop, the worker and the tests are one execution path.
+
+**Two caps.** Beside `budget_usd`, a wall-clock cap `max_minutes` per
+definition (1 to 25, default 20, `DEFAULT_REPORT_MAX_MINUTES` beside the
+default budget; the editor's *Limits* section). The engine reads a deadline
+before every question and every narrative call; past it, the questions
+still waiting are `not_run` with the time-cap note, the narrative still
+waiting is skipped, and the run is `partial` with a reason naming the cap,
+the elapsed minutes and exactly what was skipped - on the run's row, on the
+Reports list and at the top of the page. Data Health is computed before the
+loop and is never the cap's victim. The worker job's replica timeout (30
+minutes) is held above the cap plus the drain window by a deploy guard.
+
+**Run now.** On the Scheduled list, per report, owner or module admin
+(decided in the service): `POST /api/modules/bas/reports/<id>/runs` queues a
+`manual` run with the period ending now, audited as
+`bas.report_run_requested`; refused with `run_in_flight` (409) while a run of
+that report is queued or running, and with `report_not_ready` for a report
+with no questions. The Last run cell shows the newest run - *Queued just
+now*, *Running*, then its outcome, linked to the run page - and both the
+Scheduled list (while a run is in flight) and the Reports list reload every
+ten seconds while visible.
+
+**Infrastructure**, on the `cipWorkerJob` and `dbBackupJob` patterns: in
+`infra/main.bicep`, `enableBasReports` (default false), `basReportsImage`
+(no placeholder default, passed on the command line) and
+`basReportsSchedulerCron` (`*/15 * * * *`, UTC); two jobs,
+`basReportsSchedulerJob` (Schedule trigger, 600 s timeout, one retry) and
+`basReportsWorkerJob` (Event trigger, a `postgresql` KEDA rule on the
+queued-or-stalled count, two executions at most, 1800 s timeout, no retry),
+both on the platform's identity with the registry pull and vault read it
+already holds - **no new role assignment**. The worker reads `DATABASE-URL`,
+`BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` by reference; the scheduler
+only `DATABASE-URL`. One image, `Dockerfile.bas-reports` (Node 24, no
+Chromium until Phase 4), built as `bas-reports:<sha>` by `deploy.yml` on
+merge and applied to each job once its repository variable
+(`AZURE_BAS_REPORTS_SCHEDULER_JOB`, `AZURE_BAS_REPORTS_WORKER_JOB`) is set.
+**The worker runs under tsx**, not a compiled build - the same loader as
+`bas:report:run` and the one `tests/bas-reports-worker-render.test.ts`
+proves the template under (`WHY-ITS-BUILT-THIS-WAY.md` § 80).
+
+**Tested** in `tests/bas-reports-jobs.test.ts` against the real test
+database: missed ticks → one run with the next time advanced, and nothing
+on the next pass; owner disabled → paused with the reason and resumed by a
+transfer (and the transfer refused to a plain owner, to an employee without
+the grant, and to a stranger); two workers never claim the same run, with
+one row held locked in a transaction while the other claims, and two
+simultaneous claims taking two runs; a stalled run reclaimed once then
+failed with the error; the time cap → partial naming the cap and the
+questions it skipped; Run now refused in flight, refused with no questions,
+404 to a stranger, 202 then 409 through the route; the worker end to end in
+process; **and both scripts as child processes under tsx** against the same
+database. `tests/deploy-guards.test.ts` pins the flag, the parameters, both
+jobs, the secrets, the absence of a role assignment, the workflow steps, the
+Dockerfile and the three numbers of the time cap. Not built, by the phase's
+scope: PDF and email (Phase 4); nothing here makes either harder - a
+delivery is a step after `executeQueuedRun` stores the run. `runbook.md` →
+*Reports: turning the jobs on*, *Reports: a run is stuck or failed*,
+*Reports: what the caps do*.
+
 ### Filters
 
 Time range (24 h / 7 d / 30 d, and on Point Explorer a custom `from`/`to`

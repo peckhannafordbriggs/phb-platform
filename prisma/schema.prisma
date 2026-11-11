@@ -596,6 +596,11 @@ model BasReportDefinition {
   state String @default("draft")
 
   budgetUsd Decimal @map("budget_usd") @db.Decimal(8, 2)
+  /// The wall-clock cap on one run, in minutes (Phase 3). The engine finishes the sections it has when it is reached and the run is partial.
+  maxMinutes Int     @default(20) @map("max_minutes")
+
+  /// Why the scheduler paused it: set with state paused_owner_disabled, cleared when an admin transfers the owner.
+  pausedReason String? @map("paused_reason")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
@@ -752,6 +757,8 @@ model BasReportRun {
   startedAt   DateTime? @map("started_at") @db.Timestamptz()
   heartbeatAt DateTime? @map("heartbeat_at") @db.Timestamptz()
   finishedAt  DateTime? @map("finished_at") @db.Timestamptz()
+  /// How many times a worker has claimed it (Phase 3): 1 normally, 2 after a stall was reclaimed. A second stall fails it.
+  attempts    Int       @default(0)
 
   error         String?
   /// Why a run finished partial: the budget, a missing key, a declined call. Required when status is partial.

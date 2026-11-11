@@ -39,6 +39,9 @@ jobs:
     #   AZURE_POSTGRES_SERVER
     # and, once the Cost Intelligence worker job exists, AZURE_CIP_WORKER_JOB
     # (the cipWorkerJobName output). Empty means the worker steps are skipped.
+    # Likewise AZURE_BAS_REPORTS_SCHEDULER_JOB and AZURE_BAS_REPORTS_WORKER_JOB
+    # (the basReportsSchedulerJobName and basReportsWorkerJobName outputs) once
+    # the BAS Reports jobs exist; empty means their steps are skipped.
     if: >-
       vars.AZURE_CLIENT_ID != '' &&
       vars.AZURE_TENANT_ID != '' &&
@@ -76,6 +79,16 @@ jobs:
             --registry "${{ vars.AZURE_REGISTRY }}" \
             --image "cip-worker:${{ github.sha }}" \
             --file Dockerfile.cip-worker \
+            .
+
+      # One image for both BAS Reports jobs, built when either job exists.
+      - name: Build and push the BAS Reports jobs image
+        if: vars.AZURE_BAS_REPORTS_SCHEDULER_JOB != '' || vars.AZURE_BAS_REPORTS_WORKER_JOB != ''
+        run: |
+          az acr build \
+            --registry "${{ vars.AZURE_REGISTRY }}" \
+            --image "bas-reports:${{ github.sha }}" \
+            --file Dockerfile.bas-reports \
             .
 
       # ---------------------------------------------------------------------
@@ -176,6 +189,26 @@ jobs:
             --name "${{ vars.AZURE_CIP_WORKER_JOB }}" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --image "${{ vars.AZURE_REGISTRY }}.azurecr.io/cip-worker:${{ github.sha }}" \
+            --output none
+
+      # The two BAS Reports jobs, each only once it exists. A pass or a run
+      # already going finishes on the image it started with.
+      - name: Deploy the BAS Reports scheduler image
+        if: vars.AZURE_BAS_REPORTS_SCHEDULER_JOB != ''
+        run: |
+          az containerapp job update \
+            --name "${{ vars.AZURE_BAS_REPORTS_SCHEDULER_JOB }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ vars.AZURE_REGISTRY }}.azurecr.io/bas-reports:${{ github.sha }}" \
+            --output none
+
+      - name: Deploy the BAS Reports worker image
+        if: vars.AZURE_BAS_REPORTS_WORKER_JOB != ''
+        run: |
+          az containerapp job update \
+            --name "${{ vars.AZURE_BAS_REPORTS_WORKER_JOB }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ vars.AZURE_REGISTRY }}.azurecr.io/bas-reports:${{ github.sha }}" \
             --output none
 
       # NOTE: the production seed is NOT run here. It runs once, by hand, on the

@@ -55,6 +55,8 @@ export interface DefinitionForRun {
   presetLabel: string | null;
   analysisWindow: AnalysisWindow;
   budgetUsd: number;
+  /** The wall-clock cap on one run, in minutes (Phase 3). */
+  maxMinutes: number;
   site: { siteId: bigint; name: string; timezone: string };
   stationIds: bigint[];
   questions: Array<{
@@ -86,6 +88,7 @@ export async function loadDefinition(reportId: bigint): Promise<DefinitionForRun
     presetLabel: isPresetKey(row.presetKey) ? REPORT_PRESETS[row.presetKey].label : null,
     analysisWindow: isAnalysisWindow(row.analysisWindow) ? row.analysisWindow : "7d",
     budgetUsd: Number(row.budgetUsd),
+    maxMinutes: row.maxMinutes,
     site: row.site,
     stationIds: row.stationIds,
     questions: row.questions.map((q) => {

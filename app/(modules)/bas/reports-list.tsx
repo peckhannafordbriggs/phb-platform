@@ -7,21 +7,24 @@ import { ApiError } from "./health-client";
 import {
   changeReportState,
   deleteReport,
+  describeLastRun,
   describeNextRun,
   describeRecipients,
   describeStations,
   fetchReports,
   reportStateTone,
+  requestRun,
 } from "./reports-client";
 import { Button } from "@/components/ui";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /**
  * Scheduled, on the Reports bar (the Reports sub-tab until 2026-11-11): the
- * reports the viewer may see, one row each, with
- * the columns the plan names. "Run now" and "History" are not here because
- * there is nothing to run them with yet; the row says so where a last run
- * would be, rather than offering a button that does nothing.
+ * reports the viewer may see, one row each, with the columns the plan
+ * names. "Run now" (Phase 3) queues a run for the worker and the Last run
+ * cell shows it Queued, then Running, then its outcome; the list is reloaded
+ * every ten seconds while a run of any report is in flight, so the change is
+ * seen without a refresh.
  */
 export function ReportsListView() {
   const [data, setData] = useState<ReportsList | null>(null);
@@ -43,6 +46,17 @@ export function ReportsListView() {
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  // While any report has a run queued or running, reload every ten seconds
+  // (only while the tab is visible), so Run now is seen to start and finish.
+  const inFlight = data?.reports.some((r) => r.lastRun !== null && (r.lastRun.status === "queued" || r.lastRun.status === "running")) ?? false;
+  useEffect(() => {
+    if (!inFlight) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, LIST_POLL_MS);
+    return () => clearInterval(timer);
+  }, [inFlight, load]);
 
   const run = useCallback(
     async (action: () => Promise<unknown>) => {
@@ -84,6 +98,7 @@ export function ReportsListView() {
         busy={busy}
         onPause={(id) => run(() => changeReportState(id, "pause"))}
         onResume={(id) => run(() => changeReportState(id, "resume"))}
+        onRunNow={(id) => run(() => requestRun(id))}
         onDelete={(id, name) => {
           if (window.confirm(`Delete the report "${name}"? Its questions and recipients go with it.`)) {
             void run(() => deleteReport(id));
@@ -94,18 +109,23 @@ export function ReportsListView() {
   );
 }
 
+/** How often the list reloads while a run is in flight. */
+const LIST_POLL_MS = 10_000;
+
 /** The table, from a payload. Pure, so a node test can render it. */
 export function ReportsTable({
   data,
   busy = false,
   onPause,
   onResume,
+  onRunNow,
   onDelete,
 }: {
   data: ReportsList;
   busy?: boolean;
   onPause?: (reportId: string) => void;
   onResume?: (reportId: string) => void;
+  onRunNow?: (reportId: string) => void;
   onDelete?: (reportId: string, name: string) => void;
 }) {
   if (data.reports.length === 0 && data.reportsInDatabase === 0) {
@@ -154,6 +174,7 @@ export function ReportsTable({
                 busy={busy}
                 onPause={onPause}
                 onResume={onResume}
+                onRunNow={onRunNow}
                 onDelete={onDelete}
               />
             ))}
@@ -170,6 +191,7 @@ function ReportRow({
   busy,
   onPause,
   onResume,
+  onRunNow,
   onDelete,
 }: {
   report: ReportSummary;
@@ -177,9 +199,11 @@ function ReportRow({
   busy: boolean;
   onPause?: (reportId: string) => void;
   onResume?: (reportId: string) => void;
+  onRunNow?: (reportId: string) => void;
   onDelete?: (reportId: string, name: string) => void;
 }) {
   const tone = reportStateTone(r.state);
+  const inFlight = r.lastRun !== null && (r.lastRun.status === "queued" || r.lastRun.status === "running");
   return (
     <tr className="border-t border-[var(--divider-soft)] align-top">
       <td className="px-4 py-3">
@@ -196,7 +220,15 @@ function ReportRow({
       <td className="py-3 pr-3">{r.scheduleText}</td>
       <td className="py-3 pr-3 tabular-nums">{r.questionCount}</td>
       <td className="py-3 pr-3">{r.state === "active" ? describeNextRun(r.nextRunAt, r.site.timezone) : "—"}</td>
-      <td className="py-3 pr-3 text-[var(--muted)]">No runs yet</td>
+      <td className="py-3 pr-3">
+        {r.lastRun === null ? (
+          <span className="text-[var(--muted)]">No runs yet</span>
+        ) : (
+          <Link href={`/bas/reports/generated/${encodeURIComponent(r.lastRun.runId)}`} className="hover:underline" title={r.lastRun.partialReason ?? r.lastRun.error ?? undefined}>
+            {describeLastRun(r.lastRun)}
+          </Link>
+        )}
+      </td>
       <td className="py-3 pr-3">{describeRecipients(r.recipientCount)}</td>
       <td className="py-3 pr-3">
         <span
@@ -205,12 +237,23 @@ function ReportRow({
         >
           {REPORT_STATE_LABELS[r.state]}
         </span>
+        {r.pausedReason !== null && <div className="mt-1 max-w-[16rem] text-[var(--muted)]">{r.pausedReason}</div>}
       </td>
       <td className="py-3 pr-4">
         <div className="flex flex-wrap gap-1">
           <Button size="sm" href={`/bas/reports/${encodeURIComponent(r.reportId)}`}>
             Edit
           </Button>
+          {onRunNow !== undefined && (
+            <Button
+              size="sm"
+              disabled={busy || inFlight || r.questionCount === 0}
+              title={inFlight ? "A run is already queued or running." : r.questionCount === 0 ? "Add a question first." : undefined}
+              onClick={() => onRunNow(r.reportId)}
+            >
+              {inFlight ? (r.lastRun?.status === "running" ? "Running…" : "Queued…") : "Run now"}
+            </Button>
+          )}
           {r.state === "active" && onPause !== undefined && (
             <Button size="sm"  disabled={busy} onClick={() => onPause(r.reportId)}>
               Pause
