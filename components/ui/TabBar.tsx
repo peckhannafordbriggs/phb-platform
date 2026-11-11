@@ -6,6 +6,12 @@ export interface TabItem {
   href: string;
   label: React.ReactNode;
   active: boolean;
+  /**
+   * The active underline's colour when it is not the module's own, as a CSS
+   * value. The caller decides; the bar only draws. BAS's Analyze tab carries
+   * the purple its panel is accented in.
+   */
+  accent?: string;
 }
 
 /**
@@ -42,7 +48,7 @@ export function TabBar({
                   ? "font-medium text-[var(--foreground)]"
                   : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]")
               }
-              style={tab.active ? { borderColor: "var(--module-accent)" } : undefined}
+              style={tab.active ? { borderColor: tab.accent ?? "var(--module-accent)" } : undefined}
             >
               {tab.label}
               <LinkPending />

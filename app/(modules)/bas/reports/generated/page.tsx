@@ -1,25 +1,18 @@
-import { notFound } from "next/navigation";
-import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
+import { notFound, redirect } from "next/navigation";
+import { requireModuleAccess } from "@/lib/authz";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
-import { BasShell } from "../../bas-shell";
-import { GeneratedView } from "../../reports-generated";
-import { ReportsShell } from "../../reports-shell";
-import { basTab } from "../../tabs";
 
 export const dynamic = "force-dynamic";
 
-/** Generated - every run the viewer may see, newest first (Phase 2). */
+/**
+ * The runs moved to /bas/reports on 2026-11-11, when the Reports bar made
+ * them the tab's default view. An old link lands on the same list. The
+ * grant is checked first, so a person without it gets the module's 404
+ * here as everywhere, never a redirect that admits the route exists.
+ */
 export default async function BasReportsGeneratedPage() {
   const access = await requireModuleAccess(BAS_MODULE_KEY);
   if (!access.ok) notFound();
 
-  const canAdminister = await hasModuleAdmin(access.viewer.id, BAS_MODULE_KEY);
-
-  return (
-    <BasShell blurb={basTab("/bas/reports").blurb} canAdminister={canAdminister}>
-      <ReportsShell>
-        <GeneratedView />
-      </ReportsShell>
-    </BasShell>
-  );
+  redirect("/bas/reports");
 }

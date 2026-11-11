@@ -6,7 +6,6 @@ import { BasError } from "@/lib/modules/bas/errors";
 import { REPORT_CSS, ReportView } from "@/lib/modules/bas/reports/engine/render";
 import { getRun } from "@/lib/modules/bas/reports/runs-service";
 import { BasShell } from "../../../bas-shell";
-import { ReportsShell } from "../../../reports-shell";
 import { basTab } from "../../../tabs";
 
 export const dynamic = "force-dynamic";
@@ -34,26 +33,24 @@ export default async function BasReportRunPage({ params }: { params: Promise<{ r
 
   return (
     <BasShell blurb={basTab("/bas/reports").blurb} canAdminister={canAdminister}>
-      <ReportsShell>
-        <div className="space-y-4">
-          <Link href="/bas/reports/generated" className="text-sm text-[var(--muted)] hover:underline">
-            ← All generated reports
-          </Link>
-          {run.document === null ? (
-            <section className="card p-8 text-center">
-              <p className="text-sm font-medium">This run has no report</p>
-              <p className="mt-1 text-sm text-[var(--muted)]">
-                {run.status === "failed" ? `It failed: ${run.error ?? "no error recorded"}.` : `It is ${run.status}.`}
-              </p>
-            </section>
-          ) : (
-            <section className="card p-6">
-              <style>{REPORT_CSS}</style>
-              <ReportView document={run.document} />
-            </section>
-          )}
-        </div>
-      </ReportsShell>
+      <div className="space-y-4">
+        <Link href="/bas/reports" className="text-sm text-[var(--muted)] hover:underline">
+          ← All reports
+        </Link>
+        {run.document === null ? (
+          <section className="card p-8 text-center">
+            <p className="text-sm font-medium">This run has no report</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              {run.status === "failed" ? `It failed: ${run.error ?? "no error recorded"}.` : `It is ${run.status}.`}
+            </p>
+          </section>
+        ) : (
+          <section className="card p-6">
+            <style>{REPORT_CSS}</style>
+            <ReportView document={run.document} />
+          </section>
+        )}
+      </div>
     </BasShell>
   );
 }

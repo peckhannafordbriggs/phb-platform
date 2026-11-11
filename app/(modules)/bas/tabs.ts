@@ -71,9 +71,10 @@ export const BAS_TABS: readonly BasTab[] = [
   {
     // Reports (Phase 1, 2026-11-10). Between Analyze and Collection Health:
     // a report is a standing question of the data, so it sits beside the
-    // tab that asks one. Sub-tabs (Reports, Generated, Library, Usage) are
-    // app/(modules)/bas/reports/subtabs.ts; this entry matches all of them
-    // by prefix.
+    // tab that asks one. While it is open the shell draws the Reports bar
+    // (Back, Reports, Scheduled, Questions, Usage) in place of these tabs:
+    // app/(modules)/bas/reports/bar.ts. This entry matches every Reports
+    // path by prefix, which is what tells the shell to swap.
     href: "/bas/reports",
     label: "Reports",
     // What the list cannot show until a report exists: that a report is a

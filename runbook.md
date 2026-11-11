@@ -8739,6 +8739,38 @@ collected and still in every Collection Health figure.
 
 ---
 
+## How do I rename a point
+
+**Symptom.** A point is called `VAV$2d8$20104$2d105_ZoneTemperature` in
+Point Explorer and on Collection Health, and somebody wants it to read
+*Zone Temp 104-105*. Or a point already has a label and it is wrong.
+
+**Cause.** Not a fault. The name those screens show is the point's
+**label** when one has been set, and Niagara's name until then (the
+precedence is the entry *A point has one name in Point Explorer and another
+in Settings*). Nobody has set one, or somebody set the wrong one. The oBIX
+key - the `$2d`-spelled name - is never the thing to change: it is what the
+collector asks the station for, and editing it would stop collection.
+
+**Fix.** Settings → the station → *Points (N)*. Find the row (the search box
+above the list matches the label, the station's name, the Niagara name, the
+role and the equipment), hover or tab to it, and click the pencil beside the
+name. In the drawer that opens, type the new name under *Display name* and
+press *Save*; leave it blank to go back to Niagara's name. The same drawer
+sets the role, the equipment and *Shown* / *Hidden*, each saved only if it
+changed, and shows the Niagara name as the one thing it will not edit. Point
+Explorer and Collection Health show the new name on their next load; the
+Settings row shows all three names, because the key is what you match
+against Workbench.
+
+What it does not change: the collector's URL (the key), Grafana and the
+`bas_v_*` views (they keep Niagara's name on purpose), and whether the point
+is collected. Each save is one audit row - `bas.point_label_changed` with
+the previous and new label and the key - so a label that "disappeared" is
+answered by `/admin/audit` or the previous entry. The drawer uses the same
+`PATCH /settings/points/{id}` route as the row, one field per request;
+nothing new was added for it (2026-11-10).
+
 ## The Points list says it could not place N points
 
 **Symptom.** Under a station in BAS Settings, the Points list carries a red
@@ -10981,15 +11013,36 @@ writes it in Phase 1**; a report in that state got there by hand.
 `UPDATE bas_report_definitions SET state = 'paused' WHERE report_id = <n>;`
 and resume from the screen, which recomputes the next run.
 
-### The Generated and Usage sub-tabs say there is nothing
+### The Reports list and Usage say there is nothing
 
 **Symptom.** *No reports have been generated yet* / *No usage to show*.
 
-**Cause.** Usage: true until Phase 6. Generated: true until a run is made,
+**Cause.** Usage: true until Phase 6. Reports (the runs; the *Generated*
+sub-tab until 2026-11-11): true until a run is made,
 which in Phase 2 is the dev script (*Reports (Phase 2)* → *Making a run
 today*) and from Phase 3 the scheduler; the list shows the runs of the
 reports you own, or of every report if you are a module admin. *Run now*
 and *History* are not on the list until then.
+
+### The Reports tab shows a bar of its own, and the module tabs are gone
+
+**Symptom.** Opening *Reports* replaces Projects, Point Explorer, Analyze,
+Reports, Collection Health and Settings with *Back · Reports · Scheduled ·
+Questions · Usage*, and somebody reports the module's tabs as missing.
+
+**Cause.** Not a fault (2026-11-11). The Reports tab has more views than
+one row of module tabs can carry, so while it is open the same bar draws
+the Reports-only items instead - one row, never two. *Reports* is the runs
+(what was *Generated*), the default when the tab opens; *Scheduled* is the
+definitions, with *New report* top right; *Questions* is the shared
+questions and the viewer's own (what was *Library*; the route is still
+`/bas/reports/library` and the tables keep their names); *Usage* is
+unchanged.
+
+**Fix.** *Back*, at the far left of the bar, returns to the module's tabs
+with Projects selected, carrying the query string. Every older link still
+works: `/bas/reports/generated` redirects to `/bas/reports`, and an editor
+or run URL opens with the right item marked.
 
 ### Reading what was done to a report
 
@@ -11008,7 +11061,8 @@ question or a profile change*); read them with SQL on `metadata->>'reportId'`.
 
 **What exists, as of 2026-11-10.** The engine core
 (`lib/modules/bas/reports/engine/`), two more tables (`bas_report_runs`,
-`bas_report_findings`), the *Generated* sub-tab, the *Occupied hours* form
+`bas_report_findings`), the runs list (*Reports* on the Reports bar; the
+*Generated* sub-tab until 2026-11-11), the *Occupied hours* form
 on a building's row in Settings, and a dev script. **Still nothing fires on
 its own**: no scheduler, no worker, no PDF, no email. What the engine did on
 the office and the lab is `docs/bas-reports-phase-2-verification.md`; the
@@ -11035,10 +11089,16 @@ npm run bas:report:run -- --definition <report id> --period-end <ISO instant> [-
 
 The script prints the run's status, the building status, the inventory,
 every question's outcome, every finding with its two model sentences, and
-the cost. The run is then on the *Generated* sub-tab for the owner and
-every module admin, and in `bas_report_runs` / `bas_report_findings`. Run
-it twice on the same period to see the comparison: the second run marks
-the first's findings *Still open*.
+the cost. The run is then under *Reports* on the Reports bar for the
+owner and every module admin, and in `bas_report_runs` /
+`bas_report_findings`. Run it twice on the same period to see the
+comparison: the second run marks the first's findings *Still open*.
+
+To look at a stored run's document without the platform:
+`npm run -s bas:report:render -- document.json > report.html`, where the
+file holds the row's `report_json` (or pipe it in from `psql -At`). It is
+the engine's own `renderReportHtml` under the same loader as the run
+script, which is also why a test drives it (next entry but one).
 
 ### A section reads Not Applicable, or a question reads Not Monitored, and what the words mean
 
@@ -11089,9 +11149,36 @@ row for the building) and audited as `bas.building_occupancy_updated` with
 the hours before and after. A station with a trended point ignores the
 manual hours.
 
+### A run failed with "React is not defined"
+
+**Symptom.** A run on the Reports list reads *Failed*, its page says *It
+failed: React is not defined*, and `bas_report_runs.error` holds the same
+three words. Every finding and section was computed; the HTML render at
+the end threw.
+
+**Cause.** The report template (`lib/modules/bas/reports/engine/render.tsx`)
+is JSX. Under the dev script's loader, tsx, esbuild reads this repository's
+`jsx: "preserve"` (Next's own requirement; Next rewrites it back if it is
+changed) as the classic transform, `React.createElement(...)`, with no
+`React` imported. Next and vitest both compile the file with the automatic
+runtime, so the platform's run page and every in-process test render it
+fine; only the worker's render fails. The template's first line is a
+`@jsxRuntime automatic` pragma for exactly this; run 1 on the development
+database (2026-11-10 11:48) was made minutes before that line existed, and
+every run since has rendered. `tests/bas-reports-worker-render.test.ts`
+spawns tsx on `scripts/bas-report-render.ts` and holds the worker's HTML
+to vitest's byte for byte, then renders a copy of the template without the
+pragma and expects this very error - so the line going missing, or a
+second `.tsx` file arriving in the engine without one, fails the build.
+
+**Fix.** If the line is gone, put it back; the test names it. The failed
+row stays as the record it is. Run the definition again for the period
+(`npm run bas:report:run -- --definition <id> --period-end <iso>`) and the
+new run lists beside it.
+
 ### A run finished `partial`
 
-**Symptom.** *Partial* on the Generated list, and a reason at the top of
+**Symptom.** *Partial* on the Reports list, and a reason at the top of
 the run page.
 
 **Cause.** One of four, each named in `partial_reason`:

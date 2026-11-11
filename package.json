@@ -24,6 +24,7 @@
     "bas:analyze:followup-latency": "tsx scripts/bas-analyze-followup-latency.ts",
     "bas:plausibility:verify": "tsx scripts/bas-plausibility-verify.ts",
     "bas:report:run": "tsx scripts/bas-report-run.ts",
+    "bas:report:render": "tsx scripts/bas-report-render.ts",
     "db:verify:prod": "tsx scripts/verify-prod-database.ts",
     "db:backup:verify": "tsx scripts/db-backup-verify.ts",
     "cip:worker": "tsx scripts/cip-worker.ts"

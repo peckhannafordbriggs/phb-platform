@@ -4,11 +4,13 @@ import { describe, expect, it, vi } from "vitest";
  * The Reports screens as RENDERED (Phase 1), in a node environment with the
  * router stubbed - the bas-tab-bar pattern. What is asserted is the HTML: the
  * owner row and its wording, the external chip, the honest empty states, the
- * sub-tab bar, and the two clocks beside a next run.
+ * Reports bar and its Back item (2026-11-11), and the two clocks beside a next run.
  */
+/** The router the shell sees; each bar test sets the path it renders for. */
+const nav = vi.hoisted(() => ({ pathname: "/bas/reports/library", search: "" }));
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/bas/reports/library",
-  useSearchParams: () => new URLSearchParams(""),
+  usePathname: () => nav.pathname,
+  useSearchParams: () => new URLSearchParams(nav.search),
   useRouter: () => ({ push: () => undefined, replace: () => undefined }),
 }));
 
@@ -16,14 +18,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describeAuditEvent } from "@/lib/admin/audit-describe";
 import type { LibraryQuestionView, ReportsList } from "@/lib/modules/bas/reports/types";
-import { ReportsShell } from "@/app/(modules)/bas/reports-shell";
+import { BasShell } from "@/app/(modules)/bas/bas-shell";
+import { activeReportsItemHref } from "@/app/(modules)/bas/reports/bar";
 
 /**
  * `children` is supplied positionally, which React accepts and the prop type
  * does not describe - the bas-tab-bar test's cast, for the same reason: the
  * component is right, and react/no-children-prop refuses `children:` in props.
  */
-const Shell = ReportsShell as unknown as (props: { pathname?: string }) => React.ReactNode;
+const Shell = BasShell as unknown as (props: { blurb: string; canAdminister?: boolean }) => React.ReactNode;
 import { ReportsTable } from "@/app/(modules)/bas/reports-list";
 import { OwnerRow, StateChip } from "@/app/(modules)/bas/reports-editor";
 import { SharedLibraryTable } from "@/app/(modules)/bas/reports-library";
@@ -155,7 +158,7 @@ describe("the editor's fixed pieces", () => {
   });
 });
 
-describe("the placeholders and the sub-tabs", () => {
+describe("the placeholders", () => {
   it("say there are no runs rather than promising any", () => {
     const generated = renderToStaticMarkup(createElement(GeneratedPlaceholder));
     expect(generated).toContain("No reports have been generated yet");
@@ -164,18 +167,75 @@ describe("the placeholders and the sub-tabs", () => {
     expect(usage).toContain("No usage to show");
     expect(usage).toContain("There have been no runs");
   });
+});
 
-  it("render the four sub-tabs with the current one marked", () => {
-    const html = renderToStaticMarkup(createElement(Shell, { pathname: "/bas/reports/library" }, "body"));
-    const nav = /<nav[^>]*aria-label="Reports sections"[\s\S]*?<\/nav>/.exec(html);
-    expect(nav).not.toBeNull();
-    const labels = [...nav![0].matchAll(/<a[^>]*>([^<]+)<\/a>/g)].map((m) => m[1]);
-    expect(labels).toEqual(["Reports", "Generated", "Library", "Usage"]);
-    // next/link writes href last; the active tab carries aria-current.
-    expect(nav![0]).toMatch(/<a[^>]*aria-current="page"[^>]*href="\/bas\/reports\/library"/);
-    // An editor path belongs to the Reports sub-tab.
-    const editor = renderToStaticMarkup(createElement(Shell, { pathname: "/bas/reports/42" }, "body"));
-    expect(editor).toMatch(/<a[^>]*aria-current="page"[^>]*href="\/bas\/reports"/);
+describe("the Reports bar", () => {
+  const shell = () => renderToStaticMarkup(createElement(Shell, { blurb: "", canAdminister: true }, "body"));
+  const reportsBar = (html: string): string => {
+    const bar = /<nav[^>]*aria-label="Reports sections"[\s\S]*?<\/nav>/.exec(html);
+    expect(bar).not.toBeNull();
+    return bar![0];
+  };
+  const anchors = (bar: string) => [...bar.matchAll(/<a[^>]*>[\s\S]*?<\/a>/g)].map((m) => m[0]);
+  const labels = (bar: string) => anchors(bar).map((a) => a.replace(/<[^>]+>/g, "").trim());
+  // next/link writes href last; the active item carries aria-current.
+  const activeHref = (bar: string) => /<a[^>]*aria-current="page"[^>]*href="([^"]+)"/.exec(bar)?.[1] ?? null;
+
+  it("replaces the module bar while Reports is open: Back, Reports, Scheduled, Questions, Usage, in one row", () => {
+    nav.pathname = "/bas/reports/library";
+    nav.search = "";
+    const html = shell();
+    const bar = reportsBar(html);
+    expect(labels(bar)).toEqual(["Back", "Reports", "Scheduled", "Questions", "Usage"]);
+    // Never a second row: the module bar is not in the markup at all.
+    expect(html).not.toContain('aria-label="Building Automation sections"');
+    expect(html.match(/<nav /g)).toHaveLength(1);
+    expect(activeHref(bar)).toBe("/bas/reports/library");
+    // Back is a quiet item: the arrow, never active, the module's default tab.
+    const back = anchors(bar)[0]!;
+    expect(back).toContain("<svg");
+    expect(back).toContain('href="/bas"');
+    expect(back).not.toContain("aria-current");
+  });
+
+  it("keeps every deep link: the path still selects the view, and opening Reports lands on the Reports bar", () => {
+    const activeFor = (pathname: string) => {
+      nav.pathname = pathname;
+      return activeHref(reportsBar(shell()));
+    };
+    expect(activeFor("/bas/reports")).toBe("/bas/reports");
+    expect(activeFor("/bas/reports/generated/7")).toBe("/bas/reports");
+    expect(activeFor("/bas/reports/scheduled")).toBe("/bas/reports/scheduled");
+    expect(activeFor("/bas/reports/new")).toBe("/bas/reports/scheduled");
+    expect(activeFor("/bas/reports/42")).toBe("/bas/reports/scheduled");
+    expect(activeFor("/bas/reports/library")).toBe("/bas/reports/library");
+    expect(activeFor("/bas/reports/usage")).toBe("/bas/reports/usage");
+  });
+
+  it("resolves the item as a pure function, and nothing outside Reports", () => {
+    expect(activeReportsItemHref("/bas/reports/generated")).toBe("/bas/reports");
+    expect(activeReportsItemHref("/bas/reports/42/anything")).toBe("/bas/reports/scheduled");
+    expect(activeReportsItemHref("/bas/reportsx")).toBeNull();
+    expect(activeReportsItemHref("/bas")).toBeNull();
+    expect(activeReportsItemHref("/bas/points")).toBeNull();
+  });
+
+  it("Back restores the module bar with Projects selected, carrying the query string both ways", () => {
+    nav.pathname = "/bas/reports";
+    nav.search = "site=5";
+    const bar = reportsBar(shell());
+    expect(anchors(bar)[0]).toContain('href="/bas?site=5"');
+    expect(activeHref(bar)).toBe("/bas/reports?site=5");
+
+    // Where Back lands: the module bar, Projects active, and no Reports bar.
+    nav.pathname = "/bas";
+    const html = shell();
+    expect(html).not.toContain('aria-label="Reports sections"');
+    const moduleBar = /<nav[^>]*aria-label="Building Automation sections"[\s\S]*?<\/nav>/.exec(html);
+    expect(moduleBar).not.toBeNull();
+    expect(labels(moduleBar![0])).toEqual(["Projects", "Point Explorer", "Analyze", "Reports", "Collection Health", "Settings"]);
+    expect(activeHref(moduleBar![0])).toBe("/bas?site=5");
+    nav.search = "";
   });
 });
 
@@ -197,7 +257,7 @@ describe("the shared library table", () => {
       },
     ];
     const html = renderToStaticMarkup(createElement(SharedLibraryTable, { library: rows }));
-    expect(html).toContain("Shared library (2)");
+    expect(html).toContain("Shared questions (2)");
     expect(html).toContain(">Space Comfort<");
     expect(html).toContain(">Schedules<");
     expect(html).toContain(">computed<");

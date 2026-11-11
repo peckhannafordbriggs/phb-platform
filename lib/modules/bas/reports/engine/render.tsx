@@ -1,8 +1,14 @@
 /** @jsxRuntime automatic @jsxImportSource react */
-// The pragma: this file is rendered by Next (its own transform), by vitest
-// (oxc, automatic runtime) and by the dev script under tsx (esbuild, which
-// reads tsconfig's jsx: preserve as the classic transform and then wants a
-// React in scope). Naming the runtime here makes all three agree.
+// The pragma, and it is load-bearing: this file is rendered by Next (its own
+// transform), by vitest (oxc, automatic runtime) and by the dev script under
+// tsx (esbuild, which reads tsconfig's jsx: preserve as the CLASSIC transform,
+// React.createElement, and then wants a React in scope that nothing imports).
+// Naming the runtime here makes all three agree. Without it the worker's
+// render throws "React is not defined" - run 1 on the development database
+// (2026-11-10) failed exactly so, minutes before this line existed - and no
+// in-process test can see that, because vitest never compiles the file the
+// way the worker does. tests/bas-reports-worker-render.test.ts spawns tsx on
+// scripts/bas-report-render.ts and does.
 import { STATUS_LABELS } from "./rollup";
 import type { Finding, ReportDocument, SectionDocument, ZoneResult, ScheduleResult } from "./types";
 

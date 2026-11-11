@@ -3,7 +3,6 @@ import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { BasShell } from "../../bas-shell";
 import { UsagePlaceholder } from "../../reports-placeholders";
-import { ReportsShell } from "../../reports-shell";
 import { basTab } from "../../tabs";
 
 export const dynamic = "force-dynamic";
@@ -17,9 +16,7 @@ export default async function BasReportsUsagePage() {
 
   return (
     <BasShell blurb={basTab("/bas/reports").blurb} canAdminister={canAdminister}>
-      <ReportsShell>
-        <UsagePlaceholder />
-      </ReportsShell>
+      <UsagePlaceholder />
     </BasShell>
   );
 }
