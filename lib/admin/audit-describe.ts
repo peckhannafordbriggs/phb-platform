@@ -557,6 +557,19 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     );
   },
 
+  "kb.answer_reported": ({ actor, meta }) => {
+    const reason = stringField(meta, "reason") ?? "no reason recorded";
+    const n = meta.citationN;
+    return (
+      `${actor} ${meta.updated === true ? "updated their report on" : "reported"} a Knowledge Base answer as wrong ` +
+      `(${reason.replace(/_/g, " ")}${typeof n === "number" ? `, source [${n}]` : ""})`
+    );
+  },
+
+  "kb.answer_report_closed": ({ actor, meta }) =>
+    `${actor} ${stringField(meta, "status") === "dismissed" ? "dismissed" : "resolved"} a report on a Knowledge Base answer: ` +
+    `${stringField(meta, "note") ?? "no note"}`,
+
   "kb.sync_failed": ({ actor, meta }) =>
     `${actor}'s sync of the Knowledge Base failed: ${stringField(meta, "error") ?? "no reason recorded"}`,
 
@@ -859,6 +872,8 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "kb.synced": "Knowledge Base synced",
   "kb.sync_failed": "Knowledge Base sync failed",
   "kb.index_cleared": "Knowledge Base index cleared",
+  "kb.answer_reported": "Knowledge Base answer reported",
+  "kb.answer_report_closed": "Knowledge Base report closed",
   "fp.project_created": "Freeze Protection project created",
   "fp.project_updated": "Freeze Protection project updated",
   "fp.project_deleted": "Freeze Protection project deleted",

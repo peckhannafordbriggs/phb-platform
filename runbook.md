@@ -11404,9 +11404,15 @@ which includes `kb_question_sources`, the history. Then run a sync.
 
 ## A Knowledge Base answer was reported as wrong
 
-**Where reports land.** The *Report a wrong answer* button writes a row to
-`kb_answer_reports`, open until the platform admin resolves or dismisses it with
-a note. The open queue, oldest last:
+**Where reports land.** *Report a wrong answer* under each answer (anyone with
+the module, on anyone's answer) writes a row to `kb_answer_reports`
+(`lib/modules/knowledge-base/reports.ts`): a reason, optionally which source
+and a comment. Reporting again while it is open updates the same report. The
+queue is on `/knowledge-base/admin` under *Reported answers*, for **Knowledge
+Base module admins**; the Ask page's *Admin* link shows the open count. Each
+report shows the question, the answer as it was shown, and a link to open it
+with its sources. Filing and closing are audited (`kb.answer_reported`,
+`kb.answer_report_closed`). The same queue in SQL, newest first:
 
 ```sql
 SELECT r.created_at, e.email AS reported_by, r.reason, r.citation_n, r.comment,
@@ -11430,9 +11436,11 @@ document and passage in the index, if they still exist. Decide which it is:
 | The passage is right and the answer overstates it | Answering | Record the question for the evaluation set |
 | A newer version says something else | Versions | Check `family_key` / `is_latest` on both rows |
 
-**Close it.** Resolved means something was fixed; dismissed means the answer was
-right. Either way the note says what was found, and the database refuses a
-closed report without a note and a time.
+**Close it.** On the admin page: write what you found, then *Resolved*
+(something was wrong and was dealt with) or *Dismiss: the answer was right*.
+The note is required, and the database refuses a closed report without a note
+and a time. Two admins closing the same report: the second is told someone
+already closed it (409). Once closed, the reporter can report that answer again.
 
 ## Knowledge Base: what to ask IT for
 

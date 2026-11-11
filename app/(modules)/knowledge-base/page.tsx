@@ -8,6 +8,7 @@ import {
   KNOWLEDGE_BASE_MODULE_KEY,
   KNOWLEDGE_BASE_MODULE_NAME,
 } from "@/lib/modules/knowledge-base/constants";
+import { countOpenReports } from "@/lib/modules/knowledge-base/reports";
 import { listSearchableProjects } from "@/lib/modules/knowledge-base/search";
 import { moduleAccentStyle } from "@/lib/module-accent";
 import { AskPanel } from "./ask-panel";
@@ -31,6 +32,7 @@ export default async function KnowledgeBasePage({ searchParams }: { searchParams
     hasModuleAdmin(access.viewer.id, KNOWLEDGE_BASE_MODULE_KEY),
     conversationId ? getConversation(conversationId, access.viewer.id) : Promise.resolve(null),
   ]);
+  const openReports = isAdmin ? await countOpenReports() : 0;
 
   return (
     <div className="mx-auto max-w-5xl" style={moduleAccentStyle(KNOWLEDGE_BASE_MODULE_KEY)}>
@@ -41,7 +43,7 @@ export default async function KnowledgeBasePage({ searchParams }: { searchParams
       >
         {isAdmin && (
           <Link href="/knowledge-base/admin" className="text-sm font-medium underline underline-offset-2">
-            Manage the index
+            {openReports > 0 ? `Admin · ${openReports} reported answer${openReports === 1 ? "" : "s"}` : "Admin"}
           </Link>
         )}
       </ModuleHeader>

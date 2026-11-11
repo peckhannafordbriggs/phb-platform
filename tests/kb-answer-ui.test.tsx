@@ -16,6 +16,7 @@ const asked = (over: Partial<KbAskedQuestion["answer"]> = {}): KbAskedQuestion =
   scope: { how: "all", projectIds: [] },
   model: "claude-sonnet-5-5",
   durationMs: 4200,
+  reportedByMe: false,
   answer: {
     version: 1,
     kind: "answered",
@@ -54,8 +55,12 @@ describe("AnswerCard", () => {
     expect(html).toContain('id="src-q1-2"');
     expect(html).toContain("Archived</span>");
     expect(html).toContain("<li>Length 172.5 in");
-    expect(html).toContain("Pages 114-115");
+    expect(html).toContain("RTUs_Approved.pdf</a><span class=\"text-[var(--muted)]\">, pages 114-115");
     expect(html).toContain("Ann A · Nov 10, 2026, 11:00 AM");
+    // Only what helps: no project folder repeated, no timing or passage count.
+    expect(html).not.toContain("221457_MAGNODE");
+    expect(html).not.toMatch(/Read \d+ passage|4\.2 s/);
+    expect(html).toContain("Report a wrong answer");
     // Passage text is text, never markup.
     expect(html).toContain("&lt;b&gt;APPROX. WEIGHT&lt;/b&gt;");
   });
@@ -68,5 +73,11 @@ describe("AnswerCard", () => {
     );
     expect(html).toContain("Sources disagree on operating weight");
     expect(html).toContain("Not in the documents: </span>No shipping weight.");
+  });
+
+  it("says the viewer already reported it instead of offering the button again", () => {
+    const html = renderToStaticMarkup(createElement(AnswerCard, { asked: { ...asked(), reportedByMe: true } }));
+    expect(html).toContain("Reported. A Knowledge Base admin will look at it.");
+    expect(html).not.toContain("Report a wrong answer");
   });
 });

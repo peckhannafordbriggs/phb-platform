@@ -16,6 +16,7 @@ import {
 import { KNOWLEDGE_BASE_MODULE_KEY } from "./constants";
 import { defaultCondenser, joinWithLast, type KbCondenser } from "./followup";
 import { locationLabel, versionText } from "./location";
+import { reportedByViewer } from "./reports";
 import type { KbReranker } from "./rerank";
 import {
   parseQuery,
@@ -94,6 +95,8 @@ export type KbAskedQuestion = {
   answer: KbAnswerSnapshot;
   model: string | null;
   durationMs: number | null;
+  /** Whether the person looking has an open report on this answer. */
+  reportedByMe: boolean;
 };
 
 export type KbAskResult = { asked: KbAskedQuestion; search: KbSearchResult };
@@ -342,7 +345,7 @@ async function save(row: {
         await tx.kbConversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
         return created.id;
       });
-      const [asked] = await questionsWhere({ id });
+      const [asked] = await questionsWhere({ id }, row.employeeId);
       return asked!;
     } catch (error) {
       const raced = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
@@ -427,16 +430,20 @@ export async function getConversation(
     id: conversation.id,
     startedBy: nameOf(conversation.employee),
     mine: conversation.employeeId === viewerId,
-    questions: await questionsWhere({ conversationId: id }),
+    questions: await questionsWhere({ conversationId: id }, viewerId),
   };
 }
 
-async function questionsWhere(where: { id: string } | { conversationId: string }): Promise<KbAskedQuestion[]> {
+async function questionsWhere(
+  where: { id: string } | { conversationId: string },
+  viewerId: string,
+): Promise<KbAskedQuestion[]> {
   const rows = await prisma.kbQuestion.findMany({
     where,
     orderBy: { ordinal: "asc" },
     include: { conversation: { select: { employee: { select: { id: true, firstName: true, lastName: true } } } } },
   });
+  const reported = await reportedByViewer(rows.map((q) => q.id), viewerId);
   return rows.map((q) => ({
     id: q.id,
     conversationId: q.conversationId,
@@ -448,5 +455,6 @@ async function questionsWhere(where: { id: string } | { conversationId: string }
     answer: q.answer as unknown as KbAnswerSnapshot,
     model: q.model,
     durationMs: q.durationMs,
+    reportedByMe: reported.has(q.id),
   }));
 }

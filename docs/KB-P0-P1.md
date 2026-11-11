@@ -369,8 +369,16 @@ Cohere on Foundry is likely closed to the CSP subscription.
   `kb_conversations(updated_at DESC, id DESC)`, migration
   `20261111120000_kb_shared_history_index`), opened at `/knowledge-base?c=<id>`.
 - **Limits**: 10 questions per person per minute, in memory.
-- **Not built yet**: the report-a-wrong-answer button and the admin queue, the
-  real answer rules, `kb:eval` for answers.
+- **Report a wrong answer** (2026-11-11, `reports.ts`): under each answer, a
+  reason (the CHECKed five), optionally a source and a comment; one open report
+  per person per answer (a second updates it). Queue for KB module admins on
+  `/knowledge-base/admin`; closed as resolved or dismissed with a required note;
+  both audited.
+- **The answer card shows only what helps** (2026-11-11): answer, citations,
+  missing or conflicting evidence when there is any, and each source as file and
+  page with an Archived tag when it applies. No project folder repeat, version
+  date, timing or passage count.
+- **Not built yet**: the real answer rules, `kb:eval` for answers.
 
 ## Open questions
 

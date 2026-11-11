@@ -33,6 +33,15 @@ export const KB_REPORT_REASONS = [
 ] as const;
 export type KbReportReason = (typeof KB_REPORT_REASONS)[number];
 
+/** How each reason reads on the screen. Pure, so the browser imports it. */
+export const KB_REPORT_REASON_LABELS: Record<KbReportReason, string> = {
+  wrong_fact: "Something in the answer is wrong",
+  wrong_source: "A source does not say what the answer claims",
+  missing_source: "It missed a document I know about",
+  outdated: "A newer version says something else",
+  other: "Something else",
+};
+
 /** Where a report is in the admin's queue (kb_answer_reports.status). */
 export const KB_REPORT_STATUSES = ["open", "resolved", "dismissed"] as const;
 export type KbReportStatus = (typeof KB_REPORT_STATUSES)[number];

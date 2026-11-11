@@ -181,6 +181,17 @@ export type AuditAction =
    */
   | "kb.index_cleared"
   /**
+   * An employee reported a Knowledge Base answer as wrong, or updated their
+   * open report (lib/modules/knowledge-base/reports.ts). Metadata: reportId,
+   * questionId, reason, citationN, updated.
+   */
+  | "kb.answer_reported"
+  /**
+   * A module admin closed a report as resolved or dismissed. Metadata:
+   * reportId, questionId, status, note.
+   */
+  | "kb.answer_report_closed"
+  /**
    * Freeze Protection. Every write in lib/modules/freeze-protection/ writes one
    * of these in the same transaction. Metadata always carries `projectId` and
    * `jobNumber`, because the job number is what a person searches for. Updates
