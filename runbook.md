@@ -3384,6 +3384,68 @@ deployment: the hostname leaves the ingress and the certificate resource is no
 longer deployed (it stays on the environment until deleted by hand; it costs
 nothing). The app's own address never changed.
 
+## A template deployment fails with `ContainerAppInvalidName`
+
+**Symptom.** `az deployment group create` ends `DeploymentFailed`, and the
+one failed operation is a `Microsoft.App/jobs` (or `containerApps`) *Create*
+with
+
+```
+ContainerAppInvalidName: Invalid ContainerAppsJob name '<name> (trimmed)'. A name must
+consist of lower case alphanumeric characters or '-', start with an alphabetic
+character, and end with an alphanumeric character and cannot have '--'. The length
+must be between 2 and 32 characters inclusive.
+```
+
+Azure prints the name cut to 32 characters with ` (trimmed)` after it, which
+is the clue: the name was too long, not malformed.
+
+**Cause.** Every app and job name in `infra/main.bicep` is
+`${baseName}-<suffix>`, and `baseName` is `<namePrefix>-<environmentName>` -
+**13 characters in production**, so a suffix may be at most **19**.
+`-bas-reports-scheduler` is 22, and `<baseName>-bas-reports-scheduler` came
+to 34. `az bicep build`, `lint` and `what-if` all pass such a name: the
+length is only checked by the resource provider, at creation, after
+everything before it in the deployment has already gone through.
+
+**Fix.** Shorten the **suffix** in the template, never the prefix (every
+other resource is named from it), update the commands in this runbook that
+name the job, and redeploy. Nothing needs deleting first: the deployment
+runs in incremental mode, so every resource that succeeded is in its final
+state and the redeploy only creates what failed; a resource whose name
+changes between attempts would be a different matter (the old one would be
+left behind, to be deleted by hand), which is why a job that exists keeps
+its name. `tests/deploy-guards.test.ts` → *every Container App and Container
+Apps Job name fits Azure's naming rule with the production baseName* now
+computes each generated name with the production values and holds it to the
+rule, so the next one fails in the test run and not in Azure.
+
+**The record, 2026-11-11.** Deployment `bas-reports-enable` at 18:46 UTC,
+the first with `enableBasReports` on, failed on
+`<baseName>-bas-reports-scheduler` (34) after these had succeeded: the web
+app (revision `0000116` - the FP secret kept, the three Needs Review
+variables blank, the probes back on `/api/health`, i.e. the reconciliation
+above), the PostgreSQL server (`backupRetentionDays` 7 → 35, the value the
+parameters file carried), and **`<baseName>-bas-reports-worker`, created**
+(31 characters) on `bas-reports:9e4adb5…`. The Cost Intelligence worker,
+the environment, the certificate, the budget and the two role assignments
+reported no change. The scheduler is `${baseName}-bas-reports-sched` (30)
+from the same day; the worker keeps its name because it exists. The image
+is unaffected: a job name is not baked into it (the Dockerfile copies the
+scripts and the job's `command` names the one to run), so the redeploy
+passes the same `basReportsImage`.
+
+| Resource | Production name | Length |
+|---|---|---|
+| web app | `<baseName>-app` | 16 |
+| Cost Intelligence worker | `<baseName>-cip-worker` | 23 |
+| Reports scheduler | `<baseName>-bas-reports-sched` | 30 |
+| Reports worker | `<baseName>-bas-reports-worker` | 31 |
+| database backup | `<baseName>-db-backup` | 22 |
+| shadow feed / collect / classify | `<baseName>-co-shadow-feed` / `-co-shadow-collect` / `-co-classify` | 27 / 30 / 24 |
+
+---
+
 ## A template deployment fails activation, and the console log says `Listening on :80...`
 
 **Symptom.** `az deployment group create` with `infra/main.bicep` reports the
@@ -11406,7 +11468,7 @@ project and only ever adds files to the project's `AI FILES` folder.
 
 | Job | Trigger | Runs | Needs |
 |---|---|---|---|
-| `<baseName>-bas-reports-scheduler` (`basReportsSchedulerJob`) | cron, `basReportsSchedulerCron`, default `*/15 * * * *` (UTC) | `scripts/bas-reports-scheduler.ts`, one pass: for every active report whose `next_run_at` has passed, ONE queued run and the next run time advanced in the same transaction; active reports whose owner's account is disabled are paused as *Paused - owner disabled* with the reason on the row | `DATABASE-URL` by reference, nothing else |
+| `<baseName>-bas-reports-sched` (`basReportsSchedulerJob`; 30 characters in production - the longer `-scheduler` name was 34 and failed the first deployment, *A template deployment fails with `ContainerAppInvalidName`*) | cron, `basReportsSchedulerCron`, default `*/15 * * * *` (UTC) | `scripts/bas-reports-scheduler.ts`, one pass: for every active report whose `next_run_at` has passed, ONE queued run and the next run time advanced in the same transaction; active reports whose owner's account is disabled are paused as *Paused - owner disabled* with the reason on the row | `DATABASE-URL` by reference, nothing else |
 | `<baseName>-bas-reports-worker` (`basReportsWorkerJob`) | a PostgreSQL scaler counting queued runs and stalled ones, every 15 s, two executions at most | `scripts/bas-reports-worker.ts`: claims runs with `FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the Phase 2 engine, exits when the queue is empty or after its four-minute drain window | `DATABASE-URL`, `BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` (the BAS key) by reference |
 
 Same identity (`<baseName>-identity`), same registry pull and vault read; **no
@@ -11416,8 +11478,16 @@ longest time cap a report may set (25) plus the drain window (4). A report
 that missed several ticks - the job was off, the platform was down - gets one
 run for the latest occurrence and never a backfill.
 
-**Built 2026-11-12, not yet turned on.** Nothing exists in Azure until the
-steps below are done. Both scripts were run end to end against the
+**First deployment 2026-11-11 18:46 UTC (`bas-reports-enable`): failed on
+the scheduler's name, after creating the worker.** `<baseName>-bas-reports-worker`
+exists in Azure on `bas-reports:9e4adb5…`, the web app revision and the
+server's retention change in the same deployment went through, and
+`<baseName>-bas-reports-scheduler` was refused as 34 characters against a
+cap of 32 (*A template deployment fails with `ContainerAppInvalidName`*).
+The scheduler is `<baseName>-bas-reports-sched` since that day; the redeploy
+is the same step 3 command, nothing is deleted first, and what-if lists one
+*Create* (the scheduler) rather than two. Built 2026-11-12 (the PR's date);
+both scripts were run end to end against the
 development database the same day (the record is in the pull request), and
 `tests/bas-reports-jobs.test.ts` holds every rule above against the real
 test database, including the two scripts as child processes under tsx.
@@ -11464,8 +11534,9 @@ references an image that is not there fails at the job - the same shape as
    az deployment group what-if --subscription <subscription-id> --resource-group <resource-group> \
      --template-file infra/main.bicep --parameters @infra/main.parameters.json \
      --parameters containerImage="$IMAGE" cipWorkerImage="$CIP" basReportsImage="$REPORTS"
-   # Expect exactly two resources as Create - the two jobs - nothing as Delete,
-   # and NO Microsoft.Authorization/roleAssignments anywhere in the list.
+   # Expect the two jobs as Create on a first attempt - after 2026-11-11, where the
+   # worker already exists, exactly one, the scheduler - nothing as Delete, and NO
+   # Microsoft.Authorization/roleAssignments anywhere in the list.
    az deployment group create ... (the same arguments)
    ```
 
@@ -11479,9 +11550,9 @@ references an image that is not there fails at the job - the same shape as
    nothing else. Then:
 
    ```bash
-   az containerapp job start -n <baseName>-bas-reports-scheduler -g <resource-group>
-   az containerapp job execution list -n <baseName>-bas-reports-scheduler -g <resource-group> -o table   # one execution, Succeeded
-   az containerapp job logs show -n <baseName>-bas-reports-scheduler -g <resource-group> --container bas-reports-scheduler
+   az containerapp job start -n <baseName>-bas-reports-sched -g <resource-group>
+   az containerapp job execution list -n <baseName>-bas-reports-sched -g <resource-group> -o table   # one execution, Succeeded
+   az containerapp job logs show -n <baseName>-bas-reports-sched -g <resource-group> --container bas-reports-scheduler
    # "[bas-reports-scheduler] 0 queued, 0 paused, 0 skipped" is the expected line
    # when no report is due yet; a due report prints "queued run <id> of report <id>".
    ```

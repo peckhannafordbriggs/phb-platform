@@ -733,6 +733,113 @@ describe("the image parameters are read from the running resources, never from t
   });
 });
 
+/**
+ * Every Container App and Container Apps Job name the template generates,
+ * computed with the production values and held to Azure's rule for the
+ * resource type: 2 to 32 characters, lowercase alphanumerics and '-', a
+ * letter first, an alphanumeric last, no '--'. The first production
+ * deployment of the Reports jobs (2026-11-11, `bas-reports-enable`) failed
+ * with ContainerAppInvalidName on '<baseName>-bas-reports-scheduler' - 34
+ * characters with the production baseName - after the worker job and the
+ * app revision had already gone through. Nothing in the repository looked
+ * at a generated name's length; this does, so the next name that is too
+ * long fails here and not in Azure. The mutation it is for: lengthen any
+ * job's suffix past 19 characters and the first test names it.
+ */
+describe("every Container App and Container Apps Job name fits Azure's naming rule with the production baseName", () => {
+  const readFile = (rel: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, rel), "utf8"));
+  // namePrefix is the example the template's own @description gives; environmentName the example file's.
+  const PRODUCTION = { namePrefix: "phbplat", environmentName: "prod" };
+  const RULE = /^[a-z][a-z0-9-]*[a-z0-9]$/;
+  const MAX = 32;
+
+  const violations = (name: string) => {
+    const out: string[] = [];
+    if (name.length > MAX) out.push(`${name.length} characters, the cap is ${MAX}`);
+    if (name.length < 2) out.push("shorter than 2 characters");
+    if (!RULE.test(name)) out.push("not lowercase alphanumerics and '-', starting with a letter and ending alphanumeric");
+    if (name.includes("--")) out.push("contains '--'");
+    return out;
+  };
+
+  /** A bicep name expression as a string: a '${baseName}-...' literal, or a var holding one. */
+  const resolve = (bicep: string, expr: string, baseName: string): string => {
+    const literal = /^'([^']*)'$/.exec(expr.trim());
+    let text: string;
+    if (literal) {
+      text = literal[1]!;
+    } else {
+      const v = new RegExp(`^var ${expr.trim()} = '([^']*)'$`, "m").exec(bicep);
+      if (!v) throw new Error(`cannot resolve the name expression ${expr.trim()}`);
+      text = v[1]!;
+    }
+    const resolved = text.replace(/\$\{baseName\}/g, baseName);
+    if (/\$\{/.test(resolved)) throw new Error(`${expr.trim()} still holds an expression after baseName: ${resolved}`);
+    return resolved;
+  };
+
+  const generatedNames = (bicep: string, values: { namePrefix: string; environmentName: string }) => {
+    expect(bicep).toMatch(/^var baseName = toLower\('\$\{namePrefix\}-\$\{environmentName\}'\)$/m);
+    const baseName = `${values.namePrefix}-${values.environmentName}`.toLowerCase();
+    // The resource line and its `name:` as the first property, with comment
+    // lines allowed between - every app and job in the template is written
+    // that way, and a container's `name:` deeper in a block is not matched.
+    const heads = [
+      ...bicep.matchAll(/^resource (\w+) 'Microsoft\.App\/(containerApps|jobs)@[^']+'[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*name: ([^\n]+)$/gm),
+    ];
+    return heads.map((m) => ({ resource: m[1]!, type: m[2]!, name: resolve(bicep, m[3]!, baseName) }));
+  };
+
+  it("finds the app and every job, and each generated name passes", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const names = generatedNames(bicep, PRODUCTION);
+    expect(names.map((n) => n.resource)).toEqual(
+      expect.arrayContaining([
+        "containerApp",
+        "cipWorkerJob",
+        "basReportsSchedulerJob",
+        "basReportsWorkerJob",
+        "dbBackupJob",
+        "coShadowFeedJob",
+        "coShadowCollectJob",
+        "coClassifyJob",
+      ]),
+    );
+    expect(names.filter((n) => n.type === "containerApps").length).toBe(1);
+    for (const { resource, name } of names) {
+      expect(violations(name), `${resource} -> '${name}'`).toEqual([]);
+    }
+  });
+
+  it("would have refused the name that failed in Azure, and keeps the worker's name because that job exists", async () => {
+    expect(violations("phbplat-prod-bas-reports-scheduler")).toEqual(["34 characters, the cap is 32"]);
+    expect(violations("phbplat-prod--x")).toEqual(["contains '--'"]);
+    expect(violations("Phbplat-prod-app")).toHaveLength(1);
+    const bicep = await readFile("infra/main.bicep");
+    const names = Object.fromEntries(generatedNames(bicep, PRODUCTION).map((n) => [n.resource, n.name]));
+    expect(names.basReportsSchedulerJob).toBe("phbplat-prod-bas-reports-sched");
+    expect(names.basReportsWorkerJob).toBe("phbplat-prod-bas-reports-worker");
+  });
+
+  it("holds with the values in the local parameters file too, when there is one", async () => {
+    // Gitignored, so absent in CI; locally it carries the real production values.
+    let local: Record<string, { value?: unknown }>;
+    try {
+      local = (JSON.parse(await readFile("infra/main.parameters.json")) as { parameters: Record<string, { value?: unknown }> }).parameters;
+    } catch {
+      return;
+    }
+    const namePrefix = local.namePrefix?.value;
+    const environmentName = local.environmentName?.value;
+    if (typeof namePrefix !== "string" || typeof environmentName !== "string" || namePrefix.startsWith("<")) return;
+    const bicep = await readFile("infra/main.bicep");
+    for (const { resource, name } of generatedNames(bicep, { namePrefix, environmentName })) {
+      expect(violations(name), `${resource} -> '${name}'`).toEqual([]);
+    }
+  });
+});
+
 describe("no deployment file hardcodes an organisation", () => {
   const files = [
     "infra/main.bicep",
@@ -1976,7 +2083,7 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(arm.parameters.basReportsImage).toMatchObject({ type: "string", defaultValue: "" });
     const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
     const jobs = resources.filter((r) => r.type === "Microsoft.App/jobs");
-    const scheduler = jobs.find((j) => j.name.includes("bas-reports-scheduler"));
+    const scheduler = jobs.find((j) => j.name.includes("bas-reports-sched"));
     const worker = jobs.find((j) => j.name.includes("bas-reports-worker"));
     expect(scheduler).toBeDefined();
     expect(worker).toBeDefined();

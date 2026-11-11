@@ -1446,7 +1446,15 @@ assignment**; the worker runs under tsx, not a compiled build
 every rule above against the real test database, both scripts included as
 child processes. `runbook.md` → *Reports: turning the jobs on* has the
 parameter lines and the order of commands; *Reports: a run is stuck or
-failed*; *Reports: what the caps do*.
+failed*; *Reports: what the caps do*. **First production deployment
+2026-11-11: failed on the scheduler job's name** - `-bas-reports-scheduler`
+made it 34 characters against Azure's cap of 32 - after the worker job and
+the app revision had gone through. The scheduler is
+`${baseName}-bas-reports-sched` from that day, the worker keeps its name
+because it exists, nothing in Azure is deleted before the redeploy, and a
+deploy guard now computes every app and job name with the production
+values and holds each to the rule. `runbook.md` → *A template deployment
+fails with `ContainerAppInvalidName`*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
