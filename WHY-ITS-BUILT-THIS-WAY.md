@@ -3089,3 +3089,46 @@ is already trended.
 `lib/modules/bas/reports/engine/inventory.ts`;
 `tests/bas-reports-analysis.test.ts` (*applies the hydronic questions to
 nothing on a DX-only building*, *a coverage shortfall is a miss*).
+
+
+## 80 · The report worker runs under tsx, not a compiled build
+
+**The decision.** The two BAS Reports jobs (Phase 3) run their scripts the way
+the laptop runs `npm run bas:report:run`: `npx tsx scripts/bas-reports-worker.ts`
+and `npx tsx scripts/bas-reports-scheduler.ts`, from an image that copies the
+repository and compiles nothing (`Dockerfile.bas-reports`). The Cost
+Intelligence worker already runs this way; this entry says why it was kept
+when the alternative was weighed.
+
+**Why it was weighed at all.** Run 1 on the development database failed with
+*React is not defined* (PR #112): the report template is JSX, and tsx's
+esbuild reads this repository's `jsx: "preserve"` - Next's requirement - as
+the classic transform, with no React in scope. Next and vitest both use the
+automatic runtime, so no in-process test could see it. The fix is a
+`@jsxRuntime automatic` pragma on the template, and
+`tests/bas-reports-worker-render.test.ts` spawns tsx on the engine's own
+render and holds its HTML byte for byte to vitest's. A compiled build for the
+image would have been another way out: `tsc` or esbuild with `jsx:
+react-jsx`, and `node dist/...` in the container.
+
+**Why tsx won.** One loader, everywhere the engine runs: the laptop's dev
+script, the worker in Azure, and the test that proves the render. A compiled
+image is a fourth transform of the same source - a second tsconfig or a
+build flag that only the image uses - and the thing that went wrong in run 1
+was precisely a transform the tests did not exercise. The loader test is
+load-bearing only if production runs the loader it spawns. With tsx in the
+image, the test, the dev script and the job agree by construction, and
+`tests/bas-reports-jobs.test.ts` goes further: it runs both scripts as child
+processes under tsx against the test database, so the worker's entry point
+and its loader are exercised on every CI run. The cost is a second or so of
+startup per execution for esbuild to transform the sources, and an image
+that carries TypeScript rather than JavaScript; at one execution per run and
+a handful of runs a week, neither registers.
+
+**What breaks if you undo it.** Switching the image to a compiled build
+without extending the loader test to the compiled path brings back the one
+class of failure that cannot be seen from inside vitest: a transform
+production uses and no test does. If a compiled build is ever wanted - for
+startup time at hundreds of runs an hour, say - the user's own condition
+applies: extend `tests/bas-reports-worker-render.test.ts` to render through
+the compiled artefact too, in the same CI run, before the Dockerfile changes.

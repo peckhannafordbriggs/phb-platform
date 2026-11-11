@@ -1402,6 +1402,33 @@ with more readings than its interval allows is change-of-value everywhere**
 `docs/bas-reports-phase-2-verification.md` is the record;
 `WHY-ITS-BUILT-THIS-WAY.md` §§ 78-79; `runbook.md` → *Reports (Phase 2)*.
 
+**Reports, Phase 3 - the jobs (2026-11-12, built, not yet turned on).**
+Reports run unattended: a scheduler pass (`scripts/bas-reports-scheduler.ts`)
+queues ONE run for every active definition whose `next_run_at` has passed
+and advances it in the same locked transaction - missed ticks collapse into
+one run for the latest occurrence, never a backfill - and pauses reports
+whose owner is disabled as `paused_owner_disabled` with the reason on the
+row; a module admin's owner transfer (new: service, route, editor control)
+resumes them. A worker (`scripts/bas-reports-worker.ts`) claims runs with
+`FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the engine and
+drains the queue; a stalled run is reclaimed once (`attempts`) and failed
+with a clear error the second time. **The run row comes first**: the engine
+is `enqueueRun` + claim + `executeQueuedRun`, and the dev script is the
+three in one call, so there is one execution path. Two caps: `budget_usd`
+and the new `max_minutes` (1-25, default 20), a deadline read before every
+question and narrative call; past it the run finishes partial naming the
+cap and what was skipped. *Run now* on Scheduled, owner or admin, one in
+flight per report. Infrastructure behind `enableBasReports`: two Container
+Apps Jobs from `Dockerfile.bas-reports` (`bas-reports:<sha>`, built by
+`deploy.yml`), the scheduler on `*/15 * * * *` UTC, the worker on a
+PostgreSQL scaler, two executions at most, 30-minute timeout, **no new role
+assignment**; the worker runs under tsx, not a compiled build
+(`WHY-ITS-BUILT-THIS-WAY.md` § 80). `tests/bas-reports-jobs.test.ts` drives
+every rule above against the real test database, both scripts included as
+child processes. `runbook.md` → *Reports: turning the jobs on* has the
+parameter lines and the order of commands; *Reports: a run is stuck or
+failed*; *Reports: what the caps do*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
