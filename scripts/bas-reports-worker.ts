@@ -1,7 +1,7 @@
 import "./load-env";
-import { readAnthropicApiKey } from "../lib/env";
 import { prisma } from "../lib/db";
 import { createAnthropicNarrator } from "../lib/modules/bas/reports/engine/narrative";
+import { ANTHROPIC_API_KEY_VAR, readWorkerJobEnv } from "../lib/modules/bas/reports/job-env";
 import { drainQueue } from "../lib/modules/bas/reports/worker";
 
 /**
@@ -25,6 +25,13 @@ import { drainQueue } from "../lib/modules/bas/reports/worker";
  * configured", which is the honest outcome and not an error. Runs under
  * tsx, the loader tests/bas-reports-worker-render.test.ts proves the
  * template renders under.
+ *
+ * Both are read through lib/modules/bas/reports/job-env.ts and NEVER
+ * through lib/env.ts: that module parses the web app's whole boot schema
+ * on import, and importing one name from it failed this job on every
+ * production execution (ALLOWED_EMAIL_DOMAINS, a variable the job does
+ * not carry; 2026-11-11). tests/bas-reports-jobs-env.test.ts boots this
+ * script with only the template's variables and walks its import graph.
  */
 
 const once = process.argv.includes("--once");
@@ -40,10 +47,11 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 async function main(): Promise<void> {
-  const key = noNarrative ? null : readAnthropicApiKey();
+  const jobEnv = readWorkerJobEnv();
+  const key = noNarrative ? null : jobEnv.anthropicApiKey;
   const narrator = key === null ? null : createAnthropicNarrator(key);
   console.log(
-    `[bas-reports-worker] narrator: ${narrator === null ? (noNarrative ? "off (--no-narrative)" : "none (ANTHROPIC_API_KEY unset; runs finish partial)") : narrator.model}`,
+    `[bas-reports-worker] narrator: ${narrator === null ? (noNarrative ? "off (--no-narrative)" : `none (${ANTHROPIC_API_KEY_VAR} unset; runs finish partial)`) : narrator.model}`,
   );
   console.log(`[bas-reports-worker] ${once ? "one run at most, then exit" : "working until the queue is empty"}`);
 

@@ -11469,7 +11469,7 @@ project and only ever adds files to the project's `AI FILES` folder.
 | Job | Trigger | Runs | Needs |
 |---|---|---|---|
 | `<baseName>-bas-reports-sched` (`basReportsSchedulerJob`; 30 characters in production - the longer `-scheduler` name was 34 and failed the first deployment, *A template deployment fails with `ContainerAppInvalidName`*) | cron, `basReportsSchedulerCron`, default `*/15 * * * *` (UTC) | `scripts/bas-reports-scheduler.ts`, one pass: for every active report whose `next_run_at` has passed, ONE queued run and the next run time advanced in the same transaction; active reports whose owner's account is disabled are paused as *Paused - owner disabled* with the reason on the row | `DATABASE-URL` by reference, nothing else |
-| `<baseName>-bas-reports-worker` (`basReportsWorkerJob`) | a PostgreSQL scaler counting queued runs and stalled ones, every 15 s, two executions at most | `scripts/bas-reports-worker.ts`: claims runs with `FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the Phase 2 engine, exits when the queue is empty or after its four-minute drain window | `DATABASE-URL`, `BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` (the BAS key) by reference |
+| `<baseName>-bas-reports-worker` (`basReportsWorkerJob`) | a PostgreSQL scaler counting queued runs and stalled ones, every 15 s, two executions at most | `scripts/bas-reports-worker.ts`: claims runs with `FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the Phase 2 engine, exits when the queue is empty or after its four-minute drain window | `DATABASE-URL`, `BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` (the BAS key) by reference - read through `lib/modules/bas/reports/job-env.ts`, never `lib/env.ts` (*Reports: a job execution fails at startup naming a web-app variable*); `BAS-ASK-DATABASE-URL` is carried for Phase 6 and read by nothing yet |
 
 Same identity (`<baseName>-identity`), same registry pull and vault read; **no
 role assignment is added**, so a Contributor deploys this exactly as the CIP
@@ -11486,7 +11486,11 @@ server's retention change in the same deployment went through, and
 cap of 32 (*A template deployment fails with `ContainerAppInvalidName`*).
 The scheduler is `<baseName>-bas-reports-sched` since that day; the redeploy
 is the same step 3 command, nothing is deleted first, and what-if lists one
-*Create* (the scheduler) rather than two. Built 2026-11-12 (the PR's date);
+*Create* (the scheduler) rather than two. **Then every worker execution
+failed at startup** on the web app's env schema - the worker script imported
+one function from `lib/env.ts` - while the scheduler ran; fixed the same
+day in the scripts, no template change (*Reports: a job execution fails at
+startup naming a web-app variable*). Built 2026-11-12 (the PR's date);
 both scripts were run end to end against the
 development database the same day (the record is in the pull request), and
 `tests/bas-reports-jobs.test.ts` holds every rule above against the real
@@ -11593,6 +11597,64 @@ worker: one execution per run, about ten seconds of 1 vCPU for a building the
 size of the office, plus the model - about a cent a run on the office and the
 lab (`docs/bas-reports-phase-2-verification.md`). A weekly report on three
 buildings is under a dollar a month all in.
+
+## Reports: a job execution fails at startup naming a web-app variable
+
+**Symptom.** Every execution of the worker job shows *Failed*, and its log
+ends in
+
+```
+Invalid environment configuration:
+  ALLOWED_EMAIL_DOMAINS: Invalid input: expected string, received undefined
+  ...
+Copy .env.example to .env.local and fill in every value.
+    at parseEnv (/app/lib/env.ts:83:11)
+```
+
+naming variables the job has no business carrying - `AUTH_SECRET`, the Entra
+ids, `ALLOWED_EMAIL_DOMAINS` - while the scheduler job on the same image
+succeeds.
+
+**Cause.** Something on the failing script's import path imports
+`lib/env.ts`, the WEB APP's boot schema, which parses the whole schema the
+moment it is imported (on purpose: a misconfigured web deployment fails on
+boot). A job's container carries only its own few variables
+(`infra/main.bicep`), so the parse fails on the first web-app variable it
+does not find. On 2026-11-11 the chain was one line long:
+`scripts/bas-reports-worker.ts` imported `readAnthropicApiKey` from
+`lib/env.ts` to read the model key. The scheduler imported nothing from it,
+which is why it passed. `tests/bas-reports-jobs.test.ts` had run both
+scripts and passed, because it hands them the developer's full `.env.local` -
+exactly what the container does not have.
+
+**Fix.** The jobs read their environment through their own reader,
+`lib/modules/bas/reports/job-env.ts` (`readSchedulerJobEnv`,
+`readWorkerJobEnv`), the way the Cost Intelligence worker reads its own; the
+variable NAMES come from `lib/env-names.ts`, a module with no imports and no
+side effects that `lib/env.ts` re-exports. Nothing a job runs may import
+`lib/env.ts`. `tests/bas-reports-jobs-env.test.ts` holds that three ways:
+it walks each script's import graph and fails if `lib/env.ts` is reachable
+(naming the chain), it holds the template's env list for each job to the
+reader's list, and it boots each script under tsx from an empty directory
+with a clean environment holding ONLY the template's variables - the test
+that would have caught this. If the symptom comes back, run that test; the
+chain it prints is the module to fix, and the fix is to read through the
+jobs' reader or lazily, never to add a web-app variable to the job.
+
+**What each job reads, and what the template gives it.** The scheduler
+reads `DATABASE_URL` (and `NODE_ENV`, which decides only whether the
+database client is cached per process) and the template gives it exactly
+those. The worker reads `DATABASE_URL`, `ANTHROPIC_API_KEY` (unset, every run
+finishes partial saying so) and `NODE_ENV`; the template gives it those and
+`BAS_ASK_DATABASE_URL`, carried for Phase 6's planner questions and read by
+nothing yet. The model name and its prices are constants in the engine
+(`narrative.ts`, `pricing.ts`), the report's dates resolve through the
+platform's own time-zone data (Node ships full ICU), and the report carries
+no link that needs a URL variable - so the jobs need no `AUTH_URL`, no
+platform address and no other value. No template change was needed for
+this fix: the image is rebuilt by `deploy.yml` on merge and both jobs are
+pointed at it, because `AZURE_BAS_REPORTS_SCHEDULER_JOB` and
+`AZURE_BAS_REPORTS_WORKER_JOB` are set.
 
 ## Reports: a run is stuck or failed
 
