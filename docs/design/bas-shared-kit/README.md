@@ -14,6 +14,9 @@ rename a point*).
 | Analyze, one question answered | `before-bas-analyze.png` | `after-bas-analyze.png` |
 | Reports | `before-bas-reports.png` | `after-bas-reports.png` |
 | Reports, Generated | `before-bas-reports-generated.png` | `after-bas-reports-generated.png` |
+| Reports bar (2026-11-11): *Reports*, the runs | — | `reports-bar-reports.png` |
+| Reports bar: *Scheduled*, the definitions | — | `reports-bar-scheduled.png` |
+| Back from the Reports bar: the module tabs, Projects selected | — | `reports-bar-back.png` |
 
 Every colour is the one the screen had: the Analyze teal panel, its gold
 bubbles and purple accent, the module's cyan on the tab underline and the
@@ -39,3 +42,9 @@ The Cost Intelligence, Freeze Protection and Change Orders captures from the
 kit's own pull request were re-taken on this branch with the same harness
 and compared byte for byte, since the kit gained props here; the pull
 request records the result.
+
+The three Reports navigation captures (2026-11-11) were taken the same way
+on the same branch after the Reports bar landed: the runs list with the
+bar (the failed run of 10 November beside the run that replaced it), the
+Scheduled list with *New report*, and the page after clicking the bar's
+*Back* item - the module tabs again, Projects selected.

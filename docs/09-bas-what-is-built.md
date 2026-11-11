@@ -604,11 +604,22 @@ is no longer reported by the station*.
 
 ### Reports — `/bas/reports` (Phase 1, 2026-11-10)
 
-**What exists.** A tab between Analyze and Collection Health, with four
-sub-tabs on the same underline pattern: *Reports* (the list, and the editor
-at `/bas/reports/new` and `/bas/reports/<id>`), *Generated* (a placeholder
-in Phase 1; the runs since Phase 2, below), *Usage* (an honest placeholder
-until Phase 6), and *Library*. The plan is
+**What exists.** A tab between Analyze and Collection Health. Opening it
+swaps the module's tab bar for a **Reports bar** (2026-11-11): the same kit
+component in the same place, one row, never two. Left to right: *Back*,
+which returns to the module bar with Projects selected and carries the
+query string; *Reports* (`/bas/reports`, the runs - the default when the
+tab is opened - and a run at `/bas/reports/generated/<runId>`);
+*Scheduled* (`/bas/reports/scheduled`, the definitions, with *New report*
+top right, and the editor at `/bas/reports/new` and `/bas/reports/<id>`);
+*Questions* (`/bas/reports/library` - the route and the tables keep the
+name Library; the screen says Questions everywhere); and *Usage* (an
+honest placeholder until Phase 6). `/bas/reports/generated` redirects to
+`/bas/reports`, so every older link lands where it did. Until 2026-11-11
+these were a second, smaller row of sub-tabs under the module's, named
+*Reports*, *Generated*, *Library* and *Usage*. The list is
+`app/(modules)/bas/reports/bar.ts`; `tests/bas-reports-ui.test.tsx` holds
+the bar, the deep links and Back. The plan is
 `docs/bas-reports-tab-plan.md`; the spec it serves is `docs/BAS Health
 Report Build Spec.md` (Jim, 27 October 2026). Phase 1 is schema, library,
 definitions and screens; the engine is Phase 2, below. **Nothing fires on
@@ -744,15 +755,17 @@ as data. `runbook.md` → *Reports (Phase 2)*.
    the price table in `pricing.ts`; estimated before each call and stopped
    at `budget_usd` with the reason. A declined call leaves the section's
    evidence standing and the run partial.
-9. *Render and persist*: `ReportView` is the Generated page and, through
+9. *Render and persist*: `ReportView` is the run's page and, through
    `renderReportHtml`, the standalone HTML on the run; it follows the
    spec's template - point inventory (types found, Not Monitored with the
    missing points, Not Applicable dropped and listed), summary, sections,
    Data Health, Open Items Carried Forward - and **every number on it is
    read from a finding's evidence, never from the prose**.
 
-**Screens.** The *Generated* sub-tab lists runs (status, period, duration,
-cost) for the reports the viewer owns or, as a module admin, all, and
+**Screens.** *Reports*, the Reports bar's first item and the tab's default
+view (the *Generated* sub-tab until 2026-11-11), lists runs (status,
+period, duration, cost) for the reports the viewer owns or, as a module
+admin, all, and
 opens one at `/bas/reports/generated/<runId>`. Visibility is the
 definition's (owner or module admin, everyone else 404), decided in
 `runs-service.ts`. A report with runs cannot be deleted
@@ -767,6 +780,23 @@ synthetic building run end to end against the real schema
 lab**, `docs/bas-reports-phase-2-verification.md`. Not built, by the
 phase's scope: scheduler, worker, PDF, email, *Run now*, the Usage tab,
 Q6-Q18's analyses. `WHY-ITS-BUILT-THIS-WAY.md` §§ 78-79.
+
+**The template under the worker's loader (2026-11-11).** Run 1 on the
+development database had failed with `React is not defined`:
+`engine/render.tsx` is JSX, and the dev script runs under tsx, whose
+esbuild reads this repository's `jsx: "preserve"` (Next's requirement) as
+the classic transform - `React.createElement` with no React imported. Next
+and vitest both use the automatic runtime, so every in-process test passed
+and the fault existed only under the worker. The template names its
+runtime in a pragma on line 1 (added the same day, minutes after that run;
+every run since has rendered), and `tests/bas-reports-worker-render.test.ts`
+now spawns tsx on `scripts/bas-report-render.ts` - the engine's own
+`renderReportHtml`, under the worker's loader - holds its HTML byte for
+byte to vitest's, and proves it can see the fault by rendering a copy of
+the template without the pragma and expecting the stored run's error.
+`npm run -s bas:report:render -- <document.json>` renders any run's
+`report_json` to HTML by hand. `runbook.md` → *A run failed with "React
+is not defined"*.
 
 ### Filters
 
