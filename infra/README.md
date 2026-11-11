@@ -30,17 +30,28 @@ az bicep lint --file infra/main.bicep
 cp infra/main.parameters.example.json infra/main.parameters.json
 # fill it in, then:
 
-# The image the app is running NOW. A template deployment replaces the whole
-# container app, image included, so it has to be told which image to keep.
+# The images the app and the jobs are running NOW. A template deployment
+# replaces the whole container app and every job, image included, so it has to
+# be told which images to keep. None of them goes in the parameters file: a
+# file names the image of the day it was written, and on 2026-11-11 the owner's
+# file still named the cip-worker image of 2 November, 28 commits behind the
+# job. Read them, every time.
 IMAGE="$(az containerapp show -n <app> -g <resource-group> \
   --query properties.template.containers[0].image -o tsv)"
+CIP="$(az containerapp job show -n <baseName>-cip-worker -g <resource-group> \
+  --query properties.template.containers[0].image -o tsv)"
+REPORTS="$(az containerapp job show -n <baseName>-bas-reports-worker -g <resource-group> \
+  --query properties.template.containers[0].image -o tsv)"
+# CIP while enableCipWorker is on; REPORTS once enableBasReports is on (before
+# the jobs exist, the bas-reports image built for them - runbook.md, "Reports:
+# turning the jobs on"). Leave out a parameter whose flag is off.
 
 az deployment group create \
   --subscription <subscription-id> \
   --resource-group <resource-group> \
   --template-file infra/main.bicep \
   --parameters @infra/main.parameters.json \
-  --parameters containerImage="$IMAGE"
+  --parameters containerImage="$IMAGE" cipWorkerImage="$CIP" basReportsImage="$REPORTS"
 ```
 
 That is the whole routine command. **The two `@secure()` parameters,
@@ -117,13 +128,25 @@ error text, and the two grant options are under *Deploying to Azure (Phase 7 Par
 Run `what-if` first — it catches both without creating anything:
 
 ```bash
-az deployment group what-if   --subscription <subscription-id>   --resource-group <resource-group>   --template-file infra/main.bicep   --parameters @infra/main.parameters.json   --parameters containerImage="$IMAGE"
+az deployment group what-if   --subscription <subscription-id>   --resource-group <resource-group>   --template-file infra/main.bicep   --parameters @infra/main.parameters.json   --parameters containerImage="$IMAGE" cipWorkerImage="$CIP" basReportsImage="$REPORTS"
 ```
 
 With the two secure parameters omitted, what-if shows no change on the server's
 password or on either vault secret. If it reports `Microsoft.KeyVault/vaults/secrets`
 `DATABASE-URL` or `AUTH-SECRET` as *Modify* or *Create*, a value was passed - stop and
 check whether a rotation was intended.
+
+If `Microsoft.App/containerApps/<app>` shows a `properties.configuration.secrets`
+entry as *Delete*, or an env entry's `secretRef` going to `null`, a Key Vault flag
+in the parameters file is off for a secret the live app carries by hand - set the
+flag and run what-if again; do not deploy. Env entries created with `''` are plain
+parameters the file does not set; the probes going to `httpGet /api/health` are the
+template correcting a by-hand edit. All three happened on 2026-11-11; `runbook.md` →
+*A template what-if shows the container app losing a secret, gaining blank
+variables, or changing its probes* has the record and the list of what-if noise
+that means nothing. And with `enableDbBackup` true before the backup exists,
+what-if lists nothing for a Contributor - it fails on `roleAssignments/write`
+first; the same runbook section says what to do.
 
 ## Custom domain
 
@@ -233,7 +256,9 @@ failure modes.
   as the identity. The image is built once, by hand - next section
 - Three plain values for the Needs Review tab (`coReviewAppTenantId`,
   `coReviewAppClientId`, `coReviewSharePointFolder`; blank by default, and blank
-  leaves the tab "not connected"; see `runbook.md`, "Needs Review")
+  leaves the tab "not connected"; see `runbook.md`, "Needs Review". Blank in
+  production on 2026-11-11 by decision: the registration exists with consent and
+  no federated credential yet - `runbook.md`, "Request 5 status")
 - Optionally the Phase 12 Part E shadow run (`enableCoShadow`, off by default;
   see `docs/phase-12-part-e-plan.md` and `runbook.md`, "The change-order shadow
   run"): three Container Apps Jobs from the `phb-co-engine` image
@@ -318,11 +343,17 @@ grant on the vault; no new role assignment is needed, and
 `tests/deploy-guards.test.ts` asserts that from the template's grants.
 A fifth, Freeze Protection's `FP-ANTHROPIC-API-KEY` (2026-11-04), is wired the
 same way behind `fpAnthropicApiKeyInKeyVault`; its heading follows the Change
-Orders one.
+Orders one. It is also the one that was put on the live app by hand and not in
+the parameters file: from 2026-11-05 to 2026-11-11 the app carried the reference
+while the flag held its default, and the next template deployment would have
+removed it. `runbook.md` → *A template what-if shows the container app losing a
+secret, gaining blank variables, or changing its probes* has the record.
 
 All four exist in the production vault as of 2026-10-21, and the first three
 flags are on; `coAnthropicApiKeyInKeyVault` stays false until Phase 12 Part D
-reads the key. `runbook.md` → *Secrets set by hand in Key Vault* carries the
+reads the key. `FP-ANTHROPIC-API-KEY` exists and the live app has referenced it
+since 2026-11-05, so `fpAnthropicApiKeyInKeyVault` belongs in the parameters
+file as `true` from 2026-11-11 on. `runbook.md` → *Secrets set by hand in Key Vault* carries the
 dated status, and the commands below are for re-setting or rotating one.
 
 ## The Anthropic API key is set by hand, not by the template
@@ -409,6 +440,12 @@ deployment, add the same secret reference (`fp-anthropic-api-key`) and env var
 by hand on the container app (runbook → *The import says "Schedule import is
 not set up"*).
 
+**And the flag the same day the reference is added by hand.** Steps 1-3 of that
+runbook route change the live app and nothing in the repository; until the flag
+is in the parameters file they are drift, and a template deployment removes what
+they added. That is what the what-if of 2026-11-11 found, six days after the
+reference went live - `runbook.md` → *A template what-if shows the container app
+losing a secret, gaining blank variables, or changing its probes*.
 
 ## The BAS credential key is copied from the collector, byte for byte
 

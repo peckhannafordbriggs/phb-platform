@@ -186,7 +186,7 @@ names them):
 |---|---|---|
 | SSO | Employee sign-in | Client ID `220921c1-f23e-4d01-b354-736884ba3d00`. Client secret expires **13 August 2028** |
 | Change Order Mail | Graph access to the mailbox | Client ID `d1795907-d017-4a5e-9da3-033c4bee4ec1`. Scoped by Exchange policy to that one mailbox. **No SharePoint access, by design** |
-| phb-platform-co-review | Read-only Graph access to ONE SharePoint folder, `_needs_review`, for the Needs Review tab | Requested 2026-10-21; client ID goes here when it exists. `Files.SelectedOperations.Selected`, granted Read on that folder only. Production signs in with the managed identity; no secret. `runbook.md` → *What to ask IT for* → Request 5 |
+| phb-platform-co-review | Read-only Graph access to ONE SharePoint folder, `_needs_review`, for the Needs Review tab | Client ID `b9e81eed-5153-4d73-a72a-1f729e37ad21`, created 2026-10-21. `Files.SelectedOperations.Selected` consented, to be granted Read on that folder only. **As of 2026-11-11 it has no federated identity credential**, so production cannot sign in as it, the three template parameters stay blank and the tab says "not connected"; the folder grant is unconfirmed. It will sign in with the managed identity; no secret. `runbook.md` → *What to ask IT for* → *Request 5 status* |
 
 **The mailbox fence is load-bearing.** Graph application permissions reach every mailbox in
 the tenant by default. An Exchange ApplicationAccessPolicy restricts this app to

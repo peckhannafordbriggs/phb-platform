@@ -1873,7 +1873,12 @@ label carries no count, and every review route answers
 `CO_REVIEW_SHAREPOINT_FOLDER`, and outside production
 `PHB_PLATFORM_CO_REVIEW_APP_SECRET`. This is the expected state until Request
 5 is fulfilled, and it is a state rather than a fault: the folder is still
-readable in SharePoint and nothing about the automation changes.
+readable in SharePoint and nothing about the automation changes. In
+production this is the state on 2026-11-11, by decision: the three template
+parameters are blank because the registration has no federated identity
+credential yet (*What to ask IT for* → *Request 5 status*), and a template
+deployment that carries them blank changes nothing - the reader treats blank
+as absent, held by `tests/deploy-guards.test.ts`.
 
 **Fix.** Set them. The two IDs come with the app registration. The folder value
 is the folder's browser URL (open `_needs_review` in SharePoint, copy the
@@ -2415,6 +2420,28 @@ is on one folder.
 Two optional grants were deliberately not asked for and can be added later if
 Phase 2 is approved: Read on `Bid Tracker.xlsx` (the `Needs review?` column)
 and Write on `_needs_review` and `_archive` (resolving from the platform).
+
+**Request 5 status, read live from Entra on 2026-11-11.** The registration
+exists: `phb-platform-co-review`, client id
+`b9e81eed-5153-4d73-a72a-1f729e37ad21`, created 2026-10-21 at 19:08 UTC,
+within the hour of the request. Graph `Files.SelectedOperations.Selected`
+was consented at 19:10 and SharePoint Online `Sites.Selected` at 19:17 - the
+second was not asked for and grants nothing on its own. It carries **no
+federated identity credential, no secret and no certificate**, where the
+SSO, mail and CIP registrations each carry one credential naming the
+platform's user-assigned managed identity as its subject (issuer
+`https://login.microsoftonline.com/<tenant>/v2.0`, audience
+`api://AzureADTokenExchange`). The folder grant cannot be read by a
+non-admin. So production cannot sign in as it yet, and the three template
+parameters stay blank - set now, they would turn the tab's *not connected*
+into `review_auth_failed`. When the credential is added (same shape as the
+other three) and the folder grant is confirmed, the values are
+`coReviewAppTenantId` = the tenant id every other `*TenantId` parameter in
+the file carries, `coReviewAppClientId` =
+`b9e81eed-5153-4d73-a72a-1f729e37ad21`, and `coReviewSharePointFolder` = the
+folder's browser URL from `docs/13-needs-review.md` (`parseFolderSpec` takes
+the URL or `ids:<driveId>/<itemId>`).
+
 **Request 4 status, read live from Entra on 2026-10-14.** `phb-co-engine`
 exists (client id `85ca496d-3af9-4c3a-aa11-a6b7fd51105d`), `Sites.Selected`
 is consented, delegated `Files.ReadWrite.All` is consented for all users, and
@@ -3494,6 +3521,115 @@ resource group since the change.)*
 
 ---
 
+## A template what-if shows the container app losing a secret, gaining blank variables, or changing its probes
+
+**Symptom.** `az deployment group what-if` lists `Microsoft.App/containerApps/<app>`
+as *Modify*, and inside it one or more of: a `properties.configuration.secrets`
+entry as *Delete*; an env entry whose `secretRef` goes to `null`; env entries
+created with no value; `tcpSocket` probes replaced by `httpGet` on
+`/api/health`. Nothing in the template was changed for the drift to appear.
+
+**Cause.** The container app has two writers and only one of them is the
+record. `deploy.yml` runs `az containerapp update --image`, which swaps the
+image and keeps everything else from the running revision. A person in the
+portal - or `az containerapp secret set`, `az containerapp update
+--set-env-vars` - changes the running revision too, and nothing in the
+repository learns of it. A template deployment then writes the whole app from
+`infra/main.bicep` and the parameters file, and what the file does not say,
+the deployment removes. **A by-hand change to the live app is drift from the
+minute it is made, until the parameters file says the same thing.** The
+what-if is the only place the two are compared, and it compares them on the
+morning somebody is about to deploy.
+
+**Fix.** Read the live app and settle each difference in the parameters file
+or the template, never by hand on the app again:
+
+```bash
+az containerapp show -n <app> -g <resource-group> \
+  --query "{secrets: properties.configuration.secrets[].name, env: properties.template.containers[0].env[].{n:name, s:secretRef, v:value}, probes: properties.template.containers[0].probes[].{t:type, http:httpGet.path, tcp:tcpSocket.port}}" -o yaml
+```
+
+- A **secret the live app carries and the what-if deletes** is one of the
+  hand-set Key Vault references (`ANTHROPIC-API-KEY`, `CO-ANTHROPIC-API-KEY`,
+  `FP-ANTHROPIC-API-KEY`, `BAS-CREDENTIAL-KEY`, `BAS-ASK-DATABASE-URL`)
+  whose flag is off in `infra/main.parameters.json`. Set the flag
+  (`anthropicApiKeyInKeyVault`, `coAnthropicApiKeyInKeyVault`,
+  `fpAnthropicApiKeyInKeyVault`, `basCredentialKeyInKeyVault`,
+  `basAskDatabaseUrlInKeyVault`) to `true` and run the what-if again; the
+  *Delete* becomes array reordering (noise, below). The template is right
+  about every one of them; the file was silent.
+- **Env entries created with no value** are plain parameters the file does
+  not set and the template defaults to `''`. They are safe when the reader
+  treats blank as absent - every reader in `lib/env.ts` does, through
+  `blankAsAbsent`, and `tests/deploy-guards.test.ts` holds the Needs Review
+  three to it - and the feature reports itself not configured. Set them in
+  the file only when the thing they configure is ready to be live.
+- **Probes going from `tcpSocket` to `httpGet /api/health`** is the template
+  correcting a by-hand edit. The route has existed since Phase 7 Part A,
+  `deploy.yml` refuses a revision that does not answer 200 from it, and it
+  touches nothing (`app/api/health/route.ts`). Let the template win.
+
+Then run the routine deployment from `infra/README.md` → *Deploy*, with
+every running image on the command line.
+
+**The record, 2026-11-11.** The first what-if since the template deployment
+of 2026-10-22 (the `authUrl` move) showed four differences on the web app
+and none that mattered on the Cost Intelligence worker job:
+
+| What-if showed | What it was | Settled by |
+|---|---|---|
+| Secret `fp-anthropic-api-key` → `FP-ANTHROPIC-API-KEY` and env `FP_ANTHROPIC_API_KEY` (secretRef) as *Delete* | The Freeze Protection key, wired on the live app by hand under *The import says "Schedule import is not set up"* steps 1-3: by Karthik on 2026-11-04 at 17:32 and 17:36 UTC (as `anthropic-api-key-cip` / `CIP_ANTHROPIC_API_KEY`, the names PR #108 used that day), renamed to the FP names by the owner on 2026-11-05 at 16:37 and 16:40 UTC, the same hour as commit `d8e28e7`. The activity log shows these as the only writes to the app by a person since 22 October; everything else is the deploy workflow's identity. Step 4 - `fpAnthropicApiKeyInKeyVault: true` in the parameters file - was not done, so the flag held its default and the template, which has carried a reference for this key since 2026-11-04 (under the FP names since the 5th), left it out | `"fpAnthropicApiKeyInKeyVault": { "value": true }` in `infra/main.parameters.json`. Run again with the flag on: the secret list is the same six on both sides and no env entry is deleted |
+| `PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID`, `PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID`, `CO_REVIEW_SHAREPOINT_FOLDER` as *Create*, value `''` | Needs Review's three plain parameters, in the template since 2026-10-21, not in the file, never on the live app | Left blank, deliberately: the registration has no federated identity credential yet (*Request 5 status* under *What to ask IT for*), so a value would turn the tab's "not connected" into `review_auth_failed`. Blank is the expected production state, and the reader's blank-is-absent rule is held by a test |
+| Both probes `tcpSocket: 3000` → `httpGet /api/health` | A by-hand edit. Every revision Azure still holds up to `0000019` (22 September) probes `/api/health`; the template has never said anything else; the only writes by a person since the 22 October template deployment are the four above, and the portal's *Edit and deploy* dialog is where a probe gets retyped | Nothing to change. `/api/health` is on `main` since commit `20d5efa`, in the live image (`phb-platform:9e4adb5…`, the current `main`), and answered 200 at `https://platform.phb1899.com/api/health` on 2026-11-11 - 24 s on a cold start from zero replicas, 0.15 s warm |
+| (worker job) nothing real | `phbplat-prod-cip-worker` matched the template on every secret, env entry, trigger, timeout and resource | The image on the command line was the running one |
+
+Three more differences were real and are the owner's decisions, not the
+template's: `cipWorkerImage` in the parameters file named the image of
+2 November while the job ran 11 November's (remove the line from the file;
+`infra/README.md` → *Deploy* now reads every running image on the command
+line); `postgresBackupRetentionDays` in the file was `35` against `7` on the
+server (*Nightly database backup* → step 2 says read it first); and the
+budget's contact list in the file had two addresses against one on the live
+budget.
+
+**What-if noise, so nobody chases it again.** Every one of these appeared on
+the same run and means nothing: `exposedPort 0 → null`, `runningStatus`, the
+registry `server` and every `keyVaultUrl` and the
+`GRAPH_MANAGED_IDENTITY_CLIENT_ID` value turning into a `[reference(…)]`
+expression (same value, computed at deploy time), the whole `secrets` and
+`env` arrays reported entry by entry as *Modify* when only their ORDER differs
+(what-if compares arrays by index), the managed environment's `customerId`,
+`peerAuthentication` and `peerTrafficConfiguration`, the certificate's
+`validationMethod`, the registry's `anonymousPullEnabled`,
+`dataEndpointEnabled`, `encryption` and `azureADAuthenticationAsArmPolicy`,
+the PostgreSQL server's `activeDirectoryAuth`, `dataEncryption`, `replica`,
+`replicationRole` and `storage.iops/tier/type`, the two role assignments'
+`principalId` as a reference expression with `principalType` *NoEffect*, the
+budget's `endDate` and the date format of `startDate`, and three
+`Microsoft.CognitiveServices` accounts in the group as *Ignore* (not in the
+template, not touched).
+
+**What-if itself can fail before it shows anything.** With `enableDbBackup`
+true in the parameters file and the backup not yet deployed, the template
+contains a new role assignment, and Azure checks `roleAssignments/write`
+before it previews - a Contributor gets `InvalidTemplateDeployment …
+Authorization failed … Microsoft.Authorization/roleAssignments/write` at the
+storage container's scope and no listing at all (observed 2026-11-11). It is
+the second wall under *Deploying to Azure*, reached through a flag rather
+than a first deployment. To preview the rest meanwhile, pass
+`enableDbBackup=false` on the command line after the file; to deploy the
+backup, the grant in that section comes first.
+
+**The rule this leaves.** When a secret reference is added to the live app by
+hand because `deploy.yml` cannot carry it, the flag goes into
+`infra/main.parameters.json` in the same sitting, and the what-if is run
+before the day ends. `tests/deploy-guards.test.ts` → *every Key Vault flag
+the template declares is visible where a hand-set secret is wired* holds the
+template, the example file, this runbook and `infra/README.md` to each
+other, so the next flag cannot be added without the places a person reads.
+
+---
+
 ## A static file 404s in production and works locally
 
 **Symptom.** `/phb-logo.png` (or anything else in `public/`) returns 404 from the
@@ -3553,7 +3689,11 @@ decrypts the stored JACE credentials; `BAS-ASK-DATABASE-URL` points at the
 `bas_analyze` role created on the production server on 2026-10-13.
 `CO-ANTHROPIC-API-KEY` is set and parked: nothing reads it until Phase 12
 Part D and `coAnthropicApiKeyInKeyVault` stays false. The symptoms below
-describe a regression, not the current state.
+describe a regression, not the current state. `FP-ANTHROPIC-API-KEY`, the
+fifth (2026-11-04), exists and the live app has referenced it since
+2026-11-05 - by hand, six days ahead of its flag in the parameters file; *A
+template what-if shows the container app losing a secret, gaining blank
+variables, or changing its probes* has that record.
 
 The Anthropic key is the first secret the template does not write. `DATABASE-URL` and
 `AUTH-SECRET` are generated at deploy time and were passed on every deploy
@@ -12023,6 +12163,15 @@ at the job.
    *Delete*. The job reads `DATABASE-URL` by reference, so the version already
    in the vault is the one it gets.
 
+   **The what-if can fail here before it lists anything.** The role
+   assignment is new, Azure checks `Microsoft.Authorization/roleAssignments/write`
+   before it previews, and a Contributor gets `InvalidTemplateDeployment …
+   Authorization failed … roleAssignments/write` at the storage container's
+   scope (observed 2026-11-11, with the backup not yet deployed). It is the
+   second wall under *Deploying to Azure*; the grant there comes first. To
+   preview everything else meanwhile, add `enableDbBackup=false` on the
+   command line after the parameters file.
+
 4. **Run it once by hand, and look.**
 
    ```bash
@@ -12314,7 +12463,12 @@ separate from BAS Analyze's and Change Orders', and never falls back to either.
 3. Container app → Containers → Edit and deploy → environment variable
    `FP_ANTHROPIC_API_KEY`, source *Reference a secret*, `fp-anthropic-api-key`.
 4. `fpAnthropicApiKeyInKeyVault: true` in `infra/main.parameters.json`, so the
-   next template deployment keeps it instead of removing it.
+   next template deployment keeps it instead of removing it. **Not optional,
+   and not later**: steps 1-3 are drift until step 4 is done, and on
+   2026-11-11 a what-if showed exactly that - the reference, live since
+   2026-11-05, listed as *Delete* because the flag was still at its default.
+   *A template what-if shows the container app losing a secret, gaining
+   blank variables, or changing its probes* has the record.
 Until then, add equipment by hand.
 
 **"The model service could not be reached" on every schedule, locally.** On
