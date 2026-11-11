@@ -216,6 +216,13 @@ failure modes.
 - Optionally the Cost Intelligence run worker, a Container Apps Job (`enableCipWorker`,
   off by default and on in production since 2026-10-20; see `runbook.md`, "Cost
   Intelligence worker in Azure")
+- Optionally the two BAS Reports jobs (`enableBasReports`, off by default; see *Reports:
+  turning the jobs on* in `runbook.md`): a scheduler job on a cron (`basReportsSchedulerCron`,
+  every fifteen minutes, UTC) and a worker job on a PostgreSQL scaler that counts queued
+  report runs, two executions at most, both from one `bas-reports:<sha>` image
+  (`Dockerfile.bas-reports`, built by `deploy.yml` on merge) passed as `basReportsImage`.
+  The same identity, registry pull and vault read as the web app; no role assignment is
+  added.
 - Optionally the nightly database backup (`enableDbBackup`, off by default; see
   `runbook.md`, "Nightly database backup"): a geo-redundant storage account with
   shared-key access disabled, one blob container (`dumps`), a lifecycle rule that

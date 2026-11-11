@@ -996,7 +996,7 @@ describe("the two secure parameters are optional, and omitted means unchanged (2
     // gives Bicep the dependency. ARM ignores a dependency on a resource
     // whose condition is false, so an omitted secret does not block a redeploy.
     const databaseUrlRefs = code.match(/secrets\/\$\{databaseUrlSecret\.name\}/g) ?? [];
-    expect(databaseUrlRefs.length).toBe(3); // the app, the CIP worker job, the backup job
+    expect(databaseUrlRefs.length).toBe(5); // the app, the CIP worker job, the backup job, the two BAS Reports jobs
     expect(code).toMatch(/secrets\/\$\{authSecretSecret\.name\}/);
   });
 
@@ -1641,5 +1641,218 @@ describe("the Phase 12 Part E shadow run: three jobs behind one flag, two identi
       // the compiled reference names the variable, which holds CO-ANTHROPIC-API-KEY
       expect(fcfg.secrets[0]!.keyVaultUrl).toMatch(/coAnthropicApiKeySecretName/);
     });
+  });
+});
+
+describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one image, and no new role assignment (2026-11-12)", () => {
+  /**
+   * Reports Phase 3. Two Container Apps Jobs from one image behind
+   * enableBasReports - off by default, like enableCipWorker and for the same
+   * reason - the scheduler on a cron and the worker on a PostgreSQL scaler
+   * that counts queued runs and stalled ones. The identity, the registry
+   * pull and the vault read are the ones the platform already holds, so a
+   * Contributor deploys this; secrets reach both jobs by reference only;
+   * the worker's replica timeout is above the longest time cap a definition
+   * may set plus the worker's drain window; and the deploy workflow builds
+   * the image and updates each job only once its variable is set.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, relative), "utf8"));
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  const resourceBlock = (bicep: string, name: string) => {
+    const start = bicep.indexOf(`resource ${name} `);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\nvar "), rest.indexOf("\noutput ")].filter((i) => i > 0);
+    return rest.slice(0, ends.length ? Math.min(...ends) : undefined);
+  };
+  const JOBS = ["basReportsSchedulerJob", "basReportsWorkerJob"];
+
+  it("is off by default, both jobs are conditional on the one flag, and the outputs read them only through a ternary", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param enableBasReports bool = false$/m);
+    expect(code).toMatch(/^param basReportsImage string = ''$/m);
+    expect(code).toMatch(/^param basReportsSchedulerCron string = '\*\/15 \* \* \* \*'$/m);
+    for (const name of JOBS) {
+      expect(code, name).toMatch(new RegExp(`^resource ${name} '[^']+' = if \\(enableBasReports\\) \\{$`, "m"));
+    }
+    const conditional = code.match(/^resource (\w+) '[^']+' = if \(enableBasReports\)/gm) ?? [];
+    expect(conditional.length).toBe(JOBS.length);
+    const outputs = code.split("\n").filter((line) => /^output (basReportsSchedulerJobName|basReportsWorkerJobName)/.test(line));
+    expect(outputs.length).toBe(2);
+    for (const line of outputs) expect(line).toMatch(/= enableBasReports \? \w+\.name : ''$/);
+  });
+
+  it("schedules the scheduler on the cron and scales the worker on the queue, two at most, with the claim's own predicate", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const scheduler = resourceBlock(code, "basReportsSchedulerJob");
+    expect(scheduler).toMatch(/triggerType: 'Schedule'/);
+    expect(scheduler).toMatch(/cronExpression: basReportsSchedulerCron/);
+    expect(scheduler).toMatch(/parallelism: 1/);
+    expect(scheduler).toMatch(/replicaRetryLimit: 1/);
+    expect(scheduler).toMatch(/command: \[\s*'npx'\s*'tsx'\s*'scripts\/bas-reports-scheduler\.ts'\s*\]/);
+
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    expect(worker).toMatch(/triggerType: 'Event'/);
+    expect(worker).toMatch(/maxExecutions: 2/);
+    expect(worker).toMatch(/minExecutions: 0/);
+    expect(worker).toMatch(/replicaRetryLimit: 0/);
+    expect(worker).toMatch(/type: 'postgresql'/);
+    expect(worker).toMatch(/query: 'SELECT count\(\*\) FROM bas_report_runs WHERE status = \\'queued\\' OR \(status = \\'running\\' AND heartbeat_at < now\(\) - interval \\'10 minutes\\'\)'/);
+    expect(worker).toMatch(/secretRef: 'database-url'\s*\n\s*triggerParameter: 'connection'/);
+    expect(worker).toMatch(/command: \[\s*'npx'\s*'tsx'\s*'scripts\/bas-reports-worker\.ts'\s*\]/);
+    // Both run the same image, from the parameter with no placeholder default.
+    expect(scheduler).toMatch(/image: basReportsImage/);
+    expect(worker).toMatch(/image: basReportsImage/);
+  });
+
+  it("keeps the worker's replica timeout above the longest time cap a definition may set plus the drain window", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    const timeout = Number(/replicaTimeout: (\d+)/.exec(worker)?.[1]);
+    expect(timeout).toBe(1800);
+    const validation = await readFile("lib/validation/bas-reports.ts");
+    const capMinutes = Number(/\.max\((\d+), "The time cap cannot be more than/.exec(validation)?.[1]);
+    const workerSource = await readFile("lib/modules/bas/reports/worker.ts");
+    const drainMinutes = Number(/export const DRAIN_WINDOW_MS = (\d+) \* 60 \* 1000;/.exec(workerSource)?.[1]);
+    expect(capMinutes).toBeGreaterThan(0);
+    expect(drainMinutes).toBeGreaterThan(0);
+    expect(timeout).toBeGreaterThanOrEqual((capMinutes + drainMinutes) * 60 + 60);
+    // The migration's CHECK and the schema's default agree with the validation.
+    const migration = await readFile("prisma/migrations/20261112090000_add_bas_reports_jobs/migration.sql");
+    expect(migration).toMatch(new RegExp(`CHECK \\(max_minutes BETWEEN 1 AND ${capMinutes}\\)`));
+    const service = await readFile("lib/modules/bas/reports/service.ts");
+    expect(service).toMatch(new RegExp(`^export const MAX_REPORT_MINUTES = ${capMinutes};$`, "m"));
+    expect(service).toMatch(/^export const DEFAULT_REPORT_MAX_MINUTES = 20;$/m);
+  });
+
+  it("reads every secret by reference - three for the worker, one for the scheduler - and nothing secret as a value", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    const scheduler = resourceBlock(code, "basReportsSchedulerJob");
+    expect(worker).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{databaseUrlSecret\.name\}'/);
+    expect(worker).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{basAskDatabaseUrlSecretName\}'/);
+    expect(worker).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{anthropicApiKeySecretName\}'/);
+    expect((worker.match(/keyVaultUrl:/g) ?? []).length).toBe(3);
+    expect((scheduler.match(/keyVaultUrl:/g) ?? []).length).toBe(1);
+    for (const block of [worker, scheduler]) {
+      for (const line of block.split("\n").filter((l) => /^\s*value:/.test(l))) {
+        expect(line).not.toMatch(/password|secret|Url|Key|Password/);
+      }
+      expect(block).toMatch(/name:\s*'DATABASE_URL'\s*\n\s*secretRef:\s*'database-url'/);
+      expect(block).toMatch(/identity: \{\s*type: 'UserAssigned'/);
+    }
+    expect(worker).toMatch(/name:\s*'ANTHROPIC_API_KEY'\s*\n\s*secretRef:\s*'anthropic-api-key'/);
+    expect(worker).toMatch(/name:\s*'BAS_ASK_DATABASE_URL'\s*\n\s*secretRef:\s*'bas-ask-database-url'/);
+    expect(scheduler).not.toMatch(/ANTHROPIC/);
+  });
+
+  it("adds no role assignment: both jobs depend only on the pull and the vault read the identity already holds", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    for (const name of JOBS) {
+      expect(resourceBlock(code, name)).toMatch(/dependsOn: \[\s*acrPull\s*keyVaultRead\s*\]/);
+    }
+    const assignments = code.match(/^resource \w+ 'Microsoft\.Authorization\/roleAssignments@[^']+'/gm) ?? [];
+    // The three that existed before this phase: the registry pull, the vault read, the backup's blob write.
+    expect(assignments.length).toBe(3);
+    expect(code).not.toMatch(/roleAssignments@[^\n]*basReports/);
+  });
+
+  it("builds one image on merge and updates each job only once its variable is set; the Dockerfile runs the worker under tsx", async () => {
+    const workflow = await readFile(".github/workflows/deploy.yml");
+    // The workflow file is CRLF on a Windows checkout: \s* spans the line break.
+    expect(workflow).toMatch(/--image "bas-reports:\$\{\{ github\.sha \}\}"\s*\\\s*--file Dockerfile\.bas-reports/);
+    expect(workflow).toMatch(/if: vars\.AZURE_BAS_REPORTS_SCHEDULER_JOB != '' \|\| vars\.AZURE_BAS_REPORTS_WORKER_JOB != ''/);
+    for (const v of ["AZURE_BAS_REPORTS_SCHEDULER_JOB", "AZURE_BAS_REPORTS_WORKER_JOB"]) {
+      expect(workflow).toMatch(new RegExp(`if: vars\\.${v} != ''\\s*run: \\|\\s*az containerapp job update \\\\\\s*--name "\\$\\{\\{ vars\\.${v} \\}\\}"`));
+    }
+    expect(workflow).toMatch(/azurecr\.io\/bas-reports:\$\{\{ github\.sha \}\}/);
+    const dockerfile = await readFile("Dockerfile.bas-reports");
+    expect(dockerfile).toMatch(/^FROM node:24-bookworm-slim$/m);
+    expect(dockerfile).toMatch(/CMD \["npx", "tsx", "scripts\/bas-reports-worker\.ts"\]/);
+    // Nothing installed for a browser yet (the comments may name Phase 4's plan; the instructions may not).
+    const instructions = dockerfile.split(/\r?\n/).filter((line) => !line.trim().startsWith("#")).join("\n");
+    expect(instructions).not.toMatch(/chromium|playwright/i);
+    const pkg = JSON.parse(await readFile("package.json")) as { scripts: Record<string, string> };
+    expect(pkg.scripts["bas:reports:worker"]).toBe("tsx scripts/bas-reports-worker.ts");
+    expect(pkg.scripts["bas:reports:scheduler"]).toBe("tsx scripts/bas-reports-scheduler.ts");
+  });
+
+  it("ships the flag off and the cron in the example parameters, and is documented in the README and the runbook", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as { parameters: Record<string, { value: unknown }> };
+    expect(example.parameters.enableBasReports?.value).toBe(false);
+    expect(example.parameters.basReportsSchedulerCron?.value).toBe("*/15 * * * *");
+    expect(Object.keys(example.parameters)).not.toContain("basReportsImage");
+    const readme = await readFile("infra/README.md");
+    expect(readme.split("## What gets created")[1]?.split("\n## ")[0] ?? "").toMatch(/enableBasReports/);
+    const runbook = await readFile("runbook.md");
+    for (const heading of ["Reports: turning the jobs on", "Reports: a run is stuck or failed", "Reports: what the caps do"]) {
+      expect(runbook, heading).toContain(`## ${heading}`);
+    }
+    const section = runbook.split("\n## Reports: turning the jobs on")[1]?.split("\n## ")[0] ?? "";
+    expect(section).toMatch(/az acr build/);
+    expect(section).toMatch(/what-if/);
+    expect(section).toMatch(/az containerapp job start/);
+    expect(section).toMatch(/AZURE_BAS_REPORTS_WORKER_JOB/);
+  });
+
+  const az = spawnSync("az", ["bicep", "version"], { encoding: "utf8", shell: true });
+  const azAvailable = az.status === 0;
+
+  it.skipIf(!azAvailable)("compiles to ARM where both jobs carry the condition, the worker scales on PostgreSQL and every secret is a vault reference", () => {
+    const build = spawnSync("az", ["bicep", "build", "--file", "infra/main.bicep", "--stdout"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      shell: true,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    expect(build.status, build.stderr).toBe(0);
+    interface ArmJob {
+      type: string;
+      name: string;
+      condition?: string;
+      properties?: {
+        configuration?: {
+          triggerType?: string;
+          replicaTimeout?: number;
+          eventTriggerConfig?: { scale?: { maxExecutions?: number; rules?: Array<{ type: string; auth?: Array<{ secretRef: string }> }> } };
+          secrets?: Array<{ name: string; keyVaultUrl?: string; value?: string }>;
+        };
+        template?: { containers?: Array<{ command?: string[] }> };
+      };
+    }
+    const arm = JSON.parse(build.stdout.replace(/^\uFEFF/, "")) as {
+      parameters: Record<string, { type: string; defaultValue?: unknown }>;
+      resources: Record<string, ArmJob> | ArmJob[];
+    };
+    expect(arm.parameters.enableBasReports).toMatchObject({ type: "bool", defaultValue: false });
+    expect(arm.parameters.basReportsImage).toMatchObject({ type: "string", defaultValue: "" });
+    const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
+    const jobs = resources.filter((r) => r.type === "Microsoft.App/jobs");
+    const scheduler = jobs.find((j) => j.name.includes("bas-reports-scheduler"));
+    const worker = jobs.find((j) => j.name.includes("bas-reports-worker"));
+    expect(scheduler).toBeDefined();
+    expect(worker).toBeDefined();
+    for (const job of [scheduler!, worker!]) {
+      expect(job.condition).toBe("[parameters('enableBasReports')]");
+      for (const s of job.properties?.configuration?.secrets ?? []) {
+        expect(s.keyVaultUrl, s.name).toBeDefined();
+        expect(s.value, s.name).toBeUndefined();
+      }
+    }
+    expect(scheduler!.properties?.configuration?.triggerType).toBe("Schedule");
+    expect(worker!.properties?.configuration?.triggerType).toBe("Event");
+    expect(worker!.properties?.configuration?.replicaTimeout).toBe(1800);
+    const scale = worker!.properties?.configuration?.eventTriggerConfig?.scale;
+    expect(scale?.maxExecutions).toBe(2);
+    expect(scale?.rules?.[0]).toMatchObject({ type: "postgresql", auth: [{ secretRef: "database-url" }] });
+    expect(worker!.properties?.template?.containers?.[0]?.command).toEqual(["npx", "tsx", "scripts/bas-reports-worker.ts"]);
+    expect(scheduler!.properties?.template?.containers?.[0]?.command).toEqual(["npx", "tsx", "scripts/bas-reports-scheduler.ts"]);
+    const assignments = resources.filter((r) => r.type === "Microsoft.Authorization/roleAssignments");
+    expect(assignments.length).toBe(3);
   });
 });

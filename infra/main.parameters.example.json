@@ -145,6 +145,12 @@
       "value": ""
     },
 
+    "enableBasReports": {
+      "value": false
+    },
+    "basReportsSchedulerCron": {
+      "value": "*/15 * * * *"
+    },
     "enableDbBackup": {
       "value": false
     },

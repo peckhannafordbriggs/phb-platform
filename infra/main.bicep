@@ -286,6 +286,19 @@ param coReviewSharePointFolder string = ''
 @description('Model the skills run on. Empty means the default in lib/modules/cost-intelligence/runs.ts.')
 param cipRunModel string = ''
 
+// ---------------------------------------------------------------------------
+// BAS Reports jobs (Reports, Phase 3): a scheduler and a worker
+// ---------------------------------------------------------------------------
+
+@description('Create the two BAS Reports jobs: the scheduler on a cron and the worker on a scaler. Off by default for the reason enableCipWorker is: the jobs name an image that has to be in the registry first.')
+param enableBasReports bool = false
+
+@description('The BAS Reports jobs image, for both jobs. Required when enableBasReports is true: the image the jobs run now (`az containerapp job show`), or on first enable a bas-reports image built with `az acr build`. No placeholder default, so a redeploy cannot reset it.')
+param basReportsImage string = ''
+
+@description('When the scheduler runs, as a cron in UTC. Every fifteen minutes: a report due at 06:00 in its building\'s zone is queued within fifteen minutes of that, and the scheduler itself collapses the ticks it missed into one run.')
+param basReportsSchedulerCron string = '*/15 * * * *'
+
 
 // ---------------------------------------------------------------------------
 // Phase 12 Part E - the change-order shadow run
@@ -1209,6 +1222,224 @@ resource cipWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableCipWorker) {
 }
 
 // ---------------------------------------------------------------------------
+// BAS Reports jobs (Reports, Phase 3)
+//
+// Two Container Apps Jobs from one image, behind enableBasReports:
+//
+//   the SCHEDULER, on a cron (basReportsSchedulerCron, UTC): one pass of
+//   scripts/bas-reports-scheduler.ts, which queues ONE run for every active
+//   report whose next run time has passed and advances that time in the
+//   same transaction - a report that missed several ticks gets one run,
+//   never a backfill - and pauses reports whose owner's account is
+//   disabled. It needs the database and nothing else;
+//
+//   the WORKER, on a scaler that counts queued runs and stalled ones,
+//   exactly like the Cost Intelligence worker: every fifteen seconds the
+//   count is read, and one execution per run starts, two at most. Each
+//   execution runs scripts/bas-reports-worker.ts, which claims runs with
+//   FOR UPDATE SKIP LOCKED, heartbeats every 30 s while the engine works,
+//   and exits when the queue is empty or its drain window closes. The
+//   replica timeout, 30 minutes, is above the longest time cap a definition
+//   may set (25 minutes) plus the worker's drain window (4), so a run is
+//   never killed by the platform before its own cap stops it.
+//
+// The same identity, the same registry pull and the same vault read the
+// identity already holds: NO role assignment is added, so a Contributor can
+// deploy this as the CIP worker was deployed. The worker reads three secrets
+// by reference - DATABASE-URL, BAS-ASK-DATABASE-URL (the read-only role,
+// for Phase 6's planner questions) and ANTHROPIC-API-KEY (the BAS key, the
+// one Analyze uses) - and the scheduler only DATABASE-URL, because it calls
+// no model and should hold no key it never reads.
+// ---------------------------------------------------------------------------
+
+resource basReportsSchedulerJob 'Microsoft.App/jobs@2024-03-01' = if (enableBasReports) {
+  name: '${baseName}-bas-reports-scheduler'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // A pass is a handful of queries; ten minutes is the ceiling for a
+      // database that is slow to answer, after which the execution is Failed
+      // and the next tick runs the same pass again.
+      replicaTimeout: 600
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: basReportsSchedulerCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'bas-reports-scheduler'
+          image: basReportsImage
+          command: [
+            'npx'
+            'tsx'
+            'scripts/bas-reports-scheduler.ts'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: [
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'database-url'
+            }
+            {
+              name: 'NODE_ENV'
+              value: 'production'
+            }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
+resource basReportsWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableBasReports) {
+  name: '${baseName}-bas-reports-worker'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Event'
+      // Above the longest time cap a definition may carry (25 minutes,
+      // lib/validation/bas-reports.ts) plus the worker's drain window (4,
+      // lib/modules/bas/reports/worker.ts). The engine's own cap stops a
+      // run; this stops a worker that has lost its mind.
+      replicaTimeout: 1800
+      replicaRetryLimit: 0
+      eventTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+        scale: {
+          minExecutions: 0
+          maxExecutions: 2
+          pollingInterval: 15
+          rules: [
+            {
+              name: 'bas-report-runs-to-work-on'
+              type: 'postgresql'
+              metadata: {
+                // The same predicate the worker claims by: queued, or
+                // running with no heartbeat for ten minutes. A run that
+                // stalled twice is in this count until the next execution
+                // fails it, which is the first thing an execution does.
+                query: 'SELECT count(*) FROM bas_report_runs WHERE status = \'queued\' OR (status = \'running\' AND heartbeat_at < now() - interval \'10 minutes\')'
+                targetQueryValue: '1'
+              }
+              auth: [
+                {
+                  secretRef: 'database-url'
+                  triggerParameter: 'connection'
+                }
+              ]
+            }
+          ]
+        }
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
+          identity: identity.id
+        }
+        {
+          name: 'bas-ask-database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${basAskDatabaseUrlSecretName}'
+          identity: identity.id
+        }
+        {
+          name: 'anthropic-api-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${anthropicApiKeySecretName}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'bas-reports-worker'
+          image: basReportsImage
+          command: [
+            'npx'
+            'tsx'
+            'scripts/bas-reports-worker.ts'
+          ]
+          resources: {
+            cpu: json('1.0')
+            memory: '2Gi'
+          }
+          env: [
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'database-url'
+            }
+            {
+              name: 'BAS_ASK_DATABASE_URL'
+              secretRef: 'bas-ask-database-url'
+            }
+            {
+              name: 'ANTHROPIC_API_KEY'
+              secretRef: 'anthropic-api-key'
+            }
+            {
+              name: 'NODE_ENV'
+              value: 'production'
+            }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Nightly database backup
 //
 // The readings in this database exist nowhere else once the JACE rolls them
@@ -1771,6 +2002,10 @@ output managedIdentityClientId string = identity.properties.clientId
 output managedIdentityPrincipalId string = identity.properties.principalId
 // Set as the AZURE_CIP_WORKER_JOB repository variable so deploys update its image.
 output cipWorkerJobName string = enableCipWorker ? cipWorkerJob.name : ''
+
+// The two BAS Reports jobs (Phase 3), for the deploy workflow's variables.
+output basReportsSchedulerJobName string = enableBasReports ? basReportsSchedulerJob.name : ''
+output basReportsWorkerJobName string = enableBasReports ? basReportsWorkerJob.name : ''
 // The backup job and where its dumps land, for `az containerapp job execution
 // list` and `az storage blob list` in runbook.md -> "Nightly database backup".
 output dbBackupJobName string = enableDbBackup ? dbBackupJob.name : ''

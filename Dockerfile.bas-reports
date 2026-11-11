@@ -1,0 +1,39 @@
+# BAS Reports jobs image (scripts/bas-reports-scheduler.ts and
+# scripts/bas-reports-worker.ts), Reports Phase 3.
+#
+# One image, two Container Apps Jobs (infra/main.bicep, basReportsSchedulerJob
+# and basReportsWorkerJob): the scheduler on a cron, the worker on a scaler
+# that counts queued runs. Each job names its script in `command`.
+#
+# Separate from the web image for the same reason the Cost Intelligence
+# worker's is: the web app never runs a report, and a job never serves a
+# page. Node only for now - Phase 4's PDF render adds Chromium here, and
+# never to the web image.
+#
+# The scripts run under tsx, the same loader `npm run bas:report:run` uses on
+# a laptop and the one tests/bas-reports-worker-render.test.ts proves the
+# report template renders under (WHY-ITS-BUILT-THIS-WAY.md § 80). There is no
+# compile step to drift from it.
+
+FROM node:24-bookworm-slim
+
+WORKDIR /app
+
+# Same order as the web Dockerfile: postinstall runs `prisma generate`, which
+# needs the schema and config before `npm ci`.
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+RUN npm ci
+
+COPY . .
+RUN npx prisma generate && chown -R node:node /app
+
+ENV NODE_ENV=production
+
+USER node
+
+# The worker, draining the queue. The scheduler job overrides this with its
+# own script in `command`; the worker job states this one explicitly too, so
+# the image's default is never what a job silently depends on.
+CMD ["npx", "tsx", "scripts/bas-reports-worker.ts"]
