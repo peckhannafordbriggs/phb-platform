@@ -1224,6 +1224,25 @@ never a fallback; `tests/fp-anthropic-key.test.ts` holds it. The import reads PD
 `pdfjs-dist` (Apache-2.0), listed in `serverExternalPackages`.
 `runbook.md` → *The equipment schedule import*.
 
+**Template drift found and reconciled (2026-11-11).** The first what-if since
+the 22 October template deployment showed the live app losing the FP key's
+secret and variable, gaining the three Needs Review variables blank, and its
+probes going from `tcpSocket` back to `httpGet /api/health`. The template was
+right on all three: the FP reference was put on the live app by hand on 4-5
+November (Karthik, then the owner renaming it) under the runbook's own steps,
+and the parameters-file step was missed; the Needs Review three stay blank by
+decision, because the registration (client id in `HANDOVER.md`) has no
+federated credential yet; the probes were retyped in the portal, and the
+route is on `main`, in the live image and answered 200 live. **A by-hand
+change to the container app is drift until the parameters file says the same
+thing.** Also found: the owner's parameters file carried a stale
+`cipWorkerImage` - `infra/README.md` → *Deploy* now reads every running image
+and passes it on the command line - and with `enableDbBackup` true before the
+backup exists, what-if fails on `roleAssignments/write` before it lists
+anything. `runbook.md` → *A template what-if shows the container app losing a
+secret, gaining blank variables, or changing its probes*; guards in
+`tests/deploy-guards.test.ts`.
+
 **Needs Review, Phase 1 - visibility, read-only (2026-10-21).** The Change
 Orders module has a tab bar on the BAS pattern (`app/(modules)/change-orders/tabs.ts`,
 `co-shell.tsx`): *Mailbox* at `/change-orders` and *Needs Review* at

@@ -577,6 +577,34 @@ describe("the Needs Review app registration reaches the container without a secr
     expect(result.present).toBe(false);
   });
 
+  it("treats a blank value as absent, so the template's blank defaults leave the tab not connected rather than half-configured", async () => {
+    // A template deployment with coReviewAppTenantId, coReviewAppClientId and
+    // coReviewSharePointFolder unset in the parameters file puts all three on
+    // the container app with value '' (what-if, 2026-11-11, against a live app
+    // that carried none of them). Blank must read as absent: withReview answers
+    // review_not_configured, the tab says "not connected", nothing throws at
+    // boot and no request reaches Graph. A reader that took '' as a value
+    // would try to sign in as client id '' and fail somewhere less clear.
+    const env = await import("@/lib/env");
+    const names = [
+      env.CO_REVIEW_APP_TENANT_ID_VAR,
+      env.CO_REVIEW_APP_CLIENT_ID_VAR,
+      env.CO_REVIEW_SHAREPOINT_FOLDER_VAR,
+    ];
+    const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+      for (const name of names) process.env[name] = "";
+      const result = env.readReviewEnv();
+      expect(result.present).toBe(false);
+      if (!result.present) expect(result.missing).toEqual([...names].sort());
+    } finally {
+      for (const name of names) {
+        if (before[name] === undefined) delete process.env[name];
+        else process.env[name] = before[name]!;
+      }
+    }
+  });
+
   it("ships the three parameters blank in the example file, beside the CIP ones", async () => {
     const example = JSON.parse(
       await import("node:fs/promises").then((fs) =>
@@ -587,6 +615,121 @@ describe("the Needs Review app registration reaches the container without a secr
     expect(example.parameters.coReviewAppTenantId?.value).toBe("");
     expect(example.parameters.coReviewAppClientId?.value).toBe("");
     expect(example.parameters.coReviewSharePointFolder?.value).toBe("");
+  });
+});
+
+/**
+ * Template drift, found and reconciled 2026-11-11 (runbook.md -> "A template
+ * what-if shows the container app losing a secret, gaining blank variables,
+ * or changing its probes"). The Freeze Protection key was put on the live
+ * app by hand on 4-5 November under the runbook's own steps 1-3; step 4, the
+ * flag in infra/main.parameters.json, was missed, and the first what-if
+ * afterwards listed the secret and its variable as Delete. The template was
+ * never wrong - the parameters file was silent. These guards hold the pieces
+ * an operator reads when wiring a hand-set secret to each other: every flag
+ * the template declares is in the example file (so a copied parameters file
+ * cannot be silent about it), each flag gates BOTH halves of its reference on
+ * the web app (the secret and the env entry that names it), and the README
+ * and the runbook name every flag. The mutation each is for: add a sixth
+ * `...InKeyVault` flag to the bicep without the example-file line and the
+ * third test fails; gate the secret and the env entry on different flags and
+ * the second does.
+ */
+describe("every Key Vault flag the template declares is visible where a hand-set secret is wired", () => {
+  const readFile = (rel: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, rel), "utf8"));
+  const flagsIn = (bicep: string) =>
+    [...bicep.matchAll(/^param (\w+InKeyVault) bool = (true|false)$/gm)].map((m) => ({ flag: m[1]!, def: m[2]! }));
+
+  it("declares each flag false by default, and the five known ones are among them", async () => {
+    const flags = flagsIn(await readFile("infra/main.bicep"));
+    expect(flags.map((f) => f.flag)).toEqual(
+      expect.arrayContaining([
+        "anthropicApiKeyInKeyVault",
+        "coAnthropicApiKeyInKeyVault",
+        "fpAnthropicApiKeyInKeyVault",
+        "basCredentialKeyInKeyVault",
+        "basAskDatabaseUrlInKeyVault",
+      ]),
+    );
+    // True by default would reference a secret that may not exist and fail
+    // the whole revision - the reason every one of these is a flag at all.
+    for (const { flag, def } of flags) expect(def, flag).toBe("false");
+  });
+
+  it("gates a secret entry AND the env entry that names it on the web app with the same flag", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const app = bicep.split("resource containerApp ")[1]!.split(/\n(?=resource )/)[0]!;
+    for (const { flag } of flagsIn(bicep)) {
+      const secret = app.match(
+        new RegExp(`\\.\\.\\.\\(${flag}\\s*\\?\\s*\\[\\s*\\{\\s*name:\\s*'([a-z0-9-]+)'\\s*keyVaultUrl:`),
+      );
+      expect(secret, `${flag} gates a secret entry`).not.toBeNull();
+      const env = app.match(
+        new RegExp(`\\.\\.\\.\\(${flag}\\s*\\?\\s*\\[\\s*\\{\\s*name:\\s*'([A-Z0-9_]+)'\\s*secretRef:\\s*'([a-z0-9-]+)'`),
+      );
+      expect(env, `${flag} gates an env entry`).not.toBeNull();
+      expect(env![2], `${flag}: the env entry names the secret the same flag creates`).toBe(secret![1]);
+    }
+  });
+
+  it("is in the example parameters file as false, so a copied parameters file cannot be silent about it", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    for (const { flag } of flagsIn(await readFile("infra/main.bicep"))) {
+      expect(example.parameters[flag]?.value, flag).toBe(false);
+    }
+  });
+
+  it("is named in the README and in the runbook, beside the record of the 2026-11-11 drift", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const readme = await readFile("infra/README.md");
+    const runbook = await readFile("runbook.md");
+    for (const { flag } of flagsIn(bicep)) {
+      expect(readme, flag).toContain(flag);
+      expect(runbook, flag).toContain(flag);
+    }
+    const heading =
+      "## A template what-if shows the container app losing a secret, gaining blank variables, or changing its probes";
+    expect(runbook).toContain(heading);
+    const section = runbook.split(heading)[1]!.split("\n## ")[0]!;
+    // The record names the flag that was missed and the rule that came out of it.
+    expect(section).toContain("fpAnthropicApiKeyInKeyVault");
+    expect(section).toMatch(/by-hand change to the live app is drift/i);
+    expect(readme).toContain("A template what-if shows the container app losing a secret");
+  });
+});
+
+/**
+ * The image parameters are passed on the command line and never carried by
+ * the parameters file. A file names the image of the day it was written: on
+ * 2026-11-11 the owner's file still named the cip-worker image of 2 November
+ * while the job ran 11 November's, and the README's routine command, which
+ * then read only the web app's image, would have rolled the worker back 28
+ * commits. The routine command reads every running image.
+ */
+describe("the image parameters are read from the running resources, never from the parameters file", () => {
+  const readFile = (rel: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, rel), "utf8"));
+
+  it("ships none of them in the example file", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    for (const name of ["containerImage", "cipWorkerImage", "basReportsImage"]) {
+      expect(Object.keys(example.parameters), name).not.toContain(name);
+    }
+  });
+
+  it("reads each of them in the README's routine deploy command", async () => {
+    const readme = await readFile("infra/README.md");
+    // CRLF on a Windows checkout, LF in CI: anchor on the heading, not on one newline form.
+    const deploy = readme.split(/\r?\n## Deploy\r?\n/)[1]!.split("\n## ")[0]!;
+    expect(deploy).toMatch(/IMAGE="\$\(az containerapp show/);
+    expect(deploy).toMatch(/CIP="\$\(az containerapp job show -n <baseName>-cip-worker/);
+    expect(deploy).toMatch(/REPORTS="\$\(az containerapp job show -n <baseName>-bas-reports-worker/);
+    expect(deploy).toContain('containerImage="$IMAGE" cipWorkerImage="$CIP" basReportsImage="$REPORTS"');
   });
 });
 
