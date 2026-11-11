@@ -1,3 +1,4 @@
+import type { RunStatus } from "./engine/types";
 import type { LibraryQuestionKind, RoleRequirement } from "./library";
 import type { PresetKey } from "./presets";
 import type { AnalysisWindow, ScheduleSpec } from "./schedule";
@@ -23,6 +24,17 @@ export const REPORT_STATE_LABELS: Record<ReportState, string> = {
 };
 
 export type ReportQuestionKind = "library" | "personal" | "inline";
+
+/** The newest run of a report, for the Scheduled list (Phase 3). */
+export interface LastRunView {
+  runId: string;
+  status: RunStatus;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  partialReason: string | null;
+  error: string | null;
+}
 
 export interface ReportSummary {
   reportId: string;
@@ -50,9 +62,13 @@ export interface ReportSummary {
   questionCount: number;
   /** ADDITIONAL recipients. The owner is not counted: the owner is not a row. */
   recipientCount: number;
-  /** Always null in Phase 1. There are no runs. */
-  lastRun: null;
+  /** The newest run, whatever its state; null until the first is queued. */
+  lastRun: LastRunView | null;
   budgetUsd: number;
+  /** The wall-clock cap on one run, in minutes (Phase 3). */
+  maxMinutes: number;
+  /** Why the scheduler paused it; set only in paused_owner_disabled. */
+  pausedReason: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -140,11 +156,35 @@ export interface ReportSiteOption {
   stations: Array<{ stationId: string; name: string }>;
 }
 
+/** An employee a module admin may transfer a report to (Phase 3). */
+export interface OwnerOption {
+  employeeId: string;
+  name: string;
+  email: string;
+}
+
 /** What the editor needs before a report exists. */
 export interface ReportOptions {
   sites: ReportSiteOption[];
   defaultBudgetUsd: number;
+  defaultMaxMinutes: number;
+  maxMinutesLimit: number;
   companyEmailDomain: string;
+  /** Whether the viewer holds the module-admin flag, which is what offers the owner transfer. */
+  canAdminister: boolean;
+  /** Active employees with the BAS grant; empty for a viewer who is not a module admin. */
+  owners: OwnerOption[];
+}
+
+/** The result of transferring a report's owner (Phase 3). */
+export interface OwnerTransfer {
+  ownerEmployeeId: string;
+  ownerName: string;
+  ownerEmail: string;
+  state: ReportState;
+  nextRunAt: string | null;
+  /** Whether the transfer took the report out of paused_owner_disabled and back to active. */
+  resumed: boolean;
 }
 
 /** The result of activate / pause / resume. */

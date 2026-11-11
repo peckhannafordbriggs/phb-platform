@@ -5,6 +5,7 @@ import { writeAuditEvent, type AuditAction } from "@/lib/audit";
 import { BAS_MODULE_KEY } from "../constants";
 import { BasError } from "../errors";
 import { basSiteScope } from "../service";
+import { enqueueRun } from "./engine/queue";
 import {
   describeRequiredRoles,
   parseRoleRequirements,
@@ -25,7 +26,10 @@ import {
 } from "./schedule";
 import {
   isReportState,
+  type LastRunView,
   type LibraryQuestionView,
+  type OwnerOption,
+  type OwnerTransfer,
   type PersonalQuestionView,
   type RecipientView,
   type ReportDetail,
@@ -42,6 +46,7 @@ import type {
   AddReportQuestionInput,
   CreateReportInput,
   ReportStateAction,
+  TransferOwnerInput,
   UpdateReportInput,
 } from "@/lib/validation/bas-reports";
 
@@ -68,6 +73,17 @@ import type {
 
 /** Until the Usage tab holds a module-level default (Phase 6). Dollars per run. */
 export const DEFAULT_REPORT_BUDGET_USD = 2;
+
+/**
+ * The wall-clock cap on one run, in minutes, when a definition does not
+ * set its own (Phase 3) - beside the budget, because the two are the two
+ * caps a run has. 20 is five times the longest run measured on the office
+ * and the lab; 25 is the most a definition may ask for, so the worker
+ * job's 30-minute replica timeout is always above it with the worker's
+ * drain window to spare (lib/modules/bas/reports/worker.ts).
+ */
+export const DEFAULT_REPORT_MAX_MINUTES = 20;
+export const MAX_REPORT_MINUTES = 25;
 
 type Tx = Prisma.TransactionClient;
 
@@ -129,6 +145,13 @@ const DETAIL_INCLUDE = {
   recipients: {
     orderBy: { createdAt: "asc" },
     include: { addedBy: { select: { email: true } } },
+  },
+  // The newest run, for the list's Last run cell (Phase 3). One row, so a
+  // report with a thousand runs costs the list nothing more.
+  runs: {
+    orderBy: [{ createdAt: "desc" }, { runId: "desc" }],
+    take: 1,
+    select: { runId: true, status: true, createdAt: true, startedAt: true, finishedAt: true, partialReason: true, error: true },
   },
 } satisfies Prisma.BasReportDefinitionInclude;
 
@@ -218,10 +241,26 @@ function toSummary(row: DetailRow, viewer: Viewer, stationsOnSite: number): Repo
     state: toState(row.state),
     questionCount: row.questions.length,
     recipientCount: row.recipients.length,
-    lastRun: null,
+    lastRun: lastRunView(row.runs[0]),
     budgetUsd: Number(row.budgetUsd),
+    maxMinutes: row.maxMinutes,
+    pausedReason: row.pausedReason,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function lastRunView(run: DetailRow["runs"][number] | undefined): LastRunView | null {
+  if (run === undefined) return null;
+  const status = run.status;
+  return {
+    runId: run.runId.toString(),
+    status: status === "queued" || status === "running" || status === "succeeded" || status === "partial" ? status : "failed",
+    createdAt: run.createdAt.toISOString(),
+    startedAt: run.startedAt?.toISOString() ?? null,
+    finishedAt: run.finishedAt?.toISOString() ?? null,
+    partialReason: run.partialReason,
+    error: run.error,
   };
 }
 
@@ -324,9 +363,14 @@ export async function getReport(viewer: Viewer, reportIdText: string): Promise<R
   return toDetail(row, viewer);
 }
 
-/** The buildings the viewer may report on, each with its stations. */
+/**
+ * The buildings the viewer may report on, each with its stations; the two
+ * defaults; and, for a module admin, the employees a report can be handed
+ * to (Phase 3) - active, holding the BAS grant.
+ */
 export async function listReportOptions(viewer: Viewer): Promise<ReportOptions> {
   const { entitled } = await basSiteScope(viewer);
+  const admin = await canAdminister(viewer);
   const sites = await prisma.basSite.findMany({
     where: entitled === null ? {} : { siteId: { in: entitled } },
     select: {
@@ -350,7 +394,25 @@ export async function listReportOptions(viewer: Viewer): Promise<ReportOptions> 
     stations: s.stations.map((st) => ({ stationId: st.stationId.toString(), name: stationName(st) })),
   }));
 
-  return { sites: options, defaultBudgetUsd: DEFAULT_REPORT_BUDGET_USD, companyEmailDomain: COMPANY_EMAIL_DOMAIN };
+  const owners: OwnerOption[] = admin
+    ? (
+        await prisma.employee.findMany({
+          where: { status: "active", grants: { some: { moduleKey: BAS_MODULE_KEY } } },
+          select: { id: true, email: true, firstName: true, lastName: true },
+          orderBy: [{ lastName: "asc" }, { firstName: "asc" }, { email: "asc" }],
+        })
+      ).map((e) => ({ employeeId: e.id, name: personName(e), email: e.email }))
+    : [];
+
+  return {
+    sites: options,
+    defaultBudgetUsd: DEFAULT_REPORT_BUDGET_USD,
+    defaultMaxMinutes: DEFAULT_REPORT_MAX_MINUTES,
+    maxMinutesLimit: MAX_REPORT_MINUTES,
+    companyEmailDomain: COMPANY_EMAIL_DOMAIN,
+    canAdminister: admin,
+    owners,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +545,7 @@ export async function createReport(viewer: Viewer, input: CreateReportInput): Pr
 
   const presetKey = input.presetKey ?? null;
   const budget = input.budgetUsd ?? DEFAULT_REPORT_BUDGET_USD;
+  const maxMinutes = input.maxMinutes ?? DEFAULT_REPORT_MAX_MINUTES;
 
   const reportId = await prisma.$transaction(async (tx) => {
     const created = await tx.basReportDefinition.create({
@@ -499,6 +562,7 @@ export async function createReport(viewer: Viewer, input: CreateReportInput): Pr
         timeOfDay: input.timeOfDay,
         state: "draft",
         budgetUsd: new Prisma.Decimal(budget.toFixed(2)),
+        maxMinutes,
       },
       select: { reportId: true },
     });
@@ -580,6 +644,11 @@ export async function updateReport(
   if (input.budgetUsd !== undefined && input.budgetUsd !== Number(row.budgetUsd)) {
     data.budgetUsd = new Prisma.Decimal(input.budgetUsd.toFixed(2));
     changes.budgetUsd = { from: Number(row.budgetUsd), to: input.budgetUsd };
+  }
+
+  if (input.maxMinutes !== undefined && input.maxMinutes !== row.maxMinutes) {
+    data.maxMinutes = input.maxMinutes;
+    changes.maxMinutes = { from: row.maxMinutes, to: input.maxMinutes };
   }
 
   let spec = readScheduleSpec(row.scheduleKind, row.scheduleParams);
@@ -1100,4 +1169,139 @@ export async function removeReportRecipient(
     });
   });
   return { removed: true };
+}
+
+
+// ---------------------------------------------------------------------------
+// Runs on request, and the owner (Phase 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Queue a run of this report now (Phase 3's "Run now"). Owner or module
+ * admin - `loadVisibleReport` is the gate, and anyone else is told the report
+ * does not exist. One run in flight per report: a second request while one is
+ * queued or running is refused with `run_in_flight` and the row that is in the
+ * way, so the screen can say so rather than queue a duplicate. The period is
+ * the definition's window ending now; the worker picks the row up within its
+ * polling interval.
+ *
+ * The in-flight check and the insert share a transaction on the locked
+ * definition row, so two clicks in the same instant cannot both pass it.
+ */
+export async function requestRun(viewer: Viewer, reportIdText: string, now = new Date()): Promise<{ runId: string }> {
+  const { row } = await loadVisibleReport(viewer, reportIdText);
+  if (row.questions.length === 0) {
+    throw new BasError("report_not_ready", "Add at least one question before running the report.");
+  }
+
+  const runId = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT report_id FROM bas_report_definitions WHERE report_id = ${row.reportId} FOR UPDATE`;
+    const inFlight = await tx.basReportRun.findFirst({
+      where: { reportId: row.reportId, status: { in: ["queued", "running"] } },
+      orderBy: { runId: "desc" },
+      select: { runId: true, status: true },
+    });
+    if (inFlight !== null) {
+      throw new BasError(
+        "run_in_flight",
+        `A run of this report is already ${inFlight.status}. Wait for it to finish; it is on the Reports list.`,
+      );
+    }
+    const run = await enqueueRun(tx, { reportId: row.reportId, trigger: "manual", periodEnd: now, startedById: viewer.id });
+    await audit(tx, "bas.report_run_requested", viewer, {
+      reportId: row.reportId.toString(),
+      runId: run.runId.toString(),
+      name: row.name,
+      trigger: "manual",
+      periodStart: run.periodStart.toISOString(),
+      periodEnd: run.periodEnd.toISOString(),
+    });
+    return run.runId;
+  });
+
+  return { runId: runId.toString() };
+}
+
+/**
+ * Give the report a new owner (module admin only). The new owner must be an
+ * active employee with the BAS grant - a report cannot be handed to someone
+ * who could never open it - and must not already own a report of this name.
+ *
+ * A report the scheduler paused because its owner was disabled is RESUMED
+ * here: that pause exists so that an admin acts, and this is the act. It
+ * goes back to `active` with the next run computed from now, provided it
+ * still has questions and a readable schedule; otherwise to `paused`, which
+ * the new owner resumes from the screen. The reason is cleared either way.
+ */
+export async function transferReportOwner(
+  viewer: Viewer,
+  reportIdText: string,
+  input: TransferOwnerInput,
+): Promise<OwnerTransfer> {
+  const { row, admin } = await loadVisibleReport(viewer, reportIdText);
+  if (!admin) throw new BasError("admin_required", "Only a module admin can transfer a report to another owner.");
+
+  const next = await prisma.employee.findUnique({
+    where: { id: input.ownerEmployeeId },
+    select: {
+      id: true,
+      email: true,
+      firstName: true,
+      lastName: true,
+      status: true,
+      grants: { where: { moduleKey: BAS_MODULE_KEY }, select: { id: true } },
+    },
+  });
+  if (next === null || next.status !== "active" || next.grants.length === 0) {
+    throw new BasError("owner_not_eligible", "The new owner has to be an active employee with access to Building Automation.");
+  }
+  if (next.id === row.ownerEmployeeId) {
+    throw new BasError("owner_not_eligible", `${personName(next)} already owns this report.`);
+  }
+  await assertNameFree(next.id, row.name, row.reportId);
+
+  const from = toState(row.state);
+  let state: ReportState = from;
+  let nextRunAt: Date | null = row.nextRunAt;
+  let resumed = false;
+  if (from === "paused_owner_disabled") {
+    const spec = readScheduleSpec(row.scheduleKind, row.scheduleParams);
+    const canRun = row.questions.length > 0 && spec !== null && scheduleProblem(spec) === null;
+    if (canRun) {
+      state = "active";
+      nextRunAt = computeNextRun(spec, row.timeOfDay, row.site.timezone, new Date());
+      resumed = true;
+    } else {
+      state = "paused";
+      nextRunAt = null;
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.basReportDefinition.update({
+      where: { reportId: row.reportId },
+      data: { ownerEmployeeId: next.id, state, nextRunAt, pausedReason: null },
+    });
+    await audit(tx, "bas.report_owner_transferred", viewer, {
+      reportId: row.reportId.toString(),
+      name: row.name,
+      fromEmployeeId: row.ownerEmployeeId,
+      fromEmail: row.owner.email,
+      toEmployeeId: next.id,
+      toEmail: next.email,
+      fromState: from,
+      toState: state,
+      resumed,
+      nextRunAt: nextRunAt?.toISOString() ?? null,
+    });
+  });
+
+  return {
+    ownerEmployeeId: next.id,
+    ownerName: personName(next),
+    ownerEmail: next.email,
+    state,
+    nextRunAt: nextRunAt?.toISOString() ?? null,
+    resumed,
+  };
 }

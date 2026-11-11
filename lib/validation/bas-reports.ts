@@ -79,6 +79,17 @@ const budgetUsd = z
   .max(1000, "A per-run budget above $1,000 is not a cap.")
   .multipleOf(0.01, "Enter whole cents.");
 
+/**
+ * The wall-clock cap on one run, in minutes (Phase 3). Bounded at 25 so the
+ * worker job's 30-minute replica timeout is always above it with room for
+ * the worker's own drain window; the database CHECK is the same range.
+ */
+const maxMinutes = z
+  .number()
+  .int("Enter whole minutes.")
+  .min(1, "The time cap must be at least one minute.")
+  .max(25, "The time cap cannot be more than 25 minutes.");
+
 export const createReportSchema = z
   .object({
     name: reportName,
@@ -90,6 +101,7 @@ export const createReportSchema = z
     schedule: scheduleSchema,
     timeOfDay,
     budgetUsd: budgetUsd.optional(),
+    maxMinutes: maxMinutes.optional(),
   })
   .strict();
 
@@ -110,6 +122,7 @@ export const updateReportSchema = z
     schedule: scheduleSchema.optional(),
     timeOfDay: timeOfDay.optional(),
     budgetUsd: budgetUsd.optional(),
+    maxMinutes: maxMinutes.optional(),
   })
   .strict()
   .refine(
@@ -119,6 +132,11 @@ export const updateReportSchema = z
 
 export const reportStateActionSchema = z
   .object({ action: z.enum(["activate", "pause", "resume"]) })
+  .strict();
+
+/** A new owner for a report (Phase 3): an employee id. Eligibility is the service's question. */
+export const transferOwnerSchema = z
+  .object({ ownerEmployeeId: z.string().uuid("That is not an employee id.") })
   .strict();
 
 const questionText = z
@@ -178,3 +196,4 @@ export type AddReportQuestionInput = z.infer<typeof addReportQuestionSchema>;
 export type ReorderReportQuestionsInput = z.infer<typeof reorderReportQuestionsSchema>;
 export type PersonalQuestionInput = z.infer<typeof personalQuestionSchema>;
 export type AddRecipientInput = z.infer<typeof addRecipientSchema>;
+export type TransferOwnerInput = z.infer<typeof transferOwnerSchema>;

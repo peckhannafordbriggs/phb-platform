@@ -164,6 +164,14 @@ export type AuditAction =
    */
   | "bas.report_run_started"
   | "bas.report_run_finished"
+  /**
+   * A run was queued for the worker (Phase 3): by a person from Run now
+   * (trigger manual, the actor) or by the scheduler when next_run_at passed
+   * (trigger scheduled, actor null). Carries the run id and its period.
+   */
+  | "bas.report_run_requested"
+  /** A module admin gave a report a new owner; `resumed` says whether that un-paused it. */
+  | "bas.report_owner_transferred"
   | "bas.building_occupancy_updated"
   /**
    * The Cost Intelligence skill catalog was synced from the skills folder.

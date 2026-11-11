@@ -68,6 +68,8 @@ function list(over: Partial<ReportsList> = {}): ReportsList {
     recipientCount: 2,
     lastRun: null,
     budgetUsd: 2,
+    maxMinutes: 20,
+    pausedReason: null,
     createdAt: "2026-11-10T00:00:00.000Z",
     updatedAt: "2026-11-10T00:00:00.000Z",
   };

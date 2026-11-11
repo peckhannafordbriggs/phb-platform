@@ -176,6 +176,17 @@ export type BasErrorCode =
    * instead; deleting would take its history with it. 409.
    */
   | "report_has_runs"
+  /**
+   * Run now was asked for while a run of the same report is queued or
+   * running (Phase 3). One in flight per report: the worker would otherwise
+   * produce two reports for the same period, and the second would mark the
+   * first's findings still open an hour after they were new.
+   */
+  | "run_in_flight"
+  /** A module-admin action asked for by a plain owner: transferring a report. */
+  | "admin_required"
+  /** A new owner who is not an active employee with the BAS grant, or is the owner already. */
+  | "owner_not_eligible"
   /** A run that does not exist, or whose report the viewer may not see. 404. */
   | "run_not_found";
 
