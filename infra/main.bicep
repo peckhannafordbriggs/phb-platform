@@ -233,6 +233,9 @@ param anthropicApiKeyInKeyVault bool = false
 @description('Set to true once the Change Orders module\'s own Anthropic API key exists in Key Vault as CO-ANTHROPIC-API-KEY - a SECOND key, issued separately in the Anthropic Console so the change-order pipeline is billed, rate-limited and revoked independently of BAS Analyze, placed in the vault by hand, never as a template parameter. Read by the container app as CO_ANTHROPIC_API_KEY (lib/env.ts decides the name); nothing reads it until Phase 12 Part D is built, and absent it disables that and nothing else. Same conditional as the Anthropic key above, for the same reason.')
 param coAnthropicApiKeyInKeyVault bool = false
 
+@description('Set to true once the Knowledge Base\'s own Anthropic API key exists in Key Vault as KB-ANTHROPIC-API-KEY - a THIRD key, issued separately in the Anthropic Console so KB search re-sorting and answers are billed, rate-limited and revoked independently of BAS Analyze and Change Orders, placed in the vault by hand, never as a template parameter. Read by the container app as KB_ANTHROPIC_API_KEY (lib/env.ts decides the name); absent, KB search keeps its own order and writes no answers, and nothing else changes. Same conditional as the Anthropic key above, for the same reason.')
+param kbAnthropicApiKeyInKeyVault bool = false
+
 @description('Set to true once the BAS credential key exists in Key Vault as BAS-CREDENTIAL-KEY - the 32-byte base64 AES key that encrypts Niagara station passwords in bas_station_credentials, placed there by hand, never as a template parameter. It MUST be byte-identical to the BAS_CREDENTIAL_KEY in the .env of the collector on the office PC: every stored credential was encrypted under that key, and a different one turns them all into unreadable ciphertext. Same conditional as the Anthropic key, for the same reason.')
 param basCredentialKeyInKeyVault bool = false
 
@@ -625,6 +628,10 @@ var anthropicApiKeySecretName = 'ANTHROPIC-API-KEY'
 // name only.
 var coAnthropicApiKeySecretName = 'CO-ANTHROPIC-API-KEY'
 
+// The Knowledge Base's Anthropic key (2026-11-10): the same shape, a third
+// key, so KB answers are billed and revoked on their own.
+var kbAnthropicApiKeySecretName = 'KB-ANTHROPIC-API-KEY'
+
 // The BAS credential key is the same shape: issued once (generated on the
 // office PC, where the collector already uses it), pasted into the vault once
 // by hand, never on a deploy's command line. The template knows the name only.
@@ -744,6 +751,15 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               {
                 name: 'co-anthropic-api-key'
                 keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${coAnthropicApiKeySecretName}'
+                identity: identity.id
+              }
+            ]
+          : [])
+        ...(kbAnthropicApiKeyInKeyVault
+          ? [
+              {
+                name: 'kb-anthropic-api-key'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${kbAnthropicApiKeySecretName}'
                 identity: identity.id
               }
             ]
@@ -871,6 +887,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                   {
                     name: 'CO_ANTHROPIC_API_KEY'
                     secretRef: 'co-anthropic-api-key'
+                  }
+                ]
+              : [])
+            // The Knowledge Base's key, read lazily by readKbAnthropicEnv in
+            // lib/modules/knowledge-base/anthropic.ts. A third key, never a
+            // fallback to either above. Absent: search keeps its own order
+            // and no answers are written. By reference, never a plain value.
+            ...(kbAnthropicApiKeyInKeyVault
+              ? [
+                  {
+                    name: 'KB_ANTHROPIC_API_KEY'
+                    secretRef: 'kb-anthropic-api-key'
                   }
                 ]
               : [])

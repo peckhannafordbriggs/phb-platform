@@ -1300,11 +1300,11 @@ worker locally. **Keyword search is built** (`search.ts`, the search box at
 ranked by coverage, variants for plurals and tags (AV-1/AV1), quoted phrases, job
 number scoping, current versions first, every result citing page, section or
 sheet and cells. `npm run kb:eval` measures it against `.kb-eval/questions.json`
-(git-ignored). No answers, no history yet. **Embeddings are written (2026-11-10)**:
+(git-ignored). **Embeddings are written (2026-11-10)**:
 the sync's last step embeds every passage without a vector through Azure OpenAI's
 v1 API (`embed.ts`, `embedder.ts`; `npm run kb:embed:check`), an API key locally
 and the managed identity in production; tests clear `KB_EMBEDDING_*` and never
-reach Azure. **Search is hybrid (2026-11-10)**: keyword and vector results merged by reciprocal rank, a 0.3 similarity floor, and a stated fallback to words when embeddings are unavailable; `npm run kb:eval` compares the two modes. Access requests KB-1 to KB-4 approved; the Azure OpenAI deployment (KB-2) exists on Foundry as of 2026-11-10, and the managed identity's role on it is not yet verified. `docs/KB-P0-P1.md`; `runbook.md` ->
+reach Azure. **Search is hybrid (2026-11-10)**: keyword and vector results merged by reciprocal rank, a 0.3 similarity floor, and a stated fallback to words when embeddings are unavailable; `npm run kb:eval` compares the two modes. **Answers and shared history are built (2026-11-11)**: Claude Haiku re-sorts the top 30, Claude Sonnet answers from what it kept with every statement cited, checked by `finishAnswer`, saved to the shared history; the KB's own key `KB_ANTHROPIC_API_KEY` (Key Vault `KB-ANTHROPIC-API-KEY`, `kbAnthropicApiKeyInKeyVault`), never a fallback to the other two. The answer rules are a first version. Access requests KB-1 to KB-4 approved; the Azure OpenAI deployment (KB-2) exists on Foundry as of 2026-11-10, and the managed identity's role on it is not yet verified. `docs/KB-P0-P1.md`; `runbook.md` ->
 *Knowledge Base*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.

@@ -6,6 +6,7 @@ import {
   type KbQueryEmbedder,
 } from "@/lib/modules/knowledge-base/search";
 import { KB_EMBEDDING_DIMENSIONS, toVectorLiteral } from "@/lib/modules/knowledge-base/vector";
+import { cleanRerank, type KbRerankPassage } from "@/lib/modules/knowledge-base/rerank";
 import { disconnectDb, resetDb, testDb } from "./db";
 
 /**
@@ -270,6 +271,31 @@ describe("the same text in more than one file", () => {
     expect(hits.every((h) => h.alsoIn.length === 0)).toBe(true);
   });
 
+  it("puts the current version in front of an archived copy that scored higher", async () => {
+    const p = await project("221457_MAGNODE");
+    await doc(
+      p.id,
+      "ARCHIVE_221457_SUB_RTUs_Rejected_20220107.pdf",
+      // Only the archived copy holds the question's words, so it outranks the current one by far.
+      [{ content: `ERV schedule. ${BOILERPLATE}`, vector: vec(16) }],
+      { isLatest: false, isArchived: true },
+    );
+    await doc(p.id, "221457_SUB_RTUs_Approved_20220125.pdf", [{ content: BOILERPLATE, vector: vec(16, 0.9) }]);
+    await doc(p.id, "other.pdf", [{ content: "ERV schedule, see sheet M-601.", vector: vec(16, 0.85) }]);
+
+    const result = await searchPassages({
+      query: "ERV schedule",
+      queryEmbedder: embedderFor({ "ERV schedule": vec(16) }),
+    });
+
+    // The group keeps the place the archived copy earned; the current copy fronts it.
+    expect(result.hits.map((h) => h.fileName)).toEqual(["other.pdf", "221457_SUB_RTUs_Approved_20220125.pdf"]);
+    expect(result.hits[1]).toMatchObject({ isLatest: true, isArchived: false });
+    expect(result.hits[1]?.alsoIn.map((c) => [c.fileName, c.isArchived])).toEqual([
+      ["ARCHIVE_221457_SUB_RTUs_Rejected_20220107.pdf", true],
+    ]);
+  });
+
   it("does not let copies use up a document's places", async () => {
     const p = await project("221457_MAGNODE");
     await doc(p.id, "original.pdf", [{ content: BOILERPLATE, vector: vec(15) }]);
@@ -282,5 +308,90 @@ describe("the same text in more than one file", () => {
     const hits = (await searchPassages({ query: "rooftop", queryEmbedder: embedderFor({ rooftop: vec(15) }) })).hits;
     expect(hits).toHaveLength(1);
     expect(hits[0]?.alsoIn).toHaveLength(4);
+  });
+});
+
+describe("the re-sort", () => {
+  async function four() {
+    const p = await project();
+    for (const [i, name] of ["a.pdf", "b.pdf", "c.pdf", "d.pdf"].entries()) {
+      await doc(p.id, name, [{ content: `Rooftop unit note ${i}. RTU-${i} operating weight ${100 * (i + 1)} LBS.`, vector: vec(20, 1 - i * 0.05) }]);
+    }
+  }
+  const embedder = embedderFor({ "rooftop unit weight": vec(20) });
+
+  it("puts the passages Claude judged helpful first, in its order, and keeps the rest after", async () => {
+    await four();
+    const seen: KbRerankPassage[][] = [];
+    const result = await searchPassages({
+      query: "rooftop unit weight",
+      queryEmbedder: embedder,
+      reranker: async (_q, passages) => {
+        seen.push(passages);
+        return [3, 1];
+      },
+    });
+    expect(result.reranked).toBe(true);
+    expect(result.rerankNotice).toBeNull();
+    expect(result.hits.map((h) => [h.fileName, h.relevant])).toEqual([
+      ["c.pdf", true],
+      ["a.pdf", true],
+      ["b.pdf", false],
+      ["d.pdf", false],
+    ]);
+    // It reads the whole passage with where it is from, not the snippet.
+    expect(seen[0]?.[0]).toMatchObject({ n: 1, fileName: "a.pdf", where: "Page 1", version: "Current version" });
+    expect(seen[0]?.[0]?.content).toBe("Rooftop unit note 0. RTU-0 operating weight 100 LBS.");
+  });
+
+  it("reads further down than the page shows, so a helpful passage below the limit can lead", async () => {
+    await four();
+    const result = await searchPassages({
+      query: "rooftop unit weight",
+      limit: 2,
+      queryEmbedder: embedder,
+      reranker: async (_q, passages) => {
+        expect(passages).toHaveLength(4);
+        return [4];
+      },
+    });
+    expect(result.hits.map((h) => h.fileName)).toEqual(["d.pdf", "a.pdf"]);
+  });
+
+  it("keeps only numbers that were sent, each once", async () => {
+    await four();
+    const result = await searchPassages({
+      query: "rooftop unit weight",
+      queryEmbedder: embedder,
+      reranker: async () => [99, 2, 2, 0, -1, 1.5] as number[],
+    });
+    expect(result.hits.map((h) => h.fileName)).toEqual(["b.pdf", "a.pdf", "c.pdf", "d.pdf"]);
+    expect(cleanRerank([2, "3", null, 4, 4, 5], 4)).toEqual([2, 4]);
+  });
+
+  it("leaves the search order standing, and says so, when the re-sort fails", async () => {
+    await four();
+    const result = await searchPassages({
+      query: "rooftop unit weight",
+      queryEmbedder: embedder,
+      reranker: async () => {
+        throw new Error("429 rate limited");
+      },
+    });
+    expect(result).toMatchObject({ reranked: false, rerankNotice: expect.stringMatching(/did not answer/) });
+    expect(result.hits.map((h) => [h.fileName, h.relevant])).toEqual([
+      ["a.pdf", null],
+      ["b.pdf", null],
+      ["c.pdf", null],
+      ["d.pdf", null],
+    ]);
+  });
+
+  it("says when Claude is not configured, and is silent when asked not to re-sort", async () => {
+    await four();
+    const unconfigured = await searchPassages({ query: "rooftop unit weight", queryEmbedder: embedder });
+    expect(unconfigured).toMatchObject({ reranked: false, rerankNotice: expect.stringMatching(/not configured/) });
+    const off = await searchPassages({ query: "rooftop unit weight", queryEmbedder: embedder, reranker: null });
+    expect(off).toMatchObject({ reranked: false, rerankNotice: null });
   });
 });

@@ -86,6 +86,8 @@ delete process.env.KB_LOCAL_SOURCE_DIR;
 delete process.env.KB_EMBEDDING_ENDPOINT;
 delete process.env.KB_EMBEDDING_DEPLOYMENT;
 delete process.env.KB_EMBEDDING_API_KEY;
+// Never reach Anthropic from a test: the KB re-sort and answers take fakes.
+delete process.env.KB_ANTHROPIC_API_KEY;
 
 // The send gate must be off unless a test turns it on.
 process.env.PHB_ALLOW_SEND = "false";

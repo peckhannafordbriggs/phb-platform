@@ -5,6 +5,8 @@ import { KNOWLEDGE_BASE_MODULE_KEY } from "./constants";
 import { isSamePassage, passageShingles } from "./duplicates";
 import { azureEmbedder } from "./embed";
 import { readKbEmbeddingEnv } from "./env";
+import { locationLabel, versionText } from "./location";
+import { KB_RERANK_CANDIDATES, cleanRerank, defaultReranker, type KbReranker } from "./rerank";
 import { toVectorLiteral } from "./vector";
 
 /**
@@ -43,7 +45,14 @@ import { toVectorLiteral } from "./vector";
  * spec section copied into a submittal, a page carried into the next version)
  * is listed under it as `alsoIn` instead of taking a place of its own; and at
  * most KB_SEARCH_PER_DOCUMENT passages from one document, so one long spec
- * cannot fill the page.
+ * cannot fill the page. Within a group of copies the CURRENT version always
+ * leads: an archived or older copy never stands in front of a current one,
+ * whichever scored higher. The group keeps the place its best copy earned.
+ *
+ * RE-SORT (rerank.ts): the top KB_RERANK_CANDIDATES of that list go to Claude
+ * Haiku, which returns the ones that help answer the question, best first.
+ * Those lead, marked `relevant`; the rest follow in fused order. Without a
+ * key, or when it fails, the fused order stands and `rerankNotice` says so.
  */
 
 export const KB_SEARCH_LIMIT = 20;
@@ -156,6 +165,8 @@ export type KbSearchHit = {
   score: number;
   /** The same text found in other places, lower in the results; best ranked first. */
   alsoIn: KbSearchCopy[];
+  /** The re-sort's verdict: true helps answer, false does not; null when no re-sort ran. */
+  relevant: boolean | null;
 };
 
 /** Where else a hit's text was found: enough to name and open it. */
@@ -199,6 +210,10 @@ export type KbSearchResult = {
   hits: KbSearchHit[];
   /** Passages either search found, before the per-document cap and the limit. */
   candidates: number;
+  /** Whether Claude re-sorted the hits. */
+  reranked: boolean;
+  /** Why it did not, in plain words; null when it did or was not asked for. */
+  rerankNotice: string | null;
 };
 
 /** Turns the question into a vector. Null: the meaning search is not available here. */
@@ -268,8 +283,13 @@ export async function searchPassages(options: {
   mode?: KbSearchMode;
   /** Instead of Azure OpenAI from the environment (tests). Null: no meaning search. */
   queryEmbedder?: KbQueryEmbedder | null;
+  /** Instead of Claude Haiku from the environment (tests). Null: no re-sort, and no notice. */
+  reranker?: KbReranker | null;
 }): Promise<KbSearchResult> {
   const limit = Math.min(options.limit ?? KB_SEARCH_LIMIT, 50);
+  const reranker = options.reranker === undefined ? defaultReranker() : options.reranker;
+  // The re-sort reads further down the list than the page shows.
+  const pool = reranker ? Math.max(limit, KB_RERANK_CANDIDATES) : limit;
   const parsed = parseQuery(options.query);
 
   let scope: KbSearchResult["scope"] = { how: "all", projectIds: [] };
@@ -353,21 +373,33 @@ export async function searchPassages(options: {
   // the per-document cap. Text is read a batch at a time, only as far as needed.
   const perDocument = new Map<string, number>();
   const chosen: { ranked: Ranked; shingles: Set<string> | null; copies: Ranked[] }[] = [];
-  choosing: for (let at = 0; at < ranked.length && chosen.length < limit; at += CONTENT_BATCH) {
+  const texts = new Map<string, string>();
+  choosing: for (let at = 0; at < ranked.length && chosen.length < pool; at += CONTENT_BATCH) {
     const batch = ranked.slice(at, at + CONTENT_BATCH);
-    const contents = await passageContents(batch.map((r) => r.id));
+    const contents = await passageTexts(batch.map((r) => r.id));
+    for (const [id, text] of contents) texts.set(id, text);
     for (const r of batch) {
       const shingles = passageShingles(contents.get(r.id) ?? "");
       const original = chosen.find((c) => isSamePassage(c.shingles, shingles));
       if (original) {
-        if (original.copies.length < KB_SEARCH_MAX_COPIES) original.copies.push(r);
+        if (versionClass(r) < versionClass(original.ranked)) {
+          // A current copy of an archived or older passage: it leads the group.
+          const before = original.ranked;
+          perDocument.set(before.documentId, (perDocument.get(before.documentId) ?? 1) - 1);
+          perDocument.set(r.documentId, (perDocument.get(r.documentId) ?? 0) + 1);
+          original.ranked = { ...r, score: before.score };
+          original.copies.unshift(before);
+          if (original.copies.length > KB_SEARCH_MAX_COPIES) original.copies.pop();
+        } else if (original.copies.length < KB_SEARCH_MAX_COPIES) {
+          original.copies.push(r);
+        }
         continue;
       }
       const n = perDocument.get(r.documentId) ?? 0;
       if (n >= KB_SEARCH_PER_DOCUMENT) continue;
       perDocument.set(r.documentId, n + 1);
       chosen.push({ ranked: r, shingles, copies: [] });
-      if (chosen.length >= limit) break choosing;
+      if (chosen.length >= pool) break choosing;
     }
   }
 
@@ -404,7 +436,43 @@ export async function searchPassages(options: {
         const row = rows.get(copy.id);
         return row ? [copyOf(row)] : [];
       }),
+      relevant: null,
     });
+  }
+
+  // The re-sort. Its answer is cleaned, never trusted: numbers that were sent,
+  // once each. Those lead, in its order; the rest keep the fused order.
+  let ordered = hits;
+  let reranked = false;
+  let rerankNotice: string | null = null;
+  if (options.reranker === undefined && reranker === null) {
+    rerankNotice = "Not re-sorted: Claude is not configured for the Knowledge Base here.";
+  } else if (reranker && hits.length > 0) {
+    try {
+      const sent = hits.slice(0, KB_RERANK_CANDIDATES);
+      const relevant = cleanRerank(
+        await reranker(
+          options.query,
+          sent.map((h, i) => ({
+            n: i + 1,
+            fileName: h.fileName,
+            projectFolder: h.projectFolder,
+            where: locationLabel(h),
+            version: versionText(h),
+            content: texts.get(h.chunkId) ?? h.snippet,
+          })),
+        ),
+        sent.length,
+      );
+      const lead = relevant.map((n) => ({ ...sent[n - 1]!, relevant: true }));
+      const kept = new Set(relevant.map((n) => sent[n - 1]!.chunkId));
+      const rest = hits.filter((h) => !kept.has(h.chunkId)).map((h, i) => ({ ...h, relevant: i < sent.length - kept.size ? false : null }));
+      ordered = [...lead, ...rest];
+      reranked = true;
+    } catch (error) {
+      rerankNotice = "Not re-sorted: the re-sorting step did not answer this time, so results are in search order.";
+      logUnexpected("kb.rerank_failed", error, { moduleKey: KNOWLEDGE_BASE_MODULE_KEY });
+    }
   }
 
   return {
@@ -413,8 +481,10 @@ export async function searchPassages(options: {
     scope,
     mode,
     notice,
-    hits,
+    hits: ordered.slice(0, limit),
     candidates: byId.size,
+    reranked,
+    rerankNotice,
   };
 }
 
@@ -481,7 +551,13 @@ async function vectorCandidates(
     .map((r) => ({ id: r.id, documentId: r.document_id, isLatest: r.is_latest, isArchived: r.is_archived, similarity: r.similarity }));
 }
 
-async function passageContents(ids: string[]): Promise<Map<string, string>> {
+/** 0 current, 1 older, 2 archived: which copy of the same text leads. */
+function versionClass(c: Candidate): number {
+  return c.isArchived ? 2 : c.isLatest ? 0 : 1;
+}
+
+/** Passages' full text by id (the answer reads these; hits carry only a snippet). */
+export async function passageTexts(ids: string[]): Promise<Map<string, string>> {
   if (ids.length === 0) return new Map();
   const rows = await prisma.$queryRaw<Array<{ id: string; content: string }>>`
     SELECT id::text AS id, content FROM kb_chunks WHERE id = ANY(${ids}::uuid[])`;

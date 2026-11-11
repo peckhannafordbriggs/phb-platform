@@ -19,8 +19,9 @@ const params = z.object({
 /**
  * GET /api/modules/knowledge-base/search?q=<words>[&project=<id>...][&mode=keyword]
  *
- * Keyword and meaning search over indexed passages, fused by rank
- * (lib/modules/knowledge-base/search.ts); `mode=keyword` for words alone.
+ * Keyword and meaning search over indexed passages, fused by rank and
+ * re-sorted by Claude Haiku (lib/modules/knowledge-base/search.ts);
+ * `mode=keyword` for words alone (still re-sorted).
  * Anyone with the Knowledge Base grant; 404 otherwise. Read only: nothing is
  * written, not even history - history is for answers, which come later.
  */
@@ -45,7 +46,7 @@ export async function GET(request: Request) {
     });
     logger.info("kb.searched", {
       route: ROUTE,
-      outcome: result.mode,
+      outcome: result.reranked ? `${result.mode}+rerank` : result.mode,
       employeeId: access.viewer.id,
       moduleKey: KNOWLEDGE_BASE_MODULE_KEY,
       count: result.hits.length,

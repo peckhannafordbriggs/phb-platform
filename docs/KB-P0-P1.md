@@ -17,7 +17,7 @@ worker loop and its Container Apps Job, and the worker image's text tools.
 | 3 | Extraction and chunking with page, section and cell locations | **Done**. No OCR: a scanned PDF is `skipped`, `empty_text` |
 | 4 | Embeddings | **Done** (2026-11-10) |
 | 5 | Retrieval: hybrid vector + keyword, project ranking, evaluation set | **Built** (2026-11-10): hybrid, copies collapsed, `npm run kb:eval`. Not yet tuned on a real question set |
-| 6 | Answers with Claude: citations, conflicts, versions, missing evidence, follow-ups | Not started |
+| 6 | Answers with Claude: citations, conflicts, versions, missing evidence, follow-ups | **Built** (2026-11-11): Haiku re-sort, Sonnet answers, shared history. Rules are a first version |
 | 7 | Automatic sync job, admin view of indexing issues and reported answers | Partly: Index now button, worker job (built, `enableKbWorker` off), clear index. No schedule, no issue or report views |
 
 ---
@@ -338,6 +338,39 @@ as `model`), so no `api-version` has to be chosen or kept current. `embed.ts`:
   `tests/kb-hybrid.test.ts` writes hand-built vectors so every similarity is exact.
 - **Not tuned yet.** The threshold and K are defaults from the literature; tune them
   on `npm run kb:eval` (keyword and hybrid side by side) with real questions.
+
+## Re-sort, answers and history (2026-11-11)
+
+Decided 2026-11-10: Claude for both steps (Haiku re-sorts, Sonnet answers) over
+an Azure model or a self-hosted cross-encoder; research in the project notes.
+Cohere on Foundry is likely closed to the CSP subscription.
+
+- **Key**: `KB_ANTHROPIC_API_KEY`, the module's own, never a fallback to the BAS
+  or Change Orders key (`tests/anthropic-key-per-module.test.ts`). Key Vault
+  `KB-ANTHROPIC-API-KEY` behind `kbAnthropicApiKeyInKeyVault`.
+- **Re-sort** (`rerank.ts`): the top 30 after fusion and collapse go to
+  `claude-haiku-5-5` at low effort in one listwise call; it returns the numbers
+  that help, best first. Cleaned (only numbers sent, once each), 10 s timeout,
+  memoised; any failure leaves the fused order with a notice. Hits carry
+  `relevant`. Also runs on the plain search route.
+- **Answer** (`answer.ts`): the passages Haiku kept (at most 15; the top 10 when
+  there was no re-sort) go to `claude-sonnet-5-5`, structured output: kind,
+  answer with [n] citations, missing, conflicts. `finishAnswer` keeps only
+  citations to passages sent, renumbers them, and turns an uncited answer into
+  "no evidence". No passage kept: no Sonnet call. Output ceiling 4,096 tokens and
+  thinking at the model default, both placeholders until the rules are decided.
+- **Follow-ups** (`followup.ts`): rewritten by Haiku to stand alone for the
+  search; the answer sees the person's words and up to 4 earlier turns as
+  context, never as evidence. The earlier projects are kept unless a job number
+  is named. Only the starter adds to a conversation.
+- **History** (`ask.ts`): every final answer saved with a snapshot of its sources
+  (`kb_questions.answer`), citation links in `kb_question_sources`. Failed
+  answers are not saved. Shared list at `/knowledge-base/history` (index
+  `kb_conversations(updated_at DESC, id DESC)`, migration
+  `20261111120000_kb_shared_history_index`), opened at `/knowledge-base?c=<id>`.
+- **Limits**: 10 questions per person per minute, in memory.
+- **Not built yet**: the report-a-wrong-answer button and the admin queue, the
+  real answer rules, `kb:eval` for answers.
 
 ## Open questions
 

@@ -221,10 +221,7 @@ export function IndexPanel({ initial }: { initial: KbIndexStatus }) {
 /** What the admin types to confirm; lib/modules/knowledge-base/clear.ts checks the same word on the server. */
 const CONFIRM_WORD = "clear";
 
-/**
- * Empties the index so the next sync rebuilds it. Two steps on purpose: the
- * button only opens the confirmation, and the confirmation needs the word.
- */
+
 function ClearIndex({ disabled, total, onCleared }: { disabled: boolean; total: number; onCleared: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");

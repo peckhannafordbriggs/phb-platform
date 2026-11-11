@@ -1061,6 +1061,8 @@ model KbConversation {
   questions KbQuestion[]
 
   @@index([employeeId, updatedAt(sort: Desc)])
+  /// The shared history: everyone's conversations, newest activity first.
+  @@index([updatedAt(sort: Desc), id(sort: Desc)])
   @@map("kb_conversations")
 }
 

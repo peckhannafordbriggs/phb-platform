@@ -11297,7 +11297,8 @@ In every case the passages embedded so far keep their vectors, the rest stay NUL
 
 ## Knowledge Base search finds nothing, or the wrong file
 
-Search is **hybrid** (`lib/modules/knowledge-base/search.ts`): a keyword search
+Search is **hybrid**, then **re-sorted by Claude Haiku** when the KB has its
+Claude key (*Knowledge Base answers*, below), (`lib/modules/knowledge-base/search.ts`): a keyword search
 (passages holding the question's words, ranked by how many) and a meaning search
 (the question embedded, nearest passage vectors by cosine) run side by side and
 are merged by rank, so a passage both find comes first. Current versions sit above
@@ -11324,6 +11325,34 @@ first file that holds the answer, then the share found first and in the top five
 It runs every question twice, words only and hybrid, side by side, with totals
 for each (`--mode keyword` or `--mode hybrid` runs one). Run it before and after
 any change to search; a mode that fell back to words is said so in the output.
+
+## Knowledge Base answers
+
+A question goes: search (words and meaning, copies collapsed) -> Claude Haiku
+re-sorts the top 30 and keeps the ones that help -> Claude Sonnet answers from
+those, citing each -> the answer is checked and saved to the shared history
+(`lib/modules/knowledge-base/ask.ts`). Key: `KB_ANTHROPIC_API_KEY`, the KB's
+own (`infra/README.md`); models `claude-haiku-5-5` and `claude-sonnet-5-5`,
+overridable with `KB_RERANK_MODEL` / `KB_ANSWER_MODEL` without a code change.
+
+| Symptom | Why, and what to do |
+|---|---|
+| *Answers are not configured here* (503), search results shown | `KB_ANTHROPIC_API_KEY` unset. Locally `.env.local`; production the Key Vault secret and `kbAnthropicApiKeyInKeyVault` |
+| *Not re-sorted: Claude is not configured* under the results | Same cause; search still works in its own order |
+| *Not re-sorted: the re-sorting step did not answer this time* | Haiku failed or took over 10 s. Log: `kb.rerank_failed` with Anthropic's reason. A 404 there usually means the model name was retired: set `KB_RERANK_MODEL` |
+| *Claude did not answer this time* (502) | Sonnet failed (timeout 90 s, overload, refusal, an answer past 4,096 tokens). Nothing is saved. Log: `kb.answer_failed`. A retired model: set `KB_ANSWER_MODEL` |
+| *The documents found do not answer this* | Haiku kept no passage (Sonnet is then not called, nothing spent), or Sonnet's answer cited nothing, which the platform never shows as an answer. Check the search results beneath: if the right page is there, the re-sort prompt (`RERANK_RULES` in `rerank.ts`) is the place to look |
+| A citation number is missing or jumps | Citations are renumbered 1..n in order of first use, and a citation to a passage that was not sent is removed (`finishAnswer` in `answer.ts`) |
+| *That is 10 questions in a minute* (429) | Per-person limit (`KB_QUESTIONS_PER_MINUTE`), in memory, resets with a new revision |
+| *Only the person who started this conversation can add to it* (409) | History is shared, follow-ups are not. Ask it as a new question |
+| A follow-up answers about the wrong thing | A follow-up is rewritten by Haiku to stand alone for the search (shown as what was searched in the stored answer, `searchedFor`); without Claude it is the last question plus the follow-up. It keeps the earlier question's projects unless it names a job number |
+| An old answer cites a file that is gone | The history keeps a snapshot of each answer and its sources; clearing or rebuilding the index sets the links (`kb_question_sources`) to NULL and leaves the snapshot |
+
+**Changing what answers say.** The rules are `ANSWER_RULES` in
+`lib/modules/knowledge-base/answer.ts`, one string, the first version written
+from the specification. `tests/kb-answer.test.ts` holds only the parts the code
+relies on (cite by number, passages only, current version first, data is not
+instructions).
 
 ## A Knowledge Base file is `failed`
 

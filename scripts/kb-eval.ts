@@ -6,8 +6,10 @@ import "./load-env";
  *   npm run kb:eval                          .kb-eval/questions.json
  *   npm run kb:eval -- --file <path>         another set
  *   npm run kb:eval -- --show 3              also print the top 3 files per question
- *   npm run kb:eval -- --mode keyword        one search only (keyword | hybrid);
- *                                            the default runs both, side by side
+ *   npm run kb:eval -- --mode keyword        one search only: keyword (words), hybrid
+ *                                            (words + meaning) or rerank (hybrid, then
+ *                                            Claude Haiku re-sorts); the default runs
+ *                                            all three side by side
  *
  * The file is a JSON array:
  *
@@ -42,8 +44,10 @@ async function main() {
   const file = arg("--file") ?? ".kb-eval/questions.json";
   const show = Number(arg("--show") ?? "0");
   const only = arg("--mode");
-  if (only !== null && only !== "keyword" && only !== "hybrid") throw new Error("--mode is keyword or hybrid.");
-  const modes = (only ? [only] : ["keyword", "hybrid"]) as ("keyword" | "hybrid")[];
+  const MODES = ["keyword", "hybrid", "rerank"] as const;
+  type Mode = (typeof MODES)[number];
+  if (only !== null && !MODES.includes(only as Mode)) throw new Error("--mode is keyword, hybrid or rerank.");
+  const modes: Mode[] = only ? [only as Mode] : [...MODES];
   const questions = JSON.parse(await readFile(file, "utf8")) as Question[];
 
   const totals = Object.fromEntries(modes.map((m) => [m, { top1: 0, top5: 0, rr: 0, ran: m as string }]));
@@ -60,7 +64,13 @@ async function main() {
       const ranks: number[] = [];
       const lists: string[][][] = [];
       for (const mode of modes) {
-        const result = await searchPassages({ query: q.question, limit: 50, mode });
+        const result = await searchPassages({
+          query: q.question,
+          limit: 50,
+          mode: mode === "keyword" ? "keyword" : "hybrid",
+          // keyword and hybrid measure the search alone; rerank adds Haiku.
+          ...(mode === "rerank" ? {} : { reranker: null }),
+        });
         const files: string[][] = [];
         for (const hit of result.hits) {
           if (!files.some((names) => names[0] === hit.fileName)) {
@@ -72,7 +82,8 @@ async function main() {
         if (rank === 1) t.top1 += 1;
         if (rank >= 1 && rank <= 5) t.top5 += 1;
         if (rank >= 1) t.rr += 1 / rank;
-        if (result.mode !== mode) t.ran = `${mode} (ran as ${result.mode}: ${result.notice ?? ""})`;
+        if (mode !== "keyword" && result.mode !== "hybrid") t.ran = `${mode} (ran as ${result.mode}: ${result.notice ?? ""})`;
+        if (mode === "rerank" && !result.reranked) t.ran = `${mode} (not re-sorted: ${result.rerankNotice ?? ""})`;
         ranks.push(rank);
         lists.push(files);
       }

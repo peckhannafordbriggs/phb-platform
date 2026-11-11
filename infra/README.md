@@ -367,6 +367,22 @@ az keyvault secret show --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --
 # 4. Set coAnthropicApiKeyInKeyVault to true in infra/main.parameters.json and redeploy.
 ```
 
+## The Knowledge Base Anthropic key is a third key, set the same way
+
+`KB_ANTHROPIC_API_KEY` (2026-11-10) is the Knowledge Base's own key: Claude
+Haiku re-sorts search results and Claude Sonnet writes answers with it. Wired
+exactly like the Change Orders key - Key Vault `KB-ANTHROPIC-API-KEY`,
+referenced as `KB_ANTHROPIC_API_KEY` when `kbAnthropicApiKeyInKeyVault` is
+true - and never a fallback to either other key. Absent, KB search keeps its
+own order and answers say they are not configured; nothing else changes.
+
+```powershell
+# A DIFFERENT key from the other two - create one in the Anthropic Console for the KB.
+az keyvault secret set --vault-name <vault-name> --name KB-ANTHROPIC-API-KEY --value (Read-Host "Knowledge Base Anthropic API key")
+az keyvault secret show --vault-name <vault-name> --name KB-ANTHROPIC-API-KEY --query "{enabled:attributes.enabled, updated:attributes.updated}"
+# Then kbAnthropicApiKeyInKeyVault = true in infra/main.parameters.json, and redeploy.
+```
+
 ## The BAS credential key is copied from the collector, byte for byte
 
 `BAS_CREDENTIAL_KEY` is the AES-256 key that encrypts Niagara station passwords in

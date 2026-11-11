@@ -188,7 +188,9 @@ export function readMailboxAddress(): string | null {
  * credential, a missing key disables that module's model calls and nothing
  * else, and the platform must boot without either.
  *
- * There are TWO, one per module, since 2026-10-16:
+ * One per module: BAS (2026-09), Change Orders (2026-10-16), Knowledge Base
+ * (2026-11-10). The KB key is the same shape as the Change Orders one and the
+ * reasoning below applies to it word for word:
  *
  * - `ANTHROPIC_API_KEY` is BAS Analyze's (B5). The name is the Anthropic
  *   SDK's own default - `new Anthropic()` reads it unprompted - which is
@@ -201,6 +203,9 @@ export function readMailboxAddress(): string | null {
  *   any change-order client MUST pass the key explicitly, and
  *   tests/anthropic-key-per-module.test.ts fails the build on one that does
  *   not. The reader never falls back to the BAS key: absent is absent.
+ * - `KB_ANTHROPIC_API_KEY` is the Knowledge Base's: Haiku re-sorts search
+ *   results, Sonnet writes answers. Same rules: passed explicitly on every
+ *   client, never a fallback to either other key.
  *
  * Neither spec names its variable; these functions are where the names are
  * decided, and anything that calls the API takes its key from here rather than
@@ -230,6 +235,8 @@ const anthropicApiKeySchema = blankAsAbsent(z.string().trim().min(1).optional())
 export const ANTHROPIC_API_KEY_VAR = "ANTHROPIC_API_KEY";
 /** Change Orders' own key (2026-10-16). Never the SDK default name - see above. */
 export const CO_ANTHROPIC_API_KEY_VAR = "CO_ANTHROPIC_API_KEY";
+/** The Knowledge Base's own key (2026-11-10). Same rules as the Change Orders one. */
+export const KB_ANTHROPIC_API_KEY_VAR = "KB_ANTHROPIC_API_KEY";
 export const BAS_CREDENTIAL_KEY_VAR = "BAS_CREDENTIAL_KEY";
 export const BAS_CREDENTIAL_KEY_VERSION_VAR = "BAS_CREDENTIAL_KEY_VERSION";
 /** The bas_analyze role's URL (2026-10-13): the third secret by reference, same shape. */
@@ -249,6 +256,12 @@ export function readAnthropicApiKey(): string | null {
  */
 export function readChangeOrderAnthropicApiKey(): string | null {
   const result = anthropicApiKeySchema.safeParse(process.env[CO_ANTHROPIC_API_KEY_VAR]);
+  return result.success && result.data ? result.data : null;
+}
+
+/** The Knowledge Base's key. `KB_ANTHROPIC_API_KEY` and nothing else; no fallback. */
+export function readKbAnthropicApiKey(): string | null {
+  const result = anthropicApiKeySchema.safeParse(process.env[KB_ANTHROPIC_API_KEY_VAR]);
   return result.success && result.data ? result.data : null;
 }
 
