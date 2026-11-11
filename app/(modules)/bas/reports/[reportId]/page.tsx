@@ -3,7 +3,6 @@ import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { BasShell } from "../../bas-shell";
 import { ReportEditor } from "../../reports-editor";
-import { ReportsShell } from "../../reports-shell";
 import { basTab } from "../../tabs";
 
 export const dynamic = "force-dynamic";
@@ -25,12 +24,10 @@ export default async function BasReportPage({ params }: { params: Promise<{ repo
 
   return (
     <BasShell blurb={basTab("/bas/reports").blurb} canAdminister={canAdminister}>
-      <ReportsShell>
-        <ReportEditor
-          reportId={reportId}
-          viewer={{ email: viewer.email, name: `${viewer.firstName} ${viewer.lastName}`.trim() || viewer.email }}
-        />
-      </ReportsShell>
+      <ReportEditor
+        reportId={reportId}
+        viewer={{ email: viewer.email, name: `${viewer.firstName} ${viewer.lastName}`.trim() || viewer.email }}
+      />
     </BasShell>
   );
 }

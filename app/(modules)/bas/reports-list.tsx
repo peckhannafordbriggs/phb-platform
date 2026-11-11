@@ -17,7 +17,8 @@ import { Button } from "@/components/ui";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /**
- * The Reports sub-tab: the reports the viewer may see, one row each, with
+ * Scheduled, on the Reports bar (the Reports sub-tab until 2026-11-11): the
+ * reports the viewer may see, one row each, with
  * the columns the plan names. "Run now" and "History" are not here because
  * there is nothing to run them with yet; the row says so where a last run
  * would be, rather than offering a button that does nothing.

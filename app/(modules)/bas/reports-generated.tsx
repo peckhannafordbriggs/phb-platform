@@ -8,7 +8,8 @@ import { fetchRuns } from "./reports-client";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /**
- * The Generated sub-tab (Reports, Phase 2): every run the viewer may see,
+ * The runs - the Reports bar's first item and the tab's default view since
+ * 2026-11-11, the Generated sub-tab before (Reports, Phase 2): every run the viewer may see,
  * newest first, with its period, status, duration and cost. Opening one
  * shows the rendered report. No Resend, no Download PDF, no Re-run: those
  * are Phase 4 and 3, and a button that does nothing would be worse than

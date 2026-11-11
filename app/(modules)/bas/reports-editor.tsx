@@ -247,8 +247,8 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
-        <Link href="/bas/reports" className="text-sm text-[var(--muted)] hover:underline">
-          ← All reports
+        <Link href="/bas/reports/scheduled" className="text-sm text-[var(--muted)] hover:underline">
+          ← Scheduled reports
         </Link>
         {report !== null && <StateChip state={report.state} />}
       </div>
@@ -450,7 +450,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
                 if (window.confirm(`Delete the report "${report.name}"?`)) {
                   void run(async () => {
                     await deleteReport(report.reportId);
-                    router.push("/bas/reports");
+                    router.push("/bas/reports/scheduled");
                   });
                 }
               }}
@@ -527,7 +527,7 @@ function PresetButtons({ value, onChange }: { value: PresetKey | null; onChange:
         })),
         {
           value: "custom",
-          label: <span title="Pick questions from the library, your own library, or type them.">Custom</span>,
+          label: <span title="Pick from the shared questions, your own, or type them.">Custom</span>,
         },
       ]}
       value={value ?? "custom"}
@@ -601,7 +601,7 @@ function QuestionsSection({
             <span className="min-w-0 flex-1">
               {q.text}
               <span className="ml-2 text-xs text-[var(--muted)]">
-                {q.kind === "library" ? `${q.sectionLabel} · ${q.libraryKind} · ${q.appliesToLabel}` : q.kind === "personal" ? "my library" : "typed"}
+                {q.kind === "library" ? `${q.sectionLabel} · ${q.libraryKind} · ${q.appliesToLabel}` : q.kind === "personal" ? "my question" : "typed"}
               </span>
             </span>
             {!locked && (
@@ -619,8 +619,8 @@ function QuestionsSection({
         <>
           <div>
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-medium">Shared library</h3>
-              <SearchBar label="Search the shared library" placeholder="Search" value={search} onChange={setSearch} hotkey={false} className="w-56" />
+              <h3 className="text-sm font-medium">Shared questions</h3>
+              <SearchBar label="Search the shared questions" placeholder="Search" value={search} onChange={setSearch} hotkey={false} className="w-56" />
             </div>
             <div className="mt-2 max-h-72 overflow-auto rounded-[var(--radius-row)] border border-[var(--border)]">
               {LIBRARY_SECTIONS.map((section) => {
@@ -653,7 +653,7 @@ function QuestionsSection({
 
           {canUsePersonal && personal.length > 0 && (
             <div>
-              <h3 className="text-sm font-medium">My library</h3>
+              <h3 className="text-sm font-medium">My questions</h3>
               <ul className="mt-2 divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]">
                 {personal.map((p) => (
                   <li key={p.personalQuestionId} className="flex items-start gap-3 px-3 py-2 text-sm">
@@ -685,7 +685,7 @@ function QuestionsSection({
               {canUsePersonal && (
                 <label className="flex items-center gap-1.5 text-xs">
                   <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />
-                  Save to my library
+                  Save to my questions
                 </label>
               )}
               <span className="text-xs text-[var(--muted)]">Answered by the Analyze planner when runs begin.</span>

@@ -12,7 +12,9 @@ import { TONE_STYLE } from "./tone";
 const FIELD = `${INPUT} mt-1 h-auto py-2`;
 
 /**
- * The Library sub-tab: the shared library, read-only, grouped by section;
+ * The Questions item of the Reports bar (Library on screen until
+ * 2026-11-11; the route and the tables keep that name): the shared
+ * questions, read-only, grouped by section;
  * then the viewer's own questions with edit and delete. Promotion of a
  * personal question to the shared library is a later phase, and the screen
  * does not offer it.
@@ -61,7 +63,7 @@ export function ReportsLibraryView() {
   );
 
   if (library === null || personal === null) {
-    return <p className="p-6 text-sm text-[var(--muted)]">{error?.message ?? "Loading the library…"}</p>;
+    return <p className="p-6 text-sm text-[var(--muted)]">{error?.message ?? "Loading the questions…"}</p>;
   }
 
   return (
@@ -75,7 +77,7 @@ export function ReportsLibraryView() {
       <SharedLibraryTable library={library} />
 
       <section className="card p-5">
-        <h2 className="eyebrow text-[var(--muted)]">My library ({personal.length})</h2>
+        <h2 className="eyebrow text-[var(--muted)]">My questions ({personal.length})</h2>
         <p className="mt-2 text-sm text-[var(--muted)]">
           Questions you wrote and saved. Yours alone; they go on your own reports.
         </p>
@@ -88,7 +90,7 @@ export function ReportsLibraryView() {
               busy={busy}
               onSave={(text) => run(() => updatePersonal(p.personalQuestionId, text))}
               onDelete={() => {
-                if (window.confirm("Delete this question from your library?")) void run(() => deletePersonal(p.personalQuestionId));
+                if (window.confirm("Delete this question?")) void run(() => deletePersonal(p.personalQuestionId));
               }}
             />
           ))}
@@ -107,7 +109,7 @@ export function ReportsLibraryView() {
               });
             }}
           >
-            Save to my library
+            Add question
           </Button>
         </div>
       </section>
@@ -120,7 +122,7 @@ export function SharedLibraryTable({ library }: { library: LibraryQuestionView[]
   return (
     <section className="card p-0">
       <div className="px-5 py-4">
-        <h2 className="eyebrow text-[var(--muted)]">Shared library ({library.length})</h2>
+        <h2 className="eyebrow text-[var(--muted)]">Shared questions ({library.length})</h2>
         <p className="mt-2 text-sm text-[var(--muted)]">
           <span className="font-medium">computed</span> questions are answered by code over the points named;{" "}
           <span className="font-medium">planner</span> questions by the Analyze planner. A question runs only
