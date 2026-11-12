@@ -1255,6 +1255,22 @@ anything. `runbook.md` → *A template what-if shows the container app losing a
 secret, gaining blank variables, or changing its probes*; guards in
 `tests/deploy-guards.test.ts`.
 
+**Template drift, second instance: the app's scale (2026-11-12).** A
+read-only what-if the next day showed the live app at `minReplicas` 1 with an
+`http-scaler` rule (10 concurrent requests) the template did not declare; a
+deployment would have reverted both. The activity log puts the change in one
+of Karthik's two by-hand `PATCH`es on 2026-11-12 (15:03 or 18:52 UTC); the
+log carries no body and the revisions between are pruned, so which one is
+not recorded. The template now declares the app's scale in full -
+`appMinReplicas` (0), `appMaxReplicas` (3), `appHttpConcurrentRequests`
+(10) and the rule - in place of the old `minReplicas` / `maxReplicas`
+parameters, the example file carries the three, and the parameters file is
+where the live values (1 and 10) go. **What-if must show no Delete lines
+and no scale changes under the app; if it does, reconcile first**
+(`infra/README.md` → *Deploy*). Always-on costs about $10 a month at this
+container size (`runbook.md` → *Keeping one replica warm*); whether it is
+intended is the owner's to confirm with Jim.
+
 **Needs Review, Phase 1 - visibility, read-only (2026-10-21).** The Change
 Orders module has a tab bar on the BAS pattern (`app/(modules)/change-orders/tabs.ts`,
 `co-shell.tsx`): *Mailbox* at `/change-orders` and *Needs Review* at
