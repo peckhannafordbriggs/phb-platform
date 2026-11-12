@@ -136,6 +136,18 @@ password or on either vault secret. If it reports `Microsoft.KeyVault/vaults/sec
 `DATABASE-URL` or `AUTH-SECRET` as *Modify* or *Create*, a value was passed - stop and
 check whether a rotation was intended.
 
+**What-if must show no *Delete* lines and no `scale` changes under
+`Microsoft.App/containerApps/<app>`; if it does, reconcile first.** The two
+*Delete* lines the runbook lists as noise, `exposedPort 0` and `runningStatus`, are
+the only exceptions, and they appear on every run. Any other *Delete* is
+something the live app carries that the template or the parameters file does not
+say; a change under `properties.template.scale` (`minReplicas`, `maxReplicas`, a
+rule such as `http-scaler`) is the same thing for the app's scale, which the
+template has declared in full since 2026-11-12 (`appMinReplicas`,
+`appMaxReplicas`, `appHttpConcurrentRequests`). Settle each in the parameters file
+or the template, run what-if again, and deploy only when the app's block shows
+nothing but the noise the runbook lists.
+
 If `Microsoft.App/containerApps/<app>` shows a `properties.configuration.secrets`
 entry as *Delete*, or an env entry's `secretRef` going to `null`, a Key Vault flag
 in the parameters file is off for a secret the live app carries by hand - set the
@@ -322,7 +334,9 @@ secret is present with `NODE_ENV=production` — a test asserts the Bicep does n
 one either.
 
 **The database has no auto-stop, and the budget cannot stop anything.** The container app
-scales to zero freely; the database must not, because the BAS collector's source data
+may scale to zero freely (`appMinReplicas`, 0 by default; the live app keeps one replica
+warm since 2026-11-12, `runbook.md` → *Keeping one replica warm*); the database must not,
+because the BAS collector's source data
 rolls off the JACE after about 42 hours. PostgreSQL Flexible Server has no auto-stop
 property to disable — only a manual `stop` — so the reachable failure is a full disk,
 which makes the server refuse writes. `postgresStorageAutoGrow` is the guard: Azure

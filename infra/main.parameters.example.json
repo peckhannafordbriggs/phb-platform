@@ -81,6 +81,9 @@
     "authUrl": {
       "value": ""
     },
+    "appMinReplicas": { "value": 0 },
+    "appMaxReplicas": { "value": 3 },
+    "appHttpConcurrentRequests": { "value": 10 },
     "customDomainName": {
       "value": ""
     },

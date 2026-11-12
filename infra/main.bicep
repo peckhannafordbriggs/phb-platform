@@ -92,11 +92,25 @@ param containerCpu string = '0.5'
 @description('Memory per replica.')
 param containerMemory string = '1Gi'
 
-@description('Scale to zero is deliberate at this user count - a cold start is cheaper than a replica idling all night.')
-param minReplicas int = 0
+// The web app's scale, parameterised in full since 2026-11-12. A what-if
+// that day showed the live app at minReplicas 1 with an HTTP scale rule the
+// template did not declare - a by-hand change (runbook.md, "A template
+// what-if shows the container app losing a secret, gaining blank variables,
+// or changing its probes", the 2026-11-12 record). A template deployment
+// would have reverted both. The three parameters below let the parameters
+// file say what the live app is, so it is no longer drift.
+
+@description('Replicas kept running with no traffic. 0 scales to zero, with a cold start of about 30 s on the first request after five idle minutes (runbook.md, "A cold start takes about 30 seconds"); 1 keeps one replica warm, about $10 a month at this container size (runbook.md, "Keeping one replica warm"). The live app has carried 1 since 2026-11-12; the parameters file says so.')
+@minValue(0)
+param appMinReplicas int = 0
 
 @description('Upper bound on replicas. Small on purpose: Graph throttling concentrates on one mailbox through one app identity.')
-param maxReplicas int = 3
+@minValue(1)
+param appMaxReplicas int = 3
+
+@description('The HTTP scale rule (http-scaler): concurrent requests per replica before KEDA adds another, up to appMaxReplicas. 10 is the Azure default and what the live app carried by hand from 2026-11-12; declared here so it is no longer drift.')
+@minValue(1)
+param appHttpConcurrentRequests int = 10
 
 // ---------------------------------------------------------------------------
 // PostgreSQL
@@ -1042,8 +1056,20 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: minReplicas
-        maxReplicas: maxReplicas
+        minReplicas: appMinReplicas
+        maxReplicas: appMaxReplicas
+        // The one rule the live app carries. Scale-rule metadata is strings
+        // on the wire, so the int parameter is stringified here.
+        rules: [
+          {
+            name: 'http-scaler'
+            http: {
+              metadata: {
+                concurrentRequests: string(appHttpConcurrentRequests)
+              }
+            }
+          }
+        ]
       }
     }
   }

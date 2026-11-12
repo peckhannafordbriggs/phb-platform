@@ -1136,6 +1136,8 @@ describe("the two deploy paths cannot diverge on the image or the port", () => {
       "--memory",
       "--min-replicas",
       "--max-replicas",
+      "--scale-rule-name",
+      "--scale-rule-http-concurrency",
       "--secrets",
     ]) {
       expect(deploy, flag).not.toContain(flag);
@@ -2131,5 +2133,125 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(scheduler!.properties?.template?.containers?.[0]?.command).toEqual(["npx", "tsx", "scripts/bas-reports-scheduler.ts"]);
     const assignments = resources.filter((r) => r.type === "Microsoft.Authorization/roleAssignments");
     expect(assignments.length).toBe(3);
+  });
+});
+
+/**
+ * Template drift, second instance (2026-11-12): the app's scale. A read-only
+ * what-if the day after the first reconciliation showed the live app at
+ * minReplicas 1 with an HTTP scale rule (`http-scaler`, 10 concurrent
+ * requests) the template did not declare - a by-hand change in the portal -
+ * and a deployment would have reverted both (runbook.md -> "A template
+ * what-if shows the container app losing a secret, gaining blank variables,
+ * or changing its probes", the 2026-11-12 record). The template now declares
+ * the app's scale in full, parameterised, so the parameters file can say what
+ * the live app is. These guards hold: the three parameters with the defaults
+ * the first deployment chose; the scale block reading them and declaring the
+ * rule; the example file carrying all three (a copied file cannot be silent);
+ * the deploy procedure's rule and the runbook's record; the compiled ARM; and
+ * the workflow never touching scale (the flag list above). The mutation each
+ * is for: put a literal back in the scale block and the second test fails;
+ * drop a parameter from the example file and the third does.
+ */
+describe("the container app's scale is the template's, parameterised (2026-11-12)", () => {
+  const readFile = (rel: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, rel), "utf8"));
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  const appBlock = (bicep: string) => bicep.split("resource containerApp ")[1]!.split(/\n(?=resource )/)[0]!;
+  const DEFAULTS = { appMinReplicas: 0, appMaxReplicas: 3, appHttpConcurrentRequests: 10 } as const;
+
+  it("declares appMinReplicas, appMaxReplicas and appHttpConcurrentRequests with the first deployment's defaults, and the old unprefixed pair is gone", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^@minValue\(0\)\nparam appMinReplicas int = 0$/m);
+    expect(code).toMatch(/^@minValue\(1\)\nparam appMaxReplicas int = 3$/m);
+    expect(code).toMatch(/^@minValue\(1\)\nparam appHttpConcurrentRequests int = 10$/m);
+    expect(code).not.toMatch(/^param (minReplicas|maxReplicas) /m);
+    // Each carries a description a person reads at the prompt.
+    for (const name of Object.keys(DEFAULTS)) {
+      expect(code, name).toMatch(new RegExp(`@description\\('[^\\n]+'\\)\\n(@minValue\\(\\d+\\)\\n)?param ${name} int`));
+    }
+  });
+
+  it("feeds the app's scale block from the three parameters and declares the http-scaler rule, with no literal left in it", async () => {
+    const app = codeOnly(appBlock(await readFile("infra/main.bicep")));
+    const scale = /\n\s{6}scale: \{([\s\S]*?)\n\s{6}\}/.exec(app)?.[1];
+    expect(scale, "the app's scale block").toBeDefined();
+    expect(scale).toMatch(/minReplicas: appMinReplicas\b/);
+    expect(scale).toMatch(/maxReplicas: appMaxReplicas\b/);
+    expect(scale).toMatch(/name: 'http-scaler'/);
+    expect(scale).toMatch(/http: \{\s*metadata: \{\s*concurrentRequests: string\(appHttpConcurrentRequests\)\s*\}\s*\}/);
+    // No number is decided inside the block: a literal here is the next drift.
+    expect(scale).not.toMatch(/(minReplicas|maxReplicas|concurrentRequests):\s*['"]?\d/);
+    // One rule, named as the live app names it.
+    expect((scale!.match(/name: '/g) ?? []).length).toBe(1);
+  });
+
+  it("carries all three in the example parameters file at the template's defaults, so a copied file cannot be silent about the app's scale", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    for (const [name, value] of Object.entries(DEFAULTS)) {
+      expect(example.parameters[name]?.value, name).toBe(value);
+    }
+  });
+
+  it("states the rule in the deploy procedure and records the instance in the runbook, beside the first", async () => {
+    const readme = await readFile("infra/README.md");
+    const deploy = readme.split("## Deploy")[1]!.split("\n## ")[0]!;
+    expect(deploy).toMatch(/What-if must show no \*Delete\* lines and no `scale` changes under\s+`Microsoft\.App\/containerApps\/<app>`; if it does, reconcile first\./);
+    for (const name of Object.keys(DEFAULTS)) expect(deploy, name).toContain(name);
+
+    const runbook = await readFile("runbook.md");
+    const heading =
+      "## A template what-if shows the container app losing a secret, gaining blank variables, or changing its probes";
+    const section = runbook.split(heading)[1]!.split("\n## ")[0]!;
+    expect(section).toContain("**The record, 2026-11-12: the app's scale.**");
+    expect(section).toContain("**The record, 2026-11-11.**");
+    expect(section.indexOf("The record, 2026-11-11.")).toBeLessThan(section.indexOf("The record, 2026-11-12: the app's scale."));
+    expect(section).toContain("http-scaler");
+    for (const name of Object.keys(DEFAULTS)) expect(section, name).toContain(name);
+    expect(section).toContain('"appMinReplicas": { "value": 1 }');
+    expect(section).toMatch(/no \*Delete\*\s+lines and no `scale` changes under the app; if it does, reconcile first/);
+    // The cost section a person is pointed at for the decision, under the new name.
+    expect(runbook).toContain("## Keeping one replica warm — what `appMinReplicas: 1` costs");
+    expect(runbook).not.toMatch(/`minReplicas: 1`/);
+  });
+
+  const az = spawnSync("az", ["bicep", "version"], { encoding: "utf8", shell: true });
+  const azAvailable = az.status === 0;
+
+  it.skipIf(!azAvailable)("compiles to ARM where the app's scale reads the three parameters and carries the one rule", () => {
+    const build = spawnSync("az", ["bicep", "build", "--file", "infra/main.bicep", "--stdout"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      shell: true,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    expect(build.status, build.stderr).toBe(0);
+    interface ArmApp {
+      type: string;
+      name: string;
+      properties?: { template?: { scale?: { minReplicas?: unknown; maxReplicas?: unknown; rules?: unknown[] } } };
+    }
+    const arm = JSON.parse(build.stdout.replace(/^\uFEFF/, "")) as {
+      parameters: Record<string, { type: string; defaultValue?: unknown; minValue?: number }>;
+      resources: Record<string, ArmApp> | ArmApp[];
+    };
+    for (const [name, value] of Object.entries(DEFAULTS)) {
+      expect(arm.parameters[name], name).toMatchObject({ type: "int", defaultValue: value });
+    }
+    expect(arm.parameters.appMinReplicas!.minValue).toBe(0);
+    expect(arm.parameters.appMaxReplicas!.minValue).toBe(1);
+    const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
+    const apps = resources.filter((r) => r.type === "Microsoft.App/containerApps");
+    expect(apps).toHaveLength(1);
+    const scale = apps[0]!.properties?.template?.scale;
+    expect(scale?.minReplicas).toBe("[parameters('appMinReplicas')]");
+    expect(scale?.maxReplicas).toBe("[parameters('appMaxReplicas')]");
+    expect(scale?.rules).toEqual([{ name: "http-scaler", http: { metadata: { concurrentRequests: "[string(parameters('appHttpConcurrentRequests'))]" } } }]);
   });
 });

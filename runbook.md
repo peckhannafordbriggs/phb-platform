@@ -3647,7 +3647,9 @@ resource group since the change.)*
 as *Modify*, and inside it one or more of: a `properties.configuration.secrets`
 entry as *Delete*; an env entry whose `secretRef` goes to `null`; env entries
 created with no value; `tcpSocket` probes replaced by `httpGet` on
-`/api/health`. Nothing in the template was changed for the drift to appear.
+`/api/health`; `properties.template.scale.minReplicas` going from `1` to
+`0`, or a scale rule (`http-scaler`) as *Delete*. Nothing in the template was
+changed for the drift to appear.
 
 **Cause.** The container app has two writers and only one of them is the
 record. `deploy.yml` runs `az containerapp update --image`, which swaps the
@@ -3689,8 +3691,27 @@ az containerapp show -n <app> -g <resource-group> \
   `deploy.yml` refuses a revision that does not answer 200 from it, and it
   touches nothing (`app/api/health/route.ts`). Let the template win.
 
+- **The app's scale** - `minReplicas` going from `1` to `0`, `maxReplicas`
+  changing, or a rule named `http-scaler` as *Delete* - is the second
+  instance (2026-11-12, below). The template declares all of it since that
+  day: `appMinReplicas` (default 0), `appMaxReplicas` (default 3) and
+  `appHttpConcurrentRequests` (default 10, the rule's `concurrentRequests`).
+  Read the live block and put the values that differ from the defaults in
+  the parameters file; the what-if's app block then shows no `scale` line.
+
+```bash
+az containerapp show -n <app> -g <resource-group> --query properties.template.scale -o json
+# the containerapp extension is broken on one machine (runbook: az rest reads the same):
+# az rest --method get --url "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.App/containerApps/<app>?api-version=2024-03-01" --query properties.template.scale
+```
+
 Then run the routine deployment from `infra/README.md` → *Deploy*, with
-every running image on the command line.
+every running image on the command line. **What-if must show no *Delete*
+lines and no `scale` changes under the app; if it does, reconcile first.**
+The two *Delete* lines listed as noise below (`exposedPort 0`,
+`runningStatus`) are the only exceptions. Checked on 2026-11-12 with the
+reconciled template and the two live values on the command line: the app's
+block showed zero `scale` deltas and only those two.
 
 **The record, 2026-11-11.** The first what-if since the template deployment
 of 2026-10-22 (the `authUrl` move) showed four differences on the web app
@@ -3711,6 +3732,14 @@ line); `postgresBackupRetentionDays` in the file was `35` against `7` on the
 server (*Nightly database backup* → step 2 says read it first); and the
 budget's contact list in the file had two addresses against one on the live
 budget.
+
+**The record, 2026-11-12: the app's scale.** A read-only what-if the day
+after the reconciliation above showed one more difference on the web app,
+and a template deployment would have reverted it:
+
+| What-if showed | What it was | Settled by |
+|---|---|---|
+| `properties.template.scale.minReplicas` `1` → `0`, and a rule `http-scaler` (type `http`, `concurrentRequests` `"10"`) as *Delete* | A by-hand change to the live app. `az rest` on the app confirmed the live block: `minReplicas` 1, `maxReplicas` 3, the one rule; the template said `minReplicas` 0 and declared no rule. The activity log for the 90 days to 2026-11-12 shows writes to the app by a person on four occasions since the 2026-11-11 reconciliation: the owner at 18:47 and 19:56 UTC on the 11th (the two template deployments that day, `bas-reports-enable` and the scheduler-name redeploy) and Karthik (`krachamolla@phb1899.com`) at **15:03 and 18:52 UTC on 2026-11-12**, each a `PATCH` preceded by `listSecrets`, the portal's *Edit and deploy* shape. The scale change is one of Karthik's two: the activity log carries no request body, and every revision between `0000019` (22 September) and the live `0000126` is pruned, so Azure's records cannot say which. The live revision `0000126` (20:13 UTC, the deploy of PR #121) carries the change forward, because `az containerapp update --image` keeps the running revision's scale | The template declares the app's scale in full (`appMinReplicas`, `appMaxReplicas`, `appHttpConcurrentRequests` and the `http-scaler` rule, 2026-11-12), the example file carries the three at the template's defaults, and the parameters file carries what the live app is: `"appMinReplicas": { "value": 1 }` and `"appHttpConcurrentRequests": { "value": 10 }`. With those two lines the next what-if shows no `scale` line under the app. Whether always-on is intended is the owner's to confirm with Jim: *Keeping one replica warm* has the cost, about $10 a month at this container size, against compute that sat entirely inside the free grant at scale-to-zero |
 
 **What-if noise, so nobody chases it again.** Every one of these appeared on
 the same run and means nothing: `exposedPort 0 → null`, `runningStatus`, the
@@ -3743,10 +3772,16 @@ backup, the grant in that section comes first.
 **The rule this leaves.** When a secret reference is added to the live app by
 hand because `deploy.yml` cannot carry it, the flag goes into
 `infra/main.parameters.json` in the same sitting, and the what-if is run
-before the day ends. `tests/deploy-guards.test.ts` → *every Key Vault flag
-the template declares is visible where a hand-set secret is wired* holds the
+before the day ends. The same for the app's scale: a replica count or a
+scale rule changed in the portal goes into the parameters file
+(`appMinReplicas`, `appMaxReplicas`, `appHttpConcurrentRequests`) the same
+day, and a setting the template has no parameter for is added to the
+template first. `tests/deploy-guards.test.ts` → *every Key Vault flag
+the template declares is visible where a hand-set secret is wired* and
+*the container app's scale is the template's, parameterised* hold the
 template, the example file, this runbook and `infra/README.md` to each
-other, so the next flag cannot be added without the places a person reads.
+other, so the next flag or scale setting cannot be added without the places
+a person reads.
 
 ---
 
@@ -4242,7 +4277,7 @@ outlasts it. Liveness answers "should this process be killed", and the answer is
 |---|---|---|
 | `P1001: Can't reach database server` | The firewall rule allowing Azure services was removed, or the server is stopped. Burstable tier servers can be stopped to save money and stay stopped — **which is why one may have been, and why it must not be.** Stopping this server destroys building data rather than merely postponing access to it: see `docs/08-bas-and-niagara.md`, *Azure: the container app may sleep, the database may not*. Restart it, then check the Collection Health screen for new `roll_overwrite` gaps. | `az postgres flexible-server show -g <rg> -n <server> --query state`. Confirm the `AllowAllAzureServicesAndResourcesWithinAzureIps` rule exists. |
 | `P1000: Authentication failed` | The admin password was rotated on the server but not in Key Vault - or, before 2026-10-21, a template deployment set it to whatever was typed at the prompt (*A template deployment rotated the database administrator password*). | Update the `DATABASE-URL` secret, then restart the revision — the container reads Key Vault at start, not per request. If the server's password is the unknown, rotate it deliberately with `postgresAdminPassword` on one template deployment, which writes the matching `DATABASE-URL` too. |
-| `P2024: Timed out fetching a connection` | More replicas than the server's connection limit allows. Burstable tiers have low limits. | Lower `maxReplicas`, or move up a tier. |
+| `P2024: Timed out fetching a connection` | More replicas than the server's connection limit allows. Burstable tiers have low limits. | Lower `appMaxReplicas`, or move up a tier. |
 
 Nothing here needs a redeploy. Fix the database or the secret and restart the revision.
 
@@ -4590,10 +4625,14 @@ way*.
 **Symptom.** The first page after the site has been idle takes far longer
 than a page normally does; once it answers, everything is fast again.
 
-**Cause.** Scale to zero, and nothing else. `minReplicas` is 0
-(`infra/main.bicep`, deliberately), so five minutes after the last request
-(`cooldownPeriod` 300) KEDA deactivates the only replica, and the next request
-waits while Container Apps starts one. Measured on 2026-09-30 with one timed
+**Cause.** Scale to zero, and nothing else. `appMinReplicas` is 0 by default
+(`infra/main.bicep`, deliberately; `minReplicas` until 2026-11-12), so five
+minutes after the last request (`cooldownPeriod` 300) KEDA deactivates the
+only replica, and the next request waits while Container Apps starts one.
+**The live app has kept one replica warm since 2026-11-12** (`appMinReplicas`
+1 in the parameters file, after a by-hand change - *A template what-if shows
+the container app losing a secret…*, the 2026-11-12 record), so this symptom
+is not seen while that holds. Measured on 2026-09-30 with one timed
 request to `/api/health` from a scaled-to-zero state, against the platform's
 own event timestamps:
 
@@ -4630,7 +4669,7 @@ keeps the running revision's probes, so the change sat in the template until the
 next template deployment carried it - see *A template deployment fails
 activation* for why the two paths each own half of the app.
 The remaining 16 s of scheduling and sidecars belongs to the Consumption
-platform; a Dedicated workload profile or `minReplicas: 1` are the only
+platform; a Dedicated workload profile or `appMinReplicas: 1` are the only
 things that remove it, and the cost of the latter is in *Keeping one replica
 warm* below.
 
@@ -4642,7 +4681,14 @@ session, which adds the Entra sign-in bounce on top.
 
 ---
 
-## Keeping one replica warm — what `minReplicas: 1` costs
+## Keeping one replica warm — what `appMinReplicas: 1` costs
+
+**Where it stands.** The live app has run with `minReplicas` 1 since a
+by-hand change on 2026-11-12 (*A template what-if shows the container app
+losing a secret…*, the 2026-11-12 record), and the parameters file carries
+`appMinReplicas: 1` so a template deployment keeps it. The figures below are
+what that costs; whether always-on is intended is a decision to confirm with
+Jim, and `appMinReplicas: 0` in the parameters file is the way back.
 
 Consumption billing in eastus2, from the retail price list (2026-09-30): a
 vCPU-second is $0.000024 active and $0.000003 idle; a GiB-second is $0.000003
