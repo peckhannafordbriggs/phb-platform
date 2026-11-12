@@ -1,6 +1,6 @@
 import { ok, withBas } from "@/lib/modules/bas/route-helpers";
 import { reportsResult } from "@/lib/modules/bas/reports/http";
-import { parseBody } from "@/lib/modules/bas/reports/parse";
+import { parseReportBody } from "@/lib/modules/bas/reports/parse";
 import { createReport, listReports } from "@/lib/modules/bas/reports/service";
 import { createReportSchema, type CreateReportInput } from "@/lib/validation/bas-reports";
 
@@ -19,7 +19,10 @@ export async function GET() {
   return withBas(ROUTE, async (viewer) => ok(await listReports(viewer)));
 }
 
-/** Create a report, as a draft, owned by the caller. */
+/**
+ * Create a report, as a draft, owned by the caller, with its questions. The
+ * two removed per-report limits are refused with 400 (`parseReportBody`).
+ */
 export async function POST(request: Request) {
   return withBas(
     ROUTE,
@@ -28,6 +31,6 @@ export async function POST(request: Request) {
         () => createReport(viewer, input),
         (created) => ok(created, 201),
       ),
-    parseBody(request, createReportSchema),
+    parseReportBody(request, createReportSchema),
   );
 }

@@ -221,6 +221,34 @@ describe("the dashboard ground stays readable", () => {
     expect(css).toMatch(/\.dashboard-ground\s+\.card\s*\{/);
   });
 
+  it("covers the whole document: the ground on each shell's outermost element, sized by main, never by the first viewport", async () => {
+    const css = await declarations();
+    const ground = /\.dashboard-ground\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
+    // 100% of main, with the ground's own padding on top of it (2026-11-12).
+    expect(ground).toMatch(/box-sizing:\s*content-box/);
+    expect(ground).toMatch(/min-height:\s*100%/);
+    expect(ground).not.toMatch(/100vh|100dvh|100svh/);
+    // main is at least the window tall and grows with the page.
+    const appShell = await readFile("components/app-shell.tsx", "utf8");
+    expect(appShell).toMatch(/<div className="flex min-h-screen">/);
+    expect(appShell).toMatch(/<main className="min-w-0 flex-1 px-8 py-8">/);
+    // Every ground element bleeds into that padding and sets no height of its own.
+    const shells = [
+      "app/(modules)/bas/bas-shell.tsx",
+      "app/(modules)/cost-intelligence/cip-shell.tsx",
+      "app/(modules)/freeze-protection/fp-shell.tsx",
+      "app/(platform)/page.tsx",
+      "components/module-placeholder.tsx",
+    ];
+    for (const file of shells) {
+      const source = await readFile(file, "utf8");
+      const line = /className="dashboard-ground[^"]*"/.exec(source)?.[0] ?? "";
+      expect(line, file).toContain("-mx-8 -my-8");
+      expect(line, file).not.toMatch(/min-h-screen|min-h-\[|\b100vh\b/);
+      expect(source, file).not.toMatch(/minHeight:\s*"100vh"/);
+    }
+  });
+
   it("draws the washes from the quadrant colours and nothing else", async () => {
     const css = await declarations();
     const ground = /\.dashboard-ground\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? "";

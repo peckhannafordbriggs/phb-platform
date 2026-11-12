@@ -49,6 +49,10 @@ export interface ReportSummary {
   /** Stations the report covers: 0 selected means every station on the building. */
   stationsSelected: number;
   stationsOnSite: number;
+  /**
+   * A label: the preset last chosen in the editor, kept while the shared
+   * questions still match its set (2026-11-12). It restricts nothing.
+   */
   presetKey: PresetKey | null;
   presetLabel: string | null;
   analysisWindow: AnalysisWindow;
@@ -64,9 +68,6 @@ export interface ReportSummary {
   recipientCount: number;
   /** The newest run, whatever its state; null until the first is queued. */
   lastRun: LastRunView | null;
-  budgetUsd: number;
-  /** The wall-clock cap on one run, in minutes (Phase 3). */
-  maxMinutes: number;
   /** Why the scheduler paused it; set only in paused_owner_disabled. */
   pausedReason: string | null;
   createdAt: string;
@@ -163,12 +164,9 @@ export interface OwnerOption {
   email: string;
 }
 
-/** What the editor needs before a report exists. */
+/** What the editor needs before a report exists. No per-report limits since 2026-11-12: the ceiling is the module's. */
 export interface ReportOptions {
   sites: ReportSiteOption[];
-  defaultBudgetUsd: number;
-  defaultMaxMinutes: number;
-  maxMinutesLimit: number;
   companyEmailDomain: string;
   /** Whether the viewer holds the module-admin flag, which is what offers the owner transfer. */
   canAdminister: boolean;

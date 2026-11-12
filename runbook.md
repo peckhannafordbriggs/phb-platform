@@ -11155,7 +11155,9 @@ before the pool is touched. A new revision starts with an empty window.
 `bas_*` tables (`add_bas_reports`): `bas_report_definitions`,
 `bas_report_questions`, `bas_library_questions`, `bas_personal_questions`,
 `bas_report_recipients`, `bas_site_occupancy`. A report is configured -
-building, questions, window, schedule, recipients, budget - and stored.
+building, questions, window, schedule, recipients - and stored (a per-report
+budget until 2026-11-12; the module's safety ceiling since, *Reports: the
+safety ceiling* below).
 **Nothing fires on its own.** No scheduler, no worker, no email, no PDF;
 the engine and the dev script that drives it are Phase 2, the next section.
 The entries below are the ways Phase 1 can surprise someone; the plan is
@@ -11236,9 +11238,10 @@ employee's own words - not for Grafana), and allow `bas_site_occupancy`.
 planner is told nothing about them. **Phase 2 added `bas_report_runs` and
 `bas_report_findings` to every list in this repository the same way** - both
 withheld, because a run holds the rendered report and the model's own
-sentences - so `phb-bas`'s script has eight names to learn: seven withheld
-and `bas_site_occupancy` allowed. Phase 4's `bas_report_deliveries` will be
-a ninth.
+sentences - and **2026-11-12 added `bas_report_settings`** (the safety
+ceiling, one row, withheld) - so `phb-bas`'s script has nine names to
+learn: eight withheld and `bas_site_occupancy` allowed. Phase 4's
+`bas_report_deliveries` will be a tenth.
 
 ### A report's next run is an hour off after the clocks change, or runs on the wrong clock
 
@@ -11273,16 +11276,78 @@ writes it in Phase 1**; a report in that state got there by hand.
 `UPDATE bas_report_definitions SET state = 'paused' WHERE report_id = <n>;`
 and resume from the screen, which recomputes the next run.
 
-### The Reports list and Usage say there is nothing
+### The Reports list says there is nothing, or Usage shows zero beside runs the list shows
 
-**Symptom.** *No reports have been generated yet* / *No usage to show*.
+**Symptom.** *No reports have been generated yet* on Reports; or Usage
+showing $0.00 and no runs while the Reports list shows a finished run with
+a cost.
 
-**Cause.** Usage: true until Phase 6. Reports (the runs; the *Generated*
-sub-tab until 2026-11-11): true until a run is made,
-which in Phase 2 is the dev script (*Reports (Phase 2)* → *Making a run
-today*) and from Phase 3 the scheduler; the list shows the runs of the
-reports you own, or of every report if you are a module admin. *Run now*
-and *History* are not on the list until then.
+**Cause.** Reports (the runs; the *Generated* sub-tab until 2026-11-11):
+true until a run is made - the dev script (*Reports (Phase 2)* → *Making a
+run today*), *Run now*, or the scheduler; the list shows the runs of the
+reports you own, or of every report if you are a module admin.
+
+Usage: **until 2026-11-12 the page was a placeholder** that said *There
+have been no runs* without asking the database, and kept saying it once
+runs existed - the Reports list beside it showed a succeeded run at $0.0397
+on 4,310 tokens. It reads `bas_report_runs` now
+(`lib/modules/bas/reports/usage.ts`, `tests/bas-reports-usage.test.ts`
+seeds exactly that run). If it still reads zero beside a run on the
+Reports list, check three things: the run has FINISHED (queued and running
+runs have spent nothing and are not counted); its `finished_at` is inside
+the range chosen (7 / 30 / 90 days, cut on the New York day); and the
+viewer may see it (their own reports, or every report for a module admin -
+the runs list's own visibility, `visibilityWhere`). A red line under the
+tiles - *These figures cover N of the M finished runs you may see* - means
+the tallies and the joinless count disagree; report that.
+
+### Settings shows a bar of its own, like Reports
+
+**Symptom.** Opening *Settings* replaces the module tabs with *Back ·
+General · Usage*, and somebody reports the module's tabs as missing; or a
+bookmark to `/bas/settings/usage` lands on a page whose only tab row is
+that bar.
+
+**Cause.** Not a fault (2026-11-12), the same shape as the Reports bar.
+*General* is the Settings screen as it always was (projects, buildings,
+stations, credentials, occupied hours) and the default; *Usage* is the
+Reports Usage view at a second route - one component, two routes - so the
+spend figures and the safety ceiling are reachable from the module's admin
+surface without opening the Reports bar, which is unchanged. The shell
+decides the bar from the path, so a deep link to either lands on the
+Settings bar directly; both pages are `requireModuleAdmin`, like every
+Settings page. Both bars are data on one shared shape
+(`app/(modules)/bas/sub-bar.ts`, `sub-bars.ts`; `reports/bar.ts`,
+`settings/bar.ts`), drawn by the kit's TabBar in the same place, one row,
+never two. `tests/bas-settings-nav.test.tsx`.
+
+**Fix.** *Back*, at the far left, returns to the module's tabs with
+Projects selected, carrying the query string.
+
+### The page background stops short of the bottom
+
+**Symptom.** On a page shorter than the window - the Usage page under its
+ceiling card, Home, a module placeholder - the tinted ground ends a few
+lines above the bottom and the flat lighter grey of `--background` shows
+beneath it.
+
+**Cause.** Fixed 2026-11-12. `.dashboard-ground` sits on each shell's
+outermost element with `-mx-8 -my-8`, bleeding into `<main>`'s 2rem
+padding, and declared `min-height: 100%` under `box-sizing: border-box` -
+so it resolved to main's CONTENT box and stopped exactly 4rem (main's
+vertical padding) short whenever the content was shorter than the window.
+On a page taller than the window the ground is the content's own height
+and nothing shows. Cost Intelligence and Freeze Protection size their
+ground to the viewport and scroll inside it, so they never showed it.
+
+**Fix.** Already in: the ground is `box-sizing: content-box` with the
+same `min-height: 100%`, so its own padding is added on top of main's
+content height and it ends where main ends; no viewport unit anywhere, so
+a scrolling page is covered to its last line. `tests/design-tokens.test.ts`
+→ *covers the whole document* pins the two declarations, the app shell's
+`min-h-screen` row and every shell's `-mx-8 -my-8`, and refuses a `100vh`
+on any ground element. If a band comes back, something put a height on a
+ground element or a padding on `<main>` that the shell does not bleed into.
 
 ### The Reports tab shows a bar of its own, and the module tabs are gone
 
@@ -11292,7 +11357,8 @@ Questions · Usage*, and somebody reports the module's tabs as missing.
 
 **Cause.** Not a fault (2026-11-11). The Reports tab has more views than
 one row of module tabs can carry, so while it is open the same bar draws
-the Reports-only items instead - one row, never two. *Reports* is the runs
+the Reports-only items instead - one row, never two. (Settings does the
+same since 2026-11-12, the entry above; both bars are data on one shape.) *Reports* is the runs
 (what was *Generated*), the default when the tab opens; *Scheduled* is the
 definitions, with *New report* top right; *Questions* is the shared
 questions and the viewer's own (what was *Library*; the route is still
@@ -11309,11 +11375,63 @@ or run URL opens with the right item marked.
 Every write is an audit row in the same transaction, named by action:
 `bas.report_created`, `bas.report_updated` (with `changes`, field by field),
 `bas.report_deleted`, `bas.report_state_changed` (`from`, `to`),
-`bas.report_questions_changed` (`change`: added / removed / reordered /
-preset), `bas.report_recipient_added` and `_removed` (with `isExternal`),
-and `bas.personal_question_created` / `_updated` / `_deleted`. None of them is
+`bas.report_questions_changed` (`change`: `set` since 2026-11-12, one row per
+save that changed the selection, with `count`, `library` / `personal` /
+`inline` and the `presetKey` label; added / removed / reordered / preset on
+older rows), `bas.report_recipient_added` and `_removed` (with `isExternal`),
+`bas.personal_question_created` / `_updated` / `_deleted`, and
+`bas.report_ceiling_changed` (`from` and `to`, each `{ usd, minutes }`; no
+report, the module's). None of them is
 on the audit SCREEN (*The audit log screen does not show a mail send, a BAS
 question or a profile change*); read them with SQL on `metadata->>'reportId'`.
+
+### The editor's Questions section is three tabs over one checklist, and a preset is not locked
+
+**Symptom.** Somebody asks why a report labelled *Standard weekly health
+report* has 22 questions, or why the label disappeared after they unticked
+one question, or why ticks made on the Standard tab are already ticked on
+the Daily tab; or an old build of the editor cannot find the per-question
+routes.
+
+**Cause.** Not a fault (2026-11-12). The Questions section is the segmented
+control it always was - *Standard weekly*, *Daily critical-site*, *Custom* -
+but each tab is a checklist over ONE selection. A preset's tab lists that
+preset's questions grouped by section, each with a box, and its own *Select
+all* and *Clear*, which act on that tab's questions only; Daily is a subset
+of Standard, so a question ticked on one is ticked on the other. *Custom*
+lists My questions with boxes, the custom questions on this report, and
+the box to type one (this report only unless *save for reuse* is ticked).
+Switching tabs never clears anything; only the untick of a box, or *Clear*
+on a tab, removes a question. The count at the right of the tab row is the
+whole set and *Show selected* lists it in the order the report will hold
+it. `preset_key` is a **label**: which preset's *Select all* was last used
+(or the saved report's label), kept while the shared selection still
+matches that set - custom questions do not count against it, so "the
+standard weekly plus two of mine" keeps the label - and cleared by the
+service as soon as it does not. The selection is saved whole with the
+report (`questions` on `POST /api/modules/bas/reports` and `PATCH
+.../{id}`) and stored in one order: shared in library order, then the
+owner's own, then typed; the per-question add / remove / reorder routes
+were removed with the lock. A shared question turned off after it was
+saved stays on a report while it is ticked, and reads *turned off* on its
+tab.
+
+**Fix.** Nothing. To take a preset whole, open its tab and press *Select
+all*, then save.
+
+### Creating or saving a report answers 400 `limits_removed`
+
+**Symptom.** `400 limits_removed` - *Per-report limits were removed on
+2026-11-12. The module's safety ceiling on the Usage page applies to every
+run; do not send budgetUsd or maxMinutes.*
+
+**Cause.** The client is an old build of the editor, or a script, still
+sending the per-report cost budget or time cap. The two keys are refused
+by name (`parseReportBody`) rather than dropped, so a stale client fails
+loudly instead of believing it set a cap.
+
+**Fix.** Reload the editor; drop the two keys from the script. The ceiling
+is set on the Usage page (*Reports: the safety ceiling*).
 
 ---
 
@@ -11446,10 +11564,14 @@ the run page.
 - *Narrative not generated: no model key is configured* -
   `ANTHROPIC_API_KEY` unset, or `--no-narrative`. The evidence is complete;
   only the sentences are missing.
-- *Budget of $N reached after M of K sections had narrative; the rest show
-  their evidence only* - the definition's `budget_usd` would have been
-  passed by the next call's estimate. Raise the budget on the report, or
-  accept the evidence-only sections.
+- *Safety ceiling of $N reached after M of K sections had narrative; the
+  rest show their evidence only* - the module's ceiling in dollars
+  (`bas_report_settings`, the Usage page) would have been passed by the
+  next call's estimate. A module admin raises the ceiling, or accept the
+  evidence-only sections. (*Budget of $N reached* on runs before
+  2026-11-12, when the cap was the report's own.)
+- *Safety ceiling of N min reached after M min: ...* - the ceiling's
+  minutes; *Reports: the safety ceiling* below.
 - *<Section>: <reason>* - the model declined or refused the section, or
   its answer failed the schema. Run again; if it repeats, the section's
   findings are in the audit row.
@@ -11742,7 +11864,7 @@ Twice is a pattern, not bad luck: look at the worker's execution logs for the
 two attempts (`az containerapp job execution list`, then `logs show` for each),
 and at the run's period and building. A building with far more points than
 the office may be hitting the execution timeout before the engine's own time
-cap; lower the report's time cap (*Reports: what the caps do*) so the engine
+cap; lower the safety ceiling's minutes (*Reports: the safety ceiling*) so the engine
 stops itself and stores a partial report rather than being killed.
 
 **Failed, with the engine's own error.** The text under *Failed* is the
@@ -11766,49 +11888,72 @@ another owner* (admins only). The transfer resumes it with the next run
 computed from now; `bas.report_owner_transferred` records who did it and
 that it resumed.
 
-## Reports: what the caps do
+## Reports: the safety ceiling
 
-Every run carries two caps, both set on the report in its editor under
-*Limits* (and the module defaults for a new report in
-`lib/modules/bas/reports/service.ts`: `DEFAULT_REPORT_BUDGET_USD`, $2, and
-`DEFAULT_REPORT_MAX_MINUTES`, 20). Neither aborts a run. When either is
-reached the engine finishes the sections it has, renders the page from them,
-stores the run as **Partial**, and the reason - which cap, and what was left
-out - is on the run's row (under *Partial* on the Reports list) and at the
-top of the report page (*Partial report: ...*).
+**One ceiling for the module, two halves, since 2026-11-12.** Every run is
+bounded by the same two numbers - dollars and minutes - held in ONE row,
+`bas_report_settings`, shown to everyone at the bottom of the Usage page in
+the *Safety ceiling* card and editable there by BAS module admins only
+(`PATCH /api/modules/bas/reports/ceiling`, 403 `admin_required` for anyone
+else). The defaults are **$10.00 and 25 minutes per run**; the migration
+inserts the row, and an absent row reads as the defaults. Until that date
+each report carried its own budget and time cap in the editor's *Limits*
+section; those columns are dropped, the editor section is gone, and a
+client still sending them gets `400 limits_removed` (*Creating or saving a
+report answers 400 `limits_removed`*). `bas_report_runs.budget_usd` stays:
+it is the ceiling in force when the run executed, stamped at queue time and
+re-read when the worker claims the run, and the Reports list prints it as
+*$0.0397 of $10.00*.
 
-**The cost budget** (`budget_usd`). Before every narrative call the engine
-estimates the call and stops asking the model when the run's spend would
-pass the budget; the sections after that show their evidence with code's
-status sentence and no likely cause or next check. The reason reads *Budget
-of $2.00 reached after 3 of 5 sections had narrative; the rest show their
-evidence only*. Every number on the page is already final: the budget never
-changes a finding, only the prose beside it.
+Neither half aborts a run. When either is reached the engine finishes the
+sections it has, renders the page from them, stores the run as **Partial**,
+and the reason - which half, and what was left out - is on the run's row
+(under *Partial* on the Reports list) and at the top of the report page
+(*Partial report: ...*).
 
-**The time cap** (`max_minutes`, 1 to 25). A deadline on the clock from the
-moment the engine starts the run. Before every question and before every
-narrative call the engine reads the clock; past the deadline, the questions
-still waiting are recorded as *Not analysed: the run reached its time cap
-before this question* and the narrative calls still waiting are skipped,
-then the comparison, the roll-up and the page are produced from what was
-computed. The reason reads *Time cap of 20 min reached after 21 min: Q6, Q7,
-Q9 not analysed; narrative skipped for Space Comfort*. Data Health is
-computed before any question and is never the cap's victim. The cap counts
-work, not waiting: a run Queued for an hour has used none of it.
+**The dollars.** Before every narrative call the engine estimates the call
+and stops asking the model when the run's spend would pass the ceiling; the
+sections after that show their evidence with code's status sentence and no
+likely cause or next check. The reason reads *Safety ceiling of $10.00
+reached after 3 of 5 sections had narrative; the rest show their evidence
+only*. Every number on the page is already final: the ceiling never changes
+a finding, only the prose beside it.
 
-**Why 25 is the most a report may set.** The worker job's replica timeout is
-30 minutes (`infra/main.bicep`); above the cap plus the worker's four-minute
-drain window (`lib/modules/bas/reports/worker.ts`), so the engine always
-stops itself and stores a partial report before the platform kills the
-execution. A killed execution stores nothing and the run is reclaimed from
-the start (the entry above). Raising the cap past 25 means raising the
-timeout first, and `tests/deploy-guards.test.ts` holds the three numbers to
-each other.
+**The minutes** (1 to 25). A deadline on the clock from the moment the
+engine starts the run. Before every question and before every narrative
+call the engine reads the clock; past the deadline, the questions still
+waiting are recorded as *Not analysed: the run reached its time cap before
+this question* and the narrative calls still waiting are skipped, then the
+comparison, the roll-up and the page are produced from what was computed.
+The reason reads *Safety ceiling of 25 min reached after 26 min: Q6, Q7, Q9
+not analysed; narrative skipped for Space Comfort*. Data Health is computed
+before any question and is never the ceiling's victim. The minutes count
+work, not waiting: a run Queued for an hour has used none of them.
+
+**Why 25 is the most the ceiling may hold.** The worker job's replica
+timeout is 30 minutes (`infra/main.bicep`); above the ceiling plus the
+worker's four-minute drain window (`lib/modules/bas/reports/worker.ts`), so
+the engine always stops itself and stores a partial report before the
+platform kills the execution. A killed execution stores nothing and the run
+is reclaimed from the start (*Reports: a run is stuck or failed*). Raising
+`MAX_CEILING_MINUTES` (`lib/modules/bas/reports/ceiling.ts`) past 25 means
+raising the timeout first, and `tests/deploy-guards.test.ts` holds the
+numbers to each other - the constant, the migration's CHECK and default,
+and the validation's bound.
+
+**Changing it.** Reports → Usage, or Settings → Usage (the same view at a
+second route since 2026-11-12) → *Safety ceiling* → the two fields → *Save
+ceiling*. Either half or both; whole cents, whole minutes; at most $1,000
+and 25 minutes (the database CHECKs are the same bounds). Audited as
+`bas.report_ceiling_changed` with both halves before and after, and the
+card says who last set it and when. A run already executing keeps the
+ceiling it read when it started; the next run reads the new one.
 
 **A partial run is not a failed one.** It has a report, its findings are
 stored and compared, and the next run compares against it. What it lacks is
-named. If every run of a report is partial on the time cap, the building is
-bigger than the cap: raise the cap, or narrow the report to a station subset.
+named. If every run of a report is partial on the minutes, the building is
+bigger than the ceiling: raise it (a module admin), or narrow the report to
+a station subset.
 
 ## A Cost Intelligence run stays Queued
 

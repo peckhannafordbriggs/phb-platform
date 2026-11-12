@@ -7,7 +7,8 @@ import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { ModuleHeader } from "@/components/module-header";
 import { TabBar, type TabItem } from "@/components/ui";
 import { moduleAccentStyle } from "@/lib/module-accent";
-import { REPORTS_BACK_HREF, REPORTS_BAR, activeReportsItemHref } from "./reports/bar";
+import { SUB_BAR_BACK_HREF, activeSubBarItemHref, type SubBar } from "./sub-bar";
+import { subBarFor } from "./sub-bars";
 import { activeTabHref, tabHref, visibleBasTabs, type BasTab } from "./tabs";
 
 /**
@@ -24,10 +25,12 @@ import { activeTabHref, tabHref, visibleBasTabs, type BasTab } from "./tabs";
  * boundary: every route behind it repeats the grant check independently, and so
  * does every API route those pages call.
  *
- * While the Reports tab is open the bar is the Reports bar instead
- * (2026-11-11): Back, Reports, Scheduled, Questions, Usage, drawn by the same
- * kit component in the same place. One row, never two. Back is the module's
- * default tab, so it lands on Projects with the module tabs showing again.
+ * While a tab that has a bar of its own is open - Reports (2026-11-11),
+ * Settings (2026-11-12) - the bar is that tab's sub-bar instead: Back and the
+ * tab's own items, drawn by the same kit component in the same place. One
+ * row, never two. Back is the module's default tab, so it lands on Projects
+ * with the module tabs showing again. Which bars exist is data
+ * (./sub-bars.ts); the shell knows only the shape.
  */
 export function BasShell({
   blurb,
@@ -50,7 +53,7 @@ export function BasShell({
   // usePathname needs no Suspense boundary; useSearchParams does. Which bar
   // to draw is decided here, once, for the live bar and its fallback alike.
   const pathname = usePathname() ?? "";
-  const inReports = activeTabHref(pathname) === "/bas/reports";
+  const subBar = subBarFor(pathname);
 
   return (
     /*
@@ -79,8 +82,8 @@ export function BasShell({
             so a tab is never missing while it resolves - it just briefly forgets
             the filters, which is a link that still goes to the right screen.
           */}
-          <Suspense fallback={<Tabs carryQuery={false} tabs={tabs} pathname={pathname} inReports={inReports} />}>
-            <Tabs carryQuery tabs={tabs} pathname={pathname} inReports={inReports} />
+          <Suspense fallback={<Tabs carryQuery={false} tabs={tabs} pathname={pathname} subBar={subBar} />}>
+            <Tabs carryQuery tabs={tabs} pathname={pathname} subBar={subBar} />
           </Suspense>
         </ModuleHeader>
 
@@ -94,36 +97,36 @@ function Tabs({
   carryQuery,
   tabs,
   pathname,
-  inReports,
+  subBar,
 }: {
   carryQuery: boolean;
   tabs: readonly BasTab[];
   pathname: string;
-  inReports: boolean;
+  subBar: SubBar | null;
 }) {
   return carryQuery ? (
-    <LiveTabs tabs={tabs} pathname={pathname} inReports={inReports} />
+    <LiveTabs tabs={tabs} pathname={pathname} subBar={subBar} />
   ) : (
-    <StaticTabs tabs={tabs} pathname={pathname} inReports={inReports} />
+    <StaticTabs tabs={tabs} pathname={pathname} subBar={subBar} />
   );
 }
 
-function LiveTabs({ tabs, pathname, inReports }: { tabs: readonly BasTab[]; pathname: string; inReports: boolean }) {
+function LiveTabs({ tabs, pathname, subBar }: { tabs: readonly BasTab[]; pathname: string; subBar: SubBar | null }) {
   const searchParams = useSearchParams();
   const hrefFor = (href: string) => tabHref(href, searchParams);
 
-  return inReports ? (
-    <ReportsBar active={activeReportsItemHref(pathname)} hrefFor={hrefFor} />
+  return subBar !== null ? (
+    <SubBarNav bar={subBar} active={activeSubBarItemHref(subBar, pathname)} hrefFor={hrefFor} />
   ) : (
     <Bar tabs={tabs} active={activeTabHref(pathname)} hrefFor={hrefFor} />
   );
 }
 
-function StaticTabs({ tabs, pathname, inReports }: { tabs: readonly BasTab[]; pathname: string; inReports: boolean }) {
+function StaticTabs({ tabs, pathname, subBar }: { tabs: readonly BasTab[]; pathname: string; subBar: SubBar | null }) {
   const hrefFor = (href: string) => href;
 
-  return inReports ? (
-    <ReportsBar active={activeReportsItemHref(pathname)} hrefFor={hrefFor} />
+  return subBar !== null ? (
+    <SubBarNav bar={subBar} active={activeSubBarItemHref(subBar, pathname)} hrefFor={hrefFor} />
   ) : (
     <Bar tabs={tabs} active={null} hrefFor={hrefFor} />
   );
@@ -159,15 +162,15 @@ function Bar({
 }
 
 /**
- * The Reports bar: the same kit component, the Reports-only items, and Back
- * at the far left - an arrow and the word, a quiet tab-shaped item that is
- * never active, going to the module's default tab. The query string is
- * carried the way the module bar carries it, so a building filter survives
- * the trip out and back.
+ * A sub-bar: the same kit component, the tab's own items, and Back at the
+ * far left - an arrow and the word, a quiet tab-shaped item that is never
+ * active, going to the module's default tab. The query string is carried
+ * the way the module bar carries it, so a building filter survives the
+ * trip out and back.
  */
-function ReportsBar({ active, hrefFor }: { active: string | null; hrefFor: (href: string) => string }) {
+function SubBarNav({ bar, active, hrefFor }: { bar: SubBar; active: string | null; hrefFor: (href: string) => string }) {
   const back: TabItem = {
-    href: hrefFor(REPORTS_BACK_HREF),
+    href: hrefFor(SUB_BAR_BACK_HREF),
     label: (
       <>
         <ArrowLeft size={14} aria-hidden="true" />
@@ -176,11 +179,11 @@ function ReportsBar({ active, hrefFor }: { active: string | null; hrefFor: (href
     ),
     active: false,
   };
-  const items: TabItem[] = REPORTS_BAR.map((item) => ({
+  const items: TabItem[] = bar.items.map((item) => ({
     href: hrefFor(item.href),
     label: item.label,
     active: item.href === active,
   }));
 
-  return <TabBar label="Reports sections" tabs={[back, ...items]} />;
+  return <TabBar label={bar.label} tabs={[back, ...items]} />;
 }

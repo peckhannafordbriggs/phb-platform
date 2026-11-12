@@ -68,11 +68,11 @@ model Employee {
 
   basCredentialsUpdated BasStationCredential[] @relation("BasCredentialUpdatedBy")
 
-  syncsTriggered CipSkillSync[]
-  workflowsCreated CipWorkflow[]
+  syncsTriggered        CipSkillSync[]
+  workflowsCreated      CipWorkflow[]
   projectSyncsTriggered CipProjectSync[]
-  runsStarted      CipRun[]
-  checkpointsAnswered CipRunCheckpoint[]
+  runsStarted           CipRun[]
+  checkpointsAnswered   CipRunCheckpoint[]
 
   fpProjectsCreated   FpProject[]   @relation("FpProjectCreatedBy")
   fpProjectsCompleted FpProject[]   @relation("FpProjectCompletedBy")
@@ -85,6 +85,7 @@ model Employee {
   basRecipientsAdded       BasReportRecipient[]  @relation("BasRecipientAddedBy")
   basRecipientsConfirmed   BasReportRecipient[]  @relation("BasRecipientConfirmedBy")
   basReportRunsStarted     BasReportRun[]        @relation("BasReportRunStartedBy")
+  basReportSettingsUpdated BasReportSettings[]   @relation("BasReportSettingsUpdatedBy")
 
   @@index([status])
   @@index([departmentId])
@@ -233,10 +234,10 @@ model BasPointRole {
 
 /// The customer or business unit that owns a set of buildings.
 model BasOrg {
-  orgId     BigInt    @id @default(autoincrement()) @map("org_id")
-  name      String    @unique
+  orgId     BigInt   @id @default(autoincrement()) @map("org_id")
+  name      String   @unique
   notes     String?
-  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
   projects BasProject[]
   sites    BasSite[]
@@ -308,7 +309,7 @@ model BasStation {
 
   connectionMode String @default("via_parent") @map("connection_mode")
 
-  baseUrl        String? @map("base_url")
+  baseUrl String? @map("base_url")
 
   tlsSha256 String? @map("tls_sha256")
 
@@ -427,7 +428,7 @@ model BasPoint {
   tags  Json    @default("{}")
   notes String?
 
-  isActive    Boolean   @default(true) @map("is_active")
+  isActive Boolean @default(true) @map("is_active")
 
   inactiveReason String? @map("inactive_reason")
 
@@ -595,10 +596,6 @@ model BasReportDefinition {
 
   state String @default("draft")
 
-  budgetUsd Decimal @map("budget_usd") @db.Decimal(8, 2)
-  /// The wall-clock cap on one run, in minutes (Phase 3). The engine finishes the sections it has when it is reached and the run is partial.
-  maxMinutes Int     @default(20) @map("max_minutes")
-
   /// Why the scheduler paused it: set with state paused_owner_disabled, cleared when an admin transfers the owner.
   pausedReason String? @map("paused_reason")
 
@@ -749,6 +746,7 @@ model BasReportRun {
   startedById String?   @map("started_by_id") @db.Uuid
   startedBy   Employee? @relation("BasReportRunStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
 
+  /// The module's safety ceiling in dollars as it stood when the run executed (stamped at queue time, re-read when the worker claims it). Not a per-report setting since 2026-11-12.
   budgetUsd    Decimal @map("budget_usd") @db.Decimal(8, 2)
   costUsd      Decimal @default(0) @map("cost_usd") @db.Decimal(10, 6)
   inputTokens  Int     @default(0) @map("input_tokens")
@@ -781,6 +779,23 @@ model BasReportRun {
   @@map("bas_report_runs")
 }
 
+/// The Reports module's one safety ceiling (2026-11-12): the most a single run may spend and the longest it may take. One row, edited by BAS module admins from the Usage page; the engine reads it for every run.
+model BasReportSettings {
+  /// Always 1: the table holds one row, held to it by a CHECK.
+  settingsId Int @id @default(1) @map("settings_id") @db.SmallInt
+
+  /// Dollars per run. A run that would pass it stops asking the model for narrative and finishes partial, saying so.
+  ceilingUsd     Decimal @default(10) @map("ceiling_usd") @db.Decimal(8, 2)
+  /// Minutes per run, 1 to 25. Past it the engine skips what is still waiting and finishes partial, saying so.
+  ceilingMinutes Int     @default(25) @map("ceiling_minutes")
+
+  updatedById String?   @map("updated_by_id") @db.Uuid
+  updatedBy   Employee? @relation("BasReportSettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("bas_report_settings")
+}
+
 /// One structured finding of a run (Reports, Phase 2). The numbers live here; the model only words them.
 model BasReportFinding {
   findingId BigInt @id @default(autoincrement()) @map("finding_id")
@@ -793,7 +808,7 @@ model BasReportFinding {
   section     String
 
   /// `equipment:<id>` or `point:<id>`: what the finding is about, as the fingerprint keys it.
-  subjectKey String @map("subject_key")
+  subjectKey  String @map("subject_key")
   /// The exact name at run time, kept after a rename or a delete.
   subjectName String @map("subject_name")
 
@@ -924,30 +939,30 @@ model CipProjectSync {
 
 /// One execution of a workflow against a project. Also the job queue: the worker claims `queued` runs
 model CipRun {
-  id            BigInt       @id @default(autoincrement())
-  workflowId    BigInt?      @map("workflow_id")
-  workflow      CipWorkflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
-  workflowName  String       @map("workflow_name")
-  projectId     BigInt       @map("project_id")
-  project       CipProject   @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  steps         Json
-  status        String       @default("queued")
-  currentStep   Int          @default(0) @map("current_step")
-  sessionId     String?      @map("session_id")
+  id           BigInt       @id @default(autoincrement())
+  workflowId   BigInt?      @map("workflow_id")
+  workflow     CipWorkflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  workflowName String       @map("workflow_name")
+  projectId    BigInt       @map("project_id")
+  project      CipProject   @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  steps        Json
+  status       String       @default("queued")
+  currentStep  Int          @default(0) @map("current_step")
+  sessionId    String?      @map("session_id")
   /// Set by Continue: what the worker resumes the session with, once
-  resumePrompt  String?      @map("resume_prompt")
-  model         String
-  budgetUsd     Decimal      @map("budget_usd") @db.Decimal(10, 2)
-  costUsd       Decimal      @default(0) @map("cost_usd") @db.Decimal(12, 6)
-  inputTokens   BigInt       @default(0) @map("input_tokens")
-  outputTokens  BigInt       @default(0) @map("output_tokens")
-  error         String?
-  startedById   String?      @map("started_by_id") @db.Uuid
-  startedBy     Employee?    @relation(fields: [startedById], references: [id], onDelete: SetNull)
-  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  startedAt     DateTime?    @map("started_at") @db.Timestamptz(3)
-  heartbeatAt   DateTime?    @map("heartbeat_at") @db.Timestamptz(3)
-  finishedAt    DateTime?    @map("finished_at") @db.Timestamptz(3)
+  resumePrompt String?      @map("resume_prompt")
+  model        String
+  budgetUsd    Decimal      @map("budget_usd") @db.Decimal(10, 2)
+  costUsd      Decimal      @default(0) @map("cost_usd") @db.Decimal(12, 6)
+  inputTokens  BigInt       @default(0) @map("input_tokens")
+  outputTokens BigInt       @default(0) @map("output_tokens")
+  error        String?
+  startedById  String?      @map("started_by_id") @db.Uuid
+  startedBy    Employee?    @relation(fields: [startedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  startedAt    DateTime?    @map("started_at") @db.Timestamptz(3)
+  heartbeatAt  DateTime?    @map("heartbeat_at") @db.Timestamptz(3)
+  finishedAt   DateTime?    @map("finished_at") @db.Timestamptz(3)
 
   events      CipRunEvent[]
   checkpoints CipRunCheckpoint[]
@@ -993,11 +1008,11 @@ model CipRunCheckpoint {
 
 /// The Agent SDK session transcript, mirrored here so a paused run can resume in a fresh container
 model CipRunTranscript {
-  id        BigInt @id @default(autoincrement())
-  runId     BigInt @map("run_id")
-  run       CipRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  sessionId String @map("session_id")
-  subpath   String @default("")
+  id        BigInt  @id @default(autoincrement())
+  runId     BigInt  @map("run_id")
+  run       CipRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  sessionId String  @map("session_id")
+  subpath   String  @default("")
   entryUuid String? @map("entry_uuid")
   entry     Json
 

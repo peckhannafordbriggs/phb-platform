@@ -3209,3 +3209,83 @@ declared content type and an SVG attachment opened directly runs script in
 the platform's origin. Drop the `cid:` test on the body and the mail filter's
 banner icons go back to dashed boxes on every inbound message, because
 Exchange reports those messages as having no attachments.
+## 81 · A report's questions are a checklist, a preset is a label, and the only cap is the module's
+
+**What I did (2026-11-12).** The editor's Questions section keeps its
+segmented control - *Standard weekly*, *Daily critical-site*, *Custom* - and
+makes each tab a checklist over ONE selection. A preset's tab lists that
+preset's questions grouped by section, each with a box ticked from the
+shared set, with its own *Select all* and *Clear* that act on that tab's
+questions only; Daily is a subset of Standard, so a tick on one shows on the
+other, and switching tabs changes nothing. *Custom* lists My questions with
+boxes, the custom questions on this report with a *save for reuse* tick,
+and the box to type one. The count at the right of the tab row is the whole
+set and *Show selected* lists it in report order. The selection is saved
+whole with the report and stored in one order - shared in library order,
+then the owner's own, then typed. `preset_key` stays on the definition as a
+label of the preset whose *Select all* was last used, kept while the shared
+selection still matches that set and cleared by the service the moment it
+does not; it restricts nothing, and the `preset_locked` refusal and the
+per-question add / remove / reorder routes are gone. The per-report cost
+budget and time cap are gone too: one row, `bas_report_settings`, holds the
+module's safety ceiling - $10.00 and 25 minutes per run by default - edited
+by BAS module admins from the Usage page (Reports → Usage, or Settings →
+Usage, the same view at a second route under a Settings bar drawn like
+the Reports bar, both as data on one shared shape) and read by the engine
+for every run; the two definition columns are dropped and the create / update APIs
+refuse the keys with 400. The Usage page itself was a Phase 1 placeholder
+that said *There have been no runs* without asking; it now reads
+`bas_report_runs` on the same components as Cost Intelligence's *Usage &
+cost*, which moved to `components/ui/Usage.tsx` for both modules to share.
+
+**Why.** Phase 1 made the presets locks because the spec's twenty questions
+are meant to compare week to week and building to building, and a lock
+seemed the way to keep them whole. In use the lock was the obstacle: the
+first real request was "the standard weekly plus two questions of mine",
+and the only route to it was clearing the preset, losing the label, and
+adding questions one call at a time on a saved draft. A checklist gives the
+same twenty in the same order with one click, and the label survives
+exactly as long as it is true - the service judges the shared selection
+against the preset's set on every save, so the Scheduled list's *Standard
+weekly health report* under a report is a fact about its questions, not a
+memory of a button. Custom questions do not count against the match, on
+purpose: they are what the person added to the standard, not a departure
+from it. *Select all* is not a preset click and earns no label, for the
+same reason - the label says what was chosen, not what happens to coincide.
+
+The first cut that day was a flat list of all twenty with four buttons
+above it. It was reversed the same day for the three tabs, because the two
+named reports are things people talk about by name - "the standard weekly",
+"the daily" - and a tab shows each as the report it is, six or twenty
+questions under its own name, where a flat list shows one undifferentiated
+twenty and makes the presets into buttons. What survived the reversal is
+the part that matters: one selection behind every tab, so the tabs are
+views and never modes, and nothing is lost by looking.
+
+The per-report budget asked every author to decide a dollar figure they had
+no basis for, and a report's author is not the person who pays the bill.
+What the module needs is one ceiling no run may pass, set by the people who
+see the spend - which is why it lives on the Usage page, beside the figures
+it bounds, and nowhere else. The ceiling is read when a run executes, not
+when it was queued, and stamped on the run so the record says what applied.
+
+The placeholder was the honest page on 10 November and a false one by the
+12th; the lesson is the Projects-cards one again: a screen that reports a
+number must read it. The Usage service carries the same joinless count the
+other BAS lists do, and the page goes red when the tallies and the count
+disagree.
+
+**What breaks if you undo it.** Put the lock back and the first mixed
+report is impossible again. Let the client set `preset_key` and the label
+becomes a memory. Move the ceiling back onto the definition and every
+author decides a number for the company's bill; drop the 400 and an old
+editor believes it set a cap it did not. Read the ceiling at queue time and
+an admin's change waits an unknown time to apply. Replace the Usage query
+with a placeholder and the page lies within a day.
+
+`lib/modules/bas/reports/service.ts` (`resolveSelection`, `setSafetyCeiling`),
+`lib/modules/bas/reports/ceiling.ts`, `lib/modules/bas/reports/usage.ts`,
+`prisma/migrations/20261112150000_bas_reports_safety_ceiling/`;
+`tests/bas-reports-routes.test.ts`, `tests/bas-reports-usage.test.ts`,
+`tests/bas-reports-ui.test.tsx`; `runbook.md` → *Reports: the safety
+ceiling*, *The editor's Questions section is a checklist*.

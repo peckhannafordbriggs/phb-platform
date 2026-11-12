@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ANALYSIS_WINDOWS, MAX_INTERVAL_DAYS } from "@/lib/modules/bas/reports/schedule";
 import { EMAIL_SHAPE } from "@/lib/modules/bas/reports/recipients";
+import { MAX_CEILING_MINUTES, MAX_CEILING_USD } from "@/lib/modules/bas/reports/ceiling";
 
 /**
  * What the Reports screens may send (Phase 1).
@@ -68,27 +69,46 @@ export const scheduleSchema = z.discriminatedUnion("kind", [
 const analysisWindow = z.enum(ANALYSIS_WINDOWS);
 const presetKey = z.enum(["health_weekly", "health_daily"]);
 
-/**
- * Budget in dollars, to the cent. Capped well above anything a single run
- * should cost: a cap exists so that a runaway run stops, and a cap of a
- * thousand dollars is one that never will.
- */
-const budgetUsd = z
-  .number()
-  .positive("The budget must be more than zero.")
-  .max(1000, "A per-run budget above $1,000 is not a cap.")
-  .multipleOf(0.01, "Enter whole cents.");
+const questionText = z
+  .string()
+  .trim()
+  .min(1, "Type the question.")
+  .max(1000, "Questions are limited to 1,000 characters.");
 
 /**
- * The wall-clock cap on one run, in minutes (Phase 3). Bounded at 25 so the
- * worker job's 30-minute replica timeout is always above it with room for
- * the worker's own drain window; the database CHECK is the same range.
+ * One question in a report's selection (2026-11-12). Three kinds, each
+ * naming exactly what it needs. `saveToLibrary` on an inline question also
+ * saves the text to the viewer's personal library and stores the question
+ * as a personal one, so it is offered under My questions next time.
  */
-const maxMinutes = z
-  .number()
-  .int("Enter whole minutes.")
-  .min(1, "The time cap must be at least one minute.")
-  .max(25, "The time cap cannot be more than 25 minutes.");
+export const questionSelectionItemSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("library"), libraryQuestionId: bigintText }).strict(),
+  z.object({ kind: z.literal("personal"), personalQuestionId: bigintText }).strict(),
+  z
+    .object({
+      kind: z.literal("inline"),
+      text: questionText,
+      saveToLibrary: z.boolean().optional(),
+    })
+    .strict(),
+]);
+
+/**
+ * The whole selection, as the editor's checklist holds it. The service
+ * stores it in its canonical order - shared questions in library order,
+ * then the viewer's own, then typed ones - whatever order it arrives in.
+ */
+export const questionSelectionSchema = z.array(questionSelectionItemSchema).max(200);
+
+/**
+ * The two per-report caps were removed on 2026-11-12 in favour of the
+ * module's safety ceiling. A client still sending them is an old build of
+ * the editor; it is answered 400 with this sentence rather than having the
+ * keys dropped on the floor, so the mismatch is seen.
+ */
+export const REMOVED_LIMIT_KEYS = ["budgetUsd", "maxMinutes"] as const;
+export const REMOVED_LIMITS_MESSAGE =
+  "Per-report limits were removed on 2026-11-12. The module's safety ceiling on the Usage page applies to every run; do not send budgetUsd or maxMinutes.";
 
 export const createReportSchema = z
   .object({
@@ -96,20 +116,21 @@ export const createReportSchema = z
     description: optionalText(2000),
     siteId: bigintText,
     stationIds: z.array(bigintText).max(200).optional(),
+    /** The preset last clicked in the editor, kept as a label only while the selection matches it. */
     presetKey: presetKey.nullable().optional(),
     analysisWindow: analysisWindow.optional(),
     schedule: scheduleSchema,
     timeOfDay,
-    budgetUsd: budgetUsd.optional(),
-    maxMinutes: maxMinutes.optional(),
+    questions: questionSelectionSchema.optional(),
   })
   .strict();
 
 /**
  * Edit carries only what changes. A key ABSENT leaves the field alone; a key
- * present with null clears what can be cleared (description, the preset).
- * `schedule` and `timeOfDay` travel together or not at all: a new cadence
- * without its time is half a schedule.
+ * present with null clears what can be cleared (description, the preset
+ * label). `schedule` and `timeOfDay` travel together or not at all: a new
+ * cadence without its time is half a schedule. `questions` present replaces
+ * the whole selection.
  */
 export const updateReportSchema = z
   .object({
@@ -121,8 +142,7 @@ export const updateReportSchema = z
     analysisWindow: analysisWindow.optional(),
     schedule: scheduleSchema.optional(),
     timeOfDay: timeOfDay.optional(),
-    budgetUsd: budgetUsd.optional(),
-    maxMinutes: maxMinutes.optional(),
+    questions: questionSelectionSchema.optional(),
   })
   .strict()
   .refine(
@@ -139,36 +159,33 @@ export const transferOwnerSchema = z
   .object({ ownerEmployeeId: z.string().uuid("That is not an employee id.") })
   .strict();
 
-const questionText = z
-  .string()
-  .trim()
-  .min(1, "Type the question.")
-  .max(1000, "Questions are limited to 1,000 characters.");
+export const personalQuestionSchema = z.object({ text: questionText }).strict();
 
 /**
- * Adding one question. Three kinds, each naming exactly what it needs.
- * `saveToLibrary` on an inline question also saves the text to the viewer's
- * personal library and stores the question as a personal one.
+ * The module's safety ceiling (2026-11-12), either half or both. Dollars
+ * to the cent, bounded as the database CHECK is; minutes bounded at 25 so
+ * the worker job's 30-minute replica timeout is always above it with room
+ * for the worker's own drain window.
  */
-export const addReportQuestionSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("library"), libraryQuestionId: bigintText }).strict(),
-  z.object({ kind: z.literal("personal"), personalQuestionId: bigintText }).strict(),
-  z
-    .object({
-      kind: z.literal("inline"),
-      text: questionText,
-      saveToLibrary: z.boolean().optional(),
-    })
-    .strict(),
-]);
-
-export const reorderReportQuestionsSchema = z
+export const safetyCeilingSchema = z
   .object({
-    questionIds: z.array(bigintText).min(1).max(200),
+    ceilingUsd: z
+      .number()
+      .positive("The ceiling must be more than zero.")
+      .max(MAX_CEILING_USD, "A ceiling above $1,000 is not a ceiling.")
+      .multipleOf(0.01, "Enter whole cents.")
+      .optional(),
+    ceilingMinutes: z
+      .number()
+      .int("Enter whole minutes.")
+      .min(1, "The time cap must be at least one minute.")
+      .max(MAX_CEILING_MINUTES, "The time cap cannot be more than 25 minutes.")
+      .optional(),
   })
-  .strict();
-
-export const personalQuestionSchema = z.object({ text: questionText }).strict();
+  .strict()
+  .refine((value) => value.ceilingUsd !== undefined || value.ceilingMinutes !== undefined, {
+    message: "Send the ceiling in dollars, in minutes, or both.",
+  });
 
 /**
  * Adding a recipient. `confirmed` is the warn-and-confirm step for an
@@ -192,8 +209,9 @@ export const addRecipientSchema = z
 export type CreateReportInput = z.infer<typeof createReportSchema>;
 export type UpdateReportInput = z.infer<typeof updateReportSchema>;
 export type ReportStateAction = z.infer<typeof reportStateActionSchema>["action"];
-export type AddReportQuestionInput = z.infer<typeof addReportQuestionSchema>;
-export type ReorderReportQuestionsInput = z.infer<typeof reorderReportQuestionsSchema>;
+export type QuestionSelectionItem = z.infer<typeof questionSelectionItemSchema>;
+export type QuestionSelection = z.infer<typeof questionSelectionSchema>;
 export type PersonalQuestionInput = z.infer<typeof personalQuestionSchema>;
+export type SafetyCeilingInput = z.infer<typeof safetyCeilingSchema>;
 export type AddRecipientInput = z.infer<typeof addRecipientSchema>;
 export type TransferOwnerInput = z.infer<typeof transferOwnerSchema>;

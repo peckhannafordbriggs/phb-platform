@@ -12,7 +12,7 @@ export function ModulePlaceholder({
   return (
     <div
       className="dashboard-ground -mx-8 -my-8 px-8 py-8"
-      style={{ ...moduleAccentStyle(moduleKey), minHeight: "100vh" }}
+      style={moduleAccentStyle(moduleKey)}
     >
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl flex-col">
         <ModuleHeader moduleKey={moduleKey} title={title} />

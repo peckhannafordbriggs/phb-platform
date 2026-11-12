@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { Prisma } from "@/lib/generated/prisma/client";
+import { readSafetyCeiling } from "@/lib/modules/bas/reports/ceiling-read";
 import { disconnectDb } from "./db";
 import { createBasFixture, expectRejection, inRollback, type Tx } from "./bas-fixture";
 
@@ -35,7 +36,6 @@ async function definition(tx: Tx, siteId: bigint, ownerId: string, over: Record<
       scheduleKind: "weekly",
       scheduleParams: { weekdays: [1] },
       timeOfDay: "06:00",
-      budgetUsd: new Prisma.Decimal("2.00"),
       ...over,
     },
   });
@@ -61,10 +61,7 @@ describe("bas_report_definitions", () => {
       { constraint: "bas_report_definitions_state_check", over: { state: "running" } },
       // The one that matters most: active means scheduled, and scheduled means a next run.
       { constraint: "bas_report_definitions_active_has_next_run", over: { state: "active", nextRunAt: null } },
-      { constraint: "bas_report_definitions_budget_positive", over: { budgetUsd: new Prisma.Decimal("0") } },
-      // Phase 3: the time cap's range, and a pause reason only in the state the scheduler pauses into.
-      { constraint: "bas_report_definitions_max_minutes_range", over: { maxMinutes: 0 } },
-      { constraint: "bas_report_definitions_max_minutes_range", over: { maxMinutes: 26 } },
+      // Phase 3: a pause reason only in the state the scheduler pauses into.
       { constraint: "bas_report_definitions_paused_reason_matches_state", over: { pausedReason: "owner disabled" } },
     ];
     for (const c of cases) {
@@ -85,6 +82,45 @@ describe("bas_report_definitions", () => {
       await tx.$executeRawUnsafe(`UPDATE bas_report_definitions SET station_ids = NULL WHERE report_id = ${d.reportId}`);
     });
     expect(error.message).toContain("bas_report_definitions_station_ids_not_null");
+  });
+});
+
+describe("bas_report_settings", () => {
+  it("holds one row, bounded both ways, and reads as the defaults when the row is absent", async () => {
+    // The test suite's truncation of employees CASCADEs through updated_by_id
+    // and can take the migration's row with it, so the row is made here.
+    const seeded = await expectRejection(async (tx) => {
+      await tx.basReportSettings.upsert({ where: { settingsId: 1 }, create: { settingsId: 1 }, update: {} });
+      await tx.basReportSettings.create({ data: { settingsId: 2 } });
+    });
+    expect(seeded.message).toContain("bas_report_settings_single_row");
+
+    const usd = await expectRejection(async (tx) => {
+      await tx.basReportSettings.upsert({ where: { settingsId: 1 }, create: { settingsId: 1, ceilingUsd: new Prisma.Decimal("0") }, update: { ceilingUsd: new Prisma.Decimal("0") } });
+    });
+    expect(usd.message).toContain("bas_report_settings_ceiling_usd_range");
+    const tooMuch = await expectRejection(async (tx) => {
+      await tx.basReportSettings.upsert({ where: { settingsId: 1 }, create: { settingsId: 1, ceilingUsd: new Prisma.Decimal("1000.01") }, update: { ceilingUsd: new Prisma.Decimal("1000.01") } });
+    });
+    expect(tooMuch.message).toContain("bas_report_settings_ceiling_usd_range");
+    for (const minutes of [0, 26]) {
+      const error = await expectRejection(async (tx) => {
+        await tx.basReportSettings.upsert({ where: { settingsId: 1 }, create: { settingsId: 1, ceilingMinutes: minutes }, update: { ceilingMinutes: minutes } });
+      });
+      expect(error.message, String(minutes)).toContain("bas_report_settings_ceiling_minutes_range");
+    }
+
+    await inRollback(async (tx) => {
+      const row = await tx.basReportSettings.upsert({ where: { settingsId: 1 }, create: { settingsId: 1 }, update: {} });
+      expect(Number(row.ceilingUsd)).toBe(10);
+      expect(row.ceilingMinutes).toBe(25);
+      await tx.basReportSettings.delete({ where: { settingsId: 1 } });
+      expect(await readSafetyCeiling(tx)).toMatchObject({ usd: 10, minutes: 25, updatedAt: null, updatedBy: null });
+      // It is platform configuration: the model's dictionary never mentions it.
+      const described = await tx.$queryRaw<Array<{ n: number }>>`
+        SELECT count(*)::int AS n FROM bas_v_data_dictionary WHERE object_name = 'bas_report_settings'`;
+      expect(described[0]?.n).toBe(0);
+    });
   });
 });
 

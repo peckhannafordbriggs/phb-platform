@@ -3,14 +3,16 @@
 **Date:** 10 November 2026 · **Status:** plan for approval, nothing built
 **Inputs:** Jim's "BAS Health Report: Build Spec" (27 Oct 2026); the requirements brief; a read of `main` at `d8e28e7` (10 Nov); the clarifying answers recorded in §A.
 
+**Revised 12 November 2026 (§A, §C):** the presets are no longer locked - the editor's Questions section is a checklist, a preset is a button that ticks a set, and `preset_key` is a label; the per-report cost budget and time cap are gone in favour of one module-level safety ceiling on the Usage page; and the Usage page mirrors Cost Intelligence's *Usage & cost*. Where §B, §D or §F still say "budget_usd" on a definition, "locked", or "Limits", §A and §C are the current word.
+
 ---
 
 ## A. Decisions made in the clarifying round
 
 | Topic | Decision |
 |---|---|
-| Standard report | **Locked preset.** Jim's 20 questions, fixed order, fixed template, selectable as one unit; not editable. Variations are custom reports. |
-| Daily critical-site preset | **Ships in MVP** as a second locked preset: Summary, Space Comfort, Data Health. |
+| Standard report | **A preset button, not a lock** (revised 12 Nov). The editor's Questions section lists every enabled shared question as a checklist, grouped by section; *Standard weekly* ticks Jim's 20 and unticks the other shared questions, and the person can tick or untick anything after. `preset_key` is kept on the definition as a label of which preset was last clicked, cleared by the service as soon as the shared selection no longer matches it; it restricts nothing. The report template is unchanged. |
+| Daily critical-site preset | **Ships in MVP** as a second preset button: Summary, Space Comfort, Data Health. Same rules. |
 | Scope | **Per building by default**, with an optional station subset (one JACE, or a chosen group of JACEs) for buildings with many stations. |
 | Analysis engine | **Code computes, AI narrates.** Each predefined question is an analysis function (SQL/TypeScript keyed by equipment type and point role) returning structured findings with actual / expected / duration. The model writes only the status sentence, likely cause and recommended action. Custom questions run through the existing Analyze planner in batch mode. |
 | Occupancy | **Trend an occupancy point per station** where possible (role `occupancy_status`); **fall back to a per-building manual occupied-hours setting** when none is trended. The report states which source it used. |
@@ -21,9 +23,9 @@
 | Schedule | Daily / every N days / weekly on chosen weekdays / monthly; time of day in the **building's time zone**; analysis window from a fixed list (24 h, 3 d, 7 d, 14 d, 30 d) chosen independently. **Missed run = run once on the next tick**, never backfill. |
 | Visibility | **Owner + BAS module admins.** Others see only their own reports. Recipients need no platform access. |
 | Owner disabled | **Report pauses**; a module admin reassigns the owner, which resumes it. |
-| Limits | **Per-run cost and wall-clock budget** (pattern copied from Cost Intelligence's `cip_runs.budget_usd / cost_usd / tokens`); runs that hit the cap finish with what they have and say so. **Reports kept indefinitely.** |
-| Library | 20 seeded predefined questions; **users can save custom questions to a personal library**; **module admins can promote questions to the shared library** — with the caveat below. |
-| Layout | Sub-tabs inside Reports: **Reports** (list + create/edit), **Generated** (history), **Library** (predefined + personal questions), **Usage** (cost and time per run, like the Cost Intelligence usage view). |
+| Limits | **One module-level safety ceiling** (revised 12 Nov): $10.00 and 25 minutes per run by default, one row in `bas_report_settings`, editable only by BAS module admins from the *Safety ceiling* card at the bottom of the Usage page; the engine reads it for every run. A run that reaches either half finishes partial and says so. No per-report budget or time cap: the editor's Limits section and the definition's `budget_usd` / `max_minutes` columns were removed, and the create/update APIs refuse those keys with 400. `bas_report_runs.budget_usd` stays as the ceiling in force when the run executed. **Reports kept indefinitely.** |
+| Library | 20 seeded predefined questions; **users can save custom questions to a personal library** - from the editor itself, with a *save for reuse* tick on a custom question, so nobody has to visit the Questions page to build a report; **module admins can promote questions to the shared library** — with the caveat below. |
+| Layout | Sub-tabs inside Reports: **Reports** (list + create/edit), **Generated** (history), **Library** (predefined + personal questions), **Usage** (cost and time per run, on the same components as the Cost Intelligence usage view, with the module's safety ceiling at the bottom). |
 | Validation sites | Build and test on the office building first; hydronic sections validated when the first remote building (Tosi/Linux project) is collected. |
 
 **Caveat on admin-added library questions.** A question answered by an analysis function is code; an admin cannot add one through a form. What an admin *can* add is a shared, planner-answered question (the same mechanism as a custom question) with its applies-to and required-roles metadata. The library therefore has two kinds of predefined question: **computed** (the seeded 20, code) and **planner** (admin- or user-written, answered by the Analyze planner). The UI shows which kind each is.
@@ -51,20 +53,21 @@ Out of MVP scope (recorded, not forgotten): custom cron patterns; free-form anal
 
 **Reports.** Table of reports the viewer may see: name, building (+ stations), schedule in plain words ("Every Monday 06:00 ET · last 7 days"), questions count, next run, last run with status chip, recipient count, state (Active / Paused / Paused — owner disabled). Row actions: View, Edit, Run now, Pause/Resume, Delete, History. "New report" opens the editor.
 
-**Editor** (one page with sections, not a six-step wizard; saves as draft until activated):
+**Editor** (one page with sections, not a six-step wizard; saves as draft until activated; revised 12 Nov):
 1. *Details* — name, description, building, station subset (default all).
-2. *Questions* — two starting buttons: "Standard weekly health report (locked)" / "Daily critical-site report (locked)" / "Start empty". For custom reports: library browser grouped by section with a *computed* or *planner* badge and the applies-to equipment; search; add; a text box to write a custom question with "Save to my library" toggle; drag to reorder; remove.
+2. *Questions* — the segmented control with three tabs, *Standard weekly* / *Daily critical-site* / *Custom*, each a **checklist** over ONE selection shared across the tabs, visible on a new report before any save. A preset's tab lists its questions grouped by section with a checkbox each (number, text, "section · computed/planner · applies to") and its own *Select all* and *Clear*, which act on that tab's questions only; Daily is a subset of Standard, so a question ticked on one shows ticked on the other, and switching tabs never clears anything. *Custom* lists My questions with checkboxes, the custom questions on this report with a *save for reuse* tick on each, and the text box to type one (this report only by default). A running count at the right of the tab row - "12 questions ticked" - with a *Show selected* toggle that lists the whole selection in order. Mixing is the point: all 20 standard questions plus two custom ones is one report. Order is library order for shared, then My questions, then custom; there is no drag-to-reorder. Saving writes `bas_report_questions` whole. A module admin editing somebody else's report keeps the owner's own questions and types any of theirs in.
 3. *Analysis window* — 24 h / 3 d / 7 d / 14 d / 30 d.
 4. *Schedule* — frequency (daily, every N days, weekly with weekday picker, monthly on a day), time of day, shown in the building's time zone with the UTC equivalent.
 5. *Recipients* — owner shown first, locked, labelled "Report owner · required"; add addresses; external addresses trigger the warn-and-confirm dialog and show an "external" chip.
-6. *Limits* — per-run cost budget (default from module settings), with the building's expected cost shown after the first run.
-7. *Review and activate* — summary card; "Save as draft" or "Activate".
+6. *Review and activate* — summary card ("22 questions · Standard weekly health report + 2 custom"); "Save as draft" or "Activate". No *Limits* section: the module's safety ceiling applies to every run.
 
 **Generated.** All runs the viewer may see, newest first: report, period, status (Queued / Running / Succeeded / Partial — budget or time cap / Failed), duration, cost, delivery (3 of 3 sent, 1 failed), actions: Open, Download PDF, Resend, Re-run. Opening a run shows the rendered report (same HTML as the PDF) with the Not Monitored list and the New / Still open / Cleared markers.
 
-**Library.** Shared library (section, question, kind, applies to, required roles, enabled) — read-only for users, editable for module admins (planner-kind only); personal library below it (edit, delete, "used in N reports").
+**Library.** Shared library (section, question, kind, applies to, required roles, enabled) — read-only for users, editable for module admins (planner-kind only); personal library below it (edit, delete, "used in N reports"), with its *Add question* box. The read-only overview; a report's questions are chosen in the editor.
 
-**Usage.** Runs, tokens, spend and durations over 7 / 30 / 90 days, by report and by building, mirroring `usage-view.tsx` in Cost Intelligence; the module-level default budget lives here for module admins.
+**Usage** (revised 12 Nov). The same page as Cost Intelligence's *Usage & cost*, on the same shared components (`components/ui/Usage.tsx`): a 7 / 30 / 90 days toggle; tiles for Spend, Runs, Average per run, Tokens and "<Month> so far"; the spend-per-day bar chart; a segmented *By report / By building* table with runs, tokens, spend, per run and the proportion bar; and a *Most expensive runs* table (run, report, building, status chip, started, spend) whose rows open the run. Every figure is over the finished runs the viewer may see (owner, or every report for a module admin), counted on the day they finished in New York. At the bottom, the **Safety ceiling** card: the module's one ceiling, shown to everyone and editable by BAS module admins, with the explanation that a run which reaches it finishes partial and says so. Colours are the BAS module's. The same view is also *Settings → Usage* (one component, two routes), so the figures and the ceiling are reachable from the module's admin surface; the Reports bar is unchanged.
+
+**Settings tab** swaps the module bar for a bar of its own, as Reports does: *Back · General · Usage* - *General* the screen Settings always was, *Usage* the view above. Both bars are data on one shared shape.
 
 **Settings tab (existing) gains** a per-building *Occupied hours* field (weekday schedule) used as the occupancy fallback, and shows per station whether an `occupancy_status` point is trended.
 

@@ -11,7 +11,7 @@ vi.mock("@/auth", () => ({ auth: vi.fn() }));
 import { auth } from "@/auth";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { resetBasAvailabilityCache } from "@/lib/modules/bas/route-helpers";
-import { REPORT_PRESETS } from "@/lib/modules/bas/reports/presets";
+import { REPORT_PRESETS, type PresetKey } from "@/lib/modules/bas/reports/presets";
 import { computeNextRun, localParts, type ScheduleSpec } from "@/lib/modules/bas/reports/schedule";
 import type {
   LibraryQuestionView,
@@ -20,6 +20,8 @@ import type {
   ReportDetail,
   ReportsList,
 } from "@/lib/modules/bas/reports/types";
+import type { QuestionSelection } from "@/lib/validation/bas-reports";
+import { REMOVED_LIMITS_MESSAGE } from "@/lib/validation/bas-reports";
 import { seedBasReportLibrary } from "@/prisma/bas-report-library";
 import { GET as listRoute, POST as createRoute } from "@/app/api/modules/bas/reports/route";
 import { GET as optionsRoute } from "@/app/api/modules/bas/reports/options/route";
@@ -38,11 +40,6 @@ import {
   PATCH as patchRoute,
 } from "@/app/api/modules/bas/reports/[reportId]/route";
 import { POST as stateRoute } from "@/app/api/modules/bas/reports/[reportId]/state/route";
-import {
-  POST as addQuestionRoute,
-  PUT as reorderRoute,
-} from "@/app/api/modules/bas/reports/[reportId]/questions/route";
-import { DELETE as removeQuestionRoute } from "@/app/api/modules/bas/reports/[reportId]/questions/[questionId]/route";
 import { POST as addRecipientRoute } from "@/app/api/modules/bas/reports/[reportId]/recipients/route";
 import { DELETE as removeRecipientRoute } from "@/app/api/modules/bas/reports/[reportId]/recipients/[email]/route";
 import {
@@ -61,10 +58,16 @@ import {
  *
  * What the phase's done-when names, each as a test: the owner cannot be added
  * or removed as a recipient; an external address needs confirmation and is
- * audited as external; the two presets expand in fixed order and are locked;
- * a non-owner non-admin gets 404 and an admin gets 200; activation computes
- * the next run in the building's zone; and every route under
- * app/api/modules/bas/reports goes through withBas.
+ * audited as external; a non-owner non-admin gets 404 and an admin gets 200;
+ * activation computes the next run in the building's zone; and every route
+ * under app/api/modules/bas/reports goes through withBas.
+ *
+ * Since 2026-11-12 the questions are a SELECTION sent whole on create and
+ * update (the editor's checklist), stored in library order, then the
+ * owner's own, then typed; a preset is a label kept while the shared part
+ * matches it; nothing is locked; and the two per-report limits are refused
+ * with 400 so an old client fails loudly. A report made under Phase 1's
+ * preset rows round-trips through the new save to the same question set.
  */
 
 const authMock = vi.mocked(auth);
@@ -90,7 +93,6 @@ function json(body: unknown, method = "POST"): Request {
 const bare = (method = "GET") => new Request("http://localhost/api/modules/bas/reports", { method });
 
 const report = (reportId: string) => ({ params: Promise.resolve({ reportId }) });
-const question = (reportId: string, questionId: string) => ({ params: Promise.resolve({ reportId, questionId }) });
 const recipient = (reportId: string, email: string) => ({
   params: Promise.resolve({ reportId, email: encodeURIComponent(email) }),
 });
@@ -101,6 +103,9 @@ async function body<T = Record<string, unknown>>(response: Response): Promise<T>
 }
 async function errorCode(response: Response): Promise<string | undefined> {
   return ((await response.json()) as { error?: { code?: string } }).error?.code;
+}
+async function errorMessage(response: Response): Promise<string | undefined> {
+  return ((await response.json()) as { error?: { message?: string } }).error?.message;
 }
 
 const WEEKLY_MONDAY: ScheduleSpec = { kind: "weekly", weekdays: [1] };
@@ -177,6 +182,24 @@ async function detail(reportId: string): Promise<ReportDetail> {
   const response = await getRoute(bare(), report(reportId));
   expect(response.status).toBe(200);
   return body<ReportDetail>(response);
+}
+
+/** The shared library's rows, read from the database so no test's signed-in state is disturbed. */
+async function library(): Promise<Array<Pick<LibraryQuestionView, "libraryQuestionId" | "key" | "text">>> {
+  const rows = await testDb.basLibraryQuestion.findMany({ select: { libraryQuestionId: true, key: true, text: true }, orderBy: { position: "asc" } });
+  return rows.map((r) => ({ libraryQuestionId: r.libraryQuestionId.toString(), key: r.key, text: r.text }));
+}
+
+/** The selection a preset button produces: its library rows, ticked. */
+async function presetSelection(key: PresetKey): Promise<QuestionSelection> {
+  const lib = await library();
+  const wanted = new Set(REPORT_PRESETS[key].questionKeys);
+  return lib.filter((q) => wanted.has(q.key)).map((q) => ({ kind: "library" as const, libraryQuestionId: q.libraryQuestionId }));
+}
+
+/** Save a selection on a report through the update route, as the editor's Save does. */
+async function saveQuestions(reportId: string, questions: QuestionSelection, presetKey?: PresetKey | null): Promise<Response> {
+  return patchRoute(json({ questions, ...(presetKey === undefined ? {} : { presetKey }) }, "PATCH"), report(reportId));
 }
 
 async function auditRows(action: string) {
@@ -256,9 +279,7 @@ describe("who may see a report", () => {
       patchRoute(json({ name: "ZZTEST stolen" }, "PATCH"), report(reportId)),
       deleteRoute(bare("DELETE"), report(reportId)),
       stateRoute(json({ action: "activate" }), report(reportId)),
-      addQuestionRoute(json({ kind: "inline", text: "sneaky" }), report(reportId)),
-      reorderRoute(json({ questionIds: ["1"] }, "PUT"), report(reportId)),
-      removeQuestionRoute(bare("DELETE"), question(reportId, "1")),
+      patchRoute(json({ questions: [{ kind: "inline", text: "sneaky" }] }, "PATCH"), report(reportId)),
       addRecipientRoute(json({ email: "zztest.other@phb1899.com" }), report(reportId)),
       removeRecipientRoute(bare("DELETE"), recipient(reportId, "zztest.other@phb1899.com")),
     ]);
@@ -445,12 +466,14 @@ describe("external recipients", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Presets: fixed order, locked
+// Presets: buttons that tick a set, and a label that follows the selection
 // ---------------------------------------------------------------------------
 
-describe("the locked presets", () => {
-  it("health_weekly expands to the twenty in position order, and its questions cannot be edited", async () => {
-    const reportId = await createDraft({ presetKey: "health_weekly" });
+describe("the presets are labels, not locks", () => {
+  it("health_weekly sent as a selection stores the twenty in position order and keeps the label; untick one and the label goes, tick it back and it returns", async () => {
+    const weekly = await presetSelection("health_weekly");
+    // The editor's order is irrelevant: the server stores library order.
+    const reportId = await createDraft({ questions: [...weekly].reverse(), presetKey: "health_weekly" });
     const d = await detail(reportId);
     expect(d.presetKey).toBe("health_weekly");
     expect(d.presetLabel).toBe("Standard weekly health report");
@@ -459,109 +482,190 @@ describe("the locked presets", () => {
     expect(d.questions.map((q) => q.position)).toEqual(Array.from({ length: 20 }, (_, i) => i));
     expect(d.questions.every((q) => q.kind === "library" && q.libraryKind === "computed")).toBe(true);
     expect(d.questions[0]).toMatchObject({ section: "summary", sectionLabel: "Summary", appliesToLabel: "All" });
+    expect((await auditRows("bas.report_created"))[0]?.metadata).toMatchObject({ presetKey: "health_weekly", questions: 20, library: 20, personal: 0, inline: 0 });
 
-    const library = await body<LibraryQuestionView[]>(await libraryRoute());
-    const q03 = library.find((q) => q.key === "q03_zone_comfort")!;
-    const first = d.questions[0]!;
+    // Untick q03: nothing is locked, and the label no longer applies.
+    const q03Id = (await library()).find((l) => l.key === "q03_zone_comfort")!.libraryQuestionId;
+    const nineteen = weekly.filter((q) => q.kind === "library" && q.libraryQuestionId !== q03Id);
+    expect((await saveQuestions(reportId, nineteen)).status).toBe(200);
+    let after = await detail(reportId);
+    expect(after.questions).toHaveLength(19);
+    expect(after.questions.map((q) => q.libraryKey)).not.toContain("q03_zone_comfort");
+    expect(after.presetKey).toBeNull();
+    expect(after.presetLabel).toBeNull();
+    const set = (await auditRows("bas.report_questions_changed")).at(-1);
+    expect(set?.metadata).toMatchObject({ change: "set", count: 19, presetKey: null, library: 19 });
+    expect((await auditRows("bas.report_updated")).at(-1)?.metadata).toMatchObject({ changes: { presetKey: { from: "health_weekly", to: null } } });
 
-    const add = await addQuestionRoute(json({ kind: "library", libraryQuestionId: q03.libraryQuestionId }), report(reportId));
-    expect(add.status).toBe(409);
-    expect(await errorCode(add)).toBe("preset_locked");
-    const inline = await addQuestionRoute(json({ kind: "inline", text: "extra" }), report(reportId));
-    expect(await errorCode(inline)).toBe("preset_locked");
-    const remove = await removeQuestionRoute(bare("DELETE"), question(reportId, first.questionId));
-    expect(await errorCode(remove)).toBe("preset_locked");
-    const reorder = await reorderRoute(
-      json({ questionIds: [...d.questions.map((q) => q.questionId)].reverse() }, "PUT"),
-      report(reportId),
-    );
-    expect(await errorCode(reorder)).toBe("preset_locked");
+    // Tick it back with the button: the label returns.
+    expect((await saveQuestions(reportId, weekly, "health_weekly")).status).toBe(200);
+    after = await detail(reportId);
+    expect(after.questions.map((q) => q.libraryKey)).toEqual([...REPORT_PRESETS.health_weekly.questionKeys]);
+    expect(after.presetKey).toBe("health_weekly");
 
-    // Unchanged, in the same order.
-    expect((await detail(reportId)).questions.map((q) => q.libraryKey)).toEqual([...REPORT_PRESETS.health_weekly.questionKeys]);
+    // The same twenty without the button (Select all) is not labelled: the label says what was clicked.
+    expect((await saveQuestions(reportId, weekly, null)).status).toBe(200);
+    expect((await detail(reportId)).presetKey).toBeNull();
+    // And a preset sent alone never changes the questions; it is stored only when the set matches.
+    expect((await patchRoute(json({ presetKey: "health_daily" }, "PATCH"), report(reportId))).status).toBe(200);
+    after = await detail(reportId);
+    expect(after.questions).toHaveLength(20);
+    expect(after.presetKey).toBeNull();
+    expect((await patchRoute(json({ presetKey: "health_weekly" }, "PATCH"), report(reportId))).status).toBe(200);
+    expect((await detail(reportId)).presetKey).toBe("health_weekly");
   });
 
-  it("health_daily is Summary, Space Comfort and Data Health; clearing the preset keeps the questions and unlocks them", async () => {
-    const reportId = await createDraft({ presetKey: "health_daily" });
+  it("health_daily is Summary, Space Comfort and Data Health; mixing in custom questions keeps the label", async () => {
+    const daily = await presetSelection("health_daily");
+    const reportId = await createDraft({ questions: daily, presetKey: "health_daily" });
     expect((await detail(reportId)).questions.map((q) => q.libraryKey)).toEqual([...REPORT_PRESETS.health_daily.questionKeys]);
+    expect((await detail(reportId)).presetLabel).toBe("Daily critical-site report");
 
-    // Switching presets replaces the set.
-    expect((await patchRoute(json({ presetKey: "health_weekly" }, "PATCH"), report(reportId))).status).toBe(200);
-    expect((await detail(reportId)).questions).toHaveLength(20);
-    const presetRows = await auditRows("bas.report_questions_changed");
-    expect(presetRows.at(-1)?.metadata).toMatchObject({ change: "preset", presetKey: "health_weekly", count: 20 });
+    // The daily set plus two of the person's own: still the daily report, with two more.
+    const mixed: QuestionSelection = [
+      { kind: "inline", text: "Did the chiller short-cycle overnight?" },
+      ...daily,
+      { kind: "inline", text: "Which VAVs were warm while occupied?", saveToLibrary: true },
+    ];
+    expect((await saveQuestions(reportId, mixed, "health_daily")).status).toBe(200);
+    const d = await detail(reportId);
+    expect(d.presetKey).toBe("health_daily");
+    expect(d.questions).toHaveLength(8);
+    expect(d.questions.map((q) => q.kind)).toEqual(["library", "library", "library", "library", "library", "library", "personal", "inline"]);
+    expect(d.questions[6]?.text).toBe("Which VAVs were warm while occupied?");
+    expect(d.questions[7]?.text).toBe("Did the chiller short-cycle overnight?");
 
-    // Clearing keeps them as a starting point and the report becomes custom.
-    expect((await patchRoute(json({ presetKey: null }, "PATCH"), report(reportId))).status).toBe(200);
-    const custom = await detail(reportId);
-    expect(custom.presetKey).toBeNull();
-    expect(custom.questions).toHaveLength(20);
-    const add = await addQuestionRoute(json({ kind: "inline", text: "and one more" }), report(reportId));
-    expect(add.status).toBe(201);
-    expect((await detail(reportId)).questions).toHaveLength(21);
+    // Switching to the weekly button replaces the shared part and leaves the custom ones.
+    const weekly = await presetSelection("health_weekly");
+    expect((await saveQuestions(reportId, [...weekly, { kind: "personal", personalQuestionId: d.questions[6]!.personalQuestionId! }, { kind: "inline", text: "Did the chiller short-cycle overnight?" }], "health_weekly")).status).toBe(200);
+    const switched = await detail(reportId);
+    expect(switched.questions).toHaveLength(22);
+    expect(switched.presetLabel).toBe("Standard weekly health report");
+    expect(switched.questions.slice(20).map((q) => q.kind)).toEqual(["personal", "inline"]);
+  });
+
+  it("a report made under Phase 1's preset rows round-trips through the new save to the same question set", async () => {
+    // What Phase 1 wrote: preset_key set, twenty library rows in the preset's order, no API in between.
+    const lib = await library();
+    const byKey = new Map(lib.map((q) => [q.key, q.libraryQuestionId]));
+    const created = await testDb.basReportDefinition.create({
+      data: {
+        ownerEmployeeId: people.owner.id,
+        name: "ZZTEST phase one",
+        siteId: nySite,
+        presetKey: "health_weekly",
+        scheduleKind: "weekly",
+        scheduleParams: { weekdays: [1] },
+        timeOfDay: "06:00",
+        questions: {
+          create: REPORT_PRESETS.health_weekly.questionKeys.map((key, position) => ({ position, kind: "library", libraryQuestionId: BigInt(byKey.get(key)!) })),
+        },
+      },
+      select: { reportId: true },
+    });
+    const reportId = created.reportId.toString();
+    signedInAs(people.owner.entraOid!);
+    const before = await detail(reportId);
+    expect(before.presetKey).toBe("health_weekly");
+    expect(before.questions.map((q) => q.libraryKey)).toEqual([...REPORT_PRESETS.health_weekly.questionKeys]);
+
+    // The editor loads the detail into its checklist and saves it unchanged.
+    const asLoaded: QuestionSelection = before.questions.map((q) => ({ kind: "library" as const, libraryQuestionId: q.libraryQuestionId! }));
+    const saved = await patchRoute(json({ name: before.name, questions: asLoaded, presetKey: before.presetKey }, "PATCH"), report(reportId));
+    expect(saved.status).toBe(200);
+    expect(await body<{ changed: boolean }>(saved)).toMatchObject({ changed: false });
+    const after = await detail(reportId);
+    expect(after.questions.map((q) => [q.libraryKey, q.position])).toEqual(before.questions.map((q) => [q.libraryKey, q.position]));
+    expect(after.questions.map((q) => q.questionId)).toEqual(before.questions.map((q) => q.questionId));
+    expect(after.presetKey).toBe("health_weekly");
+    expect(await auditRows("bas.report_questions_changed")).toEqual([]);
+    expect(await auditRows("bas.report_updated")).toEqual([]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Custom questions: library, personal, inline; reorder; remove
+// The selection: library, mine, typed; order; duplicates; whose questions
 // ---------------------------------------------------------------------------
 
-describe("custom questions", () => {
-  it("adds from the library, inline, and inline saved to the personal library; reorders; removes; refuses duplicates", async () => {
-    const reportId = await createDraft();
-    const library = await body<LibraryQuestionView[]>(await libraryRoute());
-    const q20 = library.find((q) => q.key === "q20_data_health")!;
+describe("the question selection", () => {
+  it("stores shared questions in library order, then mine, then typed; a typed one saved for reuse becomes mine; a question twice is refused", async () => {
+    const lib = await library();
+    const q20 = lib.find((q) => q.key === "q20_data_health")!;
+    const q03 = lib.find((q) => q.key === "q03_zone_comfort")!;
+    const reportId = await createDraft({
+      questions: [
+        { kind: "inline", text: "Which VAVs were warm while occupied?" },
+        { kind: "library", libraryQuestionId: q20.libraryQuestionId },
+        { kind: "inline", text: "Did the boiler cycle overnight?", saveToLibrary: true },
+        { kind: "library", libraryQuestionId: q03.libraryQuestionId },
+      ],
+    });
 
-    const a = await addQuestionRoute(json({ kind: "library", libraryQuestionId: q20.libraryQuestionId }), report(reportId));
-    expect(a.status).toBe(201);
-    const b = await addQuestionRoute(json({ kind: "inline", text: "Which VAVs were warm while occupied?" }), report(reportId));
-    expect(b.status).toBe(201);
-    const c = await addQuestionRoute(
-      json({ kind: "inline", text: "Did the boiler cycle overnight?", saveToLibrary: true }),
-      report(reportId),
-    );
-    expect(c.status).toBe(201);
-
-    let d = await detail(reportId);
-    expect(d.questions.map((q) => [q.kind, q.position])).toEqual([["library", 0], ["inline", 1], ["personal", 2]]);
-    expect(d.questions[2]?.text).toBe("Did the boiler cycle overnight?");
+    const d = await detail(reportId);
+    expect(d.questions.map((q) => [q.kind, q.position, q.libraryKey ?? q.text])).toEqual([
+      ["library", 0, "q03_zone_comfort"],
+      ["library", 1, "q20_data_health"],
+      ["personal", 2, "Did the boiler cycle overnight?"],
+      ["inline", 3, "Which VAVs were warm while occupied?"],
+    ]);
+    expect(d.presetKey).toBeNull();
 
     const mine = await body<PersonalQuestionView[]>(await listPersonalRoute());
     expect(mine.map((p) => [p.text, p.usedInReports])).toEqual([["Did the boiler cycle overnight?", 1]]);
     expect(d.questions[2]?.personalQuestionId).toBe(mine[0]!.personalQuestionId);
+    expect((await auditRows("bas.personal_question_created"))[0]?.metadata).toMatchObject({ fromReportId: reportId });
 
-    // Duplicate library question: refused.
-    const dup = await addQuestionRoute(json({ kind: "library", libraryQuestionId: q20.libraryQuestionId }), report(reportId));
+    // The same shared question twice, or the same personal one twice: refused, nothing written.
+    const dup = await saveQuestions(reportId, [
+      { kind: "library", libraryQuestionId: q20.libraryQuestionId },
+      { kind: "library", libraryQuestionId: q20.libraryQuestionId },
+    ]);
     expect(dup.status).toBe(409);
     expect(await errorCode(dup)).toBe("question_exists");
+    const dupMine = await saveQuestions(reportId, [
+      { kind: "personal", personalQuestionId: mine[0]!.personalQuestionId },
+      { kind: "personal", personalQuestionId: mine[0]!.personalQuestionId },
+    ]);
+    expect(await errorCode(dupMine)).toBe("question_exists");
+    expect((await detail(reportId)).questions).toHaveLength(4);
 
-    // Reorder: reversed.
-    const ids = d.questions.map((q) => q.questionId);
-    expect((await reorderRoute(json({ questionIds: [...ids].reverse() }, "PUT"), report(reportId))).status).toBe(200);
-    d = await detail(reportId);
-    expect(d.questions.map((q) => q.questionId)).toEqual([...ids].reverse());
-    expect(d.questions.map((q) => q.position)).toEqual([0, 1, 2]);
-
-    // A reorder that is not a permutation: refused, order unchanged.
-    const partial = await reorderRoute(json({ questionIds: ids.slice(0, 2) }, "PUT"), report(reportId));
-    expect(partial.status).toBe(422);
-    expect(await errorCode(partial)).toBe("invalid_reorder");
-
-    // Remove the first; the rest close up.
-    expect((await removeQuestionRoute(bare("DELETE"), question(reportId, d.questions[0]!.questionId))).status).toBe(200);
-    d = await detail(reportId);
-    expect(d.questions).toHaveLength(2);
-    expect(d.questions.map((q) => q.position)).toEqual([0, 1]);
-    const gone = await removeQuestionRoute(bare("DELETE"), question(reportId, "999999"));
-    expect(gone.status).toBe(404);
+    // Unticking is saving without it; the rest close up.
+    expect((await saveQuestions(reportId, [{ kind: "library", libraryQuestionId: q20.libraryQuestionId }, { kind: "personal", personalQuestionId: mine[0]!.personalQuestionId }])).status).toBe(200);
+    const fewer = await detail(reportId);
+    expect(fewer.questions.map((q) => [q.kind, q.position])).toEqual([["library", 0], ["personal", 1]]);
+    // Clearing everything is allowed on a draft; activation is what needs a question.
+    expect((await saveQuestions(reportId, [])).status).toBe(200);
+    expect((await detail(reportId)).questions).toEqual([]);
 
     const changes = await auditRows("bas.report_questions_changed");
-    expect(changes.map((r) => (r.metadata as { change: string }).change)).toEqual([
-      "added", "added", "added", "reordered", "removed",
-    ]);
+    expect(changes.map((r) => (r.metadata as { change: string; count: number }).count)).toEqual([2, 0]);
+    expect(changes.every((r) => (r.metadata as { change: string }).change === "set")).toBe(true);
+
+    // A library id that does not exist, and a disabled one, are refused by name.
+    const missing = await saveQuestions(reportId, [{ kind: "library", libraryQuestionId: "999999" }]);
+    expect(missing.status).toBe(404);
+    expect(await errorCode(missing)).toBe("library_question_not_found");
+    await testDb.basLibraryQuestion.update({ where: { libraryQuestionId: BigInt(q03.libraryQuestionId) }, data: { enabled: false } });
+    const off = await saveQuestions(reportId, [{ kind: "library", libraryQuestionId: q03.libraryQuestionId }]);
+    expect(off.status).toBe(409);
+    expect(await errorCode(off)).toBe("library_question_disabled");
   });
 
-  it("a personal question is its owner's: another person's id is not found, and an admin cannot put theirs on someone else's report", async () => {
+  it("a shared question turned off after it was saved stays on the report when saved again, and only then", async () => {
+    const lib = await library();
+    const q03 = lib.find((q) => q.key === "q03_zone_comfort")!;
+    const q20 = lib.find((q) => q.key === "q20_data_health")!;
+    const reportId = await createDraft({ questions: [{ kind: "library", libraryQuestionId: q03.libraryQuestionId }] });
+    await testDb.basLibraryQuestion.update({ where: { libraryQuestionId: BigInt(q03.libraryQuestionId) }, data: { enabled: false } });
+    // Saved with it still ticked: kept.
+    expect((await saveQuestions(reportId, [{ kind: "library", libraryQuestionId: q03.libraryQuestionId }, { kind: "library", libraryQuestionId: q20.libraryQuestionId }])).status).toBe(200);
+    expect((await detail(reportId)).questions.map((q) => q.libraryKey)).toEqual(["q03_zone_comfort", "q20_data_health"]);
+    // Unticked and saved: gone, and it cannot come back while it is off.
+    expect((await saveQuestions(reportId, [{ kind: "library", libraryQuestionId: q20.libraryQuestionId }])).status).toBe(200);
+    expect(await errorCode(await saveQuestions(reportId, [{ kind: "library", libraryQuestionId: q03.libraryQuestionId }]))).toBe("library_question_disabled");
+  });
+
+  it("a personal question is its owner's: another person's id is not found, an admin cannot put theirs on someone else's report, and an admin's save keeps the owner's", async () => {
     const reportId = await createDraft();
     // `other` saves a question; the owner cannot use it.
     signedInAs(people.other.entraOid!);
@@ -569,20 +673,62 @@ describe("custom questions", () => {
       await createPersonalRoute(json({ text: "other's question" })),
     );
     signedInAs(people.owner.entraOid!);
-    const notMine = await addQuestionRoute(json({ kind: "personal", personalQuestionId: theirs.personalQuestionId }), report(reportId));
+    const notMine = await saveQuestions(reportId, [{ kind: "personal", personalQuestionId: theirs.personalQuestionId }]);
     expect(notMine.status).toBe(404);
     expect(await errorCode(notMine)).toBe("personal_question_not_found");
+
+    // The owner puts one of their own on it.
+    const mine = await body<{ personalQuestionId: string }>(await createPersonalRoute(json({ text: "owner's question" })));
+    expect((await saveQuestions(reportId, [{ kind: "personal", personalQuestionId: mine.personalQuestionId }])).status).toBe(200);
 
     // The admin has a question of their own and works on the owner's report.
     signedInAs(people.admin.entraOid!);
     const admins = await body<{ personalQuestionId: string }>(await createPersonalRoute(json({ text: "admin's question" })));
-    const onOthers = await addQuestionRoute(json({ kind: "personal", personalQuestionId: admins.personalQuestionId }), report(reportId));
+    const onOthers = await saveQuestions(reportId, [
+      { kind: "personal", personalQuestionId: mine.personalQuestionId },
+      { kind: "personal", personalQuestionId: admins.personalQuestionId },
+    ]);
     expect(onOthers.status).toBe(409);
     expect(await errorCode(onOthers)).toBe("personal_question_not_owner");
-    const saveOnOthers = await addQuestionRoute(json({ kind: "inline", text: "x", saveToLibrary: true }), report(reportId));
+    const saveOnOthers = await saveQuestions(reportId, [{ kind: "personal", personalQuestionId: mine.personalQuestionId }, { kind: "inline", text: "x", saveToLibrary: true }]);
     expect(await errorCode(saveOnOthers)).toBe("personal_question_not_owner");
-    // Plain inline text on someone else's report is fine.
-    expect((await addQuestionRoute(json({ kind: "inline", text: "typed by the admin" }), report(reportId))).status).toBe(201);
+    // The admin's save with the owner's question still ticked, plus typed text, is fine: the owner's question is kept.
+    const lib = await library();
+    const kept = await saveQuestions(reportId, [
+      { kind: "library", libraryQuestionId: lib.find((q) => q.key === "q20_data_health")!.libraryQuestionId },
+      { kind: "personal", personalQuestionId: mine.personalQuestionId },
+      { kind: "inline", text: "typed by the admin" },
+    ]);
+    expect(kept.status).toBe(200);
+    const d = await detail(reportId);
+    expect(d.questions.map((q) => [q.kind, q.text])).toEqual([
+      ["library", lib.find((q) => q.key === "q20_data_health")!.text],
+      ["personal", "owner's question"],
+      ["inline", "typed by the admin"],
+    ]);
+    expect((await auditRows("bas.report_questions_changed")).at(-1)?.actorEmployeeId).toBe(people.admin.id);
+  });
+
+  it("refuses the removed per-report limits with 400 and a sentence saying where the ceiling went, on create and on update", async () => {
+    signedInAs(people.owner.entraOid!);
+    for (const extra of [{ budgetUsd: 2 }, { maxMinutes: 20 }, { budgetUsd: 2, maxMinutes: 20 }]) {
+      const response = await createRoute(json(baseReport(nySite, extra)));
+      expect(response.status, JSON.stringify(extra)).toBe(400);
+      expect(await errorCode(response)).toBe("limits_removed");
+    }
+    expect(await errorMessage(await createRoute(json(baseReport(nySite, { budgetUsd: 2 }))))).toBe(REMOVED_LIMITS_MESSAGE);
+    expect(await testDb.basReportDefinition.count()).toBe(0);
+
+    const reportId = await createDraft();
+    const patched = await patchRoute(json({ name: "ZZTEST renamed", maxMinutes: 5 }, "PATCH"), report(reportId));
+    expect(patched.status).toBe(400);
+    expect(await errorCode(patched)).toBe("limits_removed");
+    expect((await detail(reportId)).name).toBe("ZZTEST weekly");
+    // The options no longer offer a default for either.
+    const options = await body<Record<string, unknown>>(await optionsRoute());
+    expect(options).not.toHaveProperty("defaultBudgetUsd");
+    expect(options).not.toHaveProperty("defaultMaxMinutes");
+    expect(options).not.toHaveProperty("maxMinutesLimit");
   });
 });
 
@@ -605,8 +751,7 @@ describe("the personal library", () => {
     expect(mine[0]?.text).toBe("Is the chiller cycling?");
 
     // Used on a report: cannot be deleted.
-    const reportId = await createDraft();
-    await addQuestionRoute(json({ kind: "personal", personalQuestionId }), report(reportId));
+    const reportId = await createDraft({ questions: [{ kind: "personal", personalQuestionId }] });
     const inUse = await deletePersonalRoute(bare("DELETE"), personal(personalQuestionId));
     expect(inUse.status).toBe(409);
     expect(await errorCode(inUse)).toBe("personal_question_in_use");
@@ -619,8 +764,7 @@ describe("the personal library", () => {
 
     // Off the report, it can go.
     signedInAs(people.owner.entraOid!);
-    const q = (await detail(reportId)).questions[0]!;
-    await removeQuestionRoute(bare("DELETE"), question(reportId, q.questionId));
+    expect((await saveQuestions(reportId, [])).status).toBe(200);
     expect((await deletePersonalRoute(bare("DELETE"), personal(personalQuestionId))).status).toBe(200);
     expect(await body<PersonalQuestionView[]>(await listPersonalRoute())).toEqual([]);
     expect((await auditRows("bas.personal_question_deleted")).length).toBe(1);
@@ -638,7 +782,7 @@ describe("draft -> active <-> paused, with the next run in the building's zone",
     expect(empty.status).toBe(409);
     expect(await errorCode(empty)).toBe("report_not_ready");
 
-    await patchRoute(json({ presetKey: "health_daily" }, "PATCH"), report(reportId));
+    expect((await saveQuestions(reportId, await presetSelection("health_daily"), "health_daily")).status).toBe(200);
     const before = new Date();
     const activated = await stateRoute(json({ action: "activate" }), report(reportId));
     expect(activated.status).toBe(200);
@@ -683,7 +827,7 @@ describe("draft -> active <-> paused, with the next run in the building's zone",
   });
 
   it("changing an active report's schedule or building recomputes the next run from the local time, in the new zone", async () => {
-    const reportId = await createDraft({ presetKey: "health_daily" });
+    const reportId = await createDraft({ questions: await presetSelection("health_daily"), presetKey: "health_daily" });
     await stateRoute(json({ action: "activate" }), report(reportId));
 
     const daily18 = await patchRoute(json({ schedule: { kind: "daily" }, timeOfDay: "18:00" }, "PATCH"), report(reportId));
@@ -705,7 +849,7 @@ describe("draft -> active <-> paused, with the next run in the building's zone",
   });
 
   it("deletes a report with everything on it, and audits what went", async () => {
-    const reportId = await createDraft({ presetKey: "health_weekly" });
+    const reportId = await createDraft({ questions: await presetSelection("health_weekly"), presetKey: "health_weekly" });
     await addRecipientRoute(json({ email: "zztest.colleague@phb1899.com" }), report(reportId));
     expect((await deleteRoute(bare("DELETE"), report(reportId))).status).toBe(200);
     expect((await getRoute(bare(), report(reportId))).status).toBe(404);
@@ -738,9 +882,11 @@ describe("the Reports routes go through withBas", () => {
 
   it("finds the routes at all, and every one uses withBas - not the settings wrapper, not a guard directly", async () => {
     const files = await routeFiles();
-    // Eleven route files shipped with Phase 1. A floor, so adding one is not a
-    // chore and a walker that stopped seeing them is caught.
-    expect(files.length).toBeGreaterThanOrEqual(11);
+    // Eleven route files shipped with Phase 1; the per-question ones went on
+    // 2026-11-12 and the ceiling and usage ones came. A floor, so adding one
+    // is not a chore and a walker that stopped seeing them is caught.
+    expect(files.length).toBeGreaterThanOrEqual(13);
+    expect(files.some((f) => f.includes("questions"))).toBe(false);
     for (const file of files) {
       const source = await readFile(file, "utf8");
       expect(source, `${file} must use withBas`).toContain("withBas(");

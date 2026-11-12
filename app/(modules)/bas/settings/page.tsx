@@ -8,7 +8,9 @@ import { basTab } from "../tabs";
 export const dynamic = "force-dynamic";
 
 /**
- * Settings - the module's third tab, at /bas/settings. Read-only in B7.2.
+ * Settings - the module's last tab, at /bas/settings; General on the
+ * Settings bar the shell draws since 2026-11-12 (Back · General · Usage,
+ * app/(modules)/bas/settings/bar.ts), beside Usage. Read-only in B7.2.
  *
  * `requireModuleAdmin`, not `requireModuleAccess`: the BAS grant is not enough,
  * the grant has to carry `is_module_admin`. A BAS user without it gets 404 here

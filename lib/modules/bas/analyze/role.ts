@@ -109,6 +109,11 @@ export const ANALYZE_WITHHELD: ReadonlyArray<{ name: string; reason: string }> =
     name: "bas_report_findings",
     reason: "A run's findings, with the model's two sentences on each. Platform-side.",
   },
+  // 2026-11-12. The module's one safety ceiling: a setting, not a reading.
+  {
+    name: "bas_report_settings",
+    reason: "The Reports module's safety ceiling, one row. Platform configuration, not building data.",
+  },
 ];
 
 /**
@@ -296,6 +301,11 @@ export function analyzeRoleProofs(): RoleProof[] {
       sql: "SELECT count(*) FROM bas_report_runs",
       mustSucceed: false,
       why: "report runs are withheld (Reports, Phase 2)",
+    },
+    {
+      sql: "SELECT count(*) FROM bas_report_settings",
+      mustSucceed: false,
+      why: "the Reports safety ceiling is a module setting, withheld (2026-11-12)",
     },
     {
       sql: "SELECT count(*) FROM employees",

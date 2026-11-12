@@ -408,6 +408,7 @@ describe("the module opens on Projects", () => {
     const element = (await SettingsPage()) as ShellElement;
 
     expect(element.type).toBe(BasShell);
+    // The Settings bar (Back · General · Usage, 2026-11-12) is the shell's; the page is the view alone.
     expect(element.props.children.type).toBe(BasSettings);
   });
 
