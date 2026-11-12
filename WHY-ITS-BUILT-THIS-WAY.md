@@ -3158,9 +3158,14 @@ cannot work, and the reason was measured rather than reasoned: the pane is a
 sandboxed iframe without `allow-same-origin`, so its origin is opaque, and in
 Chrome and Edge an `<img>` inside it goes out as `Sec-Fetch-Site: cross-site`
 with **no** `SameSite=Lax` cookie - which is what Auth.js sets. The same
-`<img>` in the top document, or in an unsandboxed frame, carries the cookie
-(`scratchpad/cookie-probe`, 2026-11-12). A cookie-gated route would answer
-401 to every image in every message.
+`<img>` in the top document, or in an unsandboxed frame, carries the cookie.
+The probe was sixty lines on 2026-11-12: a Node HTTP server that sets a Lax
+cookie on its one page, that page holding an `<img>` of its own, an
+unsandboxed srcdoc frame with one, and a frame with the pane's exact
+`sandbox` attribute with one, headless Chrome and then Edge opening it from a
+fresh profile, and the server logging which `/img` requests carried the
+cookie and what `Sec-Fetch-Site` they declared. A cookie-gated route would
+answer 401 to every image in every message.
 
 **Why not the other two.** `allow-same-origin` on the frame makes the cookie
 flow and removes one of the three layers between a vendor's markup and the
