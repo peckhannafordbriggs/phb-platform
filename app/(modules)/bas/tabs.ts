@@ -73,8 +73,9 @@ export const BAS_TABS: readonly BasTab[] = [
     // a report is a standing question of the data, so it sits beside the
     // tab that asks one. While it is open the shell draws the Reports bar
     // (Back, Reports, Scheduled, Questions, Usage) in place of these tabs:
-    // app/(modules)/bas/reports/bar.ts. This entry matches every Reports
-    // path by prefix, which is what tells the shell to swap.
+    // app/(modules)/bas/reports/bar.ts, on the shared sub-bar shape
+    // (sub-bar.ts, sub-bars.ts). This entry matches every Reports path by
+    // prefix, which is what tells the shell to swap.
     href: "/bas/reports",
     label: "Reports",
     // What the list cannot show until a report exists: that a report is a
@@ -96,6 +97,8 @@ export const BAS_TABS: readonly BasTab[] = [
     // Read-only in B7.2. The blurb says what the screen is FOR rather than what
     // it can do, so it does not have to be rewritten when B7.3 adds the forms.
     blurb: "Which buildings and controllers this platform collects from.",
+    // While it is open the shell draws the Settings bar (Back, General,
+    // Usage) in place of these tabs, as Reports does: settings/bar.ts.
     adminOnly: true,
   },
 ];

@@ -11243,23 +11243,28 @@ the runs list's own visibility, `visibilityWhere`). A red line under the
 tiles - *These figures cover N of the M finished runs you may see* - means
 the tallies and the joinless count disagree; report that.
 
-### Settings has a row of its own: General and Usage
+### Settings shows a bar of its own, like Reports
 
-**Symptom.** *Settings* opens with a second row under the module tabs -
-*General · Usage* - and somebody asks what Usage is doing there, or a
-bookmark to `/bas/settings/usage` lands on a page with both rows marked.
+**Symptom.** Opening *Settings* replaces the module tabs with *Back ·
+General · Usage*, and somebody reports the module's tabs as missing; or a
+bookmark to `/bas/settings/usage` lands on a page whose only tab row is
+that bar.
 
-**Cause.** Not a fault (2026-11-12), the Cost Intelligence shape. *General*
-is the Settings screen as it always was (projects, buildings, stations,
-credentials, occupied hours); *Usage* is the Reports Usage view at a second
-route - one component, two routes - so the spend figures and the safety
-ceiling are reachable from the module's admin surface without opening the
-Reports bar, which is unchanged. Both pages are `requireModuleAdmin`, like
-every Settings page; the module bar keeps *Settings* active for either
-(longest prefix), and the row carries the query string so a search on
-General survives a look at Usage. `tests/bas-settings-nav.test.tsx`.
+**Cause.** Not a fault (2026-11-12), the same shape as the Reports bar.
+*General* is the Settings screen as it always was (projects, buildings,
+stations, credentials, occupied hours) and the default; *Usage* is the
+Reports Usage view at a second route - one component, two routes - so the
+spend figures and the safety ceiling are reachable from the module's admin
+surface without opening the Reports bar, which is unchanged. The shell
+decides the bar from the path, so a deep link to either lands on the
+Settings bar directly; both pages are `requireModuleAdmin`, like every
+Settings page. Both bars are data on one shared shape
+(`app/(modules)/bas/sub-bar.ts`, `sub-bars.ts`; `reports/bar.ts`,
+`settings/bar.ts`), drawn by the kit's TabBar in the same place, one row,
+never two. `tests/bas-settings-nav.test.tsx`.
 
-**Fix.** Nothing.
+**Fix.** *Back*, at the far left, returns to the module's tabs with
+Projects selected, carrying the query string.
 
 ### The page background stops short of the bottom
 
@@ -11294,7 +11299,8 @@ Questions · Usage*, and somebody reports the module's tabs as missing.
 
 **Cause.** Not a fault (2026-11-11). The Reports tab has more views than
 one row of module tabs can carry, so while it is open the same bar draws
-the Reports-only items instead - one row, never two. *Reports* is the runs
+the Reports-only items instead - one row, never two. (Settings does the
+same since 2026-11-12, the entry above; both bars are data on one shape.) *Reports* is the runs
 (what was *Generated*), the default when the tab opens; *Scheduled* is the
 definitions, with *New report* top right; *Questions* is the shared
 questions and the viewer's own (what was *Library*; the route is still

@@ -13,7 +13,8 @@ that reads*; `WHY-ITS-BUILT-THIS-WAY.md` § 81).
 | `editor-tab-custom.png` | The *Custom* tab: My questions (empty, saying how to fill it), a typed question added to this report, and the box with its *save for reuse* tick. |
 | `editor-show-selected.png` | *Show selected* open on the Custom tab: the whole set in the order the report will hold it. |
 | `usage.png` | Reports → Usage over 30 days (first cut, 12 Nov): the five tiles, spend per day, the by-report / by-building table, the most expensive runs, and the *Safety ceiling* card - and the ground stopping 4rem short under it, the defect the next capture shows fixed. |
-| `settings-usage.png` | Settings → Usage: the same view under the Settings row (*General · Usage*), the module bar marking Settings, the ground reaching the bottom. |
+| `settings-general.png` | Settings → General: the Settings bar - *Back · General · Usage* - in place of the module tabs, one row, General active; the Settings screen beneath. |
+| `settings-usage.png` | Settings → Usage: the same bar with Usage active, the Usage view and the ceiling card beneath, the ground reaching the bottom. |
 | `ground-bas.png`, `ground-cip.png`, `ground-fp.png` | A page in each of Building Automation, Cost Intelligence and Freeze Protection in a short window, scrolled to the bottom: the ground covers the last line. |
 
 The first cut's three flat-list captures were removed when the tabs replaced it the same day.

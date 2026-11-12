@@ -67,7 +67,7 @@ Out of MVP scope (recorded, not forgotten): custom cron patterns; free-form anal
 
 **Usage** (revised 12 Nov). The same page as Cost Intelligence's *Usage & cost*, on the same shared components (`components/ui/Usage.tsx`): a 7 / 30 / 90 days toggle; tiles for Spend, Runs, Average per run, Tokens and "<Month> so far"; the spend-per-day bar chart; a segmented *By report / By building* table with runs, tokens, spend, per run and the proportion bar; and a *Most expensive runs* table (run, report, building, status chip, started, spend) whose rows open the run. Every figure is over the finished runs the viewer may see (owner, or every report for a module admin), counted on the day they finished in New York. At the bottom, the **Safety ceiling** card: the module's one ceiling, shown to everyone and editable by BAS module admins, with the explanation that a run which reaches it finishes partial and says so. Colours are the BAS module's. The same view is also *Settings → Usage* (one component, two routes), so the figures and the ceiling are reachable from the module's admin surface; the Reports bar is unchanged.
 
-**Settings tab** has a row of its own on the Cost Intelligence shape: *General* (the screen Settings always was) and *Usage* (above).
+**Settings tab** swaps the module bar for a bar of its own, as Reports does: *Back · General · Usage* - *General* the screen Settings always was, *Usage* the view above. Both bars are data on one shared shape.
 
 **Settings tab (existing) gains** a per-building *Occupied hours* field (weekday schedule) used as the occupancy fallback, and shows per station whether an `occupancy_status` point is trended.
 

@@ -1488,14 +1488,15 @@ either half finishes partial and says so. The Usage page was a Phase 1
 placeholder that said *There have been no runs* without asking; it now
 reads `bas_report_runs` on the shared usage components
 (`components/ui/Usage.tsx`, promoted from Cost Intelligence), and is also
-*Settings → Usage* beside *General* on a Settings row of its own (one
-component, two routes). Same day: the tinted ground stopped 4rem short on
+*Settings → Usage*: Settings now swaps the module bar for a bar of its own
+exactly as Reports does - *Back · General · Usage* - with both bars data
+on one shared sub-bar shape (`app/(modules)/bas/sub-bar.ts`). Same day: the tinted ground stopped 4rem short on
 any page shorter than the window (`min-height: 100%` under border-box on an
 element bleeding into `<main>`'s padding); it is content-box now and a
 guard refuses a viewport unit on any ground element.
 `WHY-ITS-BUILT-THIS-WAY.md` § 81; `runbook.md` → *Reports: the safety
 ceiling*, *The editor's Questions section is three tabs over one
-checklist*, *Settings has a row of its own*, *The page background stops
+checklist*, *Settings shows a bar of its own*, *The page background stops
 short of the bottom*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.

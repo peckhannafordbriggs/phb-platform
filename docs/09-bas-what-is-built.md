@@ -937,12 +937,15 @@ are `tests/bas-reports-ui.test.tsx`. The Questions page is unchanged.
 replaced it the same day, and the one selection behind them is what
 survived.)
 
-**Settings → Usage, and the ground.** Settings gained a row of its own on
-the Cost Intelligence shape (`settings-nav.tsx`, the kit's TabBar):
-*General*, the screen Settings always was, and *Usage*, the Reports Usage
-view at `/bas/settings/usage` - one component, two routes, the ceiling card
-editable because every Settings page is module-admin. The Reports bar is
-unchanged. And the tinted ground on every shell now covers the document:
+**Settings → Usage, and the ground.** Settings gained a bar of its own on
+the Reports bar's shape - *Back · General · Usage*, drawn by the shell in
+place of the module tabs, one row, never two: *General*, the screen
+Settings always was, and *Usage*, the Reports Usage view at
+`/bas/settings/usage` - one component, two routes, the ceiling card
+editable because every Settings page is module-admin. Both bars are data
+on one shared sub-bar shape (`sub-bar.ts`, the registry `sub-bars.ts`,
+`reports/bar.ts`, `settings/bar.ts`), with the longest-prefix routing and
+the Back item written once. The Reports bar is unchanged. And the tinted ground on every shell now covers the document:
 `.dashboard-ground` is `box-sizing: content-box` with `min-height: 100%`,
 because the border-box version stopped 4rem short on any page shorter than
 the window (`runbook.md` → *The page background stops short of the

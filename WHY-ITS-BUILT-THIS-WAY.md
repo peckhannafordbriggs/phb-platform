@@ -3154,8 +3154,9 @@ per-question add / remove / reorder routes are gone. The per-report cost
 budget and time cap are gone too: one row, `bas_report_settings`, holds the
 module's safety ceiling - $10.00 and 25 minutes per run by default - edited
 by BAS module admins from the Usage page (Reports → Usage, or Settings →
-Usage, the same view at a second route) and read by the engine for every
-run; the two definition columns are dropped and the create / update APIs
+Usage, the same view at a second route under a Settings bar drawn like
+the Reports bar, both as data on one shared shape) and read by the engine
+for every run; the two definition columns are dropped and the create / update APIs
 refuse the keys with 400. The Usage page itself was a Phase 1 placeholder
 that said *There have been no runs* without asking; it now reads
 `bas_report_runs` on the same components as Cost Intelligence's *Usage &
