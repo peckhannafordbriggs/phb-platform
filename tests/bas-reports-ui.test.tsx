@@ -37,6 +37,10 @@ import { ReportsTable } from "@/app/(modules)/bas/reports-list";
 import { OwnerRow, QuestionsChecklist, SelectedQuestionsList, StateChip, initialQuestionsTab, type QuestionsTab } from "@/app/(modules)/bas/reports-editor";
 import { SharedLibraryTable } from "@/app/(modules)/bas/reports-library";
 import { GeneratedPlaceholder } from "@/app/(modules)/bas/reports-placeholders";
+import { RunsTable } from "@/app/(modules)/bas/reports-generated";
+import { PRINT_PAGE_CSS, REPORT_PRINT_ID, RunActions } from "@/app/(modules)/bas/reports-run-actions";
+import { PDF_NOT_AVAILABLE_TOOLTIP, RENDER_IN_PROGRESS_PREFIX, type PdfState } from "@/lib/modules/bas/reports/pdf/naming";
+import type { RunSummary } from "@/lib/modules/bas/reports/runs-service";
 import { ReportsUsageView, SafetyCeilingCard } from "@/app/(modules)/bas/reports-usage";
 import {
   EXTERNAL_CHIP,
@@ -608,5 +612,109 @@ describe("the audit sentences", () => {
     );
     expect(ceiling.known).toBe(true);
     expect(ceiling.sentence).toBe("Jim Schwarz set the Reports safety ceiling to $5.50 and 20 minutes per run (was $10.00 and 25 minutes)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The PDF (Phase 4, 2026-11-13): the list's column and the run page's row
+// ---------------------------------------------------------------------------
+
+describe("the PDF on the Reports list and the run page", () => {
+  const pdf = (over: Partial<PdfState> = {}): PdfState => ({ status: "none", error: null, bytes: null, queuedAt: null, renderedAt: null, ...over });
+  const summary = (over: Partial<RunSummary>): RunSummary => ({
+    runId: "1",
+    reportId: "1",
+    reportName: "ZZTEST weekly",
+    buildingName: "Office",
+    status: "succeeded",
+    trigger: "manual",
+    periodStart: "2026-11-05T11:00:00.000Z",
+    periodEnd: "2026-11-12T11:00:00.000Z",
+    timezone: "America/New_York",
+    startedAt: null,
+    finishedAt: null,
+    durationS: 12,
+    costUsd: 0.01,
+    budgetUsd: 10,
+    inputTokens: 0,
+    outputTokens: 0,
+    partialReason: null,
+    error: null,
+    findings: 0,
+    buildingStatus: "good",
+    startedBy: null,
+    pdf: pdf(),
+    ...over,
+  });
+  const render = (el: React.ReactElement) => renderToStaticMarkup(el);
+
+  it("a row shows the PDF's state, a Download greyed with its reason until the PDF is ready, and Retry PDF only when a render failed", () => {
+    const rows = render(
+      createElement(RunsTable, {
+        data: {
+          runs: [
+            summary({ runId: "1", pdf: pdf() }),
+            summary({ runId: "2", pdf: pdf({ status: "queued", queuedAt: "2026-11-13T10:00:00.000Z" }) }),
+            summary({ runId: "3", pdf: pdf({ status: "ready", bytes: 81_892, renderedAt: "2026-11-13T10:00:05.000Z" }) }),
+            summary({ runId: "4", pdf: pdf({ status: "failed", error: "The PDF could not be rendered: boom." }) }),
+            summary({ runId: "5", pdf: pdf({ status: "failed", error: `${RENDER_IN_PROGRESS_PREFIX}2026-11-13T10:00:00.000Z and has not finished.` }) }),
+          ],
+          runsInDatabase: 5,
+        },
+        onRetryPdf: () => undefined,
+      }),
+    );
+    expect(rows).toContain(">PDF<");
+    expect(rows).toContain("Not available");
+    expect(rows).toContain(PDF_NOT_AVAILABLE_TOOLTIP);
+    expect(rows).toContain("Queued for the worker");
+    expect(rows).toContain("Ready · 80 KB");
+    expect(rows).toContain(">Failed<");
+    expect(rows).toContain("Rendering…");
+    // Five Downloads, four of them greyed inside a wrapper carrying the tooltip.
+    expect(rows.match(/data-testid="run-download-pdf"/g)).toHaveLength(5);
+    expect(rows.match(/data-testid="run-download-pdf-disabled"/g)).toHaveLength(4);
+    // Retry PDF for the failed one only - not the one still rendering.
+    expect(rows.match(/data-testid="run-retry-pdf"/g)).toHaveLength(1);
+    expect(rows).toContain("could not be rendered: boom");
+    // Without the handler, a pure render offers no Retry at all.
+    const noHandler = render(createElement(RunsTable, { data: { runs: [summary({ runId: "4", pdf: pdf({ status: "failed", error: "x" }) })], runsInDatabase: 1 } }));
+    expect(noHandler).not.toContain("run-retry-pdf");
+  });
+
+  it("the run page's row is Print (secondary) and Download (the red primary), Freeze Protection's pair, with Retry PDF beside them only after a failed render", () => {
+    const ready = render(createElement(RunActions, { runId: "3", pdf: pdf({ status: "ready", bytes: 100, renderedAt: "2026-11-13T10:00:05.000Z" }) }));
+    expect(ready).toMatch(/data-testid="run-print"/);
+    expect(ready).toContain("Print");
+    expect(ready).toMatch(/data-testid="run-download-pdf" class="[^"]*bg-\[var\(--phb-red-btn\)\]/);
+    expect(ready).toMatch(/data-testid="run-print" class="[^"]*border border-\[var\(--border\)\] bg-white/);
+    expect(ready).not.toContain('disabled=""');
+    expect(ready).not.toContain("Retry PDF");
+    expect(ready.indexOf("run-print")).toBeLessThan(ready.indexOf("run-download-pdf"));
+
+    const failed = render(createElement(RunActions, { runId: "4", pdf: pdf({ status: "failed", error: "The PDF could not be rendered: boom." }) }));
+    expect(failed).toContain("Retry PDF");
+    expect(failed).toContain('disabled=""');
+    expect(failed).toContain("run-download-pdf-disabled");
+    expect(failed).toContain("could not be rendered: boom");
+
+    const none = render(createElement(RunActions, { runId: "1", pdf: pdf() }));
+    expect(none).toContain(`title="${PDF_NOT_AVAILABLE_TOOLTIP}"`);
+    expect(none).not.toContain("Retry PDF");
+  });
+
+  it("the print stylesheet keeps the report alone, and the shell draws the row in the bar's actions slot", () => {
+    expect(PRINT_PAGE_CSS).toContain("body * { visibility: hidden; }");
+    expect(PRINT_PAGE_CSS).toContain(`#${REPORT_PRINT_ID}, #${REPORT_PRINT_ID} * { visibility: visible; }`);
+    expect(PRINT_PAGE_CSS).toMatch(/@media print/);
+    const ShellWithActions = BasShell as unknown as (props: { blurb: string; canAdminister?: boolean; actions?: React.ReactNode }) => React.ReactNode;
+    nav.pathname = "/bas/reports/generated/3";
+    const shell = render(createElement(ShellWithActions, { blurb: "b", canAdminister: true, actions: createElement("span", { "data-testid": "zz-actions" }, "ACTIONS") }, "body"));
+    const bar = /<nav[^>]*aria-label="Reports sections"[\s\S]*?<\/nav>/.exec(shell)?.[0] ?? "";
+    expect(bar).toContain("zz-actions");
+    expect(bar).toContain("ACTIONS");
+    // Without actions, the bar is the bar.
+    const plain = render(createElement(ShellWithActions, { blurb: "b", canAdminister: true }, "body"));
+    expect(plain).not.toContain("zz-actions");
   });
 });

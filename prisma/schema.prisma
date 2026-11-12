@@ -765,6 +765,19 @@ model BasReportRun {
   reportJson Json?   @map("report_json")
   reportHtml String? @map("report_html")
 
+  /// The report as a PDF (Phase 4, 2026-11-13): report_html printed by the worker with headless Chromium, Letter, with the report name and period in the header and page numbers in the footer. Omitted from every read by the client's global `omit` (lib/db/client.ts); a reader selects it by name.
+  pdf           Bytes?
+  /// none (no PDF and none asked for: a run from before this column, or one not finished), queued (a render is waiting for a worker; the scaler counts it), ready (pdf holds it), failed (pdf_error says why; Retry PDF queues it again). A failed render never fails the run.
+  pdfStatus     String    @default("none") @map("pdf_status")
+  /// Why the last render failed, or that one is in progress and has not finished; set exactly when pdf_status is failed.
+  pdfError      String?   @map("pdf_error")
+  /// octet_length(pdf), stored so the list never reads the bytea; set exactly when ready.
+  pdfBytes      Int?      @map("pdf_bytes")
+  /// When the render was asked for; set exactly while queued. The scheduler fails a render queued for more than an hour and never picked up.
+  pdfQueuedAt   DateTime? @map("pdf_queued_at") @db.Timestamptz()
+  /// When the PDF was produced; set exactly when ready.
+  pdfRenderedAt DateTime? @map("pdf_rendered_at") @db.Timestamptz()
+
   previousRunId BigInt?        @map("previous_run_id")
   previousRun   BasReportRun?  @relation("BasReportRunPrevious", fields: [previousRunId], references: [runId], onDelete: SetNull)
   nextRuns      BasReportRun[] @relation("BasReportRunPrevious")
@@ -776,6 +789,7 @@ model BasReportRun {
 
   @@index([reportId, createdAt(sort: Desc)])
   @@index([status])
+  @@index([pdfStatus])
   @@map("bas_report_runs")
 }
 

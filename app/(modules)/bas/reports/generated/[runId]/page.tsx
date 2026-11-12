@@ -6,6 +6,7 @@ import { BasError } from "@/lib/modules/bas/errors";
 import { REPORT_CSS, ReportView } from "@/lib/modules/bas/reports/engine/render";
 import { getRun } from "@/lib/modules/bas/reports/runs-service";
 import { BasShell } from "../../../bas-shell";
+import { PRINT_PAGE_CSS, REPORT_PRINT_ID, RunActions } from "../../../reports-run-actions";
 import { basTab } from "../../../tabs";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +16,12 @@ export const dynamic = "force-dynamic";
  * same template the standalone HTML uses. Guarded like every BAS page; the
  * run is read through the service, which answers not-found for a run whose
  * report is not the viewer's.
+ *
+ * Since Phase 4 (2026-11-13) the bar's right end carries Print and Download
+ * (reports-run-actions.tsx), the Freeze Protection Report tab's row. Print
+ * is the browser's dialog over PRINT_PAGE_CSS, which keeps only the
+ * report's section visible; Download is the PDF the worker rendered from
+ * the same HTML, through the run's pdf route.
  */
 export default async function BasReportRunPage({ params }: { params: Promise<{ runId: string }> }) {
   const access = await requireModuleAccess(BAS_MODULE_KEY);
@@ -32,7 +39,12 @@ export default async function BasReportRunPage({ params }: { params: Promise<{ r
   const canAdminister = await hasModuleAdmin(access.viewer.id, BAS_MODULE_KEY);
 
   return (
-    <BasShell blurb={basTab("/bas/reports").blurb} canAdminister={canAdminister}>
+    <BasShell
+      blurb={basTab("/bas/reports").blurb}
+      canAdminister={canAdminister}
+      actions={run.document === null ? undefined : <RunActions runId={run.runId} pdf={run.pdf} />}
+    >
+      <style>{PRINT_PAGE_CSS}</style>
       <div className="space-y-4">
         <Link href="/bas/reports" className="text-sm text-[var(--muted)] hover:underline">
           ← All reports
@@ -45,7 +57,7 @@ export default async function BasReportRunPage({ params }: { params: Promise<{ r
             </p>
           </section>
         ) : (
-          <section className="card p-6">
+          <section id={REPORT_PRINT_ID} className="card p-6">
             <style>{REPORT_CSS}</style>
             <ReportView document={run.document} />
           </section>

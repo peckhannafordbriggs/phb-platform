@@ -21,6 +21,10 @@ Your module will live in this same repo alongside Change Orders and Building Aut
 - **PostgreSQL 16 or newer** — the installer will ask you to set a password for the
   `postgres` user. Write it down, you'll need it in step 3
 - **Git**
+- **Chromium for Playwright**, after step 5's `npm install`: `npx playwright install chromium`
+  (about 170 MB, into your user profile). The BAS Reports worker prints a report to PDF
+  with it, and `tests/bas-reports-pdf.test.ts` does the same; until it is there that test
+  fails with *Executable doesn't exist*, which is the message and not a bug
 
 ## 2 · Clone the repo
 
@@ -105,7 +109,9 @@ npm test
 ```
 
 1,274 of them as of September 2026, against your real test database. If they pass,
-you're set up correctly.
+you're set up correctly. One file prints a PDF with Chromium: if
+`tests/bas-reports-pdf.test.ts` says the executable doesn't exist, run
+`npx playwright install chromium` once (step 1) and run it again.
 
 ---
 

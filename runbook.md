@@ -11747,13 +11747,14 @@ project and only ever adds files to the project's `AI FILES` folder.
 ## Reports: turning the jobs on
 
 **What they are.** Two Container Apps Jobs from one image, `bas-reports:<sha>`
-(`Dockerfile.bas-reports`, Node only until Phase 4 adds Chromium), both behind
-`enableBasReports` in `infra/main.bicep`:
+(`Dockerfile.bas-reports`: Node, and Playwright's Chromium since Phase 4's PDF
+half on 2026-11-13 - *Reports: the PDF*), both behind `enableBasReports` in
+`infra/main.bicep`:
 
 | Job | Trigger | Runs | Needs |
 |---|---|---|---|
 | `<baseName>-bas-reports-sched` (`basReportsSchedulerJob`; 30 characters in production - the longer `-scheduler` name was 34 and failed the first deployment, *A template deployment fails with `ContainerAppInvalidName`*) | cron, `basReportsSchedulerCron`, default `*/15 * * * *` (UTC) | `scripts/bas-reports-scheduler.ts`, one pass: for every active report whose `next_run_at` has passed, ONE queued run and the next run time advanced in the same transaction; active reports whose owner's account is disabled are paused as *Paused - owner disabled* with the reason on the row | `DATABASE-URL` by reference, nothing else |
-| `<baseName>-bas-reports-worker` (`basReportsWorkerJob`) | a PostgreSQL scaler counting queued runs and stalled ones, every 15 s, two executions at most | `scripts/bas-reports-worker.ts`: claims runs with `FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the Phase 2 engine, exits when the queue is empty or after its four-minute drain window | `DATABASE-URL`, `BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` (the BAS key) by reference - read through `lib/modules/bas/reports/job-env.ts`, never `lib/env.ts` (*Reports: a job execution fails at startup naming a web-app variable*); `BAS-ASK-DATABASE-URL` is carried for Phase 6 and read by nothing yet |
+| `<baseName>-bas-reports-worker` (`basReportsWorkerJob`) | a PostgreSQL scaler counting queued runs, stalled ones and queued PDF renders, every 15 s, two executions at most | `scripts/bas-reports-worker.ts`: claims runs with `FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the Phase 2 engine, prints each finished run's page to PDF with the image's Chromium (*Reports: the PDF*), exits when the queue is empty or after its four-minute drain window | `DATABASE-URL`, `BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` (the BAS key) by reference - read through `lib/modules/bas/reports/job-env.ts`, never `lib/env.ts` (*Reports: a job execution fails at startup naming a web-app variable*); `BAS-ASK-DATABASE-URL` is carried for Phase 6 and read by nothing yet |
 
 Same identity (`<baseName>-identity`), same registry pull and vault read; **no
 role assignment is added**, so a Contributor deploys this exactly as the CIP
@@ -11782,6 +11783,15 @@ test database, including the two scripts as child processes under tsx.
 `tests/deploy-guards.test.ts` pins the template, the workflow and the
 Dockerfile. The date of the first execution in Azure goes here when it has
 run.
+
+**Template change 2026-11-13 (`feat/bas-reports-pdf`).** The worker's scaler
+query gained `OR pdf_status = 'queued'`, so a *Retry PDF* wakes a worker on
+its own (*Reports: the PDF*). Deploy it with the routine step-3 command
+below: `what-if` lists the worker job as *Modify* and nothing else. Until it
+has run, a retry is picked up by the next worker execution that starts for
+a run. The image itself needs no hand build: `deploy.yml` rebuilds it on
+the merge, Chromium included, and the Dockerfile's own launch check fails
+the build if the browser cannot start.
 
 ### Turning it on, once, in this order
 
@@ -11955,6 +11965,20 @@ missing variable or an image that will not pull. Nothing is lost: the run is
 a row, and the first execution that works takes it. Locally, `npm run
 bas:reports:worker` drains the same queue.
 
+**Queued for an hour, then Failed: "Queued for N minutes and never picked up
+by a worker".** The scheduler's pass did that, deliberately (2026-11-13,
+`lib/modules/bas/reports/queue-guards.ts`). The worker job's scaler counts
+queued runs and starts an execution for each; on the night of 2026-11-12 a
+worker that crashed at startup was restarted every 45 seconds all night
+against one queued run, because a worker that cannot start never reduces
+the count. Now a run queued for more than an hour and never claimed
+(`attempts = 0`), a run claimed and lost twice, and a PDF render queued for
+an hour are each failed by the next scheduler pass - the one job still
+running - with an error saying what happened and what to do, one
+`bas.report_run_finished` audit row per run, and the count returns to zero.
+The run is a row; fix the worker (the checks above), then *Run now* queues a
+fresh one. The scheduler's log line ends `..., N abandoned`.
+
 **Running, and the Reports list shows no change for ten minutes.** The worker
 that held it stopped - killed by the platform, out of memory, or the
 execution's 30-minute timeout. After ten minutes without a heartbeat the next
@@ -11991,6 +12015,105 @@ it to another owner: the report's editor, *Recipients* → *Transfer to
 another owner* (admins only). The transfer resumes it with the next run
 computed from now; `bas.report_owner_transferred` records who did it and
 that it resumed.
+
+## Reports: the PDF
+
+**What it is (Phase 4, the PDF half, 2026-11-13; email is the other half
+and waits on the sender app registration, Request 7).** After the engine
+stores a run's page (`report_html`), the worker prints that SAME HTML to
+PDF with the headless Chromium its image carries (`Dockerfile.bas-reports`;
+never the web image, and `tests/bas-reports-pdf.test.ts` walks the web
+app's import graph to hold it) - Letter, backgrounds on, the report's name
+and period in the header, *Page N of M* in the footer, Figtree embedded
+from `app/fonts` so it reads like the screen - and stores the bytes on the
+run (`bas_report_runs.pdf`, bytea, the plan's D6) with `pdf_status`,
+`pdf_error`, `pdf_bytes`, `pdf_queued_at` and `pdf_rendered_at` beside
+them. On the run page the bar's right end carries *Print* (the browser's
+dialog, with a print stylesheet that keeps the report alone) and a red
+*Download* - Freeze Protection's Report pair; on the Reports list each
+row has a *PDF* column with the state and a *Download*. The file is
+`<report name> <start> to <end>.pdf`, the dates in the building's zone,
+from `GET /api/modules/bas/reports/runs/<id>/pdf`, guarded exactly as
+viewing the run: owner or module admin, 404 to anyone else, and 409
+`pdf_not_available` with the reason for a visible run that has no PDF.
+
+**The states, and what the buttons do.** `pdf_status` is one of:
+
+| State | Reads as | Download | Retry PDF |
+|---|---|---|---|
+| `none` | *Not available* | greyed, tooltip *PDF not available for this run — use Re-run*. Every run from before this change, and every run not yet finished | no |
+| `queued` | *Queued for the worker* | greyed | no - it is already queued |
+| `failed`, the error beginning *A PDF render started at …* | *Rendering…* | greyed | offered. The worker writes this sentence when it CLAIMS a render and replaces it with *ready* on success; if it stays, the worker stopped mid-render, and the sentence says so |
+| `failed` | *Failed*, the error as the tooltip | greyed, the tooltip says to retry | offered |
+| `ready` | *Ready · 80 KB* | downloads | no |
+
+**A render failed; the report is fine.** A failed render never changes the
+run: its status, page and findings are what the engine stored, and the run
+page shows the report. `pdf_error` holds why (*The PDF could not be
+rendered: …*), and *Retry PDF* - on the run page or the list - queues the
+render again without re-running the analysis (`POST …/pdf/retry`, 202,
+audited as `bas.report_pdf_retry_requested`; 409 `pdf_not_retryable` for
+any state but failed). The worker job's scaler counts a queued render
+beside queued runs, so a retry wakes a worker on its own **once the
+template change of 2026-11-13 is deployed** (*Reports: turning the jobs
+on*); before that, the next worker execution that starts for a run picks
+it up. If the retry fails the same way, read the worker's log:
+
+```bash
+az containerapp job execution list -n <baseName>-bas-reports-worker -g <resource-group> -o table
+az containerapp job logs show -n <baseName>-bas-reports-worker -g <resource-group> --container bas-reports-worker
+# "[bas-reports-worker] pdf of run <id> (<name>): FAILED - The PDF could not be rendered: ..." names the cause
+```
+
+Causes to expect: *Executable doesn't exist at /ms-playwright/...* - the
+image was built without the browser, which the Dockerfile's own
+launch-and-print check (as the `node` user) should have refused; rebuild
+from `main`. *Timeout 60000ms exceeded* (`RENDER_TIMEOUT_MS`,
+`lib/modules/bas/reports/pdf/render.ts`) - a page far larger than a report
+should be. *Target closed* or an exit code 137 - Chromium killed, most
+likely memory: the worker's 2Gi (`infra/main.bicep`) has been enough for
+one page at a time; if this appears, raise the worker's memory in the
+template (a what-if and a deployment) rather than lowering the report. A
+worker started with `--no-pdf`, and the dev script `bas:report:run`, carry
+no Chromium and leave the render *queued* for a worker that has one,
+saying so on the console.
+
+**Queued for an hour and nothing happens.** The scheduler's pass fails a
+render queued for more than an hour and never claimed, with *The PDF render
+was queued for N minutes and never picked up by a worker …* on
+`pdf_error` - the same guard it applies to runs (*Reports: a run is stuck
+or failed*). The report is untouched and *Retry PDF* is offered; the cause
+is the worker job not starting, with the same checks as a run queued too
+long.
+
+**Locally.** `npx playwright install chromium` once (`DEVELOPER-SETUP.md`);
+`npm run bas:reports:worker` then prints PDFs for the queued runs the way
+the job does, and `-- --no-pdf` skips it. `tests/bas-reports-pdf.test.ts`
+prints the sample document with the real browser and counts its pages
+(three), checks the header and the footer, drives the queue and the routes
+against the test database, and holds every `basReportRun` read in `lib/`
+and `app/` to a `select` that leaves the bytes out: the list reads up to
+200 runs every ten seconds, and a bytea on every row would be tens of MB a
+poll. The one read of the bytes is `loadRunPdf`.
+
+**The tripwire (the plan's D6).** The PDFs are bytea in `bas_report_runs`:
+a few hundred KB a run, tens of MB a year for a building reporting weekly.
+Move them to the backup storage account's blob service - a second container
+beside `dumps`, written by the worker under the identity's existing Storage
+Blob Data Contributor assignment, the row keeping a blob name instead of
+the bytes - when EITHER the table passes about 2 GB or more than about
+twenty buildings report weekly. Check with:
+
+```sql
+SELECT pg_size_pretty(pg_total_relation_size('bas_report_runs')) AS table_size,
+       count(*) FILTER (WHERE pdf_status = 'ready')              AS pdfs,
+       pg_size_pretty(coalesce(sum(pdf_bytes), 0)::bigint)        AS pdf_bytes
+  FROM bas_report_runs;
+SELECT count(DISTINCT site_id) AS buildings_reporting FROM bas_report_definitions WHERE state = 'active';
+```
+
+Until then the nightly backup (`pg_dump`) carries them, and the restore
+steps are unchanged.
 
 ## Reports: the safety ceiling
 

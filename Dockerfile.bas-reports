@@ -1,14 +1,17 @@
 # BAS Reports jobs image (scripts/bas-reports-scheduler.ts and
-# scripts/bas-reports-worker.ts), Reports Phase 3.
+# scripts/bas-reports-worker.ts), Reports Phase 3; Chromium since Phase 4.
 #
 # One image, two Container Apps Jobs (infra/main.bicep, basReportsSchedulerJob
 # and basReportsWorkerJob): the scheduler on a cron, the worker on a scaler
-# that counts queued runs. Each job names its script in `command`.
+# that counts queued runs and queued PDF renders. Each job names its script
+# in `command`.
 #
 # Separate from the web image for the same reason the Cost Intelligence
 # worker's is: the web app never runs a report, and a job never serves a
-# page. Node only for now - Phase 4's PDF render adds Chromium here, and
-# never to the web image.
+# page. The browser below is the clearest case - the worker prints a run's
+# page to PDF with it (lib/modules/bas/reports/pdf/render.ts), and it goes
+# in THIS image and never the web one (tests/deploy-guards.test.ts and
+# tests/bas-reports-pdf.test.ts both hold that).
 #
 # The scripts run under tsx, the same loader `npm run bas:report:run` uses on
 # a laptop and the one tests/bas-reports-worker-render.test.ts proves the
@@ -16,6 +19,11 @@
 # compile step to drift from it.
 
 FROM node:24-bookworm-slim
+
+# Where Playwright puts the browser. The default is the installing user's
+# home (/root/.cache here), which the `node` user below could not read; a
+# fixed path, made world-readable, is what Playwright documents for Docker.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
@@ -26,12 +34,27 @@ COPY prisma ./prisma
 COPY prisma.config.ts ./
 RUN npm ci
 
+# Chromium, at the version `playwright` in package-lock.json pins, with the
+# apt packages it needs on bookworm (--with-deps is Playwright's own list, the
+# same step CI runs before the PDF tests). About 400 MB, accepted in the plan
+# (docs/bas-reports-tab-plan.md, "PDF method") for one rendering of one page
+# that the screen and the PDF then cannot disagree on.
+RUN npx playwright install --with-deps chromium \
+ && chmod -R a+rX /ms-playwright \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 RUN npx prisma generate && chown -R node:node /app
 
 ENV NODE_ENV=production
 
 USER node
+
+# The image's own check, as the user the jobs run as: the browser launches
+# and prints a page, or the build fails here rather than on the first report
+# in Azure. The sandbox is off (Playwright's default) because the container
+# runs unprivileged with no user namespaces.
+RUN node -e "require('playwright').chromium.launch().then(async (b) => { const p = await b.newPage(); await p.setContent('<p>ok</p>'); const pdf = await p.pdf({ format: 'Letter' }); await b.close(); if (pdf.length < 100) throw new Error('empty pdf'); console.log('chromium prints: ' + pdf.length + ' bytes'); })"
 
 # The worker, draining the queue. The scheduler job overrides this with its
 # own script in `command`; the worker job states this one explicitly too, so

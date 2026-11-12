@@ -179,7 +179,16 @@ export type BasErrorCode =
   /** A new owner who is not an active employee with the BAS grant, or is the owner already. */
   | "owner_not_eligible"
   /** A run that does not exist, or whose report the viewer may not see. 404. */
-  | "run_not_found";
+  | "run_not_found"
+  /**
+   * The run is visible but has no PDF to download (Phase 4): the render is
+   * queued or in progress, it failed (the message says so and offers Retry
+   * PDF), or the run is from before PDFs existed. 409: the run is real, the
+   * file is not - a 404 here would read as "no such run".
+   */
+  | "pdf_not_available"
+  /** Retry PDF asked for on a run whose PDF is not failed: ready, queued, or never rendered. 409. */
+  | "pdf_not_retryable";
 
 export class BasError extends Error {
   constructor(

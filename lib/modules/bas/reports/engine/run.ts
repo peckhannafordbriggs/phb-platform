@@ -182,6 +182,12 @@ export async function executeQueuedRun(runIdInput: bigint | string, options: Exe
           outputTokens: result.document.cost.outputTokens,
           finishedAt: new Date(),
           heartbeatAt: new Date(),
+          // The PDF (Phase 4): queued the moment the page is stored. The
+          // worker renders it in the same execution (pdf/jobs.ts); a dev
+          // script, which carries no Chromium, leaves it queued for the next
+          // worker and says so.
+          pdfStatus: "queued",
+          pdfQueuedAt: new Date(),
         },
       });
       if (result.rows.length > 0) {

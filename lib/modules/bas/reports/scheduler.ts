@@ -3,6 +3,7 @@ import { writeAuditEvent } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { BAS_MODULE_KEY } from "../constants";
 import { enqueueRun } from "./engine/queue";
+import { failAbandonedWork, type AbandonedWorkReport } from "./queue-guards";
 import { computeNextRun, readScheduleSpec, scheduleProblem, type ScheduleSpec } from "./schedule";
 
 /**
@@ -27,6 +28,16 @@ import { computeNextRun, readScheduleSpec, scheduleProblem, type ScheduleSpec } 
  *
  * The schedule arithmetic is Phase 1's `computeNextRun`, untouched - the
  * DST cases are tests/bas-reports-schedule.test.ts's and are not repeated.
+ *
+ * FIRST, before any of the above, the pass takes ABANDONED work out of the
+ * queue (queue-guards.ts, 2026-11-13): a run queued for an hour that no
+ * worker has claimed, a run claimed and lost twice, a PDF render queued for
+ * an hour - each failed with an error saying what happened and what to do.
+ * The worker job's scaler counts exactly those states and starts an
+ * execution for each; a worker that crashes at startup never reduces the
+ * count, and on 2026-11-12 one was restarted every 45 seconds all night
+ * against a single queued run. The scheduler is the job that is still
+ * running when that happens, so it is the one that stops it.
  */
 
 export interface SchedulerPass {
@@ -34,6 +45,12 @@ export interface SchedulerPass {
   enqueued: Array<{ reportId: string; name: string; runId: string; periodEnd: string; nextRunAt: string; missedTicks: number }>;
   paused: Array<{ reportId: string; name: string; ownerEmail: string }>;
   skipped: Array<{ reportId: string; name: string; reason: string }>;
+  /** Work the pass failed as abandoned, by kind (queue-guards.ts). */
+  abandoned: AbandonedWorkReport;
+}
+
+export function abandonedCount(report: AbandonedWorkReport): number {
+  return report.unclaimedRuns.length + report.stalledRuns.length + report.unclaimedPdfs.length;
 }
 
 /**
@@ -63,7 +80,10 @@ export function collapseMissedTicks(
 }
 
 export async function runSchedulerPass(now = new Date()): Promise<SchedulerPass> {
-  const pass: SchedulerPass = { at: now.toISOString(), enqueued: [], paused: [], skipped: [] };
+  // Abandoned work out of the queue first, so the worker's scaler count is
+  // honest before anything new is queued.
+  const abandoned = await failAbandonedWork(now);
+  const pass: SchedulerPass = { at: now.toISOString(), enqueued: [], paused: [], skipped: [], abandoned };
 
   const active = await prisma.basReportDefinition.findMany({
     where: { state: "active" },
@@ -160,7 +180,7 @@ export async function runSchedulerPass(now = new Date()): Promise<SchedulerPass>
 
   logger.info("bas.report_scheduler_pass", {
     outcome: "ok",
-    reason: `${pass.enqueued.length} queued, ${pass.paused.length} paused, ${pass.skipped.length} skipped`,
+    reason: `${pass.enqueued.length} queued, ${pass.paused.length} paused, ${pass.skipped.length} skipped, ${abandonedCount(abandoned)} abandoned`,
   });
   return pass;
 }

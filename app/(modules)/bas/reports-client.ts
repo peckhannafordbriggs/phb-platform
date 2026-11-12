@@ -12,8 +12,9 @@ import type {
 } from "@/lib/modules/bas/reports/types";
 import type { SafetyCeilingView } from "@/lib/modules/bas/reports/ceiling";
 import { REPORT_PRESETS, presetMatching, type PresetKey } from "@/lib/modules/bas/reports/presets";
+import type { PdfState } from "@/lib/modules/bas/reports/pdf/naming";
 import type { ScheduleSpec } from "@/lib/modules/bas/reports/schedule";
-import type { RunsList } from "@/lib/modules/bas/reports/runs-service";
+import type { RunDetail, RunsList } from "@/lib/modules/bas/reports/runs-service";
 import { formatInZone } from "@/lib/modules/bas/reports/schedule";
 import type {
   AddRecipientInput,
@@ -81,6 +82,24 @@ export const deleteReport = (reportId: string) =>
 /** Run now (Phase 3): queue a run; 202 with the run id, or 409 run_in_flight. */
 export const requestRun = (reportId: string) =>
   call<{ runId: string }>(`/${encodeURIComponent(reportId)}/runs`, { method: "POST" });
+/** One run with its document; the run page polls it while a PDF is queued or rendering (Phase 4). */
+export const fetchRun = (runId: string, signal?: AbortSignal) =>
+  call<RunDetail>(`/runs/${encodeURIComponent(runId)}`, { signal });
+/** Retry PDF (Phase 4): queue a failed render again without re-running the analysis; 202, or 409 pdf_not_retryable. */
+export const retryRunPdf = (runId: string) =>
+  call<{ runId: string; pdf: PdfState }>(`/runs/${encodeURIComponent(runId)}/pdf/retry`, { method: "POST" });
+/** Where a run's PDF is served (Phase 4): a plain GET answering the file as an attachment. */
+export const runPdfUrl = (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/pdf`;
+/**
+ * Download a run's PDF: an anchor the browser follows, never a Link - a Link
+ * would prefetch the route and pull the bytes down for every row on screen.
+ */
+export function downloadRunPdf(runId: string): void {
+  const a = document.createElement("a");
+  a.href = runPdfUrl(runId);
+  a.rel = "noopener";
+  a.click();
+}
 /** Transfer the report to another owner (Phase 3, module admin). */
 export const transferOwner = (reportId: string, ownerEmployeeId: string) =>
   call<OwnerTransfer>(`/${encodeURIComponent(reportId)}/owner`, json("PATCH", { ownerEmployeeId }));

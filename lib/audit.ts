@@ -178,6 +178,13 @@ export type AuditAction =
    * module. Carries `from` and `to`, each `{ usd, minutes }`.
    */
   | "bas.report_ceiling_changed"
+  /**
+   * A person asked for a run's PDF to be rendered again (Phase 4), after a
+   * failed render. Carries the run id, the report's name and the error the
+   * failed render had left. The render itself is the worker's and is on the
+   * run's own columns, not here.
+   */
+  | "bas.report_pdf_retry_requested"
   | "bas.building_occupancy_updated"
   /**
    * The Cost Intelligence skill catalog was synced from the skills folder.

@@ -1,14 +1,16 @@
 import { prisma } from "@/lib/db";
-import { writeAuditEvent } from "@/lib/audit";
-import { logger } from "@/lib/logger";
-import { BAS_MODULE_KEY } from "../constants";
 import type { Narrator } from "./engine/narrative";
 import { ReportRunError, executeQueuedRun } from "./engine/run";
+import { drainPdfQueue, type PdfOutcome } from "./pdf/jobs";
+import type { PdfRenderer } from "./pdf/render";
+import { MAX_ATTEMPTS, STALE_AFTER_MS, STALLED_TWICE_ERROR, failExhaustedStaleRuns } from "./queue-guards";
 
 /**
  * The report worker (Reports, Phase 3): claims the oldest queued run, holds
  * it with a heartbeat, executes the Phase 2 engine on it, and goes back for
- * the next one until the queue is empty.
+ * the next one until the queue is empty. Since Phase 4 (2026-11-13) it then
+ * prints every queued PDF - the run it just finished, and any Retry PDF
+ * waiting - with headless Chromium (pdf/render.ts).
  *
  * `scripts/bas-reports-worker.ts` is the entry point, under tsx - the same
  * loader `bas:report:run` uses, which is why the template's JSX pragma and
@@ -16,15 +18,22 @@ import { ReportRunError, executeQueuedRun } from "./engine/run";
  * is reached through `executeQueuedRun` and nothing else, so what that test
  * proves about the render holds here. In Azure a Container Apps Job runs
  * the script per execution (infra/main.bicep, basReportsWorkerJob), started
- * by a KEDA scaler that counts queued runs and stalled ones.
+ * by a KEDA scaler that counts queued runs, stalled ones and queued PDFs.
  *
  * CLAIMING. One UPDATE with FOR UPDATE SKIP LOCKED, the cip-worker pattern:
  * two workers never take the same run, and a row another worker is holding
  * is skipped rather than waited for. A stalled run - `running` with no
  * heartbeat for STALE_AFTER_MS - is claimable ONCE more (attempts < 2); a
- * run that stalls a second time is failed by `failExhaustedStaleRuns`, with
- * an error that says so, before any claim is made. The scaler's query and
- * the claim's WHERE agree on what counts as work.
+ * run that stalls a second time is failed by `failExhaustedStaleRuns`
+ * (queue-guards.ts, shared with the scheduler), with an error that says so,
+ * before any claim is made. The scaler's query and the claim's WHERE agree
+ * on what counts as work.
+ *
+ * THE PDF NEVER FAILS THE RUN. The engine stores the run and queues its
+ * render in the same transaction; the render is a separate claim on the
+ * PDF columns (pdf/jobs.ts) whose failure is recorded on those columns and
+ * nowhere else. A worker with no renderer (--no-pdf) leaves renders queued
+ * for one that has.
  *
  * DRAINING. An execution works until the queue is empty or DRAIN_WINDOW_MS
  * has passed since it started, then exits and lets the scaler start a fresh
@@ -33,16 +42,11 @@ import { ReportRunError, executeQueuedRun } from "./engine/run";
  * job's replicaTimeout.
  */
 
-/** A `running` run with no heartbeat for this long is a worker that died. */
-export const STALE_AFTER_MS = 10 * 60 * 1000;
+export { MAX_ATTEMPTS, STALE_AFTER_MS, STALLED_TWICE_ERROR, failExhaustedStaleRuns };
+
 export const HEARTBEAT_EVERY_MS = 30_000;
-/** Claims a run may take: the first, and one reclaim after a stall. */
-export const MAX_ATTEMPTS = 2;
 /** How long one execution keeps claiming new runs before it exits. */
 export const DRAIN_WINDOW_MS = 4 * 60 * 1000;
-
-export const STALLED_TWICE_ERROR =
-  "The worker stopped twice while running this report. Run it again from Scheduled; if it stops again, see the runbook entry \"Reports: a run is stuck or failed\".";
 
 export interface Claim {
   runId: bigint;
@@ -55,10 +59,17 @@ export interface Claim {
 export interface WorkerOptions {
   /** Null means no model key: every run finishes partial and says so. */
   narrator: Narrator | null;
+  /** Null means no Chromium (--no-pdf, or a test): queued PDFs stay queued. */
+  pdf: PdfRenderer | null;
   /** Tests shorten it. */
   heartbeatMs?: number;
   /** The clock the time cap reads. Tests move it. */
   clock?: () => number;
+}
+
+export interface Drained {
+  runs: Claim[];
+  pdfs: PdfOutcome[];
 }
 
 /**
@@ -88,56 +99,12 @@ export async function claimNextRun(now = new Date()): Promise<Claim | null> {
 }
 
 /**
- * Fail every running run that has stalled with no reclaim left. Each is
- * one audit row; the error on the run says what happened and what to do.
- * Returns how many were failed.
- */
-export async function failExhaustedStaleRuns(now = new Date()): Promise<number> {
-  const staleBefore = new Date(now.getTime() - STALE_AFTER_MS);
-  const stale = await prisma.basReportRun.findMany({
-    where: { status: "running", heartbeatAt: { lt: staleBefore }, attempts: { gte: MAX_ATTEMPTS } },
-    select: { runId: true, reportId: true, attempts: true, heartbeatAt: true, report: { select: { name: true } } },
-    orderBy: { runId: "asc" },
-  });
-  let failed = 0;
-  for (const run of stale) {
-    await prisma.$transaction(async (tx) => {
-      // Re-checked inside the transaction: a worker may have heartbeat since.
-      const updated = await tx.basReportRun.updateMany({
-        where: { runId: run.runId, status: "running", heartbeatAt: { lt: staleBefore } },
-        data: { status: "failed", error: STALLED_TWICE_ERROR, finishedAt: now },
-      });
-      if (updated.count === 0) return;
-      failed += 1;
-      await writeAuditEvent(tx, {
-        action: "bas.report_run_finished",
-        actorEmployeeId: null,
-        moduleKey: BAS_MODULE_KEY,
-        metadata: {
-          reportId: run.reportId.toString(),
-          runId: run.runId.toString(),
-          name: run.report.name,
-          status: "failed",
-          error: STALLED_TWICE_ERROR,
-          attempts: run.attempts,
-          lastHeartbeatAt: run.heartbeatAt?.toISOString() ?? null,
-        },
-      });
-    });
-    logger.error("bas.report_run_stalled", {
-      outcome: "failed",
-      reason: `run ${run.runId} of report ${run.reportId} stalled ${run.attempts} times; failed`,
-    });
-  }
-  return failed;
-}
-
-/**
  * One run: fail the exhausted stalls, claim the next, heartbeat while the
  * engine works, and return what was claimed (null when nothing was). A run
  * the engine fails is stored as failed by the engine itself and is not
  * rethrown; anything else - the database gone, say - propagates, and the
  * run's heartbeat stops with it, which is what the next worker reclaims on.
+ * The run's PDF is queued by the engine and printed by `drainQueue`, not here.
  */
 export async function workOnce(options: WorkerOptions, now = new Date()): Promise<Claim | null> {
   await failExhaustedStaleRuns(now);
@@ -160,22 +127,30 @@ export async function workOnce(options: WorkerOptions, now = new Date()): Promis
 }
 
 /**
- * Work until the queue is empty or the window closes, and say what was done.
- * `maxRuns` is for `--once`.
+ * Work until the queue is empty or the window closes, printing queued PDFs
+ * after every run and once more at the end (a Retry PDF with no run to
+ * follow), and say what was done. `maxRuns` is for `--once`.
  */
 export async function drainQueue(
   options: WorkerOptions,
   limits: { windowMs?: number; maxRuns?: number } = {},
-): Promise<Claim[]> {
+): Promise<Drained> {
   const started = Date.now();
   const windowMs = limits.windowMs ?? DRAIN_WINDOW_MS;
-  const done: Claim[] = [];
+  const deadlineMs = started + windowMs;
+  const runs: Claim[] = [];
+  const pdfs: PdfOutcome[] = [];
   for (;;) {
-    if (limits.maxRuns !== undefined && done.length >= limits.maxRuns) break;
-    if (done.length > 0 && Date.now() - started > windowMs) break;
+    if (limits.maxRuns !== undefined && runs.length >= limits.maxRuns) break;
+    if (runs.length > 0 && Date.now() > deadlineMs) break;
     const claim = await workOnce(options);
     if (claim === null) break;
-    done.push(claim);
+    runs.push(claim);
+    pdfs.push(...(await drainPdfQueue(options.pdf, { deadlineMs })));
   }
-  return done;
+  // What was queued by a retry, or by a run from another worker, while this
+  // one had no run of its own. The first pass has no deadline: a worker that
+  // started only for a retry must get to it.
+  pdfs.push(...(await drainPdfQueue(options.pdf, runs.length === 0 ? {} : { deadlineMs })));
+  return { runs, pdfs };
 }

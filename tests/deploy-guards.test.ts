@@ -1952,7 +1952,8 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(worker).toMatch(/minExecutions: 0/);
     expect(worker).toMatch(/replicaRetryLimit: 0/);
     expect(worker).toMatch(/type: 'postgresql'/);
-    expect(worker).toMatch(/query: 'SELECT count\(\*\) FROM bas_report_runs WHERE status = \\'queued\\' OR \(status = \\'running\\' AND heartbeat_at < now\(\) - interval \\'10 minutes\\'\)'/);
+    // Queued runs, stalled runs, and - since Phase 4 - queued PDF renders, so Retry PDF wakes a worker (tests/bas-reports-queue-guards.test.ts runs this exact query).
+    expect(worker).toMatch(/query: 'SELECT count\(\*\) FROM bas_report_runs WHERE status = \\'queued\\' OR \(status = \\'running\\' AND heartbeat_at < now\(\) - interval \\'10 minutes\\'\) OR pdf_status = \\'queued\\''/);
     expect(worker).toMatch(/secretRef: 'database-url'\s*\n\s*triggerParameter: 'connection'/);
     expect(worker).toMatch(/command: \[\s*'npx'\s*'tsx'\s*'scripts\/bas-reports-worker\.ts'\s*\]/);
     // Both run the same image, from the parameter with no placeholder default.
@@ -2018,7 +2019,7 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(code).not.toMatch(/roleAssignments@[^\n]*basReports/);
   });
 
-  it("builds one image on merge and updates each job only once its variable is set; the Dockerfile runs the worker under tsx", async () => {
+  it("builds one image on merge and updates each job only once its variable is set; the Dockerfile runs the worker under tsx and carries Chromium for the PDF", async () => {
     const workflow = await readFile(".github/workflows/deploy.yml");
     // The workflow file is CRLF on a Windows checkout: \s* spans the line break.
     expect(workflow).toMatch(/--image "bas-reports:\$\{\{ github\.sha \}\}"\s*\\\s*--file Dockerfile\.bas-reports/);
@@ -2030,9 +2031,28 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     const dockerfile = await readFile("Dockerfile.bas-reports");
     expect(dockerfile).toMatch(/^FROM node:24-bookworm-slim$/m);
     expect(dockerfile).toMatch(/CMD \["npx", "tsx", "scripts\/bas-reports-worker\.ts"\]/);
-    // Nothing installed for a browser yet (the comments may name Phase 4's plan; the instructions may not).
+    // Chromium for the PDF (Phase 4, 2026-11-13): Playwright's browser at the
+    // version the lockfile pins, with its apt dependencies, at a path the
+    // unprivileged user can read, and a launch-and-print check AS that user,
+    // so a browser that cannot start fails the build and not the first report.
     const instructions = dockerfile.split(/\r?\n/).filter((line) => !line.trim().startsWith("#")).join("\n");
-    expect(instructions).not.toMatch(/chromium|playwright/i);
+    expect(instructions).toMatch(/^ENV PLAYWRIGHT_BROWSERS_PATH=\/ms-playwright$/m);
+    expect(instructions).toMatch(/RUN npx playwright install --with-deps chromium\s*\\\s*&& chmod -R a\+rX \/ms-playwright/);
+    expect(instructions.indexOf("ENV PLAYWRIGHT_BROWSERS_PATH")).toBeLessThan(instructions.indexOf("npx playwright install"));
+    expect(instructions.indexOf("USER node")).toBeLessThan(instructions.indexOf("chromium.launch()"));
+    expect(instructions).toMatch(/RUN node -e "require\('playwright'\)\.chromium\.launch\(\)/);
+    expect(instructions).toMatch(/p\.pdf\(\{ format: 'Letter' \}\)/);
+    // The web image never gets a browser.
+    const web = (await readFile("Dockerfile")).split(/\r?\n/).filter((line) => !line.trim().startsWith("#")).join("\n");
+    expect(web).not.toMatch(/chromium|playwright/i);
+    // Playwright is pinned exactly, so the image and CI print with one browser build.
+    const pkgJson = JSON.parse(await readFile("package.json")) as { dependencies: Record<string, string> };
+    expect(pkgJson.dependencies.playwright).toMatch(/^\d+\.\d+\.\d+$/);
+    // CI installs the same browser the same way, before the tests that print.
+    const ci = await readFile(".github/workflows/ci.yml");
+    expect(ci).toMatch(/- name: Install Chromium for the PDF tests\s*run: npx playwright install --with-deps chromium/);
+    expect(ci.indexOf("npx playwright install")).toBeLessThan(ci.indexOf("run: npm test"));
+    expect(ci.indexOf("run: npm ci")).toBeLessThan(ci.indexOf("npx playwright install"));
     const pkg = JSON.parse(await readFile("package.json")) as { scripts: Record<string, string> };
     expect(pkg.scripts["bas:reports:worker"]).toBe("tsx scripts/bas-reports-worker.ts");
     expect(pkg.scripts["bas:reports:scheduler"]).toBe("tsx scripts/bas-reports-scheduler.ts");
@@ -2047,7 +2067,7 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(readme.split("## What gets created")[1]?.split("\n## ")[0] ?? "").toMatch(/enableBasReports/);
     const runbook = await readFile("runbook.md");
     // "Reports: what the caps do" until 2026-11-12, when the two per-report caps became the module's one ceiling.
-    for (const heading of ["Reports: turning the jobs on", "Reports: a run is stuck or failed", "Reports: the safety ceiling"]) {
+    for (const heading of ["Reports: turning the jobs on", "Reports: a run is stuck or failed", "Reports: the safety ceiling", "Reports: the PDF"]) {
       expect(runbook, heading).toContain(`## ${heading}`);
     }
     const section = runbook.split("\n## Reports: turning the jobs on")[1]?.split("\n## ")[0] ?? "";

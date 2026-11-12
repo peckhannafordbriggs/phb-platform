@@ -243,7 +243,8 @@ failure modes.
   turning the jobs on* in `runbook.md`): a scheduler job on a cron (`basReportsSchedulerCron`,
   every fifteen minutes, UTC) and a worker job on a PostgreSQL scaler that counts queued
   report runs, two executions at most, both from one `bas-reports:<sha>` image
-  (`Dockerfile.bas-reports`, built by `deploy.yml` on merge) passed as `basReportsImage`.
+  (`Dockerfile.bas-reports` - Node and Playwright's Chromium, for the PDF - built by
+  `deploy.yml` on merge) passed as `basReportsImage`.
   The same identity, registry pull and vault read as the web app; no role assignment is
   added.
 - Optionally the nightly database backup (`enableDbBackup`, off by default; see

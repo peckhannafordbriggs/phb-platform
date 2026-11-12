@@ -26,6 +26,8 @@ type ReportsErrorCode = Extract<
   | "run_in_flight"
   | "admin_required"
   | "owner_not_eligible"
+  | "pdf_not_available"
+  | "pdf_not_retryable"
 >;
 
 /**
@@ -66,6 +68,9 @@ const STATUS: Record<ReportsErrorCode, number> = {
   // access. Transferring an owner and setting the safety ceiling.
   admin_required: 403,
   owner_not_eligible: 409,
+  // The run is visible, so 404 would be a lie; the file is what is missing.
+  pdf_not_available: 409,
+  pdf_not_retryable: 409,
 };
 
 function isReportsError(code: BasErrorCode): code is ReportsErrorCode {

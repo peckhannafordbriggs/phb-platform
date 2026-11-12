@@ -1,7 +1,7 @@
 import "./load-env";
 import { prisma } from "../lib/db";
 import { readSchedulerJobEnv } from "../lib/modules/bas/reports/job-env";
-import { runSchedulerPass } from "../lib/modules/bas/reports/scheduler";
+import { abandonedCount, runSchedulerPass } from "../lib/modules/bas/reports/scheduler";
 
 /**
  * The report scheduler, one pass (Reports, Phase 3).
@@ -13,9 +13,13 @@ import { runSchedulerPass } from "../lib/modules/bas/reports/scheduler";
  * next run time has passed it queues ONE run and advances the next run time
  * in the same transaction; a report that missed several ticks gets one run,
  * for the latest occurrence, never a backfill. Active reports whose owner's
- * account is disabled are paused with the reason recorded. Needs
- * DATABASE_URL and nothing else; prints what it did and exits 0, or exits
- * 1 if the pass threw, which Container Apps shows as a failed execution.
+ * account is disabled are paused with the reason recorded. Before any of
+ * that it fails abandoned work (2026-11-13): a run queued for an hour that
+ * no worker claimed, a run lost twice, a PDF render queued for an hour -
+ * so a worker that cannot start does not keep the scaler restarting it.
+ * Needs DATABASE_URL and nothing else; prints what it did and exits 0, or
+ * exits 1 if the pass threw, which Container Apps shows as a failed
+ * execution.
  *
  * Read through lib/modules/bas/reports/job-env.ts and never lib/env.ts,
  * which is the web app's boot schema and fails a job that imports it
@@ -37,7 +41,18 @@ async function main(): Promise<void> {
   for (const s of pass.skipped) {
     console.log(`[bas-reports-scheduler] skipped report ${s.reportId} (${s.name}): ${s.reason}`);
   }
-  console.log(`[bas-reports-scheduler] ${pass.enqueued.length} queued, ${pass.paused.length} paused, ${pass.skipped.length} skipped`);
+  for (const r of pass.abandoned.unclaimedRuns) {
+    console.log(`[bas-reports-scheduler] failed run ${r.runId} of report ${r.reportId} (${r.name}): never claimed - ${r.error}`);
+  }
+  for (const r of pass.abandoned.stalledRuns) {
+    console.log(`[bas-reports-scheduler] failed run ${r.runId} of report ${r.reportId} (${r.name}): stalled twice`);
+  }
+  for (const r of pass.abandoned.unclaimedPdfs) {
+    console.log(`[bas-reports-scheduler] failed the PDF of run ${r.runId} (${r.name}): never claimed - ${r.error}`);
+  }
+  console.log(
+    `[bas-reports-scheduler] ${pass.enqueued.length} queued, ${pass.paused.length} paused, ${pass.skipped.length} skipped, ${abandonedCount(pass.abandoned)} abandoned`,
+  );
 }
 
 main()

@@ -1561,6 +1561,37 @@ stays Watch**: the spec is silent on a share or a duration, a test pins it,
 and the question is Jim's (`runbook.md` → *Data Health rolled up to Watch
 with half the building offline*). `WHY-ITS-BUILT-THIS-WAY.md` § 82.
 
+**Reports, Phase 4, the PDF half (2026-11-13; email waits on the sender
+app registration, Request 7).** After the engine stores a run's page the
+worker prints the SAME HTML to PDF with headless Chromium - Playwright's,
+in the job image only (`Dockerfile.bas-reports`, with a launch-and-print
+check as the `node` user) and never the web image, held by a walk of the
+web app's import graph - Letter, the report name and period in the header,
+page numbers in the footer, Figtree embedded - and stores it as bytea on
+the run (`bas_report_runs.pdf` and five columns beside it, each held to
+`pdf_status` by a CHECK). **A failed render never fails the run**: the
+failure is on the PDF columns, with *Retry PDF* on the run page and the
+list, which queues a render without re-running the analysis. **A worker
+claims a render by writing the failure first** - *a render started at …
+and has not finished* - and overwrites it with ready, so a worker that
+dies mid-render leaves an honest row and there is no stuck state. On the
+run page: *Print* and a red *Download*, Freeze Protection's pair, in the
+bar's actions slot; on the Reports list, a *PDF* column with Download per
+row, greyed with *PDF not available for this run — use Re-run* for runs
+from before. `GET /api/modules/bas/reports/runs/<id>/pdf` is guarded
+exactly as viewing the run. **Every `basReportRun` read in `lib/` and
+`app/` is a `select` that leaves the bytes out**, held by a test: the list
+polls 200 rows every ten seconds. **The spin guard:** on the night of
+2026-11-12 a worker crashing at startup was restarted by the scaler every
+45 seconds all night against one queued run; the scheduler's pass now fails
+a run queued for an hour and never claimed, a run lost twice, and a PDF
+queued for an hour, so the scaler's count returns to zero
+(`queue-guards.ts`, shared with the worker; the test runs the template's
+own scaler query). The worker's scaler query gained `OR pdf_status =
+'queued'`, a template change the owner deploys; the image rebuilds on
+merge. `WHY-ITS-BUILT-THIS-WAY.md` § 83; `runbook.md` → *Reports: the
+PDF*; `docs/design/bas-reports-pdf/`.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
