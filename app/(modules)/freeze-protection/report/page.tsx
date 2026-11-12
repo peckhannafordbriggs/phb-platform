@@ -1,9 +1,11 @@
 import { notFound } from "next/navigation";
 import { requireModuleAccess } from "@/lib/authz";
+import { listProjectCatalog } from "@/lib/modules/freeze-protection/catalog";
 import { FREEZE_PROTECTION_MODULE_KEY } from "@/lib/modules/freeze-protection/constants";
 import { FpShell } from "../fp-shell";
 import { ReportActions } from "../header-actions";
 import { type FpSearchParams, loadProject } from "../load";
+import { ProjectCatalog } from "../views/project-catalog";
 import { ReportView } from "../views/report-view";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +18,13 @@ export default async function ReportPage({ searchParams }: { searchParams: Promi
   if (!access.ok) notFound();
 
   const { projects, project, lines, unit, history } = await loadProject(await searchParams);
+  if (project === null) {
+    return (
+      <FpShell>
+        <ProjectCatalog projects={await listProjectCatalog()} base="/freeze-protection/report" lead="Choose a project to see its report." />
+      </FpShell>
+    );
+  }
   const fileName = project
     ? `${slug(project.jobNumber)}${unit ? `-${slug(unit.name)}` : ""}-freeze-protection-${project.verificationDate}.html`
     : null;

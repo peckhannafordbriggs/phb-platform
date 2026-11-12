@@ -11757,8 +11757,9 @@ schedule that is always too long: add its units by hand.
 
 ## The verification form import (2026-11-10)
 
-**Import** takes a second kind of PDF: the fillable verification form. **Blank
-form** on the import panel downloads it (`GET /import/form`, behind the grant;
+**Import** takes a second kind of PDF: the fillable verification form.
+**Template**, left of the project picker on the Equipment page (shown with or
+without a project), downloads it (`GET /import/form`, behind the grant;
 the file is `lib/modules/freeze-protection/import/assets/fp-verification-form.pdf`,
 built by `scripts/fp-build-form.py`). One row per unit, ten rows a page, two
 pages, twenty in all; for more units, fill and import a second form. Tested by

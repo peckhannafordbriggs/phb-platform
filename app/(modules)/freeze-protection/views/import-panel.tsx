@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { FileDown, FileUp } from "lucide-react";
+import { FileUp } from "lucide-react";
 import type { FormDifference, FormImportOutcome } from "@/lib/modules/freeze-protection/import/form-commit";
 import type { ParsedForm } from "@/lib/modules/freeze-protection/import/form";
 import { mergeSchedules } from "@/lib/modules/freeze-protection/import/merge";
@@ -39,7 +39,6 @@ import { clearHandOff, pendingFile } from "./import-handoff";
  */
 
 const PARALLEL = 3;
-const FORM_URL = "/api/modules/freeze-protection/import/form";
 
 export type ImportFailure = { title: string; message: string };
 
@@ -189,15 +188,12 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
           <p className="max-w-3xl text-[0.8125rem] text-[var(--muted)]">
             Upload an equipment schedule PDF or a filled freeze protection form. From a schedule, equipment with a water, glycol or steam coil
             that outside air can reach is added and the rest is left out. From a form, new units are added and blank answers are filled; an
-            answer already here is never overwritten, and any difference is listed. A scanned PDF will not work.
+            answer already here is never overwritten, and any difference is listed. Download the blank form with Template, next to
+            the project picker. A scanned PDF will not work.
           </p>
           <div className="flex flex-wrap items-end justify-between gap-3">
             <PdfField file={file} onChange={setFile} />
-            <div className="flex flex-wrap gap-2">
-              <a href={FORM_URL} download className={DOWNLOAD_CLASSES}>
-                <FileDown size={15} aria-hidden="true" />
-                Blank form
-              </a>
+            <div className="flex gap-2">
               <Button href={doneHref}>Cancel</Button>
               <Button variant="primary" disabled={file === null} onClick={() => file && void run(file)}>
                 <FileUp size={15} aria-hidden="true" />
@@ -241,10 +237,6 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
     </Card>
   );
 }
-
-/** The secondary button's look on a plain link: the download is an API route, not a page to prefetch. */
-const DOWNLOAD_CLASSES =
-  "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-4 text-[0.8125rem] font-medium text-[var(--foreground)] hover:bg-[var(--neutral-50)]";
 
 /** A file input styled as the module's secondary button. Shared with New project. */
 export function PdfField({
