@@ -332,19 +332,19 @@ describe("claiming runs", () => {
     // Stalled: the heartbeat stops for longer than the stale window.
     const stale = new Date(Date.now() - STALE_AFTER_MS - 1000);
     await testDb.basReportRun.update({ where: { runId: id }, data: { heartbeatAt: stale } });
-    expect(await failExhaustedStaleRuns()).toBe(0);
+    expect(await failExhaustedStaleRuns()).toHaveLength(0);
     const second = await claimNextRun();
     expect(second).toMatchObject({ runId: id, attempts: MAX_ATTEMPTS, reclaimed: true });
     expect((await testDb.basReportRun.findUniqueOrThrow({ where: { runId: id } })).startedAt!.getTime()).toBeGreaterThan(stale.getTime());
     // Stalled a second time: failed, never claimed again.
     await testDb.basReportRun.update({ where: { runId: id }, data: { heartbeatAt: stale } });
     expect(await claimNextRun()).toBeNull();
-    expect(await failExhaustedStaleRuns()).toBe(1);
+    expect(await failExhaustedStaleRuns()).toHaveLength(1);
     const failed = await testDb.basReportRun.findUniqueOrThrow({ where: { runId: id } });
     expect(failed).toMatchObject({ status: "failed", error: STALLED_TWICE_ERROR, attempts: MAX_ATTEMPTS });
     expect(failed.finishedAt).not.toBeNull();
     expect((await auditRows("bas.report_run_finished")).at(-1)).toMatchObject({ actorEmployeeId: null, metadata: { runId: id.toString(), status: "failed", error: STALLED_TWICE_ERROR, attempts: 2 } });
-    expect(await failExhaustedStaleRuns()).toBe(0);
+    expect(await failExhaustedStaleRuns()).toHaveLength(0);
   });
 
   it("holds attempts to a count in the database", async () => {
@@ -464,15 +464,18 @@ describe("the worker", () => {
   it("executes a queued run end to end, heartbeating while it works, and leaves nothing to claim", async () => {
     const { runId } = await requestRun(viewerOf(owner), reportId);
     const beats: Date[] = [];
-    const claim = await workOnce({ narrator: createFixedNarrator(), heartbeatMs: 20 });
+    const claim = await workOnce({ narrator: createFixedNarrator(), pdf: null, heartbeatMs: 20 });
     expect(claim).toMatchObject({ runId: BigInt(runId), attempts: 1, reclaimed: false });
     const row = await testDb.basReportRun.findUniqueOrThrow({ where: { runId: BigInt(runId) } });
     expect(["succeeded", "partial"]).toContain(row.status);
     expect(row.finishedAt).not.toBeNull();
     expect(row.reportHtml ?? "").toContain("<!doctype html>");
+    // Phase 4: the page's PDF is queued the moment the page is stored; a worker with no renderer leaves it so.
+    expect(row.pdfStatus).toBe("queued");
+    expect(row.pdfQueuedAt).not.toBeNull();
     expect(row.heartbeatAt!.getTime()).toBeGreaterThanOrEqual(row.startedAt!.getTime());
     beats.push(row.heartbeatAt!);
-    expect(await workOnce({ narrator: createFixedNarrator() })).toBeNull();
+    expect(await workOnce({ narrator: createFixedNarrator(), pdf: null })).toBeNull();
     const list = await listReports(viewerOf(owner));
     expect(list.reports[0]!.lastRun).toMatchObject({ runId, status: row.status });
     expect((await auditRows("bas.report_run_started"))[0]).toMatchObject({ actorEmployeeId: owner.id, metadata: { runId, trigger: "manual", attempt: 1 } });
@@ -481,11 +484,11 @@ describe("the worker", () => {
   it("drains the queue in order and stops at --once", async () => {
     const a = await enqueueRun(testDb, { reportId: BigInt(reportId), trigger: "scheduled", periodEnd: new Date(), startedById: null, now: new Date(Date.now() - 2000) });
     const b = await enqueueRun(testDb, { reportId: BigInt(reportId), trigger: "scheduled", periodEnd: new Date(), startedById: null, now: new Date(Date.now() - 1000) });
-    const once = await drainQueue({ narrator: createFixedNarrator() }, { maxRuns: 1 });
-    expect(once.map((c) => c.runId)).toEqual([a.runId]);
-    const rest = await drainQueue({ narrator: createFixedNarrator() });
-    expect(rest.map((c) => c.runId)).toEqual([b.runId]);
-    expect(await drainQueue({ narrator: createFixedNarrator() })).toEqual([]);
+    const once = await drainQueue({ narrator: createFixedNarrator(), pdf: null }, { maxRuns: 1 });
+    expect(once.runs.map((c) => c.runId)).toEqual([a.runId]);
+    const rest = await drainQueue({ narrator: createFixedNarrator(), pdf: null });
+    expect(rest.runs.map((c) => c.runId)).toEqual([b.runId]);
+    expect(await drainQueue({ narrator: createFixedNarrator(), pdf: null })).toEqual({ runs: [], pdfs: [] });
   });
 
   it("runs as the real script under tsx - the worker's loader - and finishes the run", async () => {
@@ -503,6 +506,14 @@ describe("the worker", () => {
     expect(["succeeded", "partial"]).toContain(row.status);
     expect(row.reportHtml ?? "").toContain("<!doctype html>");
     expect(row.error).toBeNull();
+    // Phase 4: the same execution printed the page to PDF with Chromium -
+    // the image's, in Azure; Playwright's local install here and in CI.
+    expect(result.stdout).toContain("pdf: Chromium, launched on the first render");
+    expect(result.stdout).toMatch(new RegExp(`pdf of run ${runId} \\(.*\\): \\d+ bytes`));
+    expect(row.pdfStatus).toBe("ready");
+    expect(row.pdfError).toBeNull();
+    expect(row.pdfBytes ?? 0).toBeGreaterThan(5_000);
+    expect(row.pdfRenderedAt).not.toBeNull();
   }, 150_000);
 
   it("runs the scheduler as the real script under tsx, which queues the due run", async () => {

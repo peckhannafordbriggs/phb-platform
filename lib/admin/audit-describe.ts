@@ -573,6 +573,9 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     return `${actor} set the Reports safety ceiling to ${words(meta.to)} per run (was ${words(meta.from)})`;
   },
 
+  "bas.report_pdf_retry_requested": ({ actor, meta }) =>
+    `${actor} asked for the PDF of the report ${stringField(meta, "name") ?? "(unnamed)"} to be rendered again`,
+
   // Counts rather than names: a sync can touch every skill, and the sync row
   // in cip_skill_syncs holds the detail.
   "cip.skills_synced": ({ actor, meta }) => {
@@ -979,6 +982,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.report_owner_transferred": "BAS report owner transferred",
   "bas.building_occupancy_updated": "BAS building occupied hours set",
   "bas.report_ceiling_changed": "BAS Reports safety ceiling changed",
+  "bas.report_pdf_retry_requested": "BAS report PDF retried",
   "cip.skills_synced": "Cost Intelligence skills synced",
   "cip.projects_synced": "Cost Intelligence projects synced",
   "cip.run_started": "Cost Intelligence run started",

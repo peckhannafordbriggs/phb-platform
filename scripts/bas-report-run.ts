@@ -76,6 +76,7 @@ async function main(): Promise<void> {
 
   console.log("");
   console.log(`Run ${outcome.runId}: ${outcome.status}${outcome.partialReason !== null ? ` - ${outcome.partialReason}` : ""}`);
+  console.log("PDF: queued for the worker (this script carries no Chromium; the worker job or `npm run bas:reports:worker` prints it)");
   console.log(`${doc.header.buildingName} · ${doc.header.periodStart} to ${doc.header.periodEnd} · ${doc.header.windowLabel}`);
   console.log(`Building status: ${STATUS_LABELS[doc.summary.status]} · new ${doc.summary.counts.new}, still open ${doc.summary.counts.stillOpen}, cleared ${doc.summary.counts.cleared}`);
   console.log(

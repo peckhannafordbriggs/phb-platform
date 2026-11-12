@@ -63,6 +63,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Chromium for tests/bas-reports-pdf.test.ts, which prints a report the
+      # way the BAS Reports worker does (Dockerfile.bas-reports installs the
+      # same browser the same way). The version is pinned by `playwright` in
+      # package-lock.json; --with-deps adds its apt packages on the runner.
+      - name: Install Chromium for the PDF tests
+        run: npx playwright install --with-deps chromium
+
       # lib/generated is gitignored, so nothing typechecks until this runs.
       - name: Generate Prisma client
         run: npx prisma generate

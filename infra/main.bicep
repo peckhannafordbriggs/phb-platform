@@ -1233,15 +1233,17 @@ resource cipWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableCipWorker) {
 //   never a backfill - and pauses reports whose owner's account is
 //   disabled. It needs the database and nothing else;
 //
-//   the WORKER, on a scaler that counts queued runs and stalled ones,
-//   exactly like the Cost Intelligence worker: every fifteen seconds the
-//   count is read, and one execution per run starts, two at most. Each
-//   execution runs scripts/bas-reports-worker.ts, which claims runs with
-//   FOR UPDATE SKIP LOCKED, heartbeats every 30 s while the engine works,
-//   and exits when the queue is empty or its drain window closes. The
-//   replica timeout, 30 minutes, is above the longest time cap a definition
-//   may set (25 minutes) plus the worker's drain window (4), so a run is
-//   never killed by the platform before its own cap stops it.
+//   the WORKER, on a scaler that counts queued runs, stalled ones and
+//   queued PDF renders, exactly like the Cost Intelligence worker: every
+//   fifteen seconds the count is read, and one execution per run starts,
+//   two at most. Each execution runs scripts/bas-reports-worker.ts, which
+//   claims runs with FOR UPDATE SKIP LOCKED, heartbeats every 30 s while
+//   the engine works, prints each finished run's page to PDF with the
+//   Chromium the image carries (Phase 4, 2026-11-13; 2Gi is room for one
+//   page at a time), and exits when the queue is empty or its drain window
+//   closes. The replica timeout, 30 minutes, is above the longest time cap
+//   a definition may set (25 minutes) plus the worker's drain window (4),
+//   so a run is never killed by the platform before its own cap stops it.
 //
 // The same identity, the same registry pull and the same vault read the
 // identity already holds: NO role assignment is added, so a Contributor can
@@ -1363,10 +1365,17 @@ resource basReportsWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableBasRepo
               type: 'postgresql'
               metadata: {
                 // The same predicate the worker claims by: queued, or
-                // running with no heartbeat for ten minutes. A run that
-                // stalled twice is in this count until the next execution
-                // fails it, which is the first thing an execution does.
-                query: 'SELECT count(*) FROM bas_report_runs WHERE status = \'queued\' OR (status = \'running\' AND heartbeat_at < now() - interval \'10 minutes\')'
+                // running with no heartbeat for ten minutes, or - since
+                // Phase 4 (2026-11-13) - a PDF render queued, by the engine
+                // as it stores a page or by Retry PDF, so a retry wakes a
+                // worker on its own. A run that stalled twice is in this
+                // count until the next execution fails it, which is the
+                // first thing an execution does; a run or render nobody has
+                // claimed for an hour is failed by the scheduler's pass
+                // (lib/modules/bas/reports/queue-guards.ts), so a worker that
+                // cannot start does not hold the count above zero with the
+                // scaler restarting it all night (2026-11-12).
+                query: 'SELECT count(*) FROM bas_report_runs WHERE status = \'queued\' OR (status = \'running\' AND heartbeat_at < now() - interval \'10 minutes\') OR pdf_status = \'queued\''
                 targetQueryValue: '1'
               }
               auth: [

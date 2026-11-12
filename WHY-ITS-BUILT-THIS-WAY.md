@@ -3284,3 +3284,83 @@ to Watch*), `tests/bas-reports-engine.test.ts` (*a period after the data
 stopped*), `tests/bas-reports-render.test.tsx`; `runbook.md` → *Data
 Health lists ten identical "No readings" rows*, *Data Health rolled up to
 Watch with half the building offline*.
+
+## 83 · The PDF is the page printed, Chromium lives in the job image, and a render claims by writing its failure first
+
+**What I did (2026-11-13).** Reports' Phase 4, the PDF half. After the
+engine stores a run's page, the worker prints that same `report_html` with
+headless Chromium - Playwright's, installed into `Dockerfile.bas-reports`
+at the version the lockfile pins, with a launch-and-print check as the
+image's unprivileged user so a browser that cannot start fails the build -
+to a Letter PDF with the report's name and period in the header, page
+numbers in the footer and Figtree embedded from `app/fonts`, and stores the
+bytes on the run as bytea with five columns beside them, each held to
+`pdf_status` by a CHECK. A render is queued the moment the page is stored
+and by *Retry PDF* on a failed one; the worker job's scaler counts queued
+renders; a worker takes one by setting it to `failed` with a sentence
+saying a render started at this time and has not finished, and overwrites
+that with `ready`. A failed render never touches the run. The run page
+carries *Print* and a red *Download* in the bar's actions slot, the
+Freeze Protection pair; the list carries a *PDF* column. Every
+`basReportRun` read in the app is a `select` that leaves the bytes out,
+and the web app's import graph never reaches the module that launches a
+browser.
+
+In the same change, the spin guard: the scheduler's pass fails a run
+queued for an hour and never claimed, a run lost twice, and a render
+queued for an hour, each with an error naming what happened and what to
+do, so the scaler's count returns to zero.
+
+**Why.** One rendering: the plan's decision, because a screen and a PDF
+that disagree are two reports, and the model's prose is already held to
+the findings by § 78 - a second renderer would be a second place for a
+number to come from. The browser in the job image and nowhere else,
+because the web app never prints, and 400 MB of Chromium in the image that
+serves pages is 400 MB of attack surface and cold start for nothing; the
+graph test is there because "never" has to be checked, not remembered.
+
+The claim that writes its failure first is the honest shape for a step
+that can die without a word. A `rendering` state needs a heartbeat and a
+reaper to be true, and a worker killed by memory under Chromium would
+leave it forever. Writing "started and has not finished" and overwriting
+it on success means the row is true at every instant a person can read it,
+and *Retry PDF* is the only recovery there is, offered exactly when it is
+needed. A failed render never failing the run follows from what a PDF is
+here: a copy of the page, for sending; the page and the findings are the
+record.
+
+The `select` rule is arithmetic: a few hundred KB a row, two hundred rows,
+every ten seconds, per open tab. A global `omit` on the Prisma client was
+tried first and retyped every `PrismaClient` parameter in the codebase; a
+select per read, with a test walking every read, costs nothing at runtime
+and nothing in types.
+
+The spin guard sits in the scheduler because the worker is the thing that
+is broken when it is needed. On 2026-11-12 the scaler restarted a worker
+that could not boot every 45 seconds all night against one queued run: the
+count the scaler reads never fell, because only a worker reduces it. The
+scheduler is the job still running in that state, so it is the job that
+takes abandoned work out of the count - and the test runs the template's
+own scaler query, read from `infra/main.bicep`, so "returns to zero" is
+the real predicate and not a copy of it.
+
+**What breaks if you undo it.** Render the PDF from a second template and
+the two drift on the first change to one of them. Put Chromium in the web
+image and every revision carries a browser it never uses, with the graph
+test failing to say so. Replace the claim-writes-failure with a `rendering`
+state and a worker killed mid-render leaves a render that reads "in
+progress" forever, with no Retry. Let a failed render fail the run and a
+browser crash deletes a week's findings from the Reports list. Read runs
+with `include` and the list pulls every PDF on every poll. Move the spin
+guard into the worker and the night of 2026-11-12 happens again.
+
+`lib/modules/bas/reports/pdf/` (`render.ts`, `jobs.ts`, `naming.ts`),
+`queue-guards.ts`, `worker.ts`, `scheduler.ts`, `runs-service.ts`
+(`loadRunPdf`, `retryRunPdf`), the two routes under
+`app/api/modules/bas/reports/runs/[runId]/pdf/`,
+`app/(modules)/bas/reports-run-actions.tsx`, `Dockerfile.bas-reports`,
+`infra/main.bicep` (the worker's scaler query),
+`prisma/migrations/20261113090000_bas_report_runs_pdf/`;
+`tests/bas-reports-pdf.test.ts`, `tests/bas-reports-queue-guards.test.ts`,
+`tests/deploy-guards.test.ts`; `runbook.md` → *Reports: the PDF*, *Reports:
+a run is stuck or failed*.

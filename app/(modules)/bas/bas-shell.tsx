@@ -35,6 +35,7 @@ import { activeTabHref, tabHref, visibleBasTabs, type BasTab } from "./tabs";
 export function BasShell({
   blurb,
   canAdminister = false,
+  actions,
   children,
 }: {
   blurb: string;
@@ -47,6 +48,8 @@ export function BasShell({
    * missing link somebody reports.
    */
   canAdminister?: boolean;
+  /** Right-aligned controls on the bar's row - the kit's `actions` slot, as Freeze Protection uses it: a run page's Print and Download (Phase 4). */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const tabs = visibleBasTabs(canAdminister);
@@ -82,8 +85,8 @@ export function BasShell({
             so a tab is never missing while it resolves - it just briefly forgets
             the filters, which is a link that still goes to the right screen.
           */}
-          <Suspense fallback={<Tabs carryQuery={false} tabs={tabs} pathname={pathname} subBar={subBar} />}>
-            <Tabs carryQuery tabs={tabs} pathname={pathname} subBar={subBar} />
+          <Suspense fallback={<Tabs carryQuery={false} tabs={tabs} pathname={pathname} subBar={subBar} actions={actions} />}>
+            <Tabs carryQuery tabs={tabs} pathname={pathname} subBar={subBar} actions={actions} />
           </Suspense>
         </ModuleHeader>
 
@@ -93,42 +96,35 @@ export function BasShell({
   );
 }
 
-function Tabs({
-  carryQuery,
-  tabs,
-  pathname,
-  subBar,
-}: {
-  carryQuery: boolean;
+interface TabsProps {
   tabs: readonly BasTab[];
   pathname: string;
   subBar: SubBar | null;
-}) {
-  return carryQuery ? (
-    <LiveTabs tabs={tabs} pathname={pathname} subBar={subBar} />
-  ) : (
-    <StaticTabs tabs={tabs} pathname={pathname} subBar={subBar} />
-  );
+  actions?: React.ReactNode;
 }
 
-function LiveTabs({ tabs, pathname, subBar }: { tabs: readonly BasTab[]; pathname: string; subBar: SubBar | null }) {
+function Tabs({ carryQuery, ...props }: TabsProps & { carryQuery: boolean }) {
+  return carryQuery ? <LiveTabs {...props} /> : <StaticTabs {...props} />;
+}
+
+function LiveTabs({ tabs, pathname, subBar, actions }: TabsProps) {
   const searchParams = useSearchParams();
   const hrefFor = (href: string) => tabHref(href, searchParams);
 
   return subBar !== null ? (
-    <SubBarNav bar={subBar} active={activeSubBarItemHref(subBar, pathname)} hrefFor={hrefFor} />
+    <SubBarNav bar={subBar} active={activeSubBarItemHref(subBar, pathname)} hrefFor={hrefFor} actions={actions} />
   ) : (
-    <Bar tabs={tabs} active={activeTabHref(pathname)} hrefFor={hrefFor} />
+    <Bar tabs={tabs} active={activeTabHref(pathname)} hrefFor={hrefFor} actions={actions} />
   );
 }
 
-function StaticTabs({ tabs, pathname, subBar }: { tabs: readonly BasTab[]; pathname: string; subBar: SubBar | null }) {
+function StaticTabs({ tabs, pathname, subBar, actions }: TabsProps) {
   const hrefFor = (href: string) => href;
 
   return subBar !== null ? (
-    <SubBarNav bar={subBar} active={activeSubBarItemHref(subBar, pathname)} hrefFor={hrefFor} />
+    <SubBarNav bar={subBar} active={activeSubBarItemHref(subBar, pathname)} hrefFor={hrefFor} actions={actions} />
   ) : (
-    <Bar tabs={tabs} active={null} hrefFor={hrefFor} />
+    <Bar tabs={tabs} active={null} hrefFor={hrefFor} actions={actions} />
   );
 }
 
@@ -143,13 +139,16 @@ function Bar({
   tabs,
   active,
   hrefFor,
+  actions,
 }: {
   tabs: readonly BasTab[];
   active: string | null;
   hrefFor: (href: string) => string;
+  actions?: React.ReactNode;
 }) {
   return (
     <TabBar
+      actions={actions}
       label="Building Automation sections"
       tabs={tabs.map((tab) => ({
         href: hrefFor(tab.href),
@@ -168,7 +167,17 @@ function Bar({
  * the way the module bar carries it, so a building filter survives the
  * trip out and back.
  */
-function SubBarNav({ bar, active, hrefFor }: { bar: SubBar; active: string | null; hrefFor: (href: string) => string }) {
+function SubBarNav({
+  bar,
+  active,
+  hrefFor,
+  actions,
+}: {
+  bar: SubBar;
+  active: string | null;
+  hrefFor: (href: string) => string;
+  actions?: React.ReactNode;
+}) {
   const back: TabItem = {
     href: hrefFor(SUB_BAR_BACK_HREF),
     label: (
@@ -185,5 +194,5 @@ function SubBarNav({ bar, active, hrefFor }: { bar: SubBar; active: string | nul
     active: item.href === active,
   }));
 
-  return <TabBar label={bar.label} tabs={[back, ...items]} />;
+  return <TabBar label={bar.label} tabs={[back, ...items]} actions={actions} />;
 }

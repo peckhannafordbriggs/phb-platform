@@ -2,9 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui";
+import { describePdfState, pdfStateKind } from "@/lib/modules/bas/reports/pdf/naming";
 import type { RunsList, RunSummary } from "@/lib/modules/bas/reports/runs-service";
 import { ApiError, type Tone } from "./health-client";
-import { fetchRuns } from "./reports-client";
+import { downloadRunPdf, fetchRuns, retryRunPdf } from "./reports-client";
+import { DownloadPdfButton } from "./reports-run-actions";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /**
@@ -13,9 +16,11 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * newest first, with its period, status, duration and cost. Opening one
  * shows the rendered report. Reloaded every ten seconds while the tab is
  * visible (Phase 3), so a run queued from Scheduled is seen to start and
- * finish; Queued and Running are states a row can hold now. No Resend and
- * no Download PDF: those are Phase 4, and a button that does nothing would
- * be worse than none.
+ * finish; Queued and Running are states a row can hold now. Since Phase 4's
+ * PDF half (2026-11-13) each row carries its PDF's state and a Download -
+ * greyed with a tooltip until the PDF is ready - and Retry PDF when a
+ * render failed. No Resend: email is the other half of Phase 4, and a
+ * button that does nothing would be worse than none.
  */
 
 /** How often the list reloads while the tab is visible. */
@@ -96,14 +101,47 @@ export function GeneratedView() {
     return () => clearInterval(timer);
   }, [load]);
 
+  const [busyRunId, setBusyRunId] = useState<string | null>(null);
+  const retryPdf = useCallback(
+    async (runId: string) => {
+      setBusyRunId(runId);
+      try {
+        await retryRunPdf(runId);
+        await load();
+      } catch (cause) {
+        setError(cause instanceof ApiError ? cause : new ApiError("unexpected", "Something went wrong."));
+      } finally {
+        setBusyRunId(null);
+      }
+    },
+    [load],
+  );
+
   if (data === null) {
     return <p className="p-6 text-sm text-[var(--muted)]">{error?.message ?? "Loading runs…"}</p>;
   }
-  return <RunsTable data={data} />;
+  return (
+    <>
+      {error !== null && (
+        <p className="mb-3 rounded-[var(--radius-row)] border p-3 text-sm" style={TONE_STYLE.bad} role="alert">
+          {error.message}
+        </p>
+      )}
+      <RunsTable data={data} onRetryPdf={(runId) => void retryPdf(runId)} busyRunId={busyRunId} />
+    </>
+  );
 }
 
-/** Pure, for a node test. */
-export function RunsTable({ data }: { data: RunsList }) {
+/** Pure, for a node test; Retry PDF is the one action a row takes here. */
+export function RunsTable({
+  data,
+  onRetryPdf,
+  busyRunId = null,
+}: {
+  data: RunsList;
+  onRetryPdf?: (runId: string) => void;
+  busyRunId?: string | null;
+}) {
   if (data.runs.length === 0 && data.runsInDatabase === 0) {
     return (
       <section className="card p-8 text-center">
@@ -133,6 +171,7 @@ export function RunsTable({ data }: { data: RunsList }) {
               <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Findings</th>
               <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Duration</th>
               <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">Cost</th>
+              <th className="eyebrow py-2.5 pr-3 text-[var(--muted)]">PDF</th>
               <th className="eyebrow py-2.5 pr-4 text-[var(--muted)]">Delivery</th>
             </tr>
           </thead>
@@ -161,6 +200,9 @@ export function RunsTable({ data }: { data: RunsList }) {
                   <td className="py-3 pr-3 tabular-nums">
                     {money(r.costUsd)} <span className="text-[var(--muted)]">of ${r.budgetUsd.toFixed(2)}</span>
                   </td>
+                  <td className="py-3 pr-3">
+                    <PdfCell run={r} onRetryPdf={onRetryPdf} busy={busyRunId === r.runId} />
+                  </td>
                   <td className="py-3 pr-4 text-[var(--muted)]">Not sent: email is a later phase</td>
                 </tr>
               );
@@ -169,5 +211,33 @@ export function RunsTable({ data }: { data: RunsList }) {
         </table>
       </div>
     </section>
+  );
+}
+
+/**
+ * The PDF's state in words, then Download - greyed with its reason until the
+ * PDF is ready - and Retry PDF when a render failed. The error is the
+ * tooltip on both the words and the button.
+ */
+export function PdfCell({ run, onRetryPdf, busy }: { run: RunSummary; onRetryPdf?: (runId: string) => void; busy: boolean }) {
+  const kind = pdfStateKind(run.pdf);
+  return (
+    <div className="flex flex-col gap-1">
+      <span
+        className={kind === "failed" ? "text-[var(--danger)]" : "text-[var(--muted)]"}
+        title={run.pdf.error ?? undefined}
+        data-testid="run-pdf-state"
+      >
+        {describePdfState(run.pdf)}
+      </span>
+      <div className="flex flex-wrap gap-1">
+        <DownloadPdfButton pdf={run.pdf} size="sm" onClick={() => downloadRunPdf(run.runId)} />
+        {kind === "failed" && onRetryPdf !== undefined && (
+          <Button size="sm" disabled={busy} onClick={() => onRetryPdf(run.runId)} title={run.pdf.error ?? undefined} testId="run-retry-pdf">
+            Retry PDF
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }

@@ -45,6 +45,7 @@
     "next-auth": "5.0.0-beta.32",
     "pdfjs-dist": "^6.5.438",
     "pg": "^8.23.0",
+    "playwright": "1.65.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "recharts": "^3.10.1",

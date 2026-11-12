@@ -1036,6 +1036,57 @@ through `dataHealth` in `tests/bas-reports-analysis.test.ts` and end to end
 in `tests/bas-reports-engine.test.ts` (*a period after the data stopped*).
 `WHY-ITS-BUILT-THIS-WAY.md` § 82.
 
+### Reports — Phase 4, the PDF half (2026-11-13)
+
+**What exists.** A run's report as a PDF, rendered by the worker from the
+stored `report_html` with headless Chromium
+(`lib/modules/bas/reports/pdf/render.ts`: Playwright, Letter, backgrounds,
+the report name and period in the header, *Page N of M* in the footer,
+Figtree embedded from `app/fonts`; the browser is in `Dockerfile.bas-reports`
+only, with its own launch-and-print check as the `node` user) and stored on
+the run as bytea (`bas_report_runs.pdf`, with `pdf_status`, `pdf_error`,
+`pdf_bytes`, `pdf_queued_at` and `pdf_rendered_at`, each held to the status
+by a CHECK in `20261113090000_bas_report_runs_pdf`). The engine queues the
+render as it stores the page; the worker drains queued renders after every
+run and once more at the end of an execution (`pdf/jobs.ts`:
+`claimNextPdfJob` writes the in-progress failure first and
+`renderClaimedPdf` overwrites it with ready, or records why not). A failed
+render never changes the run. *Retry PDF* (`retryRunPdf`,
+`POST /api/modules/bas/reports/runs/<id>/pdf/retry`, 202, audited as
+`bas.report_pdf_retry_requested`) queues a failed render again; the
+worker's scaler query counts queued renders so a retry wakes a worker.
+`GET /api/modules/bas/reports/runs/<id>/pdf` serves the bytes as
+`<report name> <start> to <end>.pdf` under the run's own visibility rule
+(`loadRunPdf`, the one read of the bytes); a visible run with no PDF is 409
+`pdf_not_available` with the reason. Email is the other half of Phase 4
+and waits on the sender app registration.
+
+**On screen.** The run page's bar carries *Print* (the browser's dialog
+over `PRINT_PAGE_CSS`, the report alone) and a red *Download*
+(`reports-run-actions.tsx`, the Freeze Protection pair, in `BasShell`'s new
+`actions` slot); the Reports list has a *PDF* column with the state in
+words and a *Download* per row, greyed with its reason until the PDF is
+ready - *PDF not available for this run — use Re-run* for runs from before
+- and *Retry PDF* when a render failed. While a render is queued or in
+progress the run page polls every ten seconds.
+
+**The spin guard** (`queue-guards.ts`, shared with the worker): the
+scheduler's pass fails a run queued for an hour and never claimed, a run
+claimed and lost twice, and a render queued for an hour, each with an error
+saying what happened and what to do, so the worker job's scaler count
+returns to zero. The scheduler's summary line ends `..., N abandoned`.
+
+**Held by** `tests/bas-reports-pdf.test.ts` (the real Chromium on the
+sample document: three pages, header, footer; the queue, the routes, the
+CHECKs, the import graph, the `select` rule),
+`tests/bas-reports-queue-guards.test.ts` (each guard, the template's own
+scaler query before and after, the script), `tests/bas-reports-jobs.test.ts`
+(the worker script prints the PDF), `tests/bas-reports-ui.test.tsx` (the
+column, the row, the actions slot) and `tests/deploy-guards.test.ts` (the
+Dockerfile, CI's browser install, the scaler query). Captures:
+`docs/design/bas-reports-pdf/`. `WHY-ITS-BUILT-THIS-WAY.md` § 83;
+`runbook.md` → *Reports: the PDF*.
+
 ## Classification — the office building, in SQL
 
 **This is the section the 8 September version said could not exist yet** —
