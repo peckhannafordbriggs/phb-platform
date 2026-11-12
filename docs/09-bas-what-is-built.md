@@ -649,13 +649,14 @@ groups (`lib/modules/bas/reports/library.ts`), `min_coverage` 0.800, and
 `analysis_fn` naming the function Phase 2 implements. One TypeScript
 source, installed by the seed and by the migration (`ON CONFLICT DO
 NOTHING`), held to each other by `tests/bas-reports-library.test.ts`. Two
-locked presets as data (`presets.ts`): `health_weekly`, all twenty in the
-spec's order; `health_daily`, Summary, Space Comfort and Data Health. A
-preset report's questions are materialised into `bas_report_questions` and
-the question routes refuse to edit them (`preset_locked`); clearing the
-preset keeps them as a starting point. Custom reports take library,
-personal (the owner's own, nobody else's) and typed questions, reordered
-with buttons, one audit row per change.
+presets as data (`presets.ts`): `health_weekly`, all twenty in the
+spec's order; `health_daily`, Summary, Space Comfort and Data Health.
+**Locked until 2026-11-12, buttons since** - the entry at the end of the
+Reports sections says what changed; in Phase 1 a preset report's questions
+were materialised into `bas_report_questions` and the question routes
+refused to edit them (`preset_locked`), and custom reports took library,
+personal (the owner's own, nobody else's) and typed questions one call at
+a time.
 
 **The schedule** is a local time of day plus the building's zone; the
 instant is derived (`schedule.ts`, pure, used by the editor's preview and
@@ -832,9 +833,10 @@ the Container Apps scaler counts by the same predicate the claim uses.
 trigger from the row); the dev script's `executeReportRun` is the three in
 one call, so the laptop, the worker and the tests are one execution path.
 
-**Two caps.** Beside `budget_usd`, a wall-clock cap `max_minutes` per
-definition (1 to 25, default 20, `DEFAULT_REPORT_MAX_MINUTES` beside the
-default budget; the editor's *Limits* section). The engine reads a deadline
+**Two caps** (per report until 2026-11-12; the module's one safety
+ceiling since - the entry at the end of the Reports sections). Beside
+`budget_usd`, a wall-clock cap `max_minutes` per definition (1 to 25,
+default 20; the editor's *Limits* section). The engine reads a deadline
 before every question and every narrative call; past it, the questions
 still waiting are `not_run` with the time-cap note, the narrative still
 waiting is skipped, and the run is `partial` with a reason naming the cap,
@@ -888,7 +890,7 @@ Dockerfile and the three numbers of the time cap. Not built, by the phase's
 scope: PDF and email (Phase 4); nothing here makes either harder - a
 delivery is a step after `executeQueuedRun` stores the run. `runbook.md` →
 *Reports: turning the jobs on*, *Reports: a run is stuck or failed*,
-*Reports: what the caps do*.
+*Reports: the safety ceiling* (*what the caps do* until 2026-11-12).
 
 ### Filters
 
@@ -903,6 +905,62 @@ range scopes only run history and the screen spans buildings, so there is no
 single zone to resolve a calendar date in.
 
 ---
+
+### Reports — the questions checklist, the safety ceiling, and a Usage page that reads (2026-11-12)
+
+**What changed.** Three product decisions on the Reports tab, in one
+branch (`feat/bas-reports-editor-questions-usage`).
+
+**The editor's Questions section is a checklist.** Every enabled shared
+question with a checkbox, grouped by section in library order, each row
+with its number, text and *section · computed/planner · applies to*,
+visible on a new report before any save. Above it *Select all*, *Standard
+weekly*, *Daily critical-site*, *Clear* - a preset ticks its set and
+unticks the other shared questions, and leaves My questions and the custom
+questions alone. Below: My questions with checkboxes, then the custom
+questions on this report (kind `inline`, with a *save for reuse* tick that
+also stores one in My questions), and *Add a custom question to this
+report*. The selection travels whole as `questions` on create and update
+(`lib/validation/bas-reports.ts`), the service validates it and stores it
+in one order - shared in library order, then personal, then inline
+(`resolveSelection`, `writeQuestions`) - and `preset_key` is a label of
+which preset was last clicked, kept while the shared part matches
+(`presetMatching`). Nothing is locked: `preset_locked`, `invalid_reorder`,
+`question_not_found`, the per-question routes and the move buttons are
+gone. A Phase 1 preset report round-trips through the new save to the same
+rows (`tests/bas-reports-routes.test.ts`). The Questions page is unchanged.
+
+**One safety ceiling.** `bas_report_settings`, one row
+(`bas_reports_safety_ceiling`): `ceiling_usd` (default 10.00, at most
+1,000) and `ceiling_minutes` (default and at most 25), `updated_by_id`;
+`budget_usd` and `max_minutes` DROPPED from `bas_report_definitions`;
+`bas_report_runs.budget_usd` kept as the ceiling in force when the run
+executed, stamped at queue time and re-read at execution. Read by
+`readSafetyCeiling` (`ceiling.ts`, importable by the jobs), set by
+`setSafetyCeiling` (module admin, audited `bas.report_ceiling_changed`),
+`GET` / `PATCH /api/modules/bas/reports/ceiling`. The engine's two partial
+reasons now read *Safety ceiling of $N reached...* and *Safety ceiling of
+N min reached...*. The editor's Limits section is gone and the create /
+update APIs answer `400 limits_removed` to `budgetUsd` or `maxMinutes`.
+The new table is withheld from `bas_analyze` and `bas_collector`, excluded
+from the dictionary, and listed as not moving in the Azure migration
+script - every allowlist, as the Phase 1 tables were.
+
+**Usage reads the database.** `lib/modules/bas/reports/usage.ts` over the
+finished runs the viewer may see (the runs list's `visibilityWhere`),
+counted on the day they finished in New York: totals, the month so far,
+spend per day, by report and by building, the ten most expensive runs, a
+joinless count, and the ceiling. The page (`reports-usage.tsx`) is built on
+`components/ui/Usage.tsx` - the stat tile, the bar chart and the breakdown
+table, moved there from Cost Intelligence's `usage-view.tsx`, which now
+imports them - with the BAS run-status chip and a *Safety ceiling* card at
+the bottom. The range helpers are shared too (`lib/usage/range.ts`). The
+bug it replaced: the page was the Phase 1 placeholder, static, saying
+*There have been no runs* beside a Reports list showing one;
+`tests/bas-reports-usage.test.ts` seeds that run ($0.0397, 4,310 tokens)
+and reads it back. `WHY-ITS-BUILT-THIS-WAY.md` § 81; `runbook.md` →
+*Reports: the safety ceiling*, *The editor's Questions section is a
+checklist*, *The Reports list says there is nothing, or Usage shows zero*.
 
 ## Classification — the office building, in SQL
 

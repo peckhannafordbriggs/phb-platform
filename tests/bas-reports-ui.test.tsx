@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
  * The Reports screens as RENDERED (Phase 1), in a node environment with the
  * router stubbed - the bas-tab-bar pattern. What is asserted is the HTML: the
  * owner row and its wording, the external chip, the honest empty states, the
- * Reports bar and its Back item (2026-11-11), and the two clocks beside a next run.
+ * Reports bar and its Back item (2026-11-11), the two clocks beside a next
+ * run, the questions checklist and its buttons (2026-11-12), and the Usage
+ * page drawn from a run rather than a placeholder (2026-11-12).
  */
 /** The router the shell sees; each bar test sets the path it renders for. */
 const nav = vi.hoisted(() => ({ pathname: "/bas/reports/library", search: "" }));
@@ -17,7 +19,11 @@ vi.mock("next/navigation", () => ({
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describeAuditEvent } from "@/lib/admin/audit-describe";
-import type { LibraryQuestionView, ReportsList } from "@/lib/modules/bas/reports/types";
+import { DEFAULT_SAFETY_CEILING } from "@/lib/modules/bas/reports/ceiling";
+import { BAS_LIBRARY_QUESTIONS, sectionLabel } from "@/lib/modules/bas/reports/library";
+import { REPORT_PRESETS } from "@/lib/modules/bas/reports/presets";
+import type { LibraryQuestionView, PersonalQuestionView, ReportsList } from "@/lib/modules/bas/reports/types";
+import type { ReportsUsage } from "@/lib/modules/bas/reports/usage";
 import { BasShell } from "@/app/(modules)/bas/bas-shell";
 import { activeReportsItemHref } from "@/app/(modules)/bas/reports/bar";
 
@@ -28,17 +34,30 @@ import { activeReportsItemHref } from "@/app/(modules)/bas/reports/bar";
  */
 const Shell = BasShell as unknown as (props: { blurb: string; canAdminister?: boolean }) => React.ReactNode;
 import { ReportsTable } from "@/app/(modules)/bas/reports-list";
-import { OwnerRow, StateChip } from "@/app/(modules)/bas/reports-editor";
+import { OwnerRow, QuestionsChecklist, StateChip, questionMeta } from "@/app/(modules)/bas/reports-editor";
 import { SharedLibraryTable } from "@/app/(modules)/bas/reports-library";
-import { GeneratedPlaceholder, UsagePlaceholder } from "@/app/(modules)/bas/reports-placeholders";
+import { GeneratedPlaceholder } from "@/app/(modules)/bas/reports-placeholders";
+import { ReportsUsageView, SafetyCeilingCard } from "@/app/(modules)/bas/reports-usage";
 import {
   EXTERNAL_CHIP,
   OWNER_ROW_LABEL,
+  addInline,
+  applyPreset,
+  clearShared,
   describeNextRun,
   describeRecipients,
+  describeSelection,
   describeStations,
+  emptySelection,
+  presetLabelFor,
   reportStateTone,
   scheduleFromForm,
+  selectAllShared,
+  selectionBody,
+  selectionFromDetail,
+  setInlineSave,
+  toggleLibrary,
+  togglePersonal,
   formFromSchedule,
 } from "@/app/(modules)/bas/reports-client";
 
@@ -67,8 +86,6 @@ function list(over: Partial<ReportsList> = {}): ReportsList {
     questionCount: 20,
     recipientCount: 2,
     lastRun: null,
-    budgetUsd: 2,
-    maxMinutes: 20,
     pausedReason: null,
     createdAt: "2026-11-10T00:00:00.000Z",
     updatedAt: "2026-11-10T00:00:00.000Z",
@@ -160,14 +177,231 @@ describe("the editor's fixed pieces", () => {
   });
 });
 
-describe("the placeholders", () => {
-  it("say there are no runs rather than promising any", () => {
+describe("the placeholder", () => {
+  it("says there are no runs rather than promising any", () => {
     const generated = renderToStaticMarkup(createElement(GeneratedPlaceholder));
     expect(generated).toContain("No reports have been generated yet");
     expect(generated).toContain("nothing fires");
-    const usage = renderToStaticMarkup(createElement(UsagePlaceholder));
-    expect(usage).toContain("No usage to show");
-    expect(usage).toContain("There have been no runs");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Usage page (2026-11-12): drawn from runs, with the safety ceiling
+// ---------------------------------------------------------------------------
+
+function usage(over: Partial<ReportsUsage> = {}): ReportsUsage {
+  const days = Array.from({ length: 7 }, (_, i) => ({ date: `2026-11-0${6 + i}`, label: `Nov ${6 + i}`, spend: 0 }));
+  days[5]!.spend = 0.0397;
+  return {
+    range: "7d",
+    totals: { runs: 1, tokens: 4_310, spend: 0.0397 },
+    thisMonth: { label: "November", spend: 0.0397 },
+    days,
+    byReport: [{ label: "Weekly health", runs: 1, tokens: 4_310, spend: 0.0397 }],
+    byBuilding: [{ label: "Steel Place", runs: 1, tokens: 4_310, spend: 0.0397 }],
+    topRuns: [
+      { runId: "7", reportId: "1", reportName: "Weekly health", buildingName: "Steel Place", status: "succeeded", startedAt: "2026-11-11T14:00:00.000Z", finishedAt: "2026-11-11T14:01:00.000Z", tokens: 4_310, spend: 0.0397 },
+    ],
+    runsInDatabase: 1,
+    ceiling: { ...DEFAULT_SAFETY_CEILING, updatedAt: null, updatedBy: null },
+    ...over,
+  };
+}
+
+describe("the Usage page", () => {
+  it("shows the run the Reports list shows - never 'there have been no runs' - with the five tiles, the breakdown, the run row and the ceiling", () => {
+    const html = renderToStaticMarkup(createElement(ReportsUsageView, { usage: usage(), canAdminister: false }));
+    expect(html).not.toContain("There have been no runs");
+    expect(html).not.toContain("No usage to show");
+    for (const tile of ["Spend", "Runs", "Average per run", "Tokens", "November so far"]) expect(html).toContain(tile);
+    // $0.0397 rounds to the cent on a tile, as Cost Intelligence's does; the tokens are 4k.
+    expect(html).toContain("$0.04");
+    expect(html).toContain(">4k<");
+    expect(html).toContain("Spend per day");
+    expect(html).toContain("Nov 11: $0.04");
+    expect(html).toContain("By report");
+    expect(html).toContain("By building");
+    expect(html).toContain("Weekly health");
+    expect(html).toContain("Most expensive runs");
+    expect(html).toContain("#7");
+    expect(html).toContain(">Succeeded<");
+    // The ceiling, read-only for a plain BAS user.
+    expect(html).toContain("Safety ceiling");
+    expect(html).toContain("$10.00 and 25 minutes per run");
+    expect(html).toContain("finishes partial and says so");
+    expect(html).not.toContain("Save ceiling");
+    // No red note when the figures and the count agree.
+    expect(html).not.toContain("Report this");
+  });
+
+  it("offers the ceiling inputs to a module admin, is honest about an empty range, and loud when a row was lost", () => {
+    const admin = renderToStaticMarkup(createElement(SafetyCeilingCard, { ceiling: { usd: 5.25, minutes: 10, updatedAt: "2026-11-12T10:00:00.000Z", updatedBy: "jim@phb1899.com" }, canAdminister: true }));
+    expect(admin).toContain("$5.25 and 10 minutes per run");
+    expect(admin).toContain("Save ceiling");
+    expect(admin).toContain("Last set by jim@phb1899.com on 2026-11-12");
+    expect(admin).toContain("Minutes per run (1 to 25)");
+
+    const empty = renderToStaticMarkup(createElement(ReportsUsageView, {
+      usage: usage({ totals: { runs: 0, tokens: 0, spend: 0 }, days: usage().days.map((d) => ({ ...d, spend: 0 })), byReport: [], byBuilding: [], topRuns: [], runsInDatabase: 0 }),
+      canAdminister: false,
+    }));
+    expect(empty).toContain("No spend in this range");
+    expect(empty).toContain("No finished runs in this range");
+    expect(empty).toContain("$0.00");
+
+    const lost = renderToStaticMarkup(createElement(ReportsUsageView, { usage: usage({ runsInDatabase: 2 }), canAdminister: false }));
+    expect(lost).toContain("These figures cover 1 of the 2 finished runs");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The questions checklist (2026-11-12)
+// ---------------------------------------------------------------------------
+
+/** The seeded library as the editor receives it, ids 1..20 in position order. */
+const LIBRARY: LibraryQuestionView[] = [...BAS_LIBRARY_QUESTIONS]
+  .sort((a, b) => a.position - b.position)
+  .map((q, i) => ({
+    libraryQuestionId: String(i + 1),
+    key: q.key,
+    section: q.section,
+    sectionLabel: sectionLabel(q.section),
+    position: q.position,
+    text: q.text,
+    kind: q.kind,
+    analysisFn: q.analysisFn ?? null,
+    appliesToLabel: q.appliesToLabel,
+    appliesToEquipment: [...q.appliesToEquipment],
+    requiredRoles: [],
+    requiredRolesText: "",
+    minCoverage: 0.8,
+    enabled: true,
+    addedBy: null,
+    createdAt: "2026-11-10T00:00:00.000Z",
+  }));
+const MINE: PersonalQuestionView[] = [
+  { personalQuestionId: "41", text: "Did the boiler cycle overnight?", usedInReports: 0, createdAt: "2026-11-10T00:00:00.000Z", updatedAt: "2026-11-10T00:00:00.000Z" },
+];
+const idsOf = (keys: readonly string[]) => LIBRARY.filter((q) => keys.includes(q.key)).map((q) => q.libraryQuestionId);
+const checklist = (selection: ReturnType<typeof emptySelection>, canUsePersonal = true) =>
+  renderToStaticMarkup(createElement(QuestionsChecklist, { library: LIBRARY, personal: MINE, selection, onChange: () => undefined, canUsePersonal }));
+const checkedBoxes = (html: string) => (html.match(/<input type="checkbox"[^>]*checked=""/g) ?? []).length;
+/** React escapes text as HTML; the spec's questions carry apostrophes. */
+const esc = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+const boxes = (html: string) => (html.match(/<input type="checkbox"/g) ?? []).length;
+
+describe("the questions checklist", () => {
+  it("lists every enabled shared question with a box, its number and its meta, grouped by section, before any save", () => {
+    const html = checklist(emptySelection());
+    // Twenty shared boxes, one for my question; nothing ticked.
+    expect(boxes(html)).toBe(21);
+    expect(checkedBoxes(html)).toBe(0);
+    expect(html).toContain("No questions ticked");
+    for (const q of LIBRARY) {
+      expect(html).toContain(esc(q.text));
+      expect(html).toContain(esc(questionMeta(q)));
+    }
+    expect(questionMeta(LIBRARY[2]!)).toBe("Space Comfort · computed · All");
+    for (const section of ["Summary", "Space Comfort", "Data Health"]) expect(html).toContain(`>${section}<`);
+    for (const button of ["Select all", "Standard weekly", "Daily critical-site", "Clear"]) expect(html).toContain(`>${button}<`);
+    expect(html).toContain("My questions");
+    expect(html).toContain("Did the boiler cycle overnight?");
+    expect(html).toContain("Add a custom question to this report");
+    expect(html).not.toMatch(/locked/i);
+    // A turned-off question is not offered...
+    const off = renderToStaticMarkup(createElement(QuestionsChecklist, { library: LIBRARY.map((q, i) => (i === 0 ? { ...q, enabled: false } : q)), personal: [], selection: emptySelection(), onChange: () => undefined, canUsePersonal: true }));
+    expect(boxes(off)).toBe(19);
+    // ...unless it is already ticked, and then it says so.
+    const offTicked = renderToStaticMarkup(createElement(QuestionsChecklist, { library: LIBRARY.map((q, i) => (i === 0 ? { ...q, enabled: false } : q)), personal: [], selection: { ...emptySelection(), library: ["1"] }, onChange: () => undefined, canUsePersonal: true }));
+    expect(boxes(offTicked)).toBe(20);
+    expect(offTicked).toContain("turned off");
+  });
+
+  it("a preset button ticks its set and unticks the other shared questions, leaving mine and the custom ones alone; Select all and Clear act on the shared list only", () => {
+    let state = emptySelection();
+    state = togglePersonal(state, "41", true);
+    state = addInline(state, "Which VAVs were warm while occupied?");
+    state = toggleLibrary(state, idsOf(["q13_hw_supply"])[0] ?? "13", true);
+
+    const daily = applyPreset(state, "health_daily", LIBRARY);
+    expect(daily.library).toEqual(idsOf(REPORT_PRESETS.health_daily.questionKeys));
+    expect(daily.presetClicked).toBe("health_daily");
+    expect(daily.personal).toEqual(["41"]);
+    expect(daily.inline).toHaveLength(1);
+    expect(presetLabelFor(daily, LIBRARY)).toBe("health_daily");
+    expect(describeSelection(daily, LIBRARY)).toBe("8 questions · Daily critical-site report + 2 custom");
+    const dailyHtml = checklist(daily);
+    expect(checkedBoxes(dailyHtml)).toBe(7);
+
+    const weekly = applyPreset(daily, "health_weekly", LIBRARY);
+    expect(weekly.library).toHaveLength(20);
+    expect(describeSelection(weekly, LIBRARY)).toBe("22 questions · Standard weekly health report + 2 custom");
+    expect(checkedBoxes(checklist(weekly))).toBe(21);
+
+    // Untick one: nothing is locked, and the label goes while the count stays honest.
+    const varied = toggleLibrary(weekly, idsOf(["q03_zone_comfort"])[0]!, false);
+    expect(varied.presetClicked).toBe("health_weekly");
+    expect(presetLabelFor(varied, LIBRARY)).toBeNull();
+    expect(describeSelection(varied, LIBRARY)).toBe("21 questions · 19 shared + 2 custom");
+
+    // Select all is the twenty with no label; Clear is none, still with mine and the custom one.
+    const all = selectAllShared(varied, LIBRARY);
+    expect(all.library).toHaveLength(20);
+    expect(all.presetClicked).toBeNull();
+    expect(presetLabelFor(all, LIBRARY)).toBeNull();
+    const cleared = clearShared(all);
+    expect(cleared.library).toEqual([]);
+    expect(cleared.personal).toEqual(["41"]);
+    expect(cleared.inline).toHaveLength(1);
+    expect(describeSelection(cleared, LIBRARY)).toBe("2 questions · 2 custom");
+  });
+
+  it("produces the body the API takes - shared in library order, then mine, then typed - and round-trips a saved report", () => {
+    let state = emptySelection();
+    state = addInline(state, "Typed one");
+    state = toggleLibrary(state, "20", true);
+    state = togglePersonal(state, "41", true);
+    state = toggleLibrary(state, "3", true);
+    state = setInlineSave(state, state.inline[0]!.key, true);
+    expect(selectionBody(state, LIBRARY)).toEqual([
+      { kind: "library", libraryQuestionId: "3" },
+      { kind: "library", libraryQuestionId: "20" },
+      { kind: "personal", personalQuestionId: "41" },
+      { kind: "inline", text: "Typed one", saveToLibrary: true },
+    ]);
+    const html = checklist(state);
+    expect(html).toContain("Typed one");
+    expect(html).toContain("save for reuse");
+    expect(html).toContain("this report only");
+
+    // A module admin on somebody else's report: no My questions, no save for reuse, the owner's kept and named.
+    const adminHtml = renderToStaticMarkup(createElement(QuestionsChecklist, {
+      library: LIBRARY, personal: [], selection: state, onChange: () => undefined, canUsePersonal: false,
+      ownerQuestionsOnReport: [{ questionId: "9", position: 2, kind: "personal", text: "Did the boiler cycle overnight?", libraryQuestionId: null, libraryKey: null, section: null, sectionLabel: null, libraryKind: null, appliesToLabel: null, personalQuestionId: "41" }],
+    }));
+    expect(adminHtml).not.toContain("save for reuse");
+    expect(adminHtml).not.toContain(">My questions<");
+    expect(adminHtml).toContain("The owner&#x27;s questions on this report");
+    expect(adminHtml).toContain("kept when you save");
+
+    // From a saved report: the detail becomes the same selection, label included.
+    const detail = {
+      ...list().reports[0]!,
+      stationIds: [], stations: [], recipients: [],
+      questions: [
+        { questionId: "1", position: 0, kind: "library" as const, text: "t", libraryQuestionId: "3", libraryKey: "q03_zone_comfort", section: "space_comfort", sectionLabel: "Space Comfort", libraryKind: "computed" as const, appliesToLabel: "All", personalQuestionId: null },
+        { questionId: "2", position: 1, kind: "personal" as const, text: "mine", libraryQuestionId: null, libraryKey: null, section: null, sectionLabel: null, libraryKind: null, appliesToLabel: null, personalQuestionId: "41" },
+        { questionId: "3", position: 2, kind: "inline" as const, text: "typed", libraryQuestionId: null, libraryKey: null, section: null, sectionLabel: null, libraryKind: null, appliesToLabel: null, personalQuestionId: null },
+      ],
+    };
+    const loaded = selectionFromDetail(detail);
+    expect(loaded).toMatchObject({ library: ["3"], personal: ["41"], presetClicked: "health_weekly" });
+    expect(loaded.inline.map((d) => [d.text, d.save])).toEqual([["typed", false]]);
+    expect(selectionBody(loaded, LIBRARY)).toEqual([
+      { kind: "library", libraryQuestionId: "3" },
+      { kind: "personal", personalQuestionId: "41" },
+      { kind: "inline", text: "typed" },
+    ]);
   });
 });
 
@@ -300,5 +534,25 @@ describe("the audit sentences", () => {
       MODULES,
     );
     expect(preset.sentence).toBe("Jim Schwarz set the report Weekly health to the preset health_daily (6 questions)");
+    // The checklist's one row per save (2026-11-12), and the ceiling's.
+    const set = describeAuditEvent(
+      { action: "bas.report_questions_changed", moduleKey: "bas", actor: jim, target: null,
+        metadata: { reportId: "1", name: "Weekly health", change: "set", count: 22, presetKey: "health_weekly", library: 20, personal: 1, inline: 1 } },
+      MODULES,
+    );
+    expect(set.sentence).toBe("Jim Schwarz set the questions on the report Weekly health (22 questions, health_weekly)");
+    const setNoPreset = describeAuditEvent(
+      { action: "bas.report_questions_changed", moduleKey: "bas", actor: jim, target: null,
+        metadata: { reportId: "1", name: "Weekly health", change: "set", count: 1, presetKey: null } },
+      MODULES,
+    );
+    expect(setNoPreset.sentence).toBe("Jim Schwarz set the questions on the report Weekly health (1 question)");
+    const ceiling = describeAuditEvent(
+      { action: "bas.report_ceiling_changed", moduleKey: "bas", actor: jim, target: null,
+        metadata: { from: { usd: 10, minutes: 25 }, to: { usd: 5.5, minutes: 20 } } },
+      MODULES,
+    );
+    expect(ceiling.known).toBe(true);
+    expect(ceiling.sentence).toBe("Jim Schwarz set the Reports safety ceiling to $5.50 and 20 minutes per run (was $10.00 and 25 minutes)");
   });
 });

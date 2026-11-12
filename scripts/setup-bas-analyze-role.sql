@@ -156,7 +156,9 @@ INSERT INTO analyze_hold (relname, reason) VALUES
     ('bas_personal_questions',  'an employee''s own saved questions'),
     -- Reports, Phase 2 (2026-11-11): documents the platform wrote.
     ('bas_report_runs',         'a report run - period, cost, status, the rendered document'),
-    ('bas_report_findings',     'a run''s findings, with the model''s sentences on each');
+    ('bas_report_findings',     'a run''s findings, with the model''s sentences on each'),
+    -- 2026-11-12: the module''s one safety ceiling. A setting, not a reading.
+    ('bas_report_settings',     'the Reports safety ceiling - one row of platform configuration');
 
 CREATE TEMP TABLE analyze_platform (relname text PRIMARY KEY);
 INSERT INTO analyze_platform (relname) VALUES
@@ -309,6 +311,7 @@ BEGIN
     IF has_table_privilege(role, 'public.bas_personal_questions', 'SELECT')          THEN fail := fail || 'CAN SELECT bas_personal_questions'; END IF;
     IF has_table_privilege(role, 'public.bas_report_runs', 'SELECT')                 THEN fail := fail || 'CAN SELECT bas_report_runs'; END IF;
     IF has_table_privilege(role, 'public.bas_report_findings', 'SELECT')             THEN fail := fail || 'CAN SELECT bas_report_findings'; END IF;
+    IF has_table_privilege(role, 'public.bas_report_settings', 'SELECT')             THEN fail := fail || 'CAN SELECT bas_report_settings'; END IF;
     IF has_table_privilege(role, 'public.employees', 'SELECT')                      THEN fail := fail || 'CAN SELECT employees'; END IF;
     IF has_table_privilege(role, 'public.audit_events', 'SELECT')                   THEN fail := fail || 'CAN SELECT audit_events'; END IF;
     IF has_table_privilege(role, 'public.module_grants', 'SELECT')                  THEN fail := fail || 'CAN SELECT module_grants'; END IF;

@@ -45,6 +45,20 @@ export function runStatusTone(status: RunSummary["status"]): Tone {
 
 const money = (n: number) => `$${n.toFixed(4)}`;
 
+/** A run's status as the module's chip: the tone is the state, the words beside it. Shared with the Usage page. */
+export function RunStatusChip({ status, title }: { status: RunSummary["status"]; title?: string }) {
+  const tone = runStatusTone(status);
+  return (
+    <span
+      className="inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium"
+      style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
+      title={title}
+    >
+      {RUN_STATUS_LABELS[status]}
+    </span>
+  );
+}
+
 export function describePeriod(run: Pick<RunSummary, "periodStart" | "periodEnd" | "timezone">): string {
   const f = new Intl.DateTimeFormat("en-GB", { timeZone: run.timezone, day: "numeric", month: "short" });
   return `${f.format(new Date(run.periodStart))} – ${f.format(new Date(run.periodEnd))}`;
@@ -124,7 +138,6 @@ export function RunsTable({ data }: { data: RunsList }) {
           </thead>
           <tbody>
             {data.runs.map((r) => {
-              const tone = runStatusTone(r.status);
               return (
                 <tr key={r.runId} className="border-t border-[var(--divider-soft)] align-top">
                   <td className="px-4 py-3">
@@ -138,13 +151,7 @@ export function RunsTable({ data }: { data: RunsList }) {
                   </td>
                   <td className="py-3 pr-3">{describePeriod(r)}</td>
                   <td className="py-3 pr-3">
-                    <span
-                      className="inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium"
-                      style={{ ...TONE_STYLE[tone], color: TONE_INK[tone] }}
-                      title={r.partialReason ?? r.error ?? undefined}
-                    >
-                      {RUN_STATUS_LABELS[r.status]}
-                    </span>
+                    <RunStatusChip status={r.status} title={r.partialReason ?? r.error ?? undefined} />
                     {r.partialReason !== null && <div className="mt-1 max-w-[18rem] text-[var(--muted)]">{r.partialReason}</div>}
                     {r.error !== null && <div className="mt-1 max-w-[18rem] text-[var(--muted)]">{r.error}</div>}
                   </td>

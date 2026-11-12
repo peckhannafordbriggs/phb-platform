@@ -130,18 +130,11 @@ export type BasErrorCode =
   | "station_other_building"
   /** A schedule that can never fire, or carries a value outside its range. 422. */
   | "invalid_schedule"
-  /**
-   * The report carries a preset, so its questions are the preset's and are
-   * not edited one by one. Clear the preset to vary them. 409.
-   */
-  | "preset_locked"
   /** Activation refused: no questions, or a schedule that cannot be read. 409. */
   | "report_not_ready"
   /** The action does not apply in the report's current state. 409. */
   | "invalid_state"
-  /** A question that is not on this report. 404. */
-  | "question_not_found"
-  /** The same library or personal question twice on one report. 409. */
+  /** The same library or personal question twice in one report's selection. 409. */
   | "question_exists"
   | "library_question_not_found"
   /** In the library, but turned off by a module admin. 409. */
@@ -156,8 +149,6 @@ export type BasErrorCode =
   | "personal_question_not_owner"
   /** Still on a report. Refused, never cascaded. 409. */
   | "personal_question_in_use"
-  /** A reorder that is not a permutation of the report's questions. 422. */
-  | "invalid_reorder"
   /**
    * The owner's address. The owner is always a recipient and never a row,
    * so it can be neither added nor removed. 409.
@@ -183,7 +174,7 @@ export type BasErrorCode =
    * first's findings still open an hour after they were new.
    */
   | "run_in_flight"
-  /** A module-admin action asked for by a plain owner: transferring a report. */
+  /** A module-admin action asked for by a plain owner: transferring a report, or the safety ceiling (2026-11-12). */
   | "admin_required"
   /** A new owner who is not an active employee with the BAS grant, or is the owner already. */
   | "owner_not_eligible"

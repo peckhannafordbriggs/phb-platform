@@ -9,17 +9,14 @@ type ReportsErrorCode = Extract<
   | "station_other_building"
   | "invalid_schedule"
   | "name_taken"
-  | "preset_locked"
   | "report_not_ready"
   | "invalid_state"
-  | "question_not_found"
   | "question_exists"
   | "library_question_not_found"
   | "library_question_disabled"
   | "personal_question_not_found"
   | "personal_question_not_owner"
   | "personal_question_in_use"
-  | "invalid_reorder"
   | "owner_is_recipient"
   | "recipient_exists"
   | "recipient_not_found"
@@ -39,9 +36,9 @@ type ReportsErrorCode = Extract<
  * 404 for anything not found, which includes a report the viewer may not see:
  * the plan says "everything else 404 per module convention", and a 403 would
  * confirm that somebody else's report exists. 409 for a well-formed request
- * the world refuses - a preset report's questions, the owner's address, an
- * external address not yet confirmed. 422 for input that is wrong in a way
- * the shape check could not see.
+ * the world refuses - a question twice in one selection, the owner's
+ * address, an external address not yet confirmed. 422 for input that is
+ * wrong in a way the shape check could not see.
  */
 const STATUS: Record<ReportsErrorCode, number> = {
   report_not_found: 404,
@@ -49,17 +46,14 @@ const STATUS: Record<ReportsErrorCode, number> = {
   station_other_building: 409,
   invalid_schedule: 422,
   name_taken: 409,
-  preset_locked: 409,
   report_not_ready: 409,
   invalid_state: 409,
-  question_not_found: 404,
   question_exists: 409,
   library_question_not_found: 404,
   library_question_disabled: 409,
   personal_question_not_found: 404,
   personal_question_not_owner: 409,
   personal_question_in_use: 409,
-  invalid_reorder: 422,
   owner_is_recipient: 409,
   recipient_exists: 409,
   recipient_not_found: 404,
@@ -67,8 +61,9 @@ const STATUS: Record<ReportsErrorCode, number> = {
   report_has_runs: 409,
   run_not_found: 404,
   run_in_flight: 409,
-  // The one 403 here: the report is visible to the person (they own it), so
-  // 404 would be a lie, and what they lack is the admin flag, not access.
+  // The one 403 here: the report (or the Usage page) is visible to the
+  // person, so 404 would be a lie, and what they lack is the admin flag, not
+  // access. Transferring an owner and setting the safety ceiling.
   admin_required: 403,
   owner_not_eligible: 409,
 };

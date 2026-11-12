@@ -487,6 +487,15 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
       case "preset":
         return `${actor} set the report ${name} to the preset ${stringField(meta, "presetKey") ?? "(none)"}` +
           `${count !== null ? ` (${count} questions)` : ""}`;
+      // The checklist (2026-11-12): one row per save that changed the set,
+      // with the count and the preset label when the shared part matches one.
+      case "set": {
+        const preset = stringField(meta, "presetKey");
+        return `${actor} set the questions on the report ${name}` +
+          `${count !== null ? ` (${count} question${count === 1 ? "" : "s"}` : ""}` +
+          `${preset !== null ? `${count !== null ? ", " : " ("}${preset}` : ""}` +
+          `${count !== null || preset !== null ? ")" : ""}`;
+      }
       default:
         return `${actor} changed the questions on the report ${name}`;
     }
@@ -552,6 +561,17 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
 
   "bas.building_occupancy_updated": ({ actor, meta }) =>
     `${actor} set the occupied hours for the building ${stringField(meta, "name") ?? "(unnamed)"}: ${stringField(meta, "hours") ?? "none"}`,
+
+  // Both halves named every time: the ceiling is one setting with two numbers.
+  "bas.report_ceiling_changed": ({ actor, meta }) => {
+    const words = (value: unknown): string => {
+      const v = value as { usd?: unknown; minutes?: unknown } | null;
+      const usd = typeof v?.usd === "number" ? `$${v.usd.toFixed(2)}` : "?";
+      const minutes = typeof v?.minutes === "number" ? `${v.minutes} minutes` : "?";
+      return `${usd} and ${minutes}`;
+    };
+    return `${actor} set the Reports safety ceiling to ${words(meta.to)} per run (was ${words(meta.from)})`;
+  },
 
   // Counts rather than names: a sync can touch every skill, and the sync row
   // in cip_skill_syncs holds the detail.
@@ -958,6 +978,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.report_run_requested": "BAS report run queued",
   "bas.report_owner_transferred": "BAS report owner transferred",
   "bas.building_occupancy_updated": "BAS building occupied hours set",
+  "bas.report_ceiling_changed": "BAS Reports safety ceiling changed",
   "cip.skills_synced": "Cost Intelligence skills synced",
   "cip.projects_synced": "Cost Intelligence projects synced",
   "cip.run_started": "Cost Intelligence run started",

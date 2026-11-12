@@ -18,7 +18,7 @@ import { inRollback } from "./bas-fixture";
 
 /**
  * The shared library (Reports, Phase 1): the spec's twenty questions as data,
- * the two locked presets, and the three places the rows live - the
+ * the two presets, and the three places the rows live - the
  * TypeScript list, the seed, and the migration's INSERT block.
  */
 
@@ -104,7 +104,7 @@ describe("the twenty questions", () => {
   });
 });
 
-describe("the two locked presets", () => {
+describe("the two presets", () => {
   it("health_weekly is all twenty in position order, and health_daily is Summary, Space Comfort and Data Health", () => {
     const byPosition = [...BAS_LIBRARY_QUESTIONS].sort((a, b) => a.position - b.position).map((q) => q.key);
     expect(REPORT_PRESETS.health_weekly.questionKeys).toEqual(byPosition);
@@ -124,7 +124,9 @@ describe("the two locked presets", () => {
     for (const preset of Object.values(REPORT_PRESETS)) {
       for (const key of preset.questionKeys) expect(keys).toContain(key);
       expect(preset.label.length).toBeGreaterThan(0);
-      expect(preset.description).toMatch(/Locked/);
+      // Nothing is locked since 2026-11-12: a preset is a button that ticks a set.
+      expect(`${preset.label} ${preset.description}`).not.toMatch(/locked|fixed order|cannot be edited/i);
+      expect(preset.description).toMatch(/Ticks /);
     }
     // The list is a readonly array; a caller that mutated it would be mutating
     // the preset for every report after it. TypeScript refuses the write, and

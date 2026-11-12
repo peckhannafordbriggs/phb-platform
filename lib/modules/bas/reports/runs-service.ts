@@ -87,7 +87,8 @@ function toSummary(r: RunRow): RunSummary {
   };
 }
 
-async function visibilityWhere(viewer: Viewer) {
+/** The runs the viewer may see: their own reports', or every report's for a module admin. Shared with the Usage page. */
+export async function visibilityWhere(viewer: Viewer) {
   const admin = await hasModuleAdmin(viewer.id, BAS_MODULE_KEY);
   const { entitled } = await basSiteScope(viewer);
   return {

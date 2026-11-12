@@ -1960,24 +1960,30 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(worker).toMatch(/image: basReportsImage/);
   });
 
-  it("keeps the worker's replica timeout above the longest time cap a definition may set plus the drain window", async () => {
+  it("keeps the worker's replica timeout above the most minutes the safety ceiling may hold plus the drain window", async () => {
     const code = codeOnly(await readFile("infra/main.bicep"));
     const worker = resourceBlock(code, "basReportsWorkerJob");
     const timeout = Number(/replicaTimeout: (\d+)/.exec(worker)?.[1]);
     expect(timeout).toBe(1800);
-    const validation = await readFile("lib/validation/bas-reports.ts");
-    const capMinutes = Number(/\.max\((\d+), "The time cap cannot be more than/.exec(validation)?.[1]);
+    // One number, decided in ceiling.ts (2026-11-12; a per-report cap before).
+    const ceiling = await readFile("lib/modules/bas/reports/ceiling.ts");
+    const capMinutes = Number(/^export const MAX_CEILING_MINUTES = (\d+);$/m.exec(ceiling)?.[1]);
     const workerSource = await readFile("lib/modules/bas/reports/worker.ts");
     const drainMinutes = Number(/export const DRAIN_WINDOW_MS = (\d+) \* 60 \* 1000;/.exec(workerSource)?.[1]);
     expect(capMinutes).toBeGreaterThan(0);
     expect(drainMinutes).toBeGreaterThan(0);
     expect(timeout).toBeGreaterThanOrEqual((capMinutes + drainMinutes) * 60 + 60);
-    // The migration's CHECK and the schema's default agree with the validation.
-    const migration = await readFile("prisma/migrations/20261112090000_add_bas_reports_jobs/migration.sql");
-    expect(migration).toMatch(new RegExp(`CHECK \\(max_minutes BETWEEN 1 AND ${capMinutes}\\)`));
-    const service = await readFile("lib/modules/bas/reports/service.ts");
-    expect(service).toMatch(new RegExp(`^export const MAX_REPORT_MINUTES = ${capMinutes};$`, "m"));
-    expect(service).toMatch(/^export const DEFAULT_REPORT_MAX_MINUTES = 20;$/m);
+    // The migration's CHECK, its default and the validation's bound agree with it.
+    const migration = await readFile("prisma/migrations/20261112150000_bas_reports_safety_ceiling/migration.sql");
+    expect(migration).toMatch(new RegExp(`CHECK \\(ceiling_minutes BETWEEN 1 AND ${capMinutes}\\)`));
+    expect(migration).toMatch(new RegExp(`"ceiling_minutes" INTEGER NOT NULL DEFAULT ${capMinutes}`));
+    expect(ceiling).toMatch(new RegExp(`minutes: ${capMinutes} \\}`));
+    const validation = await readFile("lib/validation/bas-reports.ts");
+    expect(validation).toMatch(/\.max\(MAX_CEILING_MINUTES, "The time cap cannot be more than 25 minutes\."\)/);
+    // And the definition no longer carries a cap of its own.
+    expect(migration).toMatch(/DROP COLUMN "max_minutes"/);
+    const schema = await readFile("prisma/schema.prisma");
+    expect(schema).not.toMatch(/max_minutes|budget_usd"\) @db\.Decimal\(8, 2\)\s*\n\s*\/\/\/ The wall-clock/);
   });
 
   it("reads every secret by reference - three for the worker, one for the scheduler - and nothing secret as a value", async () => {
@@ -2040,7 +2046,8 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     const readme = await readFile("infra/README.md");
     expect(readme.split("## What gets created")[1]?.split("\n## ")[0] ?? "").toMatch(/enableBasReports/);
     const runbook = await readFile("runbook.md");
-    for (const heading of ["Reports: turning the jobs on", "Reports: a run is stuck or failed", "Reports: what the caps do"]) {
+    // "Reports: what the caps do" until 2026-11-12, when the two per-report caps became the module's one ceiling.
+    for (const heading of ["Reports: turning the jobs on", "Reports: a run is stuck or failed", "Reports: the safety ceiling"]) {
       expect(runbook, heading).toContain(`## ${heading}`);
     }
     const section = runbook.split("\n## Reports: turning the jobs on")[1]?.split("\n## ")[0] ?? "";

@@ -20,7 +20,7 @@ import { STATUS_LABELS } from "../lib/modules/bas/reports/engine/rollup";
  * --no-narrative   skip the model: the run finishes partial and says why.
  * --fixed-narrative  a canned narrator at a fixed cost per call, for a dry run.
  * Otherwise the model is called with ANTHROPIC_API_KEY, the BAS key, and the
- * run's cost is metered against the definition's budget.
+ * run's cost is metered against the module's safety ceiling (the Usage page).
  *
  * Prints the run id, the status, the building status, every section's
  * status with its findings, the inventory's Not Applicable and Not Monitored

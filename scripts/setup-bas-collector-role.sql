@@ -125,7 +125,9 @@ INSERT INTO collector_none (relname, reason) VALUES
     ('bas_site_occupancy',      'occupied hours a person entered; the collector reads occupancy from the station'),
     -- Reports, Phase 2 (2026-11-11): documents the platform wrote.
     ('bas_report_runs',         'report runs'),
-    ('bas_report_findings',     'report findings');
+    ('bas_report_findings',     'report findings'),
+    -- 2026-11-12: the Reports safety ceiling, a module setting.
+    ('bas_report_settings',     'the Reports safety ceiling');
 
 CREATE TEMP TABLE collector_seq (relname text PRIMARY KEY);
 INSERT INTO collector_seq (relname) VALUES
@@ -311,6 +313,7 @@ BEGIN
     IF has_table_privilege('bas_collector', 'public.employees', 'SELECT')                    THEN fail := fail || 'CAN SELECT employees'; END IF;
     IF has_table_privilege('bas_collector', 'public.bas_report_recipients', 'SELECT')        THEN fail := fail || 'CAN SELECT bas_report_recipients'; END IF;
     IF has_table_privilege('bas_collector', 'public.bas_report_definitions', 'SELECT')       THEN fail := fail || 'CAN SELECT bas_report_definitions'; END IF;
+    IF has_table_privilege('bas_collector', 'public.bas_report_settings', 'SELECT')          THEN fail := fail || 'CAN SELECT bas_report_settings'; END IF;
     IF has_table_privilege('bas_collector', 'public.bas_site_occupancy', 'SELECT')           THEN fail := fail || 'CAN SELECT bas_site_occupancy'; END IF;
     IF has_table_privilege('bas_collector', 'public.audit_events', 'SELECT')                 THEN fail := fail || 'CAN SELECT audit_events'; END IF;
     IF has_table_privilege('bas_collector', 'public._prisma_migrations', 'SELECT')           THEN fail := fail || 'CAN SELECT _prisma_migrations'; END IF;

@@ -10,14 +10,17 @@ import type {
   ReportStateChange,
   ReportsList,
 } from "@/lib/modules/bas/reports/types";
+import type { SafetyCeilingView } from "@/lib/modules/bas/reports/ceiling";
+import { REPORT_PRESETS, presetMatching, type PresetKey } from "@/lib/modules/bas/reports/presets";
 import type { ScheduleSpec } from "@/lib/modules/bas/reports/schedule";
 import type { RunsList } from "@/lib/modules/bas/reports/runs-service";
 import { formatInZone } from "@/lib/modules/bas/reports/schedule";
 import type {
   AddRecipientInput,
-  AddReportQuestionInput,
   CreateReportInput,
+  QuestionSelection,
   ReportStateAction,
+  SafetyCeilingInput,
   UpdateReportInput,
 } from "@/lib/validation/bas-reports";
 import { ApiError, type Tone } from "./health-client";
@@ -84,15 +87,10 @@ export const transferOwner = (reportId: string, ownerEmployeeId: string) =>
 export const changeReportState = (reportId: string, action: ReportStateAction) =>
   call<ReportStateChange>(`/${encodeURIComponent(reportId)}/state`, json("POST", { action }));
 
-export const addQuestion = (reportId: string, body: AddReportQuestionInput) =>
-  call<{ questionId: string }>(`/${encodeURIComponent(reportId)}/questions`, json("POST", body));
-export const removeQuestion = (reportId: string, questionId: string) =>
-  call<{ removed: boolean }>(
-    `/${encodeURIComponent(reportId)}/questions/${encodeURIComponent(questionId)}`,
-    { method: "DELETE" },
-  );
-export const reorderQuestions = (reportId: string, questionIds: string[]) =>
-  call<{ reordered: boolean }>(`/${encodeURIComponent(reportId)}/questions`, json("PUT", { questionIds }));
+/** The module's safety ceiling (2026-11-12): read by anyone, set by a module admin (403 otherwise). */
+export const fetchSafetyCeiling = (signal?: AbortSignal) => call<SafetyCeilingView>("/ceiling", { signal });
+export const setSafetyCeiling = (body: SafetyCeilingInput) =>
+  call<{ changed: boolean; ceiling: SafetyCeilingView }>("/ceiling", json("PATCH", body));
 
 export const createPersonal = (text: string) =>
   call<{ personalQuestionId: string }>("/personal", json("POST", { text }));
@@ -227,3 +225,137 @@ function describeAgo(at: Date, now: Date): string {
 
 export const OWNER_ROW_LABEL = "Report owner · required";
 export const EXTERNAL_CHIP = "external";
+
+// ---------------------------------------------------------------------------
+// The questions checklist (2026-11-12): the editor's selection, as pure
+// functions, so the preset buttons and the body they produce can be tested
+// in node without rendering.
+// ---------------------------------------------------------------------------
+
+/** A question typed into this report and not yet saved as a row. */
+export interface InlineDraft {
+  /** A client-side key for React and for removal; never sent. */
+  key: string;
+  text: string;
+  /** "Save for reuse": on save, also stored in My questions and put on the report as a personal one. */
+  save: boolean;
+}
+
+export interface QuestionSelectionState {
+  /** Shared questions ticked, by library question id. */
+  library: string[];
+  /** My questions ticked, by personal question id. */
+  personal: string[];
+  inline: InlineDraft[];
+  /** The preset button last clicked, or null after Select all, Clear, or a report saved without one. */
+  presetClicked: PresetKey | null;
+}
+
+export const emptySelection = (): QuestionSelectionState => ({ library: [], personal: [], inline: [], presetClicked: null });
+
+/** The saved report's questions as the checklist holds them. */
+export function selectionFromDetail(detail: ReportDetail): QuestionSelectionState {
+  return {
+    library: detail.questions.filter((q) => q.libraryQuestionId !== null).map((q) => q.libraryQuestionId!),
+    personal: detail.questions.filter((q) => q.personalQuestionId !== null).map((q) => q.personalQuestionId!),
+    inline: detail.questions
+      .filter((q) => q.kind === "inline")
+      .map((q) => ({ key: `saved:${q.questionId}`, text: q.text, save: false })),
+    presetClicked: detail.presetKey,
+  };
+}
+
+/** The library rows a preset names, by id, in library order; a row the library lacks is skipped. */
+function presetIds(key: PresetKey, library: LibraryQuestionView[]): string[] {
+  const wanted = new Set(REPORT_PRESETS[key].questionKeys);
+  return [...library]
+    .filter((q) => wanted.has(q.key))
+    .sort((a, b) => a.position - b.position)
+    .map((q) => q.libraryQuestionId);
+}
+
+/** A preset button: tick its shared questions, untick the other shared ones, leave My questions and custom ones alone. */
+export function applyPreset(state: QuestionSelectionState, key: PresetKey, library: LibraryQuestionView[]): QuestionSelectionState {
+  return { ...state, library: presetIds(key, library), presetClicked: key };
+}
+
+/** Select all: every enabled shared question. */
+export function selectAllShared(state: QuestionSelectionState, library: LibraryQuestionView[]): QuestionSelectionState {
+  return {
+    ...state,
+    library: [...library].filter((q) => q.enabled).sort((a, b) => a.position - b.position).map((q) => q.libraryQuestionId),
+    presetClicked: null,
+  };
+}
+
+/** Clear: no shared questions ticked. My questions and custom questions are left as they are. */
+export function clearShared(state: QuestionSelectionState): QuestionSelectionState {
+  return { ...state, library: [], presetClicked: null };
+}
+
+export function toggleLibrary(state: QuestionSelectionState, libraryQuestionId: string, on: boolean): QuestionSelectionState {
+  const without = state.library.filter((id) => id !== libraryQuestionId);
+  return { ...state, library: on ? [...without, libraryQuestionId] : without };
+}
+
+export function togglePersonal(state: QuestionSelectionState, personalQuestionId: string, on: boolean): QuestionSelectionState {
+  const without = state.personal.filter((id) => id !== personalQuestionId);
+  return { ...state, personal: on ? [...without, personalQuestionId] : without };
+}
+
+export function addInline(state: QuestionSelectionState, text: string, save = false): QuestionSelectionState {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return state;
+  const key = `new:${Date.now()}:${state.inline.length}`;
+  return { ...state, inline: [...state.inline, { key, text: trimmed, save }] };
+}
+
+export function removeInline(state: QuestionSelectionState, key: string): QuestionSelectionState {
+  return { ...state, inline: state.inline.filter((d) => d.key !== key) };
+}
+
+export function setInlineSave(state: QuestionSelectionState, key: string, save: boolean): QuestionSelectionState {
+  return { ...state, inline: state.inline.map((d) => (d.key === key ? { ...d, save } : d)) };
+}
+
+/** The shared questions ticked, as library keys in library order - what the preset label is judged on. */
+export function libraryKeysOf(state: QuestionSelectionState, library: LibraryQuestionView[]): string[] {
+  const ticked = new Set(state.library);
+  return [...library]
+    .filter((q) => ticked.has(q.libraryQuestionId))
+    .sort((a, b) => a.position - b.position)
+    .map((q) => q.key);
+}
+
+/** The preset label the server will store for this selection, or null. */
+export function presetLabelFor(state: QuestionSelectionState, library: LibraryQuestionView[]): PresetKey | null {
+  return presetMatching(libraryKeysOf(state, library), state.presetClicked);
+}
+
+/** The body the create and update APIs take: shared, then mine, then typed. The server re-sorts the shared part anyway. */
+export function selectionBody(state: QuestionSelectionState, library: LibraryQuestionView[]): QuestionSelection {
+  const byId = new Map(library.map((q) => [q.libraryQuestionId, q.position]));
+  const shared = [...state.library].sort((a, b) => (byId.get(a) ?? 0) - (byId.get(b) ?? 0));
+  return [
+    ...shared.map((libraryQuestionId) => ({ kind: "library" as const, libraryQuestionId })),
+    ...state.personal.map((personalQuestionId) => ({ kind: "personal" as const, personalQuestionId })),
+    ...state.inline.map((d) => ({ kind: "inline" as const, text: d.text, ...(d.save ? { saveToLibrary: true } : {}) })),
+  ];
+}
+
+export function countSelection(state: QuestionSelectionState): number {
+  return state.library.length + state.personal.length + state.inline.length;
+}
+
+/** "22 questions · Standard weekly health report + 2 custom", or "No questions ticked". */
+export function describeSelection(state: QuestionSelectionState, library: LibraryQuestionView[]): string {
+  const count = countSelection(state);
+  if (count === 0) return "No questions ticked";
+  const preset = presetLabelFor(state, library);
+  const custom = state.personal.length + state.inline.length;
+  const parts = [`${count} question${count === 1 ? "" : "s"}`];
+  if (preset !== null) parts.push(REPORT_PRESETS[preset].label + (custom > 0 ? ` + ${custom} custom` : ""));
+  else if (custom > 0 && state.library.length > 0) parts.push(`${state.library.length} shared + ${custom} custom`);
+  else if (custom > 0) parts.push(`${custom} custom`);
+  return parts.join(" · ");
+}

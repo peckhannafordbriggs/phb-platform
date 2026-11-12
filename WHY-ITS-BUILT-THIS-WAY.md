@@ -3132,3 +3132,69 @@ production uses and no test does. If a compiled build is ever wanted - for
 startup time at hundreds of runs an hour, say - the user's own condition
 applies: extend `tests/bas-reports-worker-render.test.ts` to render through
 the compiled artefact too, in the same CI run, before the Dockerfile changes.
+
+## 81 · A report's questions are a checklist, a preset is a label, and the only cap is the module's
+
+**What I did (2026-11-12).** The editor's Questions section lists every
+enabled shared question with a checkbox, grouped by section in library
+order, visible on a new report before any save, with *Select all*,
+*Standard weekly*, *Daily critical-site* and *Clear* above it; My questions
+with checkboxes below; and a box to type a custom question for this report,
+each typed one with a *save for reuse* tick. The selection is saved whole
+with the report and stored in one order - shared in library order, then the
+owner's own, then typed. `preset_key` stays on the definition as a label of
+which preset was last clicked, kept while the shared selection still
+matches that set and cleared by the service the moment it does not; it
+restricts nothing, and the `preset_locked` refusal and the per-question
+add / remove / reorder routes are gone. The per-report cost budget and time
+cap are gone too: one row, `bas_report_settings`, holds the module's safety
+ceiling - $10.00 and 25 minutes per run by default - edited by BAS module
+admins from the Usage page and read by the engine for every run; the two
+definition columns are dropped and the create / update APIs refuse the keys
+with 400. The Usage page itself was a Phase 1 placeholder that said *There
+have been no runs* without asking; it now reads `bas_report_runs` on the
+same components as Cost Intelligence's *Usage & cost*, which moved to
+`components/ui/Usage.tsx` for both modules to share.
+
+**Why.** Phase 1 made the presets locks because the spec's twenty questions
+are meant to compare week to week and building to building, and a lock
+seemed the way to keep them whole. In use the lock was the obstacle: the
+first real request was "the standard weekly plus two questions of mine",
+and the only route to it was clearing the preset, losing the label, and
+adding questions one call at a time on a saved draft. A checklist gives the
+same twenty in the same order with one click, and the label survives
+exactly as long as it is true - the service judges the shared selection
+against the preset's set on every save, so the Scheduled list's *Standard
+weekly health report* under a report is a fact about its questions, not a
+memory of a button. Custom questions do not count against the match, on
+purpose: they are what the person added to the standard, not a departure
+from it. *Select all* is not a preset click and earns no label, for the
+same reason - the label says what was chosen, not what happens to coincide.
+
+The per-report budget asked every author to decide a dollar figure they had
+no basis for, and a report's author is not the person who pays the bill.
+What the module needs is one ceiling no run may pass, set by the people who
+see the spend - which is why it lives on the Usage page, beside the figures
+it bounds, and nowhere else. The ceiling is read when a run executes, not
+when it was queued, and stamped on the run so the record says what applied.
+
+The placeholder was the honest page on 10 November and a false one by the
+12th; the lesson is the Projects-cards one again: a screen that reports a
+number must read it. The Usage service carries the same joinless count the
+other BAS lists do, and the page goes red when the tallies and the count
+disagree.
+
+**What breaks if you undo it.** Put the lock back and the first mixed
+report is impossible again. Let the client set `preset_key` and the label
+becomes a memory. Move the ceiling back onto the definition and every
+author decides a number for the company's bill; drop the 400 and an old
+editor believes it set a cap it did not. Read the ceiling at queue time and
+an admin's change waits an unknown time to apply. Replace the Usage query
+with a placeholder and the page lies within a day.
+
+`lib/modules/bas/reports/service.ts` (`resolveSelection`, `setSafetyCeiling`),
+`lib/modules/bas/reports/ceiling.ts`, `lib/modules/bas/reports/usage.ts`,
+`prisma/migrations/20261112150000_bas_reports_safety_ceiling/`;
+`tests/bas-reports-routes.test.ts`, `tests/bas-reports-usage.test.ts`,
+`tests/bas-reports-ui.test.tsx`; `runbook.md` → *Reports: the safety
+ceiling*, *The editor's Questions section is a checklist*.

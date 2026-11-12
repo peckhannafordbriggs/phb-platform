@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { LIBRARY_SECTIONS } from "@/lib/modules/bas/reports/library";
-import { PRESET_KEYS, REPORT_PRESETS, type PresetKey } from "@/lib/modules/bas/reports/presets";
+import { PRESET_KEYS, REPORT_PRESETS } from "@/lib/modules/bas/reports/presets";
 import {
   ANALYSIS_WINDOWS,
   WINDOW_LABELS,
@@ -21,33 +21,44 @@ import {
   type PersonalQuestionView,
   type ReportDetail,
   type ReportOptions,
+  type ReportQuestionView,
 } from "@/lib/modules/bas/reports/types";
 import type { CreateReportInput, UpdateReportInput } from "@/lib/validation/bas-reports";
 import { ApiError } from "./health-client";
 import {
   EXTERNAL_CHIP,
   OWNER_ROW_LABEL,
-  addQuestion,
+  addInline,
   addRecipient,
+  applyPreset,
   changeReportState,
+  clearShared,
   createReport,
   deleteReport,
   describeNextRun,
+  describeSelection,
+  emptySelection,
   fetchLibrary,
   fetchPersonal,
   fetchReport,
   fetchReportOptions,
   formFromSchedule,
-  removeQuestion,
+  removeInline,
   removeRecipient,
-  reorderQuestions,
   reportStateTone,
   scheduleFromForm,
+  selectAllShared,
+  selectionBody,
+  selectionFromDetail,
+  setInlineSave,
+  toggleLibrary,
+  togglePersonal,
   transferOwner,
   updateReport,
+  type QuestionSelectionState,
   type ScheduleForm,
 } from "./reports-client";
-import { Button, Dropdown, INPUT, SearchBar, Segmented } from "@/components/ui";
+import { Button, Dropdown, INPUT, Segmented } from "@/components/ui";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /** The kit's input, with the gap under its label. Buttons are the kit's `Button` (2026-11-10). */
@@ -73,24 +84,33 @@ interface DetailsForm {
   description: string;
   siteId: string;
   stationIds: string[];
-  presetKey: PresetKey | null;
   analysisWindow: AnalysisWindow;
   schedule: ScheduleForm;
   timeOfDay: string;
-  budgetUsd: string;
-  maxMinutes: string;
 }
 
 /**
  * The editor: one page with sections, saved as a draft until activated.
  *
  * Two modes, one component. With no `reportId` the page holds the details,
- * window, schedule and budget and the first save CREATES the draft and moves
- * to its page; questions and recipients need a report to belong to, so those
- * sections appear once it exists. With a `reportId` every section is live:
- * details save together with one button, questions and recipients save as
- * they are changed, and the last section activates, pauses, resumes or
- * deletes.
+ * the questions, the window and the schedule, and the first save CREATES the
+ * draft with its questions and moves to its page; recipients need a report
+ * to belong to, so that section fills in once it exists. With a `reportId`
+ * every section is live: details and questions save together with one
+ * button, recipients save as they are changed, and the last section
+ * activates, pauses, resumes or deletes.
+ *
+ * THE QUESTIONS ARE A CHECKLIST (2026-11-12). Every enabled shared question
+ * is listed with a box, grouped by section, visible before any save; a
+ * preset button ticks its set and unticks the other shared questions, and
+ * the person ticks or unticks anything after. My questions have boxes too,
+ * and a custom question is typed in here. Nothing is locked. The selection
+ * lives in the form until Save writes it whole; the server stores it in
+ * library order, then mine, then typed, and keeps the preset's name as a
+ * label only while the shared part still matches.
+ *
+ * No Limits section: the module's safety ceiling, on the Usage page, applies
+ * to every run (2026-11-12).
  *
  * The schedule is previewed with the SAME function the server stores it
  * with (`computeNextRun`), in the building's zone and in UTC, so what the
@@ -103,6 +123,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
   const [personal, setPersonal] = useState<PersonalQuestionView[] | null>(null);
   const [report, setReport] = useState<ReportDetail | null>(null);
   const [form, setForm] = useState<DetailsForm | null>(null);
+  const [selection, setSelection] = useState<QuestionSelectionState>(emptySelection());
   const [error, setError] = useState<ApiError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -111,6 +132,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
     if (reportId === null) return null;
     const detail = await fetchReport(reportId, signal);
     setReport(detail);
+    setSelection(selectionFromDetail(detail));
     return detail;
   }, [reportId]);
 
@@ -140,24 +162,18 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
                 description: "",
                 siteId: firstSite?.siteId ?? "",
                 stationIds: [],
-                presetKey: "health_weekly",
                 analysisWindow: "7d",
                 schedule: formFromSchedule(null, todayIn(timezone)),
                 timeOfDay: "06:00",
-                budgetUsd: opts.defaultBudgetUsd.toFixed(2),
-                maxMinutes: String(opts.defaultMaxMinutes),
               }
             : {
                 name: detail.name,
                 description: detail.description ?? "",
                 siteId: detail.site.siteId,
                 stationIds: detail.stationIds,
-                presetKey: detail.presetKey,
                 analysisWindow: detail.analysisWindow,
                 schedule: formFromSchedule(detail.schedule, todayIn(timezone)),
                 timeOfDay: detail.timeOfDay,
-                budgetUsd: detail.budgetUsd.toFixed(2),
-                maxMinutes: String(detail.maxMinutes),
               },
         );
         setError(null);
@@ -207,7 +223,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
     }
   }, [spec, scheduleIssue, form, timezone]);
 
-  if (form === null || options === null) {
+  if (form === null || options === null || library === null) {
     return <p className="p-6 text-sm text-[var(--muted)]">{error?.message ?? "Loading…"}</p>;
   }
 
@@ -215,19 +231,16 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
 
   const detailsBody = (): CreateReportInput | null => {
     if (spec === null) return null;
-    const budget = Number(form.budgetUsd);
-    const minutes = Number(form.maxMinutes);
     return {
       name: form.name,
       description: form.description.length === 0 ? null : form.description,
       siteId: form.siteId,
       stationIds: form.stationIds,
-      presetKey: form.presetKey,
+      presetKey: selection.presetClicked,
       analysisWindow: form.analysisWindow,
       schedule: spec,
       timeOfDay: form.timeOfDay,
-      budgetUsd: Number.isFinite(budget) && budget > 0 ? Math.round(budget * 100) / 100 : undefined,
-      maxMinutes: Number.isInteger(minutes) && minutes > 0 ? minutes : undefined,
+      questions: selectionBody(selection, library),
     };
   };
 
@@ -237,6 +250,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
       setError(new ApiError("validation_failed", scheduleIssue ?? "Complete the schedule."));
       return;
     }
+    const savesForReuse = selection.inline.some((d) => d.save);
     if (reportId === null) {
       await run(async () => {
         const created = await createReport(body);
@@ -244,12 +258,17 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
       }, "Draft saved.");
     } else {
       const patch: UpdateReportInput = { ...body };
-      await run(() => updateReport(reportId, patch), "Saved.");
+      const ok = await run(() => updateReport(reportId, patch), "Saved.");
+      if (ok && savesForReuse) await reloadPersonal();
     }
   };
 
   const ownerEmail = report?.ownerEmail ?? viewer.email;
   const ownerName = report?.ownerName ?? viewer.name;
+  // My questions go on my own reports: a new report is mine, an existing one
+  // is the owner's. A module admin editing somebody else's report keeps the
+  // owner's questions and types any of their own in.
+  const canUsePersonal = report === null || report.isOwner;
 
   return (
     <div className="space-y-6">
@@ -323,27 +342,15 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
 
       {/* 2. Questions */}
       <Section title="Questions" n={2}>
-        <PresetButtons value={form.presetKey} onChange={(presetKey) => set({ presetKey })} />
-        {report === null ? (
-          <p className="mt-3 text-sm text-[var(--muted)]">
-            Save the draft to add questions. A preset chosen above is added when the draft is saved.
-          </p>
-        ) : (
-          <QuestionsSection
-            report={report}
-            presetPending={form.presetKey !== report.presetKey}
-            library={library ?? []}
-            personal={personal ?? []}
-            busy={busy}
-            canUsePersonal={report.isOwner}
-            onAdd={async (body) => {
-              const ok = await run(() => addQuestion(report.reportId, body));
-              if (ok && body.kind === "inline" && body.saveToLibrary === true) await reloadPersonal();
-            }}
-            onRemove={(questionId) => run(() => removeQuestion(report.reportId, questionId))}
-            onReorder={(ids) => run(() => reorderQuestions(report.reportId, ids))}
-          />
-        )}
+        <QuestionsChecklist
+          library={library}
+          personal={personal ?? []}
+          selection={selection}
+          onChange={setSelection}
+          canUsePersonal={canUsePersonal}
+          ownerQuestionsOnReport={report?.questions.filter((q) => q.kind === "personal") ?? []}
+          disabled={busy}
+        />
       </Section>
 
       {/* 3. Analysis window */}
@@ -411,29 +418,15 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
         )}
       </Section>
 
-      {/* 6. Limits */}
-      <Section title="Limits" n={6}>
-        <Field label="Cost budget per run (USD)" hint="The model stops being asked for narrative when a run's spend would pass it. The run finishes with what it has and says so.">
-          <input className={FIELD + " max-w-[10rem]"} inputMode="decimal" value={form.budgetUsd} onChange={(e) => set({ budgetUsd: e.target.value })} />
-        </Field>
-        <Field label="Time cap per run (minutes)" hint={`Questions and narrative still waiting when a run has taken this long are skipped and named; the run finishes partial. 1 to ${options.maxMinutesLimit}.`}>
-          <input className={FIELD + " max-w-[10rem]"} inputMode="numeric" value={form.maxMinutes} onChange={(e) => set({ maxMinutes: e.target.value })} />
-        </Field>
-      </Section>
-
-      {/* 7. Review and activate */}
-      <Section title="Review and activate" n={7}>
+      {/* 6. Review and activate */}
+      <Section title="Review and activate" n={6}>
         <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-sm">
           <dt className="text-[var(--muted)]">Report</dt>
           <dd>{form.name.length > 0 ? form.name : "(unnamed)"}</dd>
           <dt className="text-[var(--muted)]">Building</dt>
           <dd>{site?.name ?? "—"}{form.stationIds.length > 0 ? ` · ${form.stationIds.length} stations` : ""}</dd>
           <dt className="text-[var(--muted)]">Questions</dt>
-          <dd>
-            {form.presetKey !== null
-              ? `${REPORT_PRESETS[form.presetKey].label} (${REPORT_PRESETS[form.presetKey].questionKeys.length}, locked)`
-              : `${report?.questions.length ?? 0} custom`}
-          </dd>
+          <dd>{describeSelection(selection, library)}</dd>
           <dt className="text-[var(--muted)]">Window</dt>
           <dd>{WINDOW_LABELS[form.analysisWindow]}</dd>
           <dt className="text-[var(--muted)]">Schedule</dt>
@@ -450,7 +443,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
           {report !== null && (report.state === "draft" || report.state === "paused") && (
             <Button
               disabled={busy}
-              onClick={() => run(() => changeReportState(report.reportId, report.state === "paused" ? "resume" : "activate"), "Activated. Runs begin when the next phase switches them on.")}
+              onClick={() => run(() => changeReportState(report.reportId, report.state === "paused" ? "resume" : "activate"), "Activated.")}
             >
               {report.state === "paused" ? "Resume" : "Activate"}
             </Button>
@@ -478,7 +471,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
         </div>
         {report !== null && report.state === "active" && (
           <p className="mt-3 text-sm text-[var(--muted)]">
-            Next run: {describeNextRun(report.nextRunAt, report.site.timezone)}. Nothing fires until the phase that runs reports is switched on.
+            Next run: {describeNextRun(report.nextRunAt, report.site.timezone)}.
           </p>
         )}
       </Section>
@@ -567,184 +560,192 @@ export function OwnerRow({ name, email }: { name: string; email: string }) {
   );
 }
 
-function PresetButtons({ value, onChange }: { value: PresetKey | null; onChange: (key: PresetKey | null) => void }) {
-  return (
-    <Segmented
-      tone="light"
-      label="Questions"
-      options={[
-        ...PRESET_KEYS.map((key) => ({
-          value: key as string,
-          label: <span title={REPORT_PRESETS[key].description}>{REPORT_PRESETS[key].label} (locked)</span>,
-        })),
-        {
-          value: "custom",
-          label: <span title="Pick from the shared questions, your own, or type them.">Custom</span>,
-        },
-      ]}
-      value={value ?? "custom"}
-      onChange={(next) => onChange(next === "custom" ? null : (next as PresetKey))}
-    />
-  );
+/** The label beside a shared question: its section, how it is answered, and what it applies to. */
+export function questionMeta(q: Pick<LibraryQuestionView, "sectionLabel" | "kind" | "appliesToLabel">): string {
+  return `${q.sectionLabel} · ${q.kind} · ${q.appliesToLabel}`;
 }
 
-function QuestionsSection({
-  report,
-  presetPending,
+/**
+ * The checklist (2026-11-12). Pure in its props, so a node test can render
+ * it empty, after a preset, and with a custom question, and read the boxes.
+ *
+ * Every enabled shared question, grouped by section in library order, with
+ * a box; a shared question since turned off is listed only while it is
+ * ticked, and says so. Above the list the four buttons; below it My
+ * questions with boxes, then the custom questions on this report and the
+ * box to type one. The buttons act on the shared list only - mixing is the
+ * point, and a preset click must not untick a question of mine.
+ */
+export function QuestionsChecklist({
   library,
   personal,
-  busy,
+  selection,
+  onChange,
   canUsePersonal,
-  onAdd,
-  onRemove,
-  onReorder,
+  ownerQuestionsOnReport = [],
+  disabled = false,
 }: {
-  report: ReportDetail;
-  presetPending: boolean;
   library: LibraryQuestionView[];
   personal: PersonalQuestionView[];
-  busy: boolean;
+  selection: QuestionSelectionState;
+  onChange: (next: QuestionSelectionState) => void;
+  /** Whether My questions and "save for reuse" are offered: the viewer owns (or is creating) the report. */
   canUsePersonal: boolean;
-  onAdd: (body: Parameters<typeof addQuestion>[1]) => Promise<void>;
-  onRemove: (questionId: string) => Promise<boolean>;
-  onReorder: (questionIds: string[]) => Promise<boolean>;
+  /** For a module admin on somebody else's report: the owner's own questions, kept and shown read-only. */
+  ownerQuestionsOnReport?: ReportQuestionView[];
+  disabled?: boolean;
 }) {
-  const [search, setSearch] = useState("");
-  const [inline, setInline] = useState("");
-  const [save, setSave] = useState(false);
-  const locked = report.presetKey !== null;
-
-  const move = (index: number, delta: number) => {
-    const ids = report.questions.map((q) => q.questionId);
-    const target = index + delta;
-    if (target < 0 || target >= ids.length) return;
-    const [moved] = ids.splice(index, 1);
-    if (moved === undefined) return;
-    ids.splice(target, 0, moved);
-    void onReorder(ids);
-  };
-
-  const onReport = new Set(report.questions.map((q) => q.libraryQuestionId ?? `p:${q.personalQuestionId ?? ""}`));
-  const term = search.trim().toLowerCase();
-  const offered = library.filter(
-    (q) => q.enabled && (term.length === 0 || q.text.toLowerCase().includes(term) || q.sectionLabel.toLowerCase().includes(term)),
-  );
+  const [draft, setDraft] = useState("");
+  const ticked = new Set(selection.library);
+  const tickedPersonal = new Set(selection.personal);
+  const offered = [...library]
+    .filter((q) => q.enabled || ticked.has(q.libraryQuestionId))
+    .sort((a, b) => a.position - b.position || a.libraryQuestionId.localeCompare(b.libraryQuestionId));
 
   return (
-    <div className="mt-4 space-y-4">
-      {presetPending && (
-        <p className="rounded-[var(--radius-row)] border p-3 text-sm" style={TONE_STYLE.warn}>
-          The preset choice above is applied when you save changes.
-        </p>
-      )}
-      {locked && (
-        <p className="text-sm text-[var(--muted)]">
-          {report.presetLabel}: {report.questions.length} questions in a fixed order. Choose Custom to vary them.
-        </p>
-      )}
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Shared question presets">
+          <Button size="sm" disabled={disabled} onClick={() => onChange(selectAllShared(selection, library))}>
+            Select all
+          </Button>
+          {PRESET_KEYS.map((key) => (
+            <Button key={key} size="sm" disabled={disabled} title={REPORT_PRESETS[key].description} onClick={() => onChange(applyPreset(selection, key, library))}>
+              {REPORT_PRESETS[key].label === "Standard weekly health report" ? "Standard weekly" : "Daily critical-site"}
+            </Button>
+          ))}
+          <Button size="sm" disabled={disabled} onClick={() => onChange(clearShared(selection))}>
+            Clear
+          </Button>
+        </div>
+        <span className="text-sm text-[var(--muted)]" data-testid="questions-summary">{describeSelection(selection, library)}</span>
+      </div>
 
-      <ol className="divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]" aria-label="Questions on this report">
-        {report.questions.length === 0 && (
-          <li className="px-3 py-3 text-sm text-[var(--muted)]">No questions yet. Add some below.</li>
-        )}
-        {report.questions.map((q, i) => (
-          <li key={q.questionId} className="flex items-start gap-3 px-3 py-2 text-sm">
-            <span className="w-6 shrink-0 tabular-nums text-[var(--muted)]">{i + 1}.</span>
-            <span className="min-w-0 flex-1">
-              {q.text}
-              <span className="ml-2 text-xs text-[var(--muted)]">
-                {q.kind === "library" ? `${q.sectionLabel} · ${q.libraryKind} · ${q.appliesToLabel}` : q.kind === "personal" ? "my question" : "typed"}
-              </span>
-            </span>
-            {!locked && (
-              <span className="flex shrink-0 gap-1">
-                <Button size="sm"  disabled={busy || i === 0} ariaLabel="Move up" onClick={() => move(i, -1)}>↑</Button>
-                <Button size="sm"  disabled={busy || i === report.questions.length - 1} ariaLabel="Move down" onClick={() => move(i, 1)}>↓</Button>
-                <Button size="sm"  disabled={busy} onClick={() => void onRemove(q.questionId)}>Remove</Button>
-              </span>
+      <div className="max-h-[30rem] overflow-auto rounded-[var(--radius-row)] border border-[var(--border)]" role="group" aria-label="Shared questions">
+        {LIBRARY_SECTIONS.map((section) => {
+          const rows = offered.filter((q) => q.section === section.key);
+          if (rows.length === 0) return null;
+          return (
+            <div key={section.key}>
+              <div className="sticky top-0 z-10 bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--muted)]">{section.label}</div>
+              {rows.map((q) => (
+                <label key={q.libraryQuestionId} className="flex items-start gap-3 border-t border-[var(--divider-soft)] px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={ticked.has(q.libraryQuestionId)}
+                    disabled={disabled}
+                    onChange={(e) => onChange(toggleLibrary(selection, q.libraryQuestionId, e.target.checked))}
+                    aria-label={`Q${q.position}: ${q.text}`}
+                  />
+                  <span className="w-7 shrink-0 tabular-nums text-[var(--muted)]">{q.position}.</span>
+                  <span className="min-w-0 flex-1">
+                    {q.text}
+                    <span className="ml-2 text-xs text-[var(--muted)]">{questionMeta(q)}</span>
+                    {!q.enabled && (
+                      <span className="ml-2 inline-block rounded-full border px-2 py-0.5 text-[0.6875rem] font-medium" style={{ ...TONE_STYLE.warn, color: TONE_INK.warn }}>
+                        turned off
+                      </span>
+                    )}
+                  </span>
+                </label>
+              ))}
+            </div>
+          );
+        })}
+        {offered.length === 0 && <p className="px-3 py-3 text-sm text-[var(--muted)]">The shared library is empty. Run the seed.</p>}
+      </div>
+
+      {canUsePersonal ? (
+        <div>
+          <h3 className="text-sm font-medium">My questions</h3>
+          <ul className="mt-2 divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]" aria-label="My questions">
+            {personal.length === 0 && (
+              <li className="px-3 py-2 text-sm text-[var(--muted)]">Nothing saved yet. Tick &ldquo;save for reuse&rdquo; on a custom question below to keep it here.</li>
             )}
-          </li>
-        ))}
-      </ol>
+            {personal.map((p) => (
+              <li key={p.personalQuestionId}>
+                <label className="flex items-start gap-3 px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={tickedPersonal.has(p.personalQuestionId)}
+                    disabled={disabled}
+                    onChange={(e) => onChange(togglePersonal(selection, p.personalQuestionId, e.target.checked))}
+                    aria-label={p.text}
+                  />
+                  <span className="min-w-0 flex-1">
+                    {p.text}
+                    <span className="ml-2 text-xs text-[var(--muted)]">my question · planner</span>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : ownerQuestionsOnReport.length > 0 ? (
+        <div>
+          <h3 className="text-sm font-medium">The owner&apos;s questions on this report</h3>
+          <ul className="mt-2 divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]" aria-label="The owner's questions">
+            {ownerQuestionsOnReport.map((q) => (
+              <li key={q.questionId} className="px-3 py-2 text-sm">
+                {q.text}
+                <span className="ml-2 text-xs text-[var(--muted)]">the owner&apos;s · kept when you save</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
-      {!locked && (
-        <>
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-medium">Shared questions</h3>
-              <SearchBar label="Search the shared questions" placeholder="Search" value={search} onChange={setSearch} hotkey={false} className="w-56" />
-            </div>
-            <div className="mt-2 max-h-72 overflow-auto rounded-[var(--radius-row)] border border-[var(--border)]">
-              {LIBRARY_SECTIONS.map((section) => {
-                const rows = offered.filter((q) => q.section === section.key);
-                if (rows.length === 0) return null;
-                return (
-                  <div key={section.key}>
-                    <div className="sticky top-0 bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--muted)]">{section.label}</div>
-                    {rows.map((q) => (
-                      <div key={q.libraryQuestionId} className="flex items-start gap-3 border-t border-[var(--divider-soft)] px-3 py-2 text-sm">
-                        <span className="min-w-0 flex-1">
-                          {q.text}
-                          <span className="ml-2 inline-block rounded-full border border-[var(--border)] px-2 py-0.5 text-[0.6875rem] text-[var(--muted)]">{q.kind}</span>
-                          <span className="ml-2 text-xs text-[var(--muted)]">applies to: {q.appliesToLabel}</span>
-                        </span>
-                        <Button size="sm"
-                          disabled={busy || onReport.has(q.libraryQuestionId)}
-                          onClick={() => void onAdd({ kind: "library", libraryQuestionId: q.libraryQuestionId })}
-                        >
-                          {onReport.has(q.libraryQuestionId) ? "Added" : "Add"}
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-              {offered.length === 0 && <p className="px-3 py-3 text-sm text-[var(--muted)]">Nothing matches.</p>}
-            </div>
-          </div>
-
-          {canUsePersonal && personal.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium">My questions</h3>
-              <ul className="mt-2 divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]">
-                {personal.map((p) => (
-                  <li key={p.personalQuestionId} className="flex items-start gap-3 px-3 py-2 text-sm">
-                    <span className="min-w-0 flex-1">{p.text}</span>
-                    <Button size="sm"
-                      disabled={busy || onReport.has(`p:${p.personalQuestionId}`)}
-                      onClick={() => void onAdd({ kind: "personal", personalQuestionId: p.personalQuestionId })}
-                    >
-                      {onReport.has(`p:${p.personalQuestionId}`) ? "Added" : "Add"}
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <div>
-            <h3 className="text-sm font-medium">Write a question</h3>
-            <textarea className={FIELD + " h-auto py-2"} rows={2} maxLength={1000} value={inline} placeholder="e.g. Which VAVs were above setpoint for more than two hours while occupied?" onChange={(e) => setInline(e.target.value)} />
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
-              <Button size="sm"
-                disabled={busy || inline.trim().length === 0}
-                onClick={() => {
-                  void onAdd({ kind: "inline", text: inline.trim(), saveToLibrary: save && canUsePersonal }).then(() => setInline(""));
-                }}
-              >
-                Add question
-              </Button>
+      <div>
+        <h3 className="text-sm font-medium">Custom questions on this report</h3>
+        <ul className="mt-2 divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]" aria-label="Custom questions">
+          {selection.inline.length === 0 && <li className="px-3 py-2 text-sm text-[var(--muted)]">None yet.</li>}
+          {selection.inline.map((d) => (
+            <li key={d.key} className="flex items-start gap-3 px-3 py-2 text-sm">
+              <span className="min-w-0 flex-1">
+                {d.text}
+                <span className="ml-2 text-xs text-[var(--muted)]">this report only · planner</span>
+              </span>
               {canUsePersonal && (
-                <label className="flex items-center gap-1.5 text-xs">
-                  <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />
-                  Save to my questions
+                <label className="flex shrink-0 items-center gap-1.5 text-xs">
+                  <input type="checkbox" checked={d.save} disabled={disabled} onChange={(e) => onChange(setInlineSave(selection, d.key, e.target.checked))} />
+                  save for reuse
                 </label>
               )}
-              <span className="text-xs text-[var(--muted)]">Answered by the Analyze planner when runs begin.</span>
-            </div>
-          </div>
-        </>
-      )}
+              <Button size="sm" disabled={disabled} onClick={() => onChange(removeInline(selection, d.key))}>
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+        <label className="mt-3 block text-sm">
+          <span className="text-[0.75rem] text-[var(--muted)]">Add a custom question to this report</span>
+          <textarea
+            className={FIELD + " h-auto py-2"}
+            rows={2}
+            maxLength={1000}
+            value={draft}
+            placeholder="e.g. Which VAVs were above setpoint for more than two hours while occupied?"
+            onChange={(e) => setDraft(e.target.value)}
+          />
+        </label>
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+          <Button
+            size="sm"
+            disabled={disabled || draft.trim().length === 0}
+            onClick={() => {
+              onChange(addInline(selection, draft));
+              setDraft("");
+            }}
+          >
+            Add
+          </Button>
+          <span className="text-xs text-[var(--muted)]">
+            Saved with the report. Custom questions are answered by the Analyze planner when that phase runs.
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

@@ -172,6 +172,12 @@ export type AuditAction =
   | "bas.report_run_requested"
   /** A module admin gave a report a new owner; `resumed` says whether that un-paused it. */
   | "bas.report_owner_transferred"
+  /**
+   * A module admin changed the Reports safety ceiling (2026-11-12): the
+   * most a run may spend and the longest it may take, one row for the
+   * module. Carries `from` and `to`, each `{ usd, minutes }`.
+   */
+  | "bas.report_ceiling_changed"
   | "bas.building_occupancy_updated"
   /**
    * The Cost Intelligence skill catalog was synced from the skills folder.

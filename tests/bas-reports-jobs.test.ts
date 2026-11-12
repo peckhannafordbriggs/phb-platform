@@ -14,15 +14,16 @@ import { TIME_CAP_NOTE, enqueueRun, executeReportRun } from "@/lib/modules/bas/r
 import type { ReportDocument } from "@/lib/modules/bas/reports/engine/types";
 import { collapseMissedTicks, runSchedulerPass } from "@/lib/modules/bas/reports/scheduler";
 import { computeNextRun, type ScheduleSpec } from "@/lib/modules/bas/reports/schedule";
+import { DEFAULT_SAFETY_CEILING } from "@/lib/modules/bas/reports/ceiling";
+import { readSafetyCeiling } from "@/lib/modules/bas/reports/ceiling-read";
 import {
-  DEFAULT_REPORT_MAX_MINUTES,
   changeReportState,
   createReport,
   listReportOptions,
   listReports,
   requestRun,
+  setSafetyCeiling,
   transferReportOwner,
-  updateReport,
 } from "@/lib/modules/bas/reports/service";
 import {
   MAX_ATTEMPTS,
@@ -117,8 +118,9 @@ async function dropBuilding() {
   await testDb.basOrg.deleteMany({ where: { name: "ZZTEST_JOBS_ORG" } });
 }
 
-/** A weekly Monday 06:00 preset report owned by `owner`, activated. */
+/** A weekly Monday 06:00 report with the standard weekly's twenty questions, owned by `owner`, activated. */
 async function activeReport(name = "ZZTEST jobs weekly"): Promise<string> {
+  const library = await testDb.basLibraryQuestion.findMany({ select: { libraryQuestionId: true }, orderBy: { position: "asc" } });
   const created = await createReport(viewerOf(owner), {
     name,
     siteId: siteId.toString(),
@@ -126,6 +128,7 @@ async function activeReport(name = "ZZTEST jobs weekly"): Promise<string> {
     analysisWindow: "7d",
     schedule: WEEKLY_MONDAY,
     timeOfDay: "06:00",
+    questions: library.map((q) => ({ kind: "library" as const, libraryQuestionId: q.libraryQuestionId.toString() })),
   });
   await changeReportState(viewerOf(owner), created.reportId, "activate");
   return created.reportId;
@@ -351,10 +354,10 @@ describe("claiming runs", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The time cap
+// The safety ceiling's minutes (the per-report time cap until 2026-11-12)
 // ---------------------------------------------------------------------------
 
-describe("the wall-clock cap", () => {
+describe("the wall-clock half of the safety ceiling", () => {
   it("stops starting questions and narrative past the deadline, finishes partial, and names the cap and what was skipped", async () => {
     // The clock: the run starts at t0, the first few reads are still at t0,
     // then it is half an hour later.
@@ -366,7 +369,7 @@ describe("the wall-clock cap", () => {
     };
     const outcome = await executeReportRun(reportId, { periodEnd: new Date(), trigger: "manual", startedById: owner.id, narrator: createFixedNarrator(), clock });
     expect(outcome.status).toBe("partial");
-    expect(outcome.partialReason).toMatch(new RegExp(`^Time cap of ${DEFAULT_REPORT_MAX_MINUTES} min reached after \\d+ min: Q\\d+`));
+    expect(outcome.partialReason).toMatch(new RegExp(`^Safety ceiling of ${DEFAULT_SAFETY_CEILING.minutes} min reached after \\d+ min: Q\\d+`));
     const skipped = outcome.document.sections.flatMap((s) => s.questions).filter((q) => q.outcome === "not_run" && q.reason === TIME_CAP_NOTE);
     expect(skipped.length).toBeGreaterThan(0);
     for (const q of skipped) expect(outcome.partialReason).toContain(`Q${q.position}`);
@@ -380,17 +383,33 @@ describe("the wall-clock cap", () => {
     expect((row.reportJson as unknown as ReportDocument).header.partialReason).toBe(outcome.partialReason);
   });
 
-  it("is a per-definition setting with the module default, bounded, and audited when changed", async () => {
-    expect((await definition(reportId)).maxMinutes).toBe(DEFAULT_REPORT_MAX_MINUTES);
-    await updateReport(viewerOf(owner), reportId, { maxMinutes: 5 });
-    expect((await definition(reportId)).maxMinutes).toBe(5);
-    expect((await auditRows("bas.report_updated")).at(-1)).toMatchObject({ metadata: { changes: { maxMinutes: { from: DEFAULT_REPORT_MAX_MINUTES, to: 5 } } } });
-    await expect(testDb.basReportDefinition.update({ where: { reportId: BigInt(reportId) }, data: { maxMinutes: 26 } })).rejects.toThrow(/bas_report_definitions_max_minutes_range/);
+  it("is the module's setting: read by every run, set by a module admin only, bounded by the CHECK, audited with both halves, and stamped on the run", async () => {
+    expect(await readSafetyCeiling()).toMatchObject({ usd: DEFAULT_SAFETY_CEILING.usd, minutes: DEFAULT_SAFETY_CEILING.minutes });
+    // An owner is not an admin: the ceiling is every report's.
+    await expect(setSafetyCeiling(viewerOf(owner), { ceilingMinutes: 5 })).rejects.toMatchObject({ code: "admin_required" });
+    const set = await setSafetyCeiling(viewerOf(admin), { ceilingMinutes: 5 });
+    expect(set).toMatchObject({ changed: true, ceiling: { usd: DEFAULT_SAFETY_CEILING.usd, minutes: 5, updatedBy: admin.email } });
+    expect((await auditRows("bas.report_ceiling_changed")).at(-1)).toMatchObject({
+      actorEmployeeId: admin.id,
+      metadata: { from: { usd: DEFAULT_SAFETY_CEILING.usd, minutes: DEFAULT_SAFETY_CEILING.minutes }, to: { usd: DEFAULT_SAFETY_CEILING.usd, minutes: 5 } },
+    });
+    await expect(testDb.basReportSettings.update({ where: { settingsId: 1 }, data: { ceilingMinutes: 26 } })).rejects.toThrow(/bas_report_settings_ceiling_minutes_range/);
+    // The definition no longer carries a cap of its own.
+    const columns = await testDb.$queryRaw<Array<{ column_name: string }>>`SELECT column_name FROM information_schema.columns WHERE table_name = 'bas_report_definitions' AND column_name IN ('budget_usd', 'max_minutes')`;
+    expect(columns).toEqual([]);
     // The reason column cannot outlive its state.
     await expect(testDb.basReportDefinition.update({ where: { reportId: BigInt(reportId) }, data: { pausedReason: "stale" } })).rejects.toThrow(/bas_report_definitions_paused_reason_matches_state/);
-    // A run made under the lower cap carries on as before when nothing is slow.
+    // A run made under the lower ceiling carries on as before when nothing is slow, and records the ceiling that applied.
     const outcome = await executeReportRun(reportId, { periodEnd: new Date(), trigger: "manual", startedById: owner.id, narrator: createFixedNarrator() });
-    expect(outcome.partialReason ?? "").not.toContain("Time cap");
+    expect(outcome.partialReason ?? "").not.toContain("Safety ceiling");
+    expect(outcome.document.cost.budgetUsd).toBe(DEFAULT_SAFETY_CEILING.usd);
+    const row = await testDb.basReportRun.findUniqueOrThrow({ where: { runId: BigInt(outcome.runId) } });
+    expect(Number(row.budgetUsd)).toBe(DEFAULT_SAFETY_CEILING.usd);
+    // Past the lower minutes: the reason names five.
+    let reads = 0;
+    const clock = () => (++reads <= 3 ? Date.now() : Date.now() + 6 * 60_000);
+    const capped = await executeReportRun(reportId, { periodEnd: new Date(), trigger: "manual", startedById: owner.id, narrator: createFixedNarrator(), clock });
+    expect(capped.partialReason).toMatch(/^Safety ceiling of 5 min reached/);
   });
 });
 

@@ -1,6 +1,6 @@
 import { ok, withBas } from "@/lib/modules/bas/route-helpers";
 import { reportsResult } from "@/lib/modules/bas/reports/http";
-import { parseBody } from "@/lib/modules/bas/reports/parse";
+import { parseReportBody } from "@/lib/modules/bas/reports/parse";
 import { deleteReport, getReport, updateReport } from "@/lib/modules/bas/reports/service";
 import { updateReportSchema, type UpdateReportInput } from "@/lib/validation/bas-reports";
 
@@ -27,7 +27,11 @@ export async function GET(
   });
 }
 
-/** Edit details, building, stations, preset, window, schedule or budget. */
+/**
+ * Edit details, building, stations, window, schedule, the questions (the
+ * whole selection) and the preset label. The two removed per-report limits
+ * are refused with 400 (`parseReportBody`).
+ */
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ reportId: string }> },
@@ -41,11 +45,11 @@ export async function PATCH(
         (result) => ok(result),
       );
     },
-    parseBody(request, updateReportSchema),
+    parseReportBody(request, updateReportSchema),
   );
 }
 
-/** Delete a report and everything on it. There are no runs to keep in Phase 1. */
+/** Delete a report and everything on it. A report with runs is refused: its history is kept. */
 export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ reportId: string }> },

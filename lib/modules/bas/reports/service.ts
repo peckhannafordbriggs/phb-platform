@@ -5,6 +5,8 @@ import { writeAuditEvent, type AuditAction } from "@/lib/audit";
 import { BAS_MODULE_KEY } from "../constants";
 import { BasError } from "../errors";
 import { basSiteScope } from "../service";
+import { SETTINGS_ROW_ID, type SafetyCeilingView } from "./ceiling";
+import { readSafetyCeiling } from "./ceiling-read";
 import { enqueueRun } from "./engine/queue";
 import {
   describeRequiredRoles,
@@ -12,7 +14,7 @@ import {
   sectionLabel,
   type LibraryQuestionKind,
 } from "./library";
-import { REPORT_PRESETS, isPresetKey, presetLabel, type PresetKey } from "./presets";
+import { isPresetKey, presetLabel, presetMatching, type PresetKey } from "./presets";
 import { isExternalAddress, normaliseEmail, COMPANY_EMAIL_DOMAIN } from "./recipients";
 import {
   computeNextRun,
@@ -43,16 +45,18 @@ import {
 } from "./types";
 import type {
   AddRecipientInput,
-  AddReportQuestionInput,
   CreateReportInput,
+  QuestionSelection,
   ReportStateAction,
+  SafetyCeilingInput,
   TransferOwnerInput,
   UpdateReportInput,
 } from "@/lib/validation/bas-reports";
 
 /**
- * Report definitions, the shared and personal libraries, and recipients
- * (Reports, Phase 1). No runs: nothing here reads a reading.
+ * Report definitions, the shared and personal libraries, recipients, and
+ * the module's safety ceiling (Reports, Phase 1; the ceiling 2026-11-12).
+ * No runs: nothing here reads a reading.
  *
  * EMPLOYEE-PARAMETERISED, like the rest of the module. Every function takes
  * the viewer and decides what they may see before it reads anything, and the
@@ -67,23 +71,17 @@ import type {
  * owner's address on the way in (`addReportRecipient`) and on the way out
  * (`removeReportRecipient`), so no API path can make the owner optional.
  *
+ * THE QUESTIONS ARE A SELECTION (2026-11-12). A report's questions arrive
+ * whole, on create and on update, as the editor's checklist holds them,
+ * and are stored in one canonical order: shared questions in library order,
+ * then the owner's own, then typed ones. A preset is a button that ticks a
+ * set; `preset_key` is a label of which was last clicked, kept while the
+ * shared part still matches it, and restricts nothing. There is no
+ * per-question route and nothing is locked.
+ *
  * Every write records an audit event in the same transaction, with the
  * report's name in the metadata because the row may since be renamed or gone.
  */
-
-/** Until the Usage tab holds a module-level default (Phase 6). Dollars per run. */
-export const DEFAULT_REPORT_BUDGET_USD = 2;
-
-/**
- * The wall-clock cap on one run, in minutes, when a definition does not
- * set its own (Phase 3) - beside the budget, because the two are the two
- * caps a run has. 20 is five times the longest run measured on the office
- * and the lab; 25 is the most a definition may ask for, so the worker
- * job's 30-minute replica timeout is always above it with the worker's
- * drain window to spare (lib/modules/bas/reports/worker.ts).
- */
-export const DEFAULT_REPORT_MAX_MINUTES = 20;
-export const MAX_REPORT_MINUTES = 25;
 
 type Tx = Prisma.TransactionClient;
 
@@ -242,8 +240,6 @@ function toSummary(row: DetailRow, viewer: Viewer, stationsOnSite: number): Repo
     questionCount: row.questions.length,
     recipientCount: row.recipients.length,
     lastRun: lastRunView(row.runs[0]),
-    budgetUsd: Number(row.budgetUsd),
-    maxMinutes: row.maxMinutes,
     pausedReason: row.pausedReason,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -406,9 +402,6 @@ export async function listReportOptions(viewer: Viewer): Promise<ReportOptions> 
 
   return {
     sites: options,
-    defaultBudgetUsd: DEFAULT_REPORT_BUDGET_USD,
-    defaultMaxMinutes: DEFAULT_REPORT_MAX_MINUTES,
-    maxMinutesLimit: MAX_REPORT_MINUTES,
     companyEmailDomain: COMPANY_EMAIL_DOMAIN,
     canAdminister: admin,
     owners,
@@ -445,42 +438,6 @@ export async function listLibraryQuestions(): Promise<LibraryQuestionView[]> {
       createdAt: r.createdAt.toISOString(),
     };
   });
-}
-
-/**
- * The library rows a preset expands to, in the preset's order. A row the
- * library lacks is a seed that did not run, and is said so.
- */
-async function presetLibraryIds(tx: Tx, presetKey: PresetKey): Promise<bigint[]> {
-  const keys = REPORT_PRESETS[presetKey].questionKeys;
-  const rows = await tx.basLibraryQuestion.findMany({
-    where: { key: { in: [...keys] } },
-    select: { key: true, libraryQuestionId: true },
-  });
-  const byKey = new Map(rows.map((r) => [r.key, r.libraryQuestionId]));
-  const missing = keys.filter((k) => !byKey.has(k));
-  if (missing.length > 0) {
-    throw new BasError(
-      "library_question_not_found",
-      `The shared library is missing ${missing.length} of the preset's questions (${missing.join(", ")}). Run the seed, then try again.`,
-    );
-  }
-  return keys.map((k) => byKey.get(k)!);
-}
-
-/** Replace a report's questions with the preset's, in the preset's order. */
-async function materialisePreset(tx: Tx, reportId: bigint, presetKey: PresetKey): Promise<number> {
-  const ids = await presetLibraryIds(tx, presetKey);
-  await tx.basReportQuestion.deleteMany({ where: { reportId } });
-  await tx.basReportQuestion.createMany({
-    data: ids.map((libraryQuestionId, position) => ({
-      reportId,
-      position,
-      kind: "library",
-      libraryQuestionId,
-    })),
-  });
-  return ids.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -543,10 +500,6 @@ export async function createReport(viewer: Viewer, input: CreateReportInput): Pr
   assertSchedule(input.schedule);
   await assertNameFree(viewer.id, input.name, null);
 
-  const presetKey = input.presetKey ?? null;
-  const budget = input.budgetUsd ?? DEFAULT_REPORT_BUDGET_USD;
-  const maxMinutes = input.maxMinutes ?? DEFAULT_REPORT_MAX_MINUTES;
-
   const reportId = await prisma.$transaction(async (tx) => {
     const created = await tx.basReportDefinition.create({
       data: {
@@ -555,21 +508,23 @@ export async function createReport(viewer: Viewer, input: CreateReportInput): Pr
         description: input.description ?? null,
         siteId: site.siteId,
         stationIds,
-        presetKey,
+        presetKey: null,
         analysisWindow: input.analysisWindow ?? "7d",
         scheduleKind: input.schedule.kind,
         scheduleParams: scheduleParamsOf(input.schedule) as Prisma.InputJsonValue,
         timeOfDay: input.timeOfDay,
         state: "draft",
-        budgetUsd: new Prisma.Decimal(budget.toFixed(2)),
-        maxMinutes,
       },
       select: { reportId: true },
     });
 
-    let questions = 0;
+    // The selection, then the label it earns. The viewer is the owner, so
+    // their own questions and "save for reuse" are allowed.
+    const resolved = await resolveSelection(tx, viewer, input.questions ?? [], null, created.reportId);
+    await writeQuestions(tx, created.reportId, resolved.rows);
+    const presetKey = presetMatching(resolved.libraryKeys, input.presetKey ?? null);
     if (presetKey !== null) {
-      questions = await materialisePreset(tx, created.reportId, presetKey);
+      await tx.basReportDefinition.update({ where: { reportId: created.reportId }, data: { presetKey } });
     }
 
     await audit(tx, "bas.report_created", viewer, {
@@ -578,7 +533,8 @@ export async function createReport(viewer: Viewer, input: CreateReportInput): Pr
       siteId: site.siteId.toString(),
       siteName: site.name,
       presetKey,
-      questions,
+      questions: resolved.rows.length,
+      ...resolved.counts,
       scheduleKind: input.schedule.kind,
       timeOfDay: input.timeOfDay,
       analysisWindow: input.analysisWindow ?? "7d",
@@ -641,16 +597,6 @@ export async function updateReport(
     changes.analysisWindow = { from: row.analysisWindow, to: input.analysisWindow };
   }
 
-  if (input.budgetUsd !== undefined && input.budgetUsd !== Number(row.budgetUsd)) {
-    data.budgetUsd = new Prisma.Decimal(input.budgetUsd.toFixed(2));
-    changes.budgetUsd = { from: Number(row.budgetUsd), to: input.budgetUsd };
-  }
-
-  if (input.maxMinutes !== undefined && input.maxMinutes !== row.maxMinutes) {
-    data.maxMinutes = input.maxMinutes;
-    changes.maxMinutes = { from: row.maxMinutes, to: input.maxMinutes };
-  }
-
   let spec = readScheduleSpec(row.scheduleKind, row.scheduleParams);
   let timeOfDay = row.timeOfDay;
   if (input.schedule !== undefined && input.timeOfDay !== undefined) {
@@ -673,16 +619,6 @@ export async function updateReport(
     }
   }
 
-  // The preset: set, changed, or cleared. Cleared keeps the questions as they
-  // are - "variations are custom reports" - so the person varies from the
-  // preset rather than from nothing.
-  let presetChange: PresetKey | null | undefined;
-  if (input.presetKey !== undefined && input.presetKey !== row.presetKey) {
-    presetChange = input.presetKey;
-    data.presetKey = input.presetKey;
-    changes.presetKey = { from: row.presetKey, to: input.presetKey };
-  }
-
   // An active report whose clock inputs moved gets a new next run, computed
   // from the new local time and the building's zone - never by shifting the
   // old instant.
@@ -697,31 +633,57 @@ export async function updateReport(
     changes.nextRunAt = { from: row.nextRunAt?.toISOString() ?? null, to: nextRunAt.toISOString() };
   }
 
-  if (Object.keys(changes).length === 0) {
-    return { changed: false, nextRunAt: nextRunAt?.toISOString() ?? null };
-  }
+  // The questions and the preset label, decided together: the label is
+  // whichever preset was last clicked (sent, or the stored one), kept only
+  // while the shared questions match it. A selection sent unchanged is no
+  // change; a preset sent alone never alters the questions.
+  const clicked: PresetKey | null = input.presetKey !== undefined ? input.presetKey : (isPresetKey(row.presetKey) ? row.presetKey : null);
+  const currentSignature = row.questions.map(questionSignature).join("\n");
+  let selection: Awaited<ReturnType<typeof resolveSelection>> | null = null;
+  let libraryKeys = row.questions.filter((q) => q.libraryQuestion !== null).map((q) => q.libraryQuestion!.key);
 
-  await prisma.$transaction(async (tx) => {
-    await tx.basReportDefinition.update({ where: { reportId: row.reportId }, data });
-    if (presetChange !== undefined && presetChange !== null) {
-      const count = await materialisePreset(tx, row.reportId, presetChange);
+  const result = await prisma.$transaction(async (tx) => {
+    if (input.questions !== undefined) {
+      selection = await resolveSelection(tx, viewer, input.questions, row, row.reportId);
+      libraryKeys = selection.libraryKeys;
+      if (selection.rows.map(rowSignature).join("\n") === currentSignature) selection = null;
+    }
+    const presetKey = presetMatching(libraryKeys, clicked);
+    if (presetKey !== row.presetKey) {
+      data.presetKey = presetKey;
+      changes.presetKey = { from: row.presetKey, to: presetKey };
+    }
+
+    if (Object.keys(changes).length === 0 && selection === null) {
+      return { changed: false };
+    }
+
+    if (Object.keys(data).length > 0) {
+      await tx.basReportDefinition.update({ where: { reportId: row.reportId }, data });
+    }
+    if (selection !== null) {
+      await writeQuestions(tx, row.reportId, selection.rows);
       await audit(tx, "bas.report_questions_changed", viewer, {
         reportId: row.reportId.toString(),
         name: input.name ?? row.name,
-        change: "preset",
-        presetKey: presetChange,
-        count,
+        change: "set",
+        presetKey,
+        count: selection.rows.length,
+        ...selection.counts,
       });
     }
-    await audit(tx, "bas.report_updated", viewer, {
-      reportId: row.reportId.toString(),
-      name: input.name ?? row.name,
-      previousName: row.name,
-      changes,
-    });
+    if (Object.keys(changes).length > 0) {
+      await audit(tx, "bas.report_updated", viewer, {
+        reportId: row.reportId.toString(),
+        name: input.name ?? row.name,
+        previousName: row.name,
+        changes,
+      });
+    }
+    return { changed: true };
   });
 
-  return { changed: true, nextRunAt: nextRunAt?.toISOString() ?? null };
+  return { changed: result.changed, nextRunAt: nextRunAt?.toISOString() ?? null };
 }
 
 export async function deleteReport(viewer: Viewer, reportIdText: string): Promise<{ deleted: boolean }> {
@@ -819,173 +781,167 @@ export async function changeReportState(
 }
 
 // ---------------------------------------------------------------------------
-// Questions on a report
+// The questions on a report: one selection, one canonical order
 // ---------------------------------------------------------------------------
 
-function assertNotPreset(row: DetailRow): void {
-  if (row.presetKey !== null) {
-    throw new BasError(
-      "preset_locked",
-      `This report uses the ${presetLabel(row.presetKey) ?? "preset"} and its questions are fixed. Clear the preset to vary them.`,
-    );
-  }
+/** One row to store, resolved and validated. */
+interface ResolvedQuestion {
+  kind: "library" | "personal" | "inline";
+  libraryQuestionId: bigint | null;
+  personalQuestionId: bigint | null;
+  inlineText: string | null;
 }
 
-/** Rewrite positions 0..n-1 in the given order. */
-async function renumber(tx: Tx, reportId: bigint, orderedIds: bigint[]): Promise<void> {
-  for (const [position, questionId] of orderedIds.entries()) {
-    await tx.basReportQuestion.update({ where: { questionId }, data: { position } });
-  }
+interface ResolvedSelection {
+  /** In the order they are stored: library by position, then personal, then inline. */
+  rows: ResolvedQuestion[];
+  /** The shared questions' keys, in stored order - what the preset label is judged on. */
+  libraryKeys: string[];
+  counts: { library: number; personal: number; inline: number };
 }
 
-export async function addReportQuestion(
+/** The identity of a stored row, for "did the selection change". */
+function questionSignature(q: DetailRow["questions"][number]): string {
+  return `${q.kind}:${q.libraryQuestionId ?? ""}:${q.personalQuestionId ?? ""}:${q.inlineText ?? ""}`;
+}
+function rowSignature(r: ResolvedQuestion): string {
+  return `${r.kind}:${r.libraryQuestionId ?? ""}:${r.personalQuestionId ?? ""}:${r.inlineText ?? ""}`;
+}
+
+/**
+ * Validate a selection and put it in its canonical order.
+ *
+ * `existing` is the report being edited, or null on create. It matters in
+ * two places: a shared question that has since been turned off stays
+ * allowed while it is already on this report (a saved report never becomes
+ * unsaveable), and a personal question that is already on the report stays
+ * allowed whoever is saving - a module admin editing the owner's report
+ * keeps the owner's own questions, and cannot add theirs
+ * (`personal_question_not_owner`). "Save for reuse" on a typed question is
+ * the owner's alone for the same reason: it writes the viewer's library.
+ */
+async function resolveSelection(
+  tx: Tx,
   viewer: Viewer,
-  reportIdText: string,
-  input: AddReportQuestionInput,
-): Promise<{ questionId: string }> {
-  const { row } = await loadVisibleReport(viewer, reportIdText);
-  assertNotPreset(row);
+  selection: QuestionSelection,
+  existing: DetailRow | null,
+  reportId: bigint,
+): Promise<ResolvedSelection> {
+  const isOwner = existing === null || existing.ownerEmployeeId === viewer.id;
+  const onReportLibrary = new Set((existing?.questions ?? []).map((q) => q.libraryQuestionId?.toString()).filter((id): id is string => id !== undefined));
+  const onReportPersonal = new Set((existing?.questions ?? []).map((q) => q.personalQuestionId?.toString()).filter((id): id is string => id !== undefined));
 
-  const position = row.questions.length;
-  const questionId = await prisma.$transaction(async (tx) => {
-    let created: { questionId: bigint };
-    let kind: string = input.kind;
+  // Shared questions: looked up in one query, duplicates refused, disabled
+  // ones refused unless already here, then sorted into library order.
+  const libraryIds: bigint[] = [];
+  const seenLibrary = new Set<string>();
+  for (const item of selection) {
+    if (item.kind !== "library") continue;
+    const id = parseId(item.libraryQuestionId);
+    if (id === null) throw new BasError("library_question_not_found", "That library question does not exist.");
+    if (seenLibrary.has(id.toString())) throw new BasError("question_exists", "A shared question is ticked twice.");
+    seenLibrary.add(id.toString());
+    libraryIds.push(id);
+  }
+  const libraryRows =
+    libraryIds.length === 0
+      ? []
+      : await tx.basLibraryQuestion.findMany({
+          where: { libraryQuestionId: { in: libraryIds } },
+          select: { libraryQuestionId: true, key: true, position: true, enabled: true },
+        });
+  const byId = new Map(libraryRows.map((r) => [r.libraryQuestionId.toString(), r]));
+  for (const id of libraryIds) {
+    const lib = byId.get(id.toString());
+    if (lib === undefined) throw new BasError("library_question_not_found", "That library question does not exist.");
+    if (!lib.enabled && !onReportLibrary.has(id.toString())) {
+      throw new BasError("library_question_disabled", "That library question has been turned off.");
+    }
+  }
+  const libraryOrdered = libraryIds
+    .map((id) => byId.get(id.toString())!)
+    .sort((a, b) => a.position - b.position || (a.libraryQuestionId < b.libraryQuestionId ? -1 : 1));
 
-    if (input.kind === "library") {
-      const id = parseId(input.libraryQuestionId);
-      const lib = id === null ? null : await tx.basLibraryQuestion.findUnique({ where: { libraryQuestionId: id } });
-      if (lib === null) throw new BasError("library_question_not_found", "That library question does not exist.");
-      if (!lib.enabled) throw new BasError("library_question_disabled", "That library question has been turned off.");
-      if (row.questions.some((q) => q.libraryQuestionId === lib.libraryQuestionId)) {
-        throw new BasError("question_exists", "That question is already on this report.");
-      }
-      created = await tx.basReportQuestion.create({
-        data: { reportId: row.reportId, position, kind: "library", libraryQuestionId: lib.libraryQuestionId },
-        select: { questionId: true },
-      });
-    } else if (input.kind === "personal") {
-      if (row.ownerEmployeeId !== viewer.id) {
+  // The viewer's own questions, in the order given.
+  const personalIds: bigint[] = [];
+  const seenPersonal = new Set<string>();
+  for (const item of selection) {
+    if (item.kind !== "personal") continue;
+    const id = parseId(item.personalQuestionId);
+    if (id === null) throw new BasError("personal_question_not_found", "That question is not in your library.");
+    if (seenPersonal.has(id.toString())) throw new BasError("question_exists", "One of your questions is ticked twice.");
+    seenPersonal.add(id.toString());
+    personalIds.push(id);
+  }
+  const notYetOnReport = personalIds.filter((id) => !onReportPersonal.has(id.toString()));
+  if (notYetOnReport.length > 0) {
+    if (!isOwner) {
+      throw new BasError(
+        "personal_question_not_owner",
+        "Personal questions go on your own reports only. Type the question in instead.",
+      );
+    }
+    const mine = await tx.basPersonalQuestion.findMany({
+      where: { personalQuestionId: { in: notYetOnReport }, employeeId: viewer.id },
+      select: { personalQuestionId: true },
+    });
+    if (mine.length !== notYetOnReport.length) {
+      throw new BasError("personal_question_not_found", "That question is not in your library.");
+    }
+  }
+
+  // Typed questions, in the order given; "save for reuse" makes one personal.
+  const inlineRows: ResolvedQuestion[] = [];
+  for (const item of selection) {
+    if (item.kind !== "inline") continue;
+    if (item.saveToLibrary === true) {
+      if (!isOwner) {
         throw new BasError(
           "personal_question_not_owner",
-          "Personal questions go on your own reports only. Type the question in instead.",
+          "A question can be saved to your library only from your own report. Add it without saving.",
         );
       }
-      const id = parseId(input.personalQuestionId);
-      const personal =
-        id === null
-          ? null
-          : await tx.basPersonalQuestion.findFirst({ where: { personalQuestionId: id, employeeId: viewer.id } });
-      if (personal === null) throw new BasError("personal_question_not_found", "That question is not in your library.");
-      if (row.questions.some((q) => q.personalQuestionId === personal.personalQuestionId)) {
-        throw new BasError("question_exists", "That question is already on this report.");
-      }
-      created = await tx.basReportQuestion.create({
-        data: { reportId: row.reportId, position, kind: "personal", personalQuestionId: personal.personalQuestionId },
-        select: { questionId: true },
+      const personal = await tx.basPersonalQuestion.create({
+        data: { employeeId: viewer.id, text: item.text },
+        select: { personalQuestionId: true, text: true },
       });
+      await audit(tx, "bas.personal_question_created", viewer, {
+        personalQuestionId: personal.personalQuestionId.toString(),
+        text: personal.text,
+        fromReportId: reportId.toString(),
+      });
+      personalIds.push(personal.personalQuestionId);
     } else {
-      if (input.saveToLibrary === true) {
-        if (row.ownerEmployeeId !== viewer.id) {
-          throw new BasError(
-            "personal_question_not_owner",
-            "A question can be saved to your library only from your own report. Add it without saving.",
-          );
-        }
-        const personal = await tx.basPersonalQuestion.create({
-          data: { employeeId: viewer.id, text: input.text },
-          select: { personalQuestionId: true, text: true },
-        });
-        await audit(tx, "bas.personal_question_created", viewer, {
-          personalQuestionId: personal.personalQuestionId.toString(),
-          text: personal.text,
-          fromReportId: row.reportId.toString(),
-        });
-        kind = "personal";
-        created = await tx.basReportQuestion.create({
-          data: { reportId: row.reportId, position, kind: "personal", personalQuestionId: personal.personalQuestionId },
-          select: { questionId: true },
-        });
-      } else {
-        created = await tx.basReportQuestion.create({
-          data: { reportId: row.reportId, position, kind: "inline", inlineText: input.text },
-          select: { questionId: true },
-        });
-      }
+      inlineRows.push({ kind: "inline", libraryQuestionId: null, personalQuestionId: null, inlineText: item.text });
     }
-
-    await audit(tx, "bas.report_questions_changed", viewer, {
-      reportId: row.reportId.toString(),
-      name: row.name,
-      change: "added",
-      kind,
-      questionId: created.questionId.toString(),
-      count: position + 1,
-    });
-    return created.questionId;
-  });
-
-  return { questionId: questionId.toString() };
-}
-
-export async function removeReportQuestion(
-  viewer: Viewer,
-  reportIdText: string,
-  questionIdText: string,
-): Promise<{ removed: boolean }> {
-  const { row } = await loadVisibleReport(viewer, reportIdText);
-  assertNotPreset(row);
-
-  const questionId = parseId(questionIdText);
-  const target = row.questions.find((q) => questionId !== null && q.questionId === questionId);
-  if (target === undefined) throw new BasError("question_not_found", "That question is not on this report.");
-
-  await prisma.$transaction(async (tx) => {
-    await tx.basReportQuestion.delete({ where: { questionId: target.questionId } });
-    await renumber(
-      tx,
-      row.reportId,
-      row.questions.filter((q) => q.questionId !== target.questionId).map((q) => q.questionId),
-    );
-    await audit(tx, "bas.report_questions_changed", viewer, {
-      reportId: row.reportId.toString(),
-      name: row.name,
-      change: "removed",
-      kind: target.kind,
-      questionId: target.questionId.toString(),
-      count: row.questions.length - 1,
-    });
-  });
-  return { removed: true };
-}
-
-export async function reorderReportQuestions(
-  viewer: Viewer,
-  reportIdText: string,
-  questionIdTexts: string[],
-): Promise<{ reordered: boolean }> {
-  const { row } = await loadVisibleReport(viewer, reportIdText);
-  assertNotPreset(row);
-
-  const wanted = questionIdTexts.map((t) => parseId(t));
-  const have = row.questions.map((q) => q.questionId.toString()).sort();
-  const given = [...questionIdTexts].sort();
-  if (wanted.some((id) => id === null) || have.join(",") !== given.join(",")) {
-    throw new BasError(
-      "invalid_reorder",
-      "The new order has to list every question on the report exactly once.",
-    );
   }
 
-  await prisma.$transaction(async (tx) => {
-    await renumber(tx, row.reportId, wanted as bigint[]);
-    await audit(tx, "bas.report_questions_changed", viewer, {
-      reportId: row.reportId.toString(),
-      name: row.name,
-      change: "reordered",
-      count: row.questions.length,
-    });
+  const rows: ResolvedQuestion[] = [
+    ...libraryOrdered.map((lib) => ({ kind: "library" as const, libraryQuestionId: lib.libraryQuestionId, personalQuestionId: null, inlineText: null })),
+    ...personalIds.map((id) => ({ kind: "personal" as const, libraryQuestionId: null, personalQuestionId: id, inlineText: null })),
+    ...inlineRows,
+  ];
+  return {
+    rows,
+    libraryKeys: libraryOrdered.map((lib) => lib.key),
+    counts: { library: libraryOrdered.length, personal: personalIds.length, inline: inlineRows.length },
+  };
+}
+
+/** Replace a report's rows with the selection, positions 0..n-1 in its order. */
+async function writeQuestions(tx: Tx, reportId: bigint, rows: ResolvedQuestion[]): Promise<void> {
+  await tx.basReportQuestion.deleteMany({ where: { reportId } });
+  if (rows.length === 0) return;
+  await tx.basReportQuestion.createMany({
+    data: rows.map((r, position) => ({
+      reportId,
+      position,
+      kind: r.kind,
+      libraryQuestionId: r.libraryQuestionId,
+      personalQuestionId: r.personalQuestionId,
+      inlineText: r.inlineText,
+    })),
   });
-  return { reordered: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1304,4 +1260,43 @@ export async function transferReportOwner(
     nextRunAt: nextRunAt?.toISOString() ?? null,
     resumed,
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// The module's safety ceiling (2026-11-12)
+// ---------------------------------------------------------------------------
+
+export { readSafetyCeiling };
+
+/**
+ * Set the ceiling - either half or both - as a module admin. Upserted,
+ * because the row can be absent (ceiling.ts says why), and audited with
+ * both halves before and after. Not an owner's action: the ceiling applies
+ * to every report in the module, which is what makes it a ceiling.
+ */
+export async function setSafetyCeiling(viewer: Viewer, input: SafetyCeilingInput): Promise<{ changed: boolean; ceiling: SafetyCeilingView }> {
+  if (!(await canAdminister(viewer))) {
+    throw new BasError("admin_required", "Only a module admin can change the safety ceiling.");
+  }
+  return prisma.$transaction(async (tx) => {
+    const current = await readSafetyCeiling(tx);
+    const next = {
+      usd: input.ceilingUsd ?? current.usd,
+      minutes: input.ceilingMinutes ?? current.minutes,
+    };
+    if (next.usd === current.usd && next.minutes === current.minutes && current.updatedAt !== null) {
+      return { changed: false, ceiling: current };
+    }
+    await tx.basReportSettings.upsert({
+      where: { settingsId: SETTINGS_ROW_ID },
+      create: { settingsId: SETTINGS_ROW_ID, ceilingUsd: next.usd.toFixed(2), ceilingMinutes: next.minutes, updatedById: viewer.id },
+      update: { ceilingUsd: next.usd.toFixed(2), ceilingMinutes: next.minutes, updatedById: viewer.id },
+    });
+    await audit(tx, "bas.report_ceiling_changed", viewer, {
+      from: { usd: current.usd, minutes: current.minutes },
+      to: next,
+    });
+    return { changed: true, ceiling: await readSafetyCeiling(tx) };
+  });
 }

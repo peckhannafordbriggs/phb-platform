@@ -1446,7 +1446,7 @@ assignment**; the worker runs under tsx, not a compiled build
 every rule above against the real test database, both scripts included as
 child processes. `runbook.md` → *Reports: turning the jobs on* has the
 parameter lines and the order of commands; *Reports: a run is stuck or
-failed*; *Reports: what the caps do*. **First production deployment
+failed*; *Reports: the safety ceiling* (*what the caps do* until 2026-11-12). **First production deployment
 2026-11-11: failed on the scheduler job's name** - `-bas-reports-scheduler`
 made it 34 characters against Azure's cap of 32 - after the worker job and
 the app revision had gone through. The scheduler is
@@ -1466,6 +1466,27 @@ holds the template's env lists to the readers, and boots each script from
 an empty directory with only the template's variables. No template change.
 `runbook.md` → *Reports: a job execution fails at startup naming a web-app
 variable*.
+
+**Reports - the questions checklist, one safety ceiling, and a Usage page
+that reads the database (2026-11-12).** The editor's Questions section is a
+checkbox list of every enabled shared question, grouped by section,
+visible before any save; *Select all* / *Standard weekly* / *Daily
+critical-site* / *Clear* act on the shared list, My questions have boxes
+too, and a custom question is typed in with a *save for reuse* tick.
+**Nothing is locked**: the selection is saved whole with the report, stored
+shared-then-mine-then-typed, and `preset_key` is a label kept only while
+the shared part still matches the preset (custom questions do not count
+against it). The per-report budget and time cap are **gone** - columns
+dropped, editor section removed, `400 limits_removed` to a client still
+sending them - in favour of **one module safety ceiling**,
+`bas_report_settings` ($10.00 and 25 minutes per run by default), edited by
+module admins from the bottom of the Usage page and read by the engine for
+every run; a run that reaches either half finishes partial and says so.
+The Usage page was a Phase 1 placeholder that said *There have been no
+runs* without asking; it now reads `bas_report_runs` on the shared usage
+components (`components/ui/Usage.tsx`, promoted from Cost Intelligence).
+`WHY-ITS-BUILT-THIS-WAY.md` § 81; `runbook.md` → *Reports: the safety
+ceiling*, *The editor's Questions section is a checklist*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
