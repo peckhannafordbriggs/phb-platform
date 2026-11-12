@@ -563,7 +563,17 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "fp.equipment_created": ({ actor, meta }) =>
     stringField(meta, "source") === "import"
       ? `${actor} imported ${fpUnit(meta)} into the ${fpJob(meta)} equipment list from ${fpFile(meta)}`
-      : `${actor} added ${fpUnit(meta)} to the ${fpJob(meta)} equipment list`,
+      : stringField(meta, "source") === "form"
+        ? `${actor} added ${fpUnit(meta)} to the ${fpJob(meta)} equipment list from the form ${fpFile(meta)}`
+        : `${actor} added ${fpUnit(meta)} to the ${fpJob(meta)} equipment list`,
+  "fp.form_imported": ({ actor, meta }) => {
+    const n = (key: string) => (typeof meta[key] === "number" ? (meta[key] as number) : 0);
+    const parts = [`added ${n("created")} unit${n("created") === 1 ? "" : "s"}`, `filled blanks on ${n("filled")}`];
+    const differences = n("differences");
+    return `${actor} imported a freeze protection form ${fpFile(meta)} into ${fpJob(meta)}: ${parts.join(", ")}${
+      differences > 0 ? `, ${differences} answer${differences === 1 ? "" : "s"} differing from the platform kept as they were` : ""
+    }`;
+  },
   "fp.schedule_imported": ({ actor, meta }) => {
     const created = typeof meta.created === "number" ? meta.created : 0;
     const skipped = Array.isArray(meta.skipped) ? meta.skipped.length : 0;
@@ -859,6 +869,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "fp.verification_unsigned": "Freeze Protection signature removed",
   "fp.result_updated": "Freeze Protection result recorded",
   "fp.schedule_imported": "Freeze Protection schedule imported",
+  "fp.form_imported": "Freeze Protection form imported",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

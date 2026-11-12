@@ -235,14 +235,15 @@ describe("Schedule import", () => {
   it("offers Import beside Add equipment, and opens above the equipment list, not instead of it", () => {
     expect(register({})).toContain(">Import<");
     const html = register({ panel: "import" });
-    expect(html).toContain("Import equipment schedule");
+    expect(html).toContain("filled freeze protection form");
+    expect(html).toContain("Blank form");
     expect(html).toContain("Equipment · 5");
     expect(html).not.toContain("Review the import");
   });
 
   it("New project takes the schedule PDF in the same grid as the verification date", () => {
     const html = register({ panel: "project" });
-    expect(html).toMatch(/Verification date[\s\S]*Equipment schedule \(PDF, optional\)[\s\S]*<\/div><p/);
+    expect(html).toMatch(/Verification date[\s\S]*Equipment schedule or filled form \(PDF, optional\)[\s\S]*<\/div><p/);
   });
 
   it("says what was added and, in words, everything left out", () => {

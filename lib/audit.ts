@@ -202,6 +202,14 @@ export type AuditAction =
    * unit carrying `source: "import"`, so each unit's history starts there.
    */
   | "fp.schedule_imported"
+  /**
+   * The verification form import (2026-11-10): one summary row per form
+   * (fileName, created, filled, differences). New units get
+   * `fp.equipment_created` with `source: "form"`; answers it filled are
+   * `fp.equipment_updated` / `fp.result_updated` rows carrying the same source,
+   * so history and the review rules see them like a person's own saves.
+   */
+  | "fp.form_imported"
   | "position.created"
   | "position.updated"
   | "department.created"
