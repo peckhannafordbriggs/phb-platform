@@ -35,7 +35,19 @@ export function MessageBodyFrame({
   onShowImages: () => void;
 }) {
   const srcDoc = useMemo(
-    () => (body === null ? null : buildBodyDocument(body, remoteImagesAllowed)),
+    () =>
+      body === null
+        ? null
+        : buildBodyDocument(
+            body,
+            remoteImagesAllowed,
+            // The sandboxed frame's own origin is opaque, so the document's
+            // CSP names the platform's origin outright for the inline-image
+            // links the service wrote. A body only ever arrives from a fetch
+            // in the browser, so there is always a window by the time one
+            // renders; the fallback keeps a server render honest.
+            typeof window === "undefined" ? null : window.location.origin,
+          ),
     [body, remoteImagesAllowed],
   );
 
@@ -69,17 +81,16 @@ export function MessageBodyFrame({
 
       {/*
         Inline images are attachments on this message, not remote content, so
-        there is nothing to consent to and no button - the honest statement is
-        that they exist and are not shown. Every message in the real mailbox
-        that has images has some of these, and before this said so they rendered
-        as unexplained placeholders that read as a bug.
+        there is nothing to consent to and no button. The ones the message
+        carries are simply shown. This note is for the rest: a `cid:` that
+        names no attachment on the message, which renders as a marked
+        placeholder, and the honest statement is why.
       */}
-      {body.inlineImages > 0 && (
+      {body.inlineImagesUnresolved > 0 && (
         <div className="border-b border-[var(--border)] bg-[var(--surface)] px-6 py-2 text-sm text-[var(--muted)]">
-          {body.inlineImages === 1
-            ? "1 inline image is part of this message and is not shown here yet."
-            : `${body.inlineImages} inline images are part of this message and are not shown here yet.`}{" "}
-          Open the message in Outlook to see them.
+          {body.inlineImagesUnresolved === 1
+            ? "1 inline image is referenced by this message but not attached to it, so it is shown as a placeholder."
+            : `${body.inlineImagesUnresolved} inline images are referenced by this message but not attached to it, so they are shown as placeholders.`}
         </div>
       )}
 

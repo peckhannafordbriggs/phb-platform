@@ -169,6 +169,18 @@ that mocked transports agreed with:
   out as two query parameters and Graph answered `400 BadRequest` - for a real project
   name - from the day search shipped until 2026-10-21. Every filter now goes through
   `filterParam` in the mail service; nothing else in the module builds a query string
+- `hasAttachments` is **false** on a message whose only attachments are inline images
+  (the mail filter's banner icons, a pasted screenshot). Anything that reads the
+  attachments only when Exchange says there are some never finds the pictures a body
+  references by `cid:`
+- `contentId` is on the `fileAttachment` subtype: `$select=contentId` on the attachments
+  collection fails the whole request with 400, and so does casting the collection. The
+  form Graph answers is `$select=…,microsoft.graph.fileAttachment/contentId`. Exchange
+  gives ordinary attachments a Content-ID too, so having one does not mean inline
+- The sandboxed reading pane sends **no session cookie** with the images it loads: its
+  origin is opaque, so a `SameSite=Lax` cookie stays home (`Sec-Fetch-Site: cross-site`,
+  measured in Chrome and Edge, 2026-11-12). A cookie-gated image route answers 401 to
+  every picture, silently, inside the frame
 
 Fixtures are right for hostile-HTML tests and error mapping. Anything about Graph's
 actual behaviour needs the real mailbox.
@@ -1466,6 +1478,35 @@ holds the template's env lists to the readers, and boots each script from
 an empty directory with only the template's variables. No template change.
 `runbook.md` → *Reports: a job execution fails at startup naming a web-app
 variable*.
+
+**Pictures in a message body are shown, and a hidden preheader stays hidden
+(2026-11-12).** Reported as *"emails with pictures show blank gaps"* with
+Josh Bittner's `RFI 310` reply of 5 November as the example; the live
+mailbox showed two causes, and the example had only the second. (1) `cid:`
+images were counted and placeholdered, never fetched: 10 of the 35 messages
+since mid-October carry them - the mail filter's banner icons on every
+inbound message, pasted screenshots on internal replies. Now the message
+route resolves each Content-ID among the message's attachments (read
+whenever the body contains `cid:`, because `hasAttachments` is false for
+inline-only messages) and writes the platform's own **signed link** in place
+of the src: one message, one attachment, an hour, HMAC under a key derived
+from `AUTH_SECRET`. `GET …/messages/{id}/inline-images/{attachmentId}` is
+the one mail route not behind `withMailbox`, by measurement rather than
+choice - the sandboxed pane's opaque origin sends no session cookie - and
+it decides the type from the bytes (raster only, SVG refused), answers
+inline with `nosniff` and `no-store`, and consults no session. The pane's
+CSP names the platform's origin and the message routes' path, since
+`'self'` is nothing to an opaque origin. Neither `allow-same-origin` nor
+`data:` inlining, for the reasons in `WHY-ITS-BUILT-THIS-WAY.md` § 82. (2)
+Josh's reply has no images: the mail filter's hidden preheader `<div>`
+(`display:none; max-height:0; overflow:hidden; max-width:0; font-size:1px`)
+lost its hiding declarations to the style allowlist and kept `max-width:0`,
+so two hundred characters of 1px white text wrapped one per line and pushed
+the message a few hundred pixels down. `display` (flow values only),
+`visibility`, `overflow` and `max-height` are allowed now; `opacity` still
+is not. A relative `<img src>` from a vendor is removed, so the only
+same-origin request a body can cause is one the service wrote. `runbook.md`
+→ *Images in a message body*, *A message opens on a blank screen*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
