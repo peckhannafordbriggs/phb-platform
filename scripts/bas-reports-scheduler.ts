@@ -1,5 +1,6 @@
 import "./load-env";
 import { prisma } from "../lib/db";
+import { readSchedulerJobEnv } from "../lib/modules/bas/reports/job-env";
 import { runSchedulerPass } from "../lib/modules/bas/reports/scheduler";
 
 /**
@@ -15,8 +16,14 @@ import { runSchedulerPass } from "../lib/modules/bas/reports/scheduler";
  * account is disabled are paused with the reason recorded. Needs
  * DATABASE_URL and nothing else; prints what it did and exits 0, or exits
  * 1 if the pass threw, which Container Apps shows as a failed execution.
+ *
+ * Read through lib/modules/bas/reports/job-env.ts and never lib/env.ts,
+ * which is the web app's boot schema and fails a job that imports it
+ * (the worker did, 2026-11-11). tests/bas-reports-jobs-env.test.ts boots
+ * this script with only the template's variables.
  */
 async function main(): Promise<void> {
+  readSchedulerJobEnv();
   const pass = await runSchedulerPass();
   console.log(`[bas-reports-scheduler] pass at ${pass.at}`);
   for (const r of pass.enqueued) {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { parseBootstrapAdmins } from "./bootstrap-admins";
+import { ANTHROPIC_API_KEY_VAR, CO_ANTHROPIC_API_KEY_VAR } from "./env-names";
 
 /**
  * Environment is parsed once, at import time, so a misconfigured deployment
@@ -7,6 +8,16 @@ import { parseBootstrapAdmins } from "./bootstrap-admins";
  *
  * Server-side only. Never import this from a client component - it would leak
  * secrets into the browser bundle.
+ *
+ * Never import this from a JOB either - the Reports scheduler and worker, the
+ * Cost Intelligence worker - or from anything on a job's import path. A job's
+ * container carries its own few variables and none of the schema below, so
+ * importing this module, even for one exported name, fails the job on boot
+ * (the Reports worker did, on every production execution, 2026-11-11). The
+ * variable NAMES live in lib/env-names.ts, which has no side effects, and
+ * are re-exported from here; a job reads its values through its own reader
+ * (lib/modules/bas/reports/job-env.ts, workerConfigFromEnv in the Cost
+ * Intelligence worker). tests/bas-reports-jobs-env.test.ts holds it.
  */
 
 const nonEmpty = z.string().trim().min(1);
@@ -214,32 +225,23 @@ const anthropicApiKeySchema = blankAsAbsent(z.string().trim().min(1).optional())
 
 /**
  * THE NAMES of the secrets that reach the container app from Key Vault by
- * reference and nowhere else, decided here and imported everywhere else that
- * reads them (lib/modules/bas/analyze/env.ts, lib/modules/bas/credentials.ts,
- * lib/modules/change-orders/anthropic-env.ts). infra/main.bicep spells the
- * same names in its `env:` list, and tests/deploy-guards.test.ts holds them
- * to each other: a rename in one place that misses another fails the build
+ * reference and nowhere else are decided in lib/env-names.ts (a module with
+ * no side effects, so a job may import it) and re-exported here, so the web
+ * app's readers (lib/modules/bas/analyze/env.ts,
+ * lib/modules/bas/credentials.ts, lib/modules/change-orders/anthropic-env.ts)
+ * keep importing them from this module. infra/main.bicep spells the same
+ * names in its `env:` lists, and tests/deploy-guards.test.ts holds them to
+ * each other: a rename in one place that misses another fails the build
  * rather than the deployment.
- *
- * BAS_CREDENTIAL_KEY_VERSION rides with the key. It is NOT a secret - a small
- * integer stamped on each credential row at encryption time so a rotation
- * does not need a flag day - and it reaches the container as a plain value.
- * Decryption never reads it; `currentKeyVersion` in credentials.ts does, when
- * a password is saved.
  */
-export const ANTHROPIC_API_KEY_VAR = "ANTHROPIC_API_KEY";
-/** Change Orders' own key (2026-10-16). Never the SDK default name - see above. */
-export const CO_ANTHROPIC_API_KEY_VAR = "CO_ANTHROPIC_API_KEY";
-/**
- * Freeze Protection's own key (2026-11-04), read by the equipment schedule
- * import and nothing else. Same rules as the Change Orders key: never the SDK
- * default name, never a fallback to another module's key.
- */
-export const FP_ANTHROPIC_API_KEY_VAR = "FP_ANTHROPIC_API_KEY";
-export const BAS_CREDENTIAL_KEY_VAR = "BAS_CREDENTIAL_KEY";
-export const BAS_CREDENTIAL_KEY_VERSION_VAR = "BAS_CREDENTIAL_KEY_VERSION";
-/** The bas_analyze role's URL (2026-10-13): the third secret by reference, same shape. */
-export const BAS_ASK_DATABASE_URL_VAR = "BAS_ASK_DATABASE_URL";
+export {
+  ANTHROPIC_API_KEY_VAR,
+  BAS_ASK_DATABASE_URL_VAR,
+  BAS_CREDENTIAL_KEY_VAR,
+  BAS_CREDENTIAL_KEY_VERSION_VAR,
+  CO_ANTHROPIC_API_KEY_VAR,
+  FP_ANTHROPIC_API_KEY_VAR,
+} from "./env-names";
 
 /** BAS Analyze's key. The tab itself reads it through `readAnalyzeEnv`. */
 export function readAnthropicApiKey(): string | null {

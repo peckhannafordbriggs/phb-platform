@@ -1454,7 +1454,18 @@ the app revision had gone through. The scheduler is
 because it exists, nothing in Azure is deleted before the redeploy, and a
 deploy guard now computes every app and job name with the production
 values and holds each to the rule. `runbook.md` → *A template deployment
-fails with `ContainerAppInvalidName`*.
+fails with `ContainerAppInvalidName`*. **Then every worker execution failed
+at startup** on `ALLOWED_EMAIL_DOMAINS`: the script imported one function
+from `lib/env.ts`, which parses the web app's whole boot schema on import.
+The jobs now read their few variables through
+`lib/modules/bas/reports/job-env.ts`, the names come from the
+side-effect-free `lib/env-names.ts` (re-exported by `lib/env.ts`), and
+**nothing a job runs may import `lib/env.ts`** -
+`tests/bas-reports-jobs-env.test.ts` walks each script's import graph,
+holds the template's env lists to the readers, and boots each script from
+an empty directory with only the template's variables. No template change.
+`runbook.md` → *Reports: a job execution fails at startup naming a web-app
+variable*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
