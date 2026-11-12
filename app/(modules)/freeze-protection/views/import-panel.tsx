@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { FileUp } from "lucide-react";
+import type { FormDifference, FormImportOutcome } from "@/lib/modules/freeze-protection/import/form-commit";
+import type { ParsedForm } from "@/lib/modules/freeze-protection/import/form";
 import { mergeSchedules } from "@/lib/modules/freeze-protection/import/merge";
 import { selectForImport } from "@/lib/modules/freeze-protection/import/select";
 import type { AnalyzedSchedule, ScheduleBlock } from "@/lib/modules/freeze-protection/import/types";
@@ -11,16 +13,26 @@ import { Button, Callout, Card, Label } from "../ui/kit";
 import { clearHandOff, pendingFile } from "./import-handoff";
 
 /**
- * The equipment schedule import, straight into the equipment list: no review page.
+ * The import, straight into the equipment list: no review page. One file
+ * picker takes either kind of PDF, and /import/split says which it is.
  *
- * 1. The PDF goes to /import/split, which cuts it into schedules (no model).
+ * An equipment schedule (a drawing set):
+ * 1. /import/split cuts it into schedules (no model).
  * 2. Each schedule goes to /import/analyze, three at a time, so progress shows
  *    and no one request runs long. A schedule that fails is listed and skipped;
  *    a missing key stops the run with the server's sentence.
  * 3. The units on equipment schedules whose names were found in the PDF go to
  *    /import/commit (selectForImport). Names already in the list are never
- *    touched. The list refreshes behind this panel, and the panel says what was
- *    added and what was left out, so anything skipped can be added by hand.
+ *    touched.
+ *
+ * A filled verification form (form.ts):
+ * 1. /import/split recognises its hidden marker field and returns its rows.
+ * 2. The rows go to POST /import/form: new names are added, blank fields on
+ *    units already in the list are filled, and anything the form disagrees
+ *    with is kept as it is and listed as a difference.
+ *
+ * Either way the list refreshes behind this panel, and the panel says what was
+ * added and what was left out.
  *
  * Shown above the equipment list (`?new=import`). From New project, the file is
  * handed over (import-handoff.ts) and the run starts on its own.
@@ -42,12 +54,23 @@ export interface ImportResult {
   failures: ImportFailure[];
 }
 
+export interface FormResult extends FormImportOutcome {
+  fileName: string;
+  /** What the form itself had wrong (a row with no name, a value not on the list). */
+  problems: string[];
+}
+
+type Read =
+  | { kind: "schedule"; fileName: string; schedules: ScheduleBlock[] }
+  | { kind: "form"; fileName: string; form: ParsedForm };
+
 type Phase =
   | { kind: "pick"; error?: string }
   | { kind: "splitting" }
   | { kind: "reading"; done: number; total: number; current: string }
-  | { kind: "saving" }
-  | { kind: "done"; result: ImportResult };
+  | { kind: "saving"; what: "units" | "form" }
+  | { kind: "done"; result: ImportResult }
+  | { kind: "formDone"; result: FormResult };
 
 export function ImportPanel({ projectId, existingNames, doneHref }: { projectId: string; existingNames: string[]; doneHref: string }) {
   const router = useRouter();
@@ -66,10 +89,12 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
 
     const form = new FormData();
     form.set("file", pdf);
-    const cut = await upload<{ fileName: string; schedules: ScheduleBlock[] }>("/import/split", form, controller.signal);
+    const cut = await upload<Read>("/import/split", form, controller.signal);
     if (!live()) return;
     clearHandOff();
     if (!cut.ok) return setPhase({ kind: "pick", error: cut.message });
+
+    if (cut.data.kind === "form") return runForm(cut.data.fileName, cut.data.form, controller.signal, live);
 
     const blocks = cut.data.schedules;
     const read: (AnalyzedSchedule | null)[] = blocks.map(() => null);
@@ -109,7 +134,7 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
       failures,
     };
     if (chosen.rows.length > 0) {
-      setPhase({ kind: "saving" });
+      setPhase({ kind: "saving", what: "units" });
       const saved = await call<{ created: number; skipped: string[] }>(
         "POST",
         "/import/commit",
@@ -123,6 +148,15 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
       router.refresh();
     }
     setPhase({ kind: "done", result });
+  }
+
+  async function runForm(fileName: string, parsed: ParsedForm, signal: AbortSignal, live: () => boolean) {
+    setPhase({ kind: "saving", what: "form" });
+    const saved = await call<FormImportOutcome>("POST", "/import/form", { projectId, fileName, jobNumber: parsed.jobNumber, rows: parsed.rows }, signal);
+    if (!live()) return;
+    if (!saved.ok) return setPhase({ kind: "pick", error: saved.message });
+    router.refresh();
+    setPhase({ kind: "formDone", result: { ...saved.data, fileName, problems: parsed.problems } });
   }
 
   // From New project with the file already chosen: start straight away.
@@ -144,15 +178,18 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
   }
 
   if (phase.kind === "done") return <ImportSummary result={phase.result} doneHref={doneHref} />;
+  if (phase.kind === "formDone") return <FormSummary result={phase.result} doneHref={doneHref} />;
 
   if (phase.kind === "pick") {
     return (
       <Card>
-        <Label>Import equipment schedule</Label>
+        <Label>Import</Label>
         <div className="flex flex-col gap-3">
           <p className="max-w-3xl text-[0.8125rem] text-[var(--muted)]">
-            Upload the equipment schedule PDF. Equipment with a water, glycol or steam coil that outside air can reach is added to this
-            project; everything else is left out. Equipment already in the list is not changed. A scanned PDF will not work.
+            Upload an equipment schedule PDF or a filled freeze protection form. From a schedule, equipment with a water, glycol or steam coil
+            that outside air can reach is added and the rest is left out. From a form, new units are added and blank answers are filled; an
+            answer already here is never overwritten, and any difference is listed. Download the blank form with Template, next to
+            the project picker. A scanned PDF will not work.
           </p>
           <div className="flex flex-wrap items-end justify-between gap-3">
             <PdfField file={file} onChange={setFile} />
@@ -177,9 +214,11 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
         <div className="flex items-center justify-between gap-3">
           <p className="text-[0.875rem]">
             {phase.kind === "splitting"
-              ? "Finding the schedules in the PDF…"
+              ? "Reading the PDF…"
               : phase.kind === "saving"
-                ? "Adding the units…"
+                ? phase.what === "form"
+                  ? "Saving the form's answers…"
+                  : "Adding the units…"
                 : `Reading schedules: ${phase.done} of ${phase.total}`}
           </p>
           {phase.kind !== "saving" && (
@@ -192,7 +231,7 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
           <div className="h-full bg-[var(--module-accent)] transition-[width]" style={{ width: `${pct}%` }} />
         </div>
         <p className="truncate text-[0.75rem] text-[var(--muted)]">
-          {phase.kind === "reading" ? phase.current : "A full drawing set takes a few minutes. Keep this tab open."}
+          {phase.kind === "reading" ? phase.current : "A full drawing set takes a few minutes; a form, a few seconds. Keep this tab open."}
         </p>
       </div>
     </Card>
@@ -200,7 +239,15 @@ export function ImportPanel({ projectId, existingNames, doneHref }: { projectId:
 }
 
 /** A file input styled as the module's secondary button. Shared with New project. */
-export function PdfField({ file, onChange, label = "Equipment schedule (PDF)" }: { file: File | null; onChange: (f: File | null) => void; label?: string }) {
+export function PdfField({
+  file,
+  onChange,
+  label = "Equipment schedule or filled form (PDF)",
+}: {
+  file: File | null;
+  onChange: (f: File | null) => void;
+  label?: string;
+}) {
   return (
     <label className="flex min-w-0 flex-col gap-1">
       <span className="text-[0.75rem] text-[var(--muted)]">{label}</span>
@@ -257,5 +304,96 @@ export function ImportSummary({ result: r, doneHref }: { result: ImportResult; d
         )}
       </div>
     </Card>
+  );
+}
+
+/**
+ * What a form import added, what it filled, and every place the form and the
+ * platform disagree. Differences are the point of this card (Karthik asked for
+ * them highlighted), so they get a table of their own: the platform's answer
+ * was kept, and the person decides in the step pane. Exported for the view tests.
+ */
+export function FormSummary({ result: r, doneHref }: { result: FormResult; doneHref: string }) {
+  const filledFields = r.filled.reduce((n, f) => n + f.fields.length, 0);
+  const headline =
+    r.created.length === 0 && r.filled.length === 0
+      ? "Nothing new on the form"
+      : [r.created.length > 0 && `Added ${plural(r.created.length, "unit")}`, r.filled.length > 0 && `filled ${plural(filledFields, "blank answer")} on ${plural(r.filled.length, "unit")}`]
+          .filter(Boolean)
+          .join(" and ");
+  return (
+    <Card>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <Label>Import freeze protection form</Label>
+            <p className="text-[0.875rem]">
+              <strong className="font-semibold">{headline.charAt(0).toUpperCase() + headline.slice(1)}</strong> from {r.fileName}.
+            </p>
+          </div>
+          <Button variant="primary" href={doneHref} className="h-8! px-3!">
+            Done
+          </Button>
+        </div>
+
+        {r.differences.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <Callout tone="warn" lead="Different.">
+              {plural(r.differences.length, "answer")} on the form {r.differences.length === 1 ? "differs" : "differ"} from what is already here. The platform&apos;s answer
+              was kept. If the form is right, change it on the unit.
+            </Callout>
+            <DifferenceTable rows={r.differences} />
+          </div>
+        )}
+        {r.filled.length > 0 && (
+          <Callout tone="ok" lead="Filled.">
+            {r.filled.map((f) => `${f.name}: ${f.fields.join(", ").toLowerCase()}`).join("; ")}.
+          </Callout>
+        )}
+        {r.created.length > 0 && (
+          <Callout tone="open" lead="Added.">
+            {r.created.join(", ")}.
+          </Callout>
+        )}
+        {r.unchanged.length > 0 && (
+          <Callout tone="closed" lead="Already matched.">
+            {r.unchanged.join(", ")}.
+          </Callout>
+        )}
+        {r.problems.length > 0 && (
+          <Callout tone="warn" lead="Not read.">
+            {r.problems.join(" ")}
+          </Callout>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/** One row per disagreement. The form's value is highlighted, in words as well as tint: "Form says". */
+function DifferenceTable({ rows }: { rows: FormDifference[] }) {
+  return (
+    <div className="overflow-x-auto rounded-[var(--radius-control)] border border-[var(--border)]">
+      <table className="w-full min-w-[34rem] border-collapse text-left text-[0.8125rem]">
+        <thead className="bg-[var(--neutral-50)] text-[0.75rem] text-[var(--muted)]">
+          <tr>
+            <th scope="col" className="px-3 py-2 font-medium">Unit</th>
+            <th scope="col" className="px-3 py-2 font-medium">Field</th>
+            <th scope="col" className="px-3 py-2 font-medium">Kept (platform)</th>
+            <th scope="col" className="px-3 py-2 font-medium">Form says</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((d, i) => (
+            <tr key={`${d.name}-${d.field}-${i}`} className="border-t border-[var(--divider-soft)]">
+              <td className="px-3 py-2 font-mono text-[0.75rem]">{d.name}</td>
+              <td className="px-3 py-2">{d.field}</td>
+              <td className="px-3 py-2">{d.platform}</td>
+              <td className="bg-[color-mix(in_srgb,var(--phb-orange)_14%,transparent)] px-3 py-2 font-medium text-[var(--phb-orange-ink)]">{d.form}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

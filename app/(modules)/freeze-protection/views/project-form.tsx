@@ -50,7 +50,7 @@ export function ProjectForm({ cancelHref, today }: { cancelHref: string; today: 
           <FieldLabel label="Verification date">
             <input type="date" required value={verificationDate} onChange={(e) => setVerificationDate(e.target.value)} className={INPUT + " font-mono"} />
           </FieldLabel>
-          <PdfField file={schedule} onChange={setSchedule} label="Equipment schedule (PDF, optional)" />
+          <PdfField file={schedule} onChange={setSchedule} label="Equipment schedule or filled form (PDF, optional)" />
         </div>
         <p className="text-[0.75rem] text-[var(--muted)]">
           The verification date is the date shown on the report. Add the equipment schedule PDF to fill in the equipment that can freeze.

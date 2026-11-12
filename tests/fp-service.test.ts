@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { FREEZE_PROTECTION_MODULE_KEY } from "@/lib/modules/freeze-protection/constants";
 import { addEquipment, deleteEquipment, getHistory, listEquipment, updateEquipment } from "@/lib/modules/freeze-protection/equipment";
 import { createProject, deleteProject, getProject, listProjects, signProject, updateProject } from "@/lib/modules/freeze-protection/projects";
+import { listProjectCatalog } from "@/lib/modules/freeze-protection/catalog";
 import { createEmployee, disconnectDb, resetDb, testDb } from "./db";
 
 /**
@@ -73,6 +74,21 @@ describe("projects", () => {
     expect((await deleteProject(pm, p.id)).ok).toBe(true);
     expect(await testDb.fpEquipment.count()).toBe(0);
     expect(await listProjects()).toEqual([]);
+  });
+});
+
+describe("catalog", () => {
+  it("lists every project, newest job first, with its units counted by where they stand", async () => {
+    const older = await project("25-900");
+    const newer = await project("26-104A");
+    await unit(newer.id, "AHU-1");
+    const r = await addEquipment(pm, { projectId: newer.id, name: "EF-1", coil: "none" });
+    if (!r.ok) throw new Error(r.message);
+
+    const cards = await listProjectCatalog();
+    expect(cards.map((c) => c.jobNumber)).toEqual(["26-104A", "25-900"]);
+    expect(cards[0]).toMatchObject({ id: newer.id, equipmentCount: 2, tones: { ok: 0, warn: 0, bad: 0, open: 1, closed: 1 } });
+    expect(cards[1]).toMatchObject({ id: older.id, equipmentCount: 0, tones: { ok: 0, warn: 0, bad: 0, open: 0, closed: 0 } });
   });
 });
 

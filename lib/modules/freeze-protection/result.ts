@@ -13,7 +13,8 @@ export type FpErrorCode =
   | "name_taken"
   | "already_signed"
   | "not_completed"
-  | "self_review";
+  | "self_review"
+  | "wrong_project";
 
 export type FpResult<T> = { ok: true; data: T } | { ok: false; code: FpErrorCode; message: string };
 
@@ -25,6 +26,8 @@ export const FP_ERROR_STATUS: Record<FpErrorCode, number> = {
   already_signed: 409,
   not_completed: 409,
   self_review: 409,
+  /** A verification form whose job number is another project's. */
+  wrong_project: 422,
 };
 
 export const ok = <T>(data: T): FpResult<T> => ({ ok: true, data });

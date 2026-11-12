@@ -20,6 +20,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { RegisterView } from "@/app/(modules)/freeze-protection/views/register-view";
 import { ReportView } from "@/app/(modules)/freeze-protection/views/report-view";
 import { type ImportResult, ImportSummary } from "@/app/(modules)/freeze-protection/views/import-panel";
+import { RegisterActions } from "@/app/(modules)/freeze-protection/header-actions";
+import { ProjectCatalog } from "@/app/(modules)/freeze-protection/views/project-catalog";
 import type { FpHistoryEntry, FpLine, FpProject } from "@/lib/modules/freeze-protection/types";
 
 const PROJECT: FpProject = {
@@ -88,6 +90,34 @@ const register = (props: Partial<Parameters<typeof RegisterView>[0]>) =>
   renderToStaticMarkup(
     createElement(RegisterView, { project: PROJECT, lines: LINES, selected: null, history: [], panel: null, today: "2026-11-01", ...props }),
   );
+
+describe("Project catalog", () => {
+  const card = (over = {}) => ({ ...PROJECT, tones: { ok: 12, warn: 0, bad: 3, open: 1, closed: 4 }, ...over });
+  const catalog = (projects: ReturnType<typeof card>[], base = "/freeze-protection") =>
+    renderToStaticMarkup(createElement(ProjectCatalog, { projects, base }));
+
+  it("shows every project as a card that opens it, with where it stands in words", () => {
+    const html = catalog([card(), card({ id: "2", jobNumber: "25-900", name: "Old Mill", equipmentCount: 0, tones: { ok: 0, warn: 0, bad: 0, open: 0, closed: 0 } })]);
+    expect(html).toContain("Projects · 2");
+    expect(html).toContain('href="/freeze-protection?project=1"');
+    expect(html).toMatch(/26-104A[\s\S]*Riverside MOB/);
+    expect(html).toContain("3 need action");
+    expect(html).toContain("1 open");
+    expect(html).toContain("12 verified");
+    expect(html).not.toContain("0 to check");
+    expect(html).toContain("No equipment yet");
+  });
+
+  it("leads to the report when the Report tab uses it", () => {
+    expect(catalog([card()], "/freeze-protection/report")).toContain('href="/freeze-protection/report?project=1"');
+  });
+
+  it("offers a new project when there are none", () => {
+    const html = catalog([]);
+    expect(html).toContain("No projects yet");
+    expect(html).toContain("New project");
+  });
+});
 
 describe("Equipment page", () => {
   it("offers a new project when there are none", () => {
@@ -235,14 +265,24 @@ describe("Schedule import", () => {
   it("offers Import beside Add equipment, and opens above the equipment list, not instead of it", () => {
     expect(register({})).toContain(">Import<");
     const html = register({ panel: "import" });
-    expect(html).toContain("Import equipment schedule");
+    expect(html).toContain("filled freeze protection form");
+    expect(html).not.toContain("Blank form");
     expect(html).toContain("Equipment · 5");
     expect(html).not.toContain("Review the import");
   });
 
   it("New project takes the schedule PDF in the same grid as the verification date", () => {
     const html = register({ panel: "project" });
-    expect(html).toMatch(/Verification date[\s\S]*Equipment schedule \(PDF, optional\)[\s\S]*<\/div><p/);
+    expect(html).toMatch(/Verification date[\s\S]*Equipment schedule or filled form \(PDF, optional\)[\s\S]*<\/div><p/);
+  });
+
+  it("offers the form Template left of the project picker, and with no project at all", () => {
+    const projects = [{ id: "1", jobNumber: "26-104A", name: "Riverside MOB" }];
+    const html = renderToStaticMarkup(createElement(RegisterActions, { projects, projectId: "1" }));
+    expect(html).toContain('<option value="">All projects</option>');
+    expect(html).toMatch(/href="\/api\/modules\/freeze-protection\/import\/form"[^>]*download[\s\S]*Template[\s\S]*Project[\s\S]*New project/);
+    const none = renderToStaticMarkup(createElement(RegisterActions, { projects: [], projectId: null }));
+    expect(none).toContain("Template");
   });
 
   it("says what was added and, in words, everything left out", () => {

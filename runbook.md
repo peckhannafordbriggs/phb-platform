@@ -12904,3 +12904,61 @@ schedules are not affected.
 
 **Fix.** Run the import again later; units already added are skipped. A
 schedule that is always too long: add its units by hand.
+
+## The verification form import (2026-11-10)
+
+**Import** takes a second kind of PDF: the fillable verification form.
+**Template**, left of the project picker on the Equipment page (shown with or
+without a project), downloads it (`GET /import/form`, behind the grant;
+the file is `lib/modules/freeze-protection/import/assets/fp-verification-form.pdf`,
+built by `scripts/fp-build-form.py`). One row per unit, ten rows a page, two
+pages, twenty in all; for more units, fill and import a second form. Tested by
+and test date are asked once on page 1.
+
+`/import/split` checks for the form's hidden `fp_form` field before reading any
+page text, so a form never reaches the schedule split or Claude. Its rows go to
+`POST /import/form` (`import/form-commit.ts`): new names are added, blank fields
+on units already in the list are filled, and an answer already on the platform
+is never overwritten. Each disagreement is listed in the summary's *Different*
+table for a person to settle on the unit. Status has no blank, so it is filled
+only while the unit has no exposure, protection or test answer. Audit rows:
+`fp.equipment_created` (source `form`), `fp.equipment_updated` /
+`fp.result_updated` for what was filled, and one `fp.form_imported`.
+
+## The form import refuses the file
+
+**Symptom.** One of:
+*That form has no units filled in.* (422 `empty_form`),
+*That is the freeze protection form, but its fields were flattened* (422 `form_flattened`),
+*That form is for job X, and this project is job Y.* (422 `wrong_project`),
+*That form is from another version of the platform.* (422 `form_version`).
+
+**Cause.** In order: the answers were not saved into the PDF (some viewers,
+including browsers, need *Save as* rather than closing the tab); the form was
+printed to PDF, flattened or scanned, which turns its fields into pictures; the
+job number on page 1 is another project's (the check stops a form putting its
+units into the wrong job; a blank job number is accepted); the form was made by
+an older or newer `fp-build-form.py`.
+
+**Fix.** Save the filled form itself and upload that file. For the wrong job,
+upload it on the right project or clear the job number on the form. For an old
+version, download **Blank form** again and copy the answers across.
+
+## The form import says some answers differ
+
+**Symptom.** The summary has a *Different* table: unit, field, *Kept
+(platform)*, *Form says*.
+
+**Cause.** By design (Karthik, 2026-11-10): a form fills blanks only. An answer
+already recorded on the platform wins, because someone entered it deliberately
+and the form may be older.
+
+**Fix.** If the form is right, change the answer on the unit in the step pane.
+Text is compared ignoring case and spacing, so those never show as differences.
+
+**Changing the form.** Edit `scripts/fp-build-form.py` and
+`import/form.ts` together, then run `python scripts/fp-build-form.py` (needs
+reportlab; qpdf optional, halves the size) and commit the PDF.
+`tests/fp-form.test.ts` opens the committed PDF and fails if the field names or
+dropdown choices no longer match `form.ts`. Change the marker version
+(`phb-fp-form/v1`) only when old forms can no longer be read correctly.

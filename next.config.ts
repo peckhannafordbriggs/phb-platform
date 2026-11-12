@@ -13,6 +13,13 @@ const nextConfig: NextConfig = {
   // dependencies again, which is what keeps the runtime image small and its
   // contents a consequence of the build rather than of a second npm install.
   output: "standalone",
+
+  // The blank Freeze Protection verification form is read from disk by its
+  // route (served behind the module grant, so not from public/). Nothing
+  // imports a PDF, so the tracer would leave it out of the standalone build.
+  outputFileTracingIncludes: {
+    "/api/modules/freeze-protection/import/form": ["./lib/modules/freeze-protection/import/assets/fp-verification-form.pdf"],
+  },
 };
 
 export default nextConfig;

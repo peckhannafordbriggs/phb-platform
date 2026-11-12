@@ -119,9 +119,41 @@ export const importEquipmentSchema = z.strictObject({
     .max(IMPORT_MAX_ROWS),
 });
 
+/**
+ * A filled verification form's rows, parsed by /import/split (import/form.ts)
+ * and sent back to be saved. Every answer optional: a blank on the form fills
+ * nothing. `jobNumber` is what page 1 says, checked against the project.
+ */
+export const FORM_IMPORT_MAX_ROWS = 500;
+const formImportRow = z.strictObject({
+  name,
+  equipmentType: shortText,
+  areaServed: shortText,
+  coil: z.enum(COIL_VALUES).nullable(),
+  status: z.enum(STATUS_VALUES).nullable(),
+  exposure: z.enum(EXPOSURE_VALUES).nullable(),
+  protection: z.enum(PROTECTION_VALUES).nullable(),
+  testFanStops: yesNo,
+  testDamperCloses: yesNo,
+  testValveFullFlow: yesNo,
+  testManualReset: yesNo,
+  tripTempF: z.number().min(-40).max(120).nullable(),
+  testedBy: shortText,
+  testDate: dateOnly.nullable(),
+  notes: text,
+});
+export const importFormSchema = z.strictObject({
+  projectId: z.string(),
+  fileName: name,
+  jobNumber: shortText,
+  rows: z.array(formImportRow).min(1).max(FORM_IMPORT_MAX_ROWS),
+});
+
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 export type CreateEquipmentInput = z.infer<typeof createEquipmentSchema>;
 export type UpdateEquipmentInput = z.infer<typeof updateEquipmentSchema>;
 export type AnalyzeScheduleInput = z.infer<typeof analyzeScheduleSchema>;
 export type ImportEquipmentInput = z.infer<typeof importEquipmentSchema>;
+export type FormImportRow = z.infer<typeof formImportRow>;
+export type ImportFormInput = z.infer<typeof importFormSchema>;

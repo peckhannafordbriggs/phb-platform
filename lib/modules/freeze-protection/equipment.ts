@@ -23,7 +23,8 @@ import type { CoilType, ConfirmedWith, EquipmentStatus, Exposure, FpHistoryEntry
 const WITH_EDITOR = { updatedBy: { select: { firstName: true, lastName: true } } } as const;
 type Row = Prisma.FpEquipmentGetPayload<{ include: typeof WITH_EDITOR }>;
 
-function toLine(r: Row): FpLine {
+/** A stored row as the screens read it. Shared with the form import (import/form-commit.ts). */
+export function toLine(r: Row): FpLine {
   const any = (...values: (string | null)[]) => values.some((v) => v !== null);
   return {
     id: r.id.toString(),
