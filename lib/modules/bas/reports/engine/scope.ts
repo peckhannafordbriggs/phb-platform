@@ -217,11 +217,17 @@ export async function resolveScope(def: DefinitionForRun, range: Interval): Prom
     pointsByStation.set(p.stationId, list);
   }
 
-  const equipmentRows = await prisma.basEquipment.findMany({
-    where: { siteId: def.site.siteId },
-    select: { equipmentId: true, name: true, equipType: true, parentEquipmentId: true },
-    orderBy: { name: "asc" },
-  });
+  const [equipmentRows, typeRows] = await Promise.all([
+    prisma.basEquipment.findMany({
+      where: { siteId: def.site.siteId },
+      select: { equipmentId: true, name: true, equipType: true, parentEquipmentId: true },
+      orderBy: { name: "asc" },
+    }),
+    // The type's display name for the inventory's "Equipment types found"
+    // line, from the vocabulary table the equipment row's type references.
+    prisma.basEquipmentType.findMany({ select: { equipType: true, displayName: true } }),
+  ]);
+  const typeLabel = new Map(typeRows.map((t) => [t.equipType, t.displayName]));
   const units: EquipmentUnit[] = [];
   const stationOfUnit = new Map<string, string>();
   for (const e of equipmentRows) {
@@ -232,6 +238,7 @@ export async function resolveScope(def: DefinitionForRun, range: Interval): Prom
       equipmentId: id,
       name: e.name,
       equipType: e.equipType,
+      equipTypeLabel: e.equipType === null ? null : (typeLabel.get(e.equipType) ?? null),
       parentEquipmentId: e.parentEquipmentId?.toString() ?? null,
       points: unitPoints,
       ...classify(unitPoints),

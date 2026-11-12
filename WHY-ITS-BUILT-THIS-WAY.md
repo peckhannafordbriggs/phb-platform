@@ -3213,3 +3213,74 @@ with a placeholder and the page lies within a day.
 `tests/bas-reports-routes.test.ts`, `tests/bas-reports-usage.test.ts`,
 `tests/bas-reports-ui.test.tsx`; `runbook.md` → *Reports: the safety
 ceiling*, *The editor's Questions section is a checklist*.
+
+## 82 · Ten points that stop at the same minute are one finding, and a data problem is Watch until Jim says otherwise
+
+**What I did (2026-11-12).** The first production run of the office
+report listed ten points as *No readings* since the same minute on the
+same station, one row each, and the page read as ten faults. Data Health
+now clusters the points on one station whose last readings fall within
+fifteen minutes of each other and, at three or more, carries them inside
+ONE `collection_stopped` finding: the rows stay in the table, under a block
+that says how many stopped, when, and that they count once; the subject is
+`station:<id>@<minute>`, so the fingerprint keys on the station and the
+minute the first point stopped; and the narrative is told it is one event
+and asked to name the causes in order - the device network trunk from the
+JACE to its controllers, the histories stopped on the station, the
+collector. A point that never reported, or that stopped alone, stays a row
+of its own. Every member is still excluded from the equipment questions.
+
+The same run rolled the building up to *Watch* with ten of twenty-six
+points out, and that stays. Jim's spec gives Data Health no status line in
+its template and no share-of-points or duration rule; its three status
+words are about equipment. A test pins Watch so that the first change to it
+is a decision, not a drift.
+
+The page changed around it: *Equipment types found* now lists the
+equipment types by count and a *Classification* line carries Step 1 per
+unit; every Data Health row and every Summary finding shows the model's
+likely cause and recommended action; a Not Monitored section is its badge
+and one line pointing at the inventory; the footer is the spend and the
+duration, with no limit.
+
+**Why.** A reader who sends a truck reads a table of ten identical rows as
+ten jobs. The signature of one stop - one station, one minute - is in the
+data and the code can see it; the model cannot be trusted to merge ten
+findings into one (it may not add or drop a finding, by § 78), so the
+merging had to be the engine's, before the narrative, with the status and
+the counts following the one finding rather than the ten. Fingerprinting
+on the station and the minute is what makes the same stop *Still open*
+next week and a second stop on the same station *New*: a fingerprint on
+the station alone would make every later outage the same open item
+forever.
+
+Keeping Watch is the same discipline as § 79: a severity rule the spec
+does not state is a rule I would be inventing, and it would decide whether
+somebody drives to a building. The honest state is Watch with the question
+on record.
+
+The rest is the difference between a label and what it labels. "Equipment
+types found: economizer" was a true sentence about the wrong thing; "0 of
+70" counted checks under a word that means points. A report that will be
+compared week to week by people who did not build it cannot carry a line
+that means something other than it says.
+
+**What breaks if you undo it.** Flatten the incident back into rows and the
+status counts the same outage ten times, the summary's three findings are
+three of its rows, and the narrative writes ten likely causes for one
+event. Fingerprint it on the station alone and outages never clear.
+Decide a severity threshold here and the next person reads it as Jim's.
+Print the limit beside the spend and the page claims a per-report budget
+the editor no longer has.
+
+`lib/modules/bas/reports/engine/analysis/data-health.ts`
+(`INCIDENT_WINDOW_MS`, `INCIDENT_MIN_POINTS`, `INCIDENT_CAUSES`),
+`inventory.ts` (`equipmentTypesFound`, `classificationText`),
+`wording.ts`, `render.tsx`, `narrative.ts`;
+`prisma/migrations/20261112200000_bas_report_findings_station_incident/`;
+`tests/bas-reports-analysis.test.ts` (*groups points on one station that
+stopped together*, *rolls ten of fourteen interval points offline ... up
+to Watch*), `tests/bas-reports-engine.test.ts` (*a period after the data
+stopped*), `tests/bas-reports-render.test.tsx`; `runbook.md` → *Data
+Health lists ten identical "No readings" rows*, *Data Health rolled up to
+Watch with half the building offline*.

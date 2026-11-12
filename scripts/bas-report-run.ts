@@ -4,6 +4,8 @@ import { prisma } from "../lib/db";
 import { createAnthropicNarrator, createFixedNarrator } from "../lib/modules/bas/reports/engine/narrative";
 import { executeReportRun, ReportRunError } from "../lib/modules/bas/reports/engine/run";
 import { STATUS_LABELS } from "../lib/modules/bas/reports/engine/rollup";
+import { incidentPoints } from "../lib/modules/bas/reports/engine/analysis/data-health";
+import { describeRunDuration } from "../lib/modules/bas/reports/engine/wording";
 
 /**
  * Run one report definition end to end against DATABASE_URL and store the
@@ -76,7 +78,13 @@ async function main(): Promise<void> {
   console.log(`Run ${outcome.runId}: ${outcome.status}${outcome.partialReason !== null ? ` - ${outcome.partialReason}` : ""}`);
   console.log(`${doc.header.buildingName} · ${doc.header.periodStart} to ${doc.header.periodEnd} · ${doc.header.windowLabel}`);
   console.log(`Building status: ${STATUS_LABELS[doc.summary.status]} · new ${doc.summary.counts.new}, still open ${doc.summary.counts.stillOpen}, cleared ${doc.summary.counts.cleared}`);
-  console.log(`Equipment types found: ${doc.inventory.equipmentTypesFound.join(" / ") || "none"} · ${doc.inventory.pointsInScope} points, ${doc.inventory.equipmentInScope} equipment`);
+  console.log(
+    `Equipment types found: ${doc.inventory.equipmentTypesFound.map((t) => `${t.label} × ${t.count}`).join(", ") || "none"} · ${doc.inventory.pointsInScope} points, ${doc.inventory.equipmentInScope} equipment`,
+  );
+  if (doc.inventory.classification.length > 0) {
+    console.log(`Classification: ${doc.inventory.classification.map((c) => `${c.name}: ${c.text}`).join("; ")}`);
+  }
+  console.log(`Required point checks met: ${doc.inventory.requiredPointsFound} of ${doc.inventory.requiredPointsTotal} (one check per question per unit it applies to)`);
   console.log(`Occupancy: ${doc.inventory.occupancy.map((o) => `${o.stationName}: ${o.kind} (${o.detail})`).join("; ")}`);
   console.log("");
   for (const s of doc.sections) {
@@ -90,19 +98,22 @@ async function main(): Promise<void> {
             : q.outcome === "not_run"
               ? "could run; analysis not built yet"
               : q.key === "q20_data_health"
-                ? `${String(q.metrics.judged ?? 0)} points judged, ${String(q.metrics.flagged ?? 0)} flagged`
+                ? `${String(q.metrics.judged ?? 0)} points judged, ${String(q.metrics.flagged ?? 0)} flagged in ${String(q.metrics.findings ?? q.metrics.flagged ?? 0)} finding(s)`
                 : `over ${q.equipment.length} unit(s)${q.skipped.length > 0 ? `, skipped ${q.skipped.map((k) => `${k.name} (${k.reason})`).join(", ")}` : ""}`;
       console.log(`    Q${q.position} ${q.outcome}: ${detail}`);
     }
     for (const f of s.findings) {
       console.log(`      [${f.priority}] ${f.subjectName} - ${f.issue}: ${f.evidence.actual}; expected ${f.evidence.expected}; ${f.evidence.when} (${f.state})`);
+      for (const p of incidentPoints(f.evidence)) console.log(`          ${p.name} - ${p.issue}: ${p.actual}; ${p.when}`);
       if (f.likelyCause !== null) console.log(`        likely: ${f.likelyCause}`);
       if (f.recommendedAction !== null) console.log(`        next: ${f.recommendedAction}`);
     }
   }
   if (doc.cleared.length > 0) console.log(`  Cleared: ${doc.cleared.map((f) => `${f.subjectName} (${f.issue})`).join(", ")}`);
   console.log("");
-  console.log(`Cost: ${doc.cost.calls} call(s), ${doc.cost.inputTokens} in / ${doc.cost.outputTokens} out, $${doc.cost.costUsd.toFixed(4)} of $${doc.cost.budgetUsd.toFixed(2)}`);
+  console.log(
+    `Cost: ${doc.cost.calls} call(s), ${doc.cost.inputTokens} in / ${doc.cost.outputTokens} out, $${doc.cost.costUsd.toFixed(4)} (safety ceiling $${doc.cost.budgetUsd.toFixed(2)}); took ${describeRunDuration(doc.header.durationMs ?? 0)}`,
+  );
 }
 
 main()

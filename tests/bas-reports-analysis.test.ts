@@ -3,15 +3,30 @@ import {
   ACTION_HOURS,
   ACTION_PERCENT,
   BAND_F,
+  COLLECTION_STOPPED,
+  INCIDENT_CAUSES,
+  INCIDENT_MIN_POINTS,
+  INCIDENT_WINDOW_MS,
   WATCH_PERCENT,
   dataHealth,
+  incidentMinute,
+  incidentPoints,
   manualOverrides,
   physicalRangeFor,
   runOutsideSchedule,
   zoneComfort,
 } from "@/lib/modules/bas/reports/engine/analysis";
 import { carriedForward, compareFindings, fingerprintOf, type PreviousFinding } from "@/lib/modules/bas/reports/engine/compare";
-import { applicableUnits, checkRequirements, classify, decideQuestion, equipmentTypesFound, type LibraryRowForEngine } from "@/lib/modules/bas/reports/engine/inventory";
+import {
+  applicableUnits,
+  checkRequirements,
+  classificationText,
+  classifications,
+  classify,
+  decideQuestion,
+  equipmentTypesFound,
+  type LibraryRowForEngine,
+} from "@/lib/modules/bas/reports/engine/inventory";
 import { MODEL_PRICES, costOf, estimateCost } from "@/lib/modules/bas/reports/engine/pricing";
 import { buildingStatus, sectionStatus, topFindings } from "@/lib/modules/bas/reports/engine/rollup";
 import {
@@ -86,13 +101,13 @@ function series(
   };
 }
 
-function unit(name: string, equipType: string, points: PointSeries[]): EquipmentUnit {
+function unit(name: string, equipType: string, points: PointSeries[], equipTypeLabel: string | null = null): EquipmentUnit {
   const id = String(nextId++);
   for (const p of points) {
     p.equipmentId = id;
     p.equipmentName = name;
   }
-  return { equipmentId: id, name, equipType, parentEquipmentId: null, points, ...classify(points) };
+  return { equipmentId: id, name, equipType, equipTypeLabel, parentEquipmentId: null, points, ...classify(points) };
 }
 
 /** Local hour of day in New York for an instant. */
@@ -337,6 +352,94 @@ describe("q20 data health", () => {
     expect(result.excluded.size).toBe(0);
   });
 
+  it("groups points on one station that stopped together into ONE collection incident, keeping every row inside it", () => {
+    const stopAt = WEEK.end - 5 * DAY_MS;
+    const stoppedAt = (name: string, at: number, stationId = "1") =>
+      series({ role: "zone_temp", name, stationId }, (t) => (t <= at ? 70 + Math.sin(t / HOUR_MS) : null));
+    // Ten points whose last reading is the same instant, one 15 minutes
+    // later (inside the window, chained), one an hour later (outside).
+    const together = Array.from({ length: 10 }, (_, i) => stoppedAt(`VAV-${i + 1} ZoneTemperature`, stopAt));
+    const chained = stoppedAt("Return_Air_Temp", stopAt + 15 * MINUTE_MS);
+    const apart = stoppedAt("Mixed_Air_Temp", stopAt + HOUR_MS);
+    // An interval point with no readings in the period whose last reading before it is the same instant: part of the stop.
+    const offline = series({ role: "supply_air_temp", name: "Supply_Temp" }, () => null);
+    offline.carryIn = 55;
+    offline.carryInAt = stopAt;
+    // A point that has never reported is not a stop and never joins one.
+    const never = series({ role: "outside_air_temp", name: "OAT" }, () => null);
+    const fine = series({ role: "zone_temp", name: "VAV-fine" }, (t) => 70 + Math.sin(t / HOUR_MS));
+
+    const result = dataHealth([...together, chained, apart, offline, never, fine], WEEK, NY, new Map([["1", "PHBoffice"]]));
+    const incident = result.findings.find((f) => f.issueCode === COLLECTION_STOPPED)!;
+    expect(incident).toBeDefined();
+    expect(result.findings.map((f) => [f.subjectName, f.issueCode])).toEqual([
+      ["PHBoffice", COLLECTION_STOPPED],
+      ["Mixed_Air_Temp", "stale"],
+      ["OAT", "offline"],
+    ]);
+    expect(incident.subjectKey).toBe(`station:1@${incidentMinute(stopAt)}`);
+    expect(incident.subjectName).toBe("PHBoffice");
+    expect(incident.priority).toBe("watch");
+    expect(incident.evidence.count).toBe(12);
+    expect(incident.evidence.durationMs).toBe(WEEK.end - stopAt);
+    expect(incident.evidence.causesInOrder).toEqual(INCIDENT_CAUSES);
+    expect(incident.evidence.actual).toContain("12 points stopped reporting at the same time");
+    const members = incidentPoints(incident.evidence);
+    expect(members.map((p) => p.name)).toEqual([...together.map((p) => p.name), "Return_Air_Temp", "Supply_Temp"].sort((a, b) => a.localeCompare(b)));
+    expect(members.find((p) => p.name === "Supply_Temp")).toMatchObject({ issueCode: "offline", issue: "No readings" });
+    expect(members.find((p) => p.name === "VAV-1 ZoneTemperature")).toMatchObject({ issueCode: "stale", issue: "Stopped trending" });
+    // Every stopped point is still excluded from the equipment questions, member or not.
+    for (const p of [...together, chained, apart, offline, never]) expect(result.excluded.has(p.pointId)).toBe(true);
+    expect(result.excluded.has(fine.pointId)).toBe(false);
+    expect(result.judged).toBe(15);
+    // The fingerprint keys on the station and the minute: the same stop next week is the same finding, a later stop is not.
+    expect(fingerprintOf("q20_data_health", incident.subjectKey, COLLECTION_STOPPED)).toBe(
+      fingerprintOf("q20_data_health", `station:1@${incidentMinute(stopAt + 30_000)}`, COLLECTION_STOPPED),
+    );
+    expect(fingerprintOf("q20_data_health", incident.subjectKey, COLLECTION_STOPPED)).not.toBe(
+      fingerprintOf("q20_data_health", `station:1@${incidentMinute(stopAt + DAY_MS)}`, COLLECTION_STOPPED),
+    );
+    expect(INCIDENT_WINDOW_MS).toBe(15 * MINUTE_MS);
+  });
+
+  it("calls fewer than three stops a coincidence, and a stop on each station its own incident", () => {
+    const stopAt = WEEK.end - 3 * DAY_MS;
+    const stoppedAt = (name: string, at: number, stationId: string) =>
+      series({ role: "zone_temp", name, stationId }, (t) => (t <= at ? 70 + Math.sin(t / HOUR_MS) : null));
+    const pair = [stoppedAt("A-1", stopAt, "1"), stoppedAt("A-2", stopAt, "1")];
+    const trio = [stoppedAt("B-1", stopAt, "2"), stoppedAt("B-2", stopAt, "2"), stoppedAt("B-3", stopAt, "2")];
+    const earlier = [stoppedAt("C-1", stopAt - DAY_MS, "2"), stoppedAt("C-2", stopAt - DAY_MS, "2"), stoppedAt("C-3", stopAt - DAY_MS, "2")];
+    const result = dataHealth([...pair, ...trio, ...earlier], WEEK, NY, new Map([["2", "Lab"]]));
+    expect(INCIDENT_MIN_POINTS).toBe(3);
+    expect(result.findings.map((f) => [f.subjectName, f.issueCode, f.subjectKey])).toEqual([
+      ["Lab", COLLECTION_STOPPED, `station:2@${incidentMinute(stopAt - DAY_MS)}`],
+      ["Lab", COLLECTION_STOPPED, `station:2@${incidentMinute(stopAt)}`],
+      ["A-1", "stale", `point:${pair[0]!.pointId}`],
+      ["A-2", "stale", `point:${pair[1]!.pointId}`],
+    ]);
+  });
+
+  it("rolls ten of fourteen interval points offline for the whole period up to Watch - the spec is silent on a share or a duration, pending Jim", () => {
+    // Jim's spec (27 Oct 2026) gives Data Health no status line in its
+    // template and names no share of points or duration that would make it
+    // Action Needed; until he does, a stop of any size is Watch. This test
+    // pins that decision so a change to it is deliberate.
+    const live = Array.from({ length: 4 }, (_, i) => series({ role: "zone_temp", name: `live-${i}` }, (t) => 70 + Math.sin(t / HOUR_MS)));
+    const dead = Array.from({ length: 10 }, (_, i) => {
+      const p = series({ role: "zone_temp", name: `dead-${i}` }, () => null);
+      p.carryIn = 70;
+      p.carryInAt = WEEK.start - DAY_MS;
+      return p;
+    });
+    const result = dataHealth([...live, ...dead], WEEK, NY);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject({ issueCode: COLLECTION_STOPPED, priority: "watch" });
+    expect(result.findings[0]!.evidence.count).toBe(10);
+    const compared = compareFindings(result.findings, [], "1", "2026-11-12T00:00:00Z");
+    expect(sectionStatus(compared.findings)).toBe("watch");
+    expect(buildingStatus([{ key: "data_health", label: "Data Health", status: sectionStatus(compared.findings), statusSentence: "", questions: [], findings: compared.findings }])).toBe("watch");
+  });
+
   it("knows the physical ranges by role and unit", () => {
     expect(physicalRangeFor("zone_temp", "fahrenheit")).toMatchObject({ min: 35, max: 110 });
     expect(physicalRangeFor("zone_temp", "celsius")).toBeNull();
@@ -350,12 +453,43 @@ describe("q20 data health", () => {
 describe("inventory: classification, applicability, requirements", () => {
   const lib = (key: string) => BAS_LIBRARY_QUESTIONS.find((q) => q.key === key)! as unknown as LibraryRowForEngine;
 
-  it("classifies a unit from its roles, as the spec's Step 1 says", () => {
-    const rtu = unit("RV", "rtu", [series({ role: "oa_damper_cmd" }, () => 10), series({ role: "supply_air_temp" }, () => 55)]);
+  it("classifies a unit from its roles, as the spec's Step 1 says, per unit and in words", () => {
+    const rtu = unit("RV", "rtu", [series({ role: "oa_damper_cmd" }, () => 10), series({ role: "supply_air_temp" }, () => 55)], "Rooftop Unit");
     expect(rtu).toMatchObject({ hydronic: false, dx: false, stagedHeat: false, economizer: true, reheat: false });
     const ahu = unit("AHU-1", "ahu", [series({ role: "cooling_valve_cmd" }, () => 0), series({ role: "heating_stage_cmd" }, () => 0)]);
     expect(ahu).toMatchObject({ hydronic: true, dx: false, stagedHeat: true });
-    expect(equipmentTypesFound([rtu, ahu])).toEqual(["hydronic", "gas or electric heat", "economizer"]);
+    const dx = unit("SS-1", "split_system", [series({ role: "compressor_status" }, () => 1)]);
+    const reheat = unit("VAV-R", "vav", [series({ role: "zone_temp" }, () => 70), series({ role: "reheat_valve_cmd" }, () => 0)], "VAV Box");
+    const plain = unit("VAV-1", "vav", [series({ role: "zone_temp" }, () => 70)], "VAV Box");
+    // The office's case: a rooftop unit with no compressor point is DX by
+    // type, and the line says why its DX questions will read Not Monitored.
+    expect(classificationText(rtu)).toBe("DX (by type; compressors not trended) with economizer");
+    expect(classificationText(ahu)).toBe("hydronic and gas or electric heat");
+    expect(classificationText(dx)).toBe("DX");
+    expect(classificationText(reheat)).toBe("hydronic with reheat");
+    expect(classificationText(plain)).toBeNull();
+    expect(classifications([rtu, ahu, dx, reheat, plain]).map((c) => [c.name, c.text])).toEqual([
+      ["RV", "DX (by type; compressors not trended) with economizer"],
+      ["AHU-1", "hydronic and gas or electric heat"],
+      ["SS-1", "DX"],
+      ["VAV-R", "hydronic with reheat"],
+    ]);
+  });
+
+  it("lists the equipment TYPES found by count with the vocabulary's names, never a classification tag", () => {
+    const rtu = unit("RV", "rtu", [series({ role: "oa_damper_cmd" }, () => 10)], "Rooftop Unit");
+    const vav1 = unit("VAV-1", "vav", [series({ role: "zone_temp" }, () => 70)], "VAV Box");
+    const vav2 = unit("VAV-2", "vav", [series({ role: "zone_temp" }, () => 70)], "VAV Box");
+    const untyped = unit("Thing", null as unknown as string, [series({ role: "zone_temp" }, () => 70)]);
+    const found = equipmentTypesFound([rtu, vav1, vav2, untyped]);
+    expect(found).toEqual([
+      { equipType: "vav", label: "VAV Box", count: 2 },
+      { equipType: null, label: "no type set", count: 1 },
+      { equipType: "rtu", label: "Rooftop Unit", count: 1 },
+    ]);
+    expect(JSON.stringify(found)).not.toContain("economizer");
+    // A type the vocabulary has no name for is printed as its key.
+    expect(equipmentTypesFound([unit("X", "doas", [series({ role: "supply_air_temp" }, () => 55)])])).toEqual([{ equipType: "doas", label: "doas", count: 1 }]);
   });
 
   it("applies the hydronic questions to nothing on a DX-only building, and the DX questions to its rooftop unit", () => {

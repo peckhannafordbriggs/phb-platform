@@ -7,6 +7,7 @@ import { auth } from "@/auth";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { resetBasAvailabilityCache } from "@/lib/modules/bas/route-helpers";
+import { COLLECTION_STOPPED, incidentMinute, incidentPoints } from "@/lib/modules/bas/reports/engine/analysis";
 import { createFixedNarrator } from "@/lib/modules/bas/reports/engine/narrative";
 import { executeReportRun } from "@/lib/modules/bas/reports/engine/run";
 import type { ReportDocument } from "@/lib/modules/bas/reports/engine/types";
@@ -77,6 +78,7 @@ let other: Awaited<ReturnType<typeof createEmployee>>;
 let admin: Awaited<ReturnType<typeof createEmployee>>;
 let siteId: bigint;
 let stationId: bigint;
+let rvId: bigint;
 let reportId: string;
 let occupancyPointId: bigint;
 let warmPointId: bigint;
@@ -139,6 +141,7 @@ beforeAll(async () => {
   const station = await testDb.basStation.create({ data: { siteId, niagaraStationName: "ZZTestEngineStation", connectionMode: "direct", baseUrl: "https://198.51.100.21" } });
   stationId = station.stationId;
   const rv = await testDb.basEquipment.create({ data: { siteId, name: "RV", equipType: "rtu" } });
+  rvId = rv.equipmentId;
   const vav1 = await testDb.basEquipment.create({ data: { siteId, name: "VAV-1", equipType: "vav", parentEquipmentId: rv.equipmentId } });
   const vav2 = await testDb.basEquipment.create({ data: { siteId, name: "VAV-2", equipType: "vav", parentEquipmentId: rv.equipmentId } });
 
@@ -221,6 +224,8 @@ afterAll(async () => {
 });
 
 const bare = (url = "http://localhost/api/modules/bas/reports/runs") => new Request(url);
+/** The page never prints a limit beside the spend (2026-11-12). */
+const stored0 = (doc: ReportDocument) => typeof doc.cost.budgetUsd === "number";
 async function data<T>(r: Response): Promise<T> {
   return ((await r.json()) as { data: T }).data;
 }
@@ -245,7 +250,16 @@ describe("a run of the standard weekly preset on the synthetic building", () => 
     expect(outcome.status).toBe("succeeded");
     expect(doc.summary.status).toBe("watch");
     expect(doc.summary.counts).toEqual({ new: 3, stillOpen: 0, cleared: 0 });
-    expect(doc.inventory.equipmentTypesFound).toEqual([]);
+    // The equipment TYPES in scope, by count, with the vocabulary's names;
+    // the Step 1 classification is its own line, and says why the rooftop
+    // unit's DX questions will read Not Monitored.
+    expect(doc.inventory.equipmentTypesFound).toEqual([
+      { equipType: "vav", label: "VAV Box", count: 2 },
+      { equipType: "rtu", label: "Rooftop Unit", count: 1 },
+    ]);
+    expect(doc.inventory.classification).toEqual([{ equipmentId: rvId.toString(), name: "RV", equipType: "rtu", text: "DX (by type; compressors not trended)" }]);
+    expect(doc.header.durationMs).toBeGreaterThanOrEqual(0);
+    expect(stored0(doc)).toBe(true);
     expect(doc.inventory.occupancy).toEqual([{ stationName: "ZZTestEngineStation", kind: "point", detail: "Occupied (occupancy status point)" }]);
     expect(doc.header.outdoor?.pointName).toBe("Outside_Air_Temp");
 
@@ -354,6 +368,61 @@ describe("a run of the standard weekly preset on the synthetic building", () => 
     expect(health.findings[0]!.likelyCause).toBeNull();
     const audit = await testDb.auditEvent.findFirst({ where: { action: "bas.report_run_finished", actorEmployeeId: null }, orderBy: { occurredAt: "desc" } });
     expect(audit?.metadata).toMatchObject({ status: "partial" });
+  });
+});
+
+describe("a period after the data stopped", () => {
+  it("carries every point that stopped together as ONE collection incident: one stored row, one finding for the status and the counts, the points inside it", async () => {
+    // A week later than the data: every interval point has no reading in
+    // the period and the same last reading before it, so the Data Health
+    // table has six rows and the report has one finding - and the station,
+    // not a point, is its subject (the CHECK on subject_key allows it).
+    const narrator = createFixedNarrator();
+    const outcome = counted(await executeReportRun(reportId, { periodEnd: new Date(END + 7 * DAY), trigger: "manual", startedById: owner.id, narrator }));
+    const doc = outcome.document;
+    const health = doc.sections.find((s) => s.key === "data_health")!;
+    expect(health.status).toBe("watch");
+    expect(health.findings.map((f) => f.issueCode)).toEqual([COLLECTION_STOPPED]);
+    const incident = health.findings[0]!;
+    const lastReading = END - 15 * MIN;
+    expect(incident.subjectKey).toBe(`station:${stationId}@${incidentMinute(lastReading)}`);
+    expect(incident.subjectName).toBe("ZZTestEngineStation");
+    expect(incident.equipmentId).toBeNull();
+    expect(incident.state).toBe("new");
+    const members = incidentPoints(incident.evidence);
+    expect(members.map((p) => p.name).sort()).toEqual(["Outside_Air_Temp", "Supply_Fan_Status", "VAV-1_Setpoint", "VAV-1_ZoneTemperature", "VAV-2_Setpoint", "VAV-2_ZoneTemperature"]);
+    expect(members.every((p) => p.issueCode === "offline")).toBe(true);
+    // One finding for the status, the summary and the counts; the two open findings of the previous run cleared.
+    expect(doc.summary.status).toBe("watch");
+    expect(doc.summary.counts).toEqual({ new: 1, stillOpen: 0, cleared: 2 });
+    expect(doc.summary.topFindings.map((f) => f.subjectName)).toEqual(["ZZTestEngineStation"]);
+    // The narrative saw one finding, with the causes to name in order.
+    const call = narrator.calls.find((c) => c.sectionLabel === "Data Health")!;
+    expect(call.findings).toHaveLength(1);
+    expect(call.findings[0]!.evidence.causesInOrder).toEqual([
+      "the device network trunk from the JACE to its controllers",
+      "the histories stopped on the station",
+      "the collector",
+    ]);
+    expect(incident.likelyCause).toMatch(/^Likely/);
+    // Stored as one row whose subject is the station and the minute.
+    const rows = await testDb.basReportFinding.findMany({ where: { runId: BigInt(outcome.runId) }, orderBy: { position: "asc" } });
+    expect(rows.filter((r) => r.state !== "cleared").map((r) => [r.subjectKey, r.issueCode])).toEqual([[incident.subjectKey, COLLECTION_STOPPED]]);
+    expect(rows.filter((r) => r.state === "cleared")).toHaveLength(2);
+    expect((rows[0]!.evidence as { points: unknown[] }).points).toHaveLength(6);
+    // The page: the incident block above the table, the six rows below it, counted once.
+    const stored = await testDb.basReportRun.findUniqueOrThrow({ where: { runId: BigInt(outcome.runId) } });
+    expect(stored.reportHtml).toContain("Collection incident on ZZTestEngineStation");
+    expect(stored.reportHtml).toContain("6 points stopped reporting at the same time");
+    expect(stored.reportHtml!.split("<td>No readings</td>").length - 1).toBe(6);
+    expect(stored.reportHtml).toContain("took ");
+    expect(stored.reportHtml).not.toContain("of $");
+
+    // The same stop a week later still: Still open, one row, the same fingerprint.
+    const again = counted(await executeReportRun(reportId, { periodEnd: new Date(END + 14 * DAY), trigger: "manual", startedById: owner.id, narrator: createFixedNarrator() }));
+    const incidentAgain = again.document.sections.find((s) => s.key === "data_health")!.findings[0]!;
+    expect(incidentAgain).toMatchObject({ fingerprint: incident.fingerprint, state: "still_open", firstSeenRunId: outcome.runId });
+    expect(again.document.summary.counts).toEqual({ new: 0, stillOpen: 1, cleared: 0 });
   });
 });
 
