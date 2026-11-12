@@ -1,8 +1,11 @@
+import { SUB_BAR_BACK_HREF, activeSubBarItemHref, type SubBar, type SubBarItem } from "../sub-bar";
+
 /**
  * The Reports bar (2026-11-11): what the module's tab bar becomes while the
  * Reports tab is open. One bar, never two rows - BasShell draws this list
  * with the kit's TabBar in place of the module tabs, and Back brings the
- * module tabs back with Projects selected.
+ * module tabs back with Projects selected. Data on the shared sub-bar shape
+ * since 2026-11-12 (../sub-bar.ts), beside the Settings bar.
  *
  * Real routes, one list, longest-prefix match, on the tabs.ts pattern. The
  * items and the paths that belong to each:
@@ -18,10 +21,7 @@
  * `/bas/reports/generated` itself redirects to `/bas/reports`, so an old
  * link lands on the same list under its new name.
  */
-export interface ReportsBarItem {
-  href: string;
-  label: string;
-}
+export type ReportsBarItem = SubBarItem;
 
 export const REPORTS_BAR: readonly ReportsBarItem[] = [
   { href: "/bas/reports", label: "Reports" },
@@ -31,31 +31,31 @@ export const REPORTS_BAR: readonly ReportsBarItem[] = [
 ];
 
 /** Where Back goes: the module's default tab (Projects). */
-export const REPORTS_BACK_HREF = "/bas";
-
-/** Every path prefix the bar knows, and the item it belongs to. */
-const PATHS: readonly { prefix: string; item: string }[] = [
-  { prefix: "/bas/reports", item: "/bas/reports" },
-  { prefix: "/bas/reports/generated", item: "/bas/reports" },
-  { prefix: "/bas/reports/scheduled", item: "/bas/reports/scheduled" },
-  { prefix: "/bas/reports/new", item: "/bas/reports/scheduled" },
-  { prefix: "/bas/reports/library", item: "/bas/reports/library" },
-  { prefix: "/bas/reports/usage", item: "/bas/reports/usage" },
-];
+export const REPORTS_BACK_HREF = SUB_BAR_BACK_HREF;
 
 /** An editor path: /bas/reports/<digits>, with or without more after it. */
 const EDITOR = /^\/bas\/reports\/[0-9]+(?:\/|$)/;
+
+export const REPORTS_SUB_BAR: SubBar = {
+  tabHref: "/bas/reports",
+  label: "Reports sections",
+  items: REPORTS_BAR,
+  paths: [
+    { prefix: "/bas/reports", item: "/bas/reports" },
+    { prefix: "/bas/reports/generated", item: "/bas/reports" },
+    { prefix: "/bas/reports/scheduled", item: "/bas/reports/scheduled" },
+    { prefix: "/bas/reports/new", item: "/bas/reports/scheduled" },
+    { prefix: "/bas/reports/library", item: "/bas/reports/library" },
+    { prefix: "/bas/reports/usage", item: "/bas/reports/usage" },
+  ],
+  // The editor's numeric ids go to Scheduled.
+  resolve: (pathname) => (EDITOR.test(pathname) ? "/bas/reports/scheduled" : null),
+};
 
 /**
  * Which item a path belongs to: the longest prefix that matches, with the
  * editor's numeric ids going to Scheduled. Null outside /bas/reports.
  */
 export function activeReportsItemHref(pathname: string): string | null {
-  if (EDITOR.test(pathname)) return "/bas/reports/scheduled";
-  let best: { prefix: string; item: string } | null = null;
-  for (const entry of PATHS) {
-    const matches = pathname === entry.prefix || pathname.startsWith(`${entry.prefix}/`);
-    if (matches && (best === null || entry.prefix.length > best.prefix.length)) best = entry;
-  }
-  return best === null ? null : best.item;
+  return activeSubBarItemHref(REPORTS_SUB_BAR, pathname);
 }

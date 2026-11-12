@@ -10,7 +10,8 @@ import { resetBasAvailabilityCache } from "@/lib/modules/bas/route-helpers";
 import { createFixedNarrator } from "@/lib/modules/bas/reports/engine/narrative";
 import { executeReportRun } from "@/lib/modules/bas/reports/engine/run";
 import type { ReportDocument } from "@/lib/modules/bas/reports/engine/types";
-import { createReport } from "@/lib/modules/bas/reports/service";
+import { DEFAULT_SAFETY_CEILING } from "@/lib/modules/bas/reports/ceiling";
+import { createReport, setSafetyCeiling } from "@/lib/modules/bas/reports/service";
 import { seedBasReportLibrary } from "@/prisma/bas-report-library";
 import { BAS_EQUIPMENT_TYPES, BAS_POINT_ROLES } from "@/prisma/bas-vocabularies";
 import { GET as listRunsRoute } from "@/app/api/modules/bas/reports/runs/route";
@@ -192,6 +193,7 @@ beforeAll(async () => {
   await insertReadings(sp2, every15(() => 72));
 
   signedInAs(owner.entraOid!);
+  const library = await testDb.basLibraryQuestion.findMany({ select: { libraryQuestionId: true }, orderBy: { position: "asc" } });
   const created = await createReport({ ...owner, profileCompleted: true }, {
     name: "ZZTEST engine weekly",
     siteId: siteId.toString(),
@@ -199,6 +201,7 @@ beforeAll(async () => {
     analysisWindow: "7d",
     schedule: { kind: "weekly", weekdays: [1] },
     timeOfDay: "06:00",
+    questions: library.map((q) => ({ kind: "library" as const, libraryQuestionId: q.libraryQuestionId.toString() })),
   });
   reportId = created.reportId;
 }, 120_000);
@@ -285,7 +288,7 @@ describe("a run of the standard weekly preset on the synthetic building", () => 
 
     // Three sections had findings: three narrative calls at a cent each.
     expect(narrator.calls.map((c) => c.sectionLabel).sort()).toEqual(["Data Health", "Schedules", "Space Comfort"]);
-    expect(doc.cost).toMatchObject({ calls: 3, costUsd: 0.03, budgetUsd: 2, model: "fixed" });
+    expect(doc.cost).toMatchObject({ calls: 3, costUsd: 0.03, budgetUsd: DEFAULT_SAFETY_CEILING.usd, model: "fixed" });
 
     const stored = await testDb.basReportRun.findUniqueOrThrow({ where: { runId: BigInt(firstRunId) }, include: { findings: true } });
     expect(stored.status).toBe("succeeded");
@@ -325,16 +328,21 @@ describe("a run of the standard weekly preset on the synthetic building", () => 
     expect(rows.map((r) => r.state).sort()).toEqual(["cleared", "still_open", "still_open"]);
   });
 
-  it("stops issuing narrative calls at the budget and finishes partial with the reason", async () => {
+  it("stops issuing narrative calls at the module's safety ceiling and finishes partial with the reason", async () => {
+    // The ceiling is the module's, set by an admin on the Usage page - here to $2, so the second call would pass it.
+    await setSafetyCeiling({ ...admin, profileCompleted: true }, { ceilingUsd: 2 });
     const narrator = createFixedNarrator({ costPerCall: 1.5 });
     const outcome = counted(await executeReportRun(reportId, { periodEnd: PERIOD_END, trigger: "manual", startedById: owner.id, narrator }));
     expect(outcome.status).toBe("partial");
-    expect(outcome.partialReason).toContain("Budget of $2.00 reached after 1 of 2 sections had narrative");
+    expect(outcome.partialReason).toContain("Safety ceiling of $2.00 reached after 1 of 2 sections had narrative");
     expect(narrator.calls).toHaveLength(1);
     expect(outcome.document.cost.costUsd).toBe(1.5);
+    expect(outcome.document.cost.budgetUsd).toBe(2);
     const stored = await testDb.basReportRun.findUniqueOrThrow({ where: { runId: BigInt(outcome.runId) } });
     expect(stored.status).toBe("partial");
-    expect(stored.partialReason).toContain("Budget");
+    expect(stored.partialReason).toContain("Safety ceiling");
+    expect(Number(stored.budgetUsd)).toBe(2);
+    await setSafetyCeiling({ ...admin, profileCompleted: true }, { ceilingUsd: DEFAULT_SAFETY_CEILING.usd });
   });
 
   it("finishes partial and says so when no model key is configured", async () => {

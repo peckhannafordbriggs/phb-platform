@@ -28,8 +28,9 @@ import { ReportRunError, executeQueuedRun } from "./engine/run";
  *
  * DRAINING. An execution works until the queue is empty or DRAIN_WINDOW_MS
  * has passed since it started, then exits and lets the scaler start a fresh
- * one for whatever is left. The window plus the longest run a definition
- * may configure (MAX_REPORT_MINUTES) stays under the job's replicaTimeout.
+ * one for whatever is left. The window plus the most minutes the module's
+ * safety ceiling may hold (MAX_CEILING_MINUTES, ceiling.ts) stays under the
+ * job's replicaTimeout.
  */
 
 /** A `running` run with no heartbeat for this long is a worker that died. */

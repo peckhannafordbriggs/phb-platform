@@ -1,5 +1,6 @@
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/db";
+import { readSafetyCeiling } from "../ceiling-read";
 import { isAnalysisWindow } from "../schedule";
 import { WINDOW_MS } from "./scope";
 
@@ -24,8 +25,10 @@ type Db = Prisma.TransactionClient | typeof prisma;
 
 /**
  * Insert a queued run for a definition: the period is the definition's
- * window ending at `periodEnd`, the budget and zone are the definition's
- * now. The caller decides the transaction - the scheduler advances
+ * window ending at `periodEnd`, the zone is the building's now, and
+ * `budget_usd` is the module's safety ceiling as it stands (2026-11-12) -
+ * the engine re-reads the ceiling when the run executes and stamps what
+ * applied. The caller decides the transaction - the scheduler advances
  * `next_run_at` in the same one.
  */
 export async function enqueueRun(
@@ -34,9 +37,10 @@ export async function enqueueRun(
 ): Promise<{ runId: bigint; periodStart: Date; periodEnd: Date }> {
   const def = await db.basReportDefinition.findUnique({
     where: { reportId: input.reportId },
-    select: { analysisWindow: true, budgetUsd: true, site: { select: { timezone: true } } },
+    select: { analysisWindow: true, site: { select: { timezone: true } } },
   });
   if (def === null) throw new ReportRunError("report_not_found", `No report definition ${input.reportId}.`);
+  const ceiling = await readSafetyCeiling(db);
   const window = isAnalysisWindow(def.analysisWindow) ? def.analysisWindow : "7d";
   const periodEnd = input.periodEnd;
   const periodStart = new Date(periodEnd.getTime() - WINDOW_MS[window]);
@@ -49,7 +53,7 @@ export async function enqueueRun(
       periodEnd,
       timezone: def.site.timezone,
       startedById: input.startedById,
-      budgetUsd: def.budgetUsd,
+      budgetUsd: ceiling.usd.toFixed(2),
       ...(input.now === undefined ? {} : { createdAt: input.now }),
     },
     select: { runId: true },

@@ -22,7 +22,12 @@ import { BAS_MODULE_KEY } from "./constants";
  */
 export type ParsedInput<T> =
   | { ok: true; data: T }
-  | { ok: false; message?: string };
+  /**
+   * A refused body. 422 `validation_failed` unless the hook names another
+   * status and code: the Reports routes answer 400 `limits_removed` to a
+   * key the API no longer has (2026-11-12), so an old client fails loudly.
+   */
+  | { ok: false; message?: string; status?: number; code?: string };
 
 /**
  * Why the platform can be "connected" to Postgres and still have no BAS data.
@@ -163,7 +168,11 @@ async function guarded<T>(
   let input = undefined as T;
   if (parse !== undefined) {
     const parsed = await parse();
-    if (!parsed.ok) return validationFailed(parsed.message);
+    if (!parsed.ok) {
+      return parsed.status !== undefined && parsed.code !== undefined
+        ? fail(parsed.status, parsed.code, parsed.message ?? "The submitted values are not valid.")
+        : validationFailed(parsed.message);
+    }
     input = parsed.data;
   }
 

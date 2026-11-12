@@ -10,6 +10,8 @@ import { carriedForward, compareFindings, type PreviousFinding } from "./compare
 import { decideQuestion, equipmentTypesFound } from "./inventory";
 import type { Narrator, NarrativeInput } from "./narrative";
 import { renderReportHtml } from "./html";
+import type { SafetyCeiling } from "../ceiling";
+import { readSafetyCeiling } from "../ceiling-read";
 import { ReportRunError, enqueueRun } from "./queue";
 import { buildingStatus, sectionStatus, topFindings } from "./rollup";
 import { loadDefinition, resolveScope, type DefinitionForRun } from "./scope";
@@ -49,11 +51,14 @@ import type {
  * The dev script's `executeReportRun` is the same three steps in one call,
  * so there is one execution path and the worker is on it.
  *
- * TWO CAPS. The cost budget stops narrative calls at `budget_usd`. The time
- * cap, `max_minutes`, is a deadline read from the clock before every
- * question and every narrative call; past it, what is left is skipped and
- * named in the reason. Neither cap aborts: the comparison, the roll-up and
- * the page are always produced from whatever was computed.
+ * ONE CEILING, TWO HALVES (2026-11-12; two per-report caps before). The
+ * module's safety ceiling - bas_report_settings, read here for every run -
+ * stops narrative calls when the run's spend would pass its dollars, and
+ * its minutes are a deadline read from the clock before every question and
+ * every narrative call; past it, what is left is skipped and named in the
+ * reason. Neither half aborts: the comparison, the roll-up and the page are
+ * always produced from whatever was computed. The ceiling that applied is
+ * stamped on the run (`budget_usd`) and printed on the page.
  */
 
 export interface RunOptions {
@@ -128,6 +133,8 @@ export async function executeQueuedRun(runIdInput: bigint | string, options: Exe
 
   const def = await loadDefinition(row.reportId);
   if (def === null) throw new ReportRunError("report_not_found", `No report definition ${row.reportId}.`);
+  // The ceiling as it stands when the run executes, not when it was queued.
+  const ceiling = await readSafetyCeiling(prisma);
 
   const now = options.now ?? new Date();
   const clock = options.clock ?? Date.now;
@@ -159,13 +166,14 @@ export async function executeQueuedRun(runIdInput: bigint | string, options: Exe
   });
 
   try {
-    const result = await produce(def, range, runId, previous?.runId ?? null, options.narrator, now, clock);
+    const result = await produce(def, range, runId, previous?.runId ?? null, options.narrator, now, clock, ceiling);
     await prisma.$transaction(async (tx) => {
       await tx.basReportRun.update({
         where: { runId },
         data: {
           status: result.status,
           partialReason: result.partialReason,
+          budgetUsd: ceiling.usd.toFixed(2),
           reportJson: result.document as unknown as Prisma.InputJsonValue,
           reportHtml: result.html,
           costUsd: new Prisma.Decimal(result.document.cost.costUsd.toFixed(6)),
@@ -261,11 +269,12 @@ async function produce(
   narrator: Narrator | null,
   now: Date,
   clock: () => number,
+  ceiling: SafetyCeiling,
 ): Promise<Produced> {
-  // The time cap: a deadline on the clock, read before every question and
-  // every narrative call. Past it, nothing new is started.
+  // The ceiling's minutes: a deadline on the clock, read before every
+  // question and every narrative call. Past it, nothing new is started.
   const startedMs = clock();
-  const deadlineMs = startedMs + def.maxMinutes * 60_000;
+  const deadlineMs = startedMs + ceiling.minutes * 60_000;
   const pastDeadline = () => clock() > deadlineMs;
   const skippedQuestions: number[] = [];
   const skippedNarrative: string[] = [];
@@ -496,7 +505,7 @@ async function produce(
     });
   }
 
-  // The narrative, within the budget and the time cap.
+  // The narrative, within the ceiling's dollars and its minutes.
   const cost = { inputTokens: 0, outputTokens: 0, costUsd: 0, calls: 0 };
   const toNarrate = sections.filter((s) => (s.status === "watch" || s.status === "action_needed") && s.findings.some((f) => f.state !== "cleared"));
   let narrated = 0;
@@ -518,9 +527,9 @@ async function produce(
         findings: live.map((f, index) => ({ index, subject: f.subjectName, issue: f.issue, priority: f.priority, state: f.state, evidence: f.evidence })),
       };
       const estimate = narrator.estimate(input);
-      if (cost.costUsd + estimate > def.budgetUsd) {
+      if (cost.costUsd + estimate > ceiling.usd) {
         partialReasons.unshift(
-          `Budget of $${def.budgetUsd.toFixed(2)} reached after ${narrated} of ${toNarrate.length} sections had narrative; the rest show their evidence only`,
+          `Safety ceiling of $${ceiling.usd.toFixed(2)} reached after ${narrated} of ${toNarrate.length} sections had narrative; the rest show their evidence only`,
         );
         break;
       }
@@ -551,7 +560,7 @@ async function produce(
       skippedQuestions.length > 0 ? `${skippedQuestions.map((p) => `Q${p}`).join(", ")} not analysed` : null,
       skippedNarrative.length > 0 ? `narrative skipped for ${skippedNarrative.join(", ")}` : null,
     ].filter((p): p is string => p !== null);
-    partialReasons.unshift(`Time cap of ${def.maxMinutes} min reached after ${elapsedMin} min: ${parts.join("; ")}`);
+    partialReasons.unshift(`Safety ceiling of ${ceiling.minutes} min reached after ${elapsedMin} min: ${parts.join("; ")}`);
   }
 
   const liveFindings = comparison.findings;
@@ -597,7 +606,7 @@ async function produce(
     cleared: comparison.cleared,
     carriedForward: carriedForward(liveFindings),
     plannerQuestions,
-    cost: { ...cost, budgetUsd: def.budgetUsd, model: narrator?.model ?? null },
+    cost: { ...cost, budgetUsd: ceiling.usd, model: narrator?.model ?? null },
   };
 
   const rows: Finding[] = [...liveFindings, ...comparison.cleared];

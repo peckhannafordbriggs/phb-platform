@@ -1446,7 +1446,7 @@ assignment**; the worker runs under tsx, not a compiled build
 every rule above against the real test database, both scripts included as
 child processes. `runbook.md` → *Reports: turning the jobs on* has the
 parameter lines and the order of commands; *Reports: a run is stuck or
-failed*; *Reports: what the caps do*. **First production deployment
+failed*; *Reports: the safety ceiling* (*what the caps do* until 2026-11-12). **First production deployment
 2026-11-11: failed on the scheduler job's name** - `-bas-reports-scheduler`
 made it 34 characters against Azure's cap of 32 - after the worker job and
 the app revision had gone through. The scheduler is
@@ -1466,6 +1466,38 @@ holds the template's env lists to the readers, and boots each script from
 an empty directory with only the template's variables. No template change.
 `runbook.md` → *Reports: a job execution fails at startup naming a web-app
 variable*.
+
+**Reports - the questions checklist, one safety ceiling, and a Usage page
+that reads the database (2026-11-12).** The editor's Questions section
+keeps its three tabs - *Standard weekly* / *Daily critical-site* / *Custom*
+- and each tab is a checklist over ONE selection: a preset's tab lists its
+questions with boxes and its own *Select all* and *Clear* (that tab's
+questions only), Daily's ticks are Standard's, switching tabs changes
+nothing, My questions have boxes on *Custom*, and a custom question is
+typed in with a *save for reuse* tick; the count and *Show selected* at the
+right of the tab row are the whole set. **Nothing is locked**: the
+selection is saved whole with the report, stored shared-then-mine-then-
+typed, and `preset_key` is a label kept only while the shared part still
+matches the preset (custom questions do not count against it). The
+per-report budget and time cap are **gone** - columns dropped, editor
+section removed, `400 limits_removed` to a client still sending them - in
+favour of **one module safety ceiling**, `bas_report_settings` ($10.00 and
+25 minutes per run by default), edited by module admins from the bottom of
+the Usage page and read by the engine for every run; a run that reaches
+either half finishes partial and says so. The Usage page was a Phase 1
+placeholder that said *There have been no runs* without asking; it now
+reads `bas_report_runs` on the shared usage components
+(`components/ui/Usage.tsx`, promoted from Cost Intelligence), and is also
+*Settings → Usage*: Settings now swaps the module bar for a bar of its own
+exactly as Reports does - *Back · General · Usage* - with both bars data
+on one shared sub-bar shape (`app/(modules)/bas/sub-bar.ts`). Same day: the tinted ground stopped 4rem short on
+any page shorter than the window (`min-height: 100%` under border-box on an
+element bleeding into `<main>`'s padding); it is content-box now and a
+guard refuses a viewport unit on any ground element.
+`WHY-ITS-BUILT-THIS-WAY.md` § 81; `runbook.md` → *Reports: the safety
+ceiling*, *The editor's Questions section is three tabs over one
+checklist*, *Settings shows a bar of its own*, *The page background stops
+short of the bottom*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

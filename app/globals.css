@@ -437,6 +437,23 @@ body {
       transparent 58%
     );
   background-repeat: no-repeat;
+  /*
+    COVERS THE DOCUMENT, NOT THE FIRST VIEWPORT (2026-11-12).
+
+    Every shell puts this class on its outermost element with -mx-8 -my-8,
+    bleeding into <main>'s 2rem padding, and <main> is a flex item of the
+    app shell's min-h-screen row, so it is at least the window tall and
+    grows with the page. min-height: 100% resolves against main's CONTENT
+    box; with box-sizing: border-box that left exactly 4rem - main's
+    vertical padding - of flat --background showing under the ground on any
+    page shorter than the window (seen under the Usage page's ceiling card).
+    content-box adds the ground's own padding back on top of that 100%, so
+    the ground ends where main ends, and on a page taller than the window
+    it is the content's own height. No viewport unit: a 100vh here would be
+    the first screen only on a page that scrolls the document.
+    tests/design-tokens.test.ts pins both declarations and the shells.
+  */
+  box-sizing: content-box;
   min-height: 100%;
 }
 
