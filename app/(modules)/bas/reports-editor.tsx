@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { LIBRARY_SECTIONS } from "@/lib/modules/bas/reports/library";
-import { PRESET_KEYS, REPORT_PRESETS } from "@/lib/modules/bas/reports/presets";
+import { REPORT_PRESETS, type PresetKey } from "@/lib/modules/bas/reports/presets";
 import {
   ANALYSIS_WINDOWS,
   WINDOW_LABELS,
@@ -30,9 +30,9 @@ import {
   OWNER_ROW_LABEL,
   addInline,
   addRecipient,
-  applyPreset,
   changeReportState,
-  clearShared,
+  clearTab,
+  countSelection,
   createReport,
   deleteReport,
   describeNextRun,
@@ -43,11 +43,14 @@ import {
   fetchReport,
   fetchReportOptions,
   formFromSchedule,
+  orderedSelection,
+  presetQuestionIds,
+  questionMeta,
   removeInline,
   removeRecipient,
   reportStateTone,
   scheduleFromForm,
-  selectAllShared,
+  selectTab,
   selectionBody,
   selectionFromDetail,
   setInlineSave,
@@ -57,6 +60,7 @@ import {
   updateReport,
   type QuestionSelectionState,
   type ScheduleForm,
+  type SelectedQuestion,
 } from "./reports-client";
 import { Button, Dropdown, INPUT, Segmented } from "@/components/ui";
 import { TONE_INK, TONE_STYLE } from "./tone";
@@ -100,14 +104,15 @@ interface DetailsForm {
  * button, recipients save as they are changed, and the last section
  * activates, pauses, resumes or deletes.
  *
- * THE QUESTIONS ARE A CHECKLIST (2026-11-12). Every enabled shared question
- * is listed with a box, grouped by section, visible before any save; a
- * preset button ticks its set and unticks the other shared questions, and
- * the person ticks or unticks anything after. My questions have boxes too,
- * and a custom question is typed in here. Nothing is locked. The selection
- * lives in the form until Save writes it whole; the server stores it in
- * library order, then mine, then typed, and keeps the preset's name as a
- * label only while the shared part still matches.
+ * THE QUESTIONS ARE A CHECKLIST BEHIND THREE TABS (2026-11-12). Standard
+ * weekly, Daily critical-site and Custom in the segmented control, one
+ * selection behind all three: a preset's tab lists its questions with boxes,
+ * grouped by section, with Select all and Clear for that tab; Custom lists
+ * My questions with boxes and the box to type one. Switching tabs changes
+ * nothing, and nothing is locked or waits for a save. The selection lives in
+ * the form until Save writes it whole; the server stores it in library
+ * order, then mine, then typed, and keeps the preset's name as a label only
+ * while the shared part still matches.
  *
  * No Limits section: the module's safety ceiling, on the Usage page, applies
  * to every run (2026-11-12).
@@ -560,21 +565,39 @@ export function OwnerRow({ name, email }: { name: string; email: string }) {
   );
 }
 
-/** The label beside a shared question: its section, how it is answered, and what it applies to. */
-export function questionMeta(q: Pick<LibraryQuestionView, "sectionLabel" | "kind" | "appliesToLabel">): string {
-  return `${q.sectionLabel} · ${q.kind} · ${q.appliesToLabel}`;
+export { questionMeta };
+
+/** The three tabs of the Questions section. A tab is a view onto ONE selection, never a mode of the report. */
+export type QuestionsTab = "standard" | "daily" | "custom";
+
+const TAB_OF_PRESET: Record<PresetKey, QuestionsTab> = { health_weekly: "standard", health_daily: "daily" };
+const PRESET_OF_TAB: Record<Exclude<QuestionsTab, "custom">, PresetKey> = { standard: "health_weekly", daily: "health_daily" };
+const TAB_OPTIONS: Array<{ value: QuestionsTab; label: string }> = [
+  { value: "standard", label: "Standard weekly" },
+  { value: "daily", label: "Daily critical-site" },
+  { value: "custom", label: "Custom" },
+];
+
+/** Which tab opens first: the saved label's, else Custom for a report that is only custom questions, else Standard. */
+export function initialQuestionsTab(selection: QuestionSelectionState): QuestionsTab {
+  if (selection.presetClicked !== null) return TAB_OF_PRESET[selection.presetClicked];
+  return selection.library.length === 0 && selection.personal.length + selection.inline.length > 0 ? "custom" : "standard";
 }
 
 /**
- * The checklist (2026-11-12). Pure in its props, so a node test can render
- * it empty, after a preset, and with a custom question, and read the boxes.
+ * The Questions section (2026-11-12, tabs since the same day's second pass).
+ * Pure in its props, so a node test can render each tab and read the boxes.
  *
- * Every enabled shared question, grouped by section in library order, with
- * a box; a shared question since turned off is listed only while it is
- * ticked, and says so. Above the list the four buttons; below it My
- * questions with boxes, then the custom questions on this report and the
- * box to type one. The buttons act on the shared list only - mixing is the
- * point, and a preset click must not untick a question of mine.
+ * Three tabs in the segmented control - Standard weekly, Daily critical-site,
+ * Custom - and ONE selection behind them. A preset's tab lists that preset's
+ * questions, grouped by section, each with a box ticked from the shared set,
+ * and its own Select all and Clear, which act on that tab's questions only;
+ * Daily is a subset of Standard, so a question ticked on one shows ticked on
+ * the other. Custom lists My questions with boxes, the custom questions on
+ * this report, and the box to type one. Switching tabs changes nothing.
+ * Nothing is locked and nothing waits for a save: the count at the right of
+ * the tab row is the whole set, and "Show selected" lists it in the order the
+ * report will hold it.
  */
 export function QuestionsChecklist({
   library,
@@ -584,6 +607,8 @@ export function QuestionsChecklist({
   canUsePersonal,
   ownerQuestionsOnReport = [],
   disabled = false,
+  initialTab,
+  initialShowSelected = false,
 }: {
   library: LibraryQuestionView[];
   personal: PersonalQuestionView[];
@@ -594,41 +619,106 @@ export function QuestionsChecklist({
   /** For a module admin on somebody else's report: the owner's own questions, kept and shown read-only. */
   ownerQuestionsOnReport?: ReportQuestionView[];
   disabled?: boolean;
+  /** The tab to open on; decided from the selection when absent. */
+  initialTab?: QuestionsTab;
+  initialShowSelected?: boolean;
 }) {
-  const [draft, setDraft] = useState("");
-  const ticked = new Set(selection.library);
-  const tickedPersonal = new Set(selection.personal);
-  const offered = [...library]
-    .filter((q) => q.enabled || ticked.has(q.libraryQuestionId))
-    .sort((a, b) => a.position - b.position || a.libraryQuestionId.localeCompare(b.libraryQuestionId));
+  const [tab, setTab] = useState<QuestionsTab>(initialTab ?? initialQuestionsTab(selection));
+  const [showSelected, setShowSelected] = useState(initialShowSelected);
+  const count = countSelection(selection);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Shared question presets">
-          <Button size="sm" disabled={disabled} onClick={() => onChange(selectAllShared(selection, library))}>
+        <Segmented tone="light" label="Questions" options={TAB_OPTIONS} value={tab} onChange={setTab} />
+        <div className="flex items-center gap-3 text-sm">
+          <span data-testid="questions-count">
+            {count} question{count === 1 ? "" : "s"} ticked
+          </span>
+          <Button size="sm" ariaExpanded={showSelected} onClick={() => setShowSelected((s) => !s)}>
+            {showSelected ? "Hide selected" : "Show selected"}
+          </Button>
+        </div>
+      </div>
+
+      {showSelected && <SelectedQuestionsList items={orderedSelection(selection, library, personal)} />}
+
+      {tab === "custom" ? (
+        <CustomTab
+          personal={personal}
+          selection={selection}
+          onChange={onChange}
+          canUsePersonal={canUsePersonal}
+          ownerQuestionsOnReport={ownerQuestionsOnReport}
+          disabled={disabled}
+        />
+      ) : (
+        <PresetTab key={tab} presetKey={PRESET_OF_TAB[tab]} library={library} selection={selection} onChange={onChange} disabled={disabled} />
+      )}
+    </div>
+  );
+}
+
+/** The whole selection in report order. Pure, for the test and the toggle alike. */
+export function SelectedQuestionsList({ items }: { items: SelectedQuestion[] }) {
+  return (
+    <ol className="divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)]" aria-label="Selected questions">
+      {items.length === 0 && <li className="px-3 py-2 text-sm text-[var(--muted)]">Nothing ticked yet.</li>}
+      {items.map((item, i) => (
+        <li key={`${item.kind}:${i}`} className="flex items-start gap-3 px-3 py-2 text-sm">
+          <span className="w-6 shrink-0 tabular-nums text-[var(--muted)]">{i + 1}.</span>
+          <span className="min-w-0 flex-1">
+            {item.text}
+            <span className="ml-2 text-xs text-[var(--muted)]">{item.meta}</span>
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** One preset's questions with boxes ticked from the shared selection, and its own Select all and Clear. */
+function PresetTab({
+  presetKey,
+  library,
+  selection,
+  onChange,
+  disabled,
+}: {
+  presetKey: PresetKey;
+  library: LibraryQuestionView[];
+  selection: QuestionSelectionState;
+  onChange: (next: QuestionSelectionState) => void;
+  disabled: boolean;
+}) {
+  const ticked = new Set(selection.library);
+  const wanted = new Set(presetQuestionIds(presetKey, library));
+  const rows = [...library]
+    .filter((q) => wanted.has(q.libraryQuestionId) && (q.enabled || ticked.has(q.libraryQuestionId)))
+    .sort((a, b) => a.position - b.position || a.libraryQuestionId.localeCompare(b.libraryQuestionId));
+  const tickedHere = rows.filter((q) => ticked.has(q.libraryQuestionId)).length;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-[var(--muted)]">{REPORT_PRESETS[presetKey].description}</p>
+        <div className="flex gap-2" role="group" aria-label={`${REPORT_PRESETS[presetKey].label} selection`}>
+          <Button size="sm" disabled={disabled || tickedHere === rows.length} onClick={() => onChange(selectTab(selection, presetKey, library))}>
             Select all
           </Button>
-          {PRESET_KEYS.map((key) => (
-            <Button key={key} size="sm" disabled={disabled} title={REPORT_PRESETS[key].description} onClick={() => onChange(applyPreset(selection, key, library))}>
-              {REPORT_PRESETS[key].label === "Standard weekly health report" ? "Standard weekly" : "Daily critical-site"}
-            </Button>
-          ))}
-          <Button size="sm" disabled={disabled} onClick={() => onChange(clearShared(selection))}>
+          <Button size="sm" disabled={disabled || tickedHere === 0} onClick={() => onChange(clearTab(selection, presetKey, library))}>
             Clear
           </Button>
         </div>
-        <span className="text-sm text-[var(--muted)]" data-testid="questions-summary">{describeSelection(selection, library)}</span>
       </div>
-
-      <div className="max-h-[30rem] overflow-auto rounded-[var(--radius-row)] border border-[var(--border)]" role="group" aria-label="Shared questions">
+      <div className="max-h-[30rem] overflow-auto rounded-[var(--radius-row)] border border-[var(--border)]" role="group" aria-label={`${REPORT_PRESETS[presetKey].label} questions`}>
         {LIBRARY_SECTIONS.map((section) => {
-          const rows = offered.filter((q) => q.section === section.key);
-          if (rows.length === 0) return null;
+          const inSection = rows.filter((q) => q.section === section.key);
+          if (inSection.length === 0) return null;
           return (
             <div key={section.key}>
               <div className="sticky top-0 z-10 bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--muted)]">{section.label}</div>
-              {rows.map((q) => (
+              {inSection.map((q) => (
                 <label key={q.libraryQuestionId} className="flex items-start gap-3 border-t border-[var(--divider-soft)] px-3 py-2 text-sm">
                   <input
                     type="checkbox"
@@ -653,15 +743,40 @@ export function QuestionsChecklist({
             </div>
           );
         })}
-        {offered.length === 0 && <p className="px-3 py-3 text-sm text-[var(--muted)]">The shared library is empty. Run the seed.</p>}
+        {rows.length === 0 && <p className="px-3 py-3 text-sm text-[var(--muted)]">The shared library is empty. Run the seed.</p>}
       </div>
+    </div>
+  );
+}
 
+/** My questions with boxes, the custom questions on this report, and the box to type one. */
+function CustomTab({
+  personal,
+  selection,
+  onChange,
+  canUsePersonal,
+  ownerQuestionsOnReport,
+  disabled,
+}: {
+  personal: PersonalQuestionView[];
+  selection: QuestionSelectionState;
+  onChange: (next: QuestionSelectionState) => void;
+  canUsePersonal: boolean;
+  ownerQuestionsOnReport: ReportQuestionView[];
+  disabled: boolean;
+}) {
+  const [draft, setDraft] = useState("");
+  const [saveDraft, setSaveDraft] = useState(false);
+  const tickedPersonal = new Set(selection.personal);
+
+  return (
+    <div className="space-y-4">
       {canUsePersonal ? (
         <div>
           <h3 className="text-sm font-medium">My questions</h3>
           <ul className="mt-2 divide-y divide-[var(--divider-soft)] rounded-[var(--radius-row)] border border-[var(--border)]" aria-label="My questions">
             {personal.length === 0 && (
-              <li className="px-3 py-2 text-sm text-[var(--muted)]">Nothing saved yet. Tick &ldquo;save for reuse&rdquo; on a custom question below to keep it here.</li>
+              <li className="px-3 py-2 text-sm text-[var(--muted)]">Nothing saved yet. Tick &ldquo;save for reuse&rdquo; on a question below to keep it here.</li>
             )}
             {personal.map((p) => (
               <li key={p.personalQuestionId}>
@@ -735,14 +850,20 @@ export function QuestionsChecklist({
             size="sm"
             disabled={disabled || draft.trim().length === 0}
             onClick={() => {
-              onChange(addInline(selection, draft));
+              onChange(addInline(selection, draft, canUsePersonal && saveDraft));
               setDraft("");
             }}
           >
             Add
           </Button>
+          {canUsePersonal && (
+            <label className="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" checked={saveDraft} disabled={disabled} onChange={(e) => setSaveDraft(e.target.checked)} />
+              save for reuse
+            </label>
+          )}
           <span className="text-xs text-[var(--muted)]">
-            Saved with the report. Custom questions are answered by the Analyze planner when that phase runs.
+            This report only unless saved for reuse. Saved with the report; answered by the Analyze planner when that phase runs.
           </span>
         </div>
       </div>

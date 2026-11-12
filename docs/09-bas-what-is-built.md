@@ -911,24 +911,42 @@ single zone to resolve a calendar date in.
 **What changed.** Three product decisions on the Reports tab, in one
 branch (`feat/bas-reports-editor-questions-usage`).
 
-**The editor's Questions section is a checklist.** Every enabled shared
-question with a checkbox, grouped by section in library order, each row
-with its number, text and *section · computed/planner · applies to*,
-visible on a new report before any save. Above it *Select all*, *Standard
-weekly*, *Daily critical-site*, *Clear* - a preset ticks its set and
-unticks the other shared questions, and leaves My questions and the custom
-questions alone. Below: My questions with checkboxes, then the custom
-questions on this report (kind `inline`, with a *save for reuse* tick that
-also stores one in My questions), and *Add a custom question to this
-report*. The selection travels whole as `questions` on create and update
+**The editor's Questions section is three tabs over one checklist.** The
+segmented control it always had - *Standard weekly*, *Daily critical-site*,
+*Custom* - with each tab a checklist and ONE selection behind all three. A
+preset's tab lists that preset's questions grouped by section, each with a
+box ticked from the shared set, with *section · computed/planner · applies
+to* beside it, and its own *Select all* and *Clear* acting on that tab's
+questions only; Daily is a subset of Standard, so a tick on one shows on the
+other, and switching tabs changes nothing. *Custom* lists My questions with
+boxes, the custom questions on this report (kind `inline`, with a *save for
+reuse* tick per question and one on the box to type one), and the box
+itself. The count at the right of the tab row is the whole set and *Show
+selected* lists it in report order. Visible on a new report before any
+save. The selection travels whole as `questions` on create and update
 (`lib/validation/bas-reports.ts`), the service validates it and stores it
 in one order - shared in library order, then personal, then inline
-(`resolveSelection`, `writeQuestions`) - and `preset_key` is a label of
-which preset was last clicked, kept while the shared part matches
+(`resolveSelection`, `writeQuestions`) - and `preset_key` is a label of the
+preset whose *Select all* was last used, kept while the shared part matches
 (`presetMatching`). Nothing is locked: `preset_locked`, `invalid_reorder`,
 `question_not_found`, the per-question routes and the move buttons are
 gone. A Phase 1 preset report round-trips through the new save to the same
-rows (`tests/bas-reports-routes.test.ts`). The Questions page is unchanged.
+rows (`tests/bas-reports-routes.test.ts`); the tabs and the shared selection
+are `tests/bas-reports-ui.test.tsx`. The Questions page is unchanged.
+(The first cut that day was a flat list with four buttons; the tabs
+replaced it the same day, and the one selection behind them is what
+survived.)
+
+**Settings → Usage, and the ground.** Settings gained a row of its own on
+the Cost Intelligence shape (`settings-nav.tsx`, the kit's TabBar):
+*General*, the screen Settings always was, and *Usage*, the Reports Usage
+view at `/bas/settings/usage` - one component, two routes, the ceiling card
+editable because every Settings page is module-admin. The Reports bar is
+unchanged. And the tinted ground on every shell now covers the document:
+`.dashboard-ground` is `box-sizing: content-box` with `min-height: 100%`,
+because the border-box version stopped 4rem short on any page shorter than
+the window (`runbook.md` → *The page background stops short of the
+bottom*; `tests/design-tokens.test.ts`). No colour changed.
 
 **One safety ceiling.** `bas_report_settings`, one row
 (`bas_reports_safety_ceiling`): `ceiling_usd` (default 10.00, at most

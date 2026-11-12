@@ -5,9 +5,10 @@ import { BAS_LIBRARY_QUESTIONS } from "./library";
  * preset", as changed on 2026-11-12). A preset is an ordered list of library
  * keys that one button in the editor ticks - and nothing more. Until
  * 2026-11-12 a preset report's questions were fixed and the question routes
- * refused to edit them; now every report's questions are a checklist, a
- * preset button ticks its set and unticks the other shared questions, and
- * the person ticks or unticks anything after. Nothing is locked.
+ * refused to edit them; now every report's questions are a checklist behind
+ * three tabs - a preset's tab lists its questions with boxes and its own
+ * Select all and Clear, one selection shared across the tabs - and the
+ * person ticks or unticks anything. Nothing is locked.
  *
  * `preset_key` on a definition is a LABEL: which preset was last clicked,
  * kept while the report's shared questions still match that set and
@@ -40,14 +41,14 @@ export const REPORT_PRESETS: Readonly<Record<PresetKey, ReportPreset>> = {
     key: "health_weekly",
     label: "Standard weekly health report",
     description:
-      "Ticks the spec's twenty questions, so reports compare week to week and building to building. Tick or untick anything after.",
+      "The spec's twenty questions, so reports compare week to week and building to building. Tick or untick any of them.",
     questionKeys: ALL_TWENTY,
   },
   health_daily: {
     key: "health_daily",
     label: "Daily critical-site report",
     description:
-      "Ticks Summary, Space Comfort and Data Health only, for hospitals and labs that get a daily run. Tick or untick anything after.",
+      "Summary, Space Comfort and Data Health only, for hospitals and labs that get a daily run. Tick or untick any of them.",
     questionKeys: ALL_TWENTY.filter((key) => {
       const q = BAS_LIBRARY_QUESTIONS.find((row) => row.key === key);
       return q !== undefined && ["summary", "space_comfort", "data_health"].includes(q.section);

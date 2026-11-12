@@ -5,8 +5,8 @@ import { describe, expect, it, vi } from "vitest";
  * router stubbed - the bas-tab-bar pattern. What is asserted is the HTML: the
  * owner row and its wording, the external chip, the honest empty states, the
  * Reports bar and its Back item (2026-11-11), the two clocks beside a next
- * run, the questions checklist and its buttons (2026-11-12), and the Usage
- * page drawn from a run rather than a placeholder (2026-11-12).
+ * run, the questions checklist - three tabs, one selection (2026-11-12) -
+ * and the Usage page drawn from a run rather than a placeholder (2026-11-12).
  */
 /** The router the shell sees; each bar test sets the path it renders for. */
 const nav = vi.hoisted(() => ({ pathname: "/bas/reports/library", search: "" }));
@@ -34,7 +34,7 @@ import { activeReportsItemHref } from "@/app/(modules)/bas/reports/bar";
  */
 const Shell = BasShell as unknown as (props: { blurb: string; canAdminister?: boolean }) => React.ReactNode;
 import { ReportsTable } from "@/app/(modules)/bas/reports-list";
-import { OwnerRow, QuestionsChecklist, StateChip, questionMeta } from "@/app/(modules)/bas/reports-editor";
+import { OwnerRow, QuestionsChecklist, SelectedQuestionsList, StateChip, initialQuestionsTab, type QuestionsTab } from "@/app/(modules)/bas/reports-editor";
 import { SharedLibraryTable } from "@/app/(modules)/bas/reports-library";
 import { GeneratedPlaceholder } from "@/app/(modules)/bas/reports-placeholders";
 import { ReportsUsageView, SafetyCeilingCard } from "@/app/(modules)/bas/reports-usage";
@@ -42,17 +42,18 @@ import {
   EXTERNAL_CHIP,
   OWNER_ROW_LABEL,
   addInline,
-  applyPreset,
-  clearShared,
+  clearTab,
   describeNextRun,
   describeRecipients,
   describeSelection,
   describeStations,
   emptySelection,
+  orderedSelection,
   presetLabelFor,
+  questionMeta,
   reportStateTone,
   scheduleFromForm,
-  selectAllShared,
+  selectTab,
   selectionBody,
   selectionFromDetail,
   setInlineSave,
@@ -63,7 +64,7 @@ import {
 
 const NY = "America/New_York";
 
-function list(over: Partial<ReportsList> = {}): ReportsList {
+function list0(over: Partial<ReportsList> = {}): ReportsList {
   const base = {
     reportId: "1",
     name: "Weekly health",
@@ -105,7 +106,7 @@ function list(over: Partial<ReportsList> = {}): ReportsList {
 
 describe("the list", () => {
   it("shows every column the plan names, never a run, and the owner-inclusive recipient count", () => {
-    const html = renderToStaticMarkup(createElement(ReportsTable, { data: list() }));
+    const html = renderToStaticMarkup(createElement(ReportsTable, { data: list0() }));
     expect(html).toContain("Weekly health");
     expect(html).toContain("Steel Place");
     expect(html).toContain("Every Monday at 06:00 (America/New_York) · last 7 days");
@@ -124,9 +125,9 @@ describe("the list", () => {
   });
 
   it("is honest when empty, and loud when the list lost a row", () => {
-    const empty = renderToStaticMarkup(createElement(ReportsTable, { data: list({ reports: [], reportsInDatabase: 0 }) }));
+    const empty = renderToStaticMarkup(createElement(ReportsTable, { data: list0({ reports: [], reportsInDatabase: 0 }) }));
     expect(empty).toContain("No reports yet");
-    const lost = renderToStaticMarkup(createElement(ReportsTable, { data: list({ reportsInDatabase: 4 }) }));
+    const lost = renderToStaticMarkup(createElement(ReportsTable, { data: list0({ reportsInDatabase: 4 }) }));
     expect(lost).toContain("This list shows 3 of the 4 reports you may see");
   });
 });
@@ -255,7 +256,7 @@ describe("the Usage page", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The questions checklist (2026-11-12)
+// The questions checklist (2026-11-12): three tabs, one selection
 // ---------------------------------------------------------------------------
 
 /** The seeded library as the editor receives it, ids 1..20 in position order. */
@@ -282,101 +283,154 @@ const LIBRARY: LibraryQuestionView[] = [...BAS_LIBRARY_QUESTIONS]
 const MINE: PersonalQuestionView[] = [
   { personalQuestionId: "41", text: "Did the boiler cycle overnight?", usedInReports: 0, createdAt: "2026-11-10T00:00:00.000Z", updatedAt: "2026-11-10T00:00:00.000Z" },
 ];
-const idsOf = (keys: readonly string[]) => LIBRARY.filter((q) => keys.includes(q.key)).map((q) => q.libraryQuestionId);
-const checklist = (selection: ReturnType<typeof emptySelection>, canUsePersonal = true) =>
-  renderToStaticMarkup(createElement(QuestionsChecklist, { library: LIBRARY, personal: MINE, selection, onChange: () => undefined, canUsePersonal }));
+const DAILY_IDS = idsOfKeys(REPORT_PRESETS.health_daily.questionKeys);
+function idsOfKeys(keys: readonly string[]): string[] {
+  return LIBRARY.filter((q) => keys.includes(q.key)).map((q) => q.libraryQuestionId);
+}
+const checklist = (selection: ReturnType<typeof emptySelection>, tab: QuestionsTab, extra: { canUsePersonal?: boolean; showSelected?: boolean } = {}) =>
+  renderToStaticMarkup(
+    createElement(QuestionsChecklist, {
+      library: LIBRARY,
+      personal: MINE,
+      selection,
+      onChange: () => undefined,
+      canUsePersonal: extra.canUsePersonal ?? true,
+      initialTab: tab,
+      initialShowSelected: extra.showSelected ?? false,
+    }),
+  );
 const checkedBoxes = (html: string) => (html.match(/<input type="checkbox"[^>]*checked=""/g) ?? []).length;
+const boxes = (html: string) => (html.match(/<input type="checkbox"/g) ?? []).length;
 /** React escapes text as HTML; the spec's questions carry apostrophes. */
 const esc = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
-const boxes = (html: string) => (html.match(/<input type="checkbox"/g) ?? []).length;
+const tabRadios = (html: string) => [...html.matchAll(/<button[^>]*role="radio"[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+const checkedTab = (html: string) => /<button[^>]*role="radio"[^>]*aria-checked="true"[^>]*>([^<]*)<\/button>/.exec(html)?.[1] ?? null;
 
 describe("the questions checklist", () => {
-  it("lists every enabled shared question with a box, its number and its meta, grouped by section, before any save", () => {
-    const html = checklist(emptySelection());
-    // Twenty shared boxes, one for my question; nothing ticked.
-    expect(boxes(html)).toBe(21);
+  it("is three tabs in the segmented control, the count at the right, and nothing ticked on a new report", () => {
+    const html = checklist(emptySelection(), "standard");
+    expect(tabRadios(html)).toEqual(["Standard weekly", "Daily critical-site", "Custom"]);
+    expect(checkedTab(html)).toBe("Standard weekly");
+    expect(html).toContain("0 questions ticked");
+    expect(html).toContain(">Show selected<");
+    expect(html).not.toMatch(/locked/i);
+    expect(html).not.toContain("Save the draft");
+    // Standard: the twenty with boxes, their number and meta, grouped by section.
+    expect(boxes(html)).toBe(20);
     expect(checkedBoxes(html)).toBe(0);
-    expect(html).toContain("No questions ticked");
     for (const q of LIBRARY) {
       expect(html).toContain(esc(q.text));
       expect(html).toContain(esc(questionMeta(q)));
     }
     expect(questionMeta(LIBRARY[2]!)).toBe("Space Comfort · computed · All");
-    for (const section of ["Summary", "Space Comfort", "Data Health"]) expect(html).toContain(`>${section}<`);
-    for (const button of ["Select all", "Standard weekly", "Daily critical-site", "Clear"]) expect(html).toContain(`>${button}<`);
-    expect(html).toContain("My questions");
-    expect(html).toContain("Did the boiler cycle overnight?");
-    expect(html).toContain("Add a custom question to this report");
-    expect(html).not.toMatch(/locked/i);
-    // A turned-off question is not offered...
-    const off = renderToStaticMarkup(createElement(QuestionsChecklist, { library: LIBRARY.map((q, i) => (i === 0 ? { ...q, enabled: false } : q)), personal: [], selection: emptySelection(), onChange: () => undefined, canUsePersonal: true }));
-    expect(boxes(off)).toBe(19);
-    // ...unless it is already ticked, and then it says so.
-    const offTicked = renderToStaticMarkup(createElement(QuestionsChecklist, { library: LIBRARY.map((q, i) => (i === 0 ? { ...q, enabled: false } : q)), personal: [], selection: { ...emptySelection(), library: ["1"] }, onChange: () => undefined, canUsePersonal: true }));
-    expect(boxes(offTicked)).toBe(20);
-    expect(offTicked).toContain("turned off");
+    for (const section of ["Summary", "Space Comfort", "VAV", "Data Health"]) expect(html).toContain(`>${section}<`);
+    for (const button of ["Select all", "Clear"]) expect(html).toContain(`>${button}<`);
+    expect(html).toContain("The spec&#x27;s twenty questions");
+    // Daily: its six, and nothing else's.
+    const daily = checklist(emptySelection(), "daily");
+    expect(checkedTab(daily)).toBe("Daily critical-site");
+    expect(boxes(daily)).toBe(6);
+    expect(daily).toContain(esc(LIBRARY[19]!.text));
+    expect(daily).not.toContain(esc(LIBRARY[5]!.text));
+    // Custom: My questions with a box, the custom list, the box to type one with its save tick.
+    const custom = checklist(emptySelection(), "custom");
+    expect(checkedTab(custom)).toBe("Custom");
+    expect(boxes(custom)).toBe(2);
+    expect(custom).toContain(">My questions<");
+    expect(custom).toContain("Did the boiler cycle overnight?");
+    expect(custom).toContain("Add a custom question to this report");
+    expect(custom).toContain("save for reuse");
+    expect(custom).toContain("This report only unless saved for reuse");
+    // Which tab opens: the saved label's, Custom for a custom-only report, Standard otherwise.
+    expect(initialQuestionsTab(emptySelection())).toBe("standard");
+    expect(initialQuestionsTab({ ...emptySelection(), presetClicked: "health_daily" })).toBe("daily");
+    expect(initialQuestionsTab({ ...emptySelection(), personal: ["41"] })).toBe("custom");
+    expect(initialQuestionsTab({ ...emptySelection(), library: ["3"], personal: ["41"] })).toBe("standard");
   });
 
-  it("a preset button ticks its set and unticks the other shared questions, leaving mine and the custom ones alone; Select all and Clear act on the shared list only", () => {
+  it("holds ONE selection across the tabs: ticks made on Standard show on Daily, Select all and Clear act on their tab only, and switching never clears", () => {
     let state = emptySelection();
     state = togglePersonal(state, "41", true);
     state = addInline(state, "Which VAVs were warm while occupied?");
-    state = toggleLibrary(state, idsOf(["q13_hw_supply"])[0] ?? "13", true);
+    // Q1, Q3 (both on Daily), Q7, Q10 (Standard only) ticked on the Standard tab.
+    for (const id of idsOfKeys(["q01_building_status", "q03_zone_comfort", "q07_vav_damper_full_missed_setpoint", "q10_static_tracks_setpoint"])) state = toggleLibrary(state, id, true);
+    expect(state.library).toHaveLength(4);
+    const standard = checklist(state, "standard");
+    expect(checkedBoxes(standard)).toBe(4);
+    expect(standard).toContain("6 questions ticked");
+    // The Daily tab shows the two it shares, ticked, and nothing was cleared by looking.
+    const daily = checklist(state, "daily");
+    expect(boxes(daily)).toBe(6);
+    expect(checkedBoxes(daily)).toBe(2);
+    expect(daily).toContain("6 questions ticked");
+    expect(checkedBoxes(checklist(state, "custom"))).toBe(1);
 
-    const daily = applyPreset(state, "health_daily", LIBRARY);
-    expect(daily.library).toEqual(idsOf(REPORT_PRESETS.health_daily.questionKeys));
-    expect(daily.presetClicked).toBe("health_daily");
-    expect(daily.personal).toEqual(["41"]);
-    expect(daily.inline).toHaveLength(1);
-    expect(presetLabelFor(daily, LIBRARY)).toBe("health_daily");
-    expect(describeSelection(daily, LIBRARY)).toBe("8 questions · Daily critical-site report + 2 custom");
-    const dailyHtml = checklist(daily);
-    expect(checkedBoxes(dailyHtml)).toBe(7);
+    // Select all on Daily adds Daily's other four and keeps Q7 and Q10; it names Daily as the label candidate.
+    const dailyAll = selectTab(state, "health_daily", LIBRARY);
+    expect(dailyAll.library).toHaveLength(8);
+    expect(dailyAll.presetClicked).toBe("health_daily");
+    expect(presetLabelFor(dailyAll, LIBRARY)).toBeNull(); // eight shared is not the daily six
+    expect(dailyAll.personal).toEqual(["41"]);
+    expect(dailyAll.inline).toHaveLength(1);
+    // Clear on Daily unticks Daily's six and nothing else.
+    const dailyCleared = clearTab(dailyAll, "health_daily", LIBRARY);
+    expect(dailyCleared.library.sort()).toEqual(idsOfKeys(["q07_vav_damper_full_missed_setpoint", "q10_static_tracks_setpoint"]).sort());
+    expect(dailyCleared.presetClicked).toBeNull();
+    expect(dailyCleared.personal).toEqual(["41"]);
+    expect(dailyCleared.inline).toHaveLength(1);
 
-    const weekly = applyPreset(daily, "health_weekly", LIBRARY);
+    // Select all on Standard is the standard twenty, and the label follows; untick one and it goes.
+    const weekly = selectTab(dailyCleared, "health_weekly", LIBRARY);
     expect(weekly.library).toHaveLength(20);
+    expect(presetLabelFor(weekly, LIBRARY)).toBe("health_weekly");
     expect(describeSelection(weekly, LIBRARY)).toBe("22 questions · Standard weekly health report + 2 custom");
-    expect(checkedBoxes(checklist(weekly))).toBe(21);
-
-    // Untick one: nothing is locked, and the label goes while the count stays honest.
-    const varied = toggleLibrary(weekly, idsOf(["q03_zone_comfort"])[0]!, false);
+    expect(checkedBoxes(checklist(weekly, "daily"))).toBe(6);
+    const varied = toggleLibrary(weekly, DAILY_IDS[2]!, false);
     expect(varied.presetClicked).toBe("health_weekly");
     expect(presetLabelFor(varied, LIBRARY)).toBeNull();
     expect(describeSelection(varied, LIBRARY)).toBe("21 questions · 19 shared + 2 custom");
-
-    // Select all is the twenty with no label; Clear is none, still with mine and the custom one.
-    const all = selectAllShared(varied, LIBRARY);
-    expect(all.library).toHaveLength(20);
-    expect(all.presetClicked).toBeNull();
-    expect(presetLabelFor(all, LIBRARY)).toBeNull();
-    const cleared = clearShared(all);
+    // Clear on Standard from the full twenty leaves only the custom ones; Select all skips a turned-off question.
+    const cleared = clearTab(weekly, "health_weekly", LIBRARY);
     expect(cleared.library).toEqual([]);
     expect(cleared.personal).toEqual(["41"]);
-    expect(cleared.inline).toHaveLength(1);
     expect(describeSelection(cleared, LIBRARY)).toBe("2 questions · 2 custom");
+    const withOneOff = LIBRARY.map((q, i) => (i === 0 ? { ...q, enabled: false } : q));
+    expect(selectTab(emptySelection(), "health_weekly", withOneOff).library).toHaveLength(19);
   });
 
-  it("produces the body the API takes - shared in library order, then mine, then typed - and round-trips a saved report", () => {
+  it("lists the whole selection in report order under Show selected, and produces the body the API takes", () => {
     let state = emptySelection();
     state = addInline(state, "Typed one");
     state = toggleLibrary(state, "20", true);
     state = togglePersonal(state, "41", true);
     state = toggleLibrary(state, "3", true);
     state = setInlineSave(state, state.inline[0]!.key, true);
+    expect(orderedSelection(state, LIBRARY, MINE).map((s) => [s.kind, s.text.slice(0, 12), s.meta])).toEqual([
+      ["library", "What percent", "Q3 · Space Comfort · computed · All"],
+      ["library", "Which points", "Q20 · Data Health · computed · All"],
+      ["personal", "Did the boil", "my question · planner"],
+      ["inline", "Typed one", "this report only · planner · saved for reuse on save"],
+    ]);
+    const shown = checklist(state, "daily", { showSelected: true });
+    expect(shown).toContain(">Hide selected<");
+    expect(shown).toContain('aria-label="Selected questions"');
+    expect(shown).toContain("Typed one");
+    expect(shown).toContain("4 questions ticked");
+    const list = renderToStaticMarkup(createElement(SelectedQuestionsList, { items: [] }));
+    expect(list).toContain("Nothing ticked yet");
     expect(selectionBody(state, LIBRARY)).toEqual([
       { kind: "library", libraryQuestionId: "3" },
       { kind: "library", libraryQuestionId: "20" },
       { kind: "personal", personalQuestionId: "41" },
       { kind: "inline", text: "Typed one", saveToLibrary: true },
     ]);
-    const html = checklist(state);
-    expect(html).toContain("Typed one");
-    expect(html).toContain("save for reuse");
-    expect(html).toContain("this report only");
+    const custom = checklist(state, "custom");
+    expect(custom).toContain("Typed one");
+    expect(custom).toContain("this report only");
 
     // A module admin on somebody else's report: no My questions, no save for reuse, the owner's kept and named.
     const adminHtml = renderToStaticMarkup(createElement(QuestionsChecklist, {
-      library: LIBRARY, personal: [], selection: state, onChange: () => undefined, canUsePersonal: false,
+      library: LIBRARY, personal: [], selection: state, onChange: () => undefined, canUsePersonal: false, initialTab: "custom",
       ownerQuestionsOnReport: [{ questionId: "9", position: 2, kind: "personal", text: "Did the boiler cycle overnight?", libraryQuestionId: null, libraryKey: null, section: null, sectionLabel: null, libraryKind: null, appliesToLabel: null, personalQuestionId: "41" }],
     }));
     expect(adminHtml).not.toContain("save for reuse");
@@ -386,7 +440,7 @@ describe("the questions checklist", () => {
 
     // From a saved report: the detail becomes the same selection, label included.
     const detail = {
-      ...list().reports[0]!,
+      ...list0().reports[0]!,
       stationIds: [], stations: [], recipients: [],
       questions: [
         { questionId: "1", position: 0, kind: "library" as const, text: "t", libraryQuestionId: "3", libraryKey: "q03_zone_comfort", section: "space_comfort", sectionLabel: "Space Comfort", libraryKind: "computed" as const, appliesToLabel: "All", personalQuestionId: null },

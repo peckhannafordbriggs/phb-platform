@@ -4,11 +4,13 @@ import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { BasShell } from "../bas-shell";
 import { BasSettings } from "../settings-view";
 import { basTab } from "../tabs";
+import { BasSettingsNav } from "./settings-nav";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Settings - the module's third tab, at /bas/settings. Read-only in B7.2.
+ * Settings - the module's last tab, at /bas/settings; General on the
+ * Settings row since 2026-11-12, beside Usage. Read-only in B7.2.
  *
  * `requireModuleAdmin`, not `requireModuleAccess`: the BAS grant is not enough,
  * the grant has to carry `is_module_admin`. A BAS user without it gets 404 here
@@ -33,6 +35,8 @@ export default async function BasSettingsPage() {
 
   return (
     <BasShell blurb={basTab("/bas/settings").blurb} canAdminister>
+      {/* General, the first of the Settings row (2026-11-12); Usage is the sibling at /bas/settings/usage. */}
+      <BasSettingsNav />
       <BasSettings />
     </BasShell>
   );

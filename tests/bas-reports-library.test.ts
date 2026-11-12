@@ -126,7 +126,7 @@ describe("the two presets", () => {
       expect(preset.label.length).toBeGreaterThan(0);
       // Nothing is locked since 2026-11-12: a preset is a button that ticks a set.
       expect(`${preset.label} ${preset.description}`).not.toMatch(/locked|fixed order|cannot be edited/i);
-      expect(preset.description).toMatch(/Ticks /);
+      expect(preset.description).toMatch(/Tick or untick any of them\.$/);
     }
     // The list is a readonly array; a caller that mutated it would be mutating
     // the preset for every report after it. TypeScript refuses the write, and

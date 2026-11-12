@@ -24,6 +24,7 @@ import { BasShell } from "@/app/(modules)/bas/bas-shell";
 import { CollectionHealth } from "@/app/(modules)/bas/collection-health";
 import { Dashboard, DashboardCards, describeCounts } from "@/app/(modules)/bas/dashboard";
 import { BasSettings } from "@/app/(modules)/bas/settings-view";
+import { BasSettingsNav } from "@/app/(modules)/bas/settings/settings-nav";
 import { BAS_TABS, basTab } from "@/app/(modules)/bas/tabs";
 import {
   POINT_PARAM,
@@ -408,7 +409,9 @@ describe("the module opens on Projects", () => {
     const element = (await SettingsPage()) as ShellElement;
 
     expect(element.type).toBe(BasShell);
-    expect(element.props.children.type).toBe(BasSettings);
+    // The Settings row (General / Usage, 2026-11-12) renders first; the Settings view is still the page.
+    const children = ([] as Array<{ type: unknown }>).concat(element.props.children as unknown as Array<{ type: unknown }>);
+    expect(children.map((c) => c.type)).toEqual([BasSettingsNav, BasSettings]);
   });
 
   it("/bas/points still opens Point Explorer with its first point, unchanged", async () => {

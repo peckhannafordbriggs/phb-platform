@@ -11243,6 +11243,49 @@ the runs list's own visibility, `visibilityWhere`). A red line under the
 tiles - *These figures cover N of the M finished runs you may see* - means
 the tallies and the joinless count disagree; report that.
 
+### Settings has a row of its own: General and Usage
+
+**Symptom.** *Settings* opens with a second row under the module tabs -
+*General · Usage* - and somebody asks what Usage is doing there, or a
+bookmark to `/bas/settings/usage` lands on a page with both rows marked.
+
+**Cause.** Not a fault (2026-11-12), the Cost Intelligence shape. *General*
+is the Settings screen as it always was (projects, buildings, stations,
+credentials, occupied hours); *Usage* is the Reports Usage view at a second
+route - one component, two routes - so the spend figures and the safety
+ceiling are reachable from the module's admin surface without opening the
+Reports bar, which is unchanged. Both pages are `requireModuleAdmin`, like
+every Settings page; the module bar keeps *Settings* active for either
+(longest prefix), and the row carries the query string so a search on
+General survives a look at Usage. `tests/bas-settings-nav.test.tsx`.
+
+**Fix.** Nothing.
+
+### The page background stops short of the bottom
+
+**Symptom.** On a page shorter than the window - the Usage page under its
+ceiling card, Home, a module placeholder - the tinted ground ends a few
+lines above the bottom and the flat lighter grey of `--background` shows
+beneath it.
+
+**Cause.** Fixed 2026-11-12. `.dashboard-ground` sits on each shell's
+outermost element with `-mx-8 -my-8`, bleeding into `<main>`'s 2rem
+padding, and declared `min-height: 100%` under `box-sizing: border-box` -
+so it resolved to main's CONTENT box and stopped exactly 4rem (main's
+vertical padding) short whenever the content was shorter than the window.
+On a page taller than the window the ground is the content's own height
+and nothing shows. Cost Intelligence and Freeze Protection size their
+ground to the viewport and scroll inside it, so they never showed it.
+
+**Fix.** Already in: the ground is `box-sizing: content-box` with the
+same `min-height: 100%`, so its own padding is added on top of main's
+content height and it ends where main ends; no viewport unit anywhere, so
+a scrolling page is covered to its last line. `tests/design-tokens.test.ts`
+→ *covers the whole document* pins the two declarations, the app shell's
+`min-h-screen` row and every shell's `-mx-8 -my-8`, and refuses a `100vh`
+on any ground element. If a band comes back, something put a height on a
+ground element or a padding on `<main>` that the shell does not bleed into.
+
 ### The Reports tab shows a bar of its own, and the module tabs are gone
 
 **Symptom.** Opening *Reports* replaces Projects, Point Explorer, Analyze,
@@ -11278,32 +11321,39 @@ report, the module's). None of them is
 on the audit SCREEN (*The audit log screen does not show a mail send, a BAS
 question or a profile change*); read them with SQL on `metadata->>'reportId'`.
 
-### The editor's Questions section is a checklist, and a preset is not locked
+### The editor's Questions section is three tabs over one checklist, and a preset is not locked
 
-**Symptom.** Somebody asks where *Custom* went, or why a report labelled
-*Standard weekly health report* has 22 questions, or why the label
-disappeared after they unticked one question; or an old build of the
-editor gets `409 preset_locked`'s successor - nothing - because the
-per-question routes are gone.
+**Symptom.** Somebody asks why a report labelled *Standard weekly health
+report* has 22 questions, or why the label disappeared after they unticked
+one question, or why ticks made on the Standard tab are already ticked on
+the Daily tab; or an old build of the editor cannot find the per-question
+routes.
 
-**Cause.** Not a fault (2026-11-12). Every enabled shared question is
-listed with a checkbox, grouped by section; *Select all*, *Standard
-weekly*, *Daily critical-site* and *Clear* act on that shared list (a
-preset ticks its set and unticks the other shared questions, and leaves
-My questions and the custom questions alone); the person ticks or unticks
-anything after. `preset_key` is a **label** of which preset was last
-clicked, kept while the shared selection still matches that set - custom
-questions do not count against it, so "the standard weekly plus two of
-mine" keeps the label - and cleared by the service as soon as it does not.
-*Select all* is not a click on a preset, so the same twenty by that route
-carry no label. The selection is saved whole with the report
-(`questions` on `POST /api/modules/bas/reports` and `PATCH .../{id}`) and
-stored in one order: shared in library order, then the owner's own, then
-typed; the per-question add / remove / reorder routes were removed with
-the lock. A shared question turned off after it was saved stays on a
-report while it is ticked, and reads *turned off* in the list.
+**Cause.** Not a fault (2026-11-12). The Questions section is the segmented
+control it always was - *Standard weekly*, *Daily critical-site*, *Custom* -
+but each tab is a checklist over ONE selection. A preset's tab lists that
+preset's questions grouped by section, each with a box, and its own *Select
+all* and *Clear*, which act on that tab's questions only; Daily is a subset
+of Standard, so a question ticked on one is ticked on the other. *Custom*
+lists My questions with boxes, the custom questions on this report, and
+the box to type one (this report only unless *save for reuse* is ticked).
+Switching tabs never clears anything; only the untick of a box, or *Clear*
+on a tab, removes a question. The count at the right of the tab row is the
+whole set and *Show selected* lists it in the order the report will hold
+it. `preset_key` is a **label**: which preset's *Select all* was last used
+(or the saved report's label), kept while the shared selection still
+matches that set - custom questions do not count against it, so "the
+standard weekly plus two of mine" keeps the label - and cleared by the
+service as soon as it does not. The selection is saved whole with the
+report (`questions` on `POST /api/modules/bas/reports` and `PATCH
+.../{id}`) and stored in one order: shared in library order, then the
+owner's own, then typed; the per-question add / remove / reorder routes
+were removed with the lock. A shared question turned off after it was
+saved stays on a report while it is ticked, and reads *turned off* on its
+tab.
 
-**Fix.** Nothing. To apply a preset again, click its button and save.
+**Fix.** Nothing. To take a preset whole, open its tab and press *Select
+all*, then save.
 
 ### Creating or saving a report answers 400 `limits_removed`
 
@@ -11827,7 +11877,8 @@ raising the timeout first, and `tests/deploy-guards.test.ts` holds the
 numbers to each other - the constant, the migration's CHECK and default,
 and the validation's bound.
 
-**Changing it.** Usage → *Safety ceiling* → the two fields → *Save
+**Changing it.** Reports → Usage, or Settings → Usage (the same view at a
+second route since 2026-11-12) → *Safety ceiling* → the two fields → *Save
 ceiling*. Either half or both; whole cents, whole minutes; at most $1,000
 and 25 minutes (the database CHECKs are the same bounds). Audited as
 `bas.report_ceiling_changed` with both halves before and after, and the

@@ -3135,26 +3135,31 @@ the compiled artefact too, in the same CI run, before the Dockerfile changes.
 
 ## 81 · A report's questions are a checklist, a preset is a label, and the only cap is the module's
 
-**What I did (2026-11-12).** The editor's Questions section lists every
-enabled shared question with a checkbox, grouped by section in library
-order, visible on a new report before any save, with *Select all*,
-*Standard weekly*, *Daily critical-site* and *Clear* above it; My questions
-with checkboxes below; and a box to type a custom question for this report,
-each typed one with a *save for reuse* tick. The selection is saved whole
-with the report and stored in one order - shared in library order, then the
-owner's own, then typed. `preset_key` stays on the definition as a label of
-which preset was last clicked, kept while the shared selection still
-matches that set and cleared by the service the moment it does not; it
-restricts nothing, and the `preset_locked` refusal and the per-question
-add / remove / reorder routes are gone. The per-report cost budget and time
-cap are gone too: one row, `bas_report_settings`, holds the module's safety
-ceiling - $10.00 and 25 minutes per run by default - edited by BAS module
-admins from the Usage page and read by the engine for every run; the two
-definition columns are dropped and the create / update APIs refuse the keys
-with 400. The Usage page itself was a Phase 1 placeholder that said *There
-have been no runs* without asking; it now reads `bas_report_runs` on the
-same components as Cost Intelligence's *Usage & cost*, which moved to
-`components/ui/Usage.tsx` for both modules to share.
+**What I did (2026-11-12).** The editor's Questions section keeps its
+segmented control - *Standard weekly*, *Daily critical-site*, *Custom* - and
+makes each tab a checklist over ONE selection. A preset's tab lists that
+preset's questions grouped by section, each with a box ticked from the
+shared set, with its own *Select all* and *Clear* that act on that tab's
+questions only; Daily is a subset of Standard, so a tick on one shows on the
+other, and switching tabs changes nothing. *Custom* lists My questions with
+boxes, the custom questions on this report with a *save for reuse* tick,
+and the box to type one. The count at the right of the tab row is the whole
+set and *Show selected* lists it in report order. The selection is saved
+whole with the report and stored in one order - shared in library order,
+then the owner's own, then typed. `preset_key` stays on the definition as a
+label of the preset whose *Select all* was last used, kept while the shared
+selection still matches that set and cleared by the service the moment it
+does not; it restricts nothing, and the `preset_locked` refusal and the
+per-question add / remove / reorder routes are gone. The per-report cost
+budget and time cap are gone too: one row, `bas_report_settings`, holds the
+module's safety ceiling - $10.00 and 25 minutes per run by default - edited
+by BAS module admins from the Usage page (Reports → Usage, or Settings →
+Usage, the same view at a second route) and read by the engine for every
+run; the two definition columns are dropped and the create / update APIs
+refuse the keys with 400. The Usage page itself was a Phase 1 placeholder
+that said *There have been no runs* without asking; it now reads
+`bas_report_runs` on the same components as Cost Intelligence's *Usage &
+cost*, which moved to `components/ui/Usage.tsx` for both modules to share.
 
 **Why.** Phase 1 made the presets locks because the spec's twenty questions
 are meant to compare week to week and building to building, and a lock
@@ -3170,6 +3175,15 @@ memory of a button. Custom questions do not count against the match, on
 purpose: they are what the person added to the standard, not a departure
 from it. *Select all* is not a preset click and earns no label, for the
 same reason - the label says what was chosen, not what happens to coincide.
+
+The first cut that day was a flat list of all twenty with four buttons
+above it. It was reversed the same day for the three tabs, because the two
+named reports are things people talk about by name - "the standard weekly",
+"the daily" - and a tab shows each as the report it is, six or twenty
+questions under its own name, where a flat list shows one undifferentiated
+twenty and makes the presets into buttons. What survived the reversal is
+the part that matters: one selection behind every tab, so the tabs are
+views and never modes, and nothing is lost by looking.
 
 The per-report budget asked every author to decide a dollar figure they had
 no basis for, and a report's author is not the person who pays the bill.

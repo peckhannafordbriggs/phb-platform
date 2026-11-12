@@ -228,8 +228,8 @@ export const EXTERNAL_CHIP = "external";
 
 // ---------------------------------------------------------------------------
 // The questions checklist (2026-11-12): the editor's selection, as pure
-// functions, so the preset buttons and the body they produce can be tested
-// in node without rendering.
+// functions, so the three tabs, their Select all and Clear, and the body
+// they produce can be tested in node without rendering.
 // ---------------------------------------------------------------------------
 
 /** A question typed into this report and not yet saved as a row. */
@@ -247,7 +247,11 @@ export interface QuestionSelectionState {
   /** My questions ticked, by personal question id. */
   personal: string[];
   inline: InlineDraft[];
-  /** The preset button last clicked, or null after Select all, Clear, or a report saved without one. */
+  /**
+   * The preset whose tab's Select all was last used, or the saved report's
+   * label; null after that tab's Clear, or on a report saved without one.
+   * The server keeps it only while the shared selection still matches.
+   */
   presetClicked: PresetKey | null;
 }
 
@@ -266,7 +270,7 @@ export function selectionFromDetail(detail: ReportDetail): QuestionSelectionStat
 }
 
 /** The library rows a preset names, by id, in library order; a row the library lacks is skipped. */
-function presetIds(key: PresetKey, library: LibraryQuestionView[]): string[] {
+export function presetQuestionIds(key: PresetKey, library: LibraryQuestionView[]): string[] {
   const wanted = new Set(REPORT_PRESETS[key].questionKeys);
   return [...library]
     .filter((q) => wanted.has(q.key))
@@ -274,23 +278,32 @@ function presetIds(key: PresetKey, library: LibraryQuestionView[]): string[] {
     .map((q) => q.libraryQuestionId);
 }
 
-/** A preset button: tick its shared questions, untick the other shared ones, leave My questions and custom ones alone. */
-export function applyPreset(state: QuestionSelectionState, key: PresetKey, library: LibraryQuestionView[]): QuestionSelectionState {
-  return { ...state, library: presetIds(key, library), presetClicked: key };
+/**
+ * Select all on a preset's tab: tick that preset's enabled questions, keep
+ * every other tick. The selection is ONE set shared across the tabs, so
+ * ticking the standard twenty and then Select all on Daily changes nothing
+ * but the label candidate.
+ */
+export function selectTab(state: QuestionSelectionState, key: PresetKey, library: LibraryQuestionView[]): QuestionSelectionState {
+  const enabled = new Set(library.filter((q) => q.enabled).map((q) => q.libraryQuestionId));
+  const have = new Set(state.library);
+  const added = presetQuestionIds(key, library).filter((id) => enabled.has(id) && !have.has(id));
+  return { ...state, library: [...state.library, ...added], presetClicked: key };
 }
 
-/** Select all: every enabled shared question. */
-export function selectAllShared(state: QuestionSelectionState, library: LibraryQuestionView[]): QuestionSelectionState {
+/**
+ * Clear on a preset's tab: untick that preset's questions and nothing else.
+ * Clearing Daily leaves the fourteen standard questions Daily does not
+ * share; My questions and the custom ones are never touched by either
+ * button.
+ */
+export function clearTab(state: QuestionSelectionState, key: PresetKey, library: LibraryQuestionView[]): QuestionSelectionState {
+  const drop = new Set(presetQuestionIds(key, library));
   return {
     ...state,
-    library: [...library].filter((q) => q.enabled).sort((a, b) => a.position - b.position).map((q) => q.libraryQuestionId),
-    presetClicked: null,
+    library: state.library.filter((id) => !drop.has(id)),
+    presetClicked: state.presetClicked === key ? null : state.presetClicked,
   };
-}
-
-/** Clear: no shared questions ticked. My questions and custom questions are left as they are. */
-export function clearShared(state: QuestionSelectionState): QuestionSelectionState {
-  return { ...state, library: [], presetClicked: null };
 }
 
 export function toggleLibrary(state: QuestionSelectionState, libraryQuestionId: string, on: boolean): QuestionSelectionState {
@@ -358,4 +371,38 @@ export function describeSelection(state: QuestionSelectionState, library: Librar
   else if (custom > 0 && state.library.length > 0) parts.push(`${state.library.length} shared + ${custom} custom`);
   else if (custom > 0) parts.push(`${custom} custom`);
   return parts.join(" · ");
+}
+
+
+/** The label beside a shared question: its section, how it is answered, and what it applies to. */
+export function questionMeta(q: Pick<LibraryQuestionView, "sectionLabel" | "kind" | "appliesToLabel">): string {
+  return `${q.sectionLabel} · ${q.kind} · ${q.appliesToLabel}`;
+}
+
+export interface SelectedQuestion {
+  kind: "library" | "personal" | "inline";
+  text: string;
+  meta: string;
+}
+
+/**
+ * The whole selection in the order the report will hold it - shared in
+ * library order, then My questions, then typed - for the "Show selected"
+ * list, which is the one place the full set is seen whichever tab is open.
+ */
+export function orderedSelection(
+  state: QuestionSelectionState,
+  library: LibraryQuestionView[],
+  personal: PersonalQuestionView[],
+): SelectedQuestion[] {
+  const ticked = new Set(state.library);
+  const mine = new Map(personal.map((p) => [p.personalQuestionId, p.text]));
+  return [
+    ...[...library]
+      .filter((q) => ticked.has(q.libraryQuestionId))
+      .sort((a, b) => a.position - b.position)
+      .map((q) => ({ kind: "library" as const, text: q.text, meta: `Q${q.position} · ${questionMeta(q)}` })),
+    ...state.personal.map((id) => ({ kind: "personal" as const, text: mine.get(id) ?? "(a question of the owner's)", meta: "my question · planner" })),
+    ...state.inline.map((d) => ({ kind: "inline" as const, text: d.text, meta: d.save ? "this report only · planner · saved for reuse on save" : "this report only · planner" })),
+  ];
 }
