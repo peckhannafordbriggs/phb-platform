@@ -194,7 +194,8 @@ most likely to be reported as bugs.
 | **"Nothing to review"** in Drafts | The Drafts folder is empty. It is empty most of the day — the automation produces drafts in bursts. | Nothing. This is the normal resting state and the default view. |
 | **"The mailbox is not connected yet"** | No Graph credential is configured. Every pane shows this together, not one pane failing. | *The mailbox is not connected*, above. |
 | **"That message is no longer here"** | The message was moved or sent between the list being drawn and the row being clicked. Power Automate moves messages constantly. | Nothing. The list refreshes itself. It is a normal event, not an error. |
-| **"N inline images are part of this message and are not shown here yet"** | The message has `cid:` images — attachments on the message itself, not remote content. The platform does not turn them into bytes yet. | Nothing, unless somebody needs to see them: Outlook renders them. See *Images in a message body* below. |
+| **"N inline images are referenced by this message but not attached to it"** | The body names a `cid:` image that no attachment on the message carries. Every inline image the message does carry is simply shown; this note is only for the ones it does not. | Nothing. Outlook has no bytes to draw either. See *Images in a message body* below. |
+| **A message opens on a blank area, or shows dashed boxes where pictures should be** | Two different causes, fixed together on 2026-11-12: a hidden preheader whose hiding styles were stripped, and `cid:` images that were never fetched. On a build from before that date both are expected. | Confirm the build date. See *Images in a message body* and *A message opens on a blank screen* below. |
 | **"N remote images were blocked"** with a *Show images* button | Genuinely remote images. Loading one tells the sender the message was opened, by whom and when, so it is a per-message decision. | Nothing. Click it if the images matter. |
 | **"N subject matches, newest first. Search does not look inside messages."** | Search matches the subject only, by design — `$search` returns ids that go stale on a move, so it is not used. Results are sorted by the service, because Graph will not sort a filtered collection. | Nothing. To find text inside a message, use Outlook. See *Folder search* below. |
 | **"Showing the first N subject matches — there are more"** | The search hit its 500-match cap. | Narrow the term. The cap and why it is reported are under *Folder search* below. |
@@ -431,39 +432,96 @@ section.
 
 ---
 
-## Images in a message body — two kinds, two different notes
+## Images in a message body — three kinds, and how each is shown
 
-Reported as a bug — *"I opened a message and only saw broken placeholders, and
-the Show images banner never appeared."* The banner was working. The message had
-no remote images at all.
+Reported twice. First (2026-09) — *"I opened a message and only saw broken
+placeholders, and the Show images banner never appeared."* The banner was
+working; the message had no remote images at all. Then (2026-11-12) — *"emails
+with pictures in the body show blank gaps where the pictures should be"*: the
+`cid:` images were never fetched, and a hidden preheader made one message open
+on a blank screen (next section).
 
 A mail body can carry three kinds of image, and they are not interchangeable:
 
 | In the source | What it is | What the platform does |
 |---|---|---|
 | `src="https://…"` | **Remote.** Loading it tells the sender the mail was opened, from which IP, and when. | src removed, counted as `remoteImagesBlocked`, amber note with a *Show images* button. |
-| `src="cid:…"` | **Inline.** An attachment on this very message. No privacy question — loading it costs nothing and tells nobody anything. | src removed, counted as `inlineImages`, neutral note with **no** button, because there is nothing to consent to. |
+| `src="cid:…"` | **Inline.** An attachment on this very message, named by its Content-ID. No privacy question — loading it costs nothing and tells nobody anything. | **Shown**, since 2026-11-12: the src becomes the platform's own signed link to the attachment, served by `GET /api/modules/change-orders/messages/{id}/inline-images/{attachmentId}`. One the message does not actually carry has its src removed and is counted as `inlineImagesUnresolved`, with a neutral note and no button. |
 | `src="data:…"` | Inline bytes, already in the body. | Left completely alone. It needs no fetch. |
 
-**Why a `cid:` src is removed rather than left in place.** A browser cannot
-resolve the `cid:` scheme, and the platform does not yet fetch the attachment and
-inline it. Leaving the src produced the browser's broken-image glyph, which reads
-as *"this application is broken"* rather than *"this image lives in an
-attachment"* — which is exactly how it was reported. With the src gone, the
-stylesheet draws a labelled placeholder with the image's alt text and the note
-above explains it. `cid:` was dropped from the CSP's `img-src` at the same time:
-nothing in the document can carry one any more.
+**How an inline image is served, and why it is a signed link rather than a
+cookie.** The reading pane is a sandboxed iframe with no `allow-same-origin`,
+so its origin is opaque and the browser sends **no session cookie** with the
+images it loads — measured in Chrome and Edge on 2026-11-12 (`Sec-Fetch-Site:
+cross-site`, cookie absent; the same `<img>` in the top document carries it).
+A route behind `withMailbox` would answer 401 to every image. So the message
+route, which *is* behind the grant, writes a link for each image it resolves:
+this message, this attachment, an expiry one hour out, and an HMAC over the
+three under a key derived from `AUTH_SECRET`. The image route checks the
+signature and the expiry and nothing else, fetches the bytes through the same
+`downloadAttachment` the download link uses, decides the type **from the
+bytes** (PNG, JPEG, GIF, WebP, BMP; anything else, SVG above all, is 404),
+and answers `inline` with `nosniff`, `no-store` and a sandboxing CSP. No
+image byte is written anywhere. `WHY-ITS-BUILT-THIS-WAY.md` § 82 has the
+alternatives that were weighed.
 
-**In this mailbox, nearly every message with images has inline ones.** Measured
-across Inbox: the automation's own failure notifications carry 4 remote and 2–4
-inline; the `RE: Reminder — Change Order pricing` thread carries 2–3 inline and
-**no** remote at all. So a message showing only the inline note is the normal
-case, not a defect.
+**Three things Graph does that the code has to know.** `hasAttachments` is
+`false` on a message whose only attachments are inline images — the mail
+filter's banner icons, a colleague's pasted screenshot — so the service reads
+the attachments whenever the body contains `cid:` as well as whenever Exchange
+says there are some. `contentId` is on the `fileAttachment` subtype and must be
+selected as `microsoft.graph.fileAttachment/contentId`; a bare `contentId`
+fails the whole request with 400. And Exchange gives *ordinary* attachments a
+Content-ID too (the PDF on the `Reminder — Change Order pricing` reply has
+one), so a Content-ID is matched only against attachments whose declared type
+is an image, and the route still decides from the bytes.
 
-**If somebody needs inline images rendered**, that is real work and deliberately
-not done: fetching each attachment and rewriting the body to `data:` URIs. It
-inflates the body, and the reading pane is the one screen where vendor content
-meets a send button. Outlook renders them today.
+**In this mailbox, nearly every message with images has inline ones.** On
+2026-11-12, 10 of the 35 messages received since mid-October carried `cid:`
+images: the mail filter's two banner icons on every inbound message, the
+automation's failure notifications (2 inline, 4 remote), and internal replies
+on the `RFI 267.1` thread with pasted screenshots (1–2 inline, nothing
+remote, `hasAttachments: false` on most).
+
+**An image link that stopped working.** A link is good for an hour from the
+moment the message was read. If a pane has been open longer than that and
+something makes the frame re-render, the images reload and the route answers
+`403 inline_image_link_expired`; reopening the message writes fresh links.
+`403 inline_image_link_invalid` means the signature did not match: the link
+was altered, or was written under a different `AUTH_SECRET` — rotating that
+secret invalidates every link in every open pane at once, which is harmless.
+
+**A picture that still shows as a dashed box.** The note above the body says
+how many images the message *references but does not carry*. That is the
+message's own state — a `cid:` with no matching attachment — and Outlook has
+no bytes to draw either. If the note is absent and a box still shows, the
+image route refused the bytes: the attachment is not a raster image (an SVG
+logo, say), or `downloadAttachment` refused it as over 25 MB. The log line is
+the route's own `mail.graph_call_failed` or a 404 on the inline-images path.
+
+---
+
+## A message opens on a blank screen, with its text further down
+
+**Symptom.** A reply with no pictures at all opens on a mostly blank pane; the
+*Report This Email* link sits a few hundred pixels down, and the text below it.
+In Outlook the same message starts at the top.
+
+**Cause.** The company's mail filter (INKY) injects a banner at the top of every
+inbound message, and the banner starts with a hidden "preheader" `<div>` holding
+about two hundred characters of From / Sent / To text, hidden with
+`display:none; max-height:0; overflow:hidden; max-width:0; font-size:1px;
+color:#fff`. The sanitizer's style allowlist had `max-width` and `font-size`
+but not `display`, `max-height` or `overflow`, so the hiding declarations were
+dropped and the sizing ones kept: the text wrapped one character per 1px line
+and pushed everything down by its own length. Josh Bittner's reply of
+2026-11-05 on `CCHMC RFI 310` was the report; it has no images.
+
+**Fix (2026-11-12).** `display` (a closed list of flow values), `visibility`,
+`overflow` and `max-height` are on the allowlist, with the rule the table is
+built on intact — none can name a URL or position anything. `opacity` is still
+out, on purpose: a zero-opacity link is invisible and still takes a click.
+`tests/mailbox-body-render.test.ts` renders the preheader as it arrived.
 
 ---
 

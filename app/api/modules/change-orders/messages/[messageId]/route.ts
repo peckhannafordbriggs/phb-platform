@@ -16,9 +16,10 @@ const ROUTE = "/api/modules/change-orders/messages/[messageId]";
  * affordance. Off by default: loading a remote image tells the sender the mail
  * was opened, by whom and when.
  *
- * Attachments are fetched alongside the message rather than from a second route,
- * because the reading pane always wants both and two round trips would show the
- * names arriving after the body.
+ * Attachments come with the message rather than from a second route, because
+ * the reading pane always wants both and two round trips would show the names
+ * arriving after the body - and because the service needs them to render the
+ * body's inline images, so it reads them in the same call.
  */
 export async function GET(
   request: Request,
@@ -31,13 +32,9 @@ export async function GET(
       const allowRemoteImages =
         new URL(request.url).searchParams.get("images") === "1";
 
-      const message = await service.getMessage(messageId, { allowRemoteImages });
-
-      // Names and sizes only - never content. Skipped entirely when the message
-      // has none, which is the common case for an automation draft.
-      const attachments = message.hasAttachments
-        ? await service.listAttachments(messageId)
-        : [];
+      const { attachments, ...message } = await service.getMessage(messageId, {
+        allowRemoteImages,
+      });
 
       return ok({ message, attachments, remoteImagesAllowed: allowRemoteImages });
     },

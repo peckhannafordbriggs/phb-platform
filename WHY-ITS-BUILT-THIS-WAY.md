@@ -3133,6 +3133,82 @@ startup time at hundreds of runs an hour, say - the user's own condition
 applies: extend `tests/bas-reports-worker-render.test.ts` to render through
 the compiled artefact too, in the same CI run, before the Dockerfile changes.
 
+## 82 · Inline images are served through a signed link, not a cookie
+
+(§ 81 is the Reports questions checklist, on its own branch at the time of
+writing.)
+
+**The decision.** A `cid:` image in a message body is rendered through
+`/api/modules/change-orders/messages/{id}/inline-images/{attachmentId}?exp=…&sig=…`:
+a link the grant-gated message route writes for each inline image it finds
+among the message's attachments, signed with HMAC-SHA256 under a key derived
+from `AUTH_SECRET`, good for an hour. The image route (`withInlineImageLink`)
+checks the signature and the expiry and consults no session. The bytes come
+through the same `downloadAttachment` the download link uses, the type is
+decided from the bytes (five raster formats; SVG and everything else refused),
+and the response is `inline`, `nosniff`, `no-store`, with a sandboxing CSP of
+its own. The sandboxed reading pane is unchanged, and its document's CSP names
+the platform's origin plus the message routes' path - the one same-origin
+destination a body can now reach - rather than `'self'`, which an opaque origin
+cannot satisfy.
+
+**Why not the obvious route.** The obvious design is an `<img>` pointing at a
+route behind `withMailbox`, same auth as everything else in the module. It
+cannot work, and the reason was measured rather than reasoned: the pane is a
+sandboxed iframe without `allow-same-origin`, so its origin is opaque, and in
+Chrome and Edge an `<img>` inside it goes out as `Sec-Fetch-Site: cross-site`
+with **no** `SameSite=Lax` cookie - which is what Auth.js sets. The same
+`<img>` in the top document, or in an unsandboxed frame, carries the cookie.
+The probe was sixty lines on 2026-11-12: a Node HTTP server that sets a Lax
+cookie on its one page, that page holding an `<img>` of its own, an
+unsandboxed srcdoc frame with one, and a frame with the pane's exact
+`sandbox` attribute with one, headless Chrome and then Edge opening it from a
+fresh profile, and the server logging which `/img` requests carried the
+cookie and what `Sec-Fetch-Site` they declared. A cookie-gated route would
+answer 401 to every image in every message.
+
+**Why not the other two.** `allow-same-origin` on the frame makes the cookie
+flow and removes one of the three layers between a vendor's markup and the
+platform's origin (message-body.tsx: sanitizer, sandbox, CSP). The sandbox
+would still forbid script, but a sanitizer bypass plus a browser bug would
+then land in the platform's origin rather than an opaque one, and the frame's
+own requests would carry the viewer's credentials wherever a body pointed
+them. Inlining the bytes as `data:` URLs keeps every layer and was the design
+the runbook had already declined: it puts every image into the message JSON,
+every time the message is read, on the one screen where vendor content meets
+a send button; a blob: URL fails for the same reason a cookie does - Blink
+checks a blob URL's origin against the requesting document's, and an opaque
+origin can request none.
+
+**What the link is and is not.** It is a capability to read one image of one
+message for an hour, minted only after the viewer passed the grant check,
+carried only inside a document that sends no referrer. The attachment id is
+part of what is signed, so a link cannot be pointed at another attachment, and
+the key is derived with a purpose label, so the session secret is never used
+as a MAC key directly. It is not a session: it cannot list, move, send or
+read anything else, and the route it reaches consults the session for nothing
+- a test holds that `auth()` is never called. Rotating `AUTH_SECRET` voids
+every link in every open pane at once, which is harmless.
+
+**Two Graph facts that shaped the service, both verified live.**
+`hasAttachments` is `false` on a message whose only attachments are inline
+images, so the attachments are read whenever the body contains `cid:` and not
+only when Exchange says so. `contentId` lives on the `fileAttachment` subtype
+and is selected as `microsoft.graph.fileAttachment/contentId`; a bare
+`contentId` fails the request with 400, and so does casting the collection.
+Exchange also gives ordinary attachments a Content-ID, so a reference is
+matched only against attachments whose declared type is an image - and the
+route still decides from the bytes, because the declared type is the
+vendor's.
+
+**What breaks if you undo it.** Put the image route behind `withMailbox` and
+every inline image is a 401 broken-image glyph, in every message, with no
+error in any pane - the request happens inside the frame. Add `'self'` to the
+document's CSP instead of the origin and nothing loads either. Serve the
+declared content type and an SVG attachment opened directly runs script in
+the platform's origin. Drop the `cid:` test on the body and the mail filter's
+banner icons go back to dashed boxes on every inbound message, because
+Exchange reports those messages as having no attachments.
 ## 81 · A report's questions are a checklist, a preset is a label, and the only cap is the module's
 
 **What I did (2026-11-12).** The editor's Questions section keeps its

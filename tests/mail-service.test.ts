@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMailService } from "@/lib/modules/change-orders/mail/service";
+import {
+  ChangeOrderMailService,
+  createMailService,
+  inlineImageSigningKey,
+} from "@/lib/modules/change-orders/mail/service";
+import { createGraphClient } from "@/lib/modules/change-orders/graph/client";
+import {
+  MESSAGE_ROUTES_PATH,
+  verifyInlineImageLink,
+} from "@/lib/modules/change-orders/mail/inline-images";
 import { createGraphStub, graphErrorResponse, jsonResponse } from "./graph-stub";
 import { TEST_MAILBOX } from "./constants";
 
@@ -473,6 +482,7 @@ describe("getMessage", () => {
       format: "text",
       // Plain text cannot carry an image at all.
       inlineImages: 0,
+      inlineImagesUnresolved: 0,
       remoteImagesBlocked: 0,
     });
   });
@@ -485,6 +495,216 @@ describe("getMessage", () => {
     expect(message.body).toBeNull();
     expect(message.subject).toBeNull();
     expect(message.to).toEqual([]);
+  });
+});
+
+/**
+ * Inline images. The pictures in a message body are attachments on the message
+ * referenced by Content-ID, and the body is rendered with the platform's own
+ * signed link in place of each `cid:` - see mail/inline-images.ts for why a
+ * link rather than a cookie-gated route.
+ *
+ * The fixtures are the shapes the live mailbox returned on 2026-11-12: the
+ * mail filter's two banner icons on a message Exchange reports as having NO
+ * attachments, and a PDF that carries a Content-ID of its own.
+ */
+describe("getMessage: inline images", () => {
+  const BANNER_ICON = {
+    "@odata.type": "#microsoft.graph.fileAttachment",
+    id: "att-icon",
+    name: "inky-injection-inliner-03755809cc10337ec572b1f12a6beedf.png",
+    contentType: "image/png",
+    size: 1_699,
+    isInline: true,
+    contentId: "inky-injection-inliner-03755809cc10337ec572b1f12a6beedf",
+  };
+
+  const PDF_WITH_CONTENT_ID = {
+    "@odata.type": "#microsoft.graph.fileAttachment",
+    id: "att-pdf",
+    name: "Bulletin 15.pdf",
+    contentType: "application/pdf",
+    size: 479_319,
+    isInline: false,
+    contentId: "68847E4DA04DA7459E27023E5665F74A@namprd19.prod.outlook.com",
+  };
+
+  function messageWith(body: string, extra: Record<string, unknown> = {}) {
+    return {
+      id: "message-1",
+      subject: "1 of your flow(s) have failed",
+      hasAttachments: false,
+      body: { contentType: "html", content: body },
+      ...extra,
+    };
+  }
+
+  function linkParts(src: string) {
+    const url = new URL(src, "http://localhost");
+    const [, messageId, attachmentId] =
+      /\/messages\/([^/]+)\/inline-images\/([^/?]+)/.exec(url.pathname) ?? [];
+    return {
+      messageId: decodeURIComponent(messageId ?? ""),
+      attachmentId: decodeURIComponent(attachmentId ?? ""),
+      exp: url.searchParams.get("exp"),
+      sig: url.searchParams.get("sig"),
+    };
+  }
+
+  function srcOf(html: string): string {
+    const src = /<img[^>]*\ssrc="([^"]*)"/.exec(html)?.[1] ?? "";
+    return src.replace(/&amp;/g, "&");
+  }
+
+  it("reads the attachments even though Exchange says there are none, and links each image", async () => {
+    const stub = createGraphStub((request) =>
+      request.url.includes("/attachments")
+        ? jsonResponse({ value: [BANNER_ICON] })
+        : jsonResponse(
+            messageWith(
+              '<p>Flow failed</p><img src="cid:inky-injection-inliner-03755809cc10337ec572b1f12a6beedf" width="24" height="24">',
+            ),
+          ),
+    );
+
+    const message = await createMailService(stub.transport).getMessage("message-1");
+
+    // Two reads: the message, then its attachments - despite hasAttachments
+    // being false, which is what Exchange reports for inline-only messages.
+    expect(stub.requests.map((r) => /\/messages\/message-1(\/attachments)?/.exec(r.url)?.[1] ?? "")).toEqual(["", "/attachments"]);
+
+    expect(message.body?.inlineImages).toBe(1);
+    expect(message.body?.inlineImagesUnresolved).toBe(0);
+    expect(message.body?.content).not.toContain("cid:");
+    expect(message.body?.content).not.toContain("data-inline-image");
+
+    const src = srcOf(message.body?.content ?? "");
+    expect(src.startsWith(`${MESSAGE_ROUTES_PATH}/message-1/inline-images/att-icon?`)).toBe(true);
+    // Relative, so it resolves against whichever hostname the platform is used at.
+    expect(src.startsWith("/")).toBe(true);
+
+    // And it is a link the image route will accept: signed for this message
+    // and this attachment, under the process's own key.
+    const parts = linkParts(src);
+    expect(parts).toMatchObject({ messageId: "message-1", attachmentId: "att-icon" });
+    expect(verifyInlineImageLink(inlineImageSigningKey(), parts)).toBe("valid");
+    expect(
+      verifyInlineImageLink(inlineImageSigningKey(), { ...parts, attachmentId: "att-pdf" }),
+    ).toBe("invalid");
+
+    // The attachments come back with the message: one read serves both.
+    expect(message.attachments).toHaveLength(1);
+    expect(message.attachments[0]?.contentId).toBe(BANNER_ICON.contentId);
+  });
+
+  it("reads no attachments for a body that references none", async () => {
+    const stub = createGraphStub(() =>
+      jsonResponse(messageWith("<p>Thanks, will do.</p>")),
+    );
+
+    const message = await createMailService(stub.transport).getMessage("message-1");
+
+    expect(stub.requests).toHaveLength(1);
+    expect(message.attachments).toEqual([]);
+    expect(message.body?.inlineImages).toBe(0);
+  });
+
+  it("still reads the attachments when Exchange says there are some", async () => {
+    const stub = createGraphStub((request) =>
+      request.url.includes("/attachments")
+        ? jsonResponse({ value: [PDF_WITH_CONTENT_ID] })
+        : jsonResponse(messageWith("<p>Quote attached</p>", { hasAttachments: true })),
+    );
+
+    const message = await createMailService(stub.transport).getMessage("message-1");
+
+    expect(stub.requests).toHaveLength(2);
+    expect(message.attachments.map((a) => a.id)).toEqual(["att-pdf"]);
+  });
+
+  it("leaves a cid: no attachment carries as a placeholder, and says so", async () => {
+    const stub = createGraphStub((request) =>
+      request.url.includes("/attachments")
+        ? jsonResponse({ value: [BANNER_ICON] })
+        : jsonResponse(messageWith('<img src="cid:image001.png@01DC" alt="screenshot">')),
+    );
+
+    const message = await createMailService(stub.transport).getMessage("message-1");
+
+    expect(message.body?.inlineImages).toBe(1);
+    expect(message.body?.inlineImagesUnresolved).toBe(1);
+    expect(message.body?.content).toContain('data-inline-image="true"');
+    expect(message.body?.content).not.toContain("inline-images/");
+  });
+
+  it("never links a cid: to an attachment that is not an image", async () => {
+    // Exchange gives ordinary attachments a Content-ID too. A body naming the
+    // PDF's gets a placeholder, not a link the image route would then refuse.
+    const stub = createGraphStub((request) =>
+      request.url.includes("/attachments")
+        ? jsonResponse({ value: [PDF_WITH_CONTENT_ID] })
+        : jsonResponse(messageWith(`<img src="cid:${PDF_WITH_CONTENT_ID.contentId}">`)),
+    );
+
+    const message = await createMailService(stub.transport).getMessage("message-1");
+
+    expect(message.body?.inlineImagesUnresolved).toBe(1);
+    expect(message.body?.content).not.toContain("inline-images/");
+  });
+
+  it("matches a Content-ID case-insensitively when nothing matches exactly", async () => {
+    const stub = createGraphStub((request) =>
+      request.url.includes("/attachments")
+        ? jsonResponse({ value: [BANNER_ICON] })
+        : jsonResponse(messageWith(`<img src="cid:${BANNER_ICON.contentId.toUpperCase()}">`)),
+    );
+
+    const message = await createMailService(stub.transport).getMessage("message-1");
+
+    expect(message.body?.inlineImagesUnresolved).toBe(0);
+    expect(srcOf(message.body?.content ?? "")).toContain("/inline-images/att-icon?");
+  });
+
+  it("resolves the pictures in a draft's preview the same way", async () => {
+    const stub = createGraphStub((request) =>
+      request.url.includes("/attachments")
+        ? jsonResponse({ value: [BANNER_ICON] })
+        : jsonResponse(
+            messageWith(`<p>Re:</p><img src="cid:${BANNER_ICON.contentId}">`, {
+              id: "draft-1",
+              subject: "ZZTEST RE: flow",
+              isDraft: true,
+            }),
+          ),
+    );
+
+    const draft = await createMailService(stub.transport).getDraftForEdit("draft-1");
+
+    expect(draft.preview?.inlineImagesUnresolved).toBe(0);
+    expect(srcOf(draft.preview?.content ?? "")).toContain(
+      `${MESSAGE_ROUTES_PATH}/draft-1/inline-images/att-icon?`,
+    );
+    // The RAW body the editor writes back is untouched: the link never reaches
+    // Exchange.
+    expect(draft.body).toContain(`cid:${BANNER_ICON.contentId}`);
+    expect(draft.body).not.toContain("inline-images/");
+  });
+
+  it("links nothing without a signing key, and still says what is missing", async () => {
+    const stub = createGraphStub((request) =>
+      request.url.includes("/attachments")
+        ? jsonResponse({ value: [BANNER_ICON] })
+        : jsonResponse(messageWith(`<img src="cid:${BANNER_ICON.contentId}">`)),
+    );
+    const service = new ChangeOrderMailService({
+      client: createGraphClient(stub.transport),
+      mailbox: TEST_MAILBOX,
+    });
+
+    const message = await service.getMessage("message-1");
+
+    expect(message.body?.inlineImagesUnresolved).toBe(1);
+    expect(message.body?.content).not.toContain("inline-images/");
   });
 });
 
@@ -524,6 +744,7 @@ describe("listAttachments", () => {
         contentType: "application/pdf",
         sizeBytes: 84_512,
         isInline: false,
+        contentId: null,
         isItemAttachment: false,
       },
       {
@@ -532,6 +753,7 @@ describe("listAttachments", () => {
         contentType: null,
         sizeBytes: 12_000,
         isInline: false,
+        contentId: null,
         isItemAttachment: true,
       },
     ]);
@@ -541,6 +763,36 @@ describe("listAttachments", () => {
     const select = decodeURIComponent(stub.requests[0]?.url ?? "");
     expect(select).toContain("$select=id,name,contentType,size,isInline");
     expect(select).not.toContain("contentBytes");
+    // `contentId` is on the fileAttachment subtype. Asked for bare, Graph
+    // refuses the whole request (verified live 2026-11-12); this is the form
+    // it answers.
+    expect(select).toContain(",microsoft.graph.fileAttachment/contentId");
+    expect(select).not.toMatch(/[,=]contentId/);
+  });
+
+  it("carries a Content-ID as Exchange stores it, without brackets", async () => {
+    const stub = createGraphStub(() =>
+      jsonResponse({
+        value: [
+          {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            id: "attachment-1",
+            name: "image001.png",
+            contentType: "image/png",
+            size: 1_699,
+            isInline: true,
+            contentId: "<image001.png@01DC4E0C.3A5B2A10>",
+          },
+        ],
+      }),
+    );
+
+    const [attachment] = await createMailService(stub.transport).listAttachments(
+      "message-1",
+    );
+
+    expect(attachment?.contentId).toBe("image001.png@01DC4E0C.3A5B2A10");
+    expect(attachment?.isInline).toBe(true);
   });
 });
 

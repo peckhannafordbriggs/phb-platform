@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildBodyDocument } from "@/app/(modules)/change-orders/build-body-document";
+import {
+  INLINE_IMAGE_CSP_PATH,
+  buildBodyDocument,
+} from "@/app/(modules)/change-orders/build-body-document";
 import { sanitizeEmailHtml } from "@/lib/modules/change-orders/mail/sanitize";
 import type { MessageBody } from "@/lib/modules/change-orders/mail/types";
 
@@ -13,15 +16,33 @@ import type { MessageBody } from "@/lib/modules/change-orders/mail/types";
  * images by default."
  */
 
-function render(html: string, allowRemoteImages = false): string {
-  const sanitized = sanitizeEmailHtml(html, { allowRemoteImages });
+/** The origin the component reads from `location.origin` in the browser. */
+const ORIGIN = "https://platform.example";
+
+function render(
+  html: string,
+  allowRemoteImages = false,
+  options: {
+    origin?: string | null;
+    resolveInlineImage?: (contentId: string) => string | null;
+  } = {},
+): string {
+  const sanitized = sanitizeEmailHtml(html, {
+    allowRemoteImages,
+    resolveInlineImage: options.resolveInlineImage,
+  });
   const body: MessageBody = {
     content: sanitized.html,
     format: "html",
     remoteImagesBlocked: sanitized.remoteImagesBlocked,
     inlineImages: sanitized.inlineImages,
+    inlineImagesUnresolved: sanitized.inlineImagesUnresolved,
   };
-  return buildBodyDocument(body, allowRemoteImages);
+  return buildBodyDocument(
+    body,
+    allowRemoteImages,
+    options.origin === undefined ? ORIGIN : options.origin,
+  );
 }
 
 function policy(document: string): string {
@@ -53,7 +74,9 @@ describe("the content security policy", () => {
     const csp = policy(render('<img src="https://tracker.invalid/px.gif">'));
 
     expect(csp).toContain("img-src data:");
-    expect(csp).not.toContain("https:");
+    // The platform's own origin is https too, so look at the scheme source
+    // itself rather than the substring.
+    expect(csp).not.toMatch(/img-src[^;]*\bhttps:(?:\s|;|$)/);
   });
 
   it("permits https images only once a person asks", () => {
@@ -61,18 +84,60 @@ describe("the content security policy", () => {
   });
 
   /**
-   * `cid:` was in `img-src` until the sanitizer started removing a `cid:` src
-   * outright - a browser cannot resolve the scheme, and the broken-image glyph
-   * it produced read as an application fault. Nothing in the document can carry
-   * one any more, so permitting it would describe a case that cannot arise.
+   * `cid:` never reaches the document. An inline image the message carries is
+   * rewritten to the platform's own signed link for the attachment, which the
+   * CSP admits by naming the platform's origin and the message routes' path -
+   * and nothing else of the platform's. One the message does not carry has its
+   * src removed and is marked, so the stylesheet draws a labelled placeholder.
    */
-  it("no longer permits cid:, because no cid: src reaches the document", () => {
+  it("admits the platform's inline-image links by origin and path, and no cid:", () => {
+    const link = `${INLINE_IMAGE_CSP_PATH}m1/inline-images/a1?exp=1&sig=abc`;
+    const document = render('<img src="cid:logo123" alt="logo">', false, {
+      resolveInlineImage: (id) => (id === "logo123" ? link : null),
+    });
+
+    expect(policy(document)).toContain(`img-src data: ${ORIGIN}${INLINE_IMAGE_CSP_PATH}`);
+    expect(policy(document)).not.toContain("cid:");
+    expect(policy(document)).not.toContain("'self'");
+    // Serialised as markup, so the query's ampersand is an entity.
+    expect(document).toContain(`src="${link.replace("&", "&amp;")}"`);
+    expect(document).not.toContain("cid:logo123");
+    // An ordinary image: not marked as a placeholder (the stylesheet always
+    // carries the placeholder rule, so look at the element, not the document).
+    expect(document).not.toContain('data-inline-image="true"');
+  });
+
+  it("marks an inline image the message does not carry as a placeholder", () => {
     const document = render('<img src="cid:logo123" alt="logo">');
 
-    expect(policy(document)).not.toContain("cid:");
     expect(document).not.toContain("cid:logo123");
-    // Marked instead, so the stylesheet can draw it as a labelled placeholder.
-    expect(document).toContain("data-inline-image");
+    expect(document).toContain('data-inline-image="true"');
+  });
+
+  it("names no origin at all when the component has none to give", () => {
+    const csp = policy(render("<p>hi</p>", false, { origin: null }));
+
+    expect(csp).toContain("img-src data:;");
+    expect(csp).not.toContain(INLINE_IMAGE_CSP_PATH);
+  });
+
+  it("refuses anything that is not a bare origin", () => {
+    for (const bad of [
+      "https://platform.example/",
+      "https://platform.example/path",
+      "javascript:alert(1)",
+      "https://platform.example\" img-src *",
+      "*",
+    ]) {
+      const csp = policy(render("<p>hi</p>", false, { origin: bad }));
+      expect(csp, bad).toBe(policy(render("<p>hi</p>", false, { origin: null })));
+    }
+  });
+
+  it("admits the platform's origin on a port, which is what development uses", () => {
+    const csp = policy(render("<p>hi</p>", false, { origin: "http://localhost:3000" }));
+
+    expect(csp).toContain(`http://localhost:3000${INLINE_IMAGE_CSP_PATH}`);
   });
 
   it("sends no referrer, so opening a message leaks no URL", () => {
@@ -134,6 +199,7 @@ describe("plain text bodies", () => {
         format: "text",
         remoteImagesBlocked: 0,
         inlineImages: 0,
+        inlineImagesUnresolved: 0,
       },
       false,
     );
@@ -145,7 +211,13 @@ describe("plain text bodies", () => {
 
   it("preserve their line breaks", () => {
     const document = buildBodyDocument(
-      { content: "line one\nline two", format: "text", remoteImagesBlocked: 0, inlineImages: 0 },
+      {
+        content: "line one\nline two",
+        format: "text",
+        remoteImagesBlocked: 0,
+        inlineImages: 0,
+        inlineImagesUnresolved: 0,
+      },
       false,
     );
 
@@ -167,5 +239,32 @@ describe("blocked remote images", () => {
     // PHASE-5 asks for cid: images with no attachment resolution to "degrade
     // visibly rather than breaking layout".
     expect(render('<img src="cid:logo123">')).toContain("img[data-remote-blocked]");
+  });
+});
+
+/**
+ * The hidden preheader the company's mail filter injects above every inbound
+ * message, as it arrived in a real reply on 2026-11-12. With its hiding
+ * declarations stripped and `max-width:0` kept, two hundred characters of
+ * 1px white text wrapped one per line and opened the message on a blank
+ * screen. The pane now keeps what hides it, exactly as Outlook does.
+ */
+describe("the phish-fence preheader", () => {
+  const preheader =
+    '<div style="display:none; font-size:1px; color:#ffffff!important; line-height:1px; ' +
+    'max-height:0px; max-width:0px; opacity:0; overflow:hidden">From: changeorder ' +
+    "&lt;changeorder@phb1899.com&gt; Sent: Thursday, November 5, 2026 8:40 AM</div>" +
+    "<p>Hi Josh,</p>";
+
+  it("stays hidden, so the message is not pushed off the first screen", () => {
+    const document = render(preheader);
+    const div = /<div style="([^"]*)">From/.exec(document)?.[1] ?? "";
+
+    expect(div).toContain("display:none");
+    expect(div).toContain("max-height:0px");
+    expect(div).toContain("overflow:hidden");
+    // Still no property that can name a URL or position anything.
+    expect(div).not.toContain("opacity");
+    expect(document).toContain("<p>Hi Josh,</p>");
   });
 });
