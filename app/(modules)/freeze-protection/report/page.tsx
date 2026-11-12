@@ -21,7 +21,7 @@ export default async function ReportPage({ searchParams }: { searchParams: Promi
   if (project === null) {
     return (
       <FpShell>
-        <ProjectCatalog projects={await listProjectCatalog()} base="/freeze-protection/report" lead="Choose a project to see its report." />
+        <ProjectCatalog projects={await listProjectCatalog()} base="/freeze-protection/report"/>
       </FpShell>
     );
   }
