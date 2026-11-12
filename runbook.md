@@ -11523,6 +11523,11 @@ the run page.
 
 A partial run is a stored, readable report. It is never a failed one.
 
+The page's footer prints the model, the calls, the tokens, the spend and
+how long the run took (*took 25 s*) - and no limit beside the spend, since
+2026-11-12: the ceiling is the module's and is on the Usage page. The dev
+script still prints the ceiling in force after the spend.
+
 ### A run finished `failed`
 
 **Symptom.** *Failed* on the list, `error` on the row, no document.
@@ -11536,6 +11541,105 @@ must stay.
 **Fix.** Read the error, fix the cause, run again. A failed run has no
 findings, and the next run compares with the last run that *finished*,
 succeeded or partial.
+
+### Data Health lists ten identical "No readings" rows, or one "Collection incident" block above the table
+
+**Symptom.** The Data Health section shows a block *Collection incident on
+PHBoffice: 18 points stopped reporting at the same time, last readings 29
+Sept, 13:00-13:10; since 29 Sept, 13:00, 7.3 days to the end of the period.
+Counted as one finding; the points are the rows below*, followed by the
+point names, the model's likely cause and recommended action, and then the
+table with one row per point. The Summary lists it once, as a Watch
+finding on the station. (Runs before 2026-11-12 showed the same event as
+ten or eighteen separate rows, each read as its own fault.)
+
+**Cause.** Several points on one station stopped within fifteen minutes of
+each other (`INCIDENT_WINDOW_MS`), three or more of them
+(`INCIDENT_MIN_POINTS`) - the signature of one event, not of ten sensors:
+in order of likelihood the device network trunk from the JACE to its
+controllers, the histories stopped on the station, or the collector
+(`INCIDENT_CAUSES`, which the narrative is asked to name in that order).
+The engine (`analysis/data-health.ts`) carries the points inside ONE
+`collection_stopped` finding whose subject is `station:<id>@<minute>` -
+the minute the first point stopped - so the status roll-up, the summary,
+the New / Still open / Cleared counts and the narrative see one finding,
+the fingerprint keys on the station and the time, and the same stop reads
+*Still open* next week. A point that has never reported is not a stop and
+stays a row of its own; so does a point that stopped alone, or two that
+stopped together. Every member is still excluded from the equipment
+questions.
+
+**Fix.** The incident's recommended action is the first check in that
+order; take them in order. On the platform side: Collection Health for
+the station (*A BAS run says `ok` and a point holds nothing*, *Collection
+Health says a point is no longer reported by the station*). When the
+points resume, the incident clears on the first run whose period is after
+the stop. If the point that stopped FIRST resumes while the others stay
+out, the incident re-fingerprints to the next minute and reads *New* once
+with the old one *Cleared*; the rows are the same points. The first run
+after 2026-11-12 on a building whose previous run held per-point rows
+shows the same one-time shift: the per-point findings clear and the
+incident is new.
+
+### Data Health rolled up to Watch with half the building offline
+
+**Symptom.** Ten of twenty-six points offline for the whole period, and
+the building status reads *Watch*, not *Action Needed*.
+
+**Cause.** By decision, pending Jim (2026-11-12). The spec gives Data
+Health no status line in its template and names no share of points or
+duration that would make a data problem Action Needed; its three status
+words describe equipment conditions. Every Data Health finding is Watch -
+a collection incident included - and
+`tests/bas-reports-analysis.test.ts` → *rolls ten of fourteen interval
+points offline for the whole period up to Watch* pins it so the change,
+when Jim decides one, is deliberate. The open question is whether a share
+of points, a duration, or both should raise it, and whether Data Health
+should affect the building status at all.
+
+**Fix.** None until Jim answers. When he does, the rule goes in
+`analysis/data-health.ts` beside the incident grouping, the test above
+changes with it, and this entry records the decision.
+
+### A Not Monitored section is one line, and the inventory lists what it needs
+
+**Symptom.** A section reads *Not Monitored* with one line - *Not
+monitored — needs airflow; airflow setpoint; damper position; see Point
+Inventory* - and no per-question list; the Point Inventory's *Not
+Monitored* list carries each question with its section and its missing
+points.
+
+**Cause.** Deliberate (2026-11-12): the inventory is the one place the
+full list lives, and a section names the union of what its questions need
+and points there, rather than repeating the inventory question by
+question. A question Not Monitored inside a section that otherwise ran
+reads the same way on one line, *Q5 not monitored — needs override or
+priority status; see Point Inventory*. The template derives the line from
+the stored questions, so a run stored before the change renders the same
+way.
+
+### The report's inventory reads "Equipment types found: economizer", or "Required points found: 0 of 70"
+
+**Symptom.** On runs before 2026-11-12 the inventory's first line printed
+the Step 1 classification words (*economizer*, *DX*, *hydronic*) where the
+reader expected the equipment list, and the second counted "required
+points" that were not points.
+
+**Cause.** Two labels, both wrong for what they showed. *Equipment types
+found* now lists the equipment types in scope by count from
+`bas_equipment.equip_type` and the vocabulary's display names - *Rooftop
+Unit × 1, VAV Box × 10* - and a separate *Classification* line carries
+Jim's Step 1 per unit, *RV: DX (by type; compressors not trended) with
+economizer*, which also says why the rooftop unit's DX questions read Not
+Monitored. The count is now labelled for what it is: *Required point
+checks met: 0 of 70 (one check per question per unit it applies to)* - 70
+is the number of question-and-unit pairs on the office (Q3 and Q4 over
+ten VAVs, Q19 over eleven units, and so on), not a number of points. A run
+stored before the change prints its old words as they were.
+
+**Fix.** Nothing to fix on the platform. What the office needs trended for
+the questions to run is in `docs/bas-reports-phase-2-verification.md` →
+*The office inventory, traced (2026-11-12)*.
 
 ### A finding is Still open after the fault was fixed, or New when it is old
 

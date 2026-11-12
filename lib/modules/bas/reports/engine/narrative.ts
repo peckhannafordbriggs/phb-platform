@@ -84,6 +84,8 @@ Write, as the schema asks:
 - status_sentence: one sentence, in plain words, saying why the section has its status and naming the worst finding by its exact name. Answer first; no preamble.
 - for every finding, by its index: likely_cause, one sentence that begins "Likely" or "Possibly" and is worded as a possibility - never a confirmed diagnosis, and never a broken part the evidence has not shown; recommended_action, one sentence naming a concrete check the operator can do next, specific to this finding, never general advice; fix_location, "remote" when the check can be done from the BAS workstation, "site" when somebody has to go to the equipment, "unknown" when the evidence does not say.
 
+A finding whose issue is "Collection stopped" is one incident, not many faults: several points on one station stopped reporting at the same time, and its evidence lists them under points and the causes to check under causes_in_order. Say in the status sentence that the points stopped together and how many, name the station, and do not describe its points as separate faults. Its likely_cause must name the causes in exactly that order - the device network trunk from the JACE to its controllers first, then the histories stopped on the station, then the collector - worded as possibilities; its recommended_action is the first check in that order.
+
 Voice: the way an experienced controls engineer talks on a job site. Plain words; keep the HVAC terms people use (setpoint, damper, VAV, economizer, compressor); the names of buildings, rooms and equipment as given; temperatures in °F as given. No role codes, column names, ids or mention of a database. No markdown, no bullet lists, no filler. If the evidence is old, say its age rather than describing the present.`;
 
 const NarrativeSchema = z.object({
@@ -98,6 +100,12 @@ const NarrativeSchema = z.object({
   ),
 });
 
+/** A copy of the evidence for the prompt, the incident's cause list under the name the prompt uses; the finding's own evidence is never touched. */
+function promptEvidence(evidence: Evidence): Record<string, unknown> {
+  const { causesInOrder, ...rest } = evidence;
+  return Array.isArray(causesInOrder) ? { ...rest, causes_in_order: causesInOrder } : rest;
+}
+
 /** The user message: the section as data, inside a block the system prompt names as data. */
 export function narrativeUserMessage(input: NarrativeInput): string {
   const payload = {
@@ -111,7 +119,7 @@ export function narrativeUserMessage(input: NarrativeInput): string {
       issue: f.issue,
       priority: f.priority,
       state: f.state,
-      evidence: f.evidence,
+      evidence: promptEvidence(f.evidence),
     })),
   };
   return [

@@ -1,5 +1,5 @@
 import { parseRoleRequirements, type RoleRequirement } from "../library";
-import type { EquipmentUnit, OccupancySource, PointSeries } from "./types";
+import type { EquipmentTypeFound, EquipmentUnit, OccupancySource, PointSeries, UnitClassification } from "./types";
 
 /**
  * Jim's Steps 1 and 2 (Reports, Phase 2): classify each unit from its
@@ -7,8 +7,14 @@ import type { EquipmentUnit, OccupancySource, PointSeries } from "./types";
  *
  * STEP 1. "Valve commands mean hydronic. Compressor status or cooling stage
  * points mean DX. Heat stage points mean gas or electric heat. A unit can be
- * more than one." Read from the roles present on the unit's points; written
- * to the inventory's "Equipment types found" line.
+ * more than one." Read from the roles present on the unit's points, and
+ * written to the inventory as one line PER UNIT ("RV: DX with economizer
+ * (compressors not trended)"). The inventory's "Equipment types found" line
+ * is a different thing: the equipment TYPES the building has, by count
+ * (one rooftop unit, ten VAV boxes), read from bas_equipment.equip_type.
+ * Until 2026-11-12 that line printed the Step 1 words instead - the office
+ * read "Equipment types found: economizer", a classification tag standing
+ * where the reader expected the equipment list.
  *
  * APPLICABILITY. A question applies to the equipment TYPES its library row
  * names (the spec's Applies-to column), read from bas_equipment.equip_type,
@@ -51,16 +57,70 @@ export function classify(points: PointSeries[]): Pick<EquipmentUnit, "roles" | "
   };
 }
 
-/** The inventory line: which kinds of equipment the points say the building has. */
-export function equipmentTypesFound(units: EquipmentUnit[]): string[] {
-  const found: string[] = [];
-  if (units.some((u) => u.hydronic || HYDRONIC_HEATING_TYPES.includes(u.equipType ?? "") || HYDRONIC_COOLING_TYPES.includes(u.equipType ?? ""))) {
-    found.push("hydronic");
+/** The label the inventory prints for a unit with no equipment type. */
+export const NO_TYPE_LABEL = "no type set";
+
+/**
+ * The inventory line: which kinds of equipment are in scope, by count,
+ * most numerous first and then by name. A unit with no type is counted
+ * under "no type set" rather than dropped, because it is in scope and the
+ * reader should know it cannot be matched to any question.
+ */
+export function equipmentTypesFound(units: EquipmentUnit[]): EquipmentTypeFound[] {
+  const byType = new Map<string, EquipmentTypeFound>();
+  for (const u of units) {
+    const key = u.equipType ?? "";
+    const existing = byType.get(key);
+    if (existing !== undefined) {
+      existing.count += 1;
+      continue;
+    }
+    byType.set(key, {
+      equipType: u.equipType,
+      label: u.equipType === null ? NO_TYPE_LABEL : (u.equipTypeLabel ?? u.equipType),
+      count: 1,
+    });
   }
-  if (units.some((u) => u.dx)) found.push("DX");
-  if (units.some((u) => u.stagedHeat)) found.push("gas or electric heat");
-  if (units.some((u) => u.economizer)) found.push("economizer");
-  return found;
+  return [...byType.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+/**
+ * Jim's Step 1 for one unit, in words, or null when the unit's points and
+ * type say nothing: "hydronic", "DX with economizer", "DX (by type;
+ * compressors not trended)", "gas or electric heat", "with reheat".
+ *
+ * DX is said two ways on purpose. From a compressor or cooling-stage role
+ * it is the spec's own rule. From the type alone (a rooftop unit with no
+ * compressor point) it is what makes the DX questions APPLY, and the
+ * parenthesis says why they will read Not Monitored.
+ */
+export function classificationText(unit: Pick<EquipmentUnit, "equipType" | "hydronic" | "dx" | "stagedHeat" | "economizer" | "reheat">): string | null {
+  const parts: string[] = [];
+  if (unit.hydronic || HYDRONIC_HEATING_TYPES.includes(unit.equipType ?? "") || HYDRONIC_COOLING_TYPES.includes(unit.equipType ?? "")) {
+    parts.push("hydronic");
+  }
+  if (unit.dx) parts.push("DX");
+  else if (DX_TYPES.includes(unit.equipType ?? "")) parts.push("DX (by type; compressors not trended)");
+  if (unit.stagedHeat) parts.push("gas or electric heat");
+  const qualifiers: string[] = [];
+  if (unit.economizer) qualifiers.push("economizer");
+  if (unit.reheat) qualifiers.push("reheat");
+  if (parts.length === 0 && qualifiers.length === 0) return null;
+  const head = parts.join(" and ");
+  if (qualifiers.length === 0) return head;
+  const tail = `with ${qualifiers.join(" and ")}`;
+  return head.length === 0 ? tail : `${head} ${tail}`;
+}
+
+/** Step 1 per unit, for the inventory's Classification lines; units that classify as nothing are left out. */
+export function classifications(units: EquipmentUnit[]): UnitClassification[] {
+  const out: UnitClassification[] = [];
+  for (const u of units) {
+    const text = classificationText(u);
+    if (text === null) continue;
+    out.push({ equipmentId: u.equipmentId, name: u.name, equipType: u.equipType, text });
+  }
+  return out;
 }
 
 export interface LibraryRowForEngine {

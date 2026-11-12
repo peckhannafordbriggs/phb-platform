@@ -1499,6 +1499,28 @@ ceiling*, *The editor's Questions section is three tabs over one
 checklist*, *Settings shows a bar of its own*, *The page background stops
 short of the bottom*.
 
+**Reports - the rendered report, corrected from the first production run
+(2026-11-12).** The office's first production run read *Equipment types
+found: economizer* and *Required points found: 0 of 70*. Traced on the dev
+database: the lookup is right and the office's points lack the roles -
+no zone setpoint, no fan status, no compressor point is trended on the
+JACE at all, so Q3/Q4/Q9/Q19 need histories added on the station before
+anything is assigned in Settings (`docs/bas-reports-phase-2-verification.md`
+→ *The office inventory, traced*). The page now lists the equipment TYPES
+by count with a separate per-unit *Classification* line, labels the count
+as checks, shows the model's likely cause and recommended action under
+every Data Health row and Summary finding, says what a Not Monitored
+section needs in one line pointing at the inventory, and prints the spend
+and the run's duration with no limit. **Points on one station that stop
+within fifteen minutes of each other, three or more, are ONE
+`collection_stopped` finding** (subject `station:<id>@<minute>`, a CHECK
+widened by migration), rendered as a block above the Data Health table
+with the rows beneath; the narrative names the causes in order (device
+network trunk, histories stopped, collector). **Every Data Health finding
+stays Watch**: the spec is silent on a share or a duration, a test pins it,
+and the question is Jim's (`runbook.md` → *Data Health rolled up to Watch
+with half the building offline*). `WHY-ITS-BUILT-THIS-WAY.md` § 82.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

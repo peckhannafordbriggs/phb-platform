@@ -277,3 +277,198 @@ which run the real files against the real schema.
   per run, the latter with the status, counts and cost; `bas.building_occupancy_updated` for the Settings field
   (test only).
 - The log line per run: `event: "bas.report_run"`, `outcome`, `reason`.
+
+---
+
+## 8. The office inventory, traced, and the rendered report corrected (2026-11-12)
+
+**Why.** The first production run of the office report (`fix/bas-report-rendering`)
+read *Equipment types found: economizer* and *Required points found: 0 of 70*
+for a building with one rooftop unit and ten VAVs whose zone temperatures
+are trended, showed ten points offline since the same minute as ten rows,
+and rolled the building up to Watch. The question was whether the lookup
+was wrong or the points were.
+
+### The trace, on the development database's office station
+
+*Observed* (`bas_equipment`, `bas_points`, `bas_point_roles`, station 6,
+site 7, 2026-11-12): eleven equipment rows - `RV` (`rtu`) and `VAV-1` to
+`VAV-10` (`vav`, each a child of `RV`) - and 26 active points, every one
+attached to a unit. The roles present:
+
+| Unit | Points with a role | Points with no role |
+|---|---|---|
+| RV | `occupancy_cmd` (OccupancyCommand), `occupancy_status` (Occupied), `oa_damper_cmd`, `outside_air_temp`, `supply_fan_speed` (RV_Supply_Fan_Speed_Analog_Output), `ra_damper_cmd`, `duct_static_pressure`, `duct_static_pressure_sp`, `supply_air_temp` (Supply_Temp_Analog_Input), `supply_air_temp_sp` (Temperature_Setpoint) | OpState, OperatingState, OperatingStateOR, System_Enable, Unit Status, Unit_Status_Mode |
+| VAV-1 … VAV-10 | one `zone_temp` each | none |
+
+How the engine reads that (`inventory.ts`, `scope.ts`):
+
+- **"Equipment types found: economizer"** came from `equipmentTypesFound`,
+  which printed Jim's Step 1 words - hydronic / DX / staged heat /
+  economizer, decided from the ROLES on the unit - under a heading that
+  reads as the equipment list. RV carries `oa_damper_cmd` and no compressor
+  or stage role, so the only Step 1 word was *economizer*. The line was
+  true and labelled wrong. It now lists the types from
+  `bas_equipment.equip_type` by count - *VAV Box × 10, Rooftop Unit × 1* -
+  and a separate *Classification* line says *RV: DX (by type; compressors
+  not trended) with economizer*.
+- **"Required points found: 0 of 70"** counted question-and-unit checks:
+  Q3 and Q4 over the ten VAVs with a zone temperature (20), Q5 over all
+  eleven units (11), Q6 and Q7 over ten VAVs (20), Q9–Q12 and Q15–Q18 over
+  RV (8), Q19 over eleven units (11) - 70, none met. The label now says so:
+  *Required point checks met: 0 of 70 (one check per question per unit it
+  applies to)*.
+- **The role matching is right.** `checkRequirements` finds a role on the
+  unit's own points (or, for `outside_air_temp` and `outside_air_humidity`,
+  anywhere on the station), each requirement group met by any one of its
+  alternatives. Checked by hand against the roles above, every Not
+  Monitored decision follows: Q3/Q4 miss the zone setpoint on every VAV;
+  Q9 has DAT and DAT setpoint on RV and misses `supply_fan_status`; Q19
+  misses every status role; Q20 needs nothing and ran. The office's points
+  lack the roles because the points are not trended, not because they are
+  unassigned - the 32 names the JACE reports
+  (`tests/fixtures/bas-office-classification.json`) hold no setpoint, no
+  airflow, no fan status and no compressor point.
+
+**What each question needs before it can run on the office** (*inferred*
+from the library's required roles against the points above):
+
+| Question | Has | Needs, and where it has to come from |
+|---|---|---|
+| Q3, Q4 zone comfort | `zone_temp` on each VAV; occupancy from `Occupied` | A zone setpoint on each VAV: a point with role `zone_temp_sp`, or both `zone_temp_cooling_sp` and `zone_temp_heating_sp`. **No setpoint history exists on the JACE**: the controls team adds the histories on the station, the collector discovers them, then Settings → Points assigns the role and the VAV |
+| Q9 DAT holds setpoint | `supply_air_temp` and `supply_air_temp_sp` on RV | A point with role `supply_fan_status` on RV. The office trends the fan SPEED command, not a status; whether `System_Enable` (bool), `Unit Status` (enum, string values the engine cannot read) or `Unit_Status_Mode` (real) is a fan or unit status is a controls question - if one is, assign it in Settings → Points; if none is, a status history has to be added on the JACE |
+| Q19 run outside schedule | occupancy from `Occupied` | Any one status role on a unit: `supply_fan_status`, `return_fan_status`, `exhaust_fan_status`, `pump_status`, `chiller_status`, `boiler_status`, `compressor_status`, `tower_fan_status` - the same fan status as Q9 would do |
+| Q20 data health | everything | Nothing; it always runs and ran |
+
+Nothing in Settings → Points alone makes Q3, Q4 or Q19 run today: the
+points do not exist on the station. The spec forbids substituting (fan
+speed for fan status, say), and the engine does not.
+
+### Run 9 - the September week again, on the corrected page
+
+The same period as runs 2, 3, 5 and 6, with the real narrator. Verbatim:
+
+```
+Run 9: succeeded
+PHB Steel Place · 2026-09-22T13:00:00.000Z to 2026-09-29T13:00:00.000Z · last 7 days
+Building status: Watch · new 1, still open 0, cleared 18
+Equipment types found: VAV Box × 10, Rooftop Unit × 1 · 26 points, 11 equipment
+Classification: RV: DX (by type; compressors not trended) with economizer
+Required point checks met: 0 of 70 (one check per question per unit it applies to)
+Occupancy: PHBoffice: point (Occupied (occupancy status point))
+
+  Space Comfort: not_monitored - Not monitored — needs active setpoint (or heating and cooling setpoints); override or priority status; see Point Inventory.
+    Q3 not_monitored: missing active setpoint (or heating and cooling setpoints)
+    Q4 not_monitored: missing active setpoint (or heating and cooling setpoints)
+    Q5 not_monitored: missing override or priority status
+  VAV: not_monitored - Not monitored — needs airflow; airflow setpoint; damper position; active setpoint (or heating and cooling setpoints); see Point Inventory.
+    Q6 not_monitored: missing airflow; airflow setpoint
+    Q7 not_monitored: missing damper position; active setpoint (or heating and cooling setpoints)
+    Q8 not_applicable: no vav with reheat on this building
+  AHU / RTU: not_monitored - Not monitored — needs fan status; duct static (coverage 72%); heating valve or heat stage; cooling valve or compressor status; OA damper (coverage 72%); RAT; see Point Inventory.
+    Q9 not_monitored: missing fan status
+    Q10 not_monitored: missing duct static (coverage 72%); fan status
+    Q11 not_monitored: missing heating valve or heat stage; cooling valve or compressor status
+    Q12 not_monitored: missing OA damper (coverage 72%); RAT
+  Hot Water: not_applicable
+    Q13 not_applicable: no hydronic heating on this building
+  Chilled Water: not_applicable
+    Q14 not_applicable: no hydronic cooling on this building
+  DX Cooling and Heat: not_monitored - Not monitored — needs compressor status or stage command; compressor status; RAT or MAT; OA damper (coverage 72%); heat stage status; see Point Inventory.
+    Q15 not_monitored: missing compressor status or stage command
+    Q16 not_monitored: missing compressor status; RAT or MAT
+    Q17 not_monitored: missing compressor status; OA damper (coverage 72%)
+    Q18 not_monitored: missing heat stage status; RAT or MAT
+  Schedules: not_monitored - Not monitored — needs fan or equipment status; see Point Inventory.
+    Q19 not_monitored: missing fan or equipment status
+  Data Health: watch - Data Health is on watch because VAV-8 104-105_ZoneTemperature has read exactly 70.5 °F for the full 7.0 days since 22 Sept, 09:00, against a 6 h limit for a temperature to sit unchanged.
+    Q20 answered: 26 points judged, 1 flagged
+      [watch] VAV-8 104-105_ZoneTemperature - Flat-lined: exactly 70.5 °F for 7.0 days (672 readings); expected a value that moves; the threshold for temperature is 6 h; since 22 Sept, 09:00 (new)
+        likely: Possibly the point is overridden or stuck at a fixed value in the controller, or the sensor or its wiring has stopped reporting a live reading, since a real zone temperature rarely holds exactly 70.5 °F for 672 readings in a row.
+        next: From the BAS workstation, check whether VAV-8 104-105_ZoneTemperature is in override or out of service and compare it against the box's airflow and damper position to see if the zone is actually responding.
+  Cleared: Outside_Air_Damper_Analog_Output1 (No readings), Outside_Air_Temp_Analog_Input1 (No readings), Return Air Damper (No readings), ROOM 107 (No readings), ROOM 130-132 (No readings), RV_Supply_Fan_Speed_Analog_Output (No readings), Supply_Duct_Static_Pressure_Analog_Input (No readings), Supply_Duct_Static_Pressure_Setpoint (No readings), Supply_Temp_Analog_Input (No readings), Temperature_Setpoint (No readings), VAV-2 122-125_ZoneTemperature (No readings), VAV-3 120-121_ZoneTemperature (No readings), VAV-4 114-115_ZoneTemperature (No readings), VAV-5 117-118_ZoneTemperature (No readings), VAV-6 113_ZoneTemperature (No readings), VAV-7 111-112_ZoneTemperature (No readings), VAV-8 104-105_ZoneTemperature (No readings), VAV-9 106_ZoneTemperature (No readings)
+
+Cost: 1 call(s), 1529 in / 277 out, $0.0129 (safety ceiling $10.00); took 5 s
+```
+
+The eighteen *Cleared* rows are run 8's per-point "No readings" findings
+(a period after the data stopped, before the incident grouping existed):
+they do not recur in this period, so they clear - the one-time shift the
+runbook names.
+
+### Run 10 - the week after the data stopped: one incident, eighteen rows
+
+The period 30 September to 7 October, which the development database has
+no readings for. Verbatim:
+
+```
+Run 10: succeeded
+PHB Steel Place · 2026-09-30T00:00:00.000Z to 2026-10-07T00:00:00.000Z · last 7 days
+Building status: Watch · new 1, still open 0, cleared 1
+Equipment types found: VAV Box × 10, Rooftop Unit × 1 · 26 points, 11 equipment
+Classification: RV: DX (by type; compressors not trended) with economizer
+Required point checks met: 0 of 70 (one check per question per unit it applies to)
+Occupancy: PHBoffice: point (Occupied (occupancy status point))
+
+  Space Comfort: not_monitored - Not monitored — needs space temp; active setpoint (or heating and cooling setpoints); override or priority status; see Point Inventory.
+    Q3 not_monitored: missing space temp; active setpoint (or heating and cooling setpoints)
+    Q4 not_monitored: missing space temp; active setpoint (or heating and cooling setpoints)
+    Q5 not_monitored: missing override or priority status
+  VAV: not_monitored - Not monitored — needs airflow; airflow setpoint; damper position; space temp; active setpoint (or heating and cooling setpoints); see Point Inventory.
+    Q6 not_monitored: missing airflow; airflow setpoint
+    Q7 not_monitored: missing damper position; space temp; active setpoint (or heating and cooling setpoints)
+    Q8 not_applicable: no vav with reheat on this building
+  AHU / RTU: not_monitored - Not monitored — needs DAT; DAT setpoint; fan status; duct static; static setpoint; heating valve or heat stage; cooling valve or compressor status; OA damper; OAT; RAT; see Point Inventory.
+    Q9 not_monitored: missing DAT; DAT setpoint; fan status
+    Q10 not_monitored: missing duct static; static setpoint; fan status
+    Q11 not_monitored: missing heating valve or heat stage; cooling valve or compressor status
+    Q12 not_monitored: missing OA damper; OAT; RAT
+  Hot Water: not_applicable
+    Q13 not_applicable: no hydronic heating on this building
+  Chilled Water: not_applicable
+    Q14 not_applicable: no hydronic cooling on this building
+  DX Cooling and Heat: not_monitored - Not monitored — needs compressor status or stage command; compressor status; DAT; RAT or MAT; OAT; OA damper; heat stage status; see Point Inventory.
+    Q15 not_monitored: missing compressor status or stage command
+    Q16 not_monitored: missing compressor status; DAT; RAT or MAT
+    Q17 not_monitored: missing compressor status; OAT; OA damper
+    Q18 not_monitored: missing heat stage status; DAT; RAT or MAT
+  Schedules: not_monitored - Not monitored — needs fan or equipment status; see Point Inventory.
+    Q19 not_monitored: missing fan or equipment status
+  Data Health: watch - Data Health is on watch because 18 points on the PHBoffice station stopped reporting together, with last readings on 29 Sept between 13:00 and 13:10, and nothing has come in for 7.3 days since.
+    Q20 answered: 26 points judged, 1 flagged
+      [watch] PHBoffice - Collection stopped: 18 points stopped reporting at the same time, last readings 29 Sept, 13:00-13:10; expected each point reporting at its interval; since 29 Sept, 13:00 (new)
+          Outside_Air_Damper_Analog_Output1 - No readings: no readings in the period; last reading 29 Sept, 13:10
+          Outside_Air_Temp_Analog_Input1 - No readings: no readings in the period; last reading 29 Sept, 13:00
+          Return Air Damper - No readings: no readings in the period; last reading 29 Sept, 13:10
+          ROOM 107 - No readings: no readings in the period; last reading 29 Sept, 13:00
+          ROOM 130-132 - No readings: no readings in the period; last reading 29 Sept, 13:00
+          RV_Supply_Fan_Speed_Analog_Output - No readings: no readings in the period; last reading 29 Sept, 13:10
+          Supply_Duct_Static_Pressure_Analog_Input - No readings: no readings in the period; last reading 29 Sept, 13:10
+          Supply_Duct_Static_Pressure_Setpoint - No readings: no readings in the period; last reading 29 Sept, 13:00
+          Supply_Temp_Analog_Input - No readings: no readings in the period; last reading 29 Sept, 13:00
+          Temperature_Setpoint - No readings: no readings in the period; last reading 29 Sept, 13:00
+          VAV-2 122-125_ZoneTemperature - No readings: no readings in the period; last reading 29 Sept, 13:00
+          VAV-3 120-121_ZoneTemperature - No readings: no readings in the period; last reading 29 Sept, 13:00
+          VAV-4 114-115_ZoneTemperature - No readings: no readings in the period; last reading 29 Sept, 13:00
+          VAV-5 117-118_ZoneTemperature - No readings: no readings in the period; last reading 29 Sept, 13:00
+          VAV-6 113_ZoneTemperature - No readings: no readings in the period; last reading 29 Sept, 13:00
+          VAV-7 111-112_ZoneTemperature - No readings: no readings in the period; last reading 29 Sept, 13:00
+          VAV-8 104-105_ZoneTemperature - No readings: no readings in the period; last reading 29 Sept, 13:00
+          VAV-9 106_ZoneTemperature - No readings: no readings in the period; last reading 29 Sept, 13:00
+        likely: Likely the device network trunk from the JACE to its controllers is down, possibly the histories stopped on the station, or possibly the collector stopped pulling data, checked in that order.
+        next: From the BAS workstation, open the PHBoffice station and check whether the controllers on the trunk from the JACE show online and are giving live values for points like Supply_Temp_Analog_Input and the VAV zone temperatures.
+  Cleared: VAV-8 104-105_ZoneTemperature (Flat-lined)
+
+Cost: 1 call(s), 4150 in / 249 out, $0.0170 (safety ceiling $10.00); took 6 s
+```
+
+*Observed*: one `bas_report_findings` row for the incident, subject
+`station:6@2026-09-29T17:00Z`, with the eighteen points in its evidence,
+plus one cleared row for VAV-8; `report_html` holds the incident block
+above the Data Health table and eighteen rows below it; the narrative
+named the three causes in the order asked and its recommended action is
+the first of them. The building status is Watch, by the decision recorded
+in `runbook.md` → *Data Health rolled up to Watch with half the building
+offline*.
+
+The rendered HTML of both runs is on the pull request.

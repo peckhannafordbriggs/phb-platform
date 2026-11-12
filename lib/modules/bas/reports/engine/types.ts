@@ -24,7 +24,8 @@ export interface Interval {
  * `expected` are already worded with their unit ("77.8 °F", "within ±2 °F of
  * 72.0 °F"); `duration` or `percent` says how long or how often; `when` says
  * when (a time of day, a date, "since 24 Aug"). Extra keys carry the raw
- * numbers for a table.
+ * numbers for a table - and, for a collection incident, the member points
+ * (`IncidentPoint[]` under `points`) and the causes in order.
  */
 export interface Evidence {
   actual: string;
@@ -35,10 +36,28 @@ export interface Evidence {
   [extra: string]: unknown;
 }
 
+/** One point inside a collection incident, as its own Data Health row. */
+export interface IncidentPoint {
+  pointId: string;
+  name: string;
+  issueCode: "offline" | "stale";
+  issue: string;
+  actual: string;
+  expected: string;
+  duration: string;
+  when: string;
+  /** The point's last reading, UTC ms. */
+  lastAt: number;
+}
+
 export interface Finding {
   questionKey: string;
   section: LibrarySection;
-  /** `equipment:<id>` or `point:<id>`. */
+  /**
+   * `equipment:<id>` or `point:<id>`; a collection incident is
+   * `station:<id>@<minute>` (the minute the first point stopped, UTC, ISO
+   * to the minute), so the fingerprint keys on the station and the time.
+   */
   subjectKey: string;
   equipmentId: string | null;
   subjectName: string;
@@ -99,6 +118,8 @@ export interface EquipmentUnit {
   equipmentId: string;
   name: string;
   equipType: string | null;
+  /** The type's display name from bas_equipment_types ("Rooftop Unit"), null when the unit has no type. */
+  equipTypeLabel: string | null;
   parentEquipmentId: string | null;
   points: PointSeries[];
   roles: Set<string>;
@@ -182,12 +203,37 @@ export interface ReportHeader {
   windowLabel: string;
   outdoor: { avgF: number; highF: number; lowF: number; pointName: string } | null;
   generatedAt: string;
+  /** How long the run took to compute and narrate, in ms; null on a document stored before it was recorded. */
+  durationMs: number | null;
   status: RunStatus;
   partialReason: string | null;
 }
 
+/** One equipment type the building has, with how many units of it are in scope. */
+export interface EquipmentTypeFound {
+  equipType: string | null;
+  /** The type's display name, or the key when the vocabulary has none, or "no type set". */
+  label: string;
+  count: number;
+}
+
+/** Jim's Step 1 for one unit, in words: "DX with economizer (compressors not trended)". */
+export interface UnitClassification {
+  equipmentId: string;
+  name: string;
+  equipType: string | null;
+  text: string;
+}
+
 export interface InventoryDocument {
-  equipmentTypesFound: string[];
+  /** The equipment types present, by count. Documents stored before 2026-11-12 hold the Step 1 words as strings instead. */
+  equipmentTypesFound: EquipmentTypeFound[];
+  /** Step 1 per unit, for the units that classify as anything. Absent on documents stored before 2026-11-12. */
+  classification: UnitClassification[];
+  /**
+   * One check per question per unit it applies to: met when every required
+   * group is present at the coverage floor. Not a count of points.
+   */
   requiredPointsFound: number;
   requiredPointsTotal: number;
   lowCoverage: Array<{ name: string; coverage: number }>;
@@ -218,5 +264,6 @@ export interface ReportDocument {
   carriedForward: Finding[];
   /** Custom questions, which this phase does not run. */
   plannerQuestions: Array<{ text: string; note: string }>;
+  /** `budgetUsd` is the safety ceiling in force; stamped on the run, not printed on the page. */
   cost: { inputTokens: number; outputTokens: number; costUsd: number; budgetUsd: number; model: string | null; calls: number };
 }

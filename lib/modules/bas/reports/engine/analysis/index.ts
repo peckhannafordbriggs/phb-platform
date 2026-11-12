@@ -35,7 +35,18 @@ export const ANALYSIS_AVAILABILITY: Readonly<Record<string, AnalysisAvailability
 
 export const NOT_BUILT_NOTE = "The analysis for this question is built in Phase 5. Its points were checked and it could run.";
 
-export { dataHealth, DATA_HEALTH_QUESTION, PHYSICAL_RANGES, physicalRangeFor } from "./data-health";
+export {
+  dataHealth,
+  incidentPoints,
+  incidentMinute,
+  COLLECTION_STOPPED,
+  DATA_HEALTH_QUESTION,
+  INCIDENT_CAUSES,
+  INCIDENT_MIN_POINTS,
+  INCIDENT_WINDOW_MS,
+  PHYSICAL_RANGES,
+  physicalRangeFor,
+} from "./data-health";
 export { zoneComfort, COMFORT_QUESTION, WORST_ZONES_QUESTION, BAND_F, WATCH_PERCENT, ACTION_PERCENT, ACTION_DEVIATION_F } from "./comfort";
 export { manualOverrides, OVERRIDES_QUESTION, OVERRIDE_ROLES } from "./overrides";
 export { runOutsideSchedule, SCHEDULES_QUESTION, STATUS_ROLES, ACTION_HOURS } from "./schedules";

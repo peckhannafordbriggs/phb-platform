@@ -983,6 +983,59 @@ and reads it back. `WHY-ITS-BUILT-THIS-WAY.md` § 81; `runbook.md` →
 *Reports: the safety ceiling*, *The editor's Questions section is a
 checklist*, *The Reports list says there is nothing, or Usage shows zero*.
 
+### Reports — the rendered report, corrected from the first production run (2026-11-12)
+
+**What changed** (`fix/bas-report-rendering`). The first production run of
+the office report read *Equipment types found: economizer* and *Required
+points found: 0 of 70*, showed Data Health as point / problem / evidence /
+since with no cause or action, repeated every Not Monitored question's
+missing roles in its section after the inventory had listed them, printed
+the spend as *$0.0397 of $2.00* after the per-report budget was gone, and
+listed ten points that stopped at the same minute as ten faults.
+
+- **The inventory.** *Equipment types found* lists the types in scope by
+  count with the vocabulary's names (`EquipmentTypeFound[]`, from
+  `bas_equipment_types.display_name`, loaded in `scope.ts`); a
+  *Classification* line carries Jim's Step 1 per unit in words
+  (`classificationText`: *DX (by type; compressors not trended) with
+  economizer*); the count is labelled *Required point checks met: N of M
+  (one check per question per unit it applies to)*. The diagnosis that
+  prompted it is `docs/bas-reports-phase-2-verification.md` → *The office
+  inventory, traced*: the lookup was right, the office's points lack the
+  roles, and most of the missing points are not trended on the JACE at all.
+- **Likely cause and recommended action everywhere.** A Data Health row
+  carries the model's two sentences on a second line under it, and so does
+  each Summary finding; the Data Health evidence cell carries the duration.
+  The narrative call is unchanged - one per section, by index, numbers
+  final.
+- **Collection incidents.** Points on one station whose last readings fall
+  within fifteen minutes of each other, three or more, are ONE
+  `collection_stopped` finding with the points inside its evidence
+  (`IncidentPoint[]`), subject `station:<id>@<minute>`, rendered as a block
+  above the Data Health table with the member rows below it; the status,
+  the summary, the counts and the narrative see one finding, and the
+  narrative is asked to name the causes in order - the device network
+  trunk, the histories stopped on the station, the collector. The
+  `subject_key` CHECK admits the third shape
+  (`bas_report_findings_station_incident`).
+- **Severity.** Every Data Health finding stays Watch: the spec is silent
+  on a share or a duration, and a test pins the decision until Jim decides
+  one (`runbook.md` → *Data Health rolled up to Watch with half the
+  building offline*).
+- **Repetition and the footer.** A Not Monitored section is its badge and
+  one line from `wording.ts` (*Not monitored — needs ...; see Point
+  Inventory*), derived from the stored questions so old runs render the
+  same way; the footer prints the spend and the run's duration
+  (`header.durationMs`) and no limit.
+
+Documents stored before this date render too: their types line is printed
+as the words it held, and they have no classification line and no
+duration. `tests/bas-reports-render.test.tsx` holds every change above
+against the fixture and a pre-change copy of it; the incident is driven
+through `dataHealth` in `tests/bas-reports-analysis.test.ts` and end to end
+in `tests/bas-reports-engine.test.ts` (*a period after the data stopped*).
+`WHY-ITS-BUILT-THIS-WAY.md` § 82.
+
 ## Classification — the office building, in SQL
 
 **This is the section the 8 September version said could not exist yet** —

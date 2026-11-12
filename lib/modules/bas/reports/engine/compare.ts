@@ -10,6 +10,12 @@ import type { Finding, RawFinding } from "./types";
  * are compared without the prose and without the numbers - a VAV starved for
  * air at 62% of occupied hours and the same VAV at 70% next week are one
  * open item, not a cleared one and a new one.
+ *
+ * A collection incident's subject is `station:<id>@<minute>` (Data Health,
+ * 2026-11-12), so its fingerprint keys on the station and the minute the
+ * first point stopped: the same stop is Still open next week however many
+ * of its points are still out, and a later stop on the same station is a
+ * new incident.
  */
 
 export function fingerprintOf(questionKey: string, subjectKey: string, issueCode: string): string {

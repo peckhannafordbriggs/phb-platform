@@ -7,7 +7,7 @@ import { LIBRARY_SECTIONS, sectionLabel, type LibrarySection } from "../library"
 import { WINDOW_LABELS } from "../schedule";
 import { ANALYSIS_AVAILABILITY, NOT_BUILT_NOTE, dataHealth, manualOverrides, runOutsideSchedule, zoneComfort } from "./analysis";
 import { carriedForward, compareFindings, type PreviousFinding } from "./compare";
-import { decideQuestion, equipmentTypesFound } from "./inventory";
+import { classifications, decideQuestion, equipmentTypesFound } from "./inventory";
 import type { Narrator, NarrativeInput } from "./narrative";
 import { renderReportHtml } from "./html";
 import type { SafetyCeiling } from "../ceiling";
@@ -15,6 +15,7 @@ import { readSafetyCeiling } from "../ceiling-read";
 import { ReportRunError, enqueueRun } from "./queue";
 import { buildingStatus, sectionStatus, topFindings } from "./rollup";
 import { loadDefinition, resolveScope, type DefinitionForRun } from "./scope";
+import { missingForSection, notMonitoredSentence } from "./wording";
 import type {
   Finding,
   Interval,
@@ -283,7 +284,9 @@ async function produce(
   const tz = def.site.timezone;
 
   // Data Health first; its flagged points are excluded from everything else.
-  const health = dataHealth(scope.points, range, tz);
+  // Station names go in so a collection incident - several points on one
+  // station stopping together - is named after the station.
+  const health = dataHealth(scope.points, range, tz, new Map(scope.stations.map((s) => [s.stationId, s.name])));
   const excluded = health.excluded;
 
   const libraryQuestions = def.questions.filter((q) => q.library !== null).map((q) => q.library!);
@@ -317,7 +320,9 @@ async function produce(
     // Data Health is already computed above, so the cap never skips it.
     if (q.key === "q20_data_health") {
       rawFindings.push(...health.findings);
-      results.push({ ...base, metrics: { judged: health.judged, flagged: health.findings.length } });
+      // `flagged` counts POINTS (every flagged point is excluded); an
+      // incident of eighteen points is one finding and eighteen flagged.
+      results.push({ ...base, metrics: { judged: health.judged, flagged: health.excluded.size, findings: health.findings.length } });
       continue;
     }
     if (availability === "derived") {
@@ -499,7 +504,16 @@ async function produce(
       key: s.key,
       label: s.label,
       status,
-      statusSentence: status === "good" ? "Everything judged was within tolerance." : status === "not_monitored" ? "The points this section needs are not trended, or not trended enough; see the inventory." : status === "not_run" ? notRunSentence : "",
+      // A Not Monitored section says in one line what it needs and points
+      // at the inventory, which lists every question's missing points once.
+      statusSentence:
+        status === "good"
+          ? "Everything judged was within tolerance."
+          : status === "not_monitored"
+            ? notMonitoredSentence(missingForSection(questions))
+            : status === "not_run"
+              ? notRunSentence
+              : "",
       questions,
       findings,
     });
@@ -581,11 +595,13 @@ async function produce(
       windowLabel: WINDOW_LABELS[def.analysisWindow],
       outdoor: scope.outdoor,
       generatedAt: now.toISOString(),
+      durationMs: clock() - startedMs,
       status,
       partialReason,
     },
     inventory: {
       equipmentTypesFound: equipmentTypesFound(scope.units),
+      classification: classifications(scope.units),
       requiredPointsFound: requiredFound,
       requiredPointsTotal: requiredTotal,
       lowCoverage: [...lowCoverage.entries()].map(([name, coverage]) => ({ name, coverage })).sort((a, b) => a.coverage - b.coverage),

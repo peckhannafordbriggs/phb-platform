@@ -67,11 +67,14 @@ describe("the report template under the worker's loader", () => {
       const source = readFileSync(TEMPLATE, "utf8").split(/\r?\n/);
       expect(source[0]).toMatch(/^\/\*\* @jsxRuntime automatic @jsxImportSource react \*\//);
       const engine = path.dirname(TEMPLATE).replace(/\\/g, "/");
+      const reports = path.dirname(engine);
+      // Every relative import pointed back at the engine, whatever the
+      // template imports this week.
       const stripped = source
         .slice(1)
         .join("\n")
-        .replace('from "./rollup"', `from "${engine}/rollup"`)
-        .replace('from "./types"', `from "${engine}/types"`);
+        .replace(/from "\.\/([^"]+)"/g, (_, rel: string) => `from "${engine}/${rel}"`)
+        .replace(/from "\.\.\/([^"]+)"/g, (_, rel: string) => `from "${reports}/${rel}"`);
       writeFileSync(path.join(dir, "render-without-pragma.tsx"), stripped);
       writeFileSync(
         path.join(dir, "entry.ts"),

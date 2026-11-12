@@ -85,6 +85,48 @@ describe("bas_report_definitions", () => {
   });
 });
 
+describe("bas_report_findings", () => {
+  const findingRow = (runId: bigint, subjectKey: string) => ({
+    runId,
+    position: 0,
+    questionKey: "q20_data_health",
+    section: "data_health",
+    subjectKey,
+    subjectName: "s",
+    issueCode: "collection_stopped",
+    priority: "watch",
+    evidence: { actual: "a", expected: "b", when: "c" },
+    fingerprint: "f".repeat(64),
+    state: "new",
+  });
+  async function run(tx: Tx) {
+    const f = await createBasFixture(tx);
+    const o = await owner(tx);
+    const d = await definition(tx, f.siteId, o.id);
+    return tx.basReportRun.create({
+      data: { reportId: d.reportId, status: "queued", trigger: "manual", periodStart: new Date("2026-11-04T00:00:00Z"), periodEnd: new Date("2026-11-11T00:00:00Z"), timezone: "America/New_York", budgetUsd: "10.00" },
+    });
+  }
+
+  it("takes a subject of an equipment, a point, or a station at a minute - and nothing looser (2026-11-12)", async () => {
+    await inRollback(async (tx) => {
+      const r = await run(tx);
+      for (const key of ["equipment:7", "point:44", "station:6@2026-09-29T17:00Z"]) {
+        const row = await tx.basReportFinding.create({ data: findingRow(r.runId, key) });
+        expect(row.subjectKey).toBe(key);
+        await tx.basReportFinding.delete({ where: { findingId: row.findingId } });
+      }
+    });
+    for (const key of ["station:6", "station:6@2026-09-29T17:00:00Z", "station:6@2026-09-29T17:00", "station:x@2026-09-29T17:00Z", "building:1"]) {
+      const error = await expectRejection(async (tx) => {
+        const r = await run(tx);
+        await tx.basReportFinding.create({ data: findingRow(r.runId, key) });
+      });
+      expect(error.message, key).toContain("bas_report_findings_subject_key_shape");
+    }
+  });
+});
+
 describe("bas_report_settings", () => {
   it("holds one row, bounded both ways, and reads as the defaults when the row is absent", async () => {
     // The test suite's truncation of employees CASCADEs through updated_by_id

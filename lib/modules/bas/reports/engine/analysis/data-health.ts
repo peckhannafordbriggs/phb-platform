@@ -17,7 +17,7 @@ import {
   totalMs,
   whereTrue,
 } from "../series";
-import type { Interval, PointSeries, RawFinding } from "../types";
+import type { IncidentPoint, Interval, PointSeries, RawFinding } from "../types";
 
 /**
  * Question 20, Data Health (Reports, Phase 2): "Which points went offline,
@@ -45,10 +45,41 @@ import type { Interval, PointSeries, RawFinding } from "../types";
  * no change is its normal week - and is judged flat only through the
  * plausibility rules it already answers to. Every finding here is Watch:
  * "go and look", never a confirmed fault, the same stance as Collection
- * Health's card.
+ * Health's card. The spec is silent on whether a share of points offline, or
+ * how long, should make Data Health Action Needed (checked 2026-11-12; the
+ * template gives Data Health no status line at all), so Watch it stays
+ * until Jim says otherwise - runbook.md → *Data Health rolled up to Watch
+ * with half the building offline*.
+ *
+ * A COLLECTION INCIDENT (2026-11-12). When several points on ONE station
+ * stop at the same time - their last readings within INCIDENT_WINDOW_MS of
+ * each other, INCIDENT_MIN_POINTS or more of them - that is one event, not
+ * ten faults: the device network trunk from the JACE to its controllers,
+ * the histories stopped on the station, or the collector. The ten rows
+ * stay in the table, but they are carried INSIDE one `collection_stopped`
+ * finding (its evidence's `points`), so the status roll-up, the summary,
+ * the New / Still open / Cleared counts and the narrative see one finding.
+ * Its subject is `station:<id>@<minute>`, the minute the first of them
+ * stopped, so the fingerprint keys on the station and the time: the same
+ * stop reads Still open next week, and a second stop on the same station
+ * is a new incident. A point that has never reported at all is not "a stop"
+ * and is never clustered.
  */
 
 export const DATA_HEALTH_QUESTION = "q20_data_health";
+
+/** The issue code of a collection incident, and its subject prefix. */
+export const COLLECTION_STOPPED = "collection_stopped";
+/** Points whose last readings fall within this of each other stopped together. */
+export const INCIDENT_WINDOW_MS = 15 * MINUTE_MS;
+/** Fewer than this many stopping together is a coincidence the table shows as rows. */
+export const INCIDENT_MIN_POINTS = 3;
+/** The causes of a collection incident, in the order to check them, as the narrative is asked to name them. */
+export const INCIDENT_CAUSES: readonly string[] = [
+  "the device network trunk from the JACE to its controllers",
+  "the histories stopped on the station",
+  "the collector",
+];
 
 interface PhysicalRange {
   roles: readonly string[] | ((role: string) => boolean);
@@ -145,9 +176,30 @@ export interface DataHealthResult {
   judged: number;
 }
 
-export function dataHealth(points: PointSeries[], range: Interval, timezone: string): DataHealthResult {
+/** A point that stopped, before the incident grouping decides whether it stopped alone. */
+interface Stopped {
+  finding: RawFinding;
+  stationId: string;
+  /** The last reading's instant. */
+  lastAt: number;
+  point: IncidentPoint;
+}
+
+/** The ISO minute the subject key carries: "2026-09-29T17:00Z". */
+export function incidentMinute(ms: number): string {
+  return `${new Date(Math.floor(ms / MINUTE_MS) * MINUTE_MS).toISOString().slice(0, 16)}Z`;
+}
+
+export function dataHealth(
+  points: PointSeries[],
+  range: Interval,
+  timezone: string,
+  /** Station names by id, for an incident's subject name; a station not named reads "station <id>". */
+  stationNames: ReadonlyMap<string, string> = new Map(),
+): DataHealthResult {
   const findings: RawFinding[] = [];
   const excluded = new Set<string>();
+  const stopped: Stopped[] = [];
   let judged = 0;
 
   const base = (p: PointSeries) => ({
@@ -166,7 +218,7 @@ export function dataHealth(points: PointSeries[], range: Interval, timezone: str
     // Offline and stale: interval trends only.
     if (interval && p.readingCount === 0) {
       excluded.add(p.pointId);
-      findings.push({
+      const finding: RawFinding = {
         ...base(p),
         issueCode: "offline",
         issue: "No readings",
@@ -177,7 +229,10 @@ export function dataHealth(points: PointSeries[], range: Interval, timezone: str
           durationMs: range.end - range.start,
           when: p.carryInAt === null ? "never reported" : `last reading ${localTime(p.carryInAt, timezone)}`,
         },
-      });
+      };
+      // A point that has never reported did not stop with the others.
+      if (p.carryInAt === null) findings.push(finding);
+      else stopped.push({ finding, stationId: p.stationId, lastAt: p.carryInAt, point: incidentPoint(p, finding, p.carryInAt) });
       continue;
     }
 
@@ -186,7 +241,7 @@ export function dataHealth(points: PointSeries[], range: Interval, timezone: str
       const staleAfter = Math.max(6 * p.intervalS! * 1000, 2 * HOUR_MS);
       if (range.end - last > staleAfter) {
         excluded.add(p.pointId);
-        findings.push({
+        const finding: RawFinding = {
           ...base(p),
           issueCode: "stale",
           issue: "Stopped trending",
@@ -197,7 +252,8 @@ export function dataHealth(points: PointSeries[], range: Interval, timezone: str
             durationMs: range.end - last,
             when: `since ${localTime(last, timezone)}`,
           },
-        });
+        };
+        stopped.push({ finding, stationId: p.stationId, lastAt: last, point: incidentPoint(p, finding, last) });
         continue;
       }
     }
@@ -275,9 +331,110 @@ export function dataHealth(points: PointSeries[], range: Interval, timezone: str
     }
   }
 
-  // Stable order: by name, so two runs list the same problems the same way.
-  findings.sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+  const incidents = groupIncidents(stopped, range, timezone, stationNames);
+  findings.push(...incidents.alone, ...incidents.incidents);
+
+  // Stable order: incidents first, then by name, so two runs list the same
+  // problems the same way.
+  findings.sort((a, b) => {
+    const ai = a.issueCode === COLLECTION_STOPPED ? 0 : 1;
+    const bi = b.issueCode === COLLECTION_STOPPED ? 0 : 1;
+    return ai - bi || a.subjectName.localeCompare(b.subjectName);
+  });
   return { findings, excluded, judged };
+}
+
+function incidentPoint(p: PointSeries, finding: RawFinding, lastAt: number): IncidentPoint {
+  return {
+    pointId: p.pointId,
+    name: p.name,
+    issueCode: finding.issueCode as "offline" | "stale",
+    issue: finding.issue,
+    actual: finding.evidence.actual,
+    expected: finding.evidence.expected,
+    duration: finding.evidence.duration ?? "",
+    when: finding.evidence.when,
+    lastAt,
+  };
+}
+
+/**
+ * Cluster the stopped points per station by their last reading: sorted,
+ * a point joins the cluster before it when their last readings are within
+ * the window. A cluster of INCIDENT_MIN_POINTS or more is one incident; the
+ * rest are rows of their own.
+ */
+function groupIncidents(
+  stopped: Stopped[],
+  range: Interval,
+  timezone: string,
+  stationNames: ReadonlyMap<string, string>,
+): { incidents: RawFinding[]; alone: RawFinding[] } {
+  const byStation = new Map<string, Stopped[]>();
+  for (const s of stopped) byStation.set(s.stationId, [...(byStation.get(s.stationId) ?? []), s]);
+
+  const incidents: RawFinding[] = [];
+  const alone: RawFinding[] = [];
+  for (const [stationId, members] of byStation) {
+    members.sort((a, b) => a.lastAt - b.lastAt || a.finding.subjectName.localeCompare(b.finding.subjectName));
+    const clusters: Stopped[][] = [];
+    for (const m of members) {
+      const current = clusters[clusters.length - 1];
+      if (current !== undefined && m.lastAt - current[current.length - 1]!.lastAt <= INCIDENT_WINDOW_MS) current.push(m);
+      else clusters.push([m]);
+    }
+    for (const cluster of clusters) {
+      if (cluster.length < INCIDENT_MIN_POINTS) {
+        alone.push(...cluster.map((c) => c.finding));
+        continue;
+      }
+      const first = cluster[0]!.lastAt;
+      const last = cluster[cluster.length - 1]!.lastAt;
+      const stationName = stationNames.get(stationId) ?? `station ${stationId}`;
+      const points = cluster.map((c) => c.point).sort((a, b) => a.name.localeCompare(b.name));
+      const sinceMs = range.end - first;
+      const window = stopWindow(first, last, timezone);
+      incidents.push({
+        questionKey: DATA_HEALTH_QUESTION,
+        section: "data_health",
+        subjectKey: `station:${stationId}@${incidentMinute(first)}`,
+        equipmentId: null,
+        subjectName: stationName,
+        issueCode: COLLECTION_STOPPED,
+        issue: "Collection stopped",
+        priority: "watch",
+        evidence: {
+          actual: `${points.length} points stopped reporting at the same time, last readings ${window}`,
+          expected: "each point reporting at its interval",
+          duration: describeDuration(sinceMs),
+          durationMs: sinceMs,
+          when: `since ${localTime(first, timezone)}`,
+          stationId,
+          stationName,
+          stoppedAt: new Date(first).toISOString(),
+          count: points.length,
+          points,
+          causesInOrder: [...INCIDENT_CAUSES],
+        },
+      });
+    }
+  }
+  return { incidents, alone };
+}
+
+/** "29 Sept, 13:00", "29 Sept, 13:00-13:10", or "29 Sept, 23:55 to 30 Sept, 00:05": when the first and the last of a cluster stopped. */
+function stopWindow(first: number, last: number, timezone: string): string {
+  const a = localTime(first, timezone);
+  const b = localTime(last, timezone);
+  if (a === b) return a;
+  const dayA = a.slice(0, a.lastIndexOf(",") );
+  const dayB = b.slice(0, b.lastIndexOf(","));
+  return dayA === dayB ? `${a}-${b.slice(b.lastIndexOf(",") + 2)}` : `${a} to ${b}`;
+}
+
+/** The member rows of a collection incident, or an empty list for any other finding. */
+export function incidentPoints(evidence: Record<string, unknown>): IncidentPoint[] {
+  return Array.isArray(evidence.points) ? (evidence.points as IncidentPoint[]) : [];
 }
 
 /** For a test: the hold a change-of-value point has in minutes. */
