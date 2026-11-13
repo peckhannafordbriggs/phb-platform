@@ -5,7 +5,7 @@ import { createAnthropicNarrator, createFixedNarrator } from "../lib/modules/bas
 import { executeReportRun, ReportRunError } from "../lib/modules/bas/reports/engine/run";
 import { STATUS_LABELS } from "../lib/modules/bas/reports/engine/rollup";
 import { incidentPoints } from "../lib/modules/bas/reports/engine/analysis/data-health";
-import { describeRunDuration } from "../lib/modules/bas/reports/engine/wording";
+import { describeRunDuration, positiveAnswer } from "../lib/modules/bas/reports/engine/wording";
 
 /**
  * Run one report definition end to end against DATABASE_URL and store the
@@ -101,7 +101,9 @@ async function main(): Promise<void> {
               : q.key === "q20_data_health"
                 ? `${String(q.metrics.judged ?? 0)} points judged, ${String(q.metrics.flagged ?? 0)} flagged in ${String(q.metrics.findings ?? q.metrics.flagged ?? 0)} finding(s)`
                 : `over ${q.equipment.length} unit(s)${q.skipped.length > 0 ? `, skipped ${q.skipped.map((k) => `${k.name} (${k.reason})`).join(", ")}` : ""}`;
-      console.log(`    Q${q.position} ${q.outcome}: ${detail}`);
+      // The page's one line for a question that ran and found nothing, so the console and the report agree.
+      const live = s.findings.filter((f) => f.questionKey === q.key && f.state !== "cleared");
+      console.log(`    Q${q.position} ${q.outcome}: ${detail}${q.outcome === "answered" && live.length === 0 ? ` - ${positiveAnswer(q)}` : ""}`);
     }
     for (const f of s.findings) {
       console.log(`      [${f.priority}] ${f.subjectName} - ${f.issue}: ${f.evidence.actual}; expected ${f.evidence.expected}; ${f.evidence.when} (${f.state})`);

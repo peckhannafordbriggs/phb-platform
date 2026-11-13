@@ -60,7 +60,7 @@ export const PRINT_CSS = `
 @page { size: Letter; }
 html, body { margin: 0; padding: 0; background: #fff; }
 .bas-report { max-width: none; }
-.bas-report h1, .bas-report h2 { break-after: avoid; }
+.bas-report h1, .bas-report h2, .bas-report h3 { break-after: avoid; }
 .bas-report tr, .bas-report .incident, .bas-report .partial { break-inside: avoid; }
 .bas-report thead { display: table-header-group; }
 .bas-report table { break-inside: auto; }

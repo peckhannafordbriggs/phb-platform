@@ -516,6 +516,11 @@ describe("inventory: classification, applicability, requirements", () => {
       outcome: "not_applicable",
       reason: "no hydronic heating on this building",
     });
+    // An acronym in the Applies-to label keeps its case mid-sentence.
+    expect(decideQuestion(lib("q08_reheat_open_above_cooling_sp"), [rtu, vavOk], pointsByStation, occupancy, stationOf, new Set())).toMatchObject({
+      outcome: "not_applicable",
+      reason: "no VAV with reheat on this building",
+    });
     const dat = decideQuestion(lib("q09_dat_holds_setpoint"), [rtu], pointsByStation, occupancy, stationOf, new Set());
     expect(dat.outcome).toBe("not_monitored");
     expect(dat.missing).toEqual(["fan status"]);

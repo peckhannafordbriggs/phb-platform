@@ -46,6 +46,8 @@ export interface SchedulesResult {
   results: ScheduleResult[];
   findings: RawFinding[];
   judged: number;
+  /** The unit with the most hours outside schedule, for the page's one-line answer when nothing qualified (2026-11-13); null when nothing was judged. */
+  longestOutside: { name: string; hours: number } | null;
 }
 
 export function runOutsideSchedule(
@@ -99,5 +101,6 @@ export function runOutsideSchedule(
 
   results.sort((a, b) => b.hoursOutside - a.hoursOutside || a.name.localeCompare(b.name));
   findings.sort((a, b) => ((b.evidence.hoursOutside as number) ?? 0) - ((a.evidence.hoursOutside as number) ?? 0));
-  return { results, findings, judged };
+  const first = results[0];
+  return { results, findings, judged, longestOutside: first === undefined ? null : { name: first.name, hours: first.hoursOutside } };
 }

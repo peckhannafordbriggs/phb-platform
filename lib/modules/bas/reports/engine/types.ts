@@ -170,6 +170,14 @@ export interface QuestionResult {
   text: string;
   kind: "computed" | "planner";
   outcome: QuestionOutcome;
+  /**
+   * What the question needs, the spec's Points-required column in its own
+   * words, as the engine read it from the library row ("space temp; active
+   * setpoint (or heating and cooling setpoints); occupancy"). On documents
+   * stored before 2026-11-13 it is absent, and the template reads the
+   * library's row for the key instead.
+   */
+  needs: string;
   /** For not_monitored: the spec's labels for the missing requirements. */
   missing: string[];
   /** For not_applicable or not_run: why, in words. */
@@ -246,6 +254,12 @@ export interface InventoryDocument {
 
 export interface SummaryDocument {
   status: SectionStatus;
+  /**
+   * The Summary's own questions (the spec's 1 and 2), so the page can head
+   * each half with the question's words. Absent on documents stored before
+   * 2026-11-13, which the template heads from the library.
+   */
+  questions: QuestionResult[];
   topFindings: Finding[];
   counts: { new: number; stillOpen: number; cleared: number };
   siteVisit: string[];

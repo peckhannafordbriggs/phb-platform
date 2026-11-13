@@ -1087,6 +1087,63 @@ Dockerfile, CI's browser install, the scaler query). Captures:
 `docs/design/bas-reports-pdf/`. `WHY-ITS-BUILT-THIS-WAY.md` § 83;
 `runbook.md` → *Reports: the PDF*.
 
+### Reports — every question on the page, in its own words (2026-11-13)
+
+**What changed** (`feat/bas-report-question-layout`). The rendered report
+(`lib/modules/bas/reports/engine/render.tsx`, the run page and the PDF
+alike) lists each question the report carries inside its section as a
+sub-heading in the spec's words - *Q3. What percent of occupied hours did
+each zone hold within ±2°F of setpoint?* - with its answer directly beneath:
+
+- the findings it raised this period (the existing rows with evidence,
+  likely cause, recommended action and the New / Still open / Cleared
+  chips); Q4 is answered by its worst-zones table, Q19 shows its hours
+  table above its findings;
+- or one factual line when it ran and found nothing, written from numbers
+  the analysis now returns and the engine stores in the question's
+  `metrics` - `zonesJudged` and `lowestPercentInBand` on `ComfortResult`,
+  `judged` and `longestOutside` on `SchedulesResult`, `judged` on the
+  overrides and Data Health results: *All 10 zones judged held setpoint for
+  at least 95% of occupied hours*, *None of the 11 units judged ran outside
+  its schedule for 30 minutes at a stretch or on two days; the most time
+  outside was 0.3 h (RV)*, *All 26 points judged were reporting, changing
+  and within physical range*;
+- or, muted, why it did not run: *Not monitored — this building does not
+  trend: airflow; airflow setpoint*, *Not applicable — no hydronic heating
+  on this building*, *Not analysed — the analysis for this question is
+  built in Phase 5. Its points were checked and it could run. Units it
+  would run over: RV*.
+
+Units a question skipped are named under it (*Not judged: VAV-5 (no
+setpoint trended)*). The section's badge stays on the section heading; a
+Not Monitored section no longer carries a line of its own. The Point
+Inventory's *Not Monitored* bullets are a table - number, the full
+question, what it needs (`needs`, stored on every `QuestionResult` from the
+library row the engine read, `describeRequiredRoles`), the result (*Runs* /
+*Not monitored — missing …* / *Not applicable — …* / *Could run; not
+analysed*) - under the unchanged counts line. The Summary heads its two
+halves with the spec's Q1 and Q2 (`summary.questions`, stored) and names
+the findings behind each count. Cleared findings are grouped under the
+question they came from; a custom question is its text over its note. The
+`Q` prefix is what keeps question numbers apart from the section numbers
+(*3. VAV* is a section; *Q3* is a question). Documents stored before this
+date render with the library supplying the words, the needs and the
+Summary's two questions, and a positive line that says only what the
+stored metrics support. The wording is in `wording.ts` (`questionHeading`,
+`positiveAnswer`, `notMonitoredLine`, `notApplicableLine`, `notRunLine`,
+`skippedLine`, `questionNeeds`; `TIME_CAP_NOTE` moved there so the template
+and its test need no engine import), and `h3` joined the print rules'
+`break-after: avoid`. The dev script prints the same positive line.
+
+**Held by** `tests/bas-reports-render.test.tsx`: the order of heading and
+answer for every outcome, all twenty questions under their headings and in
+the inventory table, the cleared groups, the pre-change document, and the
+stylesheet's colour set unchanged; `tests/bas-reports-pdf.test.ts` holds
+the sample document's new page count. Captures:
+`docs/design/bas-report-question-layout/`. `WHY-ITS-BUILT-THIS-WAY.md`
+§ 84; `runbook.md` → *Every question is a sub-heading on the report, and
+what the line under it means*.
+
 ## Classification — the office building, in SQL
 
 **This is the section the 8 September version said could not exist yet** —

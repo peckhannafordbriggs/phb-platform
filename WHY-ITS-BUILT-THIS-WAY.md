@@ -3440,3 +3440,59 @@ guard into the worker and the night of 2026-11-12 happens again.
 `tests/bas-reports-pdf.test.ts`, `tests/bas-reports-queue-guards.test.ts`,
 `tests/deploy-guards.test.ts`; `runbook.md` → *Reports: the PDF*, *Reports:
 a run is stuck or failed*.
+
+## 84 · Every question is on the report in its own words, and a question that found nothing says what it checked
+
+**What I did (2026-11-13).** The rendered report lists each question a
+report carries as a sub-heading in the spec's words inside its section -
+*Q3. What percent of occupied hours did each zone hold within ±2°F of
+setpoint?* - with its answer directly beneath: the findings it raised, or
+one line from the analysis's own numbers when there were none, or the
+reason it did not run with the points it lacks. The inventory lists the
+same questions as a table with what each needs and its result; the Summary
+heads its halves with the spec's first two questions; cleared findings are
+grouped under their question; a custom question is its text over its note.
+The analysis functions return the headline numbers the positive line needs
+(how many zones, the lowest share in band; how many units, the most hours
+outside schedule; how many points judged), and the engine stores them in
+the question's metrics beside what the question needed, so the page is
+derived from the document, and a document from before this change renders
+with the library's words for the same keys.
+
+**Why.** The first production run was read by someone who knew the spec by
+number, and the page assumed everyone would: *Q3 (Space Comfort): missing
+…*, *Q6 could run but has no analysis yet*, a Not Monitored section that
+said *see Point Inventory*. A PDF goes to people who have never seen the
+spec's table. A reader who has to look up what Q3 is does not look it up;
+they skim the chips. Putting the question on the page is what makes the
+thing under it an answer.
+
+The positive line is written from numbers rather than as a stock phrase
+for the reason every number on the page comes from a finding (§ 78).
+*Nothing found* is a claim about how hard the question looked, and *All 10
+zones judged held setpoint for at least 95% of occupied hours* is
+checkable - it names the count that would be wrong if a zone had been
+quietly skipped, and the skipped ones are listed beside it. A report that
+says *Good* without saying what it judged is the plausibility lesson
+again: a dead sensor is the best-behaved zone in the building until
+someone asks how many zones were judged.
+
+The library as the fallback for old documents, rather than a migration of
+stored JSON, because the document is the record of a run: the words a
+question had when it ran are stored from this change on, and a run from
+before is rendered with the words the library holds now - the spec's,
+verbatim, held to the migration by a test - which are the words it had.
+
+**What breaks if you undo it.** Drop the heading and the PDF is a list of
+chips keyed by numbers nobody has. Replace the positive line with a stock
+sentence and a question that judged nothing reads the same as one that
+judged everything. Number the heading without the Q and the two schemes -
+sections 0-9, questions 1-20 - collide on the page: *3. VAV* is a section
+and *Q3* is a question, and the prefix is what keeps them apart.
+
+`lib/modules/bas/reports/engine/render.tsx`, `wording.ts`, `run.ts`
+(`needs`, `summary.questions`, the headline metrics),
+`analysis/comfort.ts`, `analysis/schedules.ts`;
+`tests/bas-reports-render.test.tsx`;
+`docs/design/bas-report-question-layout/`; `runbook.md` → *Every question
+is a sub-heading on the report, and what the line under it means*.
