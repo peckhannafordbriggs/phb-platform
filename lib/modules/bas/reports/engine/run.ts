@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { BAS_MODULE_KEY } from "../../constants";
-import { LIBRARY_SECTIONS, sectionLabel, type LibrarySection } from "../library";
+import { LIBRARY_SECTIONS, describeRequiredRoles, parseRoleRequirements, sectionLabel, type LibrarySection } from "../library";
 import { WINDOW_LABELS } from "../schedule";
 import { ANALYSIS_AVAILABILITY, NOT_BUILT_NOTE, dataHealth, manualOverrides, runOutsideSchedule, zoneComfort } from "./analysis";
 import { carriedForward, compareFindings, type PreviousFinding } from "./compare";
@@ -15,7 +15,7 @@ import { readSafetyCeiling } from "../ceiling-read";
 import { ReportRunError, enqueueRun } from "./queue";
 import { buildingStatus, sectionStatus, topFindings } from "./rollup";
 import { loadDefinition, resolveScope, type DefinitionForRun } from "./scope";
-import { missingForSection, notMonitoredSentence } from "./wording";
+import { TIME_CAP_NOTE, missingForSection, notMonitoredSentence } from "./wording";
 import type {
   Finding,
   Interval,
@@ -90,8 +90,9 @@ export interface RunOutcome {
   findings: number;
 }
 
-/** A question the time cap stopped before it was analysed. */
-export const TIME_CAP_NOTE = "Not analysed: the run reached its time cap before this question.";
+// The time-cap note lives in wording.ts (no React, no Prisma) so the
+// template and its test can word it without importing the engine.
+export { TIME_CAP_NOTE };
 
 // The queue side lives in queue.ts, which imports no React: the service and
 // the scheduler queue runs through it without pulling in the renderer.
@@ -316,6 +317,7 @@ async function produce(
       text: q.text,
       kind: q.kind === "planner" ? "planner" : "computed",
       outcome: "answered",
+      needs: describeRequiredRoles(parseRoleRequirements(q.requiredRoles)),
       missing: [],
       reason: null,
       equipment: [],
@@ -391,6 +393,7 @@ async function produce(
           const parts = [...byStation.entries()].map(([, units]) =>
             zoneComfort(units, occupiedFor(units[0]!.equipmentId), range, tz, excluded),
           );
+          const lowest = parts.map((p) => p.lowestPercentInBand).filter((v): v is number => v !== null);
           comfort = {
             zones: parts.flatMap((p) => p.zones),
             findings: parts.flatMap((p) => p.findings),
@@ -401,6 +404,8 @@ async function produce(
               .sort((a, b) => a.percentInBand! - b.percentInBand!)
               .slice(0, 10),
             skipped: parts.flatMap((p) => p.skipped),
+            zonesJudged: parts.reduce((s, p) => s + p.zonesJudged, 0),
+            lowestPercentInBand: lowest.length === 0 ? null : Math.min(...lowest),
           };
           comfortCache.set(cacheKey, comfort);
         }
@@ -410,7 +415,12 @@ async function produce(
             ...base,
             equipment: decision.qualified.map((u) => u.name),
             skipped: [...decision.skipped, ...comfort.skipped],
-            metrics: { overallPercentInBand: comfort.overallPercentInBand, zones: comfort.zones },
+            metrics: {
+              overallPercentInBand: comfort.overallPercentInBand,
+              zones: comfort.zones,
+              zonesJudged: comfort.zonesJudged,
+              lowestPercentInBand: comfort.lowestPercentInBand,
+            },
           });
         } else {
           results.push({
@@ -438,11 +448,19 @@ async function produce(
           runOutsideSchedule(units, occupiedFor(units[0]!.equipmentId), range, tz, excluded),
         );
         rawFindings.push(...parts.flatMap((p) => p.findings));
+        const longest = parts
+          .map((p) => p.longestOutside)
+          .filter((l): l is { name: string; hours: number } => l !== null)
+          .sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name))[0] ?? null;
         results.push({
           ...base,
           equipment: decision.qualified.map((u) => u.name),
           skipped: decision.skipped,
-          metrics: { schedules: parts.flatMap((p) => p.results) },
+          metrics: {
+            schedules: parts.flatMap((p) => p.results),
+            judged: parts.reduce((s, p) => s + p.judged, 0),
+            longestOutside: longest,
+          },
         });
         break;
       }
@@ -619,6 +637,7 @@ async function produce(
     },
     summary: {
       status: summaryStatus,
+      questions: results.filter((r) => r.section === "summary"),
       topFindings: topFindings(liveFindings),
       counts: comparison.counts,
       siteVisit: liveFindings.filter((f) => f.fixLocation === "site").map((f) => f.subjectName),

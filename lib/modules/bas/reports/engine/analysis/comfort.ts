@@ -102,6 +102,13 @@ export interface ComfortResult {
   worst: ZoneResult[];
   /** Zones that could not be judged, with why. */
   skipped: Array<{ name: string; reason: string }>;
+  /**
+   * The headline numbers for the page's one-line answer when no zone
+   * raised a finding (2026-11-13): how many zones were judged, and the
+   * smallest share of occupied hours any of them held in band.
+   */
+  zonesJudged: number;
+  lowestPercentInBand: number | null;
 }
 
 export function zoneComfort(
@@ -245,12 +252,15 @@ export function zoneComfort(
 
   findings.sort((a, b) => (b.evidence.percent ?? 0) - (a.evidence.percent ?? 0) || a.subjectName.localeCompare(b.subjectName));
 
+  const judgedZones = zones.filter((z) => z.percentInBand !== null);
   return {
     zones,
     findings,
     overallPercentInBand: totalJudged > 0 ? Math.round((totalIn / totalJudged) * 1000) / 10 : null,
     worst,
     skipped,
+    zonesJudged: judgedZones.length,
+    lowestPercentInBand: judgedZones.length === 0 ? null : Math.min(...judgedZones.map((z) => z.percentInBand as number)),
   };
 }
 

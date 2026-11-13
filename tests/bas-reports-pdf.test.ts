@@ -147,8 +147,8 @@ async function readPdf(bytes: Uint8Array): Promise<{ pages: number; text: string
 // ---------------------------------------------------------------------------
 
 describe("the renderer (real Chromium, the one the image and CI install)", () => {
-  /** The sample document is three Letter pages at these margins; a template change that moves the count is a change to notice. */
-  const SAMPLE_PAGES = 3;
+  /** The sample document is four Letter pages at these margins (three before the question-first layout of 2026-11-13, five while the inventory carried a question table); a template change that moves the count is a change to notice. */
+  const SAMPLE_PAGES = 4;
 
   it("prints the sample report to a Letter PDF of the expected page count, with the header and the page numbers", async () => {
     const renderer = createChromiumRenderer();

@@ -11576,8 +11576,9 @@ script, which is also why a test drives it (next entry but one).
 ### A section reads Not Applicable, or a question reads Not Monitored, and what the words mean
 
 **Symptom.** The office report shows Hot Water and Chilled Water as *Not
-Applicable* and fourteen questions as *Not Monitored*, each with a list
-such as *missing airflow; airflow setpoint*.
+Applicable* and fourteen questions as *Not Monitored*, each under its own
+heading with a line such as *Not monitored — this building does not trend:
+airflow; airflow setpoint*.
 
 **Cause.** Two different decisions, by design. **Not Applicable** is about
 what the building *has*: no equipment row of a type the question applies
@@ -11590,7 +11591,8 @@ unit has every required group at 80 % coverage or better, and the list
 names the groups. A group that is present but short reads *(coverage
 72 %)* rather than being lumped in with absent. The building-wide list is
 what *every* skipped unit lacks; one unit's own lack (a sensor Data Health
-excluded, say) is on that unit's skipped line on the run page.
+excluded, say) is the *Not judged: …* line under the question on the run
+page (shown since 2026-11-13; stored but not shown before).
 
 **Fix.** Not Applicable when the building has the plant: add the equipment
 row in Settings - type decides. Not Monitored: trend the named roles on the
@@ -11754,22 +11756,62 @@ should affect the building status at all.
 `analysis/data-health.ts` beside the incident grouping, the test above
 changes with it, and this entry records the decision.
 
-### A Not Monitored section is one line, and the inventory lists what it needs
+### Every question is a sub-heading on the report, and what the line under it means
 
-**Symptom.** A section reads *Not Monitored* with one line - *Not
-monitored — needs airflow; airflow setpoint; damper position; see Point
-Inventory* - and no per-question list; the Point Inventory's *Not
-Monitored* list carries each question with its section and its missing
-points.
+**Symptom.** Since 2026-11-13 a report - the run page and the PDF, one
+template - lists each question inside its section in the spec's words,
+*Q3. What percent of occupied hours did each zone hold within ±2°F of
+setpoint?*, and directly under it one of:
 
-**Cause.** Deliberate (2026-11-12): the inventory is the one place the
-full list lives, and a section names the union of what its questions need
-and points there, rather than repeating the inventory question by
-question. A question Not Monitored inside a section that otherwise ran
-reads the same way on one line, *Q5 not monitored — needs override or
-priority status; see Point Inventory*. The template derives the line from
-the stored questions, so a run stored before the change renders the same
-way.
+- the findings table (or, for Q4, the worst-zones table; Q19 has its hours
+  table above its findings);
+- one line when the question ran and found nothing - *All 10 zones judged
+  held setpoint for at least 95% of occupied hours*, *None of the 11 units
+  judged ran outside its schedule for 30 minutes at a stretch or on two
+  days; the most time outside was 0.3 h (RV)*, *All 26 points judged were
+  reporting, changing and within physical range*;
+- a muted line saying why it did not run: *Not monitored — this building
+  does not trend: airflow; airflow setpoint*; *Not applicable — no
+  hydronic heating on this building*; *Not analysed — the analysis for
+  this question is built in Phase 5. Its points were checked and it could
+  run. Units it would run over: RV*; *Not analysed — the run reached its
+  time cap before this question*.
+
+Under an answered question, *Not judged: VAV-5 (no setpoint trended)*
+names the units it skipped. The Point Inventory keeps only its building
+lines - equipment types, classification, the coverage line, the occupancy
+source, the points in scope - with no question list and no *Required
+point checks met* count (the dev script still prints the count); the
+Summary's two halves are headed by Q1 and Q2 and each count names its
+findings (*New this period: 2 —
+VAV-3 (Zone above setpoint), points_RoomT (Out of physical range)*);
+cleared findings sit under the question they came from; a custom question
+is its text over its note. A Not Monitored section has no sentence of its
+own any more - its badge is on the heading and each question says what it
+lacks. Runs stored before this date show the same layout.
+
+**Cause.** Deliberate: a reader with only the PDF must never need to look
+up what *Q3* is, so the question is on the page and the answer is under
+it. The positive line is written from numbers the analysis returns and the
+engine stores in the question's `metrics` (zones judged and the lowest
+share in band; units judged and the most hours outside; points judged),
+never a stock phrase: a question that judged nothing must not read like
+one that judged everything. The *Q* prefix keeps question numbers apart
+from section numbers (*3. VAV* is a section; *Q3* is a question). On a run
+stored before the change the library supplies a question's words, what it
+needs and the Summary's two questions by key - the spec's words, held to
+the migration by a test - and the positive line says only what the stored
+metrics support (*No data problems found in the period* when a Data
+Health run stored no count). The engine still stores a Not Monitored
+section's one-line sentence for the dev script; the page does not show
+it.
+
+**Fix.** Nothing to fix. To find what a building must trend for a
+question, read the line under the question; the full requirement is the
+question's row on the Library sub-tab of Reports. If a question is on the
+report and missing from the page, it is in no section's `questions` on
+the stored document - the dev script lists every question the engine
+decided.
 
 ### The report's inventory reads "Equipment types found: economizer", or "Required points found: 0 of 70"
 
@@ -11788,7 +11830,10 @@ Monitored. The count is now labelled for what it is: *Required point
 checks met: 0 of 70 (one check per question per unit it applies to)* - 70
 is the number of question-and-unit pairs on the office (Q3 and Q4 over
 ten VAVs, Q19 over eleven units, and so on), not a number of points. A run
-stored before the change prints its old words as they were.
+stored before the change prints its old words as they were. Since
+2026-11-13 the count is not on the page at all - every question is in its
+section with its own line - and `npm run bas:report:run` is where it is
+printed.
 
 **Fix.** Nothing to fix on the platform. What the office needs trended for
 the questions to run is in `docs/bas-reports-phase-2-verification.md` →

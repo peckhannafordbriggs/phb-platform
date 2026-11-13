@@ -236,6 +236,16 @@ export function checkRequirements(
 /** Roles that describe the building rather than one unit, satisfied from anywhere on the station. */
 export const BUILDING_LEVEL_ROLES: readonly string[] = ["outside_air_temp", "outside_air_humidity"];
 
+/**
+ * The spec's Applies-to label mid-sentence: "Hydronic heating" reads "hydronic
+ * heating", while "VAV with reheat" and "DX with economizer" keep their
+ * acronym. Until 2026-11-13 the whole label was lower-cased and the page
+ * read "no vav with reheat on this building" under the question.
+ */
+function lowerLeadingWord(label: string): string {
+  return label.replace(/^[A-Z][a-z]/, (m) => m.toLowerCase());
+}
+
 export interface QuestionDecision {
   outcome: "not_applicable" | "not_monitored" | "runnable";
   reason: string | null;
@@ -258,7 +268,7 @@ export function decideQuestion(
   if (applicable.length === 0 && question.appliesToEquipment.length > 0) {
     return {
       outcome: "not_applicable",
-      reason: `no ${question.appliesToLabel.toLowerCase()} on this building`,
+      reason: `no ${lowerLeadingWord(question.appliesToLabel)} on this building`,
       missing: [],
       qualified: [],
       skipped: [],
