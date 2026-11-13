@@ -2039,9 +2039,26 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     // so a browser that cannot start fails the build and not the first report.
     const instructions = dockerfile.split(/\r?\n/).filter((line) => !line.trim().startsWith("#")).join("\n");
     expect(instructions).toMatch(/^ENV PLAYWRIGHT_BROWSERS_PATH=\/ms-playwright$/m);
-    expect(instructions).toMatch(/RUN npx playwright install --with-deps chromium\s*\\\s*&& chmod -R a\+rX \/ms-playwright/);
+    // The headless shell only (2026-11-13): a headless launch never runs the
+    // full browser, and a plain `install chromium` downloads both.
+    expect(instructions).toMatch(/RUN npx playwright install --with-deps --only-shell chromium\s*\\\s*&& chmod -R a\+rX \/ms-playwright/);
+    expect((instructions.match(/playwright install/g) ?? []).length).toBe(1);
     expect(instructions.indexOf("ENV PLAYWRIGHT_BROWSERS_PATH")).toBeLessThan(instructions.indexOf("npx playwright install"));
-    expect(instructions.indexOf("USER node")).toBeLessThan(instructions.indexOf("chromium.launch()"));
+    // The check runs as `node`: the last USER in the file, and before the check.
+    const users = [...instructions.matchAll(/^USER (\S+)$/gm)];
+    expect(users.at(-1)![1]).toBe("node");
+    expect(users.at(-1)!.index).toBeLessThan(instructions.indexOf("chromium.launch()"));
+    // No layer re-owns /app (2026-11-13): `chown -R node:node /app` after the
+    // install and the copy stored node_modules and the source a second time.
+    // /app is made the user's while empty, and every COPY says whose it is.
+    expect(instructions).not.toMatch(/chown\s+-R/);
+    expect(instructions).toMatch(/^RUN mkdir \/app && chown node:node \/app\nWORKDIR \/app$/m);
+    const copies = instructions.match(/^COPY .*$/gm) ?? [];
+    expect(copies.length).toBe(4);
+    for (const copy of copies) expect(copy).toMatch(/^COPY --chown=node:node /);
+    // Nothing is installed into /app by root: the install is after the first USER node and before root's turn for apt.
+    expect(instructions.indexOf("USER node")).toBeLessThan(instructions.indexOf("npm ci --omit=dev"));
+    expect(instructions.indexOf("npm ci --omit=dev")).toBeLessThan(instructions.indexOf("USER root"));
     expect(instructions).toMatch(/RUN node -e "require\('playwright'\)\.chromium\.launch\(\)/);
     expect(instructions).toMatch(/p\.pdf\(\{ format: 'Letter' \}\)/);
     // The web image never gets a browser.
@@ -2052,7 +2069,7 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(pkgJson.dependencies.playwright).toMatch(/^\d+\.\d+\.\d+$/);
     // CI installs the same browser the same way, before the tests that print.
     const ci = await readFile(".github/workflows/ci.yml");
-    expect(ci).toMatch(/- name: Install Chromium for the PDF tests\s*run: npx playwright install --with-deps chromium/);
+    expect(ci).toMatch(/- name: Install Chromium for the PDF tests\s*run: npx playwright install --with-deps --only-shell chromium/);
     expect(ci.indexOf("npx playwright install")).toBeLessThan(ci.indexOf("run: npm test"));
     expect(ci.indexOf("run: npm ci")).toBeLessThan(ci.indexOf("npx playwright install"));
     const pkg = JSON.parse(await readFile("package.json")) as { scripts: Record<string, string> };

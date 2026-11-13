@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
+import { isBuiltin } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -53,6 +54,12 @@ const SCRIPTS = {
 const IMPORT_RE = /(?:^|\n)\s*(?:import|export)\s+(?:[^'"\n]*?\s+from\s+)?['"]([^'"]+)['"]/g;
 const ENV_READ_RE = /process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*(?:['"]([A-Za-z_][A-Za-z0-9_]*)['"]|([A-Za-z_][A-Za-z0-9_]*))\s*\])/g;
 
+/** `import("x")` and `require("x")`: a package loaded lazily is still a package the image must carry. */
+const LAZY_RE = /(?:import|require)\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+/** `@scope/name/sub/path` -> `@scope/name`; `name/sub` -> `name`. */
+const packageName = (spec: string) => spec.split("/").slice(0, spec.startsWith("@") ? 2 : 1).join("/");
+
 const stripComments = (source: string) =>
   source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
@@ -75,6 +82,8 @@ interface Graph {
   parent: Map<string, string | null>;
   /** process.env reads per module: the name, or `[CONST]` for a bracketed identifier. */
   envReads: Map<string, string[]>;
+  /** Every npm package a reachable module loads (static, dynamic or require): package name -> the first module that names it. */
+  packages: Map<string, string>;
 }
 
 const rel = (file: string) => path.relative(ROOT, file).split(path.sep).join("/");
@@ -83,6 +92,7 @@ function walk(entry: string): Graph {
   const start = path.join(ROOT, entry);
   const parent = new Map<string, string | null>([[start, null]]);
   const envReads = new Map<string, string[]>();
+  const packages = new Map<string, string>();
   const queue = [start];
   const modules: string[] = [];
   while (queue.length > 0) {
@@ -91,15 +101,18 @@ function walk(entry: string): Graph {
     const code = stripComments(readFileSync(file, "utf8"));
     const reads = [...code.matchAll(ENV_READ_RE)].map((m) => m[1] ?? m[2] ?? `[${m[3]}]`);
     if (reads.length > 0) envReads.set(rel(file), [...new Set(reads)].sort());
-    for (const m of code.matchAll(IMPORT_RE)) {
-      const target = resolveImport(m[1]!, file);
+    for (const m of [...code.matchAll(IMPORT_RE), ...code.matchAll(LAZY_RE)]) {
+      const spec = m[1]!;
+      const target = resolveImport(spec, file);
       if (target !== null && !parent.has(target)) {
         parent.set(target, file);
         queue.push(target);
       }
+      const local = spec.startsWith("@/") || spec.startsWith(".");
+      if (!local && !isBuiltin(spec) && !packages.has(packageName(spec))) packages.set(packageName(spec), rel(file));
     }
   }
-  return { modules, parent, envReads };
+  return { modules, parent, envReads, packages };
 }
 
 function chainTo(graph: Graph, target: string): string[] {
@@ -143,6 +156,81 @@ describe("neither job script can reach the web app's env schema", () => {
 
   it("the Cost Intelligence worker, the pattern the jobs follow, does not reach it either", () => {
     expect(chainTo(walk("scripts/cip-worker.ts"), "lib/env.ts")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. The packages on the graph against package.json's `dependencies`
+// ---------------------------------------------------------------------------
+
+/**
+ * The jobs image installs with `npm ci --omit=dev` (2026-11-13; with the
+ * development tree in it and /app stored twice by a recursive chown the image
+ * was 6.56 GB). So a package either script loads at run time must be in
+ * `dependencies`: one that is only in `devDependencies` is simply absent from
+ * the image, and the job dies on its first line with ERR_MODULE_NOT_FOUND -
+ * in Azure, since every local run and every test here has the whole tree.
+ * `tsx` (the loader both commands name) and `dotenv` (scripts/load-env.ts)
+ * were development dependencies until this test was written.
+ */
+describe("everything a job loads at run time is a production dependency", () => {
+  const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")) as {
+    dependencies: Record<string, string>;
+    devDependencies: Record<string, string>;
+  };
+  const dockerfile = readFileSync(path.join(ROOT, "Dockerfile.bas-reports"), "utf8")
+    .split(/\r?\n/)
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+
+  it("the image installs production dependencies only", () => {
+    const installs = dockerfile.match(/npm (?:ci|install|i)\b[^\n&\\]*/g) ?? [];
+    expect(installs.map((i) => i.trim())).toEqual(["npm ci --omit=dev"]);
+  });
+
+  for (const [job, script] of Object.entries(SCRIPTS)) {
+    it(`${job}: every package on the import graph of ${script} is in dependencies`, () => {
+      const { packages } = walk(script);
+      // The walk does see packages: the database adapter and the env loader at the least.
+      expect([...packages.keys()]).toContain("@prisma/adapter-pg");
+      expect([...packages.keys()]).toContain("dotenv");
+      const missing = [...packages].filter(([name]) => !(name in pkg.dependencies)).map(([name, from]) => `${name} (loaded by ${from})`);
+      expect(missing, "move these from devDependencies to dependencies, or the jobs image lacks them").toEqual([]);
+    });
+  }
+
+  it("the worker's graph carries the browser and the model client; the scheduler's carries neither", () => {
+    const worker = [...walk(SCRIPTS.worker).packages.keys()];
+    for (const name of ["playwright", "@anthropic-ai/sdk", "react", "react-dom", "zod"]) expect(worker, name).toContain(name);
+    const scheduler = [...walk(SCRIPTS.scheduler).packages.keys()];
+    expect(scheduler).not.toContain("playwright");
+    expect(scheduler).not.toContain("@anthropic-ai/sdk");
+  });
+
+  it("the loader the commands name, and the CLI postinstall generates the client with, survive --omit=dev", () => {
+    // `npx tsx <script>` is the command of both jobs (the template, held in tests/deploy-guards.test.ts).
+    expect(pkg.dependencies.tsx).toBeDefined();
+    // No package is listed twice: the two entries could drift.
+    expect(Object.keys(pkg.dependencies).filter((name) => name in pkg.devDependencies)).toEqual([]);
+    // `prisma` is a development dependency that the lockfile does NOT mark
+    // dev-only - it is an optional peer of @prisma/client - so --omit=dev
+    // keeps it and postinstall's `prisma generate` still runs in the image.
+    // If a Prisma release drops that peer, this fails here and not in the build.
+    const lock = JSON.parse(readFileSync(path.join(ROOT, "package-lock.json"), "utf8")) as {
+      packages: Record<string, { dev?: boolean; devOptional?: boolean }>;
+    };
+    expect(lock.packages["node_modules/prisma"]).toBeDefined();
+    expect(lock.packages["node_modules/prisma"]!.dev).toBeUndefined();
+    for (const name of ["tsx", "esbuild", "dotenv", "playwright", "playwright-core"]) {
+      const entry = lock.packages[`node_modules/${name}`];
+      expect(entry, name).toBeDefined();
+      expect(entry!.dev, name).toBeUndefined();
+      expect(entry!.devOptional, name).toBeUndefined();
+    }
+    // prisma.config.ts, which the CLI loads to generate, takes dotenv and prisma/config from node_modules and nothing else.
+    const config = stripComments(readFileSync(path.join(ROOT, "prisma.config.ts"), "utf8"));
+    const bare = [...config.matchAll(IMPORT_RE)].map((m) => m[1]!).filter((spec) => !spec.startsWith(".") && !isBuiltin(spec));
+    expect(bare.sort()).toEqual(["dotenv", "prisma/config"]);
   });
 });
 
