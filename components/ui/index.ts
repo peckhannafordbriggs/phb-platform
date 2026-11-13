@@ -36,6 +36,7 @@ export { LinkPending } from "./LinkPending";
 export { Pill, type PillTone, type Tone } from "./Pill";
 export { SearchBar, type SearchResult } from "./SearchBar";
 export { Segmented } from "./Segmented";
+export { Switch } from "./Switch";
 export { TabBar, type TabItem } from "./TabBar";
 export { Table } from "./Table";
 export { SpendPerDayChart, UsageBreakdownTable, UsageStat, formatMoney, formatTokens } from "./Usage";

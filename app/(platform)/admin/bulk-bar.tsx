@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui";
 
 /**
  * The bulk action bar: confirm first, then report what actually happened.
@@ -15,6 +16,10 @@ import { useState } from "react";
  * "apply something to the selection" shape here: CLAUDE.md prohibits any bulk
  * path that could send, and the narrowest possible surface is how that stays
  * true rather than being remembered.
+ *
+ * Drawn with the kit since 2026-11-13 - the buttons, the radius - and
+ * nothing else changed: the amber of the confirmation and the red of a
+ * refusal are the colours the bar had.
  */
 
 export interface BulkOutcome {
@@ -106,8 +111,8 @@ export function BulkBar({
     const failures = summary.outcomes.filter((o) => o.result === "failed");
 
     return (
-      <div className="mb-3 rounded border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-        <p className="text-sm font-medium">
+      <div className="card px-4 py-3">
+        <p className="text-[0.8125rem] font-medium">
           {summary.changed} changed
           {summary.unchanged > 0 && `, ${summary.unchanged} already as requested`}
           {summary.failed > 0 && `, ${summary.failed} refused`}
@@ -119,7 +124,7 @@ export function BulkBar({
           so it is reported by name and by reason rather than as a failure count.
         */}
         {failures.length > 0 && (
-          <ul className="mt-2 space-y-1 text-sm text-red-800">
+          <ul className="mt-2 space-y-1 text-[0.8125rem] text-red-800">
             {failures.map((o) => (
               <li key={o.employeeId}>
                 <span className="font-medium">{o.label}</span>
@@ -129,13 +134,11 @@ export function BulkBar({
           </ul>
         )}
 
-        <button
-          type="button"
-          onClick={() => setSummary(null)}
-          className="mt-3 rounded border border-[var(--border)] bg-white px-3 py-1 text-xs"
-        >
-          Dismiss
-        </button>
+        <div className="mt-3">
+          <Button size="sm" onClick={() => setSummary(null)}>
+            Dismiss
+          </Button>
+        </div>
       </div>
     );
   }
@@ -149,14 +152,14 @@ export function BulkBar({
           : "Enable";
 
     return (
-      <div className="mb-3 rounded border border-amber-300 bg-amber-50 px-4 py-3">
+      <div className="rounded-[var(--radius-row)] border border-amber-300 bg-amber-50 px-4 py-3">
         {/*
           PHASE-10: "A confirmation showing how many employees and which module,
           before anything happens." Both numbers are in the sentence, because
           "are you sure?" on its own asks somebody to re-derive what they just
           selected.
         */}
-        <p className="text-sm text-amber-900">
+        <p className="text-[0.8125rem] text-amber-900">
           <span className="font-medium">{what}</span> for {count} selected{" "}
           {count === 1 ? "employee" : "employees"}?
           {pending.kind === "status" && pending.status === "disabled" && (
@@ -168,27 +171,17 @@ export function BulkBar({
           )}
         </p>
 
-        <div className="mt-3 flex items-center gap-3">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void run()}
-            className="rounded bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
-          >
+        <div className="mt-3 flex items-center gap-2">
+          <Button size="sm" variant="primary" disabled={busy} onClick={() => void run()}>
             {busy ? "Working…" : `Yes, ${what.toLowerCase()}`}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setPending(null)}
-            className="rounded border border-[var(--border)] bg-white px-3 py-1 text-xs disabled:opacity-50"
-          >
+          </Button>
+          <Button size="sm" disabled={busy} onClick={() => setPending(null)}>
             Cancel
-          </button>
+          </Button>
         </div>
 
         {error !== null && (
-          <p role="alert" className="mt-2 text-sm text-red-700">
+          <p role="alert" className="mt-2 text-[0.8125rem] text-red-700">
             {error}
           </p>
         )}
@@ -199,12 +192,13 @@ export function BulkBar({
   if (count === 0) return null;
 
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-3 rounded border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-      <span className="text-sm font-medium">{count} selected</span>
+    <div className="card flex flex-wrap items-center gap-2 px-4 py-3">
+      <span className="mr-1 text-[0.8125rem] font-medium">{count} selected</span>
 
       {modules.map((m) => (
         <span key={m.key} className="flex items-center gap-2">
-          <BulkButton
+          <Button
+            size="sm"
             onClick={() =>
               setPending({
                 kind: "grant",
@@ -215,8 +209,9 @@ export function BulkBar({
             }
           >
             Grant {m.displayName}
-          </BulkButton>
-          <BulkButton
+          </Button>
+          <Button
+            size="sm"
             onClick={() =>
               setPending({
                 kind: "grant",
@@ -227,17 +222,17 @@ export function BulkBar({
             }
           >
             Revoke {m.displayName}
-          </BulkButton>
+          </Button>
         </span>
       ))}
 
       <span className="flex items-center gap-2 border-l border-[var(--border)] pl-3">
-        <BulkButton onClick={() => setPending({ kind: "status", status: "active" })}>
+        <Button size="sm" onClick={() => setPending({ kind: "status", status: "active" })}>
           Enable
-        </BulkButton>
-        <BulkButton onClick={() => setPending({ kind: "status", status: "disabled" })}>
+        </Button>
+        <Button size="sm" onClick={() => setPending({ kind: "status", status: "disabled" })}>
           Disable
-        </BulkButton>
+        </Button>
       </span>
 
       <button
@@ -248,23 +243,5 @@ export function BulkBar({
         Clear
       </button>
     </div>
-  );
-}
-
-function BulkButton({
-  onClick,
-  children,
-}: {
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="rounded border border-[var(--border)] bg-white px-3 py-1 text-xs hover:bg-[var(--surface)]"
-    >
-      {children}
-    </button>
   );
 }

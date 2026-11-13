@@ -88,8 +88,10 @@ stop and ask.
 ## UI
 
 Every screen is drawn with the shared kit in `components/ui/`: buttons, cards,
-pills, the segmented control, the tab bar, tables, dropdowns, form fields, the
-empty state and the callout. **For new UI the kit is the rule, not a suggestion.**
+pills, the switch, the segmented control, the tab bar, tables (with an
+optional column template and an expanded-row panel), dropdowns, form fields,
+the empty state and the callout. **For new UI the kit is the rule, not a
+suggestion.**
 A module does not write its own button. If the kit lacks a piece, add it to the
 kit, with the two properties the rest of it has:
 

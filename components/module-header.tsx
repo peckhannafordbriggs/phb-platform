@@ -22,17 +22,30 @@ export function ModuleHeader({
   moduleKey,
   title,
   blurb,
+  accent,
   children,
 }: {
   moduleKey: string;
   title: string;
   /** One line. Longer than that belongs on the screen, not in its header. */
   blurb?: string;
+  /**
+   * A platform screen's own colour, in place of the module lookup (2026-11-13).
+   * Admin is not a module and has no key in lib/module-accent.ts; it wears the
+   * chrome purple by name. Used as fill and ink both, so only a value that
+   * clears AA as text belongs here - purple does, at 8.65.
+   */
+  accent?: string;
   /** Tabs, or anything else that belongs to the header rather than the page. */
   children?: React.ReactNode;
 }) {
+  const style =
+    accent !== undefined
+      ? ({ "--module-accent": accent, "--module-accent-ink": accent } as React.CSSProperties)
+      : moduleAccentStyle(moduleKey);
+
   return (
-    <header className="shrink-0" style={moduleAccentStyle(moduleKey)}>
+    <header className="shrink-0" style={style}>
       <div className="flex items-center gap-2.5">
         <span
           className="diamond diamond--filled"
