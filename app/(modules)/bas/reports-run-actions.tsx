@@ -36,7 +36,7 @@ export const PRINT_PAGE_CSS = `@media print {
   #${REPORT_PRINT_ID}, #${REPORT_PRINT_ID} * { visibility: visible; }
   #${REPORT_PRINT_ID} { position: absolute; inset: 0 auto auto 0; width: 100%; margin: 0; padding: 0; box-shadow: none !important; border: 0 !important; background: #fff !important; }
   #${REPORT_PRINT_ID} tr, #${REPORT_PRINT_ID} .incident, #${REPORT_PRINT_ID} .partial { break-inside: avoid; }
-  #${REPORT_PRINT_ID} h1, #${REPORT_PRINT_ID} h2 { break-after: avoid; }
+  #${REPORT_PRINT_ID} h1, #${REPORT_PRINT_ID} h2, #${REPORT_PRINT_ID} h3 { break-after: avoid; }
 }`;
 
 export function RunActions({ runId, pdf: initial }: { runId: string; pdf: PdfState }) {

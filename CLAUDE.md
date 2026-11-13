@@ -1608,6 +1608,25 @@ own scaler query). The worker's scaler query gained `OR pdf_status =
 merge. `WHY-ITS-BUILT-THIS-WAY.md` § 83; `runbook.md` → *Reports: the
 PDF*; `docs/design/bas-reports-pdf/`.
 
+**Reports - every question on the page, in its own words (2026-11-13).**
+The rendered report lists each question a report carries as a sub-heading
+in the spec's words inside its section - *Q3. What percent of occupied
+hours…* - with its answer beneath: the findings, or one factual line from
+numbers the analysis now returns (zones judged and the lowest share in
+band; units judged and the most hours outside schedule; points judged), or
+the muted reason it did not run with the points it lacks, and the units it
+skipped. The Point Inventory keeps its building lines only - the question
+bullets and the *Required point checks met* count are off the page, since
+every question is in its section; the Summary's halves are headed by Q1
+and Q2 and
+name the findings behind each count; cleared findings are grouped under
+their question; a custom question is its text over its note. `needs` and
+`summary.questions` are stored on new documents; old ones render with the
+library's words. **The `Q` prefix keeps question numbers apart from
+section numbers** - *3. VAV* is a section, *Q3* a question.
+`WHY-ITS-BUILT-THIS-WAY.md` § 84; `runbook.md` → *Every question is a
+sub-heading on the report, and what the line under it means*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
