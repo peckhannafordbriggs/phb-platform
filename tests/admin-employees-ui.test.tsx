@@ -45,7 +45,6 @@ import {
   type AdminModule,
 } from "@/app/(platform)/admin/employee-table";
 import { buildInviteEmail } from "@/lib/admin/invite-email";
-import { moduleShortName } from "@/lib/module-short-name";
 
 // ------------------------------------------------------------------ fixtures
 
@@ -181,41 +180,27 @@ afterEach(async () => {
 // -------------------------------------------------------------------- tests
 
 describe("the Access column", () => {
-  it("is a count then one chip per module, each with the module's diamond colour and its short name", () => {
+  it("is a count in words and nothing else: no chip, no diamond, no module name", () => {
     const markup = renderToStaticMarkup(createElement(AccessCell, { employee: two, modules: REAL }));
-    expect(markup).toMatch(/tabular-nums[^"]*">2<\/span>/);
-    // Change Orders' red, Building Automation's cyan - the sidebar's colours.
-    expect(markup).toContain('style="color:var(--phb-red)"');
-    expect(markup).toContain('style="color:var(--phb-cyan)"');
-    expect(markup).toContain('title="Change Orders"');
-    expect(markup).toContain('title="Building Automation"');
-    expect(markup).toContain('<span aria-hidden="true">CO</span><span class="sr-only">Change Orders</span>');
-    expect(markup).toContain('<span aria-hidden="true">BAS</span><span class="sr-only">Building Automation</span>');
-    // A module the person does not have is not a chip.
-    expect(markup).not.toContain("Cost Intelligence");
-    // Chips wrap rather than widen the table.
-    expect(markup).toContain("flex flex-wrap");
+    expect(markup).toBe('<span class="tabular-nums" data-testid="admin-access-cell">2 modules</span>');
+    expect(markup).not.toContain("diamond");
+    expect(markup).not.toContain("Change Orders");
+    expect(markup).not.toContain("Building Automation");
+    expect(markup).not.toContain("BAS");
+
+    const one = employee({ grantedModuleKeys: ["bas"] });
+    expect(renderToStaticMarkup(createElement(AccessCell, { employee: one, modules: REAL }))).toContain(">1 module</span>");
+    expect(renderToStaticMarkup(createElement(AccessCell, { employee: everyone, modules: MANY }))).toContain(">16 modules</span>");
+  });
+
+  it("counts only the active modules the registry lists, which is what the panel can show", () => {
+    const retired = employee({ grantedModuleKeys: ["change-orders", "no-such-module"] });
+    expect(renderToStaticMarkup(createElement(AccessCell, { employee: retired, modules: REAL }))).toContain(">1 module</span>");
   });
 
   it("says No access, in words and in grey, for nobody", () => {
     const markup = renderToStaticMarkup(createElement(AccessCell, { employee: nobody, modules: REAL }));
-    expect(markup).toContain(">No access</span>");
-    expect(markup).toContain("bg-[var(--neutral-100)] text-[var(--muted)]");
-    expect(markup).not.toContain("diamond");
-  });
-
-  it("short names: the five modules by name, anything else by initials, or three letters of a one-word name", () => {
-    expect(moduleShortName("change-orders", "Change Orders")).toBe("CO");
-    expect(moduleShortName("bas", "Building Automation")).toBe("BAS");
-    expect(moduleShortName("cost-intelligence", "Cost Intelligence")).toBe("CI");
-    expect(moduleShortName("knowledge-base", "Knowledge Base")).toBe("KB");
-    expect(moduleShortName("freeze-protection", "Freeze Protection")).toBe("FP");
-    expect(moduleShortName("safety-reports", "Safety Reports")).toBe("SR");
-    expect(moduleShortName("x", "Fleet Maintenance Log Book")).toBe("FML");
-    // One word: three letters, so Fleet and Training are not both "T".
-    expect(moduleShortName("fleet", "Fleet")).toBe("FLE");
-    expect(moduleShortName("training", "Training")).toBe("TRA");
-    expect(moduleShortName("constructor", "")).toBe("CON");
+    expect(markup).toBe('<span class="text-[var(--muted)]">No access</span>');
   });
 });
 
@@ -329,6 +314,17 @@ describe("a row's expanded panel", () => {
     // A wrapping grid, not a row: sixteen modules never need a sideways scroll.
     expect(panel!.querySelector("ul")?.className).toContain("grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]");
 
+    // Granted first, then the rest, each half in the registry's order; the
+    // panel is the only place a specific grant is named.
+    const names = Array.from(cards).map((card) => card.querySelector(".font-medium")?.textContent);
+    expect(names.slice(0, 2)).toEqual(["Change Orders", "Building Automation"]);
+    expect(names.slice(2)).toEqual(MANY.filter((m) => !two.grantedModuleKeys.includes(m.key)).map((m) => m.displayName));
+    expect(Array.from(cards).map((card) => card.getAttribute("data-granted"))).toEqual([
+      "true",
+      "true",
+      ...Array.from({ length: 14 }, () => "false"),
+    ]);
+
     const switches = (card: Element) => Array.from(card.querySelectorAll('[role="switch"]'));
     const co = byText(panel!, '[data-testid="admin-access-module"] .font-medium', "Change Orders")!.closest("li")!;
     const bas = byText(panel!, '[data-testid="admin-access-module"] .font-medium', "Building Automation")!.closest("li")!;
@@ -431,5 +427,11 @@ describe("the chrome", () => {
     // The status pills keep the colours the table had: teal for active, maroon for disabled.
     expect(markup).toContain("text-[var(--phb-teal-ink)]");
     expect(markup).toContain("text-[var(--phb-maroon)]");
+    // No row names a module while collapsed; the counts do the work.
+    expect(markup).toContain(">No access</span>");
+    expect(markup).toContain(">2 modules</span>");
+    expect(markup).toContain(">16 modules</span>");
+    expect(markup).not.toContain('style="color:var(--phb-cyan)"');
+    expect(markup).not.toContain("Building Automation");
   });
 });

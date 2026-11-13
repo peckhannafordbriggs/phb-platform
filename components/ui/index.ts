@@ -18,7 +18,6 @@
 export { Button } from "./Button";
 export { Callout } from "./Callout";
 export { Card } from "./Card";
-export { Chip } from "./Chip";
 export { Dropdown, type DropdownOption } from "./Dropdown";
 export { Empty } from "./Empty";
 export {

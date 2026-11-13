@@ -1618,16 +1618,19 @@ kept. Three behaviour changes, all decided by the owner: **the default Show
 is Everyone** (was *With a grant*); **the default sort is fewest grants
 first, then most recent sign-in** (`sort=access`, a fourth sort key), so the
 people who signed in and have nothing are the top rows; and **one Access
-column** - a count and one chip per module, the module's diamond in its colour
-and a short name (`lib/module-short-name.ts`), *No access* in grey - replaces
-the column per module. A chevron expands a row in place to every module with
-a switch for the grant and one for settings rights, through the employee
-page's own routes and audit events, as a wrapping grid that holds fifteen
-modules without a sideways scroll. The filters narrow the page live as you
-type; Apply, the red primary, runs the server query into the URL; Reset
-clears both. Three kit additions, each defaulting to the old rendering:
-`Table` `columns` and `detail`, `Chip`, `Switch`; the four other modules were
-re-captured byte-identical to prove it (`docs/design/admin-employees-kit/`).
+column** - a count in words, *4 modules* or *No access* in grey, and nothing
+else - replaces the column per module. A chevron expands a row in place to
+every module, granted ones first, each with its diamond in its colour, its
+full name, a switch for the grant and one for settings rights, through the
+employee page's own routes and audit events, as a wrapping grid that holds
+fifteen modules without a sideways scroll; **the panel is the only place on
+the list that names a specific grant** (the owner's decision, same day, over
+a first pass that put a chip per module on the collapsed row). The filters
+narrow the page live as you type; Apply, the red primary, runs the server
+query into the URL; Reset clears both. Two kit additions, each defaulting to
+the old rendering: `Table` `columns` and `detail`, and `Switch`; the four
+other modules were re-captured byte-identical to prove it
+(`docs/design/admin-employees-kit/`).
 The audit log and the lists pages keep their own chrome. `runbook.md` →
 *Admin panel (Phase 10)*; `tests/admin-employees-ui.test.tsx`.
 

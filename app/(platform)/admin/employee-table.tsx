@@ -6,9 +6,8 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState, useTransition } from "react";
 import { APP_TIME_ZONE } from "@/lib/activity/rollover";
 import { moduleAccent } from "@/lib/module-accent";
-import { moduleShortName } from "@/lib/module-short-name";
 import { hasSettingsSurface } from "@/lib/module-settings";
-import { Button, Card, Chip, Dropdown, Empty, Pill, SearchBar, Switch, Table } from "@/components/ui";
+import { Button, Card, Dropdown, Empty, Pill, SearchBar, Switch, Table } from "@/components/ui";
 import { BulkBar } from "./bulk-bar";
 
 /**
@@ -26,12 +25,15 @@ import { BulkBar } from "./bulk-bar";
  *     page, Apply: all of them run the filters as drafted, because a draft a
  *     person can see is the query they mean. Reset clears the draft and the
  *     URL together.
- *   - **A row expands in place to its access panel**: every active module,
- *     a switch for the grant and one for the module's settings rights, edited
- *     through the same routes the employee page uses, with the same audit
- *     events and the same platform-admin check behind them. The panel is a
- *     wrapping grid, so fifteen modules are three rows of cards and never a
- *     horizontal scroll.
+ *   - **The Access column is a count; the row's panel is the picture.** A
+ *     collapsed row says "4 modules" or "No access" and nothing more, and
+ *     sorts by that count. The chevron expands the row to every active
+ *     module - granted ones first - with the module's diamond, its full name,
+ *     a switch for the grant and one for its settings rights, edited through
+ *     the same routes the employee page uses, with the same audit events and
+ *     the same platform-admin check behind them. The panel is a wrapping
+ *     grid, so fifteen modules are four rows of cards and never a horizontal
+ *     scroll. Nowhere else on the list names a specific grant.
  */
 
 export interface AdminEmployeeRow {
@@ -608,35 +610,31 @@ function SortHeader({
 }
 
 /**
- * The Access column: how many modules, then one chip per module - the
- * module's diamond in its own colour (the sidebar's, the header's) and its
- * short name, the full name behind it. Chips wrap, so a person with every
- * module is two lines and never a wider table. Nobody is "No access", in
- * words and in grey.
+ * The Access column: how many of the active modules the person holds, in
+ * words - "4 modules", "1 module" - or "No access" in grey. A count and
+ * nothing else (2026-11-13, second pass): which modules is the expanded
+ * panel's job, and a collapsed row stays one line whatever the person
+ * holds. The column sorts by this count on the server (`sort=access`).
  */
 export function AccessCell({ employee, modules }: { employee: AdminEmployeeRow; modules: AdminModule[] }) {
-  const granted = modules
-    .map((m, index) => ({ ...m, index }))
-    .filter((m) => employee.grantedModuleKeys.includes(m.key));
+  const count = modules.filter((m) => employee.grantedModuleKeys.includes(m.key)).length;
 
-  if (granted.length === 0) return <Pill tone="muted">No access</Pill>;
+  if (count === 0) return <span className="text-[var(--muted)]">No access</span>;
 
   return (
-    <span className="flex flex-wrap items-center gap-1.5" data-testid="admin-access-cell">
-      <span className="mr-0.5 font-mono text-[0.75rem] tabular-nums text-[var(--muted)]">{granted.length}</span>
-      {granted.map((m) => (
-        <Chip key={m.key} mark={moduleAccent(m.key, m.index).fill} title={m.displayName}>
-          {moduleShortName(m.key, m.displayName)}
-        </Chip>
-      ))}
+    <span className="tabular-nums" data-testid="admin-access-cell">
+      {count} {count === 1 ? "module" : "modules"}
     </span>
   );
 }
 
 /**
- * A row's expanded panel: every active module, a switch for the grant and -
- * once granted, for a module that has a settings screen - a switch for the
- * module-admin flag, with the employee page's wording.
+ * A row's expanded panel - the one place on the list that names a specific
+ * grant: every active module, granted ones first and the rest after in the
+ * registry's order, each with its diamond in its colour, its full name, a
+ * switch for the grant and - once granted, for a module that has a settings
+ * screen - a switch for the module-admin flag, with the employee page's
+ * wording.
  *
  * The settings switch is only offered once access is granted. The server
  * refuses it outright without a grant, because "administrator of a module you
@@ -664,6 +662,13 @@ export function AccessPanel({
 }) {
   const name = `${employee.firstName} ${employee.lastName}`.trim() || employee.email;
 
+  // Granted first, then the rest; within each, the registry's own order. The
+  // index is the module's place in the registry, which is what the accent
+  // lookup's fallback keys on, so a card's colour does not move with the sort.
+  const ordered = modules
+    .map((m, index) => ({ ...m, index, granted: employee.grantedModuleKeys.includes(m.key) }))
+    .sort((a, b) => Number(b.granted) - Number(a.granted) || a.index - b.index);
+
   return (
     <div data-testid="admin-access-panel">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -677,8 +682,8 @@ export function AccessPanel({
         <p className="mt-3 text-[var(--muted)]">No active modules exist.</p>
       ) : (
         <ul className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
-          {modules.map((m, index) => {
-            const granted = employee.grantedModuleKeys.includes(m.key);
+          {ordered.map((m) => {
+            const granted = m.granted;
             const isAdmin = employee.moduleAdminKeys.includes(m.key);
             const settings = hasSettingsSurface(m.key);
             return (
@@ -686,11 +691,12 @@ export function AccessPanel({
                 key={m.key}
                 className="rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 py-2.5"
                 data-testid="admin-access-module"
+                data-granted={granted ? "true" : "false"}
               >
                 <div className="flex items-center gap-2">
                   <span
                     className="diamond diamond--filled"
-                    style={{ color: moduleAccent(m.key, index).fill }}
+                    style={{ color: moduleAccent(m.key, m.index).fill }}
                     aria-hidden="true"
                   />
                   <span className="font-medium">{m.displayName}</span>

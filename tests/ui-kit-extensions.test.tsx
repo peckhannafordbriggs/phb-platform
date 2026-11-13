@@ -18,8 +18,6 @@ import * as kit from "@/components/ui";
  *   - Table: `columns` for unequal widths and `detail` for a panel under an
  *     expanded row. Its default markup is pinned byte for byte to what it
  *     rendered before, so every table drawn before draws the same.
- *   - Chip: a neutral label for a thing, with an optional diamond mark in a
- *     colour the caller names and a long name behind a short one.
  *   - Switch: an on / off control, `role="switch"`, the accent when on.
  */
 
@@ -63,26 +61,6 @@ describe("Table", () => {
     expect(panelAt).toBeGreaterThan(markup.indexOf(">3</div>"));
     expect(markup.indexOf(">1</div>")).toBeLessThan(markup.indexOf(">3</div>"));
     expect(markup).toContain('class="rounded-[var(--radius-row)] bg-[var(--neutral-50)] px-4 py-4 text-[0.8125rem]"');
-  });
-});
-
-describe("Chip", () => {
-  it("is a neutral label with no mark and no title by default", () => {
-    const markup = html(<kit.Chip>CO</kit.Chip>);
-    expect(markup).toBe(
-      '<span class="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)] bg-white px-2 py-0.5 text-[0.6875rem] font-medium text-[var(--foreground)]">CO</span>',
-    );
-  });
-
-  it("draws the diamond in the colour it is given, and reads the long name behind the short one", () => {
-    const markup = html(
-      <kit.Chip mark="var(--phb-cyan)" title="Building Automation">
-        BAS
-      </kit.Chip>,
-    );
-    expect(markup).toContain('title="Building Automation"');
-    expect(markup).toMatch(/<span class="diamond diamond--filled[^"]*" style="color:var\(--phb-cyan\)" aria-hidden="true"><\/span>/);
-    expect(markup).toContain('<span aria-hidden="true">BAS</span><span class="sr-only">Building Automation</span>');
   });
 });
 

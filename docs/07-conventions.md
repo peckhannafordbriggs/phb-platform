@@ -88,7 +88,7 @@ stop and ask.
 ## UI
 
 Every screen is drawn with the shared kit in `components/ui/`: buttons, cards,
-pills, chips, the switch, the segmented control, the tab bar, tables (with an
+pills, the switch, the segmented control, the tab bar, tables (with an
 optional column template and an expanded-row panel), dropdowns, form fields,
 the empty state and the callout. **For new UI the kit is the rule, not a
 suggestion.**

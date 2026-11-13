@@ -5853,20 +5853,21 @@ default order. Their panel stays open wherever the row lands.
 
 ## The Access column, and a row's expanded panel
 
-**One Access column instead of one column per module (2026-11-13).** A count,
-then one chip per module the person holds - the module's diamond in its own
-colour, the sidebar's, and a short name: CO, BAS, CI, KB, FP, and the initials
-of the display name for any module added later (`lib/module-short-name.ts`;
-hover a chip for the full name). Nobody reads *No access*, in grey. Chips
-wrap, so a person with every module is two lines, never a wider table.
+**One Access column instead of one column per module (2026-11-13).** A
+collapsed row says how many of the active modules the person holds - *4
+modules*, *1 module* - or *No access* in grey, and nothing else: no module is
+named until the row is expanded. The column sorts by that count.
 
-**The chevron at the left of a row expands it in place**: every active
-module as a card with a switch for the grant and, once granted, a switch for
-*Can change settings*. The switches call the employee page's own routes -
-`POST`/`DELETE …/grants`, `PUT …/grants/<module>/admin` - so the audit rows
-are `grant.added`, `grant.removed`, `grant.admin_added`, `grant.admin_removed`
-exactly as from that page, and `withAdmin` guards every one. Fifteen modules
-are a wrapping grid of cards, not a sideways scroll.
+**The chevron at the left of a row expands it in place**, and that panel is
+the only place on the list that names a specific grant: every active module
+as a card, **granted ones first** and the rest after in the registry's order,
+each with the module's diamond in its colour, its full name, a switch for the
+grant and, once granted, a switch for *Can change settings*. The switches
+call the employee page's own routes - `POST`/`DELETE …/grants`, `PUT
+…/grants/<module>/admin` - so the audit rows are `grant.added`,
+`grant.removed`, `grant.admin_added`, `grant.admin_removed` exactly as from
+that page, and `withAdmin` guards every one. Fifteen modules are a wrapping
+grid of cards, not a sideways scroll.
 
 **The panel offers *Can change settings* for some modules and not others.**
 Only a module with a settings screen (`lib/module-settings.ts`) gets the
