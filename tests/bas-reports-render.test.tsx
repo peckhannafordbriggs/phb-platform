@@ -18,7 +18,6 @@ import {
   notRunLine,
   positiveAnswer,
   questionHeading,
-  questionNeeds,
   skippedLine,
 } from "@/lib/modules/bas/reports/engine/wording";
 
@@ -166,32 +165,29 @@ describe("the report template", () => {
     expect(page).not.toContain("None of the 2 units judged");
   });
 
-  it("lists the questions in the inventory as a table - number, the full question, what it needs, the result - and keeps the counts line", () => {
+  it("keeps the inventory to its building lines - no question list, no counts line - because every question is in its section", () => {
     inOrder(html, [
       "0. Point Inventory",
-      "Required point checks met: 3 of 9",
-      "one check per question per unit it applies to",
-      "VAV-5 ZoneTemperature (61%)",
-      "Occupied (occupancy status point)",
-      '<table class="inventory">',
-      "<th>#</th><th>Question</th><th>Needs</th><th>Result</th>",
-      '<td class="q">Q1</td><td>What is the building status (Good, Watch, Action Needed), and what three findings drove it?</td><td>No trended points required</td><td>Runs</td>',
-      '<td class="q">Q2</td>',
-      '<td class="q">Q3</td><td>What percent of occupied hours did each zone hold within ±2°F of setpoint?</td><td>space temp; active setpoint (or heating and cooling setpoints); occupancy</td><td>Runs</td>',
-      '<td class="q">Q5</td>',
-      '<td class="q">Q6</td><td>Which VAVs ran below 80% of airflow setpoint while occupied?</td><td>airflow; airflow setpoint; occupancy</td><td class="muted">Not monitored — missing airflow; airflow setpoint</td>',
-      '<td class="q">Q7</td>',
-      '<td class="q">Q13</td><td>Did HW supply temp hold setpoint or reset, and was delta T at least 10°F?</td><td>HWS temp; HWR temp; HWS setpoint</td><td class="muted">Not applicable — no hydronic heating on this building</td>',
-      '<td class="q">Q19</td>',
-      '<td class="q">Q20</td>',
+      "Equipment types found: VAV Box × 10, Rooftop Unit × 1",
+      "Classification: RV: DX (by type; compressors not trended) with economizer",
+      "Points with under 80% trend coverage: VAV-5 ZoneTemperature (61%)",
+      "Occupancy source: PHBoffice: Occupied (occupancy status point)",
+      "26 points on 11 pieces of equipment were in scope.",
       "1. Summary",
     ]);
-    // The old bullets are gone, and the dropped section stays dropped.
+    const inventory = html.slice(html.indexOf("0. Point Inventory"), html.indexOf("1. Summary"));
+    expect(inventory).not.toContain("<table");
+    expect(inventory).not.toContain("<ul>");
+    expect(inventory).not.toContain("Q3");
+    expect(html).not.toContain("Required point checks met");
+    expect(html).not.toContain("one check per question per unit it applies to");
+    expect(html).not.toContain("Required points found");
+    // The old bullets are gone, and the dropped section stays dropped - its question is nowhere on the page.
     expect(html).not.toContain("Q6 (VAV): missing");
     expect(html).not.toContain("Not Applicable and left out");
     expect(html).not.toContain("Q13 (no hydronic heating on this building)");
     expect(html).not.toContain("Hot Water");
-    expect(html).not.toContain("Required points found");
+    expect(html).not.toContain("Did HW supply temp hold setpoint");
   });
 
   it("lists the equipment types by count and the Step 1 classification separately, never a tag in place of the types", () => {
@@ -326,17 +322,13 @@ describe("the report template", () => {
     health.findings = [];
     health.status = "good";
     const page = render(old);
-    // The library supplies the Summary's questions, every question's needs, and Data Health's words.
+    // The library supplies the Summary's questions and Data Health's words.
     expect(page).toContain("<h3>Q1. What is the building status (Good, Watch, Action Needed), and what three findings drove it?</h3>");
     expect(page).toContain("<h3>Q2. What&#x27;s new, what&#x27;s still open, and what cleared since last period?</h3>");
-    expect(page).toContain('<td class="q">Q3</td><td>What percent of occupied hours did each zone hold within ±2°F of setpoint?</td><td>space temp; active setpoint (or heating and cooling setpoints); occupancy</td>');
     expect(page).toContain(`<h3>${Q20}</h3>`);
     // A positive line says only what the stored metrics support.
     expect(page).toContain("The one unit judged did not run outside its schedule for 30 minutes at a stretch or on two days; the most time outside was 0.3 h (RV).");
     expect(page).toContain("No data problems found in the period.");
-    expect(questionNeeds({ key: "q06_vav_starved_airflow" })).toBe("airflow; airflow setpoint; occupancy");
-    expect(questionNeeds({ key: "no_such_question" })).toBe("—");
-    expect(questionNeeds({ key: "q06_vav_starved_airflow", needs: "stored" })).toBe("stored");
   });
 
   it("every one of the twenty questions renders under its own heading with the spec's words when a report carries them all", () => {
@@ -357,7 +349,8 @@ describe("the report template", () => {
     for (const q of BAS_LIBRARY_QUESTIONS) {
       const heading = `<h3>${questionHeading(q).replace(/'/g, "&#x27;")}</h3>`;
       expect(page, `heading for ${q.key}`).toContain(heading);
-      expect(page, `inventory row for ${q.key}`).toContain(`<td class="q">Q${q.position}</td><td>${q.text.replace(/'/g, "&#x27;")}</td>`);
+      // Once on the page: under its heading, and nowhere in the inventory.
+      expect(page.split(q.text.replace(/'/g, "&#x27;")).length - 1, `${q.key} appears once`).toBe(1);
     }
     expect(page.split("<h3>").length - 1).toBe(BAS_LIBRARY_QUESTIONS.length + doc.plannerQuestions.length);
   });
@@ -383,9 +376,9 @@ describe("the report template", () => {
     expect(html).toContain("Did the boiler cycle overnight?");
   });
 
-  it("keeps the stylesheet's colours and adds only the heading and table rules", () => {
+  it("keeps the stylesheet's colours and adds only the heading rule", () => {
     expect(REPORT_CSS).toContain(".bas-report h3 {");
-    expect(REPORT_CSS).toContain("table.inventory td.q");
+    expect(REPORT_CSS).not.toContain("inventory");
     const colours = new Set(REPORT_CSS.match(/#[0-9a-f]{6}/g));
     expect([...colours].sort()).toEqual(
       ["#1f1a2e", "#2f7d76", "#3d3852", "#5b3192", "#5c5873", "#6fc9c1", "#88183c", "#9e6408", "#c9c5d6", "#e6e3ee", "#ebe6f2", "#ecf8f7", "#f3a11e", "#f5f4f8", "#fbeef2", "#fff6e5"].sort(),

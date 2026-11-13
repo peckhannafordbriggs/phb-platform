@@ -173,9 +173,10 @@ export interface QuestionResult {
   /**
    * What the question needs, the spec's Points-required column in its own
    * words, as the engine read it from the library row ("space temp; active
-   * setpoint (or heating and cooling setpoints); occupancy"). On documents
-   * stored before 2026-11-13 it is absent, and the template reads the
-   * library's row for the key instead.
+   * setpoint (or heating and cooling setpoints); occupancy"): the record of
+   * what was checked, kept on the document. Absent on documents stored
+   * before 2026-11-13. The page does not print it - the line under a
+   * question names what is missing - and nothing else reads it today.
    */
   needs: string;
   /** For not_monitored: the spec's labels for the missing requirements. */

@@ -20,8 +20,6 @@ import {
   notRunLine,
   positiveAnswer,
   questionHeading,
-  questionLabel,
-  questionNeeds,
   skippedLine,
 } from "./wording";
 
@@ -39,11 +37,14 @@ import {
  * factual line when it ran and found nothing (written from the numbers the
  * analysis returned), or why it did not run - Not monitored with the
  * missing points, Not applicable with the reason, Not analysed with the
- * units it would have run over. The Point Inventory is a table of the same
- * questions with what each needs and its result, the Summary heads its two
- * halves with the spec's first two questions, cleared findings are grouped
- * under the question they came from, and a custom question is its text over
- * its note. A reader with only the PDF never has to look up what "Q3" is.
+ * units it would have run over. The Point Inventory keeps its building lines
+ * (equipment types, classification, coverage, occupancy source, points in
+ * scope) and nothing per question - its Not Monitored bullets, its Not
+ * Applicable line and its required-checks count went, because every question
+ * is already in its section - the Summary heads its two halves with the
+ * spec's first two questions, cleared findings are grouped under the question
+ * they came from, and a custom question is its text over its note. A reader
+ * with only the PDF never has to look up what "Q3" is.
  * The section's badge stays on the section heading.
  *
  * ONE TEMPLATE. The Generated sub-tab renders this component from the run's
@@ -85,7 +86,6 @@ export const REPORT_CSS = `
 .bas-report th, .bas-report td { text-align: left; vertical-align: top; padding: .35rem .5rem; border-top: 1px solid #e6e3ee; }
 .bas-report th { color: #5c5873; font-weight: 600; }
 .bas-report tr.narrative td { border-top: 0; padding-top: 0; color: #3d3852; }
-.bas-report table.inventory td.q { white-space: nowrap; color: #5c5873; font-weight: 600; }
 .bas-report .mark { display: inline-block; border-radius: .25rem; padding: 0 .35rem; font-size: .6875rem; font-weight: 600; margin-left: .35rem; }
 .bas-report .mark-new { background: #ebe6f2; color: #5b3192; }
 .bas-report .mark-still_open { background: #fff6e5; color: #9e6408; }
@@ -272,14 +272,6 @@ function summaryQuestions(summary: SummaryDocument): QuestionResult[] {
     .sort(byPosition);
 }
 
-/** Every question the report carries, in the spec's order, for the inventory table. */
-function reportQuestions(doc: ReportDocument): QuestionResult[] {
-  const byKey = new Map<string, QuestionResult>();
-  for (const q of summaryQuestions(doc.summary)) byKey.set(q.key, q);
-  for (const s of doc.sections) for (const q of s.questions) byKey.set(q.key, q);
-  return [...byKey.values()].sort(byPosition);
-}
-
 /** The words of the question a finding came from, for the cleared groups: a stored result first, the library second, the key last. */
 function questionFor(doc: ReportDocument, key: string): Pick<QuestionResult, "position" | "text"> {
   for (const s of doc.sections) {
@@ -287,46 +279,6 @@ function questionFor(doc: ReportDocument, key: string): Pick<QuestionResult, "po
     if (q !== undefined) return q;
   }
   return libraryQuestion(key) ?? { position: Number.POSITIVE_INFINITY, text: key };
-}
-
-/** The inventory's Result column, one or two words with the reason. */
-function resultText(q: QuestionResult): string {
-  switch (q.outcome) {
-    case "answered":
-      return "Runs";
-    case "not_monitored":
-      return q.missing.length === 0 ? "Not monitored" : `Not monitored — missing ${q.missing.join("; ")}`;
-    case "not_applicable":
-      return q.reason === null || q.reason.trim() === "" ? "Not applicable" : `Not applicable — ${q.reason}`;
-    case "not_run":
-      return q.equipment.length === 0 ? "Not analysed" : "Could run; not analysed";
-  }
-}
-
-function InventoryTable({ questions }: { questions: QuestionResult[] }) {
-  if (questions.length === 0) return null;
-  return (
-    <table className="inventory">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Question</th>
-          <th>Needs</th>
-          <th>Result</th>
-        </tr>
-      </thead>
-      <tbody>
-        {questions.map((q) => (
-          <tr key={q.key}>
-            <td className="q">{questionLabel(q.position)}</td>
-            <td>{q.text}</td>
-            <td>{questionNeeds(q)}</td>
-            <td className={q.outcome === "answered" ? undefined : "muted"}>{resultText(q)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
 }
 
 /**
@@ -506,7 +458,6 @@ export function ReportView({ document: doc }: { document: ReportDocument }) {
   const others = renderable.filter((s) => s.key !== "data_health");
   const classification = inventory.classification ?? [];
   const durationMs = header.durationMs ?? null;
-  const questions = reportQuestions(doc);
   const summaryQs = summaryQuestions(summary);
   const statusQuestion = summaryQs.find((q) => q.key === "q01_building_status") ?? null;
   const changesQuestion = summaryQs.find((q) => q.key === "q02_changes_since_last") ?? null;
@@ -542,8 +493,7 @@ export function ReportView({ document: doc }: { document: ReportDocument }) {
         <p>Classification: {classification.map((c) => `${c.name}: ${c.text}`).join("; ")}</p>
       )}
       <p>
-        Required point checks met: {inventory.requiredPointsFound} of {inventory.requiredPointsTotal}{" "}
-        <span className="muted">(one check per question per unit it applies to)</span> | Points with under 80% trend coverage:{" "}
+        Points with under 80% trend coverage:{" "}
         {inventory.lowCoverage.length === 0 ? "none" : inventory.lowCoverage.map((p) => `${p.name} (${Math.round(p.coverage * 100)}%)`).join(", ")}
       </p>
       <p>
@@ -553,7 +503,6 @@ export function ReportView({ document: doc }: { document: ReportDocument }) {
       <p className="muted">
         {inventory.pointsInScope} points on {inventory.equipmentInScope} pieces of equipment were in scope.
       </p>
-      <InventoryTable questions={questions} />
 
       <h2>
         1. Summary <Status status={summary.status} />

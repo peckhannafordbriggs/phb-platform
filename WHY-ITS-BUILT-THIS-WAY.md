@@ -3448,9 +3448,10 @@ report carries as a sub-heading in the spec's words inside its section -
 *Q3. What percent of occupied hours did each zone hold within ±2°F of
 setpoint?* - with its answer directly beneath: the findings it raised, or
 one line from the analysis's own numbers when there were none, or the
-reason it did not run with the points it lacks. The inventory lists the
-same questions as a table with what each needs and its result; the Summary
-heads its halves with the spec's first two questions; cleared findings are
+reason it did not run with the points it lacks. The inventory keeps its
+building lines and nothing per question - its bullets and its count went,
+because a thing said once under its heading need not be said again above
+it; the Summary heads its halves with the spec's first two questions; cleared findings are
 grouped under their question; a custom question is its text over its note.
 The analysis functions return the headline numbers the positive line needs
 (how many zones, the lowest share in band; how many units, the most hours

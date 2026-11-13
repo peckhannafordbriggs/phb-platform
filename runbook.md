@@ -11529,8 +11529,7 @@ script, which is also why a test drives it (next entry but one).
 **Symptom.** The office report shows Hot Water and Chilled Water as *Not
 Applicable* and fourteen questions as *Not Monitored*, each under its own
 heading with a line such as *Not monitored — this building does not trend:
-airflow; airflow setpoint*, and the inventory table's *Result* column
-saying the same.
+airflow; airflow setpoint*.
 
 **Cause.** Two different decisions, by design. **Not Applicable** is about
 what the building *has*: no equipment row of a type the question applies
@@ -11730,11 +11729,12 @@ setpoint?*, and directly under it one of:
   time cap before this question*.
 
 Under an answered question, *Not judged: VAV-5 (no setpoint trended)*
-names the units it skipped. The Point Inventory lists every question as a
-table - number, the full question, what it needs, the result (*Runs*,
-*Not monitored — missing …*, *Not applicable — …*, *Could run; not
-analysed*) - under the counts line; the Summary's two halves are headed
-by Q1 and Q2 and each count names its findings (*New this period: 2 —
+names the units it skipped. The Point Inventory keeps only its building
+lines - equipment types, classification, the coverage line, the occupancy
+source, the points in scope - with no question list and no *Required
+point checks met* count (the dev script still prints the count); the
+Summary's two halves are headed by Q1 and Q2 and each count names its
+findings (*New this period: 2 —
 VAV-3 (Zone above setpoint), points_RoomT (Out of physical range)*);
 cleared findings sit under the question they came from; a custom question
 is its text over its note. A Not Monitored section has no sentence of its
@@ -11758,11 +11758,11 @@ section's one-line sentence for the dev script; the page does not show
 it.
 
 **Fix.** Nothing to fix. To find what a building must trend for a
-question, read the inventory table's *Needs* column and the line under
-the question; to see which questions ran, the *Result* column. If a
-question is on the report and missing from the page, it is in no section's
-`questions` on the stored document - the dev script lists every question
-the engine decided.
+question, read the line under the question; the full requirement is the
+question's row on the Library sub-tab of Reports. If a question is on the
+report and missing from the page, it is in no section's `questions` on
+the stored document - the dev script lists every question the engine
+decided.
 
 ### The report's inventory reads "Equipment types found: economizer", or "Required points found: 0 of 70"
 
@@ -11781,7 +11781,10 @@ Monitored. The count is now labelled for what it is: *Required point
 checks met: 0 of 70 (one check per question per unit it applies to)* - 70
 is the number of question-and-unit pairs on the office (Q3 and Q4 over
 ten VAVs, Q19 over eleven units, and so on), not a number of points. A run
-stored before the change prints its old words as they were.
+stored before the change prints its old words as they were. Since
+2026-11-13 the count is not on the page at all - every question is in its
+section with its own line - and `npm run bas:report:run` is where it is
+printed.
 
 **Fix.** Nothing to fix on the platform. What the office needs trended for
 the questions to run is in `docs/bas-reports-phase-2-verification.md` →

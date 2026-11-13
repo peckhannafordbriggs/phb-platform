@@ -1615,8 +1615,10 @@ hours…* - with its answer beneath: the findings, or one factual line from
 numbers the analysis now returns (zones judged and the lowest share in
 band; units judged and the most hours outside schedule; points judged), or
 the muted reason it did not run with the points it lacks, and the units it
-skipped. The Point Inventory lists the questions as a table (number,
-question, needs, result); the Summary's halves are headed by Q1 and Q2 and
+skipped. The Point Inventory keeps its building lines only - the question
+bullets and the *Required point checks met* count are off the page, since
+every question is in its section; the Summary's halves are headed by Q1
+and Q2 and
 name the findings behind each count; cleared findings are grouped under
 their question; a custom question is its text over its note. `needs` and
 `summary.questions` are stored on new documents; old ones render with the

@@ -1117,11 +1117,15 @@ each zone hold within ±2°F of setpoint?* - with its answer directly beneath:
 Units a question skipped are named under it (*Not judged: VAV-5 (no
 setpoint trended)*). The section's badge stays on the section heading; a
 Not Monitored section no longer carries a line of its own. The Point
-Inventory's *Not Monitored* bullets are a table - number, the full
-question, what it needs (`needs`, stored on every `QuestionResult` from the
-library row the engine read, `describeRequiredRoles`), the result (*Runs* /
-*Not monitored — missing …* / *Not applicable — …* / *Could run; not
-analysed*) - under the unchanged counts line. The Summary heads its two
+Inventory lost its *Not Monitored* bullets, its *Not Applicable and left
+out* line and its *Required point checks met* count - a question table
+stood in for the bullets for one commit and went as a duplicate - and
+keeps the equipment types, the classification, the coverage line, the
+occupancy source and the points in scope; every question is in its
+section. `needs` (the spec's Points-required words from the library row
+the engine read, `describeRequiredRoles`) is stored on every
+`QuestionResult` as the record of what was checked and printed nowhere.
+The Summary heads its two
 halves with the spec's Q1 and Q2 (`summary.questions`, stored) and names
 the findings behind each count. Cleared findings are grouped under the
 question they came from; a custom question is its text over its note. The
@@ -1131,14 +1135,15 @@ date render with the library supplying the words, the needs and the
 Summary's two questions, and a positive line that says only what the
 stored metrics support. The wording is in `wording.ts` (`questionHeading`,
 `positiveAnswer`, `notMonitoredLine`, `notApplicableLine`, `notRunLine`,
-`skippedLine`, `questionNeeds`; `TIME_CAP_NOTE` moved there so the template
-and its test need no engine import), and `h3` joined the print rules'
-`break-after: avoid`. The dev script prints the same positive line.
+`skippedLine`; `TIME_CAP_NOTE` moved there so the template and its test
+need no engine import), and `h3` joined the print rules' `break-after:
+avoid`. The dev script prints the same positive line, and the
+required-checks count.
 
 **Held by** `tests/bas-reports-render.test.tsx`: the order of heading and
-answer for every outcome, all twenty questions under their headings and in
-the inventory table, the cleared groups, the pre-change document, and the
-stylesheet's colour set unchanged; `tests/bas-reports-pdf.test.ts` holds
+answer for every outcome, all twenty questions under their headings and
+once only, the inventory kept to its building lines, the cleared groups,
+the pre-change document, and the stylesheet's colour set unchanged; `tests/bas-reports-pdf.test.ts` holds
 the sample document's new page count. Captures:
 `docs/design/bas-report-question-layout/`. `WHY-ITS-BUILT-THIS-WAY.md`
 § 84; `runbook.md` → *Every question is a sub-heading on the report, and

@@ -1,4 +1,3 @@
-import { BAS_LIBRARY_QUESTIONS, describeRequiredRoles } from "../library";
 import type { QuestionResult, ScheduleResult, ZoneResult } from "./types";
 
 /**
@@ -26,18 +25,6 @@ export function questionLabel(position: number): string {
 /** "Q3. What percent of occupied hours did each zone hold within ±2°F of setpoint?": the sub-heading every question gets. */
 export function questionHeading(q: Pick<QuestionResult, "position" | "text">): string {
   return `${questionLabel(q.position)}. ${q.text}`;
-}
-
-/**
- * What a question needs - the spec's Points-required column, as the engine
- * read it from the library row when it ran. A document stored before the
- * column was kept on the result falls back to the library's row for the
- * same key, and a key the library does not know reads as nothing required.
- */
-export function questionNeeds(q: Pick<QuestionResult, "key"> & { needs?: string }): string {
-  if (typeof q.needs === "string") return q.needs;
-  const row = BAS_LIBRARY_QUESTIONS.find((x) => x.key === q.key);
-  return row === undefined ? "—" : describeRequiredRoles(row.requiredRoles);
 }
 
 /** The missing requirement labels across a section's Not Monitored questions, in first-seen order, deduplicated. */
