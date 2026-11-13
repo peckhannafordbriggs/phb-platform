@@ -5819,9 +5819,19 @@ Two different states, and they read differently on purpose.
 - **"No employees match these filters"** — rows exist, the filter hid them. The
   message gives the real total and a link to show everyone.
 
-**The default view is already a filter.** "With a grant" hides everyone who
-signed in and never got access, which on a new platform is everybody. If the list
-looks emptier than expected, check the Show dropdown before anything else.
+**The default view is everyone, since 2026-11-13.** Until then it was "With a
+grant", which hid everyone who signed in and never got access - on a new
+platform, everybody. If the list looks emptier than expected, check the Show
+dropdown before anything else: a shared link can carry `scope=granted` or
+`scope=none`.
+
+**The filters narrow the page as you type, and Apply runs the query.** Typing
+or picking narrows the rows already on screen; the count line then reads
+*3 of 25 on this page match. Apply to search all 130.* Apply, the red button,
+sends the drafted filters to the server and puts them in the URL, so the view
+can be shared or paged; Reset clears the draft and the URL together and
+restores the default sort. A column sort or a page link carries the draft too,
+so what you see narrowed is what the next page is narrowed by.
 
 **"No grants at all"** is its own option, not the absence of a module filter. It
 answers "who signed in and never got access", which no combination of the other
@@ -5829,8 +5839,46 @@ filters expresses.
 
 ## Sorting
 
-Name, status and last sign-in, by clicking the column heading. The sort travels
-in the URL, so a sorted view is bookmarkable and survives Apply.
+**The list opens on fewest grants first (since 2026-11-13)**, and within one
+count the most recent sign-in first: the people who signed in and have no
+access are the top rows, newest arrival first, because that is the row an
+admin opens the screen to find. Name, status, last sign-in and access sort by
+clicking the column heading; the sort travels in the URL, so a sorted view is
+bookmarkable and survives Apply, and Reset restores the default.
+
+**A row moves after a grant toggle.** The expanded panel (next section) edits
+through the same routes the employee page uses and then re-reads the page, so
+a person whose grant count just changed can sort to a different row under the
+default order. Their panel stays open wherever the row lands.
+
+## The Access column, and a row's expanded panel
+
+**One Access column instead of one column per module (2026-11-13).** A count,
+then one chip per module the person holds - the module's diamond in its own
+colour, the sidebar's, and a short name: CO, BAS, CI, KB, FP, and the initials
+of the display name for any module added later (`lib/module-short-name.ts`;
+hover a chip for the full name). Nobody reads *No access*, in grey. Chips
+wrap, so a person with every module is two lines, never a wider table.
+
+**The chevron at the left of a row expands it in place**: every active
+module as a card with a switch for the grant and, once granted, a switch for
+*Can change settings*. The switches call the employee page's own routes -
+`POST`/`DELETE …/grants`, `PUT …/grants/<module>/admin` - so the audit rows
+are `grant.added`, `grant.removed`, `grant.admin_added`, `grant.admin_removed`
+exactly as from that page, and `withAdmin` guards every one. Fifteen modules
+are a wrapping grid of cards, not a sideways scroll.
+
+**The panel offers *Can change settings* for some modules and not others.**
+Only a module with a settings screen (`lib/module-settings.ts`) gets the
+switch; Change Orders has none. A flag that is already set on a module without
+one still shows, with *This module has no settings screen. Clear this.*, so it
+can be turned off - and the server refuses to turn it on, as
+`That module has no settings screen, so there is nothing to administer.` in
+the panel.
+
+**The panel has no platform-admin or disable switch.** Those are account
+changes, not module flags: *Open full record* in the panel's corner reaches
+the employee page, and the bulk bar enables or disables a selection.
 
 **Never-signed-in sorts to the end**, not scattered through the dates: it is the
 extreme of that column, so newest-first does not open with a screen of blanks.

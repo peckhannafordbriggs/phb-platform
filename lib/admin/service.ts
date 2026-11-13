@@ -71,6 +71,23 @@ function orderFor(
 
   if (sort === "name") return name;
 
+  if (sort === "access") {
+    /**
+     * The default since 2026-11-13: how many modules the person holds, fewest
+     * first on the way up - so everyone who signed in and has no access is at
+     * the top - and within one count the most recent sign-in first, so the
+     * newest arrival with nothing is the first row. Never-signed-in sorts to
+     * the end of its count group for the reason `lastLogin` gives.
+     */
+    return [
+      { grants: { _count: dir } },
+      { lastLoginAt: { sort: "desc", nulls: "last" } },
+      { lastName: "asc" },
+      { firstName: "asc" },
+      { id: "asc" },
+    ];
+  }
+
   if (sort === "lastLogin") {
     return [
       // Nulls last on the way down, first on the way up: "never signed in" is
@@ -140,7 +157,7 @@ export async function listEmployees(query: EmployeeListQuery) {
         lastLoginAt: true,
         position: { select: { id: true, name: true } },
         department: { select: { id: true, name: true } },
-        grants: { select: { moduleKey: true } },
+        grants: { select: { moduleKey: true, isModuleAdmin: true } },
       },
       orderBy: orderFor(sort, dir),
       skip: (page - 1) * pageSize,
@@ -152,6 +169,8 @@ export async function listEmployees(query: EmployeeListQuery) {
     employees: employees.map(({ grants, ...employee }) => ({
       ...employee,
       grantedModuleKeys: grants.map((g) => g.moduleKey),
+      /** The subset of grantedModuleKeys whose grant carries is_module_admin, for the row's expanded panel. */
+      moduleAdminKeys: grants.filter((g) => g.isModuleAdmin).map((g) => g.moduleKey),
     })),
     page,
     pageSize,

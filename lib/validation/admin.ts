@@ -67,9 +67,10 @@ export const listItemPatchSchema = z
  *
  * A closed set, not a column name from the query string - a caller-supplied
  * sort field is an injection surface and a way to order by a column the list
- * does not show. PHASE-10 asks for exactly these three.
+ * does not show. PHASE-10 asked for name, status and last sign-in; `access`
+ * (2026-11-13) is the number of modules a person holds, and the default.
  */
-export const employeeSortSchema = z.enum(["name", "lastLogin", "status"]);
+export const employeeSortSchema = z.enum(["access", "name", "lastLogin", "status"]);
 export const sortDirectionSchema = z.enum(["asc", "desc"]);
 
 /** Query parameters arrive as strings; these coerce and bound them. */
@@ -79,15 +80,23 @@ export const employeeListQuerySchema = z.object({
   status: employeeStatusSchema.optional(),
   departmentId: z.uuid().optional(),
   /**
-   * Default view is employees with at least one grant - the table accumulates
-   * everyone who ever signed in, so showing all of them by default is noise.
+   * Default view is everyone (2026-11-13; "with a grant" until then). The
+   * question the list opens on is "who signed in and has no access yet", and
+   * a default that hid exactly those people answered it with an empty screen.
+   * The default SORT puts them first instead - see `sort`.
    *
    * `none` is its own case rather than the absence of a module filter, because
    * "who signed in and never got access" is a question an admin actually asks
    * and cannot express as any combination of the others.
    */
-  scope: z.enum(["granted", "all", "none"]).default("granted"),
-  sort: employeeSortSchema.default("name"),
+  scope: z.enum(["granted", "all", "none"]).default("all"),
+  /**
+   * Fewest grants first, and within the same count the most recent sign-in
+   * first (lib/admin/service.ts, `orderFor`): the people who signed in and
+   * have nothing are at the top, newest arrival first, which is the row an
+   * admin opens this screen to find.
+   */
+  sort: employeeSortSchema.default("access"),
   dir: sortDirectionSchema.default("asc"),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(25),

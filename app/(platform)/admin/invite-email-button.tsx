@@ -1,6 +1,8 @@
 "use client";
 
+import { Copy } from "lucide-react";
 import { useState } from "react";
+import { Button } from "@/components/ui";
 import type { InviteEmail } from "@/lib/admin/invite-email";
 
 /**
@@ -12,6 +14,9 @@ import type { InviteEmail } from "@/lib/admin/invite-email";
  * The preview is plain text, not a form field: it cannot be focused, edited,
  * selected or dragged. A read-only input looked editable and selected all on
  * click (2026-11-05), so the Copy buttons are the only way the text leaves.
+ *
+ * Drawn with the kit since 2026-11-13: the button is a kit button on the
+ * header row, the panel a card, the Copy buttons the kit's small primary.
  */
 export function InviteEmailButton({ email }: { email: InviteEmail }) {
   const [open, setOpen] = useState(false);
@@ -32,14 +37,10 @@ export function InviteEmailButton({ email }: { email: InviteEmail }) {
 
   return (
     <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="cursor-pointer rounded border border-[var(--border)] px-3 py-1 text-sm font-medium text-[var(--accent)] transition-colors hover:bg-[var(--neutral-100)]"
-      >
+      <Button onClick={() => setOpen((o) => !o)} ariaExpanded={open}>
+        <Copy size={16} aria-hidden="true" />
         Copy invite email
-      </button>
+      </Button>
 
       {open && (
         <div
@@ -47,9 +48,9 @@ export function InviteEmailButton({ email }: { email: InviteEmail }) {
           aria-label="Invite email"
           draggable={false}
           onDragStart={(e) => e.preventDefault()}
-          className="absolute right-0 z-20 mt-2 w-[min(36rem,calc(100vw-2rem))] select-none rounded border border-[var(--border)] bg-white p-4 text-left shadow-lg"
+          className="card absolute right-0 z-20 mt-2 w-[min(36rem,calc(100vw-2rem))] select-none p-4 text-left"
         >
-          <p className="text-sm text-[var(--muted)]">
+          <p className="text-[0.8125rem] text-[var(--muted)]">
             Paste this into a new email in Outlook and send it to the people you
             want to invite. They appear on this screen after their first sign-in.
           </p>
@@ -63,19 +64,15 @@ export function InviteEmailButton({ email }: { email: InviteEmail }) {
           </Section>
 
           {failed && (
-            <p role="alert" className="mt-2 text-sm text-[var(--phb-maroon)]">
+            <p role="alert" className="mt-2 text-[0.8125rem] text-[var(--phb-maroon)]">
               Your browser blocked copying. Try again, or use a different browser.
             </p>
           )}
 
           <div className="mt-3 flex justify-end">
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="cursor-pointer px-2 py-1 text-sm text-[var(--muted)] underline underline-offset-2 hover:text-[var(--foreground)]"
-            >
+            <Button size="sm" onClick={() => setOpen(false)}>
               Close
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -97,16 +94,12 @@ function Section({
   return (
     <div className="mt-3">
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-xs font-medium text-[var(--muted)]">{label}</span>
-        <button
-          type="button"
-          onClick={onCopy}
-          className="cursor-pointer rounded bg-[var(--accent)] px-2.5 py-0.5 text-xs font-medium text-white transition-opacity hover:opacity-85 active:opacity-70"
-        >
+        <span className="eyebrow text-[var(--muted)]">{label}</span>
+        <Button size="sm" variant="primary" onClick={onCopy}>
           {done ? "Copied" : "Copy"}
-        </button>
+        </Button>
       </div>
-      <div className="whitespace-pre-wrap rounded border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm leading-relaxed">
+      <div className="whitespace-pre-wrap rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[0.8125rem] leading-relaxed">
         {children}
       </div>
     </div>

@@ -12,9 +12,97 @@ import * as kit from "@/components/ui";
  *   - Dropdown: `disabled`, and a combobox button that owns a listbox.
  *   - SearchBar: a filter mode that needs no router, and `hotkey={false}`.
  *   - Button: `testId`, `ariaExpanded` and `ariaLabel` pass through.
+ *
+ * And what the Admin Employees restyle added (2026-11-13), the same way:
+ *
+ *   - Table: `columns` for unequal widths and `detail` for a panel under an
+ *     expanded row. Its default markup is pinned byte for byte to what it
+ *     rendered before, so every table drawn before draws the same.
+ *   - Chip: a neutral label for a thing, with an optional diamond mark in a
+ *     colour the caller names and a long name behind a short one.
+ *   - Switch: an on / off control, `role="switch"`, the accent when on.
  */
 
 const html = (el: React.ReactElement) => renderToStaticMarkup(el);
+
+describe("Table", () => {
+  // Rendered from main at 107c318 (2026-11-13), before `columns` and `detail` existed.
+  const BASE =
+    '<div><div class="grid gap-4 border-b border-[var(--border)] pb-3" style="grid-template-columns:repeat(2, minmax(0, 1fr))"><span class="eyebrow text-[var(--muted)]">A</span><span class="eyebrow text-[var(--muted)]">B</span></div><div class="grid items-center gap-4 border-b border-[var(--divider-soft)] py-3.5 text-[0.8125rem] " style="grid-template-columns:repeat(2, minmax(0, 1fr))"><div class="min-w-0 truncate">1</div><div class="min-w-0 truncate">2</div></div><div class="grid items-center gap-4 border-b border-[var(--divider-soft)] py-3.5 text-[0.8125rem] " style="grid-template-columns:repeat(2, minmax(0, 1fr))"><div class="min-w-0 truncate">3</div><div class="min-w-0 truncate">4</div></div></div>';
+  const BASE_PAGED =
+    '<div><div class="grid gap-4 border-b border-[var(--border)] pb-3" style="grid-template-columns:repeat(2, minmax(0, 1fr))"><span class="eyebrow text-[var(--muted)]">A</span><span class="eyebrow text-[var(--muted)]">B</span></div><div class="grid items-center gap-4 border-b border-[var(--divider-soft)] py-3.5 text-[0.8125rem] cursor-pointer hover:bg-[var(--neutral-50)] bg-[var(--neutral-50)] font-medium" style="grid-template-columns:repeat(2, minmax(0, 1fr))"><div class="min-w-0 truncate">1</div><div class="min-w-0 truncate">2</div></div><div class="grid items-center gap-4 border-b border-[var(--divider-soft)] py-3.5 text-[0.8125rem] cursor-pointer hover:bg-[var(--neutral-50)] " style="grid-template-columns:repeat(2, minmax(0, 1fr))"><div class="min-w-0 truncate">3</div><div class="min-w-0 truncate">4</div></div><div class="flex items-center justify-end gap-3 pt-3 text-[0.8125rem] text-[var(--muted)]"><button type="button" disabled="" class="disabled:opacity-40">Previous</button><span>1 / 2</span><button type="button" class="disabled:opacity-40">Next</button></div></div>';
+
+  const rows = [
+    ["1", "2"],
+    ["3", "4"],
+  ];
+
+  it("renders exactly what it rendered before the additions, with and without paging", () => {
+    expect(html(<kit.Table headers={["A", "B"]} rows={rows} />)).toBe(BASE);
+    expect(
+      html(<kit.Table headers={["A", "B"]} rows={[...rows, ["5", "6"]]} pageSize={2} onRowClick={() => {}} selected={0} />),
+    ).toBe(BASE_PAGED);
+    // A detail function that has nothing to show changes nothing either.
+    expect(html(<kit.Table headers={["A", "B"]} rows={rows} detail={() => null} />)).toBe(BASE);
+  });
+
+  it("takes a column template, and draws a panel under the one row that has a detail", () => {
+    const markup = html(
+      <kit.Table
+        headers={["A", "B"]}
+        rows={rows}
+        columns="2rem minmax(0,1fr)"
+        detail={(i) => (i === 1 ? <span id="panel">more</span> : null)}
+      />,
+    );
+    expect(markup.match(/grid-template-columns:2rem minmax\(0,1fr\)/g)).toHaveLength(3);
+    expect(markup).not.toContain("repeat(2, minmax(0, 1fr))");
+    // One panel, after the second row and not the first.
+    expect(markup.match(/<span id="panel">/g)).toHaveLength(1);
+    const panelAt = markup.indexOf('id="panel"');
+    expect(panelAt).toBeGreaterThan(markup.indexOf(">3</div>"));
+    expect(markup.indexOf(">1</div>")).toBeLessThan(markup.indexOf(">3</div>"));
+    expect(markup).toContain('class="rounded-[var(--radius-row)] bg-[var(--neutral-50)] px-4 py-4 text-[0.8125rem]"');
+  });
+});
+
+describe("Chip", () => {
+  it("is a neutral label with no mark and no title by default", () => {
+    const markup = html(<kit.Chip>CO</kit.Chip>);
+    expect(markup).toBe(
+      '<span class="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)] bg-white px-2 py-0.5 text-[0.6875rem] font-medium text-[var(--foreground)]">CO</span>',
+    );
+  });
+
+  it("draws the diamond in the colour it is given, and reads the long name behind the short one", () => {
+    const markup = html(
+      <kit.Chip mark="var(--phb-cyan)" title="Building Automation">
+        BAS
+      </kit.Chip>,
+    );
+    expect(markup).toContain('title="Building Automation"');
+    expect(markup).toMatch(/<span class="diamond diamond--filled[^"]*" style="color:var\(--phb-cyan\)" aria-hidden="true"><\/span>/);
+    expect(markup).toContain('<span aria-hidden="true">BAS</span><span class="sr-only">Building Automation</span>');
+  });
+});
+
+describe("Switch", () => {
+  it("is a switch, on in the accent and off in a neutral, its words the accessible name", () => {
+    const on = html(<kit.Switch label="Access" checked onChange={() => {}} />);
+    expect(on).toMatch(/^<button type="button" role="switch" aria-checked="true"/);
+    expect(on).toContain("bg-[var(--module-accent)]");
+    expect(on).toContain("translate-x-4");
+    expect(on).toContain(">Access</span>");
+    expect(on).not.toMatch(/ disabled=""/);
+
+    const off = html(<kit.Switch label="Access" checked={false} onChange={() => {}} disabled description="Not yet" />);
+    expect(off).toContain('aria-checked="false"');
+    expect(off).toContain("bg-[var(--neutral-300)]");
+    expect(off).not.toContain("translate-x-4");
+    expect(off).toMatch(/<button[^>]*disabled=""/);
+    expect(off).toContain(">Not yet</span>");
+  });
+});
 
 describe("TabBar", () => {
   it("underlines the active tab in its own accent when it names one, and the module's otherwise", () => {
