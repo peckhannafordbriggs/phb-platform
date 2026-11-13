@@ -12090,6 +12090,81 @@ this fix: the image is rebuilt by `deploy.yml` on merge and both jobs are
 pointed at it, because `AZURE_BAS_REPORTS_SCHEDULER_JOB` and
 `AZURE_BAS_REPORTS_WORKER_JOB` are set.
 
+## Reports: a job execution fails with `Cannot find package` or `ERR_MODULE_NOT_FOUND`
+
+**Symptom.** A scheduler or worker execution shows *Failed* within a second
+or two, and its log's first lines are `Error [ERR_MODULE_NOT_FOUND]: Cannot
+find package '<name>' imported from /app/...`, or `npx` offering to install
+`tsx`. Every local run of the same script works, and so does every test.
+
+**Cause.** The jobs image installs **production dependencies only**
+(`Dockerfile.bas-reports`, `npm ci --omit=dev`, since 2026-11-13). A package
+a job loads at run time that is listed under `devDependencies` in
+`package.json` is not in the image at all; a laptop and CI install the whole
+tree, so nothing there can notice. `tsx` (the loader both job commands
+name) and `dotenv` (`scripts/load-env.ts`) were development dependencies
+until that day and were moved for this reason.
+
+**Fix.** Move the package from `devDependencies` to `dependencies` in
+`package.json`, run `npm install` so the lockfile follows, and merge; the
+image rebuilds on merge. `tests/bas-reports-jobs-env.test.ts` → *everything
+a job loads at run time is a production dependency* walks both scripts'
+import graphs (static imports, `import()` and `require()`) against the
+`dependencies` list and names the package and the module that loads it, so
+this should fail there first. What the walk cannot see is a package loaded
+through a computed name, or one that a dependency expects and does not
+declare; the image's own check and a boot against a database are the
+backstop (below).
+
+**The `prisma` CLI is the one exception, and it is deliberate.** It is a
+development dependency, and it is in the image anyway: the lockfile marks it
+as an optional peer of `@prisma/client`, which `--omit=dev` keeps, and
+postinstall's `prisma generate` writes the client during the install. The
+install line ends with `test -f lib/generated/prisma/client.ts`, so a Prisma
+release that drops the peer fails the image build - and the same test reads
+the lockfile's flag and fails first.
+
+**What the image holds, and why it is the size it is.** Built from `main` on
+2026-11-13 the image was **6.56 GB** as Docker reports it; after this change
+**2.9 GB**, from one local build of each. Three causes, in order of size:
+
+- `chown -R node:node /app` as its own layer stored `node_modules` and the
+  source a second time (1.49 GB): a layer that changes a file's owner holds a
+  whole copy of the file. `/app` is now made the user's while it is empty,
+  the install runs as `node`, and every `COPY` says `--chown=node:node`. A
+  deploy guard refuses `chown -R` in this Dockerfile.
+- The development tree and npm's download cache (2 GB for that layer, 1.31 GB
+  now).
+- Full Chromium beside the headless shell (1.06 GB for that layer, 627 MB
+  now). A headless launch - the only kind `pdf/render.ts` makes - runs
+  `chromium_headless_shell` and never the full browser, and a plain
+  `playwright install chromium` downloads both. The image and CI now install
+  with `--only-shell`. Measured rather than assumed: the sample report
+  printed in the old image and in the new one is the same file byte for byte
+  once the two creation dates and the document id are set aside (220,251
+  bytes, twice in each).
+
+What is left is mostly `node_modules` (about 1.2 GB: the Anthropic packages,
+Prisma, Next and its compiler) and Chromium's apt packages. Next is there
+because it is a dependency of the one `package.json`, not because a job
+uses it; taking it out means a second manifest for the jobs, which was not
+done.
+
+**To check an image by hand** (Docker Desktop running; the tag is yours):
+
+```bash
+docker build -f Dockerfile.bas-reports -t bas-reports:check .
+# the build's last RUN is the launch-and-print check as `node`: "chromium prints: N bytes"
+docker images bas-reports
+docker run --rm -e NODE_ENV=production -e DATABASE_URL='<a database with the migrations applied, never production>' \
+  bas-reports:check npx tsx scripts/bas-reports-scheduler.ts
+# "[bas-reports-scheduler] N queued, N paused, N skipped, N abandoned" and exit 0
+```
+
+Nothing in the template or in either job's environment changed with this:
+the commands are still `npx tsx scripts/…`, the variables are the same, and
+the image tag is still the commit's.
+
 ## Reports: a run is stuck or failed
 
 **Symptom.** A run on the Reports list, or in a report's Last run cell, reads
