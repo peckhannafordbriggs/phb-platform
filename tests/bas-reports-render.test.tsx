@@ -131,7 +131,11 @@ describe("the report template", () => {
     expect(positiveAnswer(question({ key: "q20_data_health", position: 20, section: "data_health", text: "", needs: "", metrics: { judged: 26, flagged: 0, findings: 0 } }))).toBe(
       "All 26 points judged were reporting, changing and within physical range.",
     );
-    expect(positiveAnswer(question({ key: "q09_dat_holds_setpoint", position: 9, section: "ahu_rtu", text: "", needs: "", equipment: ["RV"] }))).toBe("Nothing to report over RV.");
+    // Every one of the twenty has its own line since Phase 5; a key the code does not know gets the default.
+    expect(positiveAnswer(question({ key: "admin_planner_question", position: 21, section: "ahu_rtu", text: "", needs: "", equipment: ["RV"] }))).toBe("Nothing to report over RV.");
+    expect(positiveAnswer(question({ key: "q09_dat_holds_setpoint", position: 9, section: "ahu_rtu", text: "", needs: "", equipment: ["RV"], metrics: { judged: 1, lowest: { name: "RV", percentInBand: 97 } } }))).toBe(
+      "The one unit judged held discharge air within its band (±1.5 °F modulating, ±4 °F staged DX) for at least 97% of fan-on hours (lowest: RV).",
+    );
   });
 
   it("words the three reasons a question did not run, and what was skipped", () => {

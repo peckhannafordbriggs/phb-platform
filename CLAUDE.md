@@ -1642,6 +1642,31 @@ section numbers** - *3. VAV* is a section, *Q3* a question.
 `WHY-ITS-BUILT-THIS-WAY.md` § 84; `runbook.md` → *Every question is a
 sub-heading on the report, and what the line under it means*.
 
+**Reports, Phase 5 - every one of the twenty questions has an analysis
+(2026-11-16).** Q6-Q18 are thirteen pure functions in
+`lib/modules/bas/reports/engine/analysis/` (`vav.ts`, `air-handlers.ts`,
+`hydronic.ts`, `dx.ts`, one shape in `common.ts`, dispatched from
+`EQUIPMENT_QUESTIONS`), each returning findings with actual / expected /
+duration, the units it skipped and why, and the headline its one-line
+answer prints. **Every number is in `analysis/thresholds.ts`, marked SPEC
+(the library text's, used exactly) or CHOSEN (with its reason)**, and
+`CHOSEN_THRESHOLDS` is held to the file by a test. Three rules a later
+change must not undo: Q12 judges only while the unit calls for cooling,
+so a unit with no cooling point is not judged (the one place a function
+asks more than its library row, which stays as Jim wrote it); the DX
+questions apply by Step 1 (points or a packaged DX type), so a hydronic
+`ahu` no longer reads the DX section Not Monitored; and Q9/Q10 skip the
+fan's first 15 minutes, Q15 a trend coarser than five minutes. No role was
+added. Proven by fixture tests per question (finding, no finding, a Data
+Health exclusion, NA/NM) and a full run on a synthetic building with
+every role - all twenty answered, `succeeded`, exactly the planted
+faults; the office re-run on `main` and on the branch is identical, Q6-Q18
+still Not Monitored. CI now builds `Dockerfile.bas-reports` and prints a
+report with the worker's renderer in it (job `reports-image`).
+`WHY-ITS-BUILT-THIS-WAY.md` § 85; `runbook.md` → *Reports: a VAV, air
+handler, plant or DX finding looks wrong, or a unit reads "Not judged"*,
+*CI: "Reports jobs image builds and prints" fails*.
+
 **Admin → Employees on the shared kit (2026-11-13).** The page wears the
 module shells' chrome - the tinted ground, the header with the chrome purple
 by name (`ModuleHeader`'s new `accent`; Admin is not a module and has no key

@@ -137,6 +137,97 @@ export function segments(series: PointSeries, range: Interval, maxHoldMs: number
   return cut;
 }
 
+/** One stretch of time on which every aligned series has a value, with each one's value in order. */
+export interface Slice {
+  start: number;
+  end: number;
+  values: number[];
+}
+
+/**
+ * The sub-intervals of `within` on which every one of `lists` has a segment,
+ * with each list's value. The workhorse of every question that compares two
+ * or more points at the same instant: a temperature and its setpoint, an
+ * airflow and its setpoint, a compressor and a damper and the outdoor air.
+ * Where any one series is unknown there is no slice - nothing is judged on
+ * a value somebody did not record.
+ */
+export function align(lists: Segment[][], within: Interval[]): Slice[] {
+  const breaks = new Set<number>();
+  for (const list of lists) {
+    for (const s of list) {
+      breaks.add(s.start);
+      breaks.add(s.end);
+    }
+  }
+  for (const i of within) {
+    breaks.add(i.start);
+    breaks.add(i.end);
+  }
+  const points = [...breaks].sort((a, b) => a - b);
+  const windows = normalise(within);
+  const out: Slice[] = [];
+  const cursors = lists.map(() => 0);
+  let w = 0;
+  for (let i = 0; i + 1 < points.length; i += 1) {
+    const start = points[i]!;
+    const end = points[i + 1]!;
+    if (end <= start) continue;
+    while (w < windows.length && windows[w]!.end <= start) w += 1;
+    const win = windows[w];
+    if (win === undefined || win.start > start || end > win.end) continue;
+    const values: number[] = [];
+    let ok = true;
+    for (let k = 0; k < lists.length; k += 1) {
+      const list = lists[k]!;
+      let c = cursors[k]!;
+      while (c < list.length && list[c]!.end <= start) c += 1;
+      cursors[k] = c;
+      const seg = list[c];
+      if (seg === undefined || seg.start > start) {
+        ok = false;
+        break;
+      }
+      values.push(seg.v);
+    }
+    if (ok) out.push({ start, end, values });
+  }
+  return out;
+}
+
+/** The slices on which `test` holds, as merged intervals. */
+export function slicesWhere(slices: Slice[], test: (values: number[]) => boolean): Interval[] {
+  return normalise(slices.filter((s) => test(s.values)).map((s) => ({ start: s.start, end: s.end })));
+}
+
+/** The time the slices cover, in ms. */
+export function slicesMs(slices: Slice[]): number {
+  return slices.reduce((sum, s) => sum + (s.end - s.start), 0);
+}
+
+/** The time-weighted mean of `pick(values)` over the slices, or null when they cover no time. */
+export function slicesMean(slices: Slice[], pick: (values: number[]) => number): number | null {
+  let ms = 0;
+  let sum = 0;
+  for (const s of slices) {
+    const d = s.end - s.start;
+    ms += d;
+    sum += pick(s.values) * d;
+  }
+  return ms === 0 ? null : sum / ms;
+}
+
+/**
+ * Each interval with its first `ms` cut off, and dropped when it is no
+ * longer than that: "with compressors running 15 minutes or more", "after
+ * the fan has run long enough for the discharge air to settle".
+ */
+export function afterFirst(intervals: Interval[], ms: number): Interval[] {
+  return normalise(intervals)
+    .filter((i) => i.end - i.start > ms)
+    .map((i) => ({ start: i.start + ms, end: i.end }));
+}
+
 /** How long a point may hold between readings before the value is unknown. */
 export function holdMsFor(series: PointSeries): number {
   if (series.intervalS === null) return Number.POSITIVE_INFINITY;

@@ -3497,3 +3497,62 @@ and *Q3* is a question, and the prefix is what keeps them apart.
 `tests/bas-reports-render.test.tsx`;
 `docs/design/bas-report-question-layout/`; `runbook.md` → *Every question
 is a sub-heading on the report, and what the line under it means*.
+
+## 85 · Every number a question judges by is either the spec's or chosen in one file, and a function never guesses past what its points prove
+
+**What I did (2026-11-16).** Questions 6-18 are thirteen pure functions
+over the units the inventory already qualified, one shape for all of them
+(`analysis/common.ts`), each returning its findings, the units it skipped
+with the reason, and the headline numbers its one-line answer prints. Every
+threshold they apply is a named constant in `analysis/thresholds.ts`,
+marked SPEC (the library text's figure, used exactly) or CHOSEN (the spec
+leaves it open) with its reason, and `CHOSEN_THRESHOLDS` lists the chosen
+ones, held to the file by a test that reads the source. Three judgments
+went further than "pick a number":
+
+1. **Q12 judges only while the unit calls for cooling.** The library's
+   required points for Q12 are Jim's - OA damper, OAT, RAT - and they
+   cannot tell an economizer at minimum in its deadband (correct) from one
+   at minimum while compressors or a cooling valve run (the fault). So the
+   function needs a cooling point the row does not name, and a unit
+   without one is listed as not judged with that reason rather than judged
+   on a guess. The row was left as Jim wrote it.
+2. **The DX questions apply by Step 1, not by type alone.** The library's
+   type list for Q15-Q17 includes `ahu` (an air handler can be DX), so a
+   hydronic air handler made the whole DX section read Not Monitored on a
+   building with no compressors. Now a unit is DX when its points say so or
+   its type is a packaged DX type, and Q18's gas or electric heat likewise.
+3. **A fan's first 15 minutes are not judged** (Q9, Q10), and a compressor
+   trend coarser than five minutes is not judged for short cycling (Q15).
+
+**Why.** The spec's first rule is that a false alarm costs a truck roll,
+and each of the three is a place where the data looked like an answer and
+was not one. An economizer at minimum on a mild afternoon with no cooling
+call is the deadband working. A hydronic air handler "missing compressor
+status" tells the reader the building has DX it is not trending, which is
+false. Every morning's cold start misses a ±1.5 °F band for ten minutes,
+and the spec's own "two or more days" rule turns that into a recurring
+finding on every unit in the building. A 15-minute trend cannot show five
+starts an hour, so "no short cycling" from it would be a claim the data
+cannot support - not judging it, and saying why, is the honest answer.
+
+The numbers live in one file, split SPEC from CHOSEN, because the next
+argument about a finding will be about a number, and the person having it
+needs to know in one place whether it is Jim's or ours. A chosen number
+that drifts from what the runbook prints is a report nobody can audit; the
+test that reads the file's comments makes the list and the code one thing.
+
+**What breaks if you undo it.** Drop Q12's cooling-call rule and every
+economizer that rests at minimum between calls is a Watch, weekly, on
+every building. Apply DX by type alone and Phase 7's checklist item - the
+hydronic building leaves the DX section out - fails on any building with
+an `ahu`. Remove the settle time and Q9 and Q10 raise a finding on every
+unit that starts every morning. Inline a threshold in a function and the
+list in the runbook is wrong without anything failing.
+
+`lib/modules/bas/reports/engine/analysis/` (`common.ts`, `thresholds.ts`,
+`vav.ts`, `air-handlers.ts`, `hydronic.ts`, `dx.ts`), `inventory.ts`
+(`applicableUnits`); `tests/bas-reports-phase5.test.ts`,
+`tests/bas-reports-phase5-building.test.ts`; `runbook.md` → *Reports: a
+VAV, air handler, plant or DX finding looks wrong, or a unit reads "Not
+judged"*.

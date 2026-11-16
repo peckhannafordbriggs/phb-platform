@@ -231,6 +231,87 @@ function SchedulesTable({ rows }: { rows: ScheduleResult[] }) {
   );
 }
 
+/**
+ * The template's Hot Water and Chilled Water headline - "HWS on target: x%
+ * | Avg delta T: x °F" - from Q13's and Q14's metrics, time-weighted over
+ * every in-service hour (Phase 5). Absent when no loop was judged.
+ */
+function LoopHeadline({ q }: { q: QuestionResult }) {
+  const onTarget = q.metrics.onTargetPercent;
+  const delta = q.metrics.averageDeltaT;
+  if (typeof onTarget !== "number" || typeof delta !== "number") return null;
+  const label = typeof q.metrics.label === "string" ? q.metrics.label : q.key.startsWith("q13") ? "HWS" : "CHWS";
+  return (
+    <p>
+      {label} on target: {onTarget}% | Avg delta T: {delta.toFixed(1)} °F
+    </p>
+  );
+}
+
+interface DxRow {
+  name: string;
+  peak: number | null;
+  drop: number | null;
+  rise: number | null;
+}
+
+/**
+ * The template's DX table - Unit | Compressor starts/hr peak | Avg DAT drop
+ * with compressors on | Avg DAT rise with heat on - assembled from the
+ * per-unit metrics of Q15, Q16 and Q18 (Phase 5). A unit a question did not
+ * judge reads "—" in that column. Absent when none of the three ran.
+ */
+export function dxTableRows(questions: readonly QuestionResult[]): DxRow[] {
+  const rows = new Map<string, DxRow>();
+  const row = (name: string) => {
+    let r = rows.get(name);
+    if (r === undefined) {
+      r = { name, peak: null, drop: null, rise: null };
+      rows.set(name, r);
+    }
+    return r;
+  };
+  for (const q of questions) {
+    if (q.outcome !== "answered") continue;
+    const units = Array.isArray(q.metrics.units) ? (q.metrics.units as Array<Record<string, unknown>>) : [];
+    for (const u of units) {
+      if (typeof u.name !== "string") continue;
+      if (q.key === "q15_compressor_short_cycling" && typeof u.peakStartsPerHour === "number") row(u.name).peak = u.peakStartsPerHour;
+      if (q.key === "q16_dx_cooling_delta" && typeof u.average === "number") row(u.name).drop = u.average;
+      if (q.key === "q18_heat_stage_delta" && typeof u.average === "number") row(u.name).rise = u.average;
+    }
+  }
+  return [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function DxTable({ questions }: { questions: readonly QuestionResult[] }) {
+  const rows = dxTableRows(questions);
+  if (rows.length === 0) return null;
+  const f = (v: number | null, unit: string) => (v === null ? "—" : `${unit === "" ? v : v.toFixed(1)}${unit}`);
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Unit</th>
+          <th>Compressor starts/hr peak</th>
+          <th>Avg DAT drop with compressors on</th>
+          <th>Avg DAT rise with heat on</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.name}>
+            <td>{r.name}</td>
+            <td>{f(r.peak, "")}</td>
+            <td>{f(r.drop, " °F")}</td>
+            <td>{f(r.rise, " °F")}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function periodText(doc: ReportDocument): string {
   const f = new Intl.DateTimeFormat("en-GB", { timeZone: doc.header.timezone, day: "numeric", month: "short", year: "numeric" });
   return `${f.format(new Date(doc.header.periodStart))} to ${f.format(new Date(doc.header.periodEnd))}`;
@@ -315,6 +396,7 @@ function Answer({ q, findings, timezone }: { q: QuestionResult; findings: Findin
         <p>Zones within ±2 °F of setpoint during occupancy: {overall}%</p>
       )}
       {q.key === "q19_run_outside_schedule" && <SchedulesTable rows={schedules} />}
+      {(q.key === "q13_hw_supply_and_delta_t" || q.key === "q14_chw_supply_and_delta_t") && <LoopHeadline q={q} />}
       {findings.length === 0 ? <p>{positiveAnswer(q)}</p> : <FindingsTable findings={findings} timezone={timezone} />}
     </div>
   );
@@ -335,6 +417,7 @@ function Section({ section, timezone, index }: { section: SectionDocument; timez
         {index}. {section.label} <Status status={section.status} />
       </h2>
       {judged && section.statusSentence && <p className="sentence">{section.statusSentence}</p>}
+      {section.key === "dx" && <DxTable questions={questions} />}
       {questions.map((q) => (
         <Question key={q.key} q={q} findings={live.filter((f) => f.questionKey === q.key)} timezone={timezone} />
       ))}
