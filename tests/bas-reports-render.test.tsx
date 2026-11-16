@@ -9,6 +9,16 @@ import { question, reportDocument as document } from "./fixtures/bas-report-docu
 import { NARRATIVE_SYSTEM, createFixedNarrator, narrativeUserMessage } from "@/lib/modules/bas/reports/engine/narrative";
 import type { ReportDocument } from "@/lib/modules/bas/reports/engine/types";
 import {
+  HIDE_HOW_LABEL,
+  SHOW_HOW_LABEL,
+  formatPlannerCell,
+  occupancySourceWords,
+  plannerReadLine,
+  plannerTableView,
+} from "@/lib/modules/bas/reports/engine/planner-display";
+import { PlannerHowToggle } from "@/app/(modules)/bas/reports-planner-how";
+import { PLANNER_INTERPRETATION, PLANNER_SQL, plannerAnswer, reportWithPlanner } from "./fixtures/bas-report-planner-answer";
+import {
   TIME_CAP_NOTE,
   describeRunDuration,
   missingForSection,
@@ -450,5 +460,130 @@ describe("the narrative prompt", () => {
     expect(result.findings[0]).toMatchObject({ index: 0, fixLocation: "unknown" });
     expect(result.findings[0]!.likelyCause.startsWith("Likely")).toBe(true);
     expect(narrator.calls).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Planner answers on the page (2026-11-16): the answer, a small table, one
+// grey line; how it was answered behind a web-only button
+// ---------------------------------------------------------------------------
+
+const NY_ZONE = "America/New_York";
+const plannerSection = (html: string) => html.slice(html.indexOf("<h2>Planner questions</h2>"));
+
+describe("a planner answer on the page and in the PDF", () => {
+  it("prints the question, the answer in prose, the small table and ONE grey line - nothing of how it was answered", () => {
+    const section = plannerSection(renderReportHtml(reportWithPlanner()));
+    expect(section).toContain("<h3>Which zone was warmest on average during occupied hours?</h3>");
+    expect(section).toContain("<p>VAV-7 serving rooms 111-112 was the warmest zone during occupied hours, averaging 73.91 °F.</p>");
+    expect(section).toContain("<li>ROOM 107 — 73.37 °F</li>");
+    expect(section).toContain("<th>zone_name</th><th>avg_temp_f</th><th>first_reading</th>");
+    expect(section).toContain(
+      '<p class="planner-meta">Read 11 points on PHBoffice for 22 Sept 2026 to 29 Sept 2026; occupied hours from the Occupied point.</p>',
+    );
+    expect(section.match(/class="planner-meta"/g)).toHaveLength(1);
+    for (const hidden of [PLANNER_SQL, PLANNER_INTERPRETATION, "How the question was read", "model call", "$0.2313", "VAV-8 104-105_ZoneTemperature, ", SHOW_HOW_LABEL, 'class="sql"', "planner-how"]) {
+      expect(section, hidden).not.toContain(hidden);
+    }
+  });
+
+  it("prints dates as local dates, never ISO instants", () => {
+    const section = plannerSection(renderReportHtml(reportWithPlanner()));
+    expect(section).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+    // 13:00Z is 09:00 in New York; 04:00Z is New York midnight, a date; 00:00Z exactly is a calendar date.
+    expect(section).toContain("<td>22 Sept 2026, 09:00</td>");
+    expect(section).toContain("<td>22 Sept 2026</td>");
+    expect(section).toContain("<td>23 Sept 2026</td>");
+    expect(formatPlannerCell("2026-09-25", NY_ZONE)).toBe("25 Sept 2026");
+    expect(formatPlannerCell("2026-09-25T00:00:00Z", NY_ZONE)).toBe("25 Sept 2026");
+    expect(formatPlannerCell("73.91", NY_ZONE)).toBe("73.91");
+    expect(formatPlannerCell(12, NY_ZONE)).toBe("12");
+    expect(formatPlannerCell(null, NY_ZONE)).toBe("—");
+    expect(formatPlannerCell("not 2026-09-25T00:00:00Z", NY_ZONE)).toBe("not 2026-09-25T00:00:00Z");
+  });
+
+  it("shows at most 12 rows and 6 columns, and says how many were shown", () => {
+    const columns = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const rows = Array.from({ length: 20 }, (_, i) => columns.map((c) => `${c}${i}`));
+    const wide = plannerTableView({ columns, rows, rowCount: 200, truncated: true, kept: 20 });
+    expect(wide.columns).toEqual(["a", "b", "c", "d", "e", "f"]);
+    expect(wide.rows).toHaveLength(12);
+    expect(wide.rows.every((r) => r.length === 6)).toBe(true);
+    expect(wide.shownLine).toBe("12 of 200+ rows shown · 6 of 8 columns shown");
+    expect(plannerTableView({ columns: ["x"], rows: [["1"]], rowCount: 1, truncated: false, kept: 1 }).shownLine).toBeNull();
+    const twelve = Array.from({ length: 12 }, (_, i) => [String(i)]);
+    expect(plannerTableView({ columns: ["x"], rows: twelve, rowCount: 12, truncated: false, kept: 12 }).shownLine).toBeNull();
+    const page = plannerSection(renderReportHtml(reportWithPlanner([plannerAnswer({ table: { columns: ["x"], rows: Array.from({ length: 30 }, (_, i) => [i]), rowCount: 30, truncated: false, kept: 30 } })])));
+    expect(page.match(/<tr><td>/g)).toHaveLength(12);
+    expect(page).toContain("12 of 30 rows shown");
+  });
+
+  it("keeps the amber checks on the page: another building, another period, readings that do not cover the period", () => {
+    const answer = plannerAnswer({
+      notes: ["This answer read 2 points on PHB Spring Grove, not on PHB Steel Place: Temp1, Temp2."],
+      provenance: { ...plannerAnswer().provenance!, coverageShortfall: "Any figure above describes 3 days of the 7 days asked about." },
+    });
+    const section = plannerSection(renderReportHtml(reportWithPlanner([answer])));
+    expect(section).toContain('<p class="partial">This answer read 2 points on PHB Spring Grove, not on PHB Steel Place: Temp1, Temp2.</p>');
+    expect(section).toContain('<p class="partial">Any figure above describes 3 days of the 7 days asked about.</p>');
+  });
+
+  it("words the grey line from what was read: the occupancy clause only when the answer is about occupied hours", () => {
+    const ctx = { stationNames: ["PHBoffice"], timezone: NY_ZONE, occupancy: [{ kind: "point" as const, detail: "Occupied (occupancy status point)" }] };
+    const perDay = plannerAnswer({ text: "How many readings did the collector store per day?", interpretation: "Count of readings per local day.", sql: "SELECT 1" });
+    expect(plannerReadLine(perDay, ctx)).toBe("Read 11 points on PHBoffice for 22 Sept 2026 to 29 Sept 2026.");
+    expect(plannerReadLine(plannerAnswer(), { ...ctx, occupancy: [{ kind: "none", detail: "no occupancy point trended" }] })).toBe(
+      "Read 11 points on PHBoffice for 22 Sept 2026 to 29 Sept 2026; no occupancy source on this building.",
+    );
+    expect(plannerReadLine(plannerAnswer({ provenance: null }), ctx)).toBeNull();
+    expect(occupancySourceWords({ kind: "manual", detail: "the building's occupied hours: Mon-Fri 07:00-18:00" })).toBe("the occupied hours entered for the building");
+    expect(occupancySourceWords({ kind: "point", detail: "OccCmd (occupancy command point)" })).toBe("the OccCmd point");
+  });
+
+  it("has a print rule that hides the web view's toggle and panel", () => {
+    expect(REPORT_CSS).toContain("@media print { .bas-report .planner-how { display: none !important; } }");
+  });
+});
+
+describe("a planner answer on the web run view", () => {
+  const web = (doc: ReportDocument, open = false) =>
+    plannerSection(
+      renderToStaticMarkup(
+        createElement(ReportView, {
+          document: doc,
+          plannerDetails: (answer, timezone) => createElement(PlannerHowToggle, { answer, timezone, defaultOpen: open }),
+        }),
+      ),
+    );
+
+  it("carries a kit secondary Button, collapsed by default, under each answer", () => {
+    const html = web(reportWithPlanner([plannerAnswer(), plannerAnswer({ position: 21, text: "How many readings did the collector store per day?" })]));
+    expect(html.match(new RegExp(SHOW_HOW_LABEL, "g"))).toHaveLength(2);
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('data-testid="planner-how-toggle"');
+    // A real <button> from the kit, not a text link.
+    expect(html).toMatch(/<button type="button"[^>]*data-testid="planner-how-toggle"[^>]*>Show how this was answered<\/button>/);
+    expect(html).not.toMatch(/<a [^>]*>Show how this was answered/);
+    expect(html).not.toContain("planner-how-panel");
+    expect(html).not.toContain(PLANNER_SQL);
+  });
+
+  it("opened, shows the interpretation, every point, the period, the SQL and the cost, and reads Hide", () => {
+    const html = web(reportWithPlanner(), true);
+    expect(html).toContain(">Hide</button>");
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain(`<strong>How the question was read:</strong> ${PLANNER_INTERPRETATION}`);
+    expect(html).toContain("<strong>11 points:</strong> Occupied, ROOM 107, VAV-7 111-112_ZoneTemperature, VAV-8 104-105_ZoneTemperature and 7 more");
+    expect(html).toContain("<strong>Period queried:</strong> 22 Sept 2026, 09:00 to 29 Sept 2026, 09:00");
+    expect(html).toContain('<pre class="sql">');
+    expect(html).toContain("2 model calls · $0.2313 · 41.4 s");
+    expect(html).toContain("9 points with no role set were outside a search by role.");
+    expect(HIDE_HOW_LABEL).toBe("Hide");
+  });
+
+  it("offers nothing to expand for a question the planner was never asked", () => {
+    const html = web(reportWithPlanner([plannerAnswer({ outcome: "skipped", answer: null, reason: "Skipped — spending cap: …", interpretation: null, sql: null, table: null, provenance: null, calls: 0, costUsd: 0 })]));
+    expect(html).not.toContain(SHOW_HOW_LABEL);
+    expect(html).toContain("Skipped — spending cap");
   });
 });

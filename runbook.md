@@ -12540,6 +12540,16 @@ Usage page. Reword the question or collect the points; nothing is broken.
 **"The planner asked: …"** means it needed a choice nobody is present to
 make in a scheduled run - reword the question on the report to say which.
 
+**Where the SQL, the points and the cost went.** On the page and in the
+PDF a planner answer shows only the answer, a small table and one grey
+"Read N points on … for …" line. Everything else is on the run and on the
+web run view behind *Show how this was answered* under each answer - the
+planner's reading of the question, every point, the period queried, the
+SQL and the cost. The PDF never carries it, by design; a run stored before
+2026-11-16 keeps its old, longer stored page and PDF (the web view shows
+the new layout from the same document). A table cut to "12 of N rows
+shown" has every row the planner returned up to 50 on the run's document.
+
 **An amber note under an answer** - *"This answer read N points on
 <other building>"* or *"The query covered … not the report's period"* - is
 the platform checking the planner against the report's fixed context

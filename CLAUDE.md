@@ -1679,7 +1679,11 @@ estimate averaged from the last 20 runs ($0.25 before any history);
 what is left past either is listed by name, *Skipped — spending cap* /
 *time cap*, and the run is partial. Answers are one *Planner questions*
 section, **shown, never tracked**: no fingerprint, no finding row, no
-status. Five counters on the run (`20261116120000_bas_report_runs_planner`)
+status. On the page and in the PDF an answer is the prose, a table of at
+most 12 rows and 6 columns, local dates and one grey "Read N points on …"
+line; the reading, every point, the SQL and the cost are behind *Show how
+this was answered* on the web run view only (a `ReportView` slot the
+stored HTML never fills, plus a print rule). Five counters on the run (`20261116120000_bas_report_runs_planner`)
 feed the Usage page and the estimate. A BAS module admin can promote
 their own saved question to the shared library as a planner question
 (section, applies-to, required roles; audited

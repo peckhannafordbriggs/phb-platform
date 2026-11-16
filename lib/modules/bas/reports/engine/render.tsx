@@ -12,6 +12,8 @@
 import { BAS_LIBRARY_QUESTIONS, describeRequiredRoles } from "../library";
 import { COLLECTION_STOPPED, DATA_HEALTH_QUESTION, incidentPoints } from "./analysis/data-health";
 import { STATUS_LABELS } from "./rollup";
+import { formatPlannerCell, plannerReadLine, plannerTableView } from "./planner-display";
+import type { ReactNode } from "react";
 import type {
   EquipmentTypeFound,
   Finding,
@@ -110,6 +112,12 @@ export const REPORT_CSS = `
 .bas-report .incident p { margin: 0 0 .25rem; }
 .bas-report .planner-meta { color: #5c5873; font-size: .8125rem; margin: .15rem 0; }
 .bas-report pre.sql { white-space: pre-wrap; word-break: break-word; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #3d3852; background: #f5f4f8; padding: .4rem .5rem; border-radius: .25rem; margin: .25rem 0 .5rem; }
+.bas-report .planner-question .answer p { margin: .5rem 0; }
+.bas-report .planner-question .answer ul { list-style: disc; }
+.bas-report .planner-how { margin: .35rem 0 1rem; }
+.bas-report .planner-how-panel { margin-top: .5rem; padding: .5rem .75rem; border: 1px solid #e6e3ee; border-radius: .375rem; background: #f5f4f8; font-size: .8125rem; }
+.bas-report .planner-how-panel p { margin: 0 0 .35rem; }
+@media print { .bas-report .planner-how { display: none !important; } }
 `;
 
 const STATE_WORDS: Record<Finding["state"], string> = { new: "New", still_open: "Still open", cleared: "Cleared" };
@@ -566,23 +574,30 @@ function AnswerText({ text }: { text: string }) {
   );
 }
 
-function localRange(range: { start: string; end: string }, timezone: string): string {
-  const f = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-  return `${f.format(new Date(range.start))} to ${f.format(new Date(range.end))}`;
-}
+/**
+ * The web run view's slot under each planner answer: the "Show how this was
+ * answered" toggle (app/(modules)/bas/reports-planner-how.tsx). Absent on
+ * the stored HTML and so in the PDF - html.ts renders ReportView with no
+ * slot - and hidden by REPORT_CSS's print rule when the web page is printed.
+ */
+export type PlannerDetailsSlot = (answer: PlannerAnswer, timezone: string) => ReactNode;
 
-function cellText(cell: string | number | boolean | null): string {
-  if (cell === null) return "—";
-  if (typeof cell === "boolean") return cell ? "true" : "false";
-  return String(cell);
-}
-
-/** One planner question: its words, then its answer or why there is none, then where the answer came from. */
-function PlannerQuestion({ a, timezone }: { a: PlannerAnswer; timezone: string }) {
+/**
+ * One planner question as the page and the PDF show it (2026-11-16): its
+ * words, the answer in prose or why there is none, the amber checks, a
+ * small results table, and one grey line saying what was read. How the
+ * planner got there - its reading, every point, the SQL, the cost - is on
+ * the run and behind the web view's button, not here.
+ */
+function PlannerQuestion({ a, doc, details }: { a: PlannerAnswer; doc: ReportDocument; details?: PlannerDetailsSlot }) {
   const label = plannerOutcomeLabel(a.outcome);
   const p = a.provenance;
+  const tz = doc.header.timezone;
+  // A no-data answer has no rows worth a table (none, or one of NULLs); its reason says so.
+  const view = a.outcome === "answered" && a.table !== null && a.table.rowCount > 0 ? plannerTableView(a.table) : null;
+  const readLine = plannerReadLine(a, { stationNames: doc.header.stationNames, timezone: tz, occupancy: doc.inventory.occupancy });
   return (
-    <div>
+    <div className="planner-question">
       <h3>
         {a.text}
         {a.source === "library" && <span className="muted"> · shared question{a.sectionLabel ? `, ${a.sectionLabel}` : ""}</span>}
@@ -599,51 +614,32 @@ function PlannerQuestion({ a, timezone }: { a: PlannerAnswer; timezone: string }
           {note}
         </p>
       ))}
-      {a.interpretation !== null && <p className="planner-meta">How the question was read: {a.interpretation}</p>}
-      {p !== null && (
-        <p className="planner-meta">
-          {p.timeRange !== null ? `Period queried: ${localRange(p.timeRange, timezone)}` : p.periodUndeclared ? "Period not stated by the planner" : "No period: the query reads no readings"}
-          {p.pointCount > 0 ? ` · ${p.pointCount} point${p.pointCount === 1 ? "" : "s"}: ${p.points.join(", ")}${p.pointCount > p.points.length ? ` and ${p.pointCount - p.points.length} more` : ""}` : ""}
-          {p.gapHours !== null && p.gapHours > 0 ? ` · ${p.gapHours} hours of the period unrecorded` : ""}
-          {p.unclassifiedExcluded > 0 ? ` · ${p.unclassifiedExcluded} points with no role set were outside a search by role` : ""}
-        </p>
-      )}
       {p !== null && p.coverageShortfall !== null && <p className="partial">{p.coverageShortfall}</p>}
-      {a.table !== null && a.table.rowCount > 0 && (
+      {view !== null && (
         <>
           <table>
             <thead>
               <tr>
-                {a.table.columns.map((c) => (
+                {view.columns.map((c) => (
                   <th key={c}>{c}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {a.table.rows.map((row, i) => (
+              {view.rows.map((row, i) => (
                 <tr key={i}>
                   {row.map((cell, j) => (
-                    <td key={j}>{cellText(cell)}</td>
+                    <td key={j}>{formatPlannerCell(cell, tz)}</td>
                   ))}
                 </tr>
               ))}
             </tbody>
           </table>
-          {(a.table.kept < a.table.rowCount || a.table.truncated) && (
-            <p className="planner-meta">
-              Showing {a.table.kept} of {a.table.rowCount}
-              {a.table.truncated ? "+" : ""} rows.
-            </p>
-          )}
+          {view.shownLine !== null && <p className="planner-meta">{view.shownLine}</p>}
         </>
       )}
-      {a.sql !== null && <pre className="sql">{a.sql}</pre>}
-      {a.calls > 0 && (
-        <p className="planner-meta">
-          {a.calls} model call{a.calls === 1 ? "" : "s"} · ${a.costUsd.toFixed(4)}
-          {a.retried ? " · the first plan was unusable and a second was asked for" : ""}
-        </p>
-      )}
+      {readLine !== null && <p className="planner-meta">{readLine}</p>}
+      {details?.(a, tz)}
     </div>
   );
 }
@@ -654,15 +650,15 @@ function PlannerQuestion({ a, timezone }: { a: PlannerAnswer; timezone: string }
  * the header says they are shown and not tracked; nothing in this section
  * carries a marker or a status badge, and nothing in it feeds the Summary.
  */
-function PlannerSection({ answers, timezone }: { answers: PlannerAnswer[]; timezone: string }) {
+function PlannerSection({ doc, details }: { doc: ReportDocument; details?: PlannerDetailsSlot }) {
   return (
     <section>
       <h2>Planner questions</h2>
       <p className="muted">{PLANNER_SECTION_NOTE}</p>
-      {[...answers]
+      {[...(doc.plannerAnswers ?? [])]
         .sort((x, y) => x.position - y.position)
         .map((a) => (
-          <PlannerQuestion key={`${a.position}:${a.text}`} a={a} timezone={timezone} />
+          <PlannerQuestion key={`${a.position}:${a.text}`} a={a} doc={doc} details={details} />
         ))}
     </section>
   );
@@ -684,7 +680,7 @@ function uniqueByFingerprint(findings: Finding[]): Finding[] {
   return out;
 }
 
-export function ReportView({ document: doc }: { document: ReportDocument }) {
+export function ReportView({ document: doc, plannerDetails }: { document: ReportDocument; plannerDetails?: PlannerDetailsSlot }) {
   const { header, inventory, summary } = doc;
   const renderable = doc.sections.filter((s) => s.status !== "not_applicable");
   const dataHealth = renderable.find((s) => s.key === "data_health");
@@ -800,7 +796,7 @@ export function ReportView({ document: doc }: { document: ReportDocument }) {
       </section>
 
       {doc.plannerAnswers !== undefined && doc.plannerAnswers.length > 0 && (
-        <PlannerSection answers={doc.plannerAnswers} timezone={header.timezone} />
+        <PlannerSection doc={doc} details={plannerDetails} />
       )}
 
       {doc.plannerAnswers === undefined && doc.plannerQuestions.length > 0 && (

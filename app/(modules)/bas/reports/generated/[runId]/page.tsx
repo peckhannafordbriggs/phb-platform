@@ -7,6 +7,7 @@ import { REPORT_CSS, ReportView } from "@/lib/modules/bas/reports/engine/render"
 import { getRun } from "@/lib/modules/bas/reports/runs-service";
 import { BasShell } from "../../../bas-shell";
 import { PRINT_PAGE_CSS, REPORT_PRINT_ID, RunActions } from "../../../reports-run-actions";
+import { PlannerHowToggle } from "../../../reports-planner-how";
 import { basTab } from "../../../tabs";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,10 @@ export const dynamic = "force-dynamic";
  * is the browser's dialog over PRINT_PAGE_CSS, which keeps only the
  * report's section visible; Download is the PDF the worker rendered from
  * the same HTML, through the run's pdf route.
+ *
+ * Planner answers (2026-11-16) carry a "Show how this was answered" toggle
+ * here and only here: the page fills ReportView's `plannerDetails` slot,
+ * which the stored HTML - and so the PDF - never has.
  */
 export default async function BasReportRunPage({ params }: { params: Promise<{ runId: string }> }) {
   const access = await requireModuleAccess(BAS_MODULE_KEY);
@@ -59,7 +64,10 @@ export default async function BasReportRunPage({ params }: { params: Promise<{ r
         ) : (
           <section id={REPORT_PRINT_ID} className="card p-6">
             <style>{REPORT_CSS}</style>
-            <ReportView document={run.document} />
+            <ReportView
+              document={run.document}
+              plannerDetails={(answer, timezone) => <PlannerHowToggle answer={answer} timezone={timezone} />}
+            />
           </section>
         )}
       </div>

@@ -419,10 +419,26 @@ describe("a report of three computed and two custom questions", () => {
     expect(html.split(note)).toHaveLength(2);
     expect(html).toContain("<h2>Planner questions</h2>");
     expect(html).toContain(`<h3>${WARMEST}</h3>`);
-    // The answer's list lines are a list; the SQL is printed; the per-question cost is printed.
+    // The answer's list lines are a list; the small results table is there; one grey line says what was read.
     expect(html).toMatch(/<li>VAV-1_ZoneTemperature: [0-9.]+ °F<\/li>/);
-    expect(html).toContain('<pre class="sql">');
-    expect(html).toContain("2 model calls · $0.1000");
+    expect(html).toContain("<th>zone</th><th>avg_f</th>");
+    // The scripted plans name no points, so the platform's scope is every point on the building: 6.
+    expect(html).toContain('<p class="planner-meta">Read 6 points on ZZTestPlannerStation for 2 Nov 2026 to 9 Nov 2026; occupied hours from the Occupied point.</p>');
+    // The occupancy clause only where the answer is about occupied hours.
+    expect(html).toContain('<p class="planner-meta">Read 6 points on ZZTestPlannerStation for 2 Nov 2026 to 9 Nov 2026.</p>');
+    // A no-data answer carries no table of NULLs.
+    expect(html).not.toContain("<th>avg_cfm</th>");
+    // How it was answered is stored on the run and kept OFF the stored page, and so off the PDF.
+    expect(html).not.toContain('class="sql"');
+    expect(html).not.toContain("model call");
+    expect(html).not.toContain("How the question was read");
+    expect(html).not.toContain("Show how this was answered");
+    // (The stylesheet names .planner-how for its print rule; the body never has one.)
+    expect(html.slice(html.indexOf("<body>"))).not.toContain("planner-how");
+    const stored = doc.plannerAnswers!.find((a) => a.text === WARMEST)!;
+    expect(stored.sql).toContain("bas_readings");
+    expect(stored.interpretation).toContain("Scripted reading of");
+    expect(stored.calls).toBe(2);
     // No New / Still open / Cleared marker anywhere in the planner section.
     const section = html.slice(html.indexOf("<h2>Planner questions</h2>"));
     expect(section).not.toMatch(/class="mark /);
