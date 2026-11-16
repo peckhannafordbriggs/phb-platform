@@ -5,7 +5,16 @@ import { logger } from "@/lib/logger";
 import { BAS_MODULE_KEY } from "../../constants";
 import { LIBRARY_SECTIONS, describeRequiredRoles, parseRoleRequirements, sectionLabel, type LibrarySection } from "../library";
 import { WINDOW_LABELS } from "../schedule";
-import { ANALYSIS_AVAILABILITY, NOT_BUILT_NOTE, dataHealth, manualOverrides, runOutsideSchedule, zoneComfort } from "./analysis";
+import {
+  ANALYSIS_AVAILABILITY,
+  EQUIPMENT_QUESTIONS,
+  NOT_BUILT_NOTE,
+  dataHealth,
+  manualOverrides,
+  runOutsideSchedule,
+  zoneComfort,
+  type AnalysisContext,
+} from "./analysis";
 import { carriedForward, compareFindings, type PreviousFinding } from "./compare";
 import { classifications, decideQuestion, equipmentTypesFound } from "./inventory";
 import type { Narrator, NarrativeInput } from "./narrative";
@@ -41,7 +50,8 @@ import type {
  * Status is decided at the end: `succeeded` when everything ran and every
  * section with findings has its narrative; `partial` with a reason when the
  * narrative was cut short - by the budget, by a missing key, by a declined
- * call - or when a question that could have run has no analysis yet, or
+ * call - or when a question that could have run has no analysis (a library
+ * key the code does not know; every one of the twenty has one since Phase 5), or
  * when the run's time cap was reached (Phase 3); `failed` with the error
  * when the run threw. A failed run is stored too, so the Reports list can
  * show it.
@@ -307,6 +317,22 @@ async function produce(
   let requiredTotal = 0;
   const lowCoverage = new Map<string, number>();
   const comfortCache = new Map<string, ReturnType<typeof zoneComfort>>();
+  // What questions 6-18 read: the excluded points, each unit's station's
+  // occupied hours (null where the station has no source), and the
+  // station's points for a building-level role such as outdoor air.
+  const analysisContext: AnalysisContext = {
+    range,
+    timezone: tz,
+    excluded,
+    occupiedFor: (unit) => {
+      const station = scope.stationOfUnit.get(unit.equipmentId);
+      return (station === undefined ? null : scope.occupancyByStation.get(station)?.intervals) ?? null;
+    },
+    stationPointsFor: (unit) => {
+      const station = scope.stationOfUnit.get(unit.equipmentId);
+      return station === undefined ? [] : (scope.pointsByStation.get(station) ?? []);
+    },
+  };
 
   for (const q of libraryQuestions.sort((a, b) => a.position - b.position)) {
     const availability = ANALYSIS_AVAILABILITY[q.key] ?? "not_built";
@@ -464,9 +490,23 @@ async function produce(
         });
         break;
       }
-      default:
-        results.push({ ...base, outcome: "not_run", reason: NOT_BUILT_NOTE, equipment: decision.qualified.map((u) => u.name) });
-        partialReasons.push(`Q${q.position} could run but has no analysis yet`);
+      default: {
+        // Questions 6-18 (Phase 5), one shape: the qualified units in.
+        const fn = EQUIPMENT_QUESTIONS[q.key];
+        if (fn === undefined) {
+          results.push({ ...base, outcome: "not_run", reason: NOT_BUILT_NOTE, equipment: decision.qualified.map((u) => u.name) });
+          partialReasons.push(`Q${q.position} could run but has no analysis yet`);
+          break;
+        }
+        const r = fn(decision.qualified, analysisContext);
+        rawFindings.push(...r.findings);
+        results.push({
+          ...base,
+          equipment: decision.qualified.map((u) => u.name),
+          skipped: [...decision.skipped, ...r.skipped],
+          metrics: r.metrics,
+        });
+      }
     }
   }
 

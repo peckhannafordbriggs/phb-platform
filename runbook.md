@@ -12397,6 +12397,126 @@ named. If every run of a report is partial on the minutes, the building is
 bigger than the ceiling: raise it (a module admin), or narrow the report to
 a station subset.
 
+## Reports: a VAV, air handler, plant or DX finding looks wrong, or a unit reads "Not judged"
+
+**Symptom.** A finding under VAV, AHU / RTU, Hot Water, Chilled Water or
+DX Cooling and Heat (questions 6-18, built 2026-11-16) that the building
+operator says is not real; or a question that ran and lists a unit under
+*Not judged: …*; or a question you expected to run reads Not Applicable.
+
+**First, read the finding's two numbers.** Every finding carries the actual
+value, the expected value and how long, all computed by code from the
+trends (the model writes only the cause and the action). If the numbers
+are right and the conclusion is wrong, the threshold is the question - see
+the table. If the numbers are wrong, open the point in Point Explorer over
+the same period: a trend that moves but reads the wrong thing (a sensor in
+the wrong duct, a role on the wrong point) is a classification fix in
+Settings, not a report fix.
+
+**The numbers the questions judge by.** In
+`lib/modules/bas/reports/engine/analysis/thresholds.ts`. The spec's own
+figures (80% of airflow setpoint, ±1.5 °F and ±4 °F, 10 °F and 8 °F delta
+T, 4 starts an hour, 15 °F drop, 55 °F, 20 °F rise, 15 and 10 minutes
+running) are used exactly. These were CHOSEN because the spec leaves them
+open; each has its reason beside it in the file:
+
+| Question | Constant | Value | What it means |
+|---|---|---|---|
+| Q8, Q11, Q12 | `VALVE_OPEN_PCT` | 5% | a valve command above this is open |
+| Q6, Q7, Q9, Q10, Q13, Q14 | `ACTION_SHARE_PERCENT` | 50% of judged time | out of tolerance this much is Action Needed |
+| Q8, Q11, Q12, Q17 | `ENERGY_ACTION_HOURS` | 8 h in the period | energy waste this long is Action Needed |
+| Q7 | `DAMPER_FULL_PCT` | 95% | "100% damper" |
+| Q7 | `MISSED_SETPOINT_F` | 2 °F | "missed setpoint" is outside this, Q3's band |
+| Q8 | `ABOVE_COOLING_MARGIN_F` | 1 °F | "above cooling setpoint" is by more than this |
+| Q9, Q10 | `FAN_SETTLE_MS` | 15 min | not judged after each supply fan start |
+| Q10 | `STATIC_BAND_INWC` / `STATIC_BAND_FRACTION` | 0.1 in. w.c. or 10% of setpoint | duct static tolerance, whichever is larger |
+| Q12, Q17 | `ECON_MIN_POSITION_PCT` | 20% | an OA damper at or below this is at minimum |
+| Q12 | `ECON_DIFFERENTIAL_F` / `ECON_HIGH_LIMIT_F` | 5 °F / 65 °F | free cooling: OAT this far below RAT, and not above the high limit |
+| Q13 / Q14 | `HWS_BAND_F` / `CHWS_BAND_F` | ±4 °F / ±2 °F | supply holds setpoint within this |
+| Q13, Q14 | `LOOP_IN_SERVICE_DELTA_F` | 2 °F | with no plant status trended, in service while supply and return differ by this |
+| Q15 | `SHORT_CYCLE_MAX_INTERVAL_S` | 300 s | a compressor trend coarser than this is not judged |
+| Q15 | `SHORT_CYCLE_ACTION_DAYS` | 2 days | short cycling on two days is Action Needed; one is Watch |
+| Q18 | `HEAT_FAULT_RISE_F` | 10 °F | an average rise under this is Action Needed |
+
+Changing one is a code change with its test
+(`tests/bas-reports-phase5.test.ts` holds each from both sides, and holds
+the list above to the file); say in the commit which finding prompted it.
+Every finding is Watch the moment the spec's persistence rule is met (30
+minutes at a stretch during the hours that count, or two days).
+
+**Which hours each question judges.** Q6: occupied hours. Q7: occupied
+hours when the station has an occupancy source, otherwise every hour (the
+question's metrics say `occupied` or `all`). Q9, Q10: fan proven on, less
+the 15-minute settle. Q13, Q14: plant in service. Q16: compressors on
+after 15 minutes; Q18: heat on after 10. Q8, Q11, Q12, Q17: any hour. A
+finding at 03:00 from Q7 on a building with no occupancy source is the
+cue to set its occupied hours in Settings.
+
+**"Not judged" reasons, and what to do.**
+
+- *no cooling valve, compressor or cooling stage trended, so a call for
+  cooling cannot be told from deadband* (Q12). Deliberate: an economizer
+  at minimum is right when the unit is not cooling, and the library's
+  required points (OA damper, OAT, RAT) cannot say. Trend the unit's
+  cooling valve or compressor status and give it the role.
+- *<point> is trended every 15 min, too coarse to count starts* (Q15). A
+  start needs an off reading and an on reading; a 15-minute trend can
+  show at most two starts an hour. Make the compressor status history
+  change-of-value (or five minutes or finer) on the station.
+- *<point> readings were averaged into buckets* (Q15). More than 20,000
+  readings in the period; shorten the report's window.
+- *loop never in service in the period* / *plant never ran in the period*
+  (Q13, Q14). Supply and return within 2 °F all period, or the status
+  never on - a plant off for the season. Not a fault.
+- *fan never ran long enough to judge* (Q9, Q10), *never ran with
+  compressors on 15 min or more* (Q16), *never ran with heat stages on 10
+  min or more* (Q18). Nothing to judge this period.
+- *… trended in °C; judged in °F only*. The bands are Fahrenheit; a
+  Celsius point is not judged rather than judged on the wrong scale.
+- *missing …* - the inventory's Step 2: the unit lacks a required point,
+  or it is under 80% coverage, or Data Health flagged it this period (it
+  is then in Data Health, by name). Read Data Health first.
+
+**A question reads Not Applicable when you expected it to run.** Q15-Q17
+apply to a unit that is DX by its points (a compressor or cooling stage
+role) or by a packaged DX type (rooftop, split, CRAC, VRF); Q18 to one
+with a heat stage point or a packaged type (rooftop, unit heater, split).
+An air handler of type `ahu` with only valves is hydronic and the DX
+questions do not apply to it - until 2026-11-16 they did, and read Not
+Monitored, on a building with no DX at all. Give a DX air handler its
+compressor or cooling stage role and it applies. Q8 needs a reheat valve
+role on the VAV, Q12 and Q17 an OA damper role on the unit.
+
+## CI: "Reports jobs image builds and prints" fails
+
+**Symptom.** The pull request's check *Reports jobs image builds and
+prints* is red (`.github/workflows/ci.yml`, job `reports-image`, since
+2026-11-16).
+
+**Cause, by step.**
+
+- *Build*: `Dockerfile.bas-reports` did not build - read the step's log
+  for the failing `RUN`. Its last `RUN` is the image's own check (launch
+  Chromium, print a page); if that line fails, the browser and its
+  libraries did not install or cannot start as `node`. A Playwright
+  version bump without the image rebuilding its browser, or a change to
+  the `--only-shell` install, are the usual causes.
+- *It does not run as root*: the Dockerfile lost its `USER node`.
+- *Chromium launches and prints at run time*: the build-time check passed
+  but the run-time environment differs - `PLAYWRIGHT_BROWSERS_PATH`
+  changed, or the browser directory is not readable by `node`.
+- *The worker's renderer prints a report under tsx*: the report template
+  or `lib/modules/bas/reports/pdf/render.ts` failed under the jobs'
+  loader. "React is not defined" is the JSX pragma at the top of
+  `render.tsx` (`WHY-ITS-BUILT-THIS-WAY.md` § 80); `Cannot find package`
+  is a dependency the job loads that sits in `devDependencies` (see
+  *Reports: a job execution fails with `Cannot find package`*); "not a
+  PDF" is the renderer.
+
+**Fix.** Fix the cause on the branch. Do not merge past this check: before
+it existed, the same failure first appeared in `deploy.yml` after the
+merge, with production already on the new web image.
+
 ## A Cost Intelligence run stays Queued
 
 **Symptom.** New run works and the run page says **Queued**, and nothing in the

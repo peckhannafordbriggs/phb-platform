@@ -1,5 +1,6 @@
 import { unitSymbol } from "../../../units";
 import {
+  align,
   busiestWindow,
   holdMsFor,
   hourOfDayProfile,
@@ -52,46 +53,6 @@ interface Setpoint {
   single: Segment[] | null;
   heating: Segment[] | null;
   cooling: Segment[] | null;
-}
-
-/** The sub-intervals of [range] on which every one of `lists` has a segment, with each list's value. */
-function align(lists: Segment[][], within: Interval[]): Array<{ start: number; end: number; values: number[] }> {
-  const breaks = new Set<number>();
-  for (const list of lists) {
-    for (const s of list) {
-      breaks.add(s.start);
-      breaks.add(s.end);
-    }
-  }
-  for (const i of within) {
-    breaks.add(i.start);
-    breaks.add(i.end);
-  }
-  const points = [...breaks].sort((a, b) => a - b);
-  const out: Array<{ start: number; end: number; values: number[] }> = [];
-  const cursors = lists.map(() => 0);
-  for (let i = 0; i + 1 < points.length; i += 1) {
-    const start = points[i]!;
-    const end = points[i + 1]!;
-    if (end <= start) continue;
-    if (!within.some((w) => w.start <= start && end <= w.end)) continue;
-    const values: number[] = [];
-    let ok = true;
-    for (let k = 0; k < lists.length; k += 1) {
-      const list = lists[k]!;
-      let c = cursors[k]!;
-      while (c < list.length && list[c]!.end <= start) c += 1;
-      cursors[k] = c;
-      const seg = list[c];
-      if (seg === undefined || seg.start > start) {
-        ok = false;
-        break;
-      }
-      values.push(seg.v);
-    }
-    if (ok) out.push({ start, end, values });
-  }
-  return out;
 }
 
 export interface ComfortResult {

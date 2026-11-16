@@ -42,6 +42,8 @@ import type { EquipmentTypeFound, EquipmentUnit, OccupancySource, PointSeries, U
 export const DX_TYPES: readonly string[] = ["rtu", "split_system", "crac", "vrf_outdoor", "vrf_indoor"];
 export const HYDRONIC_HEATING_TYPES: readonly string[] = ["boiler", "plant_hw"];
 export const HYDRONIC_COOLING_TYPES: readonly string[] = ["chiller", "plant_chw"];
+/** Packaged types whose heat is gas or electric staging by type, for Q18; an air handler needs a heat stage point. */
+export const PACKAGED_HEAT_TYPES: readonly string[] = ["rtu", "unit_heater", "split_system"];
 
 export function classify(points: PointSeries[]): Pick<EquipmentUnit, "roles" | "hydronic" | "dx" | "stagedHeat" | "economizer" | "reheat"> {
   const roles = new Set<string>();
@@ -145,8 +147,25 @@ export function applicableUnits(question: LibraryRowForEngine, units: EquipmentU
       candidates = candidates.filter((u) => u.reheat);
       break;
     case "q12_economizer_at_minimum":
-    case "q17_compressors_during_economizer":
       candidates = candidates.filter((u) => u.economizer);
+      break;
+    // DX and staged heat by Step 1 (Phase 5, 2026-11-16). The library's
+    // type list for these is the widest set that CAN be DX - it includes
+    // `ahu` - so by type alone a hydronic air handler read the DX section as
+    // Not Monitored ("missing compressor status") on a building that has no
+    // DX at all. A unit is DX when its points say so, or when its type is a
+    // packaged DX type (a rooftop unit with its compressors untrended still
+    // reads Not Monitored, as the office does); gas or electric heat when it
+    // trends a heat stage, or is a packaged type that carries one.
+    case "q15_compressor_short_cycling":
+    case "q16_dx_cooling_delta":
+      candidates = candidates.filter((u) => u.dx || DX_TYPES.includes(u.equipType ?? ""));
+      break;
+    case "q17_compressors_during_economizer":
+      candidates = candidates.filter((u) => u.economizer && (u.dx || DX_TYPES.includes(u.equipType ?? "")));
+      break;
+    case "q18_heat_stage_delta":
+      candidates = candidates.filter((u) => u.stagedHeat || PACKAGED_HEAT_TYPES.includes(u.equipType ?? ""));
       break;
     case "q13_hw_supply_and_delta_t":
       candidates = units.filter(

@@ -126,6 +126,51 @@ export function positiveAnswer(q: Pick<QuestionResult, "key" | "metrics" | "equi
       if (longest === null || hoursOf(longest) === 0) return `${units} outside its schedule.`;
       return `${units} outside its schedule for 30 minutes at a stretch or on two days; the most time outside was ${hoursOf(longest).toFixed(1)} h (${longest.name}).`;
     }
+    // Questions 6-18 (Phase 5): every function returns `judged` and the
+    // headline figure its line needs - the worst hours, the lowest share in
+    // band, the peak starts - so the line names a unit and a number.
+    case "q06_vav_starved_airflow":
+      return hoursLine(m, "VAV", "VAVs", "ran below 80% of airflow setpoint while occupied for 30 minutes at a stretch or on two days", "the most time below was");
+    case "q07_vav_damper_full_missed_setpoint":
+      return hoursLine(m, "VAV", "VAVs", "sat at full damper and missed setpoint for 30 minutes at a stretch or on two days", "the most time at full damper off setpoint was");
+    case "q08_reheat_open_above_cooling_sp":
+      return hoursLine(m, "reheat valve", "reheat valves", "opened while its zone was above cooling setpoint for 30 minutes at a stretch or on two days", "the most time was");
+    case "q09_dat_holds_setpoint":
+      return bandLine(m, "held discharge air within its band (±1.5 °F modulating, ±4 °F staged DX)", "of fan-on hours");
+    case "q10_static_tracks_setpoint":
+      return bandLine(m, "tracked duct static setpoint", "of fan-on hours");
+    case "q11_simultaneous_heating_cooling":
+      return hoursLine(m, "unit", "units", "had heating and cooling on together for 30 minutes at a stretch or on two days", "the most time together was");
+    case "q12_economizer_at_minimum": {
+      const free = typeof m.freeCoolingHours === "number" ? m.freeCoolingHours : null;
+      const line = hoursLine(m, "unit", "units", "held the economizer at minimum while free cooling was available for 30 minutes at a stretch or on two days", "the most time at minimum was");
+      return free === null || judgedOf(m) === 0 ? line : `${line} Free cooling was available with cooling called for ${free.toFixed(1)} h.`;
+    }
+    case "q13_hw_supply_and_delta_t":
+    case "q14_chw_supply_and_delta_t": {
+      const judged = judgedOf(m);
+      const label = typeof m.label === "string" ? m.label : q.key.startsWith("q13") ? "HWS" : "CHWS";
+      if (judged === 0) return "No loop was in service long enough to judge.";
+      const onTarget = typeof m.onTargetPercent === "number" ? m.onTargetPercent : null;
+      const delta = typeof m.averageDeltaT === "number" ? m.averageDeltaT : null;
+      const loops = judged === 1 ? "the one loop judged" : `the ${judged} loops judged`;
+      return `${label} held setpoint and delta T held its minimum on ${loops}${onTarget === null ? "" : `; ${label} on target ${onTarget}% of in-service hours`}${delta === null ? "" : `, average delta T ${delta.toFixed(1)} °F`}.`;
+    }
+    case "q15_compressor_short_cycling": {
+      const judged = judgedOf(m);
+      if (judged === 0) return "No compressor trend fine enough to count starts.";
+      const peak = m.peak as { name: string; startsPerHour: number } | null | undefined;
+      const units = judged === 1 ? "The one unit judged did not" : `None of the ${judged} units judged`;
+      const verb = judged === 1 ? "" : " did";
+      const base = `${units}${verb} start a compressor stage more than 4 times in an hour`;
+      return peak === null || peak === undefined ? `${base}.` : `${base}; the peak was ${peak.startsPerHour} in an hour (${peak.name}).`;
+    }
+    case "q16_dx_cooling_delta":
+      return deltaLine(m, "dropped DAT at least 15 °F below return or mixed air with compressors on", "lowest average drop");
+    case "q17_compressors_during_economizer":
+      return hoursLine(m, "unit", "units", "ran compressors below 55 °F outside with the economizer at minimum for 30 minutes at a stretch or on two days", "the most time was");
+    case "q18_heat_stage_delta":
+      return deltaLine(m, "raised DAT at least 20 °F above return or mixed air with heat stages on", "lowest average rise");
     case "q20_data_health": {
       const judged = typeof m.judged === "number" ? m.judged : null;
       if (judged === null) return "No data problems found in the period.";
@@ -134,6 +179,40 @@ export function positiveAnswer(q: Pick<QuestionResult, "key" | "metrics" | "equi
     default:
       return q.equipment.length === 0 ? "Nothing to report." : `Nothing to report over ${q.equipment.join(", ")}.`;
   }
+}
+
+function judgedOf(m: Record<string, unknown>): number {
+  return typeof m.judged === "number" ? m.judged : 0;
+}
+
+/** "None of the 4 VAVs judged ran below …; the most time below was 0.3 h (VAV-2)." */
+function hoursLine(m: Record<string, unknown>, one: string, many: string, did: string, mostWas: string): string {
+  const judged = judgedOf(m);
+  if (judged === 0) return `No ${one} could be judged.`;
+  const worst = m.worst as { name: string; hours: number } | null | undefined;
+  const sentence = judged === 1 ? `The one ${one} judged never ${did}` : `None of the ${judged} ${many} judged ${did}`;
+  if (worst === null || worst === undefined || worst.hours === 0) return `${sentence}.`;
+  return `${sentence}; ${mostWas} ${worst.hours.toFixed(1)} h (${worst.name}).`;
+}
+
+/** "All 2 units judged held … for at least 94% of fan-on hours." */
+function bandLine(m: Record<string, unknown>, held: string, of: string): string {
+  const judged = judgedOf(m);
+  if (judged === 0) return "No unit ran long enough to be judged.";
+  const lowest = m.lowest as { name: string; percentInBand: number } | null | undefined;
+  const who = judged === 1 ? "The one unit judged" : `All ${judged} units judged`;
+  if (lowest === null || lowest === undefined) return `${who} ${held}.`;
+  return `${who} ${held} for at least ${formatPercent(lowest.percentInBand)}% ${of} (lowest: ${lowest.name}).`;
+}
+
+/** "All 2 units judged dropped DAT …; the lowest average drop was 17.2 °F (RTU-1)." */
+function deltaLine(m: Record<string, unknown>, did: string, lowestWas: string): string {
+  const judged = judgedOf(m);
+  if (judged === 0) return "No unit ran long enough to be judged.";
+  const lowest = m.lowest as { name: string; averageF: number } | null | undefined;
+  const who = judged === 1 ? "The one unit judged" : `All ${judged} units judged`;
+  if (lowest === null || lowest === undefined) return `${who} ${did}.`;
+  return `${who} ${did}; the ${lowestWas} was ${lowest.averageF.toFixed(1)} °F (${lowest.name}).`;
 }
 
 function hoursOf(longest: { hours?: number; hoursOutside?: number }): number {

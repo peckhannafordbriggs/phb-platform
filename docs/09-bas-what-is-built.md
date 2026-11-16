@@ -132,6 +132,7 @@ building is not recorded.
 | **Readings table and CSV** | A *Chart / Table* toggle on Point Explorer shows the raw rows behind the chart, newest first, paged in SQL, never bucketed; *Download CSV* streams every row in the range with an honest 500,000-row cap; nothing fetched until used | `feat/bas-readings-table` (2026-10-09) |
 | **Reports, Phase 1** | A Reports tab: six `bas_*` tables, the spec's twenty questions seeded as the shared library, report definitions with questions, schedule in the building's zone, recipients (owner never a row) and a stored budget; no runs, no jobs, no email, no PDF | `feat/bas-reports-phase-1` (2026-11-10) |
 | **Reports, Phase 2** | The engine core: scope, coverage in SQL, the occupancy source, Jim's Step 1 classification, Not Applicable against Not Monitored, four analyses (Data Health, zone comfort, overrides, run outside schedule), fingerprints and New / Still open / Cleared, the roll-up, one narrative call per section under the budget, the HTML template, the Generated sub-tab, the Settings occupied-hours form and a dev script; proven on the office and the lab; no scheduler, PDF or email | `feat/bas-reports-phase-2` (2026-11-10) |
+| **Reports, Phase 5** | The remaining thirteen computed questions (VAV, AHU/RTU, hot and chilled water, DX) as pure functions, every number SPEC or CHOSEN in one file; DX applicability by Step 1; the hydronic headline and the DX table on the page; a CI job that builds and prints with the jobs image; the office unchanged | `feat/bas-reports-phase5` (2026-11-16) |
 
 ### Test count
 
@@ -1148,6 +1149,99 @@ the sample document's new page count. Captures:
 `docs/design/bas-report-question-layout/`. `WHY-ITS-BUILT-THIS-WAY.md`
 § 84; `runbook.md` → *Every question is a sub-heading on the report, and
 what the line under it means*.
+
+### Reports — Phase 5 (2026-11-16): the remaining computed questions
+
+**What exists.** Every one of the twenty questions has an analysis. Q6-Q18
+are thirteen pure functions in four files under
+`lib/modules/bas/reports/engine/analysis/` - `vav.ts` (Q6 airflow below
+80% of setpoint while occupied, Q7 damper at 100% and still off setpoint,
+Q8 reheat open above cooling setpoint), `air-handlers.ts` (Q9 DAT held
+setpoint, ±1.5 °F modulating and ±4 °F staged DX; Q10 duct static tracked
+setpoint; Q11 heating and cooling together; Q12 economizer at minimum with
+free cooling available), `hydronic.ts` (Q13 and Q14, one loop function:
+supply on setpoint and delta T at its minimum), `dx.ts` (Q15 starts per
+sliding hour per stage, Q16 DAT drop with compressors on 15 minutes, Q17
+compressors below 55 °F with the economizer shut, Q18 DAT rise with heat on
+10 minutes). One shape for all thirteen (`common.ts`): the units the
+inventory qualified and an `AnalysisContext` (period, zone, excluded
+points, each unit's occupied hours or null, its station's points for
+outdoor air) in; findings, skipped units with reasons, and metrics out.
+`EQUIPMENT_QUESTIONS` in `analysis/index.ts` is the table `run.ts`
+dispatches through; `ANALYSIS_AVAILABILITY` has no `not_built` entry left,
+and `NOT_BUILT_NOTE` stays for documents stored before.
+
+**The numbers** are in `analysis/thresholds.ts`, each marked SPEC (the
+library text's own figure, used exactly) or CHOSEN (the spec leaves it
+open; each with its reason). `CHOSEN_THRESHOLDS` lists the chosen ones and
+a test holds the list to the file. `runbook.md` → *Reports: a VAV, air
+handler, plant or DX finding looks wrong, or a unit reads "Not judged"*
+prints them. Every question raises Watch the moment the spec's persistence
+rule is met; what makes Action Needed is per question and chosen.
+
+**What each returns for its one-line answer** - `judged`, and the headline
+the line prints when nothing was found: the most hours (Q6-Q8, Q11, Q12,
+Q17), the lowest share in band (Q9, Q10), on-target share and average
+delta T (Q13, Q14 - also the template's *HWS on target: x% | Avg delta T:
+x °F* line under the question), the peak starts (Q15), the lowest average
+drop or rise (Q16, Q18). The DX section draws the template's table (Unit |
+starts/hr peak | avg DAT drop | avg DAT rise) from Q15, Q16 and Q18's
+per-unit metrics (`dxTableRows` in `render.tsx`).
+
+**Hours judged.** Q6 occupied hours (its required points include
+occupancy). Q7 occupied hours where the station has an occupancy source,
+every hour where it has none, and `metrics.hoursJudged` says which. Q9 and
+Q10 while the fan is proven on, less 15 minutes after each start. Q16
+after 15 minutes of compressor run and Q18 after 10 of heat, as the spec
+says. Q13 and Q14 while the plant is in service (its status, or supply and
+return 2 °F apart). Q8, Q11, Q12 and Q17 any hour the condition holds.
+
+**Two applicability changes in `inventory.ts`.** The DX questions (Q15-Q17)
+apply to a unit that is DX by its points or by a packaged DX type, and Q18
+to one with a heat stage point or a packaged heat type: the library's type
+list includes `ahu`, so by type alone a hydronic air handler read the DX
+section as Not Monitored on a building with no DX. The office is
+unchanged (RV is a rooftop unit). And `align` - the slice-by-slice join of
+several series that comfort used privately - moved to `series.ts` with
+`slicesWhere`, `slicesMs`, `slicesMean` and `afterFirst`.
+
+**The one place a function asks for more than the library row.** Q12
+needs a call for cooling (a cooling valve, compressor or cooling stage on
+the unit) to tell an economizer at minimum in its deadband, which is
+right, from one at minimum while mechanical cooling runs, which is the
+fault. The library row - Jim's Points-required column, *OA damper, OAT,
+RAT* - is unchanged, so a unit without a cooling point is runnable, is
+judged by nothing, and is listed under the question as not judged with
+that reason. No vocabulary role was added: every role the functions read
+was already in `prisma/bas-vocabularies.ts`.
+
+**Held by** `tests/bas-reports-phase5.test.ts` (pure, 57 tests): per
+question a case that must raise a finding with its numbers, a case just
+under the threshold or shorter than the persistence rule, a case where
+Data Health flags one of the unit's points (flat, out of range, stopped)
+and the equipment finding is absent although the same data without the
+exclusion raises it, and Not Applicable / Not Monitored; plus a unit with
+exactly the library's roles judged by every function, and the CHOSEN list
+held to the file. Mutations run: no fan settle, return air before mixed,
+excluded points read, Q6 over every hour, four starts an hour counted as
+short cycling - each fails a named test. `tests/bas-reports-phase5-building.test.ts`
+runs both presets through the real engine against the test database on a
+building with every role: all twenty questions answered, the run
+`succeeded`, exactly the four planted faults found with their numbers,
+the headline and the DX table on the page.
+
+**Re-run on the office** (local copy, `--fixed-narrative`), the same two
+periods on `main`'s code and on this branch: identical question outcomes,
+missing lists, findings and inventory. Q6-Q18 still read Not Monitored, or
+Not Applicable for Q8, Q13 and Q14.
+
+**CI.** `.github/workflows/ci.yml` gained the job *Reports jobs image
+builds and prints*: it builds `Dockerfile.bas-reports` (its own cache
+scope), refuses a root user, repeats the launch-and-print check at run
+time, and prints the shared fixture report with the worker's own Chromium
+renderer under tsx, mounted read-only. Until then only `deploy.yml` built
+that image, after a merge. `runbook.md` → *CI: "Reports jobs image builds
+and prints" fails*.
 
 ## Classification — the office building, in SQL
 
