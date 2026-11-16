@@ -67,6 +67,13 @@ export interface ReportsUsage {
    */
   runsInDatabase: number;
   ceiling: SafetyCeilingView;
+  /**
+   * Planner questions (Reports, Phase 6) over the same finished runs:
+   * answered from rows, unanswered with a reason (no data, declined, not
+   * monitored, not configured), skipped at the safety ceiling, and what
+   * the planner's calls cost - its share of `totals.spend`.
+   */
+  planner: { answered: number; unanswered: number; skipped: number; spend: number };
 }
 
 const FINISHED: RunStatus[] = ["succeeded", "partial", "failed"];
@@ -106,6 +113,10 @@ export async function getReportsUsage(viewer: Viewer, range: UsageRange, now = n
         costUsd: true,
         inputTokens: true,
         outputTokens: true,
+        plannerAnswered: true,
+        plannerUnanswered: true,
+        plannerSkipped: true,
+        plannerCostUsd: true,
         report: { select: { name: true, site: { select: { name: true } } } },
       },
       orderBy: [{ finishedAt: "desc" }, { runId: "desc" }],
@@ -121,6 +132,7 @@ export async function getReportsUsage(viewer: Viewer, range: UsageRange, now = n
   const byBuilding: Tally = new Map();
   const runs: ReportsUsageRun[] = [];
   let thisMonth = 0;
+  const planner = { answered: 0, unanswered: 0, skipped: 0, spend: 0 };
 
   for (const r of rows) {
     if (r.finishedAt === null || r.finishedAt.getTime() > now.getTime()) continue;
@@ -131,6 +143,10 @@ export async function getReportsUsage(viewer: Viewer, range: UsageRange, now = n
     if (key < first) continue;
 
     const runId = r.runId.toString();
+    planner.answered += r.plannerAnswered;
+    planner.unanswered += r.plannerUnanswered;
+    planner.skipped += r.plannerSkipped;
+    planner.spend += Number(r.plannerCostUsd);
     perDay.set(key, (perDay.get(key) ?? 0) + spend);
     addToTally(byReport, r.report.name, runId, tokens, spend);
     addToTally(byBuilding, r.report.site.name, runId, tokens, spend);
@@ -161,5 +177,6 @@ export async function getReportsUsage(viewer: Viewer, range: UsageRange, now = n
     topRuns: [...runs].sort((a, b) => b.spend - a.spend || b.finishedAt.localeCompare(a.finishedAt)).slice(0, 10),
     runsInDatabase,
     ceiling,
+    planner,
   };
 }

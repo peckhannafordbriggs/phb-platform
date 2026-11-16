@@ -12,12 +12,24 @@
 import { BAS_LIBRARY_QUESTIONS, describeRequiredRoles } from "../library";
 import { COLLECTION_STOPPED, DATA_HEALTH_QUESTION, incidentPoints } from "./analysis/data-health";
 import { STATUS_LABELS } from "./rollup";
-import type { EquipmentTypeFound, Finding, QuestionResult, ReportDocument, ScheduleResult, SectionDocument, SummaryDocument, ZoneResult } from "./types";
+import type {
+  EquipmentTypeFound,
+  Finding,
+  PlannerAnswer,
+  QuestionResult,
+  ReportDocument,
+  ScheduleResult,
+  SectionDocument,
+  SummaryDocument,
+  ZoneResult,
+} from "./types";
 import {
+  PLANNER_SECTION_NOTE,
   describeRunDuration,
   notApplicableLine,
   notMonitoredLine,
   notRunLine,
+  plannerOutcomeLabel,
   positiveAnswer,
   questionHeading,
   skippedLine,
@@ -96,6 +108,8 @@ export const REPORT_CSS = `
 .bas-report .partial { border: 1px solid #f3a11e; background: #fff6e5; padding: .5rem .75rem; border-radius: .375rem; margin: .75rem 0; }
 .bas-report .incident { border: 1px solid #f3a11e; background: #fff6e5; padding: .5rem .75rem; border-radius: .375rem; margin: .5rem 0; }
 .bas-report .incident p { margin: 0 0 .25rem; }
+.bas-report .planner-meta { color: #5c5873; font-size: .8125rem; margin: .15rem 0; }
+.bas-report pre.sql { white-space: pre-wrap; word-break: break-word; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #3d3852; background: #f5f4f8; padding: .4rem .5rem; border-radius: .25rem; margin: .25rem 0 .5rem; }
 `;
 
 const STATE_WORDS: Record<Finding["state"], string> = { new: "New", still_open: "Still open", cleared: "Cleared" };
@@ -518,6 +532,142 @@ function DataHealthSection({ section, index }: { section: SectionDocument; index
   );
 }
 
+/**
+ * The planner's answer text: its paragraphs, and its "- " lines as a list,
+ * which is the one structure the summariser is allowed (docs/11).
+ */
+function AnswerText({ text }: { text: string }) {
+  const blocks: Array<{ kind: "p"; text: string } | { kind: "ul"; items: string[] }> = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    if (line.startsWith("- ")) {
+      const last = blocks[blocks.length - 1];
+      if (last !== undefined && last.kind === "ul") last.items.push(line.slice(2));
+      else blocks.push({ kind: "ul", items: [line.slice(2)] });
+    } else {
+      blocks.push({ kind: "p", text: line });
+    }
+  }
+  return (
+    <div className="answer">
+      {blocks.map((b, i) =>
+        b.kind === "p" ? (
+          <p key={i}>{b.text}</p>
+        ) : (
+          <ul key={i}>
+            {b.items.map((item, j) => (
+              <li key={j}>{item}</li>
+            ))}
+          </ul>
+        ),
+      )}
+    </div>
+  );
+}
+
+function localRange(range: { start: string; end: string }, timezone: string): string {
+  const f = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return `${f.format(new Date(range.start))} to ${f.format(new Date(range.end))}`;
+}
+
+function cellText(cell: string | number | boolean | null): string {
+  if (cell === null) return "—";
+  if (typeof cell === "boolean") return cell ? "true" : "false";
+  return String(cell);
+}
+
+/** One planner question: its words, then its answer or why there is none, then where the answer came from. */
+function PlannerQuestion({ a, timezone }: { a: PlannerAnswer; timezone: string }) {
+  const label = plannerOutcomeLabel(a.outcome);
+  const p = a.provenance;
+  return (
+    <div>
+      <h3>
+        {a.text}
+        {a.source === "library" && <span className="muted"> · shared question{a.sectionLabel ? `, ${a.sectionLabel}` : ""}</span>}
+      </h3>
+      {a.outcome === "answered" && a.answer !== null && <AnswerText text={a.answer} />}
+      {a.outcome !== "answered" && a.reason !== null && (
+        <p className="answer muted">
+          {label !== null && <strong>{label}: </strong>}
+          {a.reason}
+        </p>
+      )}
+      {a.notes.map((note, i) => (
+        <p className="partial" key={i}>
+          {note}
+        </p>
+      ))}
+      {a.interpretation !== null && <p className="planner-meta">How the question was read: {a.interpretation}</p>}
+      {p !== null && (
+        <p className="planner-meta">
+          {p.timeRange !== null ? `Period queried: ${localRange(p.timeRange, timezone)}` : p.periodUndeclared ? "Period not stated by the planner" : "No period: the query reads no readings"}
+          {p.pointCount > 0 ? ` · ${p.pointCount} point${p.pointCount === 1 ? "" : "s"}: ${p.points.join(", ")}${p.pointCount > p.points.length ? ` and ${p.pointCount - p.points.length} more` : ""}` : ""}
+          {p.gapHours !== null && p.gapHours > 0 ? ` · ${p.gapHours} hours of the period unrecorded` : ""}
+          {p.unclassifiedExcluded > 0 ? ` · ${p.unclassifiedExcluded} points with no role set were outside a search by role` : ""}
+        </p>
+      )}
+      {p !== null && p.coverageShortfall !== null && <p className="partial">{p.coverageShortfall}</p>}
+      {a.table !== null && a.table.rowCount > 0 && (
+        <>
+          <table>
+            <thead>
+              <tr>
+                {a.table.columns.map((c) => (
+                  <th key={c}>{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {a.table.rows.map((row, i) => (
+                <tr key={i}>
+                  {row.map((cell, j) => (
+                    <td key={j}>{cellText(cell)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(a.table.kept < a.table.rowCount || a.table.truncated) && (
+            <p className="planner-meta">
+              Showing {a.table.kept} of {a.table.rowCount}
+              {a.table.truncated ? "+" : ""} rows.
+            </p>
+          )}
+        </>
+      )}
+      {a.sql !== null && <pre className="sql">{a.sql}</pre>}
+      {a.calls > 0 && (
+        <p className="planner-meta">
+          {a.calls} model call{a.calls === 1 ? "" : "s"} · ${a.costUsd.toFixed(4)}
+          {a.retried ? " · the first plan was unusable and a second was asked for" : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Planner questions (Phase 6): the report's typed, personal and shared
+ * planner-kind questions, each answered by the Analyze planner. One note in
+ * the header says they are shown and not tracked; nothing in this section
+ * carries a marker or a status badge, and nothing in it feeds the Summary.
+ */
+function PlannerSection({ answers, timezone }: { answers: PlannerAnswer[]; timezone: string }) {
+  return (
+    <section>
+      <h2>Planner questions</h2>
+      <p className="muted">{PLANNER_SECTION_NOTE}</p>
+      {[...answers]
+        .sort((x, y) => x.position - y.position)
+        .map((a) => (
+          <PlannerQuestion key={`${a.position}:${a.text}`} a={a} timezone={timezone} />
+        ))}
+    </section>
+  );
+}
+
 /** "VAV-3 (Zone above setpoint), points_RoomT (Out of physical range)": the findings behind a Summary count, one entry each. */
 function findingList(findings: Finding[]): string {
   return findings.map((f) => `${f.subjectName} (${f.issue})`).join(", ");
@@ -649,7 +799,11 @@ export function ReportView({ document: doc }: { document: ReportDocument }) {
         )}
       </section>
 
-      {doc.plannerQuestions.length > 0 && (
+      {doc.plannerAnswers !== undefined && doc.plannerAnswers.length > 0 && (
+        <PlannerSection answers={doc.plannerAnswers} timezone={header.timezone} />
+      )}
+
+      {doc.plannerAnswers === undefined && doc.plannerQuestions.length > 0 && (
         <section>
           <h2>Custom questions</h2>
           {doc.plannerQuestions.map((q, i) => (

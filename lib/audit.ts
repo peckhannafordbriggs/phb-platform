@@ -152,6 +152,14 @@ export type AuditAction =
   | "bas.personal_question_updated"
   | "bas.personal_question_deleted"
   /**
+   * Reports, Phase 6. A BAS module admin promoted one of their own saved
+   * questions to the shared library as a planner-kind question, with the
+   * section, applies-to and required roles it was given. The metadata
+   * carries the personal question's id and text and the new library row's
+   * id and key, so the row can be traced back to who wrote it.
+   */
+  | "bas.library_question_promoted"
+  /**
    * Reports, Phase 2. A run is started (by the dev script, or by the worker
    * from Phase 3) and finished - succeeded, partial with the reason, or
    * failed with the error - with its cost in tokens and dollars on the

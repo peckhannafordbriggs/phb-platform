@@ -3,6 +3,7 @@ import type {
   LibraryQuestionView,
   OwnerTransfer,
   PersonalQuestionView,
+  PromotionOptions,
   RecipientView,
   ReportDetail,
   ReportOptions,
@@ -117,6 +118,16 @@ export const updatePersonal = (personalQuestionId: string, text: string) =>
   call<{ changed: boolean }>(`/personal/${encodeURIComponent(personalQuestionId)}`, json("PATCH", { text }));
 export const deletePersonal = (personalQuestionId: string) =>
   call<{ deleted: boolean }>(`/personal/${encodeURIComponent(personalQuestionId)}`, { method: "DELETE" });
+
+/** Reports, Phase 6: whether the viewer may promote, and what a promoted question may name. */
+export const fetchPromotionOptions = (signal?: AbortSignal) => call<PromotionOptions>("/library/promotion", { signal });
+/** A module admin puts one of their saved questions into the shared library as a planner question (403 otherwise). */
+export const promoteQuestion = (body: {
+  personalQuestionId: string;
+  section: string;
+  appliesToEquipment: string[];
+  requiredRoles: string[];
+}) => call<{ libraryQuestionId: string; key: string }>("/library", json("POST", body));
 
 export const addRecipient = (reportId: string, body: AddRecipientInput) =>
   call<RecipientView>(`/${encodeURIComponent(reportId)}/recipients`, json("POST", body));

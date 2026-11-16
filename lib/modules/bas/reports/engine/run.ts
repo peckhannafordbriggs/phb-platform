@@ -18,16 +18,25 @@ import {
 import { carriedForward, compareFindings, type PreviousFinding } from "./compare";
 import { classifications, decideQuestion, equipmentTypesFound } from "./inventory";
 import type { Narrator, NarrativeInput } from "./narrative";
+import {
+  PLANNER_HISTORY_RUNS,
+  plannerEstimate,
+  plannerNotAsked,
+  toPlannerAnswer,
+  type PlannerQuestionMeta,
+  type ReportPlanner,
+} from "./planner-questions";
 import { renderReportHtml } from "./html";
 import type { SafetyCeiling } from "../ceiling";
 import { readSafetyCeiling } from "../ceiling-read";
 import { ReportRunError, enqueueRun } from "./queue";
 import { buildingStatus, sectionStatus, topFindings } from "./rollup";
 import { loadDefinition, resolveScope, type DefinitionForRun } from "./scope";
-import { TIME_CAP_NOTE, missingForSection, notMonitoredSentence } from "./wording";
+import { TIME_CAP_NOTE, missingForSection, notApplicableLine, notMonitoredLine, notMonitoredSentence } from "./wording";
 import type {
   Finding,
   Interval,
+  PlannerAnswer,
   QuestionResult,
   RawFinding,
   ReportDocument,
@@ -79,6 +88,14 @@ export interface RunOptions {
   startedById: string | null;
   /** Null means no model is configured; the run finishes partial and says so. */
   narrator: Narrator | null;
+  /**
+   * Answers the report's planner questions (Phase 6). Null or absent: they
+   * are not answered, and when the report carries any the run finishes
+   * partial with `plannerUnavailable` as the reason.
+   */
+  planner?: ReportPlanner | null;
+  /** Why there is no planner, naming the missing variables. */
+  plannerUnavailable?: string | null;
   now?: Date;
   /** The clock the time cap reads, in epoch milliseconds. Tests move it. */
   clock?: () => number;
@@ -86,6 +103,8 @@ export interface RunOptions {
 
 export interface ExecuteOptions {
   narrator: Narrator | null;
+  planner?: ReportPlanner | null;
+  plannerUnavailable?: string | null;
   now?: Date;
   clock?: () => number;
   /** Which claim of the run this is: 1 normally, 2 after a reclaim. In the audit row. */
@@ -126,7 +145,14 @@ export async function executeReportRun(reportIdText: string | bigint, options: R
     where: { runId },
     data: { status: "running", startedAt: now, heartbeatAt: now, attempts: { increment: 1 } },
   });
-  return executeQueuedRun(runId, { narrator: options.narrator, now, clock: options.clock, attempt: 1 });
+  return executeQueuedRun(runId, {
+    narrator: options.narrator,
+    planner: options.planner,
+    plannerUnavailable: options.plannerUnavailable,
+    now,
+    clock: options.clock,
+    attempt: 1,
+  });
 }
 
 /**
@@ -178,7 +204,10 @@ export async function executeQueuedRun(runIdInput: bigint | string, options: Exe
   });
 
   try {
-    const result = await produce(def, range, runId, previous?.runId ?? null, options.narrator, now, clock, ceiling);
+    const result = await produce(def, range, runId, previous?.runId ?? null, options.narrator, now, clock, ceiling, {
+      planner: options.planner ?? null,
+      unavailable: options.plannerUnavailable ?? null,
+    });
     await prisma.$transaction(async (tx) => {
       await tx.basReportRun.update({
         where: { runId },
@@ -191,6 +220,11 @@ export async function executeQueuedRun(runIdInput: bigint | string, options: Exe
           costUsd: new Prisma.Decimal(result.document.cost.costUsd.toFixed(6)),
           inputTokens: result.document.cost.inputTokens,
           outputTokens: result.document.cost.outputTokens,
+          plannerAsked: result.planner.asked,
+          plannerAnswered: result.planner.answered,
+          plannerUnanswered: result.planner.unanswered,
+          plannerSkipped: result.planner.skipped,
+          plannerCostUsd: new Prisma.Decimal(result.planner.costUsd.toFixed(6)),
           finishedAt: new Date(),
           heartbeatAt: new Date(),
           // The PDF (Phase 4): queued the moment the page is stored. The
@@ -238,6 +272,10 @@ export async function executeQueuedRun(runIdInput: bigint | string, options: Exe
           costUsd: result.document.cost.costUsd,
           inputTokens: result.document.cost.inputTokens,
           outputTokens: result.document.cost.outputTokens,
+          plannerAnswered: result.planner.answered,
+          plannerUnanswered: result.planner.unanswered,
+          plannerSkipped: result.planner.skipped,
+          plannerCostUsd: result.planner.costUsd,
         },
       });
     });
@@ -277,6 +315,19 @@ interface Produced {
   document: ReportDocument;
   html: string;
   rows: Finding[];
+  planner: PlannerTally;
+}
+
+/** The counters stored on the run for Usage and for the next run's estimate. */
+interface PlannerTally {
+  /** Sent to the planner - the questions that cost. */
+  asked: number;
+  answered: number;
+  /** Everything not answered and not skipped: no data, declined, clarify, not monitored, not applicable, not configured. */
+  unanswered: number;
+  /** Never sent: a half of the ceiling was reached first. */
+  skipped: number;
+  costUsd: number;
 }
 
 async function produce(
@@ -288,6 +339,7 @@ async function produce(
   now: Date,
   clock: () => number,
   ceiling: SafetyCeiling,
+  plannerSetup: { planner: ReportPlanner | null; unavailable: string | null },
 ): Promise<Produced> {
   // The ceiling's minutes: a deadline on the clock, read before every
   // question and every narrative call. Past it, nothing new is started.
@@ -306,8 +358,11 @@ async function produce(
   const health = dataHealth(scope.points, range, tz, new Map(scope.stations.map((s) => [s.stationId, s.name])));
   const excluded = health.excluded;
 
-  const libraryQuestions = def.questions.filter((q) => q.library !== null).map((q) => q.library!);
-  const plannerQuestions = def.questions.filter((q) => q.library === null).map((q) => ({ text: q.text, note: "Custom questions are answered by the Analyze planner from Phase 6; not run in this report." }));
+  // Computed questions run below; planner-kind shared questions, the
+  // owner's own and typed ones go to the Analyze planner after the
+  // narrative (Phase 6), in the report's order.
+  const libraryQuestions = def.questions.filter((q) => q.library !== null && q.library.kind !== "planner").map((q) => q.library!);
+  const plannerQuestions = def.questions.filter((q) => q.library === null || q.library.kind === "planner");
 
   const stationOf = (unit: { equipmentId: string }) => scope.stationOfUnit.get(unit.equipmentId) ?? null;
   const results: QuestionResult[] = [];
@@ -632,11 +687,119 @@ async function produce(
     }
   }
 
-  if (skippedQuestions.length > 0 || skippedNarrative.length > 0) {
+  // Planner questions (Phase 6), after the narrative so the computed
+  // report's prose is never what the ceiling cuts. Each is checked against
+  // both halves of the ceiling before it is sent; what is left once either
+  // is reached is listed by name. Shown, never tracked: nothing here makes
+  // a finding, a fingerprint or a status.
+  const plannerAnswers: PlannerAnswer[] = [];
+  const plannerTally: PlannerTally = { asked: 0, answered: 0, unanswered: 0, skipped: 0, costUsd: 0 };
+  const skippedPlannerForTime: string[] = [];
+  const skippedPlannerForSpend: string[] = [];
+  if (plannerQuestions.length > 0) {
+    const context = {
+      siteId: def.site.siteId.toString(),
+      siteName: def.site.name,
+      timezone: tz,
+      stations: scope.stations.map((s) => ({ stationId: s.stationId, name: s.name })),
+      periodStart: new Date(range.start).toISOString(),
+      periodEnd: new Date(range.end).toISOString(),
+      windowLabel: WINDOW_LABELS[def.analysisWindow],
+    };
+    const planner = plannerSetup.planner;
+    const history = planner === null ? { askedQuestions: 0, costUsd: 0 } : await plannerHistory(runId);
+    let spendCapHit: { spent: number; estimate: number } | null = null;
+    let timeCapHit = false;
+    for (const q of plannerQuestions) {
+      const meta: PlannerQuestionMeta = {
+        position: q.position,
+        text: q.text,
+        source: q.kind,
+        libraryKey: q.library?.key ?? null,
+        sectionLabel: q.library === null ? null : sectionLabel(q.library.section),
+      };
+      if (planner === null) {
+        plannerAnswers.push(
+          plannerNotAsked(meta, "not_configured", plannerSetup.unavailable ?? "No planner is configured for this run, so the question was not asked."),
+        );
+        continue;
+      }
+      // A shared planner question carries applies-to and required roles; the
+      // building is judged against them before anything is spent. A typed or
+      // personal question carries neither and is always asked.
+      const lib = q.library;
+      if (lib !== null && (lib.appliesToEquipment.length > 0 || parseRoleRequirements(lib.requiredRoles).length > 0)) {
+        const decision = decideQuestion(lib, scope.units, scope.pointsByStation, scope.occupancyByStation, stationOf, excluded);
+        if (decision.outcome === "not_applicable") {
+          plannerAnswers.push(plannerNotAsked(meta, "not_applicable", notApplicableLine(decision.reason)));
+          continue;
+        }
+        if (decision.outcome === "not_monitored") {
+          plannerAnswers.push(plannerNotAsked(meta, "not_monitored", notMonitoredLine(decision.missing)));
+          continue;
+        }
+      }
+      if (timeCapHit || pastDeadline()) {
+        timeCapHit = true;
+        skippedPlannerForTime.push(q.text);
+        plannerAnswers.push(
+          plannerNotAsked(meta, "skipped", `Skipped — time cap: the run reached the safety ceiling's ${ceiling.minutes} minutes before this question was asked.`),
+        );
+        continue;
+      }
+      const estimate = plannerEstimate(history, { askedQuestions: plannerTally.asked, costUsd: plannerTally.costUsd }).perQuestionUsd;
+      if (spendCapHit !== null || cost.costUsd + estimate > ceiling.usd) {
+        spendCapHit = spendCapHit ?? { spent: cost.costUsd, estimate };
+        skippedPlannerForSpend.push(q.text);
+        plannerAnswers.push(
+          plannerNotAsked(
+            meta,
+            "skipped",
+            `Skipped — spending cap: $${spendCapHit.spent.toFixed(2)} of the $${ceiling.usd.toFixed(2)} safety ceiling was spent, and a planner question is estimated at $${spendCapHit.estimate.toFixed(2)}.`,
+          ),
+        );
+        continue;
+      }
+      const call = await planner.answer(q.text, context);
+      const answer = toPlannerAnswer(meta, call, context);
+      plannerAnswers.push(answer);
+      plannerTally.asked += 1;
+      plannerTally.costUsd += call.costUsd;
+      cost.calls += call.calls;
+      cost.inputTokens += call.usage.inputTokens + call.usage.cacheReadTokens + call.usage.cacheWriteTokens;
+      cost.outputTokens += call.usage.outputTokens;
+      cost.costUsd += call.costUsd;
+      logger.info("bas.report_planner_question", {
+        moduleKey: BAS_MODULE_KEY,
+        outcome: answer.outcome,
+        durationMs: call.durationMs,
+        count: answer.table?.rowCount ?? undefined,
+        question: q.text,
+        sql: answer.sql ?? undefined,
+        reason: `run ${runId}: ${call.calls} call(s), $${call.costUsd.toFixed(4)}`,
+      });
+    }
+    for (const a of plannerAnswers) {
+      if (a.outcome === "answered") plannerTally.answered += 1;
+      else if (a.outcome === "skipped") plannerTally.skipped += 1;
+      else plannerTally.unanswered += 1;
+    }
+    if (planner === null) {
+      partialReasons.push(`Planner questions not answered: ${plannerSetup.unavailable ?? "no planner is configured"}`);
+    }
+    if (skippedPlannerForSpend.length > 0) {
+      partialReasons.unshift(
+        `Safety ceiling of $${ceiling.usd.toFixed(2)} reached: planner questions skipped: ${skippedPlannerForSpend.map((t) => `"${t}"`).join("; ")}`,
+      );
+    }
+  }
+
+  if (skippedQuestions.length > 0 || skippedNarrative.length > 0 || skippedPlannerForTime.length > 0) {
     const elapsedMin = Math.max(1, Math.round((clock() - startedMs) / 60_000));
     const parts = [
       skippedQuestions.length > 0 ? `${skippedQuestions.map((p) => `Q${p}`).join(", ")} not analysed` : null,
       skippedNarrative.length > 0 ? `narrative skipped for ${skippedNarrative.join(", ")}` : null,
+      skippedPlannerForTime.length > 0 ? `planner questions skipped: ${skippedPlannerForTime.map((t) => `"${t}"`).join("; ")}` : null,
     ].filter((p): p is string => p !== null);
     partialReasons.unshift(`Safety ceiling of ${ceiling.minutes} min reached after ${elapsedMin} min: ${parts.join("; ")}`);
   }
@@ -686,12 +849,38 @@ async function produce(
     sections,
     cleared: comparison.cleared,
     carriedForward: carriedForward(liveFindings),
-    plannerQuestions,
-    cost: { ...cost, budgetUsd: ceiling.usd, model: narrator?.model ?? null },
+    plannerQuestions: [],
+    plannerAnswers,
+    cost: { ...cost, budgetUsd: ceiling.usd, model: modelsUsed(narrator, plannerTally.asked > 0 ? plannerSetup.planner : null) },
   };
 
   const rows: Finding[] = [...liveFindings, ...comparison.cleared];
-  return { status, partialReason, document, html: renderReportHtml(document), rows };
+  return { status, partialReason, document, html: renderReportHtml(document), rows, planner: plannerTally };
+}
+
+/** "claude-opus-5-5, claude-opus-5": the narrator's model and the planner's, when it was asked anything. */
+function modelsUsed(narrator: Narrator | null, planner: ReportPlanner | null): string | null {
+  const models = [narrator?.model, planner?.model].filter((m): m is string => typeof m === "string");
+  return models.length === 0 ? null : [...new Set(models)].join(", ");
+}
+
+/**
+ * The planner's history for the per-question estimate: what planner
+ * questions cost over the most recent runs that asked any, this run
+ * excluded. Every report's runs count - the question mix differs, the
+ * planner and its schema block do not.
+ */
+async function plannerHistory(runId: bigint): Promise<{ askedQuestions: number; costUsd: number }> {
+  const rows = await prisma.basReportRun.findMany({
+    where: { plannerAsked: { gt: 0 }, runId: { not: runId }, finishedAt: { not: null } },
+    orderBy: [{ finishedAt: "desc" }, { runId: "desc" }],
+    take: PLANNER_HISTORY_RUNS,
+    select: { plannerAsked: true, plannerCostUsd: true },
+  });
+  return {
+    askedQuestions: rows.reduce((sum, r) => sum + r.plannerAsked, 0),
+    costUsd: rows.reduce((sum, r) => sum + Number(r.plannerCostUsd), 0),
+  };
 }
 
 function weightedPercent(zones: Array<{ judgedMinutes: number; inBandMinutes: number }>): number | null {

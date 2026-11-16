@@ -161,6 +161,27 @@ export const transferOwnerSchema = z
 
 export const personalQuestionSchema = z.object({ text: questionText }).strict();
 
+/** Vocabulary keys: the shape bas_point_roles and bas_equipment_types use. */
+const vocabularyKey = z.string().trim().regex(/^[a-z0-9_]{1,64}$/, "Not a vocabulary key.");
+
+/**
+ * Promoting a saved question to the shared library (Reports, Phase 6). The
+ * personal question by id; the section it is filed under (never the
+ * Summary, whose two questions are derived from the rest); the equipment
+ * types it applies to, none meaning the whole building; and the point roles
+ * it needs, each one required. Strict: a kind, a key or an analysis
+ * function cannot be supplied - a promoted question is planner-kind, and
+ * the service names it.
+ */
+export const promoteQuestionSchema = z
+  .object({
+    personalQuestionId: z.string().regex(/^[0-9]{1,20}$/, "Not a question id."),
+    section: z.enum(["space_comfort", "vav", "ahu_rtu", "hot_water", "chilled_water", "dx", "schedules", "data_health"]),
+    appliesToEquipment: z.array(vocabularyKey).max(20).default([]),
+    requiredRoles: z.array(vocabularyKey).max(20).default([]),
+  })
+  .strict();
+
 /**
  * The module's safety ceiling (2026-11-12), either half or both. Dollars
  * to the cent, bounded as the database CHECK is; minutes bounded at 25 so
@@ -212,6 +233,7 @@ export type ReportStateAction = z.infer<typeof reportStateActionSchema>["action"
 export type QuestionSelectionItem = z.infer<typeof questionSelectionItemSchema>;
 export type QuestionSelection = z.infer<typeof questionSelectionSchema>;
 export type PersonalQuestionInput = z.infer<typeof personalQuestionSchema>;
+export type PromoteQuestionInput = z.infer<typeof promoteQuestionSchema>;
 export type SafetyCeilingInput = z.infer<typeof safetyCeilingSchema>;
 export type AddRecipientInput = z.infer<typeof addRecipientSchema>;
 export type TransferOwnerInput = z.infer<typeof transferOwnerSchema>;

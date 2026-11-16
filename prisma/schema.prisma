@@ -752,6 +752,17 @@ model BasReportRun {
   inputTokens  Int     @default(0) @map("input_tokens")
   outputTokens Int     @default(0) @map("output_tokens")
 
+  /// Planner questions (Reports, Phase 6) sent to the Analyze planner in this run - the ones that cost. Each is then answered or unanswered.
+  plannerAsked      Int     @default(0) @map("planner_asked")
+  /// Planner questions the planner answered from rows.
+  plannerAnswered   Int     @default(0) @map("planner_answered")
+  /// Planner questions with no answer and a reason: no data, declined, a clarification no one could give, not monitored or not applicable, or not configured.
+  plannerUnanswered Int     @default(0) @map("planner_unanswered")
+  /// Planner questions never sent because the run reached a half of the safety ceiling.
+  plannerSkipped    Int     @default(0) @map("planner_skipped")
+  /// What the planner calls cost, part of cost_usd; with planner_asked, the history the next run's per-question estimate is drawn from.
+  plannerCostUsd    Decimal @default(0) @map("planner_cost_usd") @db.Decimal(10, 6)
+
   startedAt   DateTime? @map("started_at") @db.Timestamptz()
   heartbeatAt DateTime? @map("heartbeat_at") @db.Timestamptz()
   finishedAt  DateTime? @map("finished_at") @db.Timestamptz()

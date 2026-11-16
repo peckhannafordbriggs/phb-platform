@@ -6,13 +6,16 @@ import { executeReportRun, ReportRunError } from "../lib/modules/bas/reports/eng
 import { STATUS_LABELS } from "../lib/modules/bas/reports/engine/rollup";
 import { incidentPoints } from "../lib/modules/bas/reports/engine/analysis/data-health";
 import { describeRunDuration, positiveAnswer } from "../lib/modules/bas/reports/engine/wording";
+import { createAnthropicReportPlanner, type ReportPlanner } from "../lib/modules/bas/reports/engine/planner-questions";
+import { plannerUnavailableReason, readWorkerJobEnv } from "../lib/modules/bas/reports/job-env";
+import { resetAnalyzePool } from "../lib/modules/bas/analyze/pool";
 
 /**
  * Run one report definition end to end against DATABASE_URL and store the
  * run (Reports, Phase 2) - the way a report is produced before the
  * scheduler and worker exist (Phase 3).
  *
- *   npm run bas:report:run -- --definition <id> --period-end <iso> [--as <email>] [--no-narrative] [--fixed-narrative]
+ *   npm run bas:report:run -- --definition <id> --period-end <iso> [--as <email>] [--no-narrative] [--fixed-narrative] [--no-planner]
  *
  * --period-end     the instant the analysis window ends; the window is the
  *                  definition's. Defaults to now, which on a database whose
@@ -21,8 +24,12 @@ import { describeRunDuration, positiveAnswer } from "../lib/modules/bas/reports/
  *                  the platform started it.
  * --no-narrative   skip the model: the run finishes partial and says why.
  * --fixed-narrative  a canned narrator at a fixed cost per call, for a dry run.
+ * --no-planner     leave the report's planner questions unasked: the run
+ *                  finishes partial and says so.
  * Otherwise the model is called with ANTHROPIC_API_KEY, the BAS key, and the
  * run's cost is metered against the module's safety ceiling (the Usage page).
+ * Planner questions (Phase 6) are asked through the same key, their SQL run
+ * as the bas_analyze role from BAS_ASK_DATABASE_URL, as the worker does.
  *
  * Prints the run id, the status, the building status, every section's
  * status with its findings, the inventory's Not Applicable and Not Monitored
@@ -37,7 +44,7 @@ function arg(name: string): string | null {
 async function main(): Promise<void> {
   const definition = arg("--definition");
   if (definition === null || !/^[0-9]+$/.test(definition)) {
-    console.error("Usage: npm run bas:report:run -- --definition <id> --period-end <iso> [--as <email>] [--no-narrative] [--fixed-narrative]");
+    console.error("Usage: npm run bas:report:run -- --definition <id> --period-end <iso> [--as <email>] [--no-narrative] [--fixed-narrative] [--no-planner]");
     process.exit(2);
   }
   const periodEndText = arg("--period-end");
@@ -70,8 +77,22 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`Running definition ${definition} for the period ending ${periodEnd.toISOString()}${narrator === null ? " (no narrative)" : ` (narrator: ${narrator.model})`}`);
-  const outcome = await executeReportRun(definition, { periodEnd, trigger: "manual", startedById, narrator });
+  let planner: ReportPlanner | null = null;
+  let plannerUnavailable: string | null = null;
+  if (process.argv.includes("--no-planner")) {
+    plannerUnavailable = "The run was started with --no-planner.";
+  } else {
+    const jobEnv = readWorkerJobEnv();
+    plannerUnavailable = plannerUnavailableReason(jobEnv);
+    if (plannerUnavailable === null && jobEnv.anthropicApiKey !== null && jobEnv.askDatabaseUrl !== null) {
+      planner = createAnthropicReportPlanner({ apiKey: jobEnv.anthropicApiKey, askDatabaseUrl: jobEnv.askDatabaseUrl });
+    }
+  }
+
+  console.log(
+    `Running definition ${definition} for the period ending ${periodEnd.toISOString()}${narrator === null ? " (no narrative)" : ` (narrator: ${narrator.model})`}${planner === null ? ` (no planner: ${plannerUnavailable})` : ` (planner: ${planner.model})`}`,
+  );
+  const outcome = await executeReportRun(definition, { periodEnd, trigger: "manual", startedById, narrator, planner, plannerUnavailable });
   const doc = outcome.document;
 
   console.log("");
@@ -113,6 +134,18 @@ async function main(): Promise<void> {
     }
   }
   if (doc.cleared.length > 0) console.log(`  Cleared: ${doc.cleared.map((f) => `${f.subjectName} (${f.issue})`).join(", ")}`);
+  for (const a of doc.plannerAnswers ?? []) {
+    console.log("");
+    console.log(`  Planner: ${a.text}`);
+    console.log(
+      `    ${a.outcome}${a.calls > 0 ? ` · ${a.calls} call(s), ${a.inputTokens} in / ${a.outputTokens} out, $${a.costUsd.toFixed(4)}, ${Math.round(a.durationMs / 100) / 10} s` : ""}`,
+    );
+    if (a.answer !== null) console.log(`    ${a.answer.split("\n").join("\n    ")}`);
+    if (a.reason !== null) console.log(`    reason: ${a.reason}`);
+    if (a.interpretation !== null) console.log(`    read as: ${a.interpretation}`);
+    if (a.sql !== null) console.log(`    sql: ${a.sql.split(/\s+/).join(" ")}`);
+    for (const note of a.notes) console.log(`    note: ${note}`);
+  }
   console.log("");
   console.log(
     `Cost: ${doc.cost.calls} call(s), ${doc.cost.inputTokens} in / ${doc.cost.outputTokens} out, $${doc.cost.costUsd.toFixed(4)} (safety ceiling $${doc.cost.budgetUsd.toFixed(2)}); took ${describeRunDuration(doc.header.durationMs ?? 0)}`,
@@ -128,4 +161,7 @@ main()
     }
     process.exitCode = 1;
   })
-  .finally(() => prisma.$disconnect());
+  .finally(async () => {
+    await resetAnalyzePool();
+    await prisma.$disconnect();
+  });

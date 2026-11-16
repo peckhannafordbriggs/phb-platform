@@ -528,6 +528,11 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "bas.personal_question_deleted": ({ actor, meta }) =>
     `${actor} deleted a question from their library: "${clip(stringField(meta, "text") ?? "", 100)}"`,
 
+  "bas.library_question_promoted": ({ actor, meta }) => {
+    const section = stringField(meta, "sectionLabel");
+    return `${actor} added a question to the shared library, answered by the planner${section !== null ? ` under ${section}` : ""}: "${clip(stringField(meta, "text") ?? "", 100)}"`;
+  },
+
   "bas.report_run_started": ({ actor, meta }) =>
     `${actor} started a ${stringField(meta, "trigger") ?? "manual"} run of the report ${stringField(meta, "name") ?? "(unnamed)"}`,
 
@@ -986,6 +991,7 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.personal_question_created": "BAS personal question saved",
   "bas.personal_question_updated": "BAS personal question edited",
   "bas.personal_question_deleted": "BAS personal question deleted",
+  "bas.library_question_promoted": "BAS question promoted to the shared library",
   "bas.report_run_started": "BAS report run started",
   "bas.report_run_finished": "BAS report run finished",
   "bas.report_run_requested": "BAS report run queued",

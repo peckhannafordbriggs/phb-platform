@@ -12487,6 +12487,74 @@ Monitored, on a building with no DX at all. Give a DX air handler its
 compressor or cooling stage role and it applies. Q8 needs a reheat valve
 role on the VAV, Q12 and Q17 an OA damper role on the unit.
 
+## Reports: a planner question says "could not read the tables", "Skipped", "Not asked" or "No data"
+
+Planner questions (Reports, Phase 6) are a report's typed, saved and
+shared planner-kind questions, answered by the Analyze planner during the
+run. They appear in the report's last section, *Planner questions*. They
+never change the building status, so nothing in this entry is urgent for
+the building; each is about why a question has no answer.
+
+**"The platform could not read the tables it needs to check this answer.
+Contact IT. (permission denied for table bas_site_occupancy)"** - and the
+Analyze tab fails the same way. **Cause:** the `bas_analyze` role was
+created before a `bas_*` table it is meant to read existed. Its grants
+are explicit; `scripts/setup-bas-analyze-role.sql` (Azure) and `npm run
+bas:analyze:role` (local) were updated on 2026-11-10 for
+`bas_site_occupancy`, but a role made before then never received the
+grant, and the Analyze schema context counts every table it is allowed,
+so one missing grant fails every question. Found on the development
+database on 2026-11-16, where the role predated Reports Phase 1.
+**Production was not checked** (no access from the agent); if the
+deployed Analyze tab answers, it has the grant. **Fix:** re-run the role
+script against that database as its administrator. It is idempotent,
+refuses an unclassified table, and proves the boundary (report tables
+refused, `bas_site_occupancy` readable). Locally pass the current
+password back with `-- --password=…` so `BAS_ASK_DATABASE_URL` stays
+valid. **Rule from here:** every migration that adds a `bas_*` table the
+role is allowed to read needs that script re-run on every database.
+
+**"Skipped — spending cap: $X of the $Y safety ceiling was spent, and a
+planner question is estimated at $Z."** **Cause:** the run would have
+passed the module's safety ceiling. The estimate is the average cost of a
+planner question over the last 20 runs that asked any, or $0.25 before
+there is history (measured: $0.06 to $0.23 a question on the office).
+**Fix:** none needed if the cap is right; otherwise raise the ceiling on
+the Usage page (module admin) or move questions off the report. The
+partial reason at the top of the report names every question skipped.
+
+**"Skipped — time cap"**: the same for the ceiling's minutes. A planner
+question takes 20-45 seconds (two or three model calls and one query).
+
+**"Not asked: … is not set, so the planner could not be asked."** The
+worker (or `bas:report:run`) has no `ANTHROPIC_API_KEY` or no
+`BAS_ASK_DATABASE_URL`. Both reach the worker job by Key Vault reference
+(`infra/main.bicep`, `basReportsWorkerJob`); check the secrets exist and
+the job's latest execution log line `[bas-reports-worker] planner: …`.
+
+**"No data: Nothing in the data matched this question …"** or **"Not
+answered: …"** is the planner's own outcome, shown verbatim, as on the
+Analyze tab: the query ran and matched nothing, or the planner declined
+because the points are not collected. It is counted *unanswered* on the
+Usage page. Reword the question or collect the points; nothing is broken.
+**"The planner asked: …"** means it needed a choice nobody is present to
+make in a scheduled run - reword the question on the report to say which.
+
+**An amber note under an answer** - *"This answer read N points on
+<other building>"* or *"The query covered … not the report's period"* - is
+the platform checking the planner against the report's fixed context
+after the query ran. The answer is still shown, labelled; if a report's
+question keeps drawing on another building, reword it to name this one.
+
+**Not monitored / Not applicable under a shared planner question.** An
+admin promoted it with required roles or applies-to the building lacks;
+the planner was not asked and nothing was spent.
+
+**Promoting a question** (module admins): *Reports → Questions*, *Promote
+to shared* on one of your saved questions, or *Promote a question* above
+the shared table. Each ticked role is required on its own. Refused with
+403 for anyone else; audited as `bas.library_question_promoted`.
+
 ## CI: "Reports jobs image builds and prints" fails
 
 **Symptom.** The pull request's check *Reports jobs image builds and

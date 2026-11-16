@@ -197,6 +197,27 @@ export const PRIOR_TEXT_MAX_CHARS = 1_200;
 export const PRIOR_SQL_MAX_CHARS = 4_000;
 export const PRIOR_TURNS_MAX_BYTES = 24_000;
 
+/**
+ * The fixed context a report's planner question is asked in (Reports,
+ * Phase 6): the report's building, the stations it covers, and the
+ * analysis window. Building and station names come from the controllers
+ * and travel to the model inside a data block; the ids are what the SQL
+ * should filter on. The platform checks the outcome against it afterwards
+ * - a point on another building, a period other than this one - and says
+ * so on the report, because the prompt is not the enforcement.
+ */
+export interface ReportContext {
+  siteId: string;
+  siteName: string;
+  timezone: string;
+  stations: Array<{ stationId: string; name: string }>;
+  /** ISO 8601, UTC: the report's analysis window. */
+  periodStart: string;
+  periodEnd: string;
+  /** "Last 7 days". */
+  windowLabel: string;
+}
+
 export interface Attempt {
   sql: string;
   /** What went wrong, in the database's or the guard's words. */

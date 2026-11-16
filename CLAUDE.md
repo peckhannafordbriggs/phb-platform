@@ -1667,6 +1667,30 @@ report with the worker's renderer in it (job `reports-image`).
 handler, plant or DX finding looks wrong, or a unit reads "Not judged"*,
 *CI: "Reports jobs image builds and prints" fails*.
 
+**Reports, Phase 6 - planner questions run (2026-11-16).** A report's
+typed, saved and shared planner-kind questions are answered by the
+Analyze planner in the run, through the tab's own steps 4-9, moved
+unchanged into `lib/modules/bas/analyze/core.ts` so the worker never
+imports the environment reader - with the report's building, stations
+and period as fixed context, checked after the query (an amber note for a
+point on another building or another period). They run **after** the
+narrative, each checked against both halves of the safety ceiling with an
+estimate averaged from the last 20 runs ($0.25 before any history);
+what is left past either is listed by name, *Skipped — spending cap* /
+*time cap*, and the run is partial. Answers are one *Planner questions*
+section, **shown, never tracked**: no fingerprint, no finding row, no
+status. Five counters on the run (`20261116120000_bas_report_runs_planner`)
+feed the Usage page and the estimate. A BAS module admin can promote
+their own saved question to the shared library as a planner question
+(section, applies-to, required roles; audited
+`bas.library_question_promoted`); a promoted question's requirements are
+judged before the planner is asked. Office dev run 18: $0.2313 and
+$0.0631 for the two custom questions, $0.3012 the run. **Found on the
+way:** the local `bas_analyze` role predated `bas_site_occupancy` and
+failed every Analyze question until the role script was re-run;
+production was not checked. `WHY-ITS-BUILT-THIS-WAY.md` § 86;
+`runbook.md` → *Reports: a planner question says …*.
+
 **Admin → Employees on the shared kit (2026-11-13).** The page wears the
 module shells' chrome - the tinted ground, the header with the chrome purple
 by name (`ModuleHeader`'s new `accent`; Admin is not a module and has no key

@@ -66,6 +66,8 @@ export function ReportsUsageView({ usage, canAdminister }: { usage: ReportsUsage
         <UsageStat label={`${usage.thisMonth.label} so far`} value={formatMoney(usage.thisMonth.spend)} />
       </div>
 
+      <PlannerQuestionsLine planner={usage.planner} />
+
       <SpendPerDayChart days={days} />
 
       <Card padding="p-0">
@@ -183,5 +185,24 @@ export function SafetyCeilingCard({
         </p>
       )}
     </Card>
+  );
+}
+
+/**
+ * Planner questions over the range (Reports, Phase 6): how many were
+ * answered, how many came back with a reason instead, how many the safety
+ * ceiling skipped, and the planner's share of the spend. Not rendered when
+ * no run in the range carried a planner question - an empty line would say
+ * nothing. Exported for tests.
+ */
+export function PlannerQuestionsLine({ planner }: { planner: ReportsUsage["planner"] }) {
+  const total = planner.answered + planner.unanswered + planner.skipped;
+  if (total === 0) return null;
+  return (
+    <p className="text-sm text-[var(--muted)]" data-testid="planner-questions-line">
+      <span className="font-medium text-[var(--foreground)]">Planner questions:</span> {planner.answered.toLocaleString("en-US")} answered ·{" "}
+      {planner.unanswered.toLocaleString("en-US")} unanswered · {planner.skipped.toLocaleString("en-US")} skipped at the safety ceiling ·{" "}
+      {formatMoney(planner.spend)} of the spend
+    </p>
   );
 }
