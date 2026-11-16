@@ -120,6 +120,18 @@ export interface ReportsList {
   viewerEmployeeId: string;
 }
 
+/**
+ * What the promotion form offers (Reports, Phase 6): whether the viewer may
+ * promote at all - a BAS module admin - and the sections, equipment types
+ * and point roles a promoted question may name.
+ */
+export interface PromotionOptions {
+  canPromote: boolean;
+  sections: Array<{ key: string; label: string }>;
+  equipmentTypes: Array<{ key: string; label: string }>;
+  roles: Array<{ key: string; label: string }>;
+}
+
 export interface LibraryQuestionView {
   libraryQuestionId: string;
   key: string;

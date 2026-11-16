@@ -12,12 +12,26 @@
 import { BAS_LIBRARY_QUESTIONS, describeRequiredRoles } from "../library";
 import { COLLECTION_STOPPED, DATA_HEALTH_QUESTION, incidentPoints } from "./analysis/data-health";
 import { STATUS_LABELS } from "./rollup";
-import type { EquipmentTypeFound, Finding, QuestionResult, ReportDocument, ScheduleResult, SectionDocument, SummaryDocument, ZoneResult } from "./types";
+import { splitPlannerAnswer } from "./planner-display";
+import type { ReactNode } from "react";
+import type {
+  EquipmentTypeFound,
+  Finding,
+  PlannerAnswer,
+  QuestionResult,
+  ReportDocument,
+  ScheduleResult,
+  SectionDocument,
+  SummaryDocument,
+  ZoneResult,
+} from "./types";
 import {
+  PLANNER_SECTION_NOTE,
   describeRunDuration,
   notApplicableLine,
   notMonitoredLine,
   notRunLine,
+  plannerOutcomeLabel,
   positiveAnswer,
   questionHeading,
   skippedLine,
@@ -96,6 +110,15 @@ export const REPORT_CSS = `
 .bas-report .partial { border: 1px solid #f3a11e; background: #fff6e5; padding: .5rem .75rem; border-radius: .375rem; margin: .75rem 0; }
 .bas-report .incident { border: 1px solid #f3a11e; background: #fff6e5; padding: .5rem .75rem; border-radius: .375rem; margin: .5rem 0; }
 .bas-report .incident p { margin: 0 0 .25rem; }
+.bas-report .planner-meta { color: #5c5873; font-size: .8125rem; margin: .15rem 0; }
+.bas-report pre.sql { white-space: pre-wrap; word-break: break-word; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #3d3852; background: #f5f4f8; padding: .4rem .5rem; border-radius: .25rem; margin: .25rem 0 .5rem; }
+.bas-report .planner-question .answer p { margin: .5rem 0; }
+.bas-report .planner-question .answer ul { list-style: disc; }
+.bas-report .planner-how { margin: .35rem 0 1rem; }
+.bas-report .planner-how-table { overflow-x: auto; }
+.bas-report .planner-how-panel { margin-top: .5rem; padding: .5rem .75rem; border: 1px solid #e6e3ee; border-radius: .375rem; background: #f5f4f8; font-size: .8125rem; }
+.bas-report .planner-how-panel p { margin: 0 0 .35rem; }
+@media print { .bas-report .planner-how { display: none !important; } }
 `;
 
 const STATE_WORDS: Record<Finding["state"], string> = { new: "New", still_open: "Still open", cleared: "Cleared" };
@@ -518,6 +541,109 @@ function DataHealthSection({ section, index }: { section: SectionDocument; index
   );
 }
 
+/**
+ * The planner's answer text: its paragraphs, and its "- " lines as a list,
+ * which is the one structure the summariser is allowed (docs/11).
+ */
+function AnswerText({ text }: { text: string }) {
+  const blocks: Array<{ kind: "p"; text: string } | { kind: "ul"; items: string[] }> = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    if (line.startsWith("- ")) {
+      const last = blocks[blocks.length - 1];
+      if (last !== undefined && last.kind === "ul") last.items.push(line.slice(2));
+      else blocks.push({ kind: "ul", items: [line.slice(2)] });
+    } else {
+      blocks.push({ kind: "p", text: line });
+    }
+  }
+  return (
+    <div className="answer">
+      {blocks.map((b, i) =>
+        b.kind === "p" ? (
+          <p key={i}>{b.text}</p>
+        ) : (
+          <ul key={i}>
+            {b.items.map((item, j) => (
+              <li key={j}>{item}</li>
+            ))}
+          </ul>
+        ),
+      )}
+    </div>
+  );
+}
+
+/**
+ * The web run view's slot under each planner answer: the "Show how this was
+ * answered" toggle (app/(modules)/bas/reports-planner-how.tsx). Absent on
+ * the stored HTML and so in the PDF - html.ts renders ReportView with no
+ * slot - and hidden by REPORT_CSS's print rule when the web page is printed.
+ */
+export type PlannerDetailsSlot = (answer: PlannerAnswer, timezone: string) => ReactNode;
+
+/**
+ * One planner question as the page and the PDF show it (revised
+ * 2026-11-16): its words as the sub-heading and the planner's prose answer,
+ * paragraphs and list as written, less the coverage paragraph that
+ * `splitPlannerAnswer` moves to the web view's panel. A question with no
+ * answer shows why instead. Two amber lines are the only other things
+ * printed, because each says the answer may not mean what it reads as: the
+ * note for a query that read another building or another period, and the
+ * coverage shortfall ("Any figure above describes N days of the M asked
+ * about"), the platform's sentence Analyze never lets anyone collapse.
+ * Everything else - the coverage paragraph, the reading, the points, the
+ * rows, the SQL, the cost - is on the run and behind the web view's
+ * button, never here.
+ */
+function PlannerQuestion({ a, timezone, details }: { a: PlannerAnswer; timezone: string; details?: PlannerDetailsSlot }) {
+  const label = plannerOutcomeLabel(a.outcome);
+  const answer = a.outcome === "answered" && a.answer !== null ? splitPlannerAnswer(a.answer).answer : null;
+  return (
+    <div className="planner-question">
+      <h3>
+        {a.text}
+        {a.source === "library" && <span className="muted"> · shared question{a.sectionLabel ? `, ${a.sectionLabel}` : ""}</span>}
+      </h3>
+      {answer !== null && <AnswerText text={answer} />}
+      {a.outcome !== "answered" && a.reason !== null && (
+        <p className="answer muted">
+          {label !== null && <strong>{label}: </strong>}
+          {a.reason}
+        </p>
+      )}
+      {a.notes.map((note, i) => (
+        <p className="partial" key={i}>
+          {note}
+        </p>
+      ))}
+      {a.provenance !== null && a.provenance.coverageShortfall !== null && <p className="partial">{a.provenance.coverageShortfall}</p>}
+      {details?.(a, timezone)}
+    </div>
+  );
+}
+
+/**
+ * Planner questions (Phase 6): the report's typed, personal and shared
+ * planner-kind questions, each answered by the Analyze planner. One note in
+ * the header says they are shown and not tracked; nothing in this section
+ * carries a marker or a status badge, and nothing in it feeds the Summary.
+ */
+function PlannerSection({ doc, details }: { doc: ReportDocument; details?: PlannerDetailsSlot }) {
+  return (
+    <section>
+      <h2>Planner questions</h2>
+      <p className="muted">{PLANNER_SECTION_NOTE}</p>
+      {[...(doc.plannerAnswers ?? [])]
+        .sort((x, y) => x.position - y.position)
+        .map((a) => (
+          <PlannerQuestion key={`${a.position}:${a.text}`} a={a} timezone={doc.header.timezone} details={details} />
+        ))}
+    </section>
+  );
+}
+
 /** "VAV-3 (Zone above setpoint), points_RoomT (Out of physical range)": the findings behind a Summary count, one entry each. */
 function findingList(findings: Finding[]): string {
   return findings.map((f) => `${f.subjectName} (${f.issue})`).join(", ");
@@ -534,7 +660,7 @@ function uniqueByFingerprint(findings: Finding[]): Finding[] {
   return out;
 }
 
-export function ReportView({ document: doc }: { document: ReportDocument }) {
+export function ReportView({ document: doc, plannerDetails }: { document: ReportDocument; plannerDetails?: PlannerDetailsSlot }) {
   const { header, inventory, summary } = doc;
   const renderable = doc.sections.filter((s) => s.status !== "not_applicable");
   const dataHealth = renderable.find((s) => s.key === "data_health");
@@ -649,7 +775,11 @@ export function ReportView({ document: doc }: { document: ReportDocument }) {
         )}
       </section>
 
-      {doc.plannerQuestions.length > 0 && (
+      {doc.plannerAnswers !== undefined && doc.plannerAnswers.length > 0 && (
+        <PlannerSection doc={doc} details={plannerDetails} />
+      )}
+
+      {doc.plannerAnswers === undefined && doc.plannerQuestions.length > 0 && (
         <section>
           <h2>Custom questions</h2>
           {doc.plannerQuestions.map((q, i) => (

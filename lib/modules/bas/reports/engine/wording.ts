@@ -241,3 +241,27 @@ export function describeRunDuration(ms: number): string {
   if (h > 0) return m === 0 ? `${h} h` : `${h} h ${m} min`;
   return s === 0 ? `${m} min` : `${m} min ${s} s`;
 }
+
+/**
+ * The planner section's header note (Reports, Phase 6), said once for the
+ * section rather than under every answer: what answered these questions,
+ * and that nothing here is tracked or moves a status.
+ */
+export const PLANNER_SECTION_NOTE =
+  "Answered by the Analyze planner from this building's data for this period; these answers do not change the building status.";
+
+/** The word in front of a planner question's reason, by outcome; null where the reason speaks for itself. */
+export function plannerOutcomeLabel(outcome: string): string | null {
+  switch (outcome) {
+    case "no_data":
+      return "No data";
+    case "cannot_answer":
+    case "clarify":
+      return "Not answered";
+    case "not_configured":
+      return "Not asked";
+    default:
+      // answered has no reason; not monitored, not applicable and skipped open with their own words.
+      return null;
+  }
+}

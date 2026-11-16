@@ -277,8 +277,98 @@ export interface ReportDocument {
   cleared: Finding[];
   /** Action Needed items still open, oldest first. */
   carriedForward: Finding[];
-  /** Custom questions, which this phase does not run. */
+  /**
+   * Custom questions as documents before Phase 6 stored them: the text and a
+   * note that they were not run. Empty on every document since; read only to
+   * render an old run.
+   */
   plannerQuestions: Array<{ text: string; note: string }>;
+  /**
+   * The planner questions and their answers (Reports, Phase 6), in the
+   * report's order. Shown, never tracked: no fingerprint, no finding row, no
+   * part in any status. Absent on documents stored before 2026-11-16.
+   */
+  plannerAnswers?: PlannerAnswer[];
   /** `budgetUsd` is the safety ceiling in force; stamped on the run, not printed on the page. */
   cost: { inputTokens: number; outputTokens: number; costUsd: number; budgetUsd: number; model: string | null; calls: number };
+}
+
+/**
+ * How a planner question ended.
+ *
+ *   answered        the planner's query returned rows and the summariser
+ *                   read them
+ *   no_data         the query ran and matched nothing - not an answer of zero
+ *   cannot_answer   the planner declined, or no usable query could be run
+ *   clarify         the planner needed a choice nobody was there to make
+ *   not_configured  the run had no planner: a variable is missing
+ *   not_monitored   a shared question whose required points the building
+ *                   does not trend; the planner was not asked
+ *   not_applicable  a shared question for equipment the building does not have
+ *   skipped         the run reached a half of the safety ceiling first
+ */
+export type PlannerOutcome =
+  | "answered"
+  | "no_data"
+  | "cannot_answer"
+  | "clarify"
+  | "not_configured"
+  | "not_monitored"
+  | "not_applicable"
+  | "skipped";
+
+/** The provenance of a planner answer, as the report keeps it: the platform's figures, never the model's. */
+export interface PlannerProvenance {
+  /** The UTC range the query covered, as the planner declared it. */
+  timeRange: { start: string; end: string } | null;
+  periodUndeclared: boolean;
+  /** Names of the points the answer drew on, at most PLANNER_POINTS_KEPT. */
+  points: string[];
+  pointCount: number;
+  /** Hours of the queried range with no readings, from bas_data_gaps; null when it could not be computed. */
+  gapHours: number | null;
+  /** The platform's sentence when the readings do not cover the range. */
+  coverageShortfall: string | null;
+  unknownHorizonCount: number;
+  unclassifiedExcluded: number;
+  neverCollected: string[];
+}
+
+export interface PlannerAnswer {
+  /** Order on the report: the question's position in the definition. */
+  position: number;
+  text: string;
+  /** Where the question came from: typed on the report, the owner's library, or the shared library. */
+  source: "inline" | "personal" | "library";
+  /** For a shared question: its key and the section the library files it under. */
+  libraryKey: string | null;
+  sectionLabel: string | null;
+  outcome: PlannerOutcome;
+  /** The summariser's words, for `answered`. */
+  answer: string | null;
+  /**
+   * Why there is no answer, verbatim: the platform's no-data explanation,
+   * the planner's reason for declining, its clarifying question, the
+   * missing points, or the cap that skipped it.
+   */
+  reason: string | null;
+  /** The planner's one sentence on how it read the question. */
+  interpretation: string | null;
+  sql: string | null;
+  /** The rows behind the answer, at most PLANNER_ROWS_KEPT of them. */
+  table: { columns: string[]; rows: Array<Array<string | number | boolean | null>>; rowCount: number; truncated: boolean; kept: number } | null;
+  provenance: PlannerProvenance | null;
+  /**
+   * The platform's checks of the outcome against the report's fixed
+   * context: a point on another building, a period other than the
+   * report's. Empty when the answer stayed inside both.
+   */
+  notes: string[];
+  retried: boolean;
+  /** What this question's model calls cost; zero when none were made. */
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  calls: number;
+  durationMs: number;
 }

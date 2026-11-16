@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import type { Narrator } from "./engine/narrative";
+import type { ReportPlanner } from "./engine/planner-questions";
 import { ReportRunError, executeQueuedRun } from "./engine/run";
 import { drainPdfQueue, type PdfOutcome } from "./pdf/jobs";
 import type { PdfRenderer } from "./pdf/render";
@@ -59,6 +60,9 @@ export interface Claim {
 export interface WorkerOptions {
   /** Null means no model key: every run finishes partial and says so. */
   narrator: Narrator | null;
+  /** Null means no planner: a run carrying planner questions finishes partial with `plannerUnavailable`. */
+  planner?: ReportPlanner | null;
+  plannerUnavailable?: string | null;
   /** Null means no Chromium (--no-pdf, or a test): queued PDFs stay queued. */
   pdf: PdfRenderer | null;
   /** Tests shorten it. */
@@ -117,7 +121,13 @@ export async function workOnce(options: WorkerOptions, now = new Date()): Promis
       .catch(() => undefined);
   }, options.heartbeatMs ?? HEARTBEAT_EVERY_MS);
   try {
-    await executeQueuedRun(claim.runId, { narrator: options.narrator, attempt: claim.attempts, clock: options.clock });
+    await executeQueuedRun(claim.runId, {
+      narrator: options.narrator,
+      planner: options.planner ?? null,
+      plannerUnavailable: options.plannerUnavailable ?? null,
+      attempt: claim.attempts,
+      clock: options.clock,
+    });
   } catch (error) {
     if (!(error instanceof ReportRunError && error.code === "run_failed")) throw error;
   } finally {

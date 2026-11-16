@@ -1243,6 +1243,77 @@ renderer under tsx, mounted read-only. Until then only `deploy.yml` built
 that image, after a merge. `runbook.md` → *CI: "Reports jobs image builds
 and prints" fails*.
 
+### Reports — Phase 6 (2026-11-16): planner questions run
+
+**What exists.** A report's typed questions, the owner's saved ones and
+shared planner-kind questions are answered by the Analyze planner in the
+run, one question at a time, with the report's building, stations and
+period as fixed context. `lib/modules/bas/analyze/core.ts` is steps 4-9
+of an Analyze question (plan, guard, run, provenance, no-data check,
+summarise), taken out of `service.ts` so the Analyze tab and the report
+worker share one path; `service.ts` wraps it exactly as before.
+`lib/modules/bas/reports/engine/planner-questions.ts` is the batch side:
+`createAnthropicReportPlanner` (claude-opus-5 through `ANTHROPIC_API_KEY`,
+SQL as `bas_analyze` through `BAS_ASK_DATABASE_URL`), a meter that prices
+every plan and summary call from the API's usage, the per-question
+estimate, and `toPlannerAnswer`, which stores the outcome and checks it
+against the context (a point on another building, a period other than the
+report's) - the prompt asks, the platform verifies.
+
+**In the run** (`run.ts`), after the narrative, so the computed report's
+prose is never what the ceiling cuts. A shared planner question with
+applies-to or required roles is judged against the building first (Not
+applicable / Not monitored, nothing spent). Before each question both
+halves of the safety ceiling are checked; past either, every remaining
+question is listed by name, *Skipped — spending cap* or *Skipped — time
+cap*, and the run finishes partial naming them. No planner (a variable
+missing) is also partial, naming the variable. Answers are stored on the
+document as `plannerAnswers`, rendered as one *Planner questions* section
+whose header says once that they are shown and not tracked; nothing there
+is a finding, a fingerprint or a status input. Five counters on the run
+(`planner_asked`, `_answered`, `_unanswered`, `_skipped`, `_cost_usd`,
+migration `20261116120000_bas_report_runs_planner`) feed the Usage page's
+*Planner questions* line and the next run's estimate.
+
+**What a reader sees (revised twice the same day).** The page and the PDF
+show two things per planner question: the question as the sub-heading
+and the planner's prose answer - its paragraphs and list as written -
+less the summariser's coverage paragraph ("This covers 22 September …
+these are not current conditions"), which `splitPlannerAnswer` moves to
+the panel by a conservative rule (a later, non-list paragraph that opens
+or reads the way those sentences do; anything unrecognised stays on the
+page). Two amber lines are the exceptions and stay visible on both: the
+note for a query that read another building or another period, and the
+coverage shortfall ("Any figure above describes N days of the M asked
+about"). Everything else - the coverage paragraph, how the question was
+read, the period and every point, the gap figures, the results table (dates
+local), the SQL and the cost - is behind a kit secondary Button, *Show
+how this was answered*, on the web run view only
+(`app/(modules)/bas/reports-planner-how.tsx`, filling `ReportView`'s
+`plannerDetails` slot; `engine/planner-display.tsx` holds the split, the
+cell formatter and the panel). The stored HTML has no slot, so the PDF
+never has the button or the panel, and `REPORT_CSS` hides `.planner-how`
+under `@media print` for the web page's own Print; a test prints both
+through the real Chromium and reads the PDF's text. Nothing stored
+changed: the answer is stored whole. Runs stored before this keep their
+old `report_html` and PDF; the web view re-renders from the document.
+
+**Promotion.** A BAS module admin can put one of their own saved
+questions into the shared library as a planner question with a section,
+applies-to and required roles - *Promote to shared* on the personal row,
+or *Promote a question* on the shared table. `POST
+/api/modules/bas/reports/library` (403 `admin_required` otherwise),
+audited as `bas.library_question_promoted`; `GET
+/api/modules/bas/reports/library/promotion` says whether the viewer may.
+
+**Measured on the office** (run 18 on the development database, period
+ending 29 September): *Which zone was warmest on average during occupied
+hours?* answered in 41 s for $0.2313; *How many readings did the
+collector store per day?* in 23 s for $0.0631; the run $0.3012 with the
+narrative. Captures in `docs/design/bas-reports-planner/`.
+`WHY-ITS-BUILT-THIS-WAY.md` § 86; `runbook.md` → *Reports: a planner
+question*.
+
 ## Classification — the office building, in SQL
 
 **This is the section the 8 September version said could not exist yet** —

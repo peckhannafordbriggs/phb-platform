@@ -17,6 +17,7 @@ type ReportsErrorCode = Extract<
   | "personal_question_not_found"
   | "personal_question_not_owner"
   | "personal_question_in_use"
+  | "unknown_vocabulary_key"
   | "owner_is_recipient"
   | "recipient_exists"
   | "recipient_not_found"
@@ -56,6 +57,7 @@ const STATUS: Record<ReportsErrorCode, number> = {
   personal_question_not_found: 404,
   personal_question_not_owner: 409,
   personal_question_in_use: 409,
+  unknown_vocabulary_key: 422,
   owner_is_recipient: 409,
   recipient_exists: 409,
   recipient_not_found: 404,

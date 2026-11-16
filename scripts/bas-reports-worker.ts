@@ -1,7 +1,8 @@
 import "./load-env";
 import { prisma } from "../lib/db";
 import { createAnthropicNarrator } from "../lib/modules/bas/reports/engine/narrative";
-import { ANTHROPIC_API_KEY_VAR, readWorkerJobEnv } from "../lib/modules/bas/reports/job-env";
+import { ANTHROPIC_API_KEY_VAR, plannerUnavailableReason, readWorkerJobEnv } from "../lib/modules/bas/reports/job-env";
+import { createAnthropicReportPlanner } from "../lib/modules/bas/reports/engine/planner-questions";
 import { createChromiumRenderer } from "../lib/modules/bas/reports/pdf/render";
 import { drainQueue } from "../lib/modules/bas/reports/worker";
 
@@ -57,15 +58,26 @@ async function main(): Promise<void> {
   const jobEnv = readWorkerJobEnv();
   const key = noNarrative ? null : jobEnv.anthropicApiKey;
   const narrator = key === null ? null : createAnthropicNarrator(key);
+  // The planner questions (Phase 6): the same key, SQL through the
+  // bas_analyze role. Either missing, and a run carrying planner questions
+  // finishes partial naming the variable.
+  const plannerUnavailable = noNarrative
+    ? "The worker was started with --no-narrative, so no model was called."
+    : plannerUnavailableReason(jobEnv);
+  const planner =
+    plannerUnavailable === null && jobEnv.anthropicApiKey !== null && jobEnv.askDatabaseUrl !== null
+      ? createAnthropicReportPlanner({ apiKey: jobEnv.anthropicApiKey, askDatabaseUrl: jobEnv.askDatabaseUrl })
+      : null;
   const pdf = noPdf ? null : createChromiumRenderer();
   console.log(
     `[bas-reports-worker] narrator: ${narrator === null ? (noNarrative ? "off (--no-narrative)" : `none (${ANTHROPIC_API_KEY_VAR} unset; runs finish partial)`) : narrator.model}`,
   );
+  console.log(`[bas-reports-worker] planner: ${planner === null ? `none (${plannerUnavailable})` : planner.model}`);
   console.log(`[bas-reports-worker] pdf: ${pdf === null ? "off (--no-pdf; renders stay queued)" : "Chromium, launched on the first render"}`);
   console.log(`[bas-reports-worker] ${once ? "one run at most, then exit" : "working until the queue is empty"}`);
 
   try {
-    const done = await drainQueue({ narrator, pdf }, once ? { maxRuns: 1 } : {});
+    const done = await drainQueue({ narrator, planner, plannerUnavailable, pdf }, once ? { maxRuns: 1 } : {});
     for (const claim of done.runs) {
       console.log(`[bas-reports-worker] run ${claim.runId} of report ${claim.reportId}: done${claim.reclaimed ? " (reclaimed after a stall)" : ""}`);
     }

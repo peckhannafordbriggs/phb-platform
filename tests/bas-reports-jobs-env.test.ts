@@ -10,6 +10,7 @@ import {
   DATABASE_URL_VAR,
   SCHEDULER_JOB_VARS,
   WORKER_JOB_VARS,
+  plannerUnavailableReason,
   readSchedulerJobEnv,
   readWorkerJobEnv,
 } from "@/lib/modules/bas/reports/job-env";
@@ -255,26 +256,37 @@ describe("the template gives each job exactly what its reader needs, and nothing
     expect(names).toEqual([...SCHEDULER_JOB_VARS, "NODE_ENV"].sort());
   });
 
-  it("worker: DATABASE_URL and ANTHROPIC_API_KEY by reference, NODE_ENV, and BAS_ASK_DATABASE_URL carried for Phase 6", () => {
+  it("worker: DATABASE_URL, ANTHROPIC_API_KEY and BAS_ASK_DATABASE_URL by reference, and NODE_ENV", () => {
     const names = jobEnvNamesInTemplate("basReportsWorkerJob");
     for (const required of WORKER_JOB_VARS) expect(names, required).toContain(required);
-    // BAS_ASK_DATABASE_URL is on the worker for the planner questions of a
-    // later phase; nothing on the worker's import graph reads it today, and
-    // the graph test above would notice if something started to. Anything
-    // else appearing here needs a reader and a line in the runbook.
-    expect(names).toEqual([...WORKER_JOB_VARS, "BAS_ASK_DATABASE_URL", "NODE_ENV"].sort());
+    // BAS_ASK_DATABASE_URL is read since Phase 6 (2026-11-16): the planner
+    // questions run their SQL as bas_analyze. Anything else appearing here
+    // needs a reader and a line in the runbook.
+    expect(WORKER_JOB_VARS).toContain("BAS_ASK_DATABASE_URL");
+    expect(names).toEqual([...WORKER_JOB_VARS, "NODE_ENV"].sort());
   });
 
   it("the readers take what they declare, trimmed, and name DATABASE_URL when it is missing", () => {
     expect(DATABASE_URL_VAR).toBe("DATABASE_URL");
     expect(ANTHROPIC_API_KEY_VAR).toBe("ANTHROPIC_API_KEY");
     expect(readSchedulerJobEnv({ DATABASE_URL: " postgresql://x " })).toEqual({ databaseUrl: "postgresql://x" });
-    expect(readWorkerJobEnv({ DATABASE_URL: "postgresql://x", ANTHROPIC_API_KEY: " k " })).toEqual({ databaseUrl: "postgresql://x", anthropicApiKey: "k" });
+    expect(readWorkerJobEnv({ DATABASE_URL: "postgresql://x", ANTHROPIC_API_KEY: " k ", BAS_ASK_DATABASE_URL: " postgresql://ask " })).toEqual({
+      databaseUrl: "postgresql://x",
+      anthropicApiKey: "k",
+      askDatabaseUrl: "postgresql://ask",
+    });
+    expect(readWorkerJobEnv({ DATABASE_URL: "postgresql://x", ANTHROPIC_API_KEY: "k" }).askDatabaseUrl).toBeNull();
+    // The planner's unavailability names the variables, never a value.
+    expect(plannerUnavailableReason({ anthropicApiKey: "k", askDatabaseUrl: null })).toBe("BAS_ASK_DATABASE_URL is not set, so the planner could not be asked.");
+    expect(plannerUnavailableReason({ anthropicApiKey: null, askDatabaseUrl: null })).toBe(
+      "ANTHROPIC_API_KEY and BAS_ASK_DATABASE_URL are not set, so the planner could not be asked.",
+    );
+    expect(plannerUnavailableReason({ anthropicApiKey: "k", askDatabaseUrl: "postgresql://ask" })).toBeNull();
     expect(readWorkerJobEnv({ DATABASE_URL: "postgresql://x", ANTHROPIC_API_KEY: "  " }).anthropicApiKey).toBeNull();
     expect(() => readWorkerJobEnv({ ANTHROPIC_API_KEY: "k" })).toThrow(/DATABASE_URL is not set/);
     expect(() => readSchedulerJobEnv({})).toThrow(/scheduler job/);
     // The web app's variables mean nothing to them.
-    expect(readWorkerJobEnv({ DATABASE_URL: "postgresql://x", ALLOWED_EMAIL_DOMAINS: "", AUTH_SECRET: "" })).toEqual({ databaseUrl: "postgresql://x", anthropicApiKey: null });
+    expect(readWorkerJobEnv({ DATABASE_URL: "postgresql://x", ALLOWED_EMAIL_DOMAINS: "", AUTH_SECRET: "" })).toEqual({ databaseUrl: "postgresql://x", anthropicApiKey: null, askDatabaseUrl: null });
   });
 });
 

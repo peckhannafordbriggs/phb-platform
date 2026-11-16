@@ -209,6 +209,7 @@ function usage(over: Partial<ReportsUsage> = {}): ReportsUsage {
     ],
     runsInDatabase: 1,
     ceiling: { ...DEFAULT_SAFETY_CEILING, updatedAt: null, updatedBy: null },
+    planner: { answered: 0, unanswered: 0, skipped: 0, spend: 0 },
     ...over,
   };
 }

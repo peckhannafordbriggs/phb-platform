@@ -41,6 +41,12 @@ import { seedBasReportLibrary } from "@/prisma/bas-report-library";
 import { GET as pdfRoute } from "@/app/api/modules/bas/reports/runs/[runId]/pdf/route";
 import { POST as retryRoute } from "@/app/api/modules/bas/reports/runs/[runId]/pdf/retry/route";
 import { reportDocument } from "./fixtures/bas-report-document";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { REPORT_CSS, ReportView } from "@/lib/modules/bas/reports/engine/render";
+import { SHOW_HOW_LABEL } from "@/lib/modules/bas/reports/engine/planner-display";
+import { PlannerHowToggle } from "@/app/(modules)/bas/reports-planner-how";
+import { PLANNER_COVERAGE, PLANNER_INTERPRETATION, PLANNER_SQL, plannerAnswer, reportWithPlanner } from "./fixtures/bas-report-planner-answer";
 import {
   createEmployee,
   disconnectDb,
@@ -195,6 +201,52 @@ describe("the renderer (real Chromium, the one the image and CI install)", () =>
       });
       const pdf = await readPdf(bytes);
       expect(pdf.text[0]).toContain('ZZTEST <b>bold</b> & "quoted"');
+    } finally {
+      await renderer.close();
+    }
+  }, 120_000);
+
+  /**
+   * Planner answers (2026-11-16): the stored page has no "Show how this was
+   * answered" toggle at all, and even the WEB markup - toggle and open panel
+   * included - prints without them, because REPORT_CSS hides `.planner-how`
+   * under @media print. Both halves through the real Chromium.
+   */
+  it("prints a planner answer as the question and its prose only, never the web view's toggle or panel", async () => {
+    const shortfall = "Any figure above describes 3 days of the 7 days asked about.";
+    const doc = reportWithPlanner([plannerAnswer({ provenance: { ...plannerAnswer().provenance!, coverageShortfall: shortfall } })]);
+    const webBody = renderToStaticMarkup(
+      createElement(ReportView, {
+        document: doc,
+        plannerDetails: (answer, timezone) => createElement(PlannerHowToggle, { answer, timezone, defaultOpen: true }),
+      }),
+    );
+    expect(webBody).toContain(PLANNER_SQL.slice(0, 30));
+    const webPage = `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>${REPORT_CSS}</style></head><body>${webBody}</body></html>`;
+    const renderer = createChromiumRenderer();
+    try {
+      for (const html of [renderReportHtml(doc), webPage]) {
+        const text = (await readPdf(await renderer.render({ html, title: "ZZTEST planner", period: "2026-09-22 to 2026-09-29" }))).text.join(" ");
+        expect(text).toContain("Planner questions");
+        expect(text).toContain("VAV-7 serving rooms 111-112 was the warmest zone");
+        expect(text).toContain("VAV-8 did not move all week");
+        // The coverage shortfall is printed, as the one amber line this answer has.
+        expect(text).toContain(shortfall);
+        for (const hidden of [
+          SHOW_HOW_LABEL,
+          "Hide",
+          "bas_readings r JOIN",
+          PLANNER_INTERPRETATION.slice(0, 40),
+          PLANNER_COVERAGE.slice(0, 40),
+          "not current conditions",
+          "first_reading",
+          "Read 11 points",
+          "model calls",
+          "$0.2313",
+        ]) {
+          expect(text, hidden).not.toContain(hidden);
+        }
+      }
     } finally {
       await renderer.close();
     }

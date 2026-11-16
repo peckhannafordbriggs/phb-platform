@@ -3556,3 +3556,78 @@ list in the runbook is wrong without anything failing.
 `tests/bas-reports-phase5-building.test.ts`; `runbook.md` → *Reports: a
 VAV, air handler, plant or DX finding looks wrong, or a unit reads "Not
 judged"*.
+
+---
+
+## 86 · A report's planner questions run on the Analyze tab's own path, after the narrative, shown and never tracked
+
+**What I did (2026-11-16).** Reports Phase 6 made planner questions run.
+Steps 4-9 of an Analyze question moved from `analyze/service.ts` into
+`analyze/core.ts`, unchanged, and both the tab and the report engine call
+that one function. A report's question gets the same guard, the same
+read-only role, the same provenance and the same no-data rule as a
+question typed on the tab; what differs is around it - no rate limit, no
+`bas.question_asked` row (the run stores the question, SQL and outcome),
+and a fixed context in the plan call's user turn.
+
+**Why a separate file and not an export of `service.ts`.** The report
+worker must not import `lib/env.ts` (§ 80's amendment: it parses the web
+app's boot schema on import, and the worker died on it), and `service.ts`
+reads the environment through `analyze/env.ts`. `core.ts` reads nothing but
+its arguments. `tests/bas-reports-jobs-env.test.ts` walks the worker's
+import graph and boots it with only the template's variables.
+
+**Why after the narrative.** The ceiling is shared. The computed findings
+are the report; a custom question is an addition. Run in D3's order, a
+report with ten planner questions could spend the ceiling and leave the
+findings without their likely cause and next check. Run last, the
+planner gets what is left and says by name what it skipped.
+
+**Why checked after, not only told before.** The plan call is told the
+building, stations and period, and that no one can answer a clarifying
+question. Prompts get ignored (the planner's own header says so), so the
+platform compares the provenance it computed with the context and prints
+an amber note for a point on another building or a different period. The
+`bas_analyze` role is still what stops a read of a report table; a test
+asks the planner for `bas_report_runs` and the database refuses it.
+
+**Why shown, never tracked.** A planner answer is model-written SQL and
+model-written prose. A fingerprint over that would say an issue "cleared"
+when the model phrased it differently. So the answers carry no marker, no
+finding row and no part in a status, and the section says so once.
+
+**Why the estimate is a history average.** The narrative estimates from
+prompt length; a planner question's cost is mostly the schema block and
+whatever the model writes, which prompt length does not predict. The
+counters on the run (`planner_asked`, `planner_cost_usd`) give the
+average over the last 20 runs that asked any, and a starting $0.25 before
+there is any (above the dearer of the two measured office questions). A
+CHECK holds the planner's cost within the run's, which is also what
+caught a mutation that dropped the planner's cost from the total.
+
+**Why the page shows only the answer (same day, twice).** The first
+version printed everything the Analyze tab shows; the second still
+printed a table and a provenance line; in the office's run both buried
+two answers. A report is read by somebody deciding what to do about a
+building, often from the PDF. So the page and the PDF carry the question
+and the planner's prose - which already names the numbers that matter -
+and two amber lines, each the platform's verdict that the answer may not
+mean what it reads as: the note for another building or period (it may be
+about the wrong thing), and the coverage shortfall (a number in it
+describes less of the period than it says). The shortfall was in the
+panel for one revision and came back to the page at the owner's direction
+the same day, which is where the Analyze tab has always kept it. The
+rest is behind a button on the web run view for whoever wants to check
+the planner's work. The summariser's own coverage paragraph is
+split off at display time by a conservative pattern rule, because the
+answer is stored as one string and the stored document is not rewritten.
+The button is a slot the web page fills rather than a flag on the
+template, so the static render the worker prints has no way to include
+it, and a print rule covers the web page's own Print.
+
+**What breaks if you undo it.** Duplicate steps 4-9 and the report and
+the tab drift on what "no data" means. Import `service.ts` from the
+engine and the worker boots the web app's environment. Run planner
+questions first and a large custom list can starve the narrative.
+Fingerprint planner answers and New / Cleared becomes a measure of the
+model's wording.

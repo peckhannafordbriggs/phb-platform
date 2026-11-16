@@ -150,6 +150,11 @@ export type BasErrorCode =
   /** Still on a report. Refused, never cascaded. 409. */
   | "personal_question_in_use"
   /**
+   * A promotion named an equipment type or a point role the vocabulary
+   * does not have (Reports, Phase 6). 422.
+   */
+  | "unknown_vocabulary_key"
+  /**
    * The owner's address. The owner is always a recipient and never a row,
    * so it can be neither added nor removed. 409.
    */

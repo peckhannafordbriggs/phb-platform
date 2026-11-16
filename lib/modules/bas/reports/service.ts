@@ -8,11 +8,15 @@ import { basSiteScope } from "../service";
 import { SETTINGS_ROW_ID, type SafetyCeilingView } from "./ceiling";
 import { readSafetyCeiling } from "./ceiling-read";
 import { enqueueRun } from "./engine/queue";
+import { randomBytes } from "node:crypto";
 import {
+  DEFAULT_MIN_COVERAGE,
+  LIBRARY_SECTIONS,
   describeRequiredRoles,
   parseRoleRequirements,
   sectionLabel,
   type LibraryQuestionKind,
+  type RoleRequirement,
 } from "./library";
 import { isPresetKey, presetLabel, presetMatching, type PresetKey } from "./presets";
 import { isExternalAddress, normaliseEmail, COMPANY_EMAIL_DOMAIN } from "./recipients";
@@ -33,6 +37,7 @@ import {
   type OwnerOption,
   type OwnerTransfer,
   type PersonalQuestionView,
+  type PromotionOptions,
   type RecipientView,
   type ReportDetail,
   type ReportOptions,
@@ -46,6 +51,7 @@ import {
 import type {
   AddRecipientInput,
   CreateReportInput,
+  PromoteQuestionInput,
   QuestionSelection,
   ReportStateAction,
   SafetyCeilingInput,
@@ -437,6 +443,132 @@ export async function listLibraryQuestions(): Promise<LibraryQuestionView[]> {
       addedBy: r.addedBy?.email ?? null,
       createdAt: r.createdAt.toISOString(),
     };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Promotion to the shared library (Reports, Phase 6)
+// ---------------------------------------------------------------------------
+
+/** The Summary's questions are derived from the rest; nothing is promoted into it. */
+const PROMOTABLE_SECTIONS = LIBRARY_SECTIONS.filter((s) => s.key !== "summary");
+
+/**
+ * What the promotion form needs. Every BAS user may ask - the answer says
+ * `canPromote: false` to anyone who is not a module admin, and the screen
+ * offers nothing - because the Questions page is everyone's.
+ */
+export async function getPromotionOptions(viewer: Viewer): Promise<PromotionOptions> {
+  const [admin, types, roles] = await Promise.all([
+    canAdminister(viewer),
+    prisma.basEquipmentType.findMany({ select: { equipType: true, displayName: true }, orderBy: { displayName: "asc" } }),
+    prisma.basPointRole.findMany({ select: { pointRole: true, displayName: true }, orderBy: { displayName: "asc" } }),
+  ]);
+  return {
+    canPromote: admin,
+    sections: PROMOTABLE_SECTIONS.map((s) => ({ key: s.key, label: s.label })),
+    equipmentTypes: types.map((t) => ({ key: t.equipType, label: t.displayName })),
+    roles: roles.map((r) => ({ key: r.pointRole, label: r.displayName })),
+  };
+}
+
+/**
+ * A module admin puts one of their own saved questions into the shared
+ * library as a planner-kind question (the plan's caveat in §A: an admin
+ * cannot add a computed question, which is code; a planner question is the
+ * same mechanism as a custom one, with metadata). Everyone with the BAS
+ * grant then sees it in the editor's checklist under its section.
+ *
+ * The admin's OWN question: the Questions page lists nobody else's, and a
+ * question somebody else wrote reaches the shared library through them.
+ * The personal question stays where it is - reports that carry it keep
+ * carrying it - and the library gets a copy of its text.
+ *
+ * Applies-to and required roles are what the engine judges the building
+ * against before the planner is asked (run.ts): a question for VAVs on a
+ * building with none is Not applicable and costs nothing. Each role given
+ * is required on its own; the alternative groups the twenty use ("active
+ * setpoint, or heating and cooling setpoints") are not offered here.
+ *
+ * Refused for anyone who is not a module admin (`admin_required`, 403),
+ * for text the library already holds (`question_exists`), and for a key
+ * the vocabulary does not have. Audited as `bas.library_question_promoted`
+ * in the same transaction.
+ */
+export async function promotePersonalQuestion(
+  viewer: Viewer,
+  input: PromoteQuestionInput,
+): Promise<{ libraryQuestionId: string; key: string }> {
+  if (!(await canAdminister(viewer))) {
+    throw new BasError("admin_required", "Only a module admin can add a question to the shared library.");
+  }
+  const personal = await loadOwnPersonalQuestion(viewer, input.personalQuestionId);
+  const appliesTo = [...new Set(input.appliesToEquipment)];
+  const roleKeys = [...new Set(input.requiredRoles)];
+
+  const [types, roles] = await Promise.all([
+    appliesTo.length === 0
+      ? []
+      : prisma.basEquipmentType.findMany({ where: { equipType: { in: appliesTo } }, select: { equipType: true, displayName: true } }),
+    roleKeys.length === 0
+      ? []
+      : prisma.basPointRole.findMany({ where: { pointRole: { in: roleKeys } }, select: { pointRole: true, displayName: true } }),
+  ]);
+  const unknown = [
+    ...appliesTo.filter((k) => !types.some((t) => t.equipType === k)),
+    ...roleKeys.filter((k) => !roles.some((r) => r.pointRole === k)),
+  ];
+  if (unknown.length > 0) {
+    throw new BasError("unknown_vocabulary_key", `Not in the vocabulary: ${unknown.join(", ")}.`);
+  }
+
+  const requiredRoles: RoleRequirement[] = roleKeys.map((key) => ({
+    label: roles.find((r) => r.pointRole === key)!.displayName,
+    anyOf: [[key]],
+  }));
+  const appliesToLabel =
+    appliesTo.length === 0 ? "All" : appliesTo.map((k) => types.find((t) => t.equipType === k)!.displayName).join(", ");
+
+  return prisma.$transaction(async (tx) => {
+    const clash = await tx.basLibraryQuestion.findFirst({
+      where: { text: { equals: personal.text, mode: "insensitive" } },
+      select: { libraryQuestionId: true },
+    });
+    if (clash !== null) {
+      throw new BasError("question_exists", "The shared library already has that question.");
+    }
+    const last = await tx.basLibraryQuestion.aggregate({ _max: { position: true } });
+    // A key nobody types: the library's keys are stable handles, and a
+    // promoted question has no spec row number to take one from.
+    const key = `planner_${randomBytes(5).toString("hex")}`;
+    const created = await tx.basLibraryQuestion.create({
+      data: {
+        key,
+        section: input.section,
+        position: (last._max.position ?? 0) + 1,
+        text: personal.text,
+        kind: "planner",
+        analysisFn: null,
+        appliesToLabel,
+        appliesToEquipment: appliesTo,
+        requiredRoles: requiredRoles as unknown as Prisma.InputJsonValue,
+        minCoverage: DEFAULT_MIN_COVERAGE,
+        enabled: true,
+        addedById: viewer.id,
+      },
+      select: { libraryQuestionId: true, key: true },
+    });
+    await audit(tx, "bas.library_question_promoted", viewer, {
+      libraryQuestionId: created.libraryQuestionId.toString(),
+      key: created.key,
+      personalQuestionId: personal.personalQuestionId.toString(),
+      text: personal.text,
+      section: input.section,
+      sectionLabel: sectionLabel(input.section),
+      appliesToEquipment: appliesTo,
+      requiredRoles: roleKeys,
+    });
+    return { libraryQuestionId: created.libraryQuestionId.toString(), key: created.key };
   });
 }
 
