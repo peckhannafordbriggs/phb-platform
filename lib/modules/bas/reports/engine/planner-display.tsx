@@ -12,16 +12,16 @@ import type { PlannerAnswer } from "./types";
  *
  *   the page and the PDF    the question and the planner's prose answer -
  *                           its paragraphs and its list, as written - less
- *                           its coverage paragraph (below). The amber note
- *                           for a query that touched another building or
- *                           another period is the one other thing shown,
- *                           and it is render.tsx's.
+ *                           its coverage paragraph (below). Two amber lines
+ *                           are the only other things shown, both
+ *                           render.tsx's: the note for a query that touched
+ *                           another building or period, and the coverage
+ *                           shortfall.
  *   the web run view only   `PlannerHowPanel` behind a kit Button, "Show
  *                           how this was answered": the coverage
  *                           paragraph, how the question was read, the
- *                           period and every point, the gap and coverage
- *                           figures, the results table, the SQL and the
- *                           cost. The PDF never has it: the stored HTML is
+ *                           period and every point, the gap figures, the
+ *                           results table, the SQL and the cost. The PDF never has it: the stored HTML is
  *                           rendered with no slot for it (html.ts), and
  *                           REPORT_CSS hides it under `@media print` for
  *                           the web page's own Print.
@@ -133,7 +133,8 @@ export function hasPlannerDetails(a: PlannerAnswer): boolean {
 /**
  * Everything behind "Show how this was answered": the summariser's coverage
  * paragraph, how the planner read the question, the period it queried with
- * the gap and coverage figures, every point name kept on the run, the
+ * the gap figures (the coverage shortfall is on the page), every point name
+ * kept on the run, the
  * results table (every row the run kept, dates local), the SQL and the
  * cost. The web run view only.
  */
@@ -163,7 +164,6 @@ export function PlannerHowPanel({ answer: a, timezone }: { answer: PlannerAnswer
           {p.gapHours !== null && p.gapHours > 0 ? ` · ${p.gapHours} hours of it unrecorded` : ""}
         </p>
       )}
-      {p !== null && p.coverageShortfall !== null && <p>{p.coverageShortfall}</p>}
       {p !== null && p.pointCount > 0 && (
         <p>
           <strong>

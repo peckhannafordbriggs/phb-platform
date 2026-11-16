@@ -509,16 +509,21 @@ describe("a planner answer on the page and in the PDF", () => {
     expect(PLANNER_SECTION_NOTE).toBe("Answered by the Analyze planner from this building's data for this period; these answers do not change the building status.");
   });
 
-  it("keeps the amber note for another building or period on the page, and moves the coverage shortfall to the panel", () => {
+  it("keeps two amber lines on the page: another building or period, and the coverage shortfall - and not in the panel twice", () => {
     const answer = plannerAnswer({
       notes: ["This answer read 2 points on PHB Spring Grove, not on PHB Steel Place: Temp1, Temp2."],
       provenance: { ...plannerAnswer().provenance!, coverageShortfall: "Any figure above describes 3 days of the 7 days asked about." },
     });
     const page = plannerSection(renderReportHtml(reportWithPlanner([answer])));
-    expect(page).toContain('<p class="partial">This answer read 2 points on PHB Spring Grove, not on PHB Steel Place: Temp1, Temp2.</p>');
-    expect(page).not.toContain("Any figure above describes");
+    expect(page).toContain(
+      '<p class="partial">This answer read 2 points on PHB Spring Grove, not on PHB Steel Place: Temp1, Temp2.</p><p class="partial">Any figure above describes 3 days of the 7 days asked about.</p>',
+    );
+    expect(page.match(/class="partial"/g)).toHaveLength(2);
     const panel = renderToStaticMarkup(createElement(PlannerHowToggle, { answer, timezone: NY_ZONE, defaultOpen: true }));
-    expect(panel).toContain("Any figure above describes 3 days of the 7 days asked about.");
+    expect(panel).not.toContain("Any figure above describes");
+    // No shortfall, no second line.
+    const covered = plannerSection(renderReportHtml(reportWithPlanner([plannerAnswer()])));
+    expect(covered).not.toContain('class="partial"');
   });
 
   it("shows a question with no answer by its reason", () => {

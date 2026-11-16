@@ -12544,7 +12544,7 @@ make in a scheduled run - reword the question on the report to say which.
 On the page and in the PDF a planner answer is only the question and the
 planner's prose. Its coverage paragraph ("This covers … these are not
 current conditions"), how the question was read, the period and every
-point, the coverage-shortfall figure, the results table, the SQL and the
+point, the results table, the SQL and the
 cost are on the run and on the web run view behind *Show how this was
 answered* under each answer. The PDF never carries them, by design. A run
 stored before 2026-11-16 keeps its old, longer stored page and PDF (the
@@ -12552,6 +12552,13 @@ web view shows the new layout from the same document). If a coverage
 sentence still shows on the page, the summariser worded it in a way
 `COVERAGE_PATTERNS` (`engine/planner-display.tsx`) does not recognise -
 the rule is deliberately conservative - and a pattern can be added there.
+
+**"Any figure above describes N days of the M asked about"** in amber
+under a planner answer is the coverage shortfall: the readings the
+platform holds do not span the period the answer is about, so a number in
+it (an average, a count) describes less than it appears to. It is printed
+on the page and in the PDF on purpose, as on the Analyze tab. Check
+Collection Health for the gap; nothing is wrong with the report.
 
 **An amber note under an answer** - *"This answer read N points on
 <other building>"* or *"The query covered … not the report's period"* - is

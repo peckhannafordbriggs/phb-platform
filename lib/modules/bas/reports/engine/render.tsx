@@ -588,10 +588,14 @@ export type PlannerDetailsSlot = (answer: PlannerAnswer, timezone: string) => Re
  * 2026-11-16): its words as the sub-heading and the planner's prose answer,
  * paragraphs and list as written, less the coverage paragraph that
  * `splitPlannerAnswer` moves to the web view's panel. A question with no
- * answer shows why instead. The amber note for a query that read another
- * building or another period is the one other thing printed. Everything
- * else - the coverage paragraph, the reading, the points, the rows, the SQL,
- * the cost - is on the run and behind the web view's button, never here.
+ * answer shows why instead. Two amber lines are the only other things
+ * printed, because each says the answer may not mean what it reads as: the
+ * note for a query that read another building or another period, and the
+ * coverage shortfall ("Any figure above describes N days of the M asked
+ * about"), the platform's sentence Analyze never lets anyone collapse.
+ * Everything else - the coverage paragraph, the reading, the points, the
+ * rows, the SQL, the cost - is on the run and behind the web view's
+ * button, never here.
  */
 function PlannerQuestion({ a, timezone, details }: { a: PlannerAnswer; timezone: string; details?: PlannerDetailsSlot }) {
   const label = plannerOutcomeLabel(a.outcome);
@@ -614,6 +618,7 @@ function PlannerQuestion({ a, timezone, details }: { a: PlannerAnswer; timezone:
           {note}
         </p>
       ))}
+      {a.provenance !== null && a.provenance.coverageShortfall !== null && <p className="partial">{a.provenance.coverageShortfall}</p>}
       {details?.(a, timezone)}
     </div>
   );

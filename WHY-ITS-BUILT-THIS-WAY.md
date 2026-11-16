@@ -3611,13 +3611,14 @@ printed a table and a provenance line; in the office's run both buried
 two answers. A report is read by somebody deciding what to do about a
 building, often from the PDF. So the page and the PDF carry the question
 and the planner's prose - which already names the numbers that matter -
-and the amber note for another building or period, which is the
-platform's verdict that the answer may be about the wrong thing. The
-rest, the coverage-shortfall figure included, is behind a button on the
-web run view for whoever wants to check the planner's work. That is a
-deliberate departure from the Analyze tab, where the shortfall is never
-collapsible: here it is one click away on the web and absent from the
-PDF, at the owner's direction. The summariser's own coverage paragraph is
+and two amber lines, each the platform's verdict that the answer may not
+mean what it reads as: the note for another building or period (it may be
+about the wrong thing), and the coverage shortfall (a number in it
+describes less of the period than it says). The shortfall was in the
+panel for one revision and came back to the page at the owner's direction
+the same day, which is where the Analyze tab has always kept it. The
+rest is behind a button on the web run view for whoever wants to check
+the planner's work. The summariser's own coverage paragraph is
 split off at display time by a conservative pattern rule, because the
 answer is stored as one string and the stored document is not rewritten.
 The button is a slot the web page fills rather than a flag on the

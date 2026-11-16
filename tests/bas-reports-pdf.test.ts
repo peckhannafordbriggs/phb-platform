@@ -46,7 +46,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { REPORT_CSS, ReportView } from "@/lib/modules/bas/reports/engine/render";
 import { SHOW_HOW_LABEL } from "@/lib/modules/bas/reports/engine/planner-display";
 import { PlannerHowToggle } from "@/app/(modules)/bas/reports-planner-how";
-import { PLANNER_COVERAGE, PLANNER_INTERPRETATION, PLANNER_SQL, reportWithPlanner } from "./fixtures/bas-report-planner-answer";
+import { PLANNER_COVERAGE, PLANNER_INTERPRETATION, PLANNER_SQL, plannerAnswer, reportWithPlanner } from "./fixtures/bas-report-planner-answer";
 import {
   createEmployee,
   disconnectDb,
@@ -213,7 +213,8 @@ describe("the renderer (real Chromium, the one the image and CI install)", () =>
    * under @media print. Both halves through the real Chromium.
    */
   it("prints a planner answer as the question and its prose only, never the web view's toggle or panel", async () => {
-    const doc = reportWithPlanner();
+    const shortfall = "Any figure above describes 3 days of the 7 days asked about.";
+    const doc = reportWithPlanner([plannerAnswer({ provenance: { ...plannerAnswer().provenance!, coverageShortfall: shortfall } })]);
     const webBody = renderToStaticMarkup(
       createElement(ReportView, {
         document: doc,
@@ -229,6 +230,8 @@ describe("the renderer (real Chromium, the one the image and CI install)", () =>
         expect(text).toContain("Planner questions");
         expect(text).toContain("VAV-7 serving rooms 111-112 was the warmest zone");
         expect(text).toContain("VAV-8 did not move all week");
+        // The coverage shortfall is printed, as the one amber line this answer has.
+        expect(text).toContain(shortfall);
         for (const hidden of [
           SHOW_HOW_LABEL,
           "Hide",

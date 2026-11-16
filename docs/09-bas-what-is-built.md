@@ -1282,10 +1282,11 @@ less the summariser's coverage paragraph ("This covers 22 September …
 these are not current conditions"), which `splitPlannerAnswer` moves to
 the panel by a conservative rule (a later, non-list paragraph that opens
 or reads the way those sentences do; anything unrecognised stays on the
-page). The amber note for a query that read another building or another
-period is the one exception and stays visible. Everything else - the
-coverage paragraph, how the question was read, the period and every
-point, the coverage-shortfall and gap figures, the results table (dates
+page). Two amber lines are the exceptions and stay visible on both: the
+note for a query that read another building or another period, and the
+coverage shortfall ("Any figure above describes N days of the M asked
+about"). Everything else - the coverage paragraph, how the question was
+read, the period and every point, the gap figures, the results table (dates
 local), the SQL and the cost - is behind a kit secondary Button, *Show
 how this was answered*, on the web run view only
 (`app/(modules)/bas/reports-planner-how.tsx`, filling `ReportView`'s
