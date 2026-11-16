@@ -67,8 +67,11 @@ jobs:
       # way the BAS Reports worker does (Dockerfile.bas-reports installs the
       # same browser the same way). The version is pinned by `playwright` in
       # package-lock.json; --with-deps adds its apt packages on the runner.
+      # --only-shell: the headless shell is the binary a headless launch runs
+      # and the only one the image carries, so the tests print with exactly
+      # what the worker has and fail here if that is ever not enough.
       - name: Install Chromium for the PDF tests
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
 
       # lib/generated is gitignored, so nothing typechecks until this runs.
       - name: Generate Prisma client

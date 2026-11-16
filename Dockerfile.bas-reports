@@ -25,30 +25,55 @@ FROM node:24-bookworm-slim
 # fixed path, made world-readable, is what Playwright documents for Docker.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
+# /app belongs to `node` from its first layer, and every COPY below says
+# --chown. The image used to end with `chown -R node:node /app`, and a layer
+# that changes a file's owner holds a second copy of the file: all of
+# node_modules and the source, twice (2026-11-13, the image was 6.56 GB).
+# tests/deploy-guards.test.ts refuses a recursive chown of /app here.
+RUN mkdir /app && chown node:node /app
 WORKDIR /app
+
+# The install runs as `node`, so node_modules is the user's own without a
+# chown either.
+USER node
 
 # Same order as the web Dockerfile: postinstall runs `prisma generate`, which
 # needs the schema and config before `npm ci`.
-COPY package.json package-lock.json ./
-COPY prisma ./prisma
-COPY prisma.config.ts ./
-RUN npm ci
+COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node prisma ./prisma
+COPY --chown=node:node prisma.config.ts ./
 
-# Chromium, at the version `playwright` in package-lock.json pins, with the
-# apt packages it needs on bookworm (--with-deps is Playwright's own list, the
-# same step CI runs before the PDF tests). About 400 MB, accepted in the plan
-# (docs/bas-reports-tab-plan.md, "PDF method") for one rendering of one page
-# that the screen and the PDF then cannot disagree on.
-RUN npx playwright install --with-deps chromium \
+# Production dependencies only: no eslint, vitest, typescript, tailwind or
+# jsdom in an image that runs two scripts. What the scripts load at run time
+# - tsx itself, and dotenv through scripts/load-env.ts - is in `dependencies`
+# for this line's sake, and tests/bas-reports-jobs-env.test.ts walks both
+# scripts' import graphs against that list. The `prisma` CLI survives
+# --omit=dev (it is an optional peer of @prisma/client), which is what lets
+# postinstall generate the client here; lib/generated is in .dockerignore, so
+# this is the only copy and the COPY below cannot replace it. The download
+# cache goes in the same layer it was written in.
+RUN npm ci --omit=dev \
+ && npm cache clean --force \
+ && test -f lib/generated/prisma/client.ts
+
+# Chromium's headless shell, at the version `playwright` in package-lock.json
+# pins, with the apt packages it needs on bookworm (--with-deps is
+# Playwright's own list, the same step CI runs before the PDF tests).
+# --only-shell because a headless launch - the only kind render.ts makes -
+# already runs the headless shell and never the full browser: a plain
+# `install chromium` downloads both, and the full one sat in the image
+# unused. One rendering of one page that the screen and the PDF then cannot
+# disagree on (docs/bas-reports-tab-plan.md, "PDF method"). As root, for apt.
+USER root
+RUN npx playwright install --with-deps --only-shell chromium \
  && chmod -R a+rX /ms-playwright \
- && rm -rf /var/lib/apt/lists/*
-
-COPY . .
-RUN npx prisma generate && chown -R node:node /app
-
-ENV NODE_ENV=production
+ && rm -rf /var/lib/apt/lists/* /root/.npm
 
 USER node
+
+COPY --chown=node:node . .
+
+ENV NODE_ENV=production
 
 # The image's own check, as the user the jobs run as: the browser launches
 # and prints a page, or the build fails here rather than on the first report

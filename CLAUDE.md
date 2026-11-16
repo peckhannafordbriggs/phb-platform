@@ -1608,6 +1608,21 @@ own scaler query). The worker's scaler query gained `OR pdf_status =
 merge. `WHY-ITS-BUILT-THIS-WAY.md` § 83; `runbook.md` → *Reports: the
 PDF*; `docs/design/bas-reports-pdf/`.
 
+**The Reports jobs image is production dependencies and the headless shell
+only (2026-11-13).** `Dockerfile.bas-reports` built to 6.56 GB; it is 2.9 GB
+from the same source. `chown -R node:node /app` stored `/app` twice, so
+`/app` is the user's from its first layer and every `COPY` says `--chown`;
+the install is `npm ci --omit=dev`, run as `node`; and Playwright installs
+with `--only-shell`, because a headless launch never runs the full browser
+(the sample report prints byte-identical in both images, dates and id
+aside). **A package a job loads at run time must be in `dependencies`**:
+`tsx` and `dotenv` moved there, and `tests/bas-reports-jobs-env.test.ts`
+walks both scripts' import graphs against the list. The `prisma` CLI stays
+a development dependency and survives `--omit=dev` as an optional peer of
+`@prisma/client`; the install asserts the generated client exists. No
+template or job env change. `runbook.md` → *Reports: a job execution fails
+with `Cannot find package` or `ERR_MODULE_NOT_FOUND`*.
+
 **Reports - every question on the page, in its own words (2026-11-13).**
 The rendered report lists each question a report carries as a sub-heading
 in the spec's words inside its section - *Q3. What percent of occupied

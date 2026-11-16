@@ -681,7 +681,7 @@ describe("Chromium lives in the job image and nowhere the web app serves", () =>
       .split(/\r?\n/)
       .filter((l) => !l.trim().startsWith("#"))
       .join("\n");
-    expect(jobs).toMatch(/npx playwright install --with-deps chromium/);
+    expect(jobs).toMatch(/npx playwright install --with-deps --only-shell chromium/);
   });
 
   it("every read of a run in lib/ and app/ selects its columns by name, and only loadRunPdf selects the bytes", () => {
