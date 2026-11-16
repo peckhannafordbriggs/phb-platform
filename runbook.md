@@ -12540,15 +12540,18 @@ Usage page. Reword the question or collect the points; nothing is broken.
 **"The planner asked: …"** means it needed a choice nobody is present to
 make in a scheduled run - reword the question on the report to say which.
 
-**Where the SQL, the points and the cost went.** On the page and in the
-PDF a planner answer shows only the answer, a small table and one grey
-"Read N points on … for …" line. Everything else is on the run and on the
-web run view behind *Show how this was answered* under each answer - the
-planner's reading of the question, every point, the period queried, the
-SQL and the cost. The PDF never carries it, by design; a run stored before
-2026-11-16 keeps its old, longer stored page and PDF (the web view shows
-the new layout from the same document). A table cut to "12 of N rows
-shown" has every row the planner returned up to 50 on the run's document.
+**Where the table, the SQL, the points and the coverage sentence went.**
+On the page and in the PDF a planner answer is only the question and the
+planner's prose. Its coverage paragraph ("This covers … these are not
+current conditions"), how the question was read, the period and every
+point, the coverage-shortfall figure, the results table, the SQL and the
+cost are on the run and on the web run view behind *Show how this was
+answered* under each answer. The PDF never carries them, by design. A run
+stored before 2026-11-16 keeps its old, longer stored page and PDF (the
+web view shows the new layout from the same document). If a coverage
+sentence still shows on the page, the summariser worded it in a way
+`COVERAGE_PATTERNS` (`engine/planner-display.tsx`) does not recognise -
+the rule is deliberately conservative - and a pattern can be added there.
 
 **An amber note under an answer** - *"This answer read N points on
 <other building>"* or *"The query covered … not the report's period"* - is

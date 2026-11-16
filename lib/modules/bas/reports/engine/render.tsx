@@ -12,7 +12,7 @@
 import { BAS_LIBRARY_QUESTIONS, describeRequiredRoles } from "../library";
 import { COLLECTION_STOPPED, DATA_HEALTH_QUESTION, incidentPoints } from "./analysis/data-health";
 import { STATUS_LABELS } from "./rollup";
-import { formatPlannerCell, plannerReadLine, plannerTableView } from "./planner-display";
+import { splitPlannerAnswer } from "./planner-display";
 import type { ReactNode } from "react";
 import type {
   EquipmentTypeFound,
@@ -115,6 +115,7 @@ export const REPORT_CSS = `
 .bas-report .planner-question .answer p { margin: .5rem 0; }
 .bas-report .planner-question .answer ul { list-style: disc; }
 .bas-report .planner-how { margin: .35rem 0 1rem; }
+.bas-report .planner-how-table { overflow-x: auto; }
 .bas-report .planner-how-panel { margin-top: .5rem; padding: .5rem .75rem; border: 1px solid #e6e3ee; border-radius: .375rem; background: #f5f4f8; font-size: .8125rem; }
 .bas-report .planner-how-panel p { margin: 0 0 .35rem; }
 @media print { .bas-report .planner-how { display: none !important; } }
@@ -583,26 +584,25 @@ function AnswerText({ text }: { text: string }) {
 export type PlannerDetailsSlot = (answer: PlannerAnswer, timezone: string) => ReactNode;
 
 /**
- * One planner question as the page and the PDF show it (2026-11-16): its
- * words, the answer in prose or why there is none, the amber checks, a
- * small results table, and one grey line saying what was read. How the
- * planner got there - its reading, every point, the SQL, the cost - is on
- * the run and behind the web view's button, not here.
+ * One planner question as the page and the PDF show it (revised
+ * 2026-11-16): its words as the sub-heading and the planner's prose answer,
+ * paragraphs and list as written, less the coverage paragraph that
+ * `splitPlannerAnswer` moves to the web view's panel. A question with no
+ * answer shows why instead. The amber note for a query that read another
+ * building or another period is the one other thing printed. Everything
+ * else - the coverage paragraph, the reading, the points, the rows, the SQL,
+ * the cost - is on the run and behind the web view's button, never here.
  */
-function PlannerQuestion({ a, doc, details }: { a: PlannerAnswer; doc: ReportDocument; details?: PlannerDetailsSlot }) {
+function PlannerQuestion({ a, timezone, details }: { a: PlannerAnswer; timezone: string; details?: PlannerDetailsSlot }) {
   const label = plannerOutcomeLabel(a.outcome);
-  const p = a.provenance;
-  const tz = doc.header.timezone;
-  // A no-data answer has no rows worth a table (none, or one of NULLs); its reason says so.
-  const view = a.outcome === "answered" && a.table !== null && a.table.rowCount > 0 ? plannerTableView(a.table) : null;
-  const readLine = plannerReadLine(a, { stationNames: doc.header.stationNames, timezone: tz, occupancy: doc.inventory.occupancy });
+  const answer = a.outcome === "answered" && a.answer !== null ? splitPlannerAnswer(a.answer).answer : null;
   return (
     <div className="planner-question">
       <h3>
         {a.text}
         {a.source === "library" && <span className="muted"> · shared question{a.sectionLabel ? `, ${a.sectionLabel}` : ""}</span>}
       </h3>
-      {a.outcome === "answered" && a.answer !== null && <AnswerText text={a.answer} />}
+      {answer !== null && <AnswerText text={answer} />}
       {a.outcome !== "answered" && a.reason !== null && (
         <p className="answer muted">
           {label !== null && <strong>{label}: </strong>}
@@ -614,32 +614,7 @@ function PlannerQuestion({ a, doc, details }: { a: PlannerAnswer; doc: ReportDoc
           {note}
         </p>
       ))}
-      {p !== null && p.coverageShortfall !== null && <p className="partial">{p.coverageShortfall}</p>}
-      {view !== null && (
-        <>
-          <table>
-            <thead>
-              <tr>
-                {view.columns.map((c) => (
-                  <th key={c}>{c}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {view.rows.map((row, i) => (
-                <tr key={i}>
-                  {row.map((cell, j) => (
-                    <td key={j}>{formatPlannerCell(cell, tz)}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {view.shownLine !== null && <p className="planner-meta">{view.shownLine}</p>}
-        </>
-      )}
-      {readLine !== null && <p className="planner-meta">{readLine}</p>}
-      {details?.(a, tz)}
+      {details?.(a, timezone)}
     </div>
   );
 }
@@ -658,7 +633,7 @@ function PlannerSection({ doc, details }: { doc: ReportDocument; details?: Plann
       {[...(doc.plannerAnswers ?? [])]
         .sort((x, y) => x.position - y.position)
         .map((a) => (
-          <PlannerQuestion key={`${a.position}:${a.text}`} a={a} doc={doc} details={details} />
+          <PlannerQuestion key={`${a.position}:${a.text}`} a={a} timezone={doc.header.timezone} details={details} />
         ))}
     </section>
   );

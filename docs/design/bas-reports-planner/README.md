@@ -2,16 +2,16 @@
 
 The record for the pull request that made a report's planner questions
 run (`feat/bas-reports-phase6`; `docs/09-bas-what-is-built.md` →
-*Reports — Phase 6*; `WHY-ITS-BUILT-THIS-WAY.md` § 86), after the display
-revision of the same day: the page and the PDF show the answer, a small
-table and one grey line; how it was answered is behind a button on the
-web run view only.
+*Reports — Phase 6*; `WHY-ITS-BUILT-THIS-WAY.md` § 86), after the second
+display revision of the same day: the page and the PDF show the question
+and the planner's prose answer only; everything about how it was answered
+is behind a button on the web run view.
 
 | Capture | What it shows |
 |---|---|
-| `web-panel-closed.png` | The *Planner questions* section of office run 18 (PHB Steel Place, the seven days ending 29 September 2026) on the web run view at 1440 px: each answer in prose, its results table with local dates (*22 Sept 2026*, not an ISO instant), the grey *Read N points on PHBoffice for … ; occupied hours from the Occupied point.* line - the occupancy clause only on the question about occupied hours - and the kit secondary Button *Show how this was answered*, collapsed. |
-| `web-panel-open.png` | The first answer after a click: the button reads *Hide* and the panel shows how the question was read, the period queried, all 11 points, the SQL and *2 model calls · $0.2313 · 41.4 s*. |
-| `pdf-planner-page-1.png`, `pdf-planner-page-2.png` | Pages 3 and 4 of run 18 re-rendered from its stored document and printed by the worker's Chromium renderer: where the section begins, and the first answer's list, table and grey line. No button, no panel, no SQL, no cost - checked in the PDF's own text as well as by eye. |
+| `web-panel-closed.png` | The *Planner questions* section of office run 18 (PHB Steel Place, the seven days ending 29 September 2026) on the web run view at 1440 px: the one-sentence intro, each question, its prose answer with its list - the summariser's coverage paragraph left out - and the kit secondary Button *Show how this was answered*, collapsed. No table, no provenance line. |
+| `web-panel-open.png` | The first answer after a click: the button reads *Hide* and the panel shows the coverage paragraph ("This covers 22 September … these are not current conditions"), how the question was read, the period queried, all 11 points, the results table, the SQL and *2 model calls · $0.2313 · 41.4 s*. |
+| `pdf-planner-page-1.png`, `pdf-planner-page-2.png` | Pages 3 and 4 of run 18 re-rendered from its stored document and printed by the worker's Chromium renderer: where the section begins (with the intro line) and both answers. No button, no panel, no table, no coverage paragraph, no SQL, no cost - checked in the PDF's own text as well as by eye. |
 | `cost-line.png` | The run's foot: both models, the calls, the tokens and $0.3012. |
 
 ## Method

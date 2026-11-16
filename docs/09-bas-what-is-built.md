@@ -1275,24 +1275,27 @@ is a finding, a fingerprint or a status input. Five counters on the run
 migration `20261116120000_bas_report_runs_planner`) feed the Usage page's
 *Planner questions* line and the next run's estimate.
 
-**What a reader sees (revised the same day).** The page and the PDF show
-the question, the answer in prose, a results table only when it is small
-(at most 12 rows and 6 columns, else the first 12 and 6 and a line saying
-"12 of N rows shown"), dates in the building's zone rather than ISO
-instants, the amber checks, and one grey line - "Read N points on
-<station> for <period>; occupied hours from <source>." (the occupancy
-clause only when the answer is about occupied hours). How it was answered
-- the planner's reading of the question, every point, the period queried,
-the gap figures, the SQL and the cost - sits behind a kit secondary
-Button, *Show how this was answered*, on the web run view only
+**What a reader sees (revised twice the same day).** The page and the PDF
+show two things per planner question: the question as the sub-heading
+and the planner's prose answer - its paragraphs and list as written -
+less the summariser's coverage paragraph ("This covers 22 September …
+these are not current conditions"), which `splitPlannerAnswer` moves to
+the panel by a conservative rule (a later, non-list paragraph that opens
+or reads the way those sentences do; anything unrecognised stays on the
+page). The amber note for a query that read another building or another
+period is the one exception and stays visible. Everything else - the
+coverage paragraph, how the question was read, the period and every
+point, the coverage-shortfall and gap figures, the results table (dates
+local), the SQL and the cost - is behind a kit secondary Button, *Show
+how this was answered*, on the web run view only
 (`app/(modules)/bas/reports-planner-how.tsx`, filling `ReportView`'s
-`plannerDetails` slot; `engine/planner-display.tsx` holds the helpers and
-the panel). The stored HTML has no slot, so the PDF never has the button,
-and `REPORT_CSS` hides `.planner-how` under `@media print` for the web
-page's own Print; a test prints both through the real Chromium. Nothing
-stored changed: the document keeps every field. Runs stored before this
-keep their old `report_html` (and PDF); the web view re-renders from the
-document and shows the new layout.
+`plannerDetails` slot; `engine/planner-display.tsx` holds the split, the
+cell formatter and the panel). The stored HTML has no slot, so the PDF
+never has the button or the panel, and `REPORT_CSS` hides `.planner-how`
+under `@media print` for the web page's own Print; a test prints both
+through the real Chromium and reads the PDF's text. Nothing stored
+changed: the answer is stored whole. Runs stored before this keep their
+old `report_html` and PDF; the web view re-renders from the document.
 
 **Promotion.** A BAS module admin can put one of their own saved
 questions into the shared library as a planner question with a section,

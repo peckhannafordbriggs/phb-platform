@@ -3605,21 +3605,24 @@ there is any (above the dearer of the two measured office questions). A
 CHECK holds the planner's cost within the run's, which is also what
 caught a mutation that dropped the planner's cost from the total.
 
-**Why the page shows less than the Analyze tab (same day).** The first
-version printed everything the tab shows - the reading of the question,
-the period and every point, the full table, the SQL, the call count - and
-in the office's run that buried two answers under a page of provenance. A
-report is read by somebody deciding what to do about a building, often
-from the PDF. So the page keeps what a reader acts on and what stops a
-number being misread - the answer, a small table, the amber checks (which
-are the platform's verdict on the answer, and stay on both), and one line
-saying what was read - and the rest moves behind a button on the web run
-view, where the person who wants to check the planner's work can. The
-stored document is untouched, so this is a display decision that can be
-reversed without touching a run. The button is a slot the web page fills
-rather than a flag on the template, so the static render the worker
-prints has no way to include it, and a print rule covers the web page's
-own Print.
+**Why the page shows only the answer (same day, twice).** The first
+version printed everything the Analyze tab shows; the second still
+printed a table and a provenance line; in the office's run both buried
+two answers. A report is read by somebody deciding what to do about a
+building, often from the PDF. So the page and the PDF carry the question
+and the planner's prose - which already names the numbers that matter -
+and the amber note for another building or period, which is the
+platform's verdict that the answer may be about the wrong thing. The
+rest, the coverage-shortfall figure included, is behind a button on the
+web run view for whoever wants to check the planner's work. That is a
+deliberate departure from the Analyze tab, where the shortfall is never
+collapsible: here it is one click away on the web and absent from the
+PDF, at the owner's direction. The summariser's own coverage paragraph is
+split off at display time by a conservative pattern rule, because the
+answer is stored as one string and the stored document is not rewritten.
+The button is a slot the web page fills rather than a flag on the
+template, so the static render the worker prints has no way to include
+it, and a print rule covers the web page's own Print.
 
 **What breaks if you undo it.** Duplicate steps 4-9 and the report and
 the tab drift on what "no data" means. Import `service.ts` from the

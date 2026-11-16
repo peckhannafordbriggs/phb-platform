@@ -1,44 +1,94 @@
 /** @jsxRuntime automatic @jsxImportSource react */
 // The pragma for the same reason render.tsx carries it: this file is
 // rendered by Next, by vitest and by the worker under tsx.
-import type { OccupancyKind, PlannerAnswer } from "./types";
+import type { PlannerAnswer } from "./types";
 
 /**
- * How a planner answer is SHOWN (Reports, Phase 6, display revised
+ * How a planner answer is SHOWN (Reports, Phase 6; display revised twice on
  * 2026-11-16). Everything the planner produced stays stored on the run's
- * document exactly as before - the interpretation, every point name kept,
- * the period, the gap figures, the SQL, the rows, the cost. This file
- * decides what of it a reader sees, and where:
+ * document exactly as before - the answer text whole, the interpretation,
+ * every point name kept, the period, the gap figures, the SQL, the rows,
+ * the cost. This file decides what of it a reader sees, and where:
  *
- *   the page and the PDF    the question, the answer in prose, a results
- *                           table when it is small (at most 12 rows and 6
- *                           columns, else the first 12 rows and the first
- *                           6 columns, and a line saying how much is
- *                           shown), dates as local dates, and ONE grey line:
- *                           "Read N points on <station> for <period>;
- *                           occupied hours from <source>." The amber notes
- *                           - a point on another building, another period,
- *                           readings that do not cover the period - are
- *                           render.tsx's and stay on both.
+ *   the page and the PDF    the question and the planner's prose answer -
+ *                           its paragraphs and its list, as written - less
+ *                           its coverage paragraph (below). The amber note
+ *                           for a query that touched another building or
+ *                           another period is the one other thing shown,
+ *                           and it is render.tsx's.
  *   the web run view only   `PlannerHowPanel` behind a kit Button, "Show
- *                           how this was answered": the interpretation, the
- *                           full point list, the period queried, the gap
- *                           figures, the SQL and the cost. The PDF never
- *                           has it: the stored HTML is rendered with no
- *                           slot for it (html.ts), and REPORT_CSS hides it
- *                           under `@media print` for the web page's Print.
+ *                           how this was answered": the coverage
+ *                           paragraph, how the question was read, the
+ *                           period and every point, the gap and coverage
+ *                           figures, the results table, the SQL and the
+ *                           cost. The PDF never has it: the stored HTML is
+ *                           rendered with no slot for it (html.ts), and
+ *                           REPORT_CSS hides it under `@media print` for
+ *                           the web page's own Print.
+ *
+ * THE COVERAGE PARAGRAPH is the summariser's own sentence about the period,
+ * the missing hours, the unclassified points and the age of the data - "This
+ * covers 22 September at 9:00 AM through 29 September … so these are not
+ * current conditions." The answer is stored as one string, so it is split
+ * here, at display time, by `splitPlannerAnswer`: a paragraph that is not
+ * the first, is not a list item, and opens or reads the way the
+ * summariser's coverage sentences do (COVERAGE_PATTERNS) moves to the
+ * panel. The rule is conservative on purpose: a paragraph it does not
+ * recognise stays on the page, so a miss shows a caveat the reader did not
+ * need rather than hiding part of the answer.
  *
  * No React state and no engine imports here, so the client toggle
  * (app/(modules)/bas/reports-planner-how.tsx) can import the panel without
  * pulling the engine - or Prisma - into the browser bundle.
  */
 
-export const PLANNER_TABLE_MAX_ROWS = 12;
-export const PLANNER_TABLE_MAX_COLUMNS = 6;
 export const SHOW_HOW_LABEL = "Show how this was answered";
 export const HIDE_HOW_LABEL = "Hide";
 
 type Cell = string | number | boolean | null;
+
+/**
+ * How the summariser's coverage paragraph reads (docs/11 puts the period,
+ * the gaps and the age of the data after the answer). Measured against the
+ * office's run 18: "This covers 22 September …" and "The newest reading held
+ * for this station is from 29 September …, so this is historical data, not
+ * a live view." Case-insensitive.
+ */
+export const COVERAGE_PATTERNS: readonly RegExp[] = [
+  /^this (answer )?(covers|is based on|describes)\b/i,
+  /^these (figures|numbers|counts|readings) (cover|describe)\b/i,
+  /^(the )?(newest|latest|most recent) reading\b/i,
+  /\bnot (the )?current conditions\b/i,
+  /\bnot a live view\b/i,
+];
+
+/**
+ * The answer as the page shows it, and the coverage paragraphs the panel
+ * shows. Paragraphs are the summariser's lines; list items ("- ") always
+ * stay with the answer, and so does the first paragraph, which is the
+ * answer itself (docs/11: answer first).
+ */
+export function splitPlannerAnswer(text: string): { answer: string; coverage: string[] } {
+  const lines = text.split(/\r?\n/);
+  const kept: string[] = [];
+  const coverage: string[] = [];
+  let seenParagraph = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.length === 0) {
+      kept.push(raw);
+      continue;
+    }
+    const isList = line.startsWith("- ");
+    if (!isList && seenParagraph && COVERAGE_PATTERNS.some((p) => p.test(line))) {
+      coverage.push(line);
+      continue;
+    }
+    if (!isList) seenParagraph = true;
+    kept.push(raw);
+  }
+  return { answer: kept.join("\n").trim(), coverage };
+}
 
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -52,7 +102,7 @@ function timeIn(d: Date, timezone: string): string {
 }
 
 /**
- * A result cell as the page prints it. An instant is a local date - with
+ * A result cell as the panel prints it. An instant is a local date - with
  * the time when it is not local midnight - never an ISO string. An instant
  * at exactly midnight UTC is a calendar date: a PostgreSQL `date` the pool
  * read on a UTC host, or a day bucketed in the role's UTC session, and
@@ -74,76 +124,29 @@ export function formatPlannerCell(cell: Cell, timezone: string): string {
   return String(cell);
 }
 
-/** The table as the page shows it: at most 12 rows and 6 columns, and a line saying what was left out. */
-export function plannerTableView(table: NonNullable<PlannerAnswer["table"]>): { columns: string[]; rows: Cell[][]; shownLine: string | null } {
-  const columns = table.columns.slice(0, PLANNER_TABLE_MAX_COLUMNS);
-  const rows = table.rows.slice(0, PLANNER_TABLE_MAX_ROWS).map((r) => r.slice(0, PLANNER_TABLE_MAX_COLUMNS));
-  const parts: string[] = [];
-  if (table.rowCount > rows.length) parts.push(`${rows.length} of ${table.rowCount.toLocaleString("en-US")}${table.truncated ? "+" : ""} rows shown`);
-  if (table.columns.length > columns.length) parts.push(`${columns.length} of ${table.columns.length} columns shown`);
-  return { columns, rows, shownLine: parts.length === 0 ? null : parts.join(" · ") };
-}
-
-function rangeText(range: { start: string; end: string }, timezone: string): string {
-  const start = dateIn(new Date(range.start), timezone);
-  const end = dateIn(new Date(range.end), timezone);
-  return start === end ? start : `${start} to ${end}`;
-}
-
-/** "the Occupied point", "the occupied hours entered for the building", or null for no source. */
-export function occupancySourceWords(o: { kind: OccupancyKind; detail: string }): string | null {
-  if (o.kind === "point") {
-    const m = /^(.*) \(occupancy (status|command) point\)$/.exec(o.detail);
-    return m === null ? o.detail : `the ${m[1]} point`;
-  }
-  if (o.kind === "manual") return "the occupied hours entered for the building";
-  return null;
-}
-
-/** Whether the answer is about occupied hours: the question, how it was read, or its SQL says so. */
-function concernsOccupancy(a: PlannerAnswer): boolean {
-  return /occup/i.test([a.text, a.interpretation ?? "", a.sql ?? ""].join(" "));
-}
-
-/**
- * The one grey line under an answer: "Read 11 points on PHBoffice for 22
- * Sept 2026 to 29 Sept 2026; occupied hours from the Occupied point." The
- * occupancy clause only when the answer is about occupied hours - said of a
- * per-day reading count it would claim a filter the query never applied.
- * Null when nothing was read (the planner was not asked, or declined).
- */
-export function plannerReadLine(
-  a: PlannerAnswer,
-  context: { stationNames: string[]; timezone: string; occupancy: ReadonlyArray<{ kind: OccupancyKind; detail: string }> },
-): string | null {
-  const p = a.provenance;
-  if (p === null) return null;
-  const where = context.stationNames.length > 0 ? context.stationNames.join(", ") : "this building";
-  const points = p.pointCount === 0 ? "Read no points" : `Read ${p.pointCount} point${p.pointCount === 1 ? "" : "s"}`;
-  const period = p.timeRange !== null ? ` for ${rangeText(p.timeRange, context.timezone)}` : p.periodUndeclared ? " for a period the planner did not state" : "";
-  let occupancy = "";
-  if (concernsOccupancy(a)) {
-    const sources = [...new Set(context.occupancy.map(occupancySourceWords).filter((s): s is string => s !== null))];
-    occupancy = sources.length === 0 ? "; no occupancy source on this building" : `; occupied hours from ${sources.join(" and ")}`;
-  }
-  return `${points} on ${where}${period}${occupancy}.`;
-}
-
 /** Whether there is anything behind the button. */
 export function hasPlannerDetails(a: PlannerAnswer): boolean {
-  return a.interpretation !== null || a.sql !== null || a.provenance !== null || a.calls > 0;
+  const coverage = a.answer === null ? [] : splitPlannerAnswer(a.answer).coverage;
+  return coverage.length > 0 || a.interpretation !== null || a.sql !== null || a.provenance !== null || a.table !== null || a.calls > 0;
 }
 
 /**
- * Everything behind "Show how this was answered": how the planner read the
- * question, the period it queried, every point name kept on the run, the
- * gap figures, the SQL and the cost. The web run view only.
+ * Everything behind "Show how this was answered": the summariser's coverage
+ * paragraph, how the planner read the question, the period it queried with
+ * the gap and coverage figures, every point name kept on the run, the
+ * results table (every row the run kept, dates local), the SQL and the
+ * cost. The web run view only.
  */
 export function PlannerHowPanel({ answer: a, timezone }: { answer: PlannerAnswer; timezone: string }) {
   const p = a.provenance;
+  const coverage = a.answer === null ? [] : splitPlannerAnswer(a.answer).coverage;
   const f = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const table = a.outcome === "answered" && a.table !== null && a.table.rowCount > 0 ? a.table : null;
   return (
     <div className="planner-how-panel">
+      {coverage.map((line, i) => (
+        <p key={`c${i}`}>{line}</p>
+      ))}
       {a.interpretation !== null && (
         <p>
           <strong>How the question was read:</strong> {a.interpretation}
@@ -160,6 +163,7 @@ export function PlannerHowPanel({ answer: a, timezone }: { answer: PlannerAnswer
           {p.gapHours !== null && p.gapHours > 0 ? ` · ${p.gapHours} hours of it unrecorded` : ""}
         </p>
       )}
+      {p !== null && p.coverageShortfall !== null && <p>{p.coverageShortfall}</p>}
       {p !== null && p.pointCount > 0 && (
         <p>
           <strong>
@@ -172,6 +176,34 @@ export function PlannerHowPanel({ answer: a, timezone }: { answer: PlannerAnswer
       {p !== null && p.unclassifiedExcluded > 0 && <p>{p.unclassifiedExcluded} points with no role set were outside a search by role.</p>}
       {p !== null && p.unknownHorizonCount > 0 && <p>{p.unknownHorizonCount} of the points have an unknown roll horizon.</p>}
       {p !== null && p.neverCollected.length > 0 && <p>Never collected: {p.neverCollected.join(", ")}.</p>}
+      {table !== null && (
+        <div className="planner-how-table">
+          <table>
+            <thead>
+              <tr>
+                {table.columns.map((c) => (
+                  <th key={c}>{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {table.rows.map((row, i) => (
+                <tr key={i}>
+                  {row.map((cell, j) => (
+                    <td key={j}>{formatPlannerCell(cell, timezone)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(table.kept < table.rowCount || table.truncated) && (
+            <p className="planner-meta">
+              {table.kept} of {table.rowCount.toLocaleString("en-US")}
+              {table.truncated ? "+" : ""} rows kept on the run.
+            </p>
+          )}
+        </div>
+      )}
       {a.sql !== null && <pre className="sql">{a.sql}</pre>}
       <p className="planner-meta">
         {a.calls === 0 ? "No model call was made." : `${a.calls} model call${a.calls === 1 ? "" : "s"} · $${a.costUsd.toFixed(4)}`}

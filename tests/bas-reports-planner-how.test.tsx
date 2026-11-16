@@ -8,7 +8,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { PlannerHowToggle } from "@/app/(modules)/bas/reports-planner-how";
 import { HIDE_HOW_LABEL, SHOW_HOW_LABEL } from "@/lib/modules/bas/reports/engine/planner-display";
-import { PLANNER_INTERPRETATION, PLANNER_SQL, plannerAnswer } from "./fixtures/bas-report-planner-answer";
+import { PLANNER_COVERAGE, PLANNER_INTERPRETATION, PLANNER_SQL, plannerAnswer } from "./fixtures/bas-report-planner-answer";
 
 /**
  * The web run view's "Show how this was answered" toggle (2026-11-16),
@@ -49,7 +49,9 @@ describe("Show how this was answered", () => {
     expect(button().textContent).toBe(HIDE_HOW_LABEL);
     expect(button().getAttribute("aria-expanded")).toBe("true");
     const panel = el.querySelector(".planner-how-panel")!;
+    expect(panel.textContent).toContain(PLANNER_COVERAGE);
     expect(panel.textContent).toContain(PLANNER_INTERPRETATION);
+    expect(panel.querySelector("table")).not.toBeNull();
     expect(panel.querySelector("pre.sql")!.textContent).toBe(PLANNER_SQL);
     expect(panel.textContent).toContain("2 model calls · $0.2313");
 

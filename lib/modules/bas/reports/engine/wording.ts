@@ -248,8 +248,7 @@ export function describeRunDuration(ms: number): string {
  * and that nothing here is tracked or moves a status.
  */
 export const PLANNER_SECTION_NOTE =
-  "Answered by the Analyze planner, one question at a time, from this building's data for this period. " +
-  "Shown, not tracked: these answers carry no New / Still open / Cleared marker and never change the building status.";
+  "Answered by the Analyze planner from this building's data for this period; these answers do not change the building status.";
 
 /** The word in front of a planner question's reason, by outcome; null where the reason speaks for itself. */
 export function plannerOutcomeLabel(outcome: string): string | null {
