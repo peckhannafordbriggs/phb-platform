@@ -26,3 +26,16 @@ export function versionText(v: { isLatest: boolean; isArchived: boolean; version
   const kind = v.isArchived ? "Archived version" : v.isLatest ? "Current version" : "Older version";
   return v.versionLabel ? `${kind} (${v.versionLabel})` : kind;
 }
+
+/**
+ * A project as people say it: job number and name, "221457 MAGNODE", from the
+ * folder `221457_MAGNODE`. The same words in the answer prompt, the answer
+ * and the screen, so the screen can find them in the answer and highlight
+ * them. Older answer snapshots carry only the folder, so it is the fallback.
+ */
+export function projectLabel(p: { projectFolder: string; projectNumber?: string | null; projectName?: string | null }): string {
+  if (p.projectNumber && p.projectName) return `${p.projectNumber} ${p.projectName}`;
+  const numbered = /^(\d{6})_(.*)$/.exec(p.projectFolder);
+  const name = (numbered?.[2] ?? p.projectFolder).replace(/_/g, " ").trim() || p.projectFolder;
+  return numbered ? `${numbered[1]} ${name}` : name;
+}

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { denialResponse, requireModuleAccess } from "@/lib/authz";
+import { denialResponse, hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { fail, notFound, ok, serverError, validationFailed } from "@/lib/api/response";
 import { logUnexpected } from "@/lib/logger";
 import { KNOWLEDGE_BASE_MODULE_KEY } from "@/lib/modules/knowledge-base/constants";
@@ -24,8 +24,9 @@ const body = z
  *   { "reason": "wrong_fact", "citationN"?: 2, "comment"?: "..." }
  *
  * Reports an answer as wrong (lib/modules/knowledge-base/reports.ts). Anyone
- * with the Knowledge Base grant, on anyone's answer. Reporting again while the
- * first report is open updates it.
+ * with the Knowledge Base grant, on an answer they can see: their own, or any
+ * for a module admin (404 otherwise). Reporting again while the first report
+ * is open updates it.
  */
 export async function POST(request: Request, { params }: IdParams) {
   const access = await requireModuleAccess(KNOWLEDGE_BASE_MODULE_KEY);
@@ -40,6 +41,7 @@ export async function POST(request: Request, { params }: IdParams) {
       await reportAnswer({
         questionId: id,
         reporterId: access.viewer.id,
+        everyone: await hasModuleAdmin(access.viewer.id, KNOWLEDGE_BASE_MODULE_KEY),
         reason: parsed.data.reason,
         citationN: parsed.data.citationN ?? null,
         comment: parsed.data.comment ?? null,

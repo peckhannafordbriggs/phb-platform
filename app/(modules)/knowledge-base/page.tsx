@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 /**
  * /knowledge-base[?c=<conversation id>]: ask about past projects. An answer
  * cites its sources; follow-ups continue the conversation. `c` opens one from
- * the shared history - anyone's, read only unless it is the viewer's own.
+ * the history: the viewer's own, or anyone's (read only) for a module admin.
  */
 export default async function KnowledgeBasePage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
   const access = await requireModuleAccess(KNOWLEDGE_BASE_MODULE_KEY);
@@ -27,11 +27,14 @@ export default async function KnowledgeBasePage({ searchParams }: { searchParams
 
   const { c } = await searchParams;
   const conversationId = z.uuid().safeParse(c).success ? c! : null;
-  const [projects, isAdmin, conversation] = await Promise.all([
+  const [projects, isAdmin] = await Promise.all([
     listSearchableProjects(),
     hasModuleAdmin(access.viewer.id, KNOWLEDGE_BASE_MODULE_KEY),
-    conversationId ? getConversation(conversationId, access.viewer.id) : Promise.resolve(null),
   ]);
+  // Someone else's conversation opens for a module admin only.
+  const conversation = conversationId
+    ? await getConversation(conversationId, access.viewer.id, { everyone: isAdmin })
+    : null;
   const openReports = isAdmin ? await countOpenReports() : 0;
 
   return (

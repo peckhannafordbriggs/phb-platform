@@ -1,6 +1,6 @@
 "use client";
 
-import { locationLabel } from "@/lib/modules/knowledge-base/location";
+import { locationLabel, projectLabel } from "@/lib/modules/knowledge-base/location";
 import type { KbSearchCopy, KbSearchHit, KbSearchResult } from "@/lib/modules/knowledge-base/search";
 
 /**
@@ -44,6 +44,14 @@ function Snippet({ text }: { text: string }) {
   return <p className="mt-2 whitespace-pre-line text-sm leading-relaxed">{parts}</p>;
 }
 
+/** How a project name is highlighted, wherever it appears: in an answer, a source or a result. */
+export const PROJECT_HIGHLIGHT =
+  "rounded bg-[color-mix(in_srgb,var(--module-accent)_14%,transparent)] px-1 font-medium text-[var(--module-accent-ink)]";
+
+export function ProjectTag({ label }: { label: string }) {
+  return <span className={`${PROJECT_HIGHLIGHT} mr-1.5 whitespace-nowrap`}>{label}</span>;
+}
+
 /** An orange tag for an archived or older copy, so it is never mistaken for the current one. */
 export function OlderTag({ copy }: { copy: Pick<KbSearchCopy, "isArchived" | "isLatest"> }) {
   const older = copy.isArchived ? "Archived" : copy.isLatest ? null : "Older version";
@@ -56,7 +64,7 @@ export function OlderTag({ copy }: { copy: Pick<KbSearchCopy, "isArchived" | "is
 }
 
 /** Other files holding the same text, so one passage is listed once. */
-function AlsoIn({ copies }: { copies: KbSearchCopy[] }) {
+function AlsoIn({ copies, project }: { copies: KbSearchCopy[]; project: string }) {
   if (copies.length === 0) return null;
   return (
     <div className="mt-2 text-xs text-[var(--muted)]">
@@ -65,6 +73,7 @@ function AlsoIn({ copies }: { copies: KbSearchCopy[] }) {
         {copies.map((copy) => (
           <li key={copy.chunkId} className="break-all">
             <OlderTag copy={copy} />
+            {projectLabel(copy) !== project && <ProjectTag label={projectLabel(copy)} />}
             {copy.webUrl ? (
               <a href={copy.webUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
                 {copy.fileName}
@@ -121,8 +130,9 @@ export function SearchResults({ result, projects }: { result: KbSearchResult; pr
                     {hit.fileName}
                   </span>
                 )}
-                <div className="mt-0.5 text-xs text-[var(--muted)]">
-                  {hit.projectFolder} · {locationLabel(hit)}
+                <div className="mt-1 text-xs text-[var(--muted)]">
+                  <ProjectTag label={projectLabel(hit)} />
+                  {locationLabel(hit)}
                 </div>
               </div>
               <Version hit={hit} />
@@ -137,7 +147,7 @@ export function SearchResults({ result, projects }: { result: KbSearchResult; pr
                   : "Holds every word"}
               {hit.matchedBy === "both" && ", and close in meaning"}
             </p>
-            <AlsoIn copies={hit.alsoIn} />
+            <AlsoIn copies={hit.alsoIn} project={projectLabel(hit)} />
           </li>
         ))}
       </ol>

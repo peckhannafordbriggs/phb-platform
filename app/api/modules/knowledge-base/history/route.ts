@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { denialResponse, requireModuleAccess } from "@/lib/authz";
+import { denialResponse, hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { ok, serverError, validationFailed } from "@/lib/api/response";
 import { logUnexpected } from "@/lib/logger";
 import { listConversations } from "@/lib/modules/knowledge-base/ask";
@@ -18,9 +18,9 @@ const params = z.object({
 /**
  * GET /api/modules/knowledge-base/history[?mine=1][&before=<iso>&beforeId=<id>]
  *
- * The shared question history: everyone's conversations, newest activity
- * first, 30 a page. `mine=1` narrows to the viewer's own. Anyone with the
- * Knowledge Base grant; 404 otherwise.
+ * The question history, newest activity first, 30 a page: the viewer's own,
+ * or everyone's for a Knowledge Base module admin (who can narrow to their own
+ * with `mine=1`). Anyone with the grant; 404 otherwise.
  */
 export async function GET(request: Request) {
   const access = await requireModuleAccess(KNOWLEDGE_BASE_MODULE_KEY);
@@ -36,9 +36,10 @@ export async function GET(request: Request) {
     return validationFailed("The page marker is not valid.");
   }
   try {
+    const everyone = !parsed.data.mine && (await hasModuleAdmin(access.viewer.id, KNOWLEDGE_BASE_MODULE_KEY));
     return ok(
       await listConversations({
-        ...(parsed.data.mine ? { employeeId: access.viewer.id } : {}),
+        ...(everyone ? {} : { employeeId: access.viewer.id }),
         ...(parsed.data.before && parsed.data.beforeId
           ? { before: { updatedAt: new Date(parsed.data.before), id: parsed.data.beforeId } }
           : {}),

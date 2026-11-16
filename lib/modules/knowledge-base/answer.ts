@@ -31,7 +31,8 @@ export const KB_ANSWER_PRIOR_TURNS = 4;
 export type KbAnswerPassage = {
   n: number;
   fileName: string;
-  projectFolder: string;
+  /** "221457 MAGNODE" (location.ts projectLabel): written into the answer exactly so. */
+  project: string;
   where: string;
   version: string;
   content: string;
@@ -73,7 +74,8 @@ export const ANSWER_RULES = `You answer questions about a mechanical contractor'
 # Shape
 - The first sentence answers the question. Then only what helps: the qualifier, the conflict, what is missing.
 - Short: one to four sentences for a fact. Several items (units, rooms, values) as a short list, one per line, each line starting with "- ". Plain text: no headings, no bold, no tables, no preamble, no closing offer of help.
-- Name things the way the documents do: project folder or job number, equipment tag, file type (submittal, RFI, spec section). Say "the approved submittal", not "passage 3".
+- Say which project a fact comes from, writing the project exactly as given after "Project" in the passage header (for example "221457 MAGNODE"): the screen highlights it. Once is enough when every fact is from one project; name each when they differ.
+- Name things the way the documents do: equipment tag, file type (submittal, RFI, spec section). Say "the approved submittal", not "passage 3".
 - Plain, complete words. Do not shorten words or make up abbreviations ("operating weight", not "op. wt."); keep equipment tags, model numbers and values exactly as the documents write them.
 - Do not describe your process: no "based on the passages", "the documents provided", "according to the search".
 
@@ -106,7 +108,7 @@ export function answerUserMessage(input: {
   }
   parts.push("Question:", dataBlock(input.question), "", "Passages:");
   for (const p of input.passages) {
-    parts.push(`[${p.n}] ${p.fileName} | ${p.projectFolder} | ${p.where} | ${p.version}`, dataBlock(p.content));
+    parts.push(`[${p.n}] ${p.fileName} | Project ${p.project} | ${p.where} | ${p.version}`, dataBlock(p.content));
   }
   return parts.join("\n");
 }

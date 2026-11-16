@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import type { KbAskedQuestion } from "@/lib/modules/knowledge-base/ask";
-import { locationLabel } from "@/lib/modules/knowledge-base/location";
+import { locationLabel, projectLabel } from "@/lib/modules/knowledge-base/location";
 import { KB_REPORT_REASONS, KB_REPORT_REASON_LABELS, type KbReportReason } from "@/lib/modules/knowledge-base/types";
-import { OlderTag } from "./search-panel";
+import { OlderTag, PROJECT_HIGHLIGHT, ProjectTag } from "./search-panel";
 
 /**
  * One question and its answer as saved: the answer, with each citation linked
@@ -12,6 +12,10 @@ import { OlderTag } from "./search-panel";
  * disagree, when either applies; each source as its file and page. Nothing
  * else - no timing, no counts. Read from the snapshot in the history, so it
  * shows the same after a rebuild.
+ *
+ * Project names are highlighted wherever they appear: the answer is asked to
+ * write them exactly as its sources are labelled ("221457 MAGNODE"), and the
+ * full label, the name alone or the job number alone is marked.
  *
  * Under it, "Report a wrong answer" (lib/modules/knowledge-base/reports.ts).
  */
@@ -21,16 +25,50 @@ const CITE = /(\[\d+\])/g;
 /** "Page 8" reads as "file.pdf, page 8"; a sheet's own name keeps its case. */
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
-function AnswerText({ text, anchor }: { text: string; anchor: (n: number) => string }) {
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * What to highlight for these projects: the full label ("221457 MAGNODE"), the
+ * name alone ("MAGNODE") and the job number alone, longest first so the full
+ * label wins. Case-insensitive, whole words. Null when there is nothing to mark.
+ */
+export function projectPattern(labels: string[]): RegExp | null {
+  const terms = new Set<string>();
+  for (const label of labels) {
+    terms.add(label);
+    const m = /^(\d{6}) (.+)$/.exec(label);
+    if (m) {
+      terms.add(m[1]!);
+      if (m[2]!.length >= 3) terms.add(m[2]!);
+    }
+  }
+  const sorted = [...terms].filter((t) => t.trim()).sort((a, b) => b.length - a.length);
+  return sorted.length === 0 ? null : new RegExp(`(?<![\\w])(${sorted.map(escape).join("|")})(?![\\w])`, "gi");
+}
+
+function highlight(text: string, pattern: RegExp | null, key: string): React.ReactNode[] {
+  if (!pattern) return [text];
+  return text.split(pattern).map((part, i) =>
+    i % 2 === 1 ? (
+      <mark key={`${key}-${i}`} className={PROJECT_HIGHLIGHT}>
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
+  );
+}
+
+function AnswerText({ text, anchor, projects }: { text: string; anchor: (n: number) => string; projects: RegExp | null }) {
   const withCitations = (line: string) =>
-    line.split(CITE).map((part, i) => {
+    line.split(CITE).flatMap((part, i) => {
       const m = /^\[(\d+)\]$/.exec(part);
       return m ? (
         <a key={i} href={`#${anchor(Number(m[1]))}`} className="align-super text-[0.7rem] font-semibold text-[var(--module-accent-ink)] no-underline">
           [{m[1]}]
         </a>
       ) : (
-        part
+        highlight(part, projects, String(i))
       );
     });
   const blocks: React.ReactNode[] = [];
@@ -158,6 +196,8 @@ export function AnswerCard({ asked }: { asked: KbAskedQuestion }) {
   const [reported, setReported] = useState(asked.reportedByMe);
   const a = asked.answer;
   const anchor = (n: number) => `src-${asked.id}-${n}`;
+  const labelOf = (s: (typeof a.sources)[number]) => s.projectLabel ?? projectLabel(s);
+  const projects = projectPattern([...new Set(a.sources.map(labelOf))]);
   // Fixed locale and zone: the server renders this first, and the browser must agree.
   const when = new Date(asked.createdAt).toLocaleString("en-US", {
     dateStyle: "medium",
@@ -174,7 +214,7 @@ export function AnswerCard({ asked }: { asked: KbAskedQuestion }) {
       </div>
 
       <div className={`card p-5 ${a.kind === "no_evidence" ? "border-dashed" : ""}`}>
-        <AnswerText text={a.text} anchor={anchor} />
+        <AnswerText text={a.text} anchor={anchor} projects={projects} />
         {a.missing && (
           <p className="mt-3 text-sm text-[var(--muted)]">
             <span className="font-medium text-[var(--foreground)]">Not in the documents: </span>
@@ -197,6 +237,7 @@ export function AnswerCard({ asked }: { asked: KbAskedQuestion }) {
             {a.sources.map((s) => (
               <li key={s.n} id={anchor(s.n)} className="scroll-mt-24">
                 <span className="mr-1.5 font-semibold text-[var(--module-accent-ink)]">[{s.n}]</span>
+                <ProjectTag label={labelOf(s)} />
                 <OlderTag copy={s} />
                 {s.webUrl ? (
                   <a href={s.webUrl} target="_blank" rel="noreferrer" className="break-all underline underline-offset-2">

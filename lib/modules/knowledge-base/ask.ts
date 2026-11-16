@@ -15,7 +15,7 @@ import {
 } from "./answer";
 import { KNOWLEDGE_BASE_MODULE_KEY } from "./constants";
 import { defaultCondenser, joinWithLast, type KbCondenser } from "./followup";
-import { locationLabel, versionText } from "./location";
+import { locationLabel, projectLabel, versionText } from "./location";
 import { reportedByViewer } from "./reports";
 import type { KbReranker } from "./rerank";
 import {
@@ -42,9 +42,9 @@ import type { KbAnswerKind, KbScopeHow } from "./types";
  *      cited source, so the history reads the same after the index is rebuilt.
  *
  * Only final answers are history (types.ts): a question whose answer failed
- * is logged and not saved. History is shared - everyone with the module sees
- * every conversation - but only the person who started a conversation adds to
- * it; anyone else asks afresh.
+ * is logged and not saved. Each person sees their own conversations; Knowledge
+ * Base module admins see everyone's (2026-11-16, replacing "everyone sees
+ * everyone's"). Only the person who started a conversation adds to it.
  */
 
 export type KbAnswerSource = {
@@ -54,6 +54,8 @@ export type KbAnswerSource = {
   documentId: string;
   fileName: string;
   projectFolder: string;
+  /** "221457 MAGNODE": as the answer writes it. Absent on answers saved before 2026-11-16. */
+  projectLabel?: string;
   path: string;
   webUrl: string | null;
   versionLabel: string | null;
@@ -231,7 +233,7 @@ export async function askQuestion(input: {
         passages: evidence.map((h, i) => ({
           n: i + 1,
           fileName: h.fileName,
-          projectFolder: h.projectFolder,
+          project: projectLabel(h),
           where: locationLabel(h),
           version: versionText(h),
           content: texts.get(h.chunkId) ?? h.snippet,
@@ -287,6 +289,7 @@ function sourceOf(hit: KbSearchHit, n: number, texts: Map<string, string>): KbAn
     documentId: hit.documentId,
     fileName: hit.fileName,
     projectFolder: hit.projectFolder,
+    projectLabel: projectLabel(hit),
     path: hit.path,
     webUrl: hit.webUrl,
     versionLabel: hit.versionLabel,
@@ -373,8 +376,9 @@ const nameOf = (e: { id: string; firstName: string; lastName: string } | null) =
   e ? { id: e.id, name: `${e.firstName} ${e.lastName}`.trim() } : null;
 
 /**
- * Everyone's conversations, newest activity first (`mine` narrows to one
- * person's). Paged by `before`: the updatedAt and id of the last row shown,
+ * Conversations, newest activity first: one person's (`employeeId`), or
+ * everyone's for a module admin. The caller decides which; the routes and the
+ * page pass the viewer's own id unless the viewer is a module admin. Paged by `before`: the updatedAt and id of the last row shown,
  * so a conversation updated while someone pages is neither repeated nor lost.
  */
 export async function listConversations(options: {
@@ -416,16 +420,22 @@ export async function listConversations(options: {
   }));
 }
 
-/** One conversation, every question in order. Null when it does not exist. */
+/**
+ * One conversation, every question in order. Null when it does not exist, or
+ * when it is someone else's and the viewer may not see everyone's (only module
+ * admins may) - the same null, so an id says nothing about whose it is.
+ */
 export async function getConversation(
   id: string,
   viewerId: string,
+  options: { everyone: boolean },
 ): Promise<{ id: string; startedBy: { id: string; name: string } | null; mine: boolean; questions: KbAskedQuestion[] } | null> {
   const conversation = await prisma.kbConversation.findUnique({
     where: { id },
     select: { id: true, employeeId: true, employee: { select: { id: true, firstName: true, lastName: true } } },
   });
   if (!conversation) return null;
+  if (conversation.employeeId !== viewerId && !options.everyone) return null;
   return {
     id: conversation.id,
     startedBy: nameOf(conversation.employee),

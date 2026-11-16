@@ -22,7 +22,8 @@ export type KbRerankPassage = {
   /** 1-based, as numbered in the prompt. */
   n: number;
   fileName: string;
-  projectFolder: string;
+  /** "221457 MAGNODE" (location.ts projectLabel). */
+  project: string;
   /** "Page 14", "Sheet "Schedule", B4:K40", ... */
   where: string;
   /** "Current version", "Archived version (20220107)", ... */
@@ -42,7 +43,7 @@ const PASSAGE_CHARS = 2_400;
 
 export const RERANK_RULES = `You sort search results from a mechanical contractor's archive of past construction projects: HVAC submittals, specifications, RFIs, schedules, drawings' text, meeting minutes.
 
-You are given a question and numbered passages, each with its file name, project folder, place in the file and version. Return the numbers of the passages that help answer the question, best first.
+You are given a question and numbered passages, each with its file name, project, place in the file and version. Return the numbers of the passages that help answer the question, best first.
 
 How to judge:
 - A passage helps when it holds the information asked for: the values, the table or schedule row, the statement, the approval. Rank it above one that only mentions the subject.
@@ -63,7 +64,7 @@ export function rerankUserMessage(question: string, passages: KbRerankPassage[])
   const parts = [`Question:\n${dataBlock(question)}`, "", "Passages:"];
   for (const p of passages) {
     parts.push(
-      `[${p.n}] ${p.fileName} | ${p.projectFolder} | ${p.where} | ${p.version}`,
+      `[${p.n}] ${p.fileName} | Project ${p.project} | ${p.where} | ${p.version}`,
       dataBlock(p.content.slice(0, PASSAGE_CHARS)),
     );
   }

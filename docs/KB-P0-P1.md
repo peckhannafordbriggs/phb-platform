@@ -17,7 +17,7 @@ worker loop and its Container Apps Job, and the worker image's text tools.
 | 3 | Extraction and chunking with page, section and cell locations | **Done**. No OCR: a scanned PDF is `skipped`, `empty_text` |
 | 4 | Embeddings | **Done** (2026-11-10) |
 | 5 | Retrieval: hybrid vector + keyword, project ranking, evaluation set | **Built** (2026-11-10): hybrid, copies collapsed, `npm run kb:eval`. Not yet tuned on a real question set |
-| 6 | Answers with Claude: citations, conflicts, versions, missing evidence, follow-ups | **Built** (2026-11-11): Haiku re-sort, Sonnet answers, shared history. Rules are a first version |
+| 6 | Answers with Claude: citations, conflicts, versions, missing evidence, follow-ups | **Built** (2026-11-11): Haiku re-sort, Sonnet answers, history. Rules are a first version |
 | 7 | Automatic sync job, admin view of indexing issues and reported answers | Partly: Index now button, worker job (built, `enableKbWorker` off), clear index. No schedule, no issue or report views |
 
 ---
@@ -201,10 +201,11 @@ Until 2 and 3 land, Phases 1 to 3 can be built and tested against
   stay excluded for the first release.
 - **Embeddings:** Azure OpenAI `text-embedding-3-small`, 1536 dimensions.
 - **History:** central, in the platform database (not per browser), kept
-  indefinitely, and **shared: every KB user sees everyone's questions and
-  answers** (2026-10-28), each with who asked it. One person's answer is
-  another's search result; the grant is already flat, so this exposes no
-  document a grantee could not retrieve themselves.
+  indefinitely. **Changed 2026-11-16: each person sees only their own
+  conversations; Knowledge Base module admins see everyone's**, with who asked
+  and an Everyone / Mine switch nobody else gets. Someone else's conversation
+  is a 404 for a non-admin, by link or by API, and a non-admin can report only
+  their own answers. (2026-10-28 to 2026-11-16 everyone saw everyone's.)
 - **Report a wrong answer:** in the first release (`kb_answer_reports`), not
   deferred.
 - **Scaffold project:** `224070_UC_OLD_CHEM` (curated) is the project to build
@@ -378,12 +379,18 @@ Cohere on Foundry is likely closed to the CSP subscription.
   missing or conflicting evidence when there is any, and each source as file and
   page with an Archived tag when it applies. No project folder repeat, version
   date, timing or passage count.
+- **Projects are named and highlighted** (2026-11-16): each passage reaches
+  Haiku and Sonnet as `Project 221457 MAGNODE` (job number and the folder's name,
+  `projectLabel` in `location.ts`); Sonnet is told to write the project exactly
+  so, and the screen highlights the full label, the name alone or the job number
+  wherever it appears in the answer, and tags each source and search result with
+  it. Answers saved before then fall back to the folder name.
 - **Not built yet**: the real answer rules, `kb:eval` for answers.
 
 ## Open questions
 
 - **Shared history and leavers.** `kb_conversations.employee_id` cascades on
-  delete, so removing an employee row would remove questions everyone can see.
+  delete, so removing an employee row would remove that person's questions.
   Employees are disabled, not deleted, today; revisit before anything deletes
   employee rows.
 - Does the folder template ever nest a `2A`, `5A` or `8` code under a different

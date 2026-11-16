@@ -28,8 +28,8 @@ beforeEach(async () => {
 });
 
 /** A saved answer with two sources, as ask.ts saves it. */
-async function answered() {
-  const asker = await createEmployee({ firstName: "Ann", lastName: "A" });
+async function answered(owner?: { id: string }) {
+  const asker = owner ?? (await createEmployee({ firstName: "Ann", lastName: "A" }));
   const conversation = await testDb.kbConversation.create({ data: { employeeId: asker.id } });
   const source = (n: number) => ({
     n, chunkId: `c${n}`, documentId: `d${n}`, fileName: `file${n}.pdf`, projectFolder: "221457_MAGNODE", path: "x", webUrl: null,
@@ -65,21 +65,32 @@ describe("reporting an answer", () => {
   it("files a report anyone with the module can make, and a second one updates it rather than adding", async () => {
     const { question, conversation } = await answered();
     const me = await createEmployee();
-    const first = await reportAnswer({ questionId: question.id, reporterId: me.id, reason: "wrong_fact", comment: " It is 410 lbs. " });
-    const again = await reportAnswer({ questionId: question.id, reporterId: me.id, reason: "wrong_source", citationN: 2 });
+    const first = await reportAnswer({ questionId: question.id, reporterId: me.id, everyone: true, reason: "wrong_fact", comment: " It is 410 lbs. " });
+    const again = await reportAnswer({ questionId: question.id, reporterId: me.id, everyone: true, reason: "wrong_source", citationN: 2 });
     expect(again.id).toBe(first.id);
     expect(await testDb.kbAnswerReport.findMany()).toMatchObject([{ reason: "wrong_source", citationN: 2, comment: null, status: "open" }]);
     expect(await testDb.auditEvent.count({ where: { action: "kb.answer_reported" } })).toBe(2);
 
     // The person who reported sees it; the asker does not.
-    expect((await getConversation(conversation.id, me.id))?.questions[0]?.reportedByMe).toBe(true);
-    expect((await getConversation(conversation.id, question.id))?.questions[0]?.reportedByMe).toBe(false);
+    expect((await getConversation(conversation.id, me.id, { everyone: true }))?.questions[0]?.reportedByMe).toBe(true);
+    expect((await getConversation(conversation.id, conversation.employeeId, { everyone: false }))?.questions[0]?.reportedByMe).toBe(false);
+  });
+
+  it("lets someone who is not an admin report only their own answers", async () => {
+    const { question, asker } = await answered();
+    const stranger = await createEmployee();
+    await expect(reportAnswer({ questionId: question.id, reporterId: stranger.id, everyone: false, reason: "other" })).rejects.toMatchObject({
+      code: "question_not_found",
+    });
+    await expect(reportAnswer({ questionId: question.id, reporterId: asker.id, everyone: false, reason: "other" })).resolves.toMatchObject({
+      status: "open",
+    });
   });
 
   it("refuses a source the answer does not have", async () => {
     const { question } = await answered();
     const me = await createEmployee();
-    await expect(reportAnswer({ questionId: question.id, reporterId: me.id, reason: "wrong_source", citationN: 3 })).rejects.toMatchObject({
+    await expect(reportAnswer({ questionId: question.id, reporterId: me.id, everyone: true, reason: "wrong_source", citationN: 3 })).rejects.toMatchObject({
       code: "citation_not_found",
     });
   });
@@ -90,7 +101,7 @@ describe("the admin queue", () => {
     const { question } = await answered();
     const reporter = await createEmployee({ firstName: "Bob", lastName: "B" });
     const admin = await createEmployee({ firstName: "Cat", lastName: "C" });
-    const filed = await reportAnswer({ questionId: question.id, reporterId: reporter.id, reason: "outdated", comment: "Rev 2 changed it." });
+    const filed = await reportAnswer({ questionId: question.id, reporterId: reporter.id, everyone: true, reason: "outdated", comment: "Rev 2 changed it." });
 
     const open = await listReports("open");
     expect(open).toMatchObject([
@@ -117,15 +128,16 @@ describe("the admin queue", () => {
     });
 
     // Closed, the reporter may report the same answer again.
-    const later = await reportAnswer({ questionId: question.id, reporterId: reporter.id, reason: "wrong_fact" });
+    const later = await reportAnswer({ questionId: question.id, reporterId: reporter.id, everyone: true, reason: "wrong_fact" });
     expect(later.id).not.toBe(filed.id);
   });
 });
 
 describe("the routes", () => {
-  it("report: 200 for anyone with the module, 422 for a bad body, 404 for an unknown answer", async () => {
-    const { question } = await answered();
-    await signIn({ admin: false });
+  it("report: 200 on your own answer, 422 for a bad body, 404 for an unknown answer or someone else's", async () => {
+    const someoneElses = (await answered()).question;
+    const me = await signIn({ admin: false });
+    const { question } = await answered(me);
     const url = `http://localhost/api/modules/knowledge-base/questions/${question.id}/report`;
     for (const body of [{}, { reason: "nope" }, { reason: "other", extra: 1 }, { reason: "other", comment: "x".repeat(2001) }]) {
       expect((await reportRoute(new Request(url, json(body)), params(question.id))).status).toBe(422);
@@ -133,12 +145,14 @@ describe("the routes", () => {
     expect((await reportRoute(new Request(url, json({ reason: "other", citationN: 9 })), params(question.id))).status).toBe(422);
     expect((await reportRoute(new Request(url, json({ reason: "other" })), params(question.id))).status).toBe(200);
     expect((await reportRoute(new Request(url, json({ reason: "other" })), params("00000000-0000-4000-8000-000000000000"))).status).toBe(404);
+    const theirs = `http://localhost/api/modules/knowledge-base/questions/${someoneElses.id}/report`;
+    expect((await reportRoute(new Request(theirs, json({ reason: "other" })), params(someoneElses.id))).status).toBe(404);
   });
 
   it("queue: 404 for someone without module admin, and closing needs a note", async () => {
     const { question } = await answered();
     const reporter = await createEmployee();
-    const filed = await reportAnswer({ questionId: question.id, reporterId: reporter.id, reason: "other" });
+    const filed = await reportAnswer({ questionId: question.id, reporterId: reporter.id, everyone: true, reason: "other" });
 
     await signIn({ admin: false });
     expect((await listRoute(new Request("http://localhost/api/modules/knowledge-base/reports"))).status).toBe(404);

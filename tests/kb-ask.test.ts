@@ -18,7 +18,7 @@ import {
 } from "@/lib/modules/knowledge-base/ask";
 import { KNOWLEDGE_BASE_MODULE_KEY } from "@/lib/modules/knowledge-base/constants";
 import type { KbReranker } from "@/lib/modules/knowledge-base/rerank";
-import { createEmployee, disconnectDb, grantModule, resetDb, testDb } from "./db";
+import { createEmployee, disconnectDb, grantModule, grantModuleAdmin, resetDb, testDb } from "./db";
 
 /**
  * A question start to finish against real passages: search, re-sort (a fake
@@ -106,7 +106,12 @@ describe("askQuestion", () => {
       [1, "221457_SUB_Packaged_RTUs_Approved.pdf"],
       [2, "221457_SPEC_Div23.pdf"],
     ]);
-    expect(calls[0]?.passages[0]).toMatchObject({ where: "Page 4", version: "Current version", content: expect.stringContaining("375 LBS") });
+    expect(calls[0]?.passages[0]).toMatchObject({
+      project: "221457 Magnode",
+      where: "Page 4",
+      version: "Current version",
+      content: expect.stringContaining("375 LBS"),
+    });
     expect(search.reranked).toBe(true);
 
     expect(asked).toMatchObject({
@@ -128,6 +133,7 @@ describe("askQuestion", () => {
       [2, "221457_SPEC_Div23.pdf", 4],
     ]);
     expect(asked.answer.sources[0]?.excerpt).toContain("375 LBS");
+    expect(asked.answer.sources[0]?.projectLabel).toBe("221457 Magnode");
 
     const rows = await testDb.kbQuestionSource.findMany({ orderBy: { n: "asc" } });
     expect(rows.map((r) => r.n)).toEqual([1, 2]);
@@ -216,7 +222,7 @@ describe("askQuestion", () => {
       answer: { searchedFor: "rooftop unit dimensions" },
     });
     // The other project's AHU never reached the answer.
-    expect(calls[0]?.passages.every((p) => p.projectFolder === "221457_MAGNODE")).toBe(true);
+    expect(calls[0]?.passages.every((p) => p.project === "221457 Magnode")).toBe(true);
   });
 
   it("falls back to the last question plus the follow-up when the rewrite fails", async () => {
@@ -300,18 +306,21 @@ describe("the shared history", () => {
     expect([...page1, ...page2].map((c) => c.firstQuestion)).toEqual(all.map((c) => c.firstQuestion));
     expect((await listConversations({ employeeId: b.id })).map((c) => c.firstQuestion)).toEqual(["rooftop unit weight two"]);
 
-    const mine = await getConversation(third.asked.conversationId, a.id);
-    const theirs = await getConversation(third.asked.conversationId, b.id);
+    const mine = await getConversation(third.asked.conversationId, a.id, { everyone: false });
     expect(mine).toMatchObject({ mine: true, startedBy: { name: "Ann A" } });
-    expect(theirs?.mine).toBe(false);
-    expect(theirs?.questions.map((q) => q.answer.text)).toEqual(["375 LBS [1]."]);
+    // Someone else's: hidden from a non-admin exactly as a missing one is, open to an admin.
+    expect(await getConversation(third.asked.conversationId, b.id, { everyone: false })).toBeNull();
+    const asAdmin = await getConversation(third.asked.conversationId, b.id, { everyone: true });
+    expect(asAdmin?.mine).toBe(false);
+    expect(asAdmin?.questions.map((q) => q.answer.text)).toEqual(["375 LBS [1]."]);
   });
 });
 
 describe("the routes", () => {
-  async function signIn() {
+  async function signIn({ admin = false }: { admin?: boolean } = {}) {
     const employee = await createEmployee();
     await grantModule(employee.id, KNOWLEDGE_BASE_MODULE_KEY);
+    if (admin) await grantModuleAdmin(employee.id, KNOWLEDGE_BASE_MODULE_KEY);
     authMock.mockResolvedValue({
       entraOid: employee.entraOid,
       issuedAt: Math.floor(Date.now() / 1000),
@@ -339,7 +348,7 @@ describe("the routes", () => {
     expect((await response.json()).error.code).toBe("not_configured");
   });
 
-  it("history: lists everyone's, opens one, 404 for an unknown id, 404 without the grant", async () => {
+  it("history: a person sees their own, a module admin sees everyone's; 404 for the rest", async () => {
     await seed();
     const asker = await createEmployee();
     const { asked } = await askQuestion({
@@ -347,10 +356,27 @@ describe("the routes", () => {
       question: "rooftop unit weight",
       deps: { ...recordingAnswerer("375 LBS [1]."), reranker: rerankRtu, queryEmbedder: null, limiter: freshLimiter() },
     });
-    await signIn();
-    const list = await historyRoute(new Request("http://localhost/api/modules/knowledge-base/history"));
-    expect((await list.json()).data.map((c: { id: string }) => c.id)).toEqual([asked.conversationId]);
-    const one = await conversationRoute(new Request("http://localhost/x"), { params: Promise.resolve({ id: asked.conversationId }) });
+    const list = () => historyRoute(new Request("http://localhost/api/modules/knowledge-base/history"));
+    const open = (id: string) => conversationRoute(new Request("http://localhost/x"), { params: Promise.resolve({ id }) });
+
+    // Not an admin: their own (none), and the other person's is not there, even by id.
+    const me = await signIn();
+    expect((await (await list()).json()).data).toEqual([]);
+    expect((await open(asked.conversationId)).status).toBe(404);
+    const mine = await askQuestion({
+      employeeId: me.id,
+      question: "rooftop unit weight",
+      deps: { ...recordingAnswerer("375 LBS [1]."), reranker: rerankRtu, queryEmbedder: null, limiter: freshLimiter() },
+    });
+    expect((await (await list()).json()).data.map((c: { id: string }) => c.id)).toEqual([mine.asked.conversationId]);
+    expect((await (await open(mine.asked.conversationId)).json()).data).toMatchObject({ mine: true });
+
+    // A module admin: everyone's, and mine=1 narrows to their own.
+    await signIn({ admin: true });
+    expect((await (await list()).json()).data).toHaveLength(2);
+    const mineOnly = await historyRoute(new Request("http://localhost/api/modules/knowledge-base/history?mine=1"));
+    expect((await mineOnly.json()).data).toEqual([]);
+    const one = await open(asked.conversationId);
     expect((await one.json()).data).toMatchObject({ mine: false, questions: [{ question: "rooftop unit weight" }] });
     const missing = await conversationRoute(new Request("http://localhost/x"), {
       params: Promise.resolve({ id: "00000000-0000-4000-8000-000000000000" }),

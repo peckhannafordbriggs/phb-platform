@@ -1284,8 +1284,8 @@ server before merge (and on any server a backup is restored onto),
 `DROP INDEX "kb_chunks_embedding_hnsw_idx"`; delete that line** -
 `tests/kb-schema.test.ts` fails on it. Decided: folders 2A, 5A, 8 and 1A, 1D stay
 excluded; Azure OpenAI embeddings; a report-a-wrong-answer button in the first
-release; `ARCHIVE_` files indexed and tagged, never latest; history shared, everyone
-sees everyone's questions; the source is the Knowledge Base site's Documents library,
+release; `ARCHIVE_` files indexed and tagged, never latest; each person sees their own
+question history and KB module admins see everyone's (changed 2026-11-16); the source is the Knowledge Base site's Documents library,
 every project in it legacy. **The sync exists** (`lib/modules/knowledge-base/sync.ts`,
 `npm run kb:sync`), on the folder store now shared with Cost Intelligence
 (`lib/sharepoint/folder-store.ts`, the KB takes it read-only), and it indexes what
@@ -1304,7 +1304,7 @@ sheet and cells. `npm run kb:eval` measures it against `.kb-eval/questions.json`
 the sync's last step embeds every passage without a vector through Azure OpenAI's
 v1 API (`embed.ts`, `embedder.ts`; `npm run kb:embed:check`), an API key locally
 and the managed identity in production; tests clear `KB_EMBEDDING_*` and never
-reach Azure. **Search is hybrid (2026-11-10)**: keyword and vector results merged by reciprocal rank, a 0.3 similarity floor, and a stated fallback to words when embeddings are unavailable; `npm run kb:eval` compares the two modes. **Answers and shared history are built (2026-11-11)**: Claude Haiku re-sorts the top 30, Claude Sonnet answers from what it kept with every statement cited, checked by `finishAnswer`, saved to the shared history; the KB's own key `KB_ANTHROPIC_API_KEY` (Key Vault `KB-ANTHROPIC-API-KEY`, `kbAnthropicApiKeyInKeyVault`), never a fallback to the other two. The answer rules are a first version. *Report a wrong answer* and the module admins' queue on `/knowledge-base/admin` are built (`reports.ts`, audited). Access requests KB-1 to KB-4 approved; the Azure OpenAI deployment (KB-2) exists on Foundry as of 2026-11-10, and the managed identity's role on it is not yet verified. `docs/KB-P0-P1.md`; `runbook.md` ->
+reach Azure. **Search is hybrid (2026-11-10)**: keyword and vector results merged by reciprocal rank, a 0.3 similarity floor, and a stated fallback to words when embeddings are unavailable; `npm run kb:eval` compares the two modes. **Answers and shared history are built (2026-11-11)**: Claude Haiku re-sorts the top 30, Claude Sonnet answers from what it kept with every statement cited, checked by `finishAnswer`, saved to the history; the KB's own key `KB_ANTHROPIC_API_KEY` (Key Vault `KB-ANTHROPIC-API-KEY`, `kbAnthropicApiKeyInKeyVault`), never a fallback to the other two. The answer rules are a first version. *Report a wrong answer* and the module admins' queue on `/knowledge-base/admin` are built (`reports.ts`, audited). Access requests KB-1 to KB-4 approved; the Azure OpenAI deployment (KB-2) exists on Foundry as of 2026-11-10, and the managed identity's role on it is not yet verified. `docs/KB-P0-P1.md`; `runbook.md` ->
 *Knowledge Base*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.

@@ -35,12 +35,19 @@ export type KbReportFiled = { id: string; questionId: string; reason: KbReportRe
 export async function reportAnswer(input: {
   questionId: string;
   reporterId: string;
+  /** Module admins may report any answer; anyone else only their own (the only ones they can see). */
+  everyone: boolean;
   reason: KbReportReason;
   citationN?: number | null;
   comment?: string | null;
 }): Promise<KbReportFiled> {
-  const question = await prisma.kbQuestion.findUnique({ where: { id: input.questionId }, select: { answer: true } });
-  if (!question) throw new KbReportError("question_not_found", "That answer no longer exists.");
+  const question = await prisma.kbQuestion.findUnique({
+    where: { id: input.questionId },
+    select: { answer: true, conversation: { select: { employeeId: true } } },
+  });
+  if (!question || (!input.everyone && question.conversation.employeeId !== input.reporterId)) {
+    throw new KbReportError("question_not_found", "That answer no longer exists.");
+  }
   const citationN = input.citationN ?? null;
   const sources = (question.answer as unknown as KbAnswerSnapshot).sources ?? [];
   if (citationN !== null && !sources.some((s) => s.n === citationN)) {

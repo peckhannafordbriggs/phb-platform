@@ -5,7 +5,7 @@ import { KNOWLEDGE_BASE_MODULE_KEY } from "./constants";
 import { isSamePassage, passageShingles } from "./duplicates";
 import { azureEmbedder } from "./embed";
 import { readKbEmbeddingEnv } from "./env";
-import { locationLabel, versionText } from "./location";
+import { locationLabel, projectLabel, versionText } from "./location";
 import { KB_RERANK_CANDIDATES, cleanRerank, defaultReranker, type KbReranker } from "./rerank";
 import { toVectorLiteral } from "./vector";
 
@@ -141,6 +141,8 @@ export type KbSearchHit = {
   projectId: string;
   projectFolder: string;
   projectNumber: string | null;
+  /** The folder's name without the job number, as the sync stores it ("MAGNODE"). */
+  projectName: string;
   fileName: string;
   /** Inside the project folder. */
   path: string;
@@ -175,6 +177,8 @@ export type KbSearchCopy = Pick<
   | "chunkId"
   | "documentId"
   | "projectFolder"
+  | "projectNumber"
+  | "projectName"
   | "fileName"
   | "path"
   | "webUrl"
@@ -256,6 +260,7 @@ type HitRow = {
   project_id: string;
   folder_name: string;
   project_number: string | null;
+  project_name: string;
   file_name: string;
   path: string;
   folder_code: string | null;
@@ -415,6 +420,7 @@ export async function searchPassages(options: {
       projectId: r.project_id,
       projectFolder: r.folder_name,
       projectNumber: r.project_number,
+      projectName: r.project_name,
       fileName: r.file_name,
       path: r.path,
       folderCode: r.folder_code,
@@ -456,7 +462,7 @@ export async function searchPassages(options: {
           sent.map((h, i) => ({
             n: i + 1,
             fileName: h.fileName,
-            projectFolder: h.projectFolder,
+            project: projectLabel(h),
             where: locationLabel(h),
             version: versionText(h),
             content: texts.get(h.chunkId) ?? h.snippet,
@@ -569,6 +575,8 @@ function copyOf(r: HitRow): KbSearchCopy {
     chunkId: r.chunk_id,
     documentId: r.document_id,
     projectFolder: r.folder_name,
+    projectNumber: r.project_number,
+    projectName: r.project_name,
     fileName: r.file_name,
     path: r.path,
     webUrl: r.web_url,
@@ -600,7 +608,7 @@ async function hydrate(ids: string[], termSql: Prisma.Sql[]): Promise<Map<string
   const rows = await prisma.$queryRaw<HitRow[]>`
     WITH q AS (SELECT (${anyTerm}) AS any_term)
     SELECT c.id::text AS chunk_id, d.id::text AS document_id, p.id::text AS project_id,
-           p.folder_name, p.project_number, d.file_name, d.path, d.folder_code, d.web_url,
+           p.folder_name, p.project_number, p.name AS project_name, d.file_name, d.path, d.folder_code, d.web_url,
            d.version_label, d.is_latest, d.is_archived,
            c.page_start, c.page_end, c.section, c.sheet, c.cell_range,
            ${snippet} AS snippet,

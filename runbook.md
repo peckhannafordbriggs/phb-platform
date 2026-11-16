@@ -11330,7 +11330,7 @@ any change to search; a mode that fell back to words is said so in the output.
 
 A question goes: search (words and meaning, copies collapsed) -> Claude Haiku
 re-sorts the top 30 and keeps the ones that help -> Claude Sonnet answers from
-those, citing each -> the answer is checked and saved to the shared history
+those, citing each -> the answer is checked and saved to the history
 (`lib/modules/knowledge-base/ask.ts`). Key: `KB_ANTHROPIC_API_KEY`, the KB's
 own (`infra/README.md`); models `claude-haiku-5-5` and `claude-sonnet-5-5`,
 overridable with `KB_RERANK_MODEL` / `KB_ANSWER_MODEL` without a code change.
@@ -11344,7 +11344,9 @@ overridable with `KB_RERANK_MODEL` / `KB_ANSWER_MODEL` without a code change.
 | *The documents found do not answer this* | Haiku kept no passage (Sonnet is then not called, nothing spent), or Sonnet's answer cited nothing, which the platform never shows as an answer. Check the search results beneath: if the right page is there, the re-sort prompt (`RERANK_RULES` in `rerank.ts`) is the place to look |
 | A citation number is missing or jumps | Citations are renumbered 1..n in order of first use, and a citation to a passage that was not sent is removed (`finishAnswer` in `answer.ts`) |
 | *That is 10 questions in a minute* (429) | Per-person limit (`KB_QUESTIONS_PER_MINUTE`), in memory, resets with a new revision |
-| *Only the person who started this conversation can add to it* (409) | History is shared, follow-ups are not. Ask it as a new question |
+| *Only the person who started this conversation can add to it* (409) | A module admin can open anyone's conversation but not add to it. Ask it as a new question |
+| *That conversation no longer exists* for a link someone sent | Each person sees only their own history; only Knowledge Base module admins open anyone's. Grant module admin, or have the asker look |
+| A project name is not highlighted in an answer | The screen marks the project as its sources are labelled (`221457 MAGNODE`), the name alone or the job number. A paraphrase ("the Magnode job") is marked only on the word that matches. Answers saved before 2026-11-16 use the folder name |
 | A follow-up answers about the wrong thing | A follow-up is rewritten by Haiku to stand alone for the search (shown as what was searched in the stored answer, `searchedFor`); without Claude it is the last question plus the follow-up. It keeps the earlier question's projects unless it names a job number |
 | An old answer cites a file that is gone | The history keeps a snapshot of each answer and its sources; clearing or rebuilding the index sets the links (`kb_question_sources`) to NULL and leaves the snapshot |
 
