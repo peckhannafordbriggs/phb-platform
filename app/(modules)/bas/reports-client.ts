@@ -89,6 +89,12 @@ export const fetchRun = (runId: string, signal?: AbortSignal) =>
 /** Retry PDF (Phase 4): queue a failed render again without re-running the analysis; 202, or 409 pdf_not_retryable. */
 export const retryRunPdf = (runId: string) =>
   call<{ runId: string; pdf: PdfState }>(`/runs/${encodeURIComponent(runId)}/pdf/retry`, { method: "POST" });
+/** Resend (Phase 4, email): queue the run's failed deliveries again; 202, or 409 nothing_to_resend. */
+export const resendRunEmail = (runId: string) =>
+  call<{ runId: string; requeued: number }>(`/runs/${encodeURIComponent(runId)}/deliveries/resend`, { method: "POST" });
+/** Send to me (Phase 4, email): one copy to the signed-in person; 202, or 409 run_not_sendable / delivery_pending. */
+export const sendRunToMe = (runId: string) =>
+  call<{ runId: string; email: string }>(`/runs/${encodeURIComponent(runId)}/deliveries/send-to-me`, { method: "POST" });
 /** Where a run's PDF is served (Phase 4): a plain GET answering the file as an attachment. */
 export const runPdfUrl = (runId: string) => `${BASE}/runs/${encodeURIComponent(runId)}/pdf`;
 /**

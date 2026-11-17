@@ -40,6 +40,7 @@ requested, and two of those are already written down below.
 | `AUTH_URL` | `http://localhost:3000`. |
 | `BOOTSTRAP_ADMIN_EMAIL` | Your own work address is enough locally. It seeds an admin row in *your* database and has no effect anywhere else. |
 | `PHB_ALLOW_SEND` | `false`. Always. Never set it to `true` outside production — development runs against the live `changeorder@phb1899.com` mailbox and there is no test mailbox. |
+| `BAS_REPORTS_ALLOW_SEND` | `false`, except during a deliberate, supervised test of report email from your own machine (*Turning report email on* → *Locally*). `BAS_MAILBOX` may stay blank: it defaults to `controlls@phb1899.com`. |
 | `CO_MAILBOX` | `changeorder@phb1899.com`. |
 | `ALLOWED_EMAIL_DOMAINS` | `phb1899.com`. Confirm the full verified-domain list with IT only if a legitimate account is being rejected with `domain_not_allowed`. |
 
@@ -65,6 +66,8 @@ Only these. Everything else above you can do without talking to anyone.
 | `AUTH_MICROSOFT_ENTRA_ID_SECRET` | Owner of the **SSO** app registration (client ID above) | The current client secret **value**, sent over something that is not email. Needed only to sign in — see below. |
 | `GRAPH_CLIENT_ID`, `GRAPH_TENANT_ID` | Owner of the **Graph** app registration | Both IDs. Not secret. |
 | `GRAPH_CLIENT_SECRET` | Same | A client secret value for local development. Production never has one. |
+| `BAS_MAIL_CLIENT_ID`, `BAS_MAIL_TENANT_ID` | Owner of the **phb-platform-bas-mail** app registration (Request 7 below) | Both IDs. Not secret. Blank: the Reports worker records every email as not configured. |
+| `BAS_MAIL_CLIENT_SECRET` | Same | A client secret value for local development. Production never has one and refuses to send with one. |
 
 | `PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID`, `PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID` | Owner of the **phb-platform-co-review** app registration (Request 5 below) | Both IDs. Not secret. |
 | `PHB_PLATFORM_CO_REVIEW_APP_SECRET` | Same | A client secret value for local development. Production never has one. |
@@ -2640,6 +2643,63 @@ Tracker through the workbook API with its `eTag`, `cTag` and
 Phase 11's table-binding check repeated the same day.
 
 **Status: sent 2026-10-29.** Nothing has landed yet.
+
+### Request 7 — the sender app registration for report email (BAS Reports, Phase 4)
+
+For the email half of Reports Phase 4 (`docs/bas-reports-tab-plan.md` §A
+*Sender*, §D5). The worker sends each finished report from the controls
+team's mailbox, `controlls@phb1899.com` (two L's), as a **fifth** app
+registration: never the Change Orders mail app, whose mailbox fence is the
+change-order system's safety model, and never a delegated sign-in. The
+code is built and refuses to send until this exists (*Turning report email
+on*).
+
+> **Subject: App registration to send BAS health reports from controlls@**
+>
+> Hi Zac,
+>
+> One more app registration, on the pattern of the Change Order Mail app -
+> the same kind of mailbox fence, a different mailbox, and **Mail.Send only**.
+>
+> **What it is for.** The platform's BAS module produces a weekly health
+> report per building as a PDF. We want it emailed from
+> controlls@phb1899.com to the report's owner and the people they add. The
+> platform's worker job sends one message per recipient; nothing reads the
+> mailbox.
+>
+>     New app registration:   phb-platform-bas-mail
+>     Owner:                  an M365 group, not a person
+>     Graph application permission:
+>                             Mail.Send  (admin consent)
+>     Exchange ApplicationAccessPolicy:
+>                             RestrictAccess to controlls@phb1899.com only, through a
+>                             mail-enabled security group holding that one mailbox.
+>                             Please run Test-ApplicationAccessPolicy for the app
+>                             against controlls@ (Granted) and changeorder@ (Denied)
+>                             and send me both results.
+>     Credential:             a federated identity credential for the platform's
+>                             user-assigned managed identity - the same identity,
+>                             issuer and subject as the Change Order Mail app's and
+>                             the Needs Review app's. No client secret in Azure.
+>     For developer machines: one client secret, sent over Teams, not email.
+>
+> And a confirmation, please: that controlls@phb1899.com exists as a
+> mailbox, whether it is a licensed user or a shared mailbox, and who owns
+> it - its Sent Items will hold a copy of every report.
+>
+> Please send the client id and tenant id.
+>
+> Thanks,
+> Mahi
+
+**What to check when it lands**, before the gate is opened: the two
+`Test-ApplicationAccessPolicy` results (*Granted* for controlls@, *Denied*
+for changeorder@); then the steps in *Turning report email on*, which send
+one message to your own address first.
+
+**Status:** named in the plan's Phase 0 (`docs/bas-reports-tab-plan.md` §F)
+as the prerequisite for email. Whether it has been sent, and its date, is
+not recorded in this repository on 2026-11-17 - write both here when known.
 
 ## Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays (2026-11-02)
 
@@ -12085,7 +12145,7 @@ half on 2026-11-13 - *Reports: the PDF*), both behind `enableBasReports` in
 | Job | Trigger | Runs | Needs |
 |---|---|---|---|
 | `<baseName>-bas-reports-sched` (`basReportsSchedulerJob`; 30 characters in production - the longer `-scheduler` name was 34 and failed the first deployment, *A template deployment fails with `ContainerAppInvalidName`*) | cron, `basReportsSchedulerCron`, default `*/15 * * * *` (UTC) | `scripts/bas-reports-scheduler.ts`, one pass: for every active report whose `next_run_at` has passed, ONE queued run and the next run time advanced in the same transaction; active reports whose owner's account is disabled are paused as *Paused - owner disabled* with the reason on the row | `DATABASE-URL` by reference, nothing else |
-| `<baseName>-bas-reports-worker` (`basReportsWorkerJob`) | a PostgreSQL scaler counting queued runs, stalled ones and queued PDF renders, every 15 s, two executions at most | `scripts/bas-reports-worker.ts`: claims runs with `FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the Phase 2 engine, prints each finished run's page to PDF with the image's Chromium (*Reports: the PDF*), exits when the queue is empty or after its four-minute drain window | `DATABASE-URL`, `BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` (the BAS key) by reference - read through `lib/modules/bas/reports/job-env.ts`, never `lib/env.ts` (*Reports: a job execution fails at startup naming a web-app variable*); `BAS-ASK-DATABASE-URL` is carried for Phase 6 and read by nothing yet |
+| `<baseName>-bas-reports-worker` (`basReportsWorkerJob`) | a PostgreSQL scaler counting queued runs, stalled ones, queued PDF renders and (since 2026-11-17) due report emails, every 15 s, two executions at most | `scripts/bas-reports-worker.ts`: claims runs with `FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the Phase 2 engine, prints each finished run's page to PDF with the image's Chromium (*Reports: the PDF*), exits when the queue is empty or after its four-minute drain window | `DATABASE-URL`, `BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` (the BAS key) by reference - read through `lib/modules/bas/reports/job-env.ts`, never `lib/env.ts` (*Reports: a job execution fails at startup naming a web-app variable*); `BAS-ASK-DATABASE-URL` is carried for Phase 6 and read by nothing yet |
 
 Same identity (`<baseName>-identity`), same registry pull and vault read; **no
 role assignment is added**, so a Contributor deploys this exactly as the CIP
@@ -12123,6 +12183,12 @@ has run, a retry is picked up by the next worker execution that starts for
 a run. The image itself needs no hand build: `deploy.yml` rebuilds it on
 the merge, Chromium included, and the Dockerfile's own launch check fails
 the build if the browser cannot start.
+
+**Template change 2026-11-17 (`feat/bas-reports-email`).** The worker job
+gains six plain environment values for report email and its scaler counts
+due deliveries; `basReportsAllowSend` stays false until *Turning report
+email on* says otherwise. The routine step-3 command deploys it; `what-if`
+lists the worker job as *Modify* and nothing else.
 
 ### Turning it on, once, in this order
 
@@ -12424,8 +12490,8 @@ that it resumed.
 
 ## Reports: the PDF
 
-**What it is (Phase 4, the PDF half, 2026-11-13; email is the other half
-and waits on the sender app registration, Request 7).** After the engine
+**What it is (Phase 4, the PDF half, 2026-11-13; email is the other half,
+built 2026-11-17 - *Turning report email on*).** After the engine
 stores a run's page (`report_html`), the worker prints that SAME HTML to
 PDF with the headless Chromium its image carries (`Dockerfile.bas-reports`;
 never the web image, and `tests/bas-reports-pdf.test.ts` walks the web
@@ -12500,7 +12566,9 @@ prints the sample document with the real browser and counts its pages
 against the test database, and holds every `basReportRun` read in `lib/`
 and `app/` to a `select` that leaves the bytes out: the list reads up to
 200 runs every ten seconds, and a bytea on every row would be tens of MB a
-poll. The one read of the bytes is `loadRunPdf`.
+poll. The bytes are read in two places: `loadRunPdf` (the download) and,
+since 2026-11-17, `loadRunEmail` (`email/send.ts`, the attachment - and
+only once the PDF is known to be small enough to attach).
 
 **The tripwire (the plan's D6).** The PDFs are bytea in `bas_report_runs`:
 a few hundred KB a run, tens of MB a year for a building reporting weekly.
@@ -12520,6 +12588,203 @@ SELECT count(DISTINCT site_id) AS buildings_reporting FROM bas_report_definition
 
 Until then the nightly backup (`pg_dump`) carries them, and the restore
 steps are unchanged.
+
+## Turning report email on
+
+**What it is (Reports, Phase 4, the email half - built 2026-11-17, not yet
+turned on).** When a report run has finished - succeeded or partial - and
+its PDF is ready, the worker job writes one delivery row per address in
+`bas_report_deliveries`: the report's **owner first, from their employee
+record** (never a recipient row, so nothing can take the owner off), then
+each address on the report's recipient list in the order it was added. It
+then sends **one message per row** from `controlls@phb1899.com` through the
+`phb-platform-bas-mail` app registration (*What to ask IT for* -> Request
+7): subject *Report name — building — period*, a short HTML summary
+(building status, the three top findings, the New / Still open / Cleared
+counts, which questions were Not monitored) and a link to the run, with the
+PDF attached when it is under Graph's 3 MB simple-upload limit and the link
+alone, with a sentence saying why, above it. A failed attempt is tried
+again after 1 minute and after 5 more - three attempts - and then reads
+*Failed* with **Resend** beside it. A run whose PDF failed is not emailed
+until *Retry PDF* gives it one.
+
+**The worker is the only sender.** The web app never sends: *Resend* (the
+run's FAILED rows, and only those) and *Send to me* (one copy to your own
+address, whoever is on the list) each write a row, audited as
+`bas.report_resend_requested` and `bas.report_send_to_me_requested`, and
+the worker job's scaler counts rows that are due, so an execution starts
+for them within about fifteen seconds. Both are on the run page's *Email*
+card; *Resend* is also in the Reports list's *Delivery* column.
+
+**The send gate.** `BAS_REPORTS_ALLOW_SEND` on the worker job, mirroring
+`PHB_ALLOW_SEND`: exactly the lowercase string `true` opens it, and
+anything else - absent, `false`, `TRUE`, `1` - keeps it shut. Shut, the
+worker marks every due delivery **Not sent — sending disabled** and nothing
+leaves the platform: no token is fetched, no request is made. The template
+writes it on every deployment from the boolean parameter
+`basReportsAllowSend` (default `false`), so it is never absent and never
+hand-typed (`tests/deploy-guards.test.ts`). Rows the shut gate stopped stay
+*Not sent*: Resend does not touch them, by design, and *Send to me* is how
+to get one such run after the gate is opened.
+
+**No Key Vault secret.** In production the worker signs in as
+`phb-platform-bas-mail` with the platform's managed identity and the app's
+federated identity credential - the Change Orders mail app's mechanism,
+from the same shared code (`lib/mail/credential.ts`) - and **refuses to
+send if `BAS_MAIL_CLIENT_SECRET` is set** in production. The three values
+it needs are identifiers, plain template parameters:
+
+| Parameter (`infra/main.parameters.json`) | Worker variable | Value |
+|---|---|---|
+| `basMailClientId` | `BAS_MAIL_CLIENT_ID` | the app's client id, from Request 7 |
+| `basMailTenantId` | `BAS_MAIL_TENANT_ID` | the tenant id (the same one the other apps carry) |
+| `basMailbox` | `BAS_MAILBOX` | `controlls@phb1899.com`; blank means the same, the default in `lib/modules/bas/reports/job-env.ts` |
+| `basReportsAllowSend` | `BAS_REPORTS_ALLOW_SEND` | `false` until step 4 below |
+
+The template also gives the worker `GRAPH_MANAGED_IDENTITY_CLIENT_ID` (the
+platform's identity, which the federated credential names) and
+`PLATFORM_URL` (`authUrl`, where the email's link points). **None of this
+reaches the worker without a template deployment**: the job's environment
+comes only from the template, and the scaler's count of due deliveries is a
+template change too. The image needs nothing by hand - `deploy.yml`
+rebuilds it on the merge.
+
+### In this order
+
+1. **Request 7 has landed**, with *Granted* for controlls@ and *Denied* for
+   changeorder@ from `Test-ApplicationAccessPolicy`.
+
+2. **Add the four parameters to `infra/main.parameters.json`**, beside
+   `enableBasReports`:
+
+   ```json
+   "basMailClientId": { "value": "<client id of phb-platform-bas-mail>" },
+   "basMailTenantId": { "value": "<tenant id>" },
+   "basMailbox": { "value": "controlls@phb1899.com" },
+   "basReportsAllowSend": { "value": false }
+   ```
+
+3. **Deploy the template with the gate shut** - the routine command of
+   *Reports: turning the jobs on*, step 3, reading the three running images
+   first. `what-if` lists the worker job as *Modify* (six new plain
+   environment values and the scaler query) and nothing else: no secret, no
+   role assignment, no *Delete*. Then prove the path is live while nothing
+   can leave: open a finished run, press **Send to me**, and within a
+   minute the *Email* card reads *Not sent — sending disabled* for your
+   address. The worker's log says so on its fourth line:
+
+   ```bash
+   az containerapp job logs show -n <baseName>-bas-reports-worker -g <resource-group> --container bas-reports-worker
+   # [bas-reports-worker] email: sending disabled (BAS_REPORTS_ALLOW_SEND is not "true"): due deliveries are recorded as not sent
+   # [bas-reports-worker] delivery <id> of run <id>: not_sent
+   ```
+
+   *email: NOT CONFIGURED - BAS_MAIL_CLIENT_ID ... is not set* means step 2
+   did not reach the deployment.
+
+4. **Open the gate**: `"basReportsAllowSend": { "value": true }`, the same
+   deployment again. `what-if` shows one change, the worker's
+   `BAS_REPORTS_ALLOW_SEND` from `false` to `true`.
+
+5. **Verify with Send to me, to yourself, before anyone else.** On a
+   finished run: **Send to me**. Within about a minute the card reads
+   *Sent* for your address with the time, the message is in your inbox
+   from controlls@ with the PDF attached and the link opening the run, and
+   a copy is in controlls@'s *Sent Items*. If it reads *Failed*, the reason
+   is beside it: *A report email did not arrive*. Only then let a scheduled
+   run go to its list - every active report emails its owner and recipients
+   from its next run on.
+
+**Closing the gate in an emergency.** `"basReportsAllowSend": { "value":
+false }` and a deployment. Faster, by hand, then the parameters file to
+match (a by-hand change is drift until the file says the same):
+
+```bash
+az containerapp job update -n <baseName>-bas-reports-worker -g <resource-group> --set-env-vars BAS_REPORTS_ALLOW_SEND=false
+```
+
+Each worker execution reads the gate when it starts, so the next execution
+sends nothing; an execution already running finishes what it holds.
+
+**Locally.** `.env.local` takes `BAS_MAIL_CLIENT_ID`, `BAS_MAIL_TENANT_ID`
+and `BAS_MAIL_CLIENT_SECRET` (the developer secret from Request 7) and
+leaves `BAS_REPORTS_ALLOW_SEND=false` except during a deliberate,
+supervised test - the rule `PHB_ALLOW_SEND` has. Outside production the
+sender also refuses any address that is not `@phb1899.com`, so a local test
+reaches colleagues and never a contractor. `npm run bas:reports:worker`
+sends what is due; `-- --no-email` leaves deliveries pending.
+
+## A report email did not arrive
+
+Start on the run's page (Reports -> the run): the **Email** card lists every
+address with its state, attempts and the reason. Or in the database:
+
+```sql
+SELECT delivery_id, email, source, status, attempts, next_attempt_at, sent_at, graph_request_id, last_error
+  FROM bas_report_deliveries WHERE run_id = <run id> ORDER BY position;
+```
+
+| The card or the Delivery column says | What happened | What to do |
+|---|---|---|
+| *Waiting for the PDF* | The run finished; its PDF is queued, and the rows are written when it is ready | Nothing, unless it stays: *Reports: the PDF* |
+| *Not sent: no PDF* | The PDF failed, so no email was queued | *Retry PDF*; the email follows the ready PDF |
+| *Not emailed* | The run is from before report email, or finished without the worker ever printing its PDF | *Send to me* for a copy |
+| *Not sent — sending disabled* | The gate was shut when the worker reached it; nothing left the platform | *Turning report email on*; then *Send to me* - Resend does not reopen these rows |
+| *Waiting*, attempts 1 or 2, *Next attempt …* | An attempt failed and the backoff is running; the reason is beside it | Wait, or read the reason below |
+| *Failed* | Three attempts failed, or a failure no retry fixes | Fix the cause below, then **Resend** |
+| *Sent* | Graph accepted the message (202) | The last section of this entry |
+
+**What a *Failed* reason means:**
+
+- *BAS_MAIL_CLIENT_ID and BAS_MAIL_TENANT_ID are not set …* - the template
+  parameters never reached the worker (*Turning report email on*, steps
+  2-3). Failed on the first attempt: retrying cannot fix configuration.
+- *BAS_MAIL_CLIENT_SECRET is set in production …* - remove the variable
+  from the worker job; production signs in with the managed identity.
+- *Entra refused a token for the Graph app registration: … AADSTS…* - the
+  code after `AADSTS` is the answer. `AADSTS70021` or `AADSTS700213`: the
+  app's federated credential does not match the identity (issuer, subject
+  or audience; *Production sign-in bounces* has the same shape for the SSO
+  app). `AADSTS7000215`/`AADSTS7000218`: a secret where an assertion is
+  expected, or none. `AADSTS700016`: the client id is wrong or the app is
+  in another tenant.
+- *Graph refused the send: status=403 code=ErrorAccessDenied …* - the
+  Exchange ApplicationAccessPolicy denies the mailbox, or Mail.Send has no
+  admin consent. Ask IT for `Test-ApplicationAccessPolicy -Identity
+  controlls@phb1899.com -AppId <client id>`; it must say *Granted*. A
+  policy change can take up to an hour to apply.
+- *status=404* (`ErrorInvalidUser`, `MailboxNotEnabledForRESTAPI`) - the
+  mailbox does not exist, is misspelled (two L's), or is not an Exchange
+  Online mailbox. Check `basMailbox`.
+- *status=400* - Graph refused the request itself; the code says why. The
+  request id is on the row (`graph_request_id`) for Microsoft support.
+- *Not sent: outside production a report email goes only to @phb1899.com
+  addresses …* - the developer-machine fence; production does not apply it.
+- *Waiting for a worker for N minutes and never sent …* - the scheduler's
+  guard failed a delivery nobody took for an hour: the worker job is not
+  starting executions. *Reports: a run is stuck or failed* has the checks;
+  then Resend.
+- *3 attempts made and the worker stopped during the last …* - a worker
+  died mid-send three times; its log says why
+  (`az containerapp job logs show …`). Resend once the cause is fixed.
+
+**It says *Sent* and the person has nothing.** Graph accepted it; from here
+it is mail. The copy in controlls@'s *Sent Items* shows what left. An
+Exchange admin can run a message trace from controlls@ to the address for
+the day; every report email carries the header `X-PHB-Report-Delivery:
+<delivery id>` (the row's `delivery_id`), which tells one run's message
+from another's. An external address may have quarantined it. The row's
+`graph_request_id` is what Microsoft support asks for. There is no Graph
+message id: the app holds Mail.Send only, and `sendMail` answers 202 with
+no body.
+
+**Somebody received it twice.** One way this can happen, and only one: a
+worker that died after Graph's 202 and before it recorded *Sent* - the row
+was taken again when its five-minute lease ran out, and `sendMail` gives
+nothing to check whether the first went. The row's `attempts` is then 2 or
+more. Rows are unique per run and address, so a repeated worker or a
+second PDF render never sends twice on its own; *Send to me* and *Resend*
+send again on purpose.
 
 ## Reports: the safety ceiling
 

@@ -193,6 +193,19 @@ export type AuditAction =
    * run's own columns, not here.
    */
   | "bas.report_pdf_retry_requested"
+  /**
+   * A person asked for a run's FAILED email deliveries to be tried again
+   * (Phase 4, the email half, 2026-11-17). Carries the run, the report's
+   * name, the addresses and how many rows were queued. The sending is the
+   * worker's; each row's outcome is on bas_report_deliveries.
+   */
+  | "bas.report_resend_requested"
+  /**
+   * A person asked for a copy of a run to be emailed to their own address
+   * (2026-11-17). Carries the run, the report's name, the address and the
+   * state the row for that address had before, or null when it had none.
+   */
+  | "bas.report_send_to_me_requested"
   | "bas.building_occupancy_updated"
   /**
    * The Cost Intelligence skill catalog was synced from the skills folder.

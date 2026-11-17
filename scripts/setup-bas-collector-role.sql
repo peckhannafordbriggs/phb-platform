@@ -127,7 +127,9 @@ INSERT INTO collector_none (relname, reason) VALUES
     ('bas_report_runs',         'report runs'),
     ('bas_report_findings',     'report findings'),
     -- 2026-11-12: the Reports safety ceiling, a module setting.
-    ('bas_report_settings',     'the Reports safety ceiling');
+    ('bas_report_settings',     'the Reports safety ceiling'),
+    -- 2026-11-17: report email addresses and send state.
+    ('bas_report_deliveries',   'report email deliveries');
 
 CREATE TEMP TABLE collector_seq (relname text PRIMARY KEY);
 INSERT INTO collector_seq (relname) VALUES

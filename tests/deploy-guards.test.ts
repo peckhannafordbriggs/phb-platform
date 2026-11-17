@@ -1954,8 +1954,11 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(worker).toMatch(/minExecutions: 0/);
     expect(worker).toMatch(/replicaRetryLimit: 0/);
     expect(worker).toMatch(/type: 'postgresql'/);
-    // Queued runs, stalled runs, and - since Phase 4 - queued PDF renders, so Retry PDF wakes a worker (tests/bas-reports-queue-guards.test.ts runs this exact query).
-    expect(worker).toMatch(/query: 'SELECT count\(\*\) FROM bas_report_runs WHERE status = \\'queued\\' OR \(status = \\'running\\' AND heartbeat_at < now\(\) - interval \\'10 minutes\\'\) OR pdf_status = \\'queued\\''/);
+    // Queued runs, stalled runs, queued PDF renders (Phase 4) and - since the email half, 2026-11-17 - due report
+    // emails, so Retry PDF, Resend and Send to me each wake a worker (tests/bas-reports-queue-guards.test.ts runs this exact query).
+    expect(worker).toMatch(
+      /query: 'SELECT \(SELECT count\(\*\) FROM bas_report_runs WHERE status = \\'queued\\' OR \(status = \\'running\\' AND heartbeat_at < now\(\) - interval \\'10 minutes\\'\) OR pdf_status = \\'queued\\'\) \+ \(SELECT count\(\*\) FROM bas_report_deliveries WHERE status = \\'pending\\' AND next_attempt_at <= now\(\) AND attempts < 3\) AS count'/,
+    );
     expect(worker).toMatch(/secretRef: 'database-url'\s*\n\s*triggerParameter: 'connection'/);
     expect(worker).toMatch(/command: \[\s*'npx'\s*'tsx'\s*'scripts\/bas-reports-worker\.ts'\s*\]/);
     // Both run the same image, from the parameter with no placeholder default.
@@ -2000,6 +2003,8 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect((scheduler.match(/keyVaultUrl:/g) ?? []).length).toBe(1);
     for (const block of [worker, scheduler]) {
       for (const line of block.split("\n").filter((l) => /^\s*value:/.test(l))) {
+        // authUrl is the platform's public address, the email's link (2026-11-17): not a secret.
+        if (/^\s*value: authUrl$/.test(line)) continue;
         expect(line).not.toMatch(/password|secret|Url|Key|Password/);
       }
       expect(block).toMatch(/name:\s*'DATABASE_URL'\s*\n\s*secretRef:\s*'database-url'/);
@@ -2270,5 +2275,87 @@ describe("the container app's scale is the template's, parameterised (2026-11-12
     expect(scale?.minReplicas).toBe("[parameters('appMinReplicas')]");
     expect(scale?.maxReplicas).toBe("[parameters('appMaxReplicas')]");
     expect(scale?.rules).toEqual([{ name: "http-scaler", http: { metadata: { concurrentRequests: "[string(parameters('appHttpConcurrentRequests'))]" } } }]);
+  });
+});
+
+describe("the BAS report email: a send gate set explicitly from a boolean, the worker only, and no secret (2026-11-17)", () => {
+  /**
+   * Reports, Phase 4, the email half. The worker sends each finished run from
+   * the BAS mailbox through phb-platform-bas-mail (Request 7). Mirrors the
+   * PHB_ALLOW_SEND guard above: the gate is a PLAIN value on the worker,
+   * present on every deployment - never absent, which would read as closed
+   * silently, and never a hand-typed string - written from the boolean
+   * parameter basReportsAllowSend, default false. The worker opens it for
+   * exactly "true" (lib/modules/bas/reports/job-env.ts), so the template's
+   * two literals are exactly 'true' and 'false'. No Key Vault secret: the
+   * app is reached with the managed identity and a federated credential,
+   * and a client secret in production is refused by the sender.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, relative), "utf8"));
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  const resourceBlock = (bicep: string, name: string) => {
+    const start = bicep.indexOf(`resource ${name} `);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\nvar "), rest.indexOf("\noutput ")].filter((i) => i > 0);
+    return rest.slice(0, ends.length ? Math.min(...ends) : undefined);
+  };
+
+  it("the gate is a boolean parameter, false by default, written to the worker as exactly 'true' or 'false' on every deployment", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param basReportsAllowSend bool = false$/m);
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    expect(worker).toMatch(/name: 'BAS_REPORTS_ALLOW_SEND'\s*\n\s*value: basReportsAllowSend \? 'true' : 'false'\n/);
+    // One entry, a value, never a secretRef.
+    expect(worker.match(/'BAS_REPORTS_ALLOW_SEND'/g)).toHaveLength(1);
+    expect(worker).not.toMatch(/name: 'BAS_REPORTS_ALLOW_SEND'\s*\n\s*secretRef/);
+    // The reader opens it for exactly "true": the two literals above are the only ones it can receive.
+    const reader = await readFile("lib/modules/bas/reports/job-env.ts");
+    expect(reader).toMatch(/allowSend: env\[BAS_REPORTS_ALLOW_SEND_VAR\] === "true"/);
+  });
+
+  it("only the worker carries it: the scheduler and the web app never send a report", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(resourceBlock(code, "basReportsSchedulerJob")).not.toMatch(/BAS_REPORTS_ALLOW_SEND|BAS_MAIL/);
+    expect(code.match(/'BAS_REPORTS_ALLOW_SEND'/g)).toHaveLength(1);
+    expect(code.match(/name: 'BAS_MAIL_CLIENT_ID'/g)).toHaveLength(1);
+  });
+
+  it("the sender app's ids and mailbox come from parameters with empty defaults, as plain values", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    for (const param of ["basMailClientId", "basMailTenantId", "basMailbox"]) {
+      expect(code, param).toMatch(new RegExp(`^param ${param} string = ''$`, "m"));
+    }
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    expect(worker).toMatch(/name: 'BAS_MAIL_CLIENT_ID'\s*\n\s*value: basMailClientId\n/);
+    expect(worker).toMatch(/name: 'BAS_MAIL_TENANT_ID'\s*\n\s*value: basMailTenantId\n/);
+    expect(worker).toMatch(/name: 'BAS_MAILBOX'\s*\n\s*value: basMailbox\n/);
+    expect(worker).toMatch(/name: 'GRAPH_MANAGED_IDENTITY_CLIENT_ID'\s*\n\s*value: identity\.properties\.clientId\n/);
+    expect(worker).toMatch(/name: 'PLATFORM_URL'\s*\n\s*value: authUrl\n/);
+    // The example parameters file names the four, with the gate shut and no address: blank is the reader's default mailbox.
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as { parameters: Record<string, { value: unknown }> };
+    expect(example.parameters.basReportsAllowSend?.value).toBe(false);
+    expect(example.parameters.basMailbox?.value).toBe("");
+    expect(await readFile("lib/modules/bas/reports/job-env.ts")).toMatch(/export const DEFAULT_BAS_MAILBOX = "controlls@phb1899\.com";/);
+    expect(example.parameters.basMailClientId?.value).toBe("");
+    expect(example.parameters.basMailTenantId?.value).toBe("");
+  });
+
+  it("adds no secret: no client secret anywhere in the template, and the worker still reads three by reference", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).not.toMatch(/BAS_MAIL_CLIENT_SECRET|BAS-MAIL/);
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    expect((worker.match(/keyVaultUrl:/g) ?? []).length).toBe(3);
+    // The sender refuses a secret in production, the Change Orders credential's rule.
+    const reader = await readFile("lib/modules/bas/reports/job-env.ts");
+    expect(reader).toMatch(/is set in production\. Production sends with the managed identity and a federated identity credential/);
+    const mailer = await readFile("lib/modules/bas/reports/email/mailer.ts");
+    expect(mailer).toMatch(/secretInProduction:/);
+    expect(mailer).toMatch(/createManagedIdentityAssertionProvider/);
   });
 });

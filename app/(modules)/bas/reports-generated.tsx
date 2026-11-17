@@ -6,7 +6,8 @@ import { Button } from "@/components/ui";
 import { describePdfState, pdfStateKind } from "@/lib/modules/bas/reports/pdf/naming";
 import type { RunsList, RunSummary } from "@/lib/modules/bas/reports/runs-service";
 import { ApiError, type Tone } from "./health-client";
-import { downloadRunPdf, fetchRuns, retryRunPdf } from "./reports-client";
+import { downloadRunPdf, fetchRuns, resendRunEmail, retryRunPdf } from "./reports-client";
+import { DeliveryCell } from "./reports-run-deliveries";
 import { DownloadPdfButton } from "./reports-run-actions";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
@@ -19,8 +20,10 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * finish; Queued and Running are states a row can hold now. Since Phase 4's
  * PDF half (2026-11-13) each row carries its PDF's state and a Download -
  * greyed with a tooltip until the PDF is ready - and Retry PDF when a
- * render failed. No Resend: email is the other half of Phase 4, and a
- * button that does nothing would be worse than none.
+ * render failed. Since the email half (2026-11-17) the Delivery column is
+ * the run's email - "3 of 3 sent", "1 failed" with Resend beside it, "Not
+ * sent — sending disabled" while the worker's send gate is closed
+ * (reports-run-deliveries.tsx).
  */
 
 /** How often the list reloads while the tab is visible. */
@@ -102,6 +105,20 @@ export function GeneratedView() {
   }, [load]);
 
   const [busyRunId, setBusyRunId] = useState<string | null>(null);
+  const resend = useCallback(
+    async (runId: string) => {
+      setBusyRunId(runId);
+      try {
+        await resendRunEmail(runId);
+        await load();
+      } catch (cause) {
+        setError(cause instanceof ApiError ? cause : new ApiError("unexpected", "Something went wrong."));
+      } finally {
+        setBusyRunId(null);
+      }
+    },
+    [load],
+  );
   const retryPdf = useCallback(
     async (runId: string) => {
       setBusyRunId(runId);
@@ -127,19 +144,21 @@ export function GeneratedView() {
           {error.message}
         </p>
       )}
-      <RunsTable data={data} onRetryPdf={(runId) => void retryPdf(runId)} busyRunId={busyRunId} />
+      <RunsTable data={data} onRetryPdf={(runId) => void retryPdf(runId)} onResend={(runId) => void resend(runId)} busyRunId={busyRunId} />
     </>
   );
 }
 
-/** Pure, for a node test; Retry PDF is the one action a row takes here. */
+/** Pure, for a node test; Retry PDF and Resend are the two actions a row takes here. */
 export function RunsTable({
   data,
   onRetryPdf,
+  onResend,
   busyRunId = null,
 }: {
   data: RunsList;
   onRetryPdf?: (runId: string) => void;
+  onResend?: (runId: string) => void;
   busyRunId?: string | null;
 }) {
   if (data.runs.length === 0 && data.runsInDatabase === 0) {
@@ -203,7 +222,9 @@ export function RunsTable({
                   <td className="py-3 pr-3">
                     <PdfCell run={r} onRetryPdf={onRetryPdf} busy={busyRunId === r.runId} />
                   </td>
-                  <td className="py-3 pr-4 text-[var(--muted)]">Not sent: email is a later phase</td>
+                  <td className="py-3 pr-4">
+                    <DeliveryCell run={r} onResend={onResend} busy={busyRunId === r.runId} />
+                  </td>
                 </tr>
               );
             })}

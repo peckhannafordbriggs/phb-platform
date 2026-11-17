@@ -488,7 +488,7 @@ describe("the worker", () => {
     expect(once.runs.map((c) => c.runId)).toEqual([a.runId]);
     const rest = await drainQueue({ narrator: createFixedNarrator(), pdf: null });
     expect(rest.runs.map((c) => c.runId)).toEqual([b.runId]);
-    expect(await drainQueue({ narrator: createFixedNarrator(), pdf: null })).toEqual({ runs: [], pdfs: [] });
+    expect(await drainQueue({ narrator: createFixedNarrator(), pdf: null })).toEqual({ runs: [], pdfs: [], deliveries: [] });
   });
 
   it("runs as the real script under tsx - the worker's loader - and finishes the run", async () => {

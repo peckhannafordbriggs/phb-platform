@@ -29,6 +29,9 @@ type ReportsErrorCode = Extract<
   | "owner_not_eligible"
   | "pdf_not_available"
   | "pdf_not_retryable"
+  | "nothing_to_resend"
+  | "run_not_sendable"
+  | "delivery_pending"
 >;
 
 /**
@@ -73,6 +76,10 @@ const STATUS: Record<ReportsErrorCode, number> = {
   // The run is visible, so 404 would be a lie; the file is what is missing.
   pdf_not_available: 409,
   pdf_not_retryable: 409,
+  // The email half of Phase 4: the run is visible, the action does not apply to it now.
+  nothing_to_resend: 409,
+  run_not_sendable: 409,
+  delivery_pending: 409,
 };
 
 function isReportsError(code: BasErrorCode): code is ReportsErrorCode {

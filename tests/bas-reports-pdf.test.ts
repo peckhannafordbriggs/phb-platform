@@ -736,7 +736,7 @@ describe("Chromium lives in the job image and nowhere the web app serves", () =>
     expect(jobs).toMatch(/npx playwright install --with-deps --only-shell chromium/);
   });
 
-  it("every read of a run in lib/ and app/ selects its columns by name, and only loadRunPdf selects the bytes", () => {
+  it("every read of a run in lib/ and app/ selects its columns by name, and only loadRunPdf and the email's loader select the bytes", () => {
     const reads: Array<{ file: string; call: string }> = [];
     for (const file of [...sourceFiles("lib"), ...sourceFiles("app")]) {
       const code = stripComments(readFileSync(path.join(ROOT, file), "utf8"));
@@ -764,8 +764,10 @@ describe("Chromium lives in the job image and nowhere the web app serves", () =>
       expect(r.call, `${r.file}: ${r.call.slice(0, 80)}`).not.toMatch(/include:/);
     }
     const selectingBytes = reads.filter((r) => /\bpdf:\s*true/.test(r.call));
-    expect(selectingBytes.map((r) => r.file)).toEqual(["lib/modules/bas/reports/runs-service.ts"]);
-    expect(selectingBytes).toHaveLength(1);
+    // The download route's loadRunPdf, and since 2026-11-17 the email's loadRunEmail, which attaches the PDF -
+    // and reads it only once it knows the PDF is small enough to attach.
+    expect(selectingBytes.map((r) => r.file).sort()).toEqual(["lib/modules/bas/reports/email/send.ts", "lib/modules/bas/reports/runs-service.ts"]);
+    expect(selectingBytes).toHaveLength(2);
     // RUN_SELECT, the list's and the detail's columns, leaves the bytes out.
     const service = readFileSync(path.join(ROOT, "lib/modules/bas/reports/runs-service.ts"), "utf8");
     const select = /const RUN_SELECT = \{([\s\S]*?)\} as const;/.exec(service)?.[1] ?? "";

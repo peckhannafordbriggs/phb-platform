@@ -1,7 +1,15 @@
 import "./load-env";
 import { prisma } from "../lib/db";
 import { createAnthropicNarrator } from "../lib/modules/bas/reports/engine/narrative";
-import { ANTHROPIC_API_KEY_VAR, plannerUnavailableReason, readWorkerJobEnv } from "../lib/modules/bas/reports/job-env";
+import {
+  ANTHROPIC_API_KEY_VAR,
+  BAS_REPORTS_ALLOW_SEND_VAR,
+  mailNotConfiguredReason,
+  plannerUnavailableReason,
+  readWorkerJobEnv,
+  readWorkerMailEnv,
+} from "../lib/modules/bas/reports/job-env";
+import { createReportMailer } from "../lib/modules/bas/reports/email/mailer";
 import { createAnthropicReportPlanner } from "../lib/modules/bas/reports/engine/planner-questions";
 import { createChromiumRenderer } from "../lib/modules/bas/reports/pdf/render";
 import { drainQueue } from "../lib/modules/bas/reports/worker";
@@ -13,6 +21,7 @@ import { drainQueue } from "../lib/modules/bas/reports/worker";
  *   npm run bas:reports:worker -- --once        one run at most, then exit
  *   npm run bas:reports:worker -- --no-narrative  skip the model: runs finish partial and say so
  *   npm run bas:reports:worker -- --no-pdf      skip Chromium: PDFs stay queued for a worker that has it
+ *   npm run bas:reports:worker -- --no-email    skip the email: deliveries stay pending for a worker that sends
  *
  * In Azure a Container Apps Job runs this per execution (infra/main.bicep,
  * basReportsWorkerJob), started by a scaler that counts queued runs,
@@ -33,7 +42,13 @@ import { drainQueue } from "../lib/modules/bas/reports/worker";
  * tsx, the loader tests/bas-reports-worker-render.test.ts proves the
  * template renders under.
  *
- * Both are read through lib/modules/bas/reports/job-env.ts and NEVER
+ * The report email (2026-11-17): after the PDFs, every delivery that is
+ * due is sent from BAS_MAILBOX (controlls@phb1899.com) through the
+ * phb-platform-bas-mail app registration - or, while
+ * BAS_REPORTS_ALLOW_SEND is not exactly "true", marked not sent with
+ * nothing leaving the platform. This process is the only sender.
+ *
+ * All of it is read through lib/modules/bas/reports/job-env.ts and NEVER
  * through lib/env.ts: that module parses the web app's whole boot schema
  * on import, and importing one name from it failed this job on every
  * production execution (ALLOWED_EMAIL_DOMAINS, a variable the job does
@@ -44,6 +59,7 @@ import { drainQueue } from "../lib/modules/bas/reports/worker";
 const once = process.argv.includes("--once");
 const noNarrative = process.argv.includes("--no-narrative");
 const noPdf = process.argv.includes("--no-pdf");
+const noEmail = process.argv.includes("--no-email");
 let stopping = false;
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -69,15 +85,29 @@ async function main(): Promise<void> {
       ? createAnthropicReportPlanner({ apiKey: jobEnv.anthropicApiKey, askDatabaseUrl: jobEnv.askDatabaseUrl })
       : null;
   const pdf = noPdf ? null : createChromiumRenderer();
+  const mailEnv = readWorkerMailEnv();
+  const email = noEmail ? null : { mailer: createReportMailer(mailEnv), platformUrl: mailEnv.platformUrl };
+  const mailProblem = mailNotConfiguredReason(mailEnv);
   console.log(
     `[bas-reports-worker] narrator: ${narrator === null ? (noNarrative ? "off (--no-narrative)" : `none (${ANTHROPIC_API_KEY_VAR} unset; runs finish partial)`) : narrator.model}`,
   );
   console.log(`[bas-reports-worker] planner: ${planner === null ? `none (${plannerUnavailable})` : planner.model}`);
   console.log(`[bas-reports-worker] pdf: ${pdf === null ? "off (--no-pdf; renders stay queued)" : "Chromium, launched on the first render"}`);
+  console.log(
+    `[bas-reports-worker] email: ${
+      email === null
+        ? "off (--no-email; deliveries stay pending)"
+        : !mailEnv.allowSend
+          ? `sending disabled (${BAS_REPORTS_ALLOW_SEND_VAR} is not "true"): due deliveries are recorded as not sent`
+          : mailProblem !== null
+            ? `NOT CONFIGURED - ${mailProblem}`
+            : `from ${mailEnv.mailbox}`
+    }`,
+  );
   console.log(`[bas-reports-worker] ${once ? "one run at most, then exit" : "working until the queue is empty"}`);
 
   try {
-    const done = await drainQueue({ narrator, planner, plannerUnavailable, pdf }, once ? { maxRuns: 1 } : {});
+    const done = await drainQueue({ narrator, planner, plannerUnavailable, pdf, email }, once ? { maxRuns: 1 } : {});
     for (const claim of done.runs) {
       console.log(`[bas-reports-worker] run ${claim.runId} of report ${claim.reportId}: done${claim.reclaimed ? " (reclaimed after a stall)" : ""}`);
     }
@@ -88,8 +118,12 @@ async function main(): Promise<void> {
           : `[bas-reports-worker] pdf of run ${outcome.runId} (${outcome.name}): FAILED - ${outcome.error}`,
       );
     }
+    for (const d of done.deliveries) {
+      // The delivery id and the run, never the address: the row has it, the log does not need it.
+      console.log(`[bas-reports-worker] delivery ${d.deliveryId} of run ${d.runId}: ${d.status}${d.error !== null ? ` - ${d.error}` : ""}`);
+    }
     console.log(
-      `[bas-reports-worker] ${done.runs.length} run(s) worked, ${done.pdfs.length} pdf(s) rendered; queue ${done.runs.length === 0 || once ? "checked" : "empty"}`,
+      `[bas-reports-worker] ${done.runs.length} run(s) worked, ${done.pdfs.length} pdf(s) rendered, ${done.deliveries.length} delivery(ies) handled; queue ${done.runs.length === 0 || once ? "checked" : "empty"}`,
     );
   } finally {
     if (pdf !== null) await pdf.close();

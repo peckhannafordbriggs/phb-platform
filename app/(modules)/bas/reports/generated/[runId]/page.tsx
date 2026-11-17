@@ -7,6 +7,7 @@ import { REPORT_CSS, ReportView } from "@/lib/modules/bas/reports/engine/render"
 import { getRun } from "@/lib/modules/bas/reports/runs-service";
 import { BasShell } from "../../../bas-shell";
 import { PRINT_PAGE_CSS, REPORT_PRINT_ID, RunActions } from "../../../reports-run-actions";
+import { RunDeliveries } from "../../../reports-run-deliveries";
 import { PlannerHowToggle } from "../../../reports-planner-how";
 import { basTab } from "../../../tabs";
 
@@ -23,6 +24,10 @@ export const dynamic = "force-dynamic";
  * is the browser's dialog over PRINT_PAGE_CSS, which keeps only the
  * report's section visible; Download is the PDF the worker rendered from
  * the same HTML, through the run's pdf route.
+ *
+ * The run's email (2026-11-17): a card above the report lists each address,
+ * owner first, with its state, and offers Resend and Send to me
+ * (reports-run-deliveries.tsx). It is outside the print section.
  *
  * Planner answers (2026-11-16) carry a "Show how this was answered" toggle
  * here and only here: the page fills ReportView's `plannerDetails` slot,
@@ -54,6 +59,7 @@ export default async function BasReportRunPage({ params }: { params: Promise<{ r
         <Link href="/bas/reports" className="text-sm text-[var(--muted)] hover:underline">
           ← All reports
         </Link>
+        <RunDeliveries runId={run.runId} status={run.status} timezone={run.timezone} deliveries={run.deliveries} summary={run.delivery} />
         {run.document === null ? (
           <section className="card p-8 text-center">
             <p className="text-sm font-medium">This run has no report</p>

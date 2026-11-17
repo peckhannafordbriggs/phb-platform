@@ -50,6 +50,9 @@ async function main(): Promise<void> {
   for (const r of pass.abandoned.unclaimedPdfs) {
     console.log(`[bas-reports-scheduler] failed the PDF of run ${r.runId} (${r.name}): never claimed - ${r.error}`);
   }
+  for (const d of pass.abandoned.abandonedDeliveries) {
+    console.log(`[bas-reports-scheduler] failed delivery ${d.deliveryId} of run ${d.runId}: ${d.error}`);
+  }
   console.log(
     `[bas-reports-scheduler] ${pass.enqueued.length} queued, ${pass.paused.length} paused, ${pass.skipped.length} skipped, ${abandonedCount(pass.abandoned)} abandoned`,
   );

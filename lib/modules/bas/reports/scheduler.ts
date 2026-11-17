@@ -50,7 +50,7 @@ export interface SchedulerPass {
 }
 
 export function abandonedCount(report: AbandonedWorkReport): number {
-  return report.unclaimedRuns.length + report.stalledRuns.length + report.unclaimedPdfs.length;
+  return report.unclaimedRuns.length + report.stalledRuns.length + report.unclaimedPdfs.length + report.abandonedDeliveries.length;
 }
 
 /**

@@ -1699,6 +1699,36 @@ failed every Analyze question until the role script was re-run;
 production was not checked. `WHY-ITS-BUILT-THIS-WAY.md` § 86;
 `runbook.md` → *Reports: a planner question says …*.
 
+**Reports, Phase 4, the email half - built 2026-11-17, cannot send until
+Request 7 lands and the gate is opened.** When a run has finished
+(succeeded or partial) and its PDF is ready, the worker writes one
+`bas_report_deliveries` row per address - the owner first, from the
+employee record, never a recipient row; then the recipient rows - unique
+on (run, email), and sends **one message per row** from
+`controlls@phb1899.com` through a fifth app registration,
+`phb-platform-bas-mail` (Mail.Send, fenced by its own
+ApplicationAccessPolicy), with `sendMail`: three attempts on a 1- and
+5-minute backoff, then *Failed* with **Resend**. The PDF rides along under
+Graph's 3 MB simple-upload line, the link alone above it. **The worker is
+the only sender**: Resend (failed rows only) and *Send to me* write rows,
+audited, and the scaler counts due rows; `sendMail` appears in one file
+(`email/mailer.ts`) and nothing under `app/` imports it, held by a test.
+**`BAS_REPORTS_ALLOW_SEND`** mirrors `PHB_ALLOW_SEND` - exactly `true`
+opens it - is written on every deployment from `basReportsAllowSend`
+(default false), and shut means every due row is *Not sent — sending
+disabled* with no token fetched; outside production the sender also
+refuses any non-`@phb1899.com` address. **No Key Vault secret**: the
+managed identity and a federated credential, from the Change Orders
+credential and client, now shared as `lib/mail/` (Change Orders' tests
+unchanged and green); a client secret in production is refused. The
+template must be deployed before the gate can open - the worker's
+environment and the scaler's count come only from it. Prohibition 1 is
+the change-order system's and is untouched: a different mailbox and app,
+decided in the plan (§A *Sender*, §D5). `graph_request_id`, not a message
+id: `sendMail` answers 202 with no body. `WHY-ITS-BUILT-THIS-WAY.md` § 87;
+`runbook.md` → *Turning report email on*, *A report email did not arrive*,
+*What to ask IT for* → Request 7.
+
 **Admin → Employees on the shared kit (2026-11-13).** The page wears the
 module shells' chrome - the tinted ground, the header with the chrome purple
 by name (`ModuleHeader`'s new `accent`; Admin is not a module and has no key
