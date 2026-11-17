@@ -72,15 +72,19 @@
 --   The server's firewall must admit the shell. Add a temporary rule for the
 --   shell's outbound address and remove it afterwards:
 --     IP=$(curl -s https://ifconfig.me)
---     az postgres flexible-server firewall-rule create -g <resource-group> -n <server> \
---        --rule-name cloudshell-temp --start-ip-address $IP --end-ip-address $IP
+--     az postgres flexible-server firewall-rule create -g <resource-group> -s <server> -n cloudshell-temp \
+--        --start-ip-address $IP --end-ip-address $IP
 --     ...run the script...
---     az postgres flexible-server firewall-rule delete -g <resource-group> -n <server> \
---        --rule-name cloudshell-temp --yes
+--     az postgres flexible-server firewall-rule delete -g <resource-group> -s <server> -n cloudshell-temp --yes
+--   (-s is the server and -n the rule - the only spelling az accepts.)
 --
 --   Re-running rotates the password and re-asserts the grants; it never widens
---   them. It proves the boundary before it finishes and fails loudly if the
---   proof fails. Then the URL for Key Vault (BAS-ASK-DATABASE-URL; infra/README.md):
+--   them. AFTER A MIGRATION that adds a bas_* table, re-run it with the
+--   EXISTING password - the one inside the BAS-ASK-DATABASE-URL secret - so the
+--   URL the container app holds stays valid: runbook.md -> *Analyze answers
+--   "permission denied" for every question* -> *Re-run after a migration* has
+--   the PowerShell steps from a laptop. It proves the boundary before it
+--   finishes and fails loudly if the proof fails. On a first run, then the URL for Key Vault (BAS-ASK-DATABASE-URL; infra/README.md):
 --
 --     postgresql://bas_analyze:<the password you chose>@<server>.postgres.database.azure.com:5432/phb_platform?sslmode=require
 --
