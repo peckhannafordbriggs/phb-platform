@@ -92,6 +92,8 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
     "bas_report_findings",
     // 2026-11-12: the module's safety ceiling, a setting.
     "bas_report_settings",
+    // 2026-11-17: who each run was emailed to.
+    "bas_report_deliveries",
   ];
 
   const BAS_VIEWS = [

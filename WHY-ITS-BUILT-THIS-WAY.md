@@ -3631,3 +3631,64 @@ engine and the worker boots the web app's environment. Run planner
 questions first and a large custom list can starve the narrative.
 Fingerprint planner answers and New / Cleared becomes a measure of the
 model's wording.
+
+## 87 · Report email: the worker is the only sender, one message per address, behind a gate of its own, on the Change Orders credential
+
+**What I did (2026-11-17).** The email half of Reports Phase 4. A ready
+PDF writes the run's delivery rows (owner first, from the employee
+record; then the recipient rows), unique on (run, email), and the worker
+sends one `sendMail` per row from `controlls@phb1899.com` as
+`phb-platform-bas-mail`. Three attempts on a 1- and 5-minute backoff,
+then *Failed* and Resend. `BAS_REPORTS_ALLOW_SEND` gates it.
+
+**Why this does not break prohibition 1.** Prohibition 1 is the
+change-order system's safety model: vendor mail from `changeorder@`, one
+human, one draft. This is a different mailbox, a different app whose
+Exchange policy refuses every other mailbox, and a decision the owner
+made in the plan (§A *Sender*, §D5) - a scheduled report to the people
+who asked for it. Nothing here can reach `changeorder@`: the mailbox is
+this module's configuration and the app's policy is the fence at Exchange.
+
+**Why the worker and never the web app.** One sender is one place to
+gate, log and test. Resend and Send to me write rows; the scaler counts
+due rows, so they still go within seconds. A test holds `sendMail` to one
+file and the mailer's importers to the worker's path.
+
+**Why a gate of its own, set explicitly.** `PHB_ALLOW_SEND` is the change
+orders' and has been `true` since 2026-10-14; reusing it would open report
+email the moment the code deployed. The new gate is written on every
+template deployment from a boolean, so it is never absent (which would
+read as shut, silently) and never hand-typed. Shut, the worker marks rows
+*Not sent* in one statement before any claim, and the mailer refuses again
+before any request.
+
+**Why `sendMail` and no message id.** Request 7 grants Mail.Send only: the
+app may send as the mailbox and may not read or write its items, so the
+draft-then-send the Change Orders module uses is not open to it, and
+`sendMail` answers 202 with no body. The row keeps Graph's request id; the
+message carries `X-PHB-Report-Delivery: <delivery id>` for a trace. The
+price: a worker that dies between the 202 and the database write sends
+that one message again after the lease. Asking for Mail.ReadWrite to close
+that window would widen the app's grant for a rare duplicate of a report
+email - not worth it.
+
+**Why the shared `lib/mail/`.** The worker's import graph must never reach
+`lib/env.ts` (§ 80), and the Change Orders credential imported it at the
+top. The mechanism - assertion in production, secret on a developer
+machine, a secret in production refused - moved to `lib/mail/credential.ts`
+with `production` passed in, and the middleware chain to
+`lib/mail/graph-client.ts`; Change Orders keeps its file names, its
+MailError vocabulary and every test unchanged. A second copy of the
+credential path would be two places for prohibition 7 to drift.
+
+**Why rows are written at PDF-ready and not at run end.** The plan sends
+after the PDF exists; writing rows earlier would mean a row waiting on a
+render that may fail. A failed render writes none, and Retry PDF's success
+writes them then.
+
+**What breaks if you undo it.** Send from the web app and the gate has two
+homes. Reuse `PHB_ALLOW_SEND` and production starts mailing reports the
+day this merges. Drop the unique key and a repeated worker mails everyone
+twice. Read the owner from a recipient row and a removed row silences the
+owner. Copy the credential instead of sharing it and the next
+prohibition-7 fix lands in one of the two.

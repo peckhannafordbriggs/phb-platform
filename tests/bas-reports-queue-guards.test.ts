@@ -247,7 +247,7 @@ describe("the scheduler's pass takes abandoned work out of the scaler's count", 
     expect(report.unclaimedRuns.map((r) => r.runId)).toEqual([unclaimed.runId.toString()]);
     expect(report.stalledRuns).toEqual([]);
     expect(report.unclaimedPdfs).toEqual([]);
-    expect(await failAbandonedWork()).toEqual({ unclaimedRuns: [], stalledRuns: [], unclaimedPdfs: [] });
+    expect(await failAbandonedWork()).toEqual({ unclaimedRuns: [], stalledRuns: [], unclaimedPdfs: [], abandonedDeliveries: [] });
   });
 
   it("the scheduler script prints what it failed and counts it", async () => {

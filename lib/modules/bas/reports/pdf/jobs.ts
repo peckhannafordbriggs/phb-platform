@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { enqueueRunDeliveries } from "../deliveries";
 import { periodLabel, renderFailedSentence, renderInProgressSentence } from "./naming";
 import { looksLikePdf, type PdfBytes, type PdfRenderer } from "./render";
 
@@ -27,6 +28,13 @@ import { looksLikePdf, type PdfBytes, type PdfRenderer } from "./render";
  * what the engine stored, and `renderClaimedPdf` never throws for a render
  * that failed - only for a database that would not take the result, which
  * is the worker's to stop on.
+ *
+ * A READY PDF IS WHAT STARTS THE EMAIL (2026-11-17). In the same transaction
+ * that stores the bytes, the run's delivery rows are written - the owner
+ * first, then each recipient (deliveries.ts) - for a run that succeeded or
+ * finished partial; the worker sends them next. A render that fails writes
+ * none, so a run is emailed when Retry PDF gives it a PDF, and once: the
+ * rows are unique on (run, email).
  */
 
 export interface PdfJob {
@@ -103,13 +111,20 @@ export async function renderClaimedPdf(job: PdfJob, renderer: PdfRenderer, now: 
     return { ...base, ok: false, bytes: null, error: sentence };
   }
 
-  await prisma.basReportRun.update({
-    where: { runId: job.runId },
-    data: { pdf: bytes, pdfBytes: bytes.length, pdfRenderedAt: now(), pdfStatus: "ready", pdfError: null, pdfQueuedAt: null },
-    // The bytes just written are not echoed back.
-    select: { runId: true },
+  const at = now();
+  const deliveries = await prisma.$transaction(async (tx) => {
+    await tx.basReportRun.update({
+      where: { runId: job.runId },
+      data: { pdf: bytes, pdfBytes: bytes.length, pdfRenderedAt: at, pdfStatus: "ready", pdfError: null, pdfQueuedAt: null },
+      // The bytes just written are not echoed back.
+      select: { runId: true },
+    });
+    return enqueueRunDeliveries(tx, job.runId, at);
   });
-  logger.info("bas.report_pdf_rendered", { outcome: "ready", reason: `run ${job.runId} of report ${job.reportId}: ${bytes.length} bytes` });
+  logger.info("bas.report_pdf_rendered", {
+    outcome: "ready",
+    reason: `run ${job.runId} of report ${job.reportId}: ${bytes.length} bytes; ${deliveries} delivery(ies) queued`,
+  });
   return { ...base, ok: true, bytes: bytes.length, error: null };
 }
 

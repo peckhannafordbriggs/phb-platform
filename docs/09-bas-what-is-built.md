@@ -1059,8 +1059,8 @@ worker's scaler query counts queued renders so a retry wakes a worker.
 `GET /api/modules/bas/reports/runs/<id>/pdf` serves the bytes as
 `<report name> <start> to <end>.pdf` under the run's own visibility rule
 (`loadRunPdf`, the one read of the bytes); a visible run with no PDF is 409
-`pdf_not_available` with the reason. Email is the other half of Phase 4
-and waits on the sender app registration.
+`pdf_not_available` with the reason. Email is the other half of Phase 4,
+built 2026-11-17 (below), and needs the sender app registration to send.
 
 **On screen.** The run page's bar carries *Print* (the browser's dialog
 over `PRINT_PAGE_CSS`, the report alone) and a red *Download*
@@ -1313,6 +1313,45 @@ collector store per day?* in 23 s for $0.0631; the run $0.3012 with the
 narrative. Captures in `docs/design/bas-reports-planner/`.
 `WHY-ITS-BUILT-THIS-WAY.md` § 86; `runbook.md` → *Reports: a planner
 question*.
+
+### Reports — Phase 4, the email half (2026-11-17)
+
+**What exists.** `bas_report_deliveries` (`20261117120000_add_bas_report_deliveries`):
+one row per address per run, unique on (run, email), status `pending` /
+`sent` / `failed` / `not_sent`, attempts (at most three), the next attempt
+time, the last error, Graph's request id and when it was sent. Written by
+`enqueueRunDeliveries` (`deliveries.ts`) in the transaction that stores a
+ready PDF (`pdf/jobs.ts`), for a run that succeeded or finished partial:
+the owner first from the employee record, then the recipient rows. Sent
+by the worker (`email/send.ts` `drainDeliveries`, after each run's PDFs and
+at the end of an execution) through `email/mailer.ts`: the gate, then the
+company-only fence outside production, then one `sendMail` per row from
+`BAS_MAILBOX` (default `controlls@phb1899.com`) as `phb-platform-bas-mail`
+on the shared credential and client (`lib/mail/`, moved out of the Change
+Orders module the same day). The message is `email/message.ts`: subject,
+building status, three top findings, New / Still open / Cleared, the Not
+monitored line, the PDF line and the link. *Resend* (failed rows only) and
+*Send to me* (`runs-service.ts`; `POST …/runs/<id>/deliveries/resend` and
+`…/send-to-me`, 202, audited) write rows for the worker. The scheduler's
+pass fails a delivery due for an hour and never taken (`queue-guards.ts`).
+
+**On screen.** The Reports list's *Delivery* column (`DeliveryCell`):
+*3 of 3 sent*, *1 failed* with Resend, *Not sent — sending disabled*,
+*Waiting for the PDF*. The run page's *Email* card (`RunDeliveries`): every
+address with its state, attempts and reason, Resend and Send to me.
+
+**Template.** The worker job gains six plain values - `BAS_MAIL_CLIENT_ID`,
+`BAS_MAIL_TENANT_ID`, `BAS_MAILBOX` from parameters with empty defaults,
+`BAS_REPORTS_ALLOW_SEND` from `basReportsAllowSend` (default false),
+`GRAPH_MANAGED_IDENTITY_CLIENT_ID` and `PLATFORM_URL` - and its scaler
+counts due deliveries. No secret, no role assignment.
+
+**Not built.** Anything that sends without the worker; a per-report
+choice of whether to email; a digest across reports; message ids (the app
+holds Mail.Send only). **Not proven:** a send to the live mailbox - the
+app does not exist yet. Every Graph behaviour here is from the
+documentation and the fake transport, and CLAUDE.md's rule applies: the
+first real Send to me is the verification (*Turning report email on*).
 
 ## Classification — the office building, in SQL
 

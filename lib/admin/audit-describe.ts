@@ -581,6 +581,14 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "bas.report_pdf_retry_requested": ({ actor, meta }) =>
     `${actor} asked for the PDF of the report ${stringField(meta, "name") ?? "(unnamed)"} to be rendered again`,
 
+  "bas.report_resend_requested": ({ actor, meta }) => {
+    const count = typeof meta.count === "number" ? meta.count : 0;
+    return `${actor} asked for ${count} failed email${count === 1 ? "" : "s"} of the report ${stringField(meta, "name") ?? "(unnamed)"} to be sent again`;
+  },
+
+  "bas.report_send_to_me_requested": ({ actor, meta }) =>
+    `${actor} asked for a copy of the report ${stringField(meta, "name") ?? "(unnamed)"} to be emailed to ${stringField(meta, "email") ?? "them"}`,
+
   // Counts rather than names: a sync can touch every skill, and the sync row
   // in cip_skill_syncs holds the detail.
   "cip.skills_synced": ({ actor, meta }) => {
@@ -999,6 +1007,8 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.building_occupancy_updated": "BAS building occupied hours set",
   "bas.report_ceiling_changed": "BAS Reports safety ceiling changed",
   "bas.report_pdf_retry_requested": "BAS report PDF retried",
+  "bas.report_resend_requested": "BAS report email resent",
+  "bas.report_send_to_me_requested": "BAS report emailed to self",
   "cip.skills_synced": "Cost Intelligence skills synced",
   "cip.projects_synced": "Cost Intelligence projects synced",
   "cip.run_started": "Cost Intelligence run started",

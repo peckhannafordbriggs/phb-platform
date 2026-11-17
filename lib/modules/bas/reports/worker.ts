@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import type { Narrator } from "./engine/narrative";
 import type { ReportPlanner } from "./engine/planner-questions";
 import { ReportRunError, executeQueuedRun } from "./engine/run";
+import { drainDeliveries, type DeliveryOptions, type DeliveryOutcome } from "./email/send";
 import { drainPdfQueue, type PdfOutcome } from "./pdf/jobs";
 import type { PdfRenderer } from "./pdf/render";
 import { MAX_ATTEMPTS, STALE_AFTER_MS, STALLED_TWICE_ERROR, failExhaustedStaleRuns } from "./queue-guards";
@@ -36,6 +37,13 @@ import { MAX_ATTEMPTS, STALE_AFTER_MS, STALLED_TWICE_ERROR, failExhaustedStaleRu
  * nowhere else. A worker with no renderer (--no-pdf) leaves renders queued
  * for one that has.
  *
+ * THE EMAIL (2026-11-17). A ready PDF writes the run's delivery rows
+ * (pdf/jobs.ts); after each run's PDFs, and once more at the end, the worker
+ * sends every delivery that is due (email/send.ts) - or, with the send gate
+ * closed, marks them not sent and sends nothing. The worker is the ONLY
+ * sender: a Resend or a Send to me from the web app writes a row, and the
+ * scaler counts due rows, so a worker starts for them on its own.
+ *
  * DRAINING. An execution works until the queue is empty or DRAIN_WINDOW_MS
  * has passed since it started, then exits and lets the scaler start a fresh
  * one for whatever is left. The window plus the most minutes the module's
@@ -65,6 +73,8 @@ export interface WorkerOptions {
   plannerUnavailable?: string | null;
   /** Null means no Chromium (--no-pdf, or a test): queued PDFs stay queued. */
   pdf: PdfRenderer | null;
+  /** The report email. Absent or null (--no-email, or a test): due deliveries stay pending for a worker that has it. */
+  email?: DeliveryOptions | null;
   /** Tests shorten it. */
   heartbeatMs?: number;
   /** The clock the time cap reads. Tests move it. */
@@ -74,6 +84,7 @@ export interface WorkerOptions {
 export interface Drained {
   runs: Claim[];
   pdfs: PdfOutcome[];
+  deliveries: DeliveryOutcome[];
 }
 
 /**
@@ -150,6 +161,8 @@ export async function drainQueue(
   const deadlineMs = started + windowMs;
   const runs: Claim[] = [];
   const pdfs: PdfOutcome[] = [];
+  const deliveries: DeliveryOutcome[] = [];
+  const email = options.email ?? null;
   for (;;) {
     if (limits.maxRuns !== undefined && runs.length >= limits.maxRuns) break;
     if (runs.length > 0 && Date.now() > deadlineMs) break;
@@ -157,10 +170,13 @@ export async function drainQueue(
     if (claim === null) break;
     runs.push(claim);
     pdfs.push(...(await drainPdfQueue(options.pdf, { deadlineMs })));
+    deliveries.push(...(await drainDeliveries(email, { deadlineMs })));
   }
   // What was queued by a retry, or by a run from another worker, while this
   // one had no run of its own. The first pass has no deadline: a worker that
-  // started only for a retry must get to it.
-  pdfs.push(...(await drainPdfQueue(options.pdf, runs.length === 0 ? {} : { deadlineMs })));
-  return { runs, pdfs };
+  // started only for a retry - a PDF, a Resend, a Send to me - must get to it.
+  const tail = runs.length === 0 ? {} : { deadlineMs };
+  pdfs.push(...(await drainPdfQueue(options.pdf, tail)));
+  deliveries.push(...(await drainDeliveries(email, tail)));
+  return { runs, pdfs, deliveries };
 }

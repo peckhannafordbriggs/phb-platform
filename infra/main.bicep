@@ -313,6 +313,27 @@ param basReportsImage string = ''
 @description('When the scheduler runs, as a cron in UTC. Every fifteen minutes: a report due at 06:00 in its building\'s zone is queued within fifteen minutes of that, and the scheduler itself collapses the ticks it missed into one run.')
 param basReportsSchedulerCron string = '*/15 * * * *'
 
+// The report email (Reports, Phase 4, the email half - 2026-11-17). The
+// worker sends each finished run from the BAS mailbox through its own app
+// registration, phb-platform-bas-mail (Vitis Request 7: Graph Mail.Send,
+// application, fenced to the one mailbox by an Exchange
+// ApplicationAccessPolicy, with a federated identity credential for this
+// deployment's managed identity). Every value here is an identifier, not a
+// secret, and NO Key Vault secret is added: production signs in as the app
+// with the managed identity's token, exactly as the Change Orders mail app
+// does, and the worker refuses to send with a client secret set.
+@description('Client ID of the phb-platform-bas-mail app registration (Request 7). Not a secret. Blank: the worker reports the email as not configured and sends nothing.')
+param basMailClientId string = ''
+
+@description('Tenant ID of the phb-platform-bas-mail app registration. Not a secret.')
+param basMailTenantId string = ''
+
+@description('The mailbox report email is sent from. Blank means the controls team mailbox named in lib/modules/bas/reports/job-env.ts (DEFAULT_BAS_MAILBOX); no address is written in this file.')
+param basMailbox string = ''
+
+@description('The report email send gate, mirroring PHB_ALLOW_SEND. False: every delivery is recorded as not sent and nothing leaves the platform. Set true only once Request 7 is complete and a Send to me has been verified (runbook: Turning report email on).')
+param basReportsAllowSend bool = false
+
 
 // ---------------------------------------------------------------------------
 // Phase 12 Part E - the change-order shadow run
@@ -1259,8 +1280,9 @@ resource cipWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableCipWorker) {
 //   never a backfill - and pauses reports whose owner's account is
 //   disabled. It needs the database and nothing else;
 //
-//   the WORKER, on a scaler that counts queued runs, stalled ones and
-//   queued PDF renders, exactly like the Cost Intelligence worker: every
+//   the WORKER, on a scaler that counts queued runs, stalled ones, queued
+//   PDF renders and - since 2026-11-17 - report emails that are due, exactly
+//   like the Cost Intelligence worker: every
 //   fifteen seconds the count is read, and one execution per run starts,
 //   two at most. Each execution runs scripts/bas-reports-worker.ts, which
 //   claims runs with FOR UPDATE SKIP LOCKED, heartbeats every 30 s while
@@ -1401,7 +1423,13 @@ resource basReportsWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableBasRepo
                 // (lib/modules/bas/reports/queue-guards.ts), so a worker that
                 // cannot start does not hold the count above zero with the
                 // scaler restarting it all night (2026-11-12).
-                query: 'SELECT count(*) FROM bas_report_runs WHERE status = \'queued\' OR (status = \'running\' AND heartbeat_at < now() - interval \'10 minutes\') OR pdf_status = \'queued\''
+                //
+                // Since 2026-11-17 the count also holds the report emails that
+                // are due - pending, their time come, an attempt left - which
+                // is what deliveries.ts claims, so a Resend, a Send to me or a
+                // retry after its backoff wakes a worker too. The scheduler's
+                // pass fails a delivery due for an hour and never taken.
+                query: 'SELECT (SELECT count(*) FROM bas_report_runs WHERE status = \'queued\' OR (status = \'running\' AND heartbeat_at < now() - interval \'10 minutes\') OR pdf_status = \'queued\') + (SELECT count(*) FROM bas_report_deliveries WHERE status = \'pending\' AND next_attempt_at <= now() AND attempts < 3) AS count'
                 targetQueryValue: '1'
               }
               auth: [
@@ -1468,6 +1496,41 @@ resource basReportsWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableBasRepo
             {
               name: 'NODE_ENV'
               value: 'production'
+            }
+            // The report email (2026-11-17): identifiers, never a secret.
+            {
+              name: 'BAS_MAIL_CLIENT_ID'
+              value: basMailClientId
+            }
+            {
+              name: 'BAS_MAIL_TENANT_ID'
+              value: basMailTenantId
+            }
+            {
+              name: 'BAS_MAILBOX'
+              value: basMailbox
+            }
+            // The send gate, set EXPLICITLY on every deployment from a
+            // boolean, so it is never absent and never a hand-typed string:
+            // the worker opens it for exactly 'true' and nothing else, as
+            // PHB_ALLOW_SEND's guard does. tests/deploy-guards.test.ts holds
+            // the expression. Only the worker carries it: the worker is the
+            // only process that sends a report.
+            {
+              name: 'BAS_REPORTS_ALLOW_SEND'
+              value: basReportsAllowSend ? 'true' : 'false'
+            }
+            // The platform's one identity, which the federated credential
+            // on phb-platform-bas-mail names; the CIP worker reads the same
+            // variable for the same reason.
+            {
+              name: 'GRAPH_MANAGED_IDENTITY_CLIENT_ID'
+              value: identity.properties.clientId
+            }
+            // Where the email's link points: the platform's own address.
+            {
+              name: 'PLATFORM_URL'
+              value: authUrl
             }
           ]
         }

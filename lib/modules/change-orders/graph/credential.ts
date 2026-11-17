@@ -1,10 +1,13 @@
-import { ClientAssertionCredential, ClientSecretCredential } from "@azure/identity";
 import type { TokenCredential } from "@azure/identity";
-import {
-  ManagedIdentityAssertionError,
-  createManagedIdentityAssertionProvider,
-} from "@/lib/azure/managed-identity-assertion";
+import { createManagedIdentityAssertionProvider } from "@/lib/azure/managed-identity-assertion";
 import { isProduction, readGraphEnv, type GraphEnv } from "@/lib/env";
+import {
+  GRAPH_SCOPE,
+  createAppCredential,
+  createCachedTokenProvider as createSharedCachedTokenProvider,
+  type AppCredentialConfig,
+} from "@/lib/mail/credential";
+import type { TokenProvider } from "@/lib/mail/graph-client";
 import { MailError } from "../mail/errors";
 
 /**
@@ -12,25 +15,22 @@ import { MailError } from "../mail/errors";
  *
  * CLAUDE.md prohibition 7: nothing that expires may exist in production. So the
  * two environments authenticate differently, and the difference is this one
- * environment check - not a strategy interface, not a plugin.
+ * environment check - `isProduction` - not a strategy interface, not a plugin.
  *
- * The production half - the managed identity's token presented as a client
- * assertion - is lib/azure/managed-identity-assertion.ts, shared with sign-in
- * since 2026-09-16. This file adds only what is Graph's: the error type its
- * callers expect, and the secret path for developer machines.
+ * The mechanism - the managed identity's token presented as a client
+ * assertion in production, a client secret on developer machines, a secret
+ * in production refused - is lib/mail/credential.ts since 2026-11-17, shared
+ * with the BAS report sender, whose worker job cannot import lib/env.ts. The
+ * assertion is lib/azure/managed-identity-assertion.ts, shared with sign-in
+ * since 2026-09-16. This file adds only what is the mail module's: the
+ * environment check, the configuration it reads, and the words - every
+ * failure here is a MailError, as its callers expect.
  */
 
-export const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
+export { GRAPH_SCOPE };
+export type { TokenProvider };
 
-/** Refresh this far before expiry so a request never carries a dying token. */
-const REFRESH_MARGIN_MS = 5 * 60 * 1000;
-
-export interface GraphCredentialConfig {
-  clientId: string;
-  tenantId: string;
-  clientSecret: string | null;
-  managedIdentityClientId: string | null;
-}
+export type GraphCredentialConfig = AppCredentialConfig;
 
 export function graphCredentialConfig(values: GraphEnv): GraphCredentialConfig {
   return {
@@ -44,66 +44,33 @@ export function graphCredentialConfig(values: GraphEnv): GraphCredentialConfig {
 export function createGraphCredential(
   config: GraphCredentialConfig,
 ): TokenCredential {
-  if (isProduction) {
-    // A secret reaching production is a configuration failure serious enough to
-    // refuse, not to work around. Failing here means the module is unavailable;
-    // proceeding would mean production depends on something that expires.
-    if (config.clientSecret !== null) {
-      throw new MailError("not_configured", {
-        detail:
-          "GRAPH_CLIENT_SECRET is set in production. Production must authenticate " +
-          "with a managed identity and a federated identity credential; remove the " +
-          "secret from the deployment configuration.",
-      });
-    }
-
-    // The managed identity does not itself hold Mail.ReadWrite. It proves
-    // identity to Entra, which then issues a token for the Graph app
-    // registration that does - the federated identity credential ties them
-    // together. Nothing in this path expires.
-    const getAssertion = createManagedIdentityAssertionProvider({
-      managedIdentityClientId: config.managedIdentityClientId,
-    });
-
-    return new ClientAssertionCredential(
-      config.tenantId,
-      config.clientId,
-      async () => {
-        try {
-          return await getAssertion();
-        } catch (error) {
-          if (error instanceof ManagedIdentityAssertionError) {
-            throw new MailError("auth_failed", { detail: error.message, cause: error });
-          }
-          throw error;
-        }
-      },
-    );
-  }
-
-  if (config.clientSecret === null) {
-    throw new MailError("not_configured", {
-      detail: "GRAPH_CLIENT_SECRET is required outside production.",
-    });
-  }
-
-  return new ClientSecretCredential(
-    config.tenantId,
-    config.clientId,
-    config.clientSecret,
-  );
+  return createAppCredential(config, {
+    production: isProduction,
+    assertion: (managedIdentityClientId) =>
+      createManagedIdentityAssertionProvider({ managedIdentityClientId }),
+    vocabulary: {
+      // A secret reaching production is a configuration failure serious
+      // enough to refuse, not to work around.
+      secretInProduction: () =>
+        new MailError("not_configured", {
+          detail:
+            "GRAPH_CLIENT_SECRET is set in production. Production must authenticate " +
+            "with a managed identity and a federated identity credential; remove the " +
+            "secret from the deployment configuration.",
+        }),
+      secretMissing: () =>
+        new MailError("not_configured", {
+          detail: "GRAPH_CLIENT_SECRET is required outside production.",
+        }),
+      assertionFailed: (error) =>
+        new MailError("auth_failed", { detail: error.message, cause: error }),
+    },
+  });
 }
 
-/** Returns a bearer token. The only thing the Graph client needs to know. */
-export type TokenProvider = () => Promise<string>;
-
 /**
- * Wraps a credential in an in-memory cache.
- *
- * Graph tokens last about an hour. Fetching one per request is wasteful and, at
- * enough traffic, gets the app throttled at the token endpoint rather than at
- * Graph - a failure that looks nothing like the cause. Concurrent callers share
- * one in-flight fetch for the same reason.
+ * Wraps a credential in an in-memory cache (lib/mail/credential.ts), with
+ * every failure an `auth_failed` MailError.
  *
  * `now` is injectable so expiry behaviour can be tested without waiting an hour.
  */
@@ -111,48 +78,11 @@ export function createCachedTokenProvider(
   credential: TokenCredential,
   options: { scope?: string; now?: () => number } = {},
 ): TokenProvider {
-  const scope = options.scope ?? GRAPH_SCOPE;
-  const now = options.now ?? (() => Date.now());
-
-  let cached: { token: string; expiresAt: number } | null = null;
-  let inFlight: Promise<string> | null = null;
-
-  async function fetchToken(): Promise<string> {
-    let result;
-    try {
-      result = await credential.getToken(scope);
-    } catch (error) {
-      throw new MailError("auth_failed", {
-        detail: `Entra refused a token for the Graph app registration: ${
-          error instanceof Error ? error.name : typeof error
-        }`,
-        cause: error,
-      });
-    }
-
-    if (result === null) {
-      throw new MailError("auth_failed", {
-        detail: "The credential returned no token and no error.",
-      });
-    }
-
-    cached = { token: result.token, expiresAt: result.expiresOnTimestamp };
-    return result.token;
-  }
-
-  return async function getToken(): Promise<string> {
-    if (cached !== null && cached.expiresAt - REFRESH_MARGIN_MS > now()) {
-      return cached.token;
-    }
-
-    if (inFlight !== null) return inFlight;
-
-    inFlight = fetchToken().finally(() => {
-      inFlight = null;
-    });
-
-    return inFlight;
-  };
+  return createSharedCachedTokenProvider(credential, {
+    ...options,
+    tokenRefused: (detail, cause) =>
+      new MailError("auth_failed", cause === undefined ? { detail } : { detail, cause }),
+  });
 }
 
 let memoisedProvider: TokenProvider | null = null;

@@ -114,6 +114,11 @@ export const ANALYZE_WITHHELD: ReadonlyArray<{ name: string; reason: string }> =
     name: "bas_report_settings",
     reason: "The Reports module's safety ceiling, one row. Platform configuration, not building data.",
   },
+  // 2026-11-17. Who each run was emailed to: addresses and send state.
+  {
+    name: "bas_report_deliveries",
+    reason: "The addresses a report run was emailed to, and whether each went. Platform-side.",
+  },
 ];
 
 /**

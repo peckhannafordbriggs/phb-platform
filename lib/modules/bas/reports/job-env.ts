@@ -32,6 +32,45 @@ export const SCHEDULER_JOB_VARS = [DATABASE_URL_VAR] as const;
 /** What the worker's template entry must carry. The key and the ask URL may be unset: runs then finish partial and say so. */
 export const WORKER_JOB_VARS = [DATABASE_URL_VAR, ANTHROPIC_API_KEY_VAR, BAS_ASK_DATABASE_URL_VAR] as const;
 
+/*
+ * The report email (Reports, Phase 4, the email half - 2026-11-17). Plain
+ * values, never secrets: the sender app registration (phb-platform-bas-mail,
+ * Vitis Request 7) is reached in production with the managed identity and a
+ * federated identity credential, as the Change Orders mail app is, so there
+ * is no Key Vault secret to read. A client secret exists for developer
+ * machines only and is REFUSED in production (email/mailer.ts).
+ */
+export const BAS_MAIL_CLIENT_ID_VAR = "BAS_MAIL_CLIENT_ID";
+export const BAS_MAIL_TENANT_ID_VAR = "BAS_MAIL_TENANT_ID";
+export const BAS_MAILBOX_VAR = "BAS_MAILBOX";
+/** Developer machines only, in .env.local. Never in the template; production refuses to send with it set. */
+export const BAS_MAIL_CLIENT_SECRET_VAR = "BAS_MAIL_CLIENT_SECRET";
+/**
+ * The send gate, mirroring PHB_ALLOW_SEND: exactly the lowercase string
+ * "true" opens it; absent, "false", "TRUE" and "1" all leave it closed, and
+ * a closed gate means every delivery is recorded as not sent and nothing
+ * leaves the platform.
+ */
+export const BAS_REPORTS_ALLOW_SEND_VAR = "BAS_REPORTS_ALLOW_SEND";
+/** The platform's one user-assigned identity, named for the module that first needed it (the CIP worker reads the same one). */
+export const MANAGED_IDENTITY_CLIENT_ID_VAR = "GRAPH_MANAGED_IDENTITY_CLIENT_ID";
+/** Where the email's link points: the platform's own address, the template's authUrl. */
+export const PLATFORM_URL_VAR = "PLATFORM_URL";
+export const NODE_ENV_VAR = "NODE_ENV";
+
+/** Two L's: the controls team's mailbox. The plan's sender (§A, §D5). */
+export const DEFAULT_BAS_MAILBOX = "controlls@phb1899.com";
+
+/** What the worker's template entry carries for the email, as plain values beside WORKER_JOB_VARS. */
+export const WORKER_MAIL_VARS = [
+  BAS_MAIL_CLIENT_ID_VAR,
+  BAS_MAIL_TENANT_ID_VAR,
+  BAS_MAILBOX_VAR,
+  BAS_REPORTS_ALLOW_SEND_VAR,
+  MANAGED_IDENTITY_CLIENT_ID_VAR,
+  PLATFORM_URL_VAR,
+] as const;
+
 /** A plain record rather than NodeJS.ProcessEnv, so a test can pass a few keys. */
 export type EnvLike = Record<string, string | undefined>;
 
@@ -68,6 +107,61 @@ export function readWorkerJobEnv(env: EnvLike = process.env): WorkerJobEnv {
     anthropicApiKey: key.length === 0 ? null : key,
     askDatabaseUrl: ask.length === 0 ? null : ask,
   };
+}
+
+export interface BasMailEnv {
+  clientId: string | null;
+  tenantId: string | null;
+  /** Lower-cased; DEFAULT_BAS_MAILBOX when unset or blank. */
+  mailbox: string;
+  clientSecret: string | null;
+  managedIdentityClientId: string | null;
+  /** True only for exactly "true". */
+  allowSend: boolean;
+  /** NODE_ENV is "production". Decides the credential path and the company-only fence. */
+  production: boolean;
+  /** No trailing slash; null when unset, and the email then names the tab instead of linking. */
+  platformUrl: string | null;
+}
+
+const trimmedOrNull = (value: string | undefined): string | null => {
+  const t = value?.trim() ?? "";
+  return t.length === 0 ? null : t;
+};
+
+export function readWorkerMailEnv(env: EnvLike = process.env): BasMailEnv {
+  const url = trimmedOrNull(env[PLATFORM_URL_VAR]);
+  return {
+    clientId: trimmedOrNull(env[BAS_MAIL_CLIENT_ID_VAR]),
+    tenantId: trimmedOrNull(env[BAS_MAIL_TENANT_ID_VAR]),
+    mailbox: (trimmedOrNull(env[BAS_MAILBOX_VAR]) ?? DEFAULT_BAS_MAILBOX).toLowerCase(),
+    clientSecret: trimmedOrNull(env[BAS_MAIL_CLIENT_SECRET_VAR]),
+    managedIdentityClientId: trimmedOrNull(env[MANAGED_IDENTITY_CLIENT_ID_VAR]),
+    // No trim, no case-folding: the same comparison PHB_ALLOW_SEND's guard makes.
+    allowSend: env[BAS_REPORTS_ALLOW_SEND_VAR] === "true",
+    production: env[NODE_ENV_VAR] === "production",
+    platformUrl: url === null ? null : url.replace(/\/+$/, ""),
+  };
+}
+
+/**
+ * Why the report email cannot be sent, naming the variables, or null when
+ * it can be attempted. Names only: a value is never printed. The gate is
+ * not part of this - a closed gate is a decision, not a fault.
+ */
+export function mailNotConfiguredReason(mail: BasMailEnv): string | null {
+  const missing = [
+    mail.clientId === null ? BAS_MAIL_CLIENT_ID_VAR : null,
+    mail.tenantId === null ? BAS_MAIL_TENANT_ID_VAR : null,
+    !mail.production && mail.clientSecret === null ? BAS_MAIL_CLIENT_SECRET_VAR : null,
+  ].filter((v): v is string => v !== null);
+  if (missing.length > 0) {
+    return `${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not set, so the report email cannot be sent.`;
+  }
+  if (mail.production && mail.clientSecret !== null) {
+    return `${BAS_MAIL_CLIENT_SECRET_VAR} is set in production. Production sends with the managed identity and a federated identity credential; remove the secret from the deployment configuration.`;
+  }
+  return null;
 }
 
 /**

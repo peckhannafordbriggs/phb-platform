@@ -645,6 +645,7 @@ describe("the PDF on the Reports list and the run page", () => {
     buildingStatus: "good",
     startedBy: null,
     pdf: pdf(),
+    delivery: { total: 0, sent: 0, failed: 0, pending: 0, notSent: 0, emptyReason: "none" },
     ...over,
   });
   const render = (el: React.ReactElement) => renderToStaticMarkup(el);
@@ -681,6 +682,35 @@ describe("the PDF on the Reports list and the run page", () => {
     // Without the handler, a pure render offers no Retry at all.
     const noHandler = render(createElement(RunsTable, { data: { runs: [summary({ runId: "4", pdf: pdf({ status: "failed", error: "x" }) })], runsInDatabase: 1 } }));
     expect(noHandler).not.toContain("run-retry-pdf");
+  });
+
+  it("the Delivery column is the run's email: sent counts, Failed with Resend, Not sent — sending disabled, and the waiting states (2026-11-17)", () => {
+    const d = (over: Partial<RunSummary["delivery"]>): RunSummary["delivery"] => ({ total: 0, sent: 0, failed: 0, pending: 0, notSent: 0, emptyReason: null, ...over });
+    const rows = render(
+      createElement(RunsTable, {
+        data: {
+          runs: [
+            summary({ runId: "1", delivery: d({ total: 3, sent: 3 }) }),
+            summary({ runId: "2", delivery: d({ total: 3, sent: 2, failed: 1 }) }),
+            summary({ runId: "3", delivery: d({ total: 2, notSent: 2 }) }),
+            summary({ runId: "4", delivery: d({ emptyReason: "waiting_for_pdf" }) }),
+          ],
+          runsInDatabase: 4,
+        },
+        onResend: () => undefined,
+      }),
+    );
+    expect(rows).not.toContain("email is a later phase");
+    expect(rows).toContain("3 of 3 sent");
+    expect(rows).toContain("1 failed");
+    expect(rows).toContain("Resend tries the failed one again.");
+    expect(rows).toContain("Not sent — sending disabled");
+    expect(rows).toContain("Waiting for the PDF");
+    // Resend on the failed row only.
+    expect(rows.match(/data-testid="run-resend"/g)).toHaveLength(1);
+    // Without the handler, a pure render offers no Resend.
+    const bare = render(createElement(RunsTable, { data: { runs: [summary({ runId: "2", delivery: d({ total: 1, failed: 1 }) })], runsInDatabase: 1 } }));
+    expect(bare).not.toContain("run-resend");
   });
 
   it("the run page's row is Print (secondary) and Download (the red primary), Freeze Protection's pair, with Retry PDF beside them only after a failed render", () => {

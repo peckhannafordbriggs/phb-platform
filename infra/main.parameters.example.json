@@ -154,6 +154,18 @@
     "basReportsSchedulerCron": {
       "value": "*/15 * * * *"
     },
+    "basMailClientId": {
+      "value": ""
+    },
+    "basMailTenantId": {
+      "value": ""
+    },
+    "basMailbox": {
+      "value": ""
+    },
+    "basReportsAllowSend": {
+      "value": false
+    },
     "enableDbBackup": {
       "value": false
     },

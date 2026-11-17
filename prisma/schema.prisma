@@ -86,6 +86,7 @@ model Employee {
   basRecipientsConfirmed   BasReportRecipient[]  @relation("BasRecipientConfirmedBy")
   basReportRunsStarted     BasReportRun[]        @relation("BasReportRunStartedBy")
   basReportSettingsUpdated BasReportSettings[]   @relation("BasReportSettingsUpdatedBy")
+  basReportDeliveriesAsked BasReportDelivery[]   @relation("BasReportDeliveryRequestedBy")
 
   @@index([status])
   @@index([departmentId])
@@ -796,12 +797,51 @@ model BasReportRun {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
   findings          BasReportFinding[]
-  firstSeenFindings BasReportFinding[] @relation("BasReportFindingFirstSeen")
+  firstSeenFindings BasReportFinding[]  @relation("BasReportFindingFirstSeen")
+  deliveries        BasReportDelivery[]
 
   @@index([reportId, createdAt(sort: Desc)])
   @@index([status])
   @@index([pdfStatus])
   @@map("bas_report_runs")
+}
+
+/// One email of one run to one address (Reports, Phase 4, the email half - 2026-11-17). The owner's row is written from the employee record when the run's PDF is ready, never from a recipient row; one row per address per run, so a worker retry cannot send twice from the queue.
+model BasReportDelivery {
+  deliveryId BigInt @id @default(autoincrement()) @map("delivery_id")
+
+  runId BigInt       @map("run_id")
+  run   BasReportRun @relation(fields: [runId], references: [runId], onDelete: Cascade)
+
+  /// Lower-cased, the spelling a recipient row stores.
+  email    String
+  /// owner (from the employee record), recipient (a bas_report_recipients row), requested (Send to me).
+  source   String
+  /// The order the worker sends in: the owner 0, the recipient rows after it in the order they were added.
+  position Int
+
+  /// pending (waiting for the worker, or for its next attempt), sent, failed (attempts used up, or a failure retrying cannot fix; Resend queues it again), not_sent (the send gate was closed: nothing left the platform).
+  status         String    @default("pending")
+  /// Attempts made, at most three. A claim counts as an attempt before the call is made.
+  attempts       Int       @default(0)
+  /// When the worker may next take it: now when queued, later after a failed attempt (the backoff), and a lease while an attempt is in flight.
+  nextAttemptAt  DateTime  @default(now()) @map("next_attempt_at") @db.Timestamptz()
+  /// Why the last attempt failed, or that one started and has not finished, or why nothing was sent. Never the message body.
+  lastError      String?   @map("last_error")
+  /// Graph's request-id for the sendMail call it accepted: sendMail answers 202 with no body, so there is no message id to keep. What Microsoft support asks for.
+  graphRequestId String?   @map("graph_request_id")
+  sentAt         DateTime? @map("sent_at") @db.Timestamptz()
+
+  /// Who asked for this address with Send to me, or who last asked for a Resend of it; null for a delivery the worker queued on its own.
+  requestedById String?   @map("requested_by_id") @db.Uuid
+  requestedBy   Employee? @relation("BasReportDeliveryRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@unique([runId, email])
+  @@index([status, nextAttemptAt])
+  @@map("bas_report_deliveries")
 }
 
 /// The Reports module's one safety ceiling (2026-11-12): the most a single run may spend and the longest it may take. One row, edited by BAS module admins from the Usage page; the engine reads it for every run.

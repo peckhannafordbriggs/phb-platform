@@ -10,6 +10,7 @@ import {
   DATABASE_URL_VAR,
   SCHEDULER_JOB_VARS,
   WORKER_JOB_VARS,
+  WORKER_MAIL_VARS,
   plannerUnavailableReason,
   readSchedulerJobEnv,
   readWorkerJobEnv,
@@ -263,7 +264,11 @@ describe("the template gives each job exactly what its reader needs, and nothing
     // questions run their SQL as bas_analyze. Anything else appearing here
     // needs a reader and a line in the runbook.
     expect(WORKER_JOB_VARS).toContain("BAS_ASK_DATABASE_URL");
-    expect(names).toEqual([...WORKER_JOB_VARS, "NODE_ENV"].sort());
+    // The report email (2026-11-17): six plain values, read by readWorkerMailEnv.
+    expect([...WORKER_MAIL_VARS].sort()).toEqual(
+      ["BAS_MAILBOX", "BAS_MAIL_CLIENT_ID", "BAS_MAIL_TENANT_ID", "BAS_REPORTS_ALLOW_SEND", "GRAPH_MANAGED_IDENTITY_CLIENT_ID", "PLATFORM_URL"].sort(),
+    );
+    expect(names).toEqual([...WORKER_JOB_VARS, ...WORKER_MAIL_VARS, "NODE_ENV"].sort());
   });
 
   it("the readers take what they declare, trimmed, and name DATABASE_URL when it is missing", () => {

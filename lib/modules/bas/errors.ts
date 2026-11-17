@@ -193,7 +193,13 @@ export type BasErrorCode =
    */
   | "pdf_not_available"
   /** Retry PDF asked for on a run whose PDF is not failed: ready, queued, or never rendered. 409. */
-  | "pdf_not_retryable";
+  | "pdf_not_retryable"
+  /** Resend asked for on a run with no failed delivery (Phase 4, email). 409: Resend re-queues failed rows only. */
+  | "nothing_to_resend"
+  /** Send to me on a run that has not finished, or finished failed: there is no report to send. 409. */
+  | "run_not_sendable"
+  /** Send to me while a copy to the same address is already waiting for the worker. 409. */
+  | "delivery_pending";
 
 export class BasError extends Error {
   constructor(

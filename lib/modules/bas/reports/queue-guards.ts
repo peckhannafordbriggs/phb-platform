@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { BAS_MODULE_KEY } from "../constants";
+import { failExhaustedDeliveries, failUnclaimedDeliveries } from "./deliveries";
 
 /**
  * The rules that take abandoned work OUT of the queue (Reports, Phase 3 and
@@ -25,7 +26,10 @@ import { BAS_MODULE_KEY } from "../constants";
  *   - a run claimed and LOST TWICE (running, no heartbeat, attempts at
  *     MAX_ATTEMPTS) is failed, as the worker would have failed it;
  *   - a PDF render queued for more than UNCLAIMED_AFTER_MS and never claimed
- *     is failed on its own column; the run it belongs to is untouched.
+ *     is failed on its own column; the run it belongs to is untouched;
+ *   - a report email delivery due for an hour and never taken, or one whose
+ *     three attempts are used up with the worker gone during the last
+ *     (2026-11-17), is failed on its own row, where Resend offers it again.
  *
  * Each is one audit row where a run's outcome changed, and one log line.
  * The scaler's query (infra/main.bicep) counts exactly these states, so
@@ -60,10 +64,20 @@ export interface AbandonedWork {
   error: string;
 }
 
+/** One report email the guards failed. */
+export interface AbandonedDelivery {
+  deliveryId: string;
+  runId: string;
+  email: string;
+  error: string;
+}
+
 export interface AbandonedWorkReport {
   unclaimedRuns: AbandonedWork[];
   stalledRuns: AbandonedWork[];
   unclaimedPdfs: AbandonedWork[];
+  /** Deliveries never taken for an hour, and ones whose attempts ran out with the worker gone. */
+  abandonedDeliveries: AbandonedDelivery[];
 }
 
 async function auditFailed(
@@ -186,11 +200,22 @@ export async function failUnclaimedPdfs(now = new Date()): Promise<AbandonedWork
   return failed;
 }
 
-/** All three, in the order the scheduler applies them. */
+/** The deliveries the guards fail: attempts used up first, then the ones never taken. */
+export async function failAbandonedDeliveries(now = new Date()): Promise<AbandonedDelivery[]> {
+  const exhausted = await failExhaustedDeliveries(now);
+  const unclaimed = await failUnclaimedDeliveries(now);
+  return [
+    ...exhausted.map((d) => ({ deliveryId: d.deliveryId.toString(), runId: d.runId.toString(), email: d.email, error: "attempts used up" })),
+    ...unclaimed.map((d) => ({ deliveryId: d.deliveryId.toString(), runId: d.runId.toString(), email: d.email, error: d.error })),
+  ];
+}
+
+/** All four, in the order the scheduler applies them. */
 export async function failAbandonedWork(now = new Date()): Promise<AbandonedWorkReport> {
   return {
     unclaimedRuns: await failUnclaimedRuns(now),
     stalledRuns: await failExhaustedStaleRuns(now),
     unclaimedPdfs: await failUnclaimedPdfs(now),
+    abandonedDeliveries: await failAbandonedDeliveries(now),
   };
 }
