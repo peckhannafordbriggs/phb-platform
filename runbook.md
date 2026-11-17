@@ -3929,6 +3929,9 @@ tab says the model service could not be reached, or the database could not
 be reached.** The URL in the vault has a wrong host, password or
 `sslmode`; set the secret again and create a new revision. **Rotating**: run
 the script again with a new password, set the secret again, new revision.
+**After a migration that adds a `bas_*` table**: run it again with the SAME
+password - *Analyze answers "permission denied" for every question* →
+*Re-run after a migration* has the steps.
 
 ### The Change Orders Anthropic key, the same way
 
@@ -4254,8 +4257,8 @@ migration. **Never `migrate reset` against production** — it drops every table
 left behind. It is scoped to one runner IP, but remove it:
 
 ```bash
-az postgres flexible-server firewall-rule list -g <rg> -n <server> -o table
-az postgres flexible-server firewall-rule delete -g <rg> -n <server> --rule-name gh-deploy-<run-id> --yes
+az postgres flexible-server firewall-rule list -g <rg> -s <server> -o table
+az postgres flexible-server firewall-rule delete -g <rg> -s <server> -n gh-deploy-<run-id> --yes
 ```
 
 The close step runs under `always()`, so this only happens if the runner itself is
@@ -10874,7 +10877,195 @@ Unclassified bas_* object(s): {bas_alarms}. Nothing has been granted or revoked.
 
 That is the intended stop. `tests/bas-analyze-role.test.ts` builds a
 throwaway copy of the role from the same list on the test database, so the
-suite fails on the unclassified object too.
+suite fails on the unclassified object too. Since 2026-11-17
+`tests/bas-analyze-grant-guard.test.ts` also reads every migration for a
+`CREATE TABLE` or `CREATE VIEW` of a `bas_*` object and fails unless
+`scripts/setup-bas-analyze-role.sql` grants it or withholds it by name (every
+`bas_report_*`, `bas_library_*` and `bas_personal_*` table must be withheld).
+**No test can do the other half**: the script re-run on production, below.
+
+**In production** the role lives on the Azure server and the local command
+above never reaches it. A table classified in the script is still ungranted
+there until a person re-runs the script: *Re-run after a migration*.
+
+### Re-run after a migration
+
+**When.** A migration added a `bas_*` table or view that `bas_analyze` is
+allowed to read, it has deployed, and production's Analyze tab - and every
+Reports planner question, which runs as the same role through the worker's
+`BAS_ASK_DATABASE_URL` - answers `permission denied for table bas_<name>`.
+One missing grant fails **every** question, not only questions about that
+table, because the planner's schema context reads every allowed object.
+First seen with `bas_site_occupancy` (Reports Phase 1, 2026-11-10): the
+script listed it from that day, but the production role was made on
+2026-10-13 and nobody re-ran it, so production failed every question until
+it was (reported 2026-11-17).
+
+**What the re-run does.** It re-asserts the same allowlist, refuses an
+unclassified `bas_*` object before touching anything, never widens a grant
+and proves the boundary before it finishes. It also **sets the role's
+password**, so it is run with the password the role already has, read out of
+`BAS-ASK-DATABASE-URL`. The vault secret, the container app and the Reports
+worker then keep working unchanged: no `secret set`, no new revision.
+
+**Which machine.** A Windows laptop with this repository on an up-to-date
+`main`; `az` signed in as a person who can create firewall rules on the server
+and read secrets in the vault (the platform owner can); and PostgreSQL's own
+`psql` 15 or newer (`\getenv`, below), which the PostgreSQL 17 installer puts
+at `C:\Program Files\PostgreSQL\17\bin\psql.exe` (`DEVELOPER-SETUP.md`).
+This is the same route as *The collector's role on the Azure database*:
+`psql` from Windows with the production admin URL and `-f` on the repository
+file. (The office PC's `bas_backup` and `bas_readonly` roles are on the
+office database, not this server, and are not part of this.) The Cloud Shell
+route in the script's own header works too; this is the PowerShell one.
+
+**The firewall.** Yes, a rule is needed. The server takes public connections
+only from addresses its firewall rules name; the deploy workflow adds and
+removes its own `gh-deploy-<run-id>` rule, and a laptop's address is not
+covered unless somebody added it. Add a temporary rule for this run and
+delete it at the end. If an existing rule already covers your address the
+extra rule does no harm.
+
+Every step runs in **one** Windows PowerShell window, in order - each step
+uses variables the one before it set. Nothing below prints a password or a
+URL. Do not run it under `Start-Transcript`.
+
+1. **The repository, up to date.** The table the error names must be in the
+   script's grant list.
+
+   ```
+   cd C:\Users\<you>\phb-platform
+   git checkout main
+   git pull --ff-only
+   Select-String -Path .\scripts\setup-bas-analyze-role.sql -SimpleMatch -Pattern "('bas_site_occupancy')"
+   ```
+
+   One line printed (put the table from the error in place of
+   `bas_site_occupancy`). Nothing printed means the script does not grant it
+   yet: classify it first (*Fix*, above), merge, then come back.
+
+2. **Names.**
+
+   ```
+   $psqlExe = "C:\Program Files\PostgreSQL\17\bin\psql.exe"
+   $server  = "phbplat-prod-pg-ovwzv7"
+   $vault   = "phbplat-prod-kv-ovwzv7"
+   $fqdn    = "$server.postgres.database.azure.com"
+   $rule    = "laptop-analyze-grant"
+   $rg      = az postgres flexible-server list --query "[?name=='$server'].resourceGroup" -o tsv --only-show-errors
+   "resource group: $rg"
+   & $psqlExe --version
+   ```
+
+   The production resource group's name, and `psql (PostgreSQL) 17.x`. An
+   empty resource group means `az` is signed in to the wrong account or
+   subscription: `az login`, then again.
+
+3. **A temporary firewall rule for this laptop.**
+
+   ```
+   $ip = (Invoke-RestMethod -Uri "https://api.ipify.org").Trim()
+   az postgres flexible-server firewall-rule create -g $rg -s $server -n $rule --start-ip-address $ip --end-ip-address $ip -o none
+   az postgres flexible-server firewall-rule list -g $rg -s $server --query "[?name=='$rule']" -o table
+   ```
+
+   One row, your address at both ends. `-s` is the server and `-n` the rule;
+   `az` has no `--rule-name` on this command. A VPN that changes your address
+   mid-way needs this step again.
+
+4. **The two connection URLs, into variables, not onto the screen.**
+
+   ```
+   $adminUrl = az keyvault secret show --vault-name $vault --name DATABASE-URL --query value -o tsv --only-show-errors
+   $askUrl   = az keyvault secret show --vault-name $vault --name BAS-ASK-DATABASE-URL --query value -o tsv --only-show-errors
+   "admin URL read: $($adminUrl -like 'postgresql://phbplatadmin:*')"
+   "ask URL read:   $($askUrl -like 'postgresql://bas_analyze:*')"
+   ```
+
+   `True` twice. `DATABASE-URL` is the administrator's URL the template
+   writes, the one the platform itself runs on, so it is right by
+   construction. `False` or `ForbiddenByRbac`: your account cannot read the
+   vault's secrets (*Secrets set by hand in Key Vault*).
+
+5. **The role's current password, out of the ask URL.**
+
+   ```
+   if ($askUrl -notmatch '^postgresql://([^:/@]+):(.*)@([^@/]+)/') { throw "BAS-ASK-DATABASE-URL is not a postgresql://user:password@host/ URL" }
+   $pw = [Uri]::UnescapeDataString($Matches[2])
+   Remove-Variable Matches
+   ```
+
+   Prints nothing. The greedy match takes everything up to the last `@`, and
+   the unescape undoes the URL's percent-encoding.
+
+6. **Before changing anything: the password is the role's, and the fault is
+   this one.**
+
+   ```
+   $env:PGPASSWORD = $pw
+   & $psqlExe "host=$fqdn port=5432 dbname=phb_platform user=bas_analyze sslmode=require" -X -At -c "SELECT current_user"
+   & $psqlExe "host=$fqdn port=5432 dbname=phb_platform user=bas_analyze sslmode=require" -X -At -c "SELECT count(*) FROM bas_site_occupancy"
+   Remove-Item Env:PGPASSWORD
+   ```
+
+   `bas_analyze`, then `ERROR:  permission denied for table
+   bas_site_occupancy`. **Stop** on `password authentication failed`: the
+   password read in step 5 is not the role's, and step 7 would change the role
+   to it - find out why first. A timeout is the firewall: step 3 has not taken
+   effect yet (give it a minute) or your address changed.
+
+7. **Re-run the script, with the same password.**
+
+   ```
+   $env:PHB_ANALYZE_PW = $pw
+   & $psqlExe $adminUrl -X -c '\getenv pw PHB_ANALYZE_PW' -f .\scripts\setup-bas-analyze-role.sql
+   "psql exit code: $LASTEXITCODE"
+   Remove-Item Env:PHB_ANALYZE_PW
+   ```
+
+   Among the output, three `NOTICE` lines - `Gate passed: 29 bas_* object(s)
+   present, 20 readable, 9 withheld.` (the numbers grow with later
+   migrations), `Granted SELECT on 20 objects to bas_analyze, withheld 9,
+   revoked 8 platform tables by name.` and `bas_analyze: reads the allowlist,
+   refused everywhere else. OK.` - then `psql exit code: 0`. The password is
+   printed nowhere.
+
+   The password goes over as an environment variable that `\getenv` reads into
+   the script's `pw` variable, **not** as `-v pw=…` the way the file's header
+   shows for bash: Windows PowerShell 5.1 mangles a native argument containing
+   a double quote, and a mangled password would silently set the role to
+   something the vault does not hold. Rehearsed on 2026-11-17 against the test
+   database with a throwaway role and a password holding a quote, a space, a
+   backslash and `@ : / # ? %`: it reached the role unchanged.
+
+   If the gate refuses: *Unclassified bas_\* object(s)* means this checkout is
+   older than production's migrations (step 1 again); *Allowlisted object(s)
+   not found* means production has not applied the migration yet (let the
+   deploy finish). Either way it stopped before granting or changing anything.
+
+8. **Prove it from the outside, through the vault's own URL.**
+
+   ```
+   & $psqlExe $askUrl -X -At -c "SELECT count(*) FROM bas_site_occupancy"
+   & $psqlExe $askUrl -X -At -c "SELECT count(*) FROM bas_report_runs"
+   ```
+
+   A number (0 is fine: a building with no occupied hours entered), then
+   `ERROR:  permission denied for table bas_report_runs`. The first succeeding
+   **through `BAS-ASK-DATABASE-URL` itself** is the proof the password did not
+   move. Then ask one question on `/bas/analyze`; no restart is needed,
+   because a grant is checked when the query runs and the schema context is
+   cached only after a success.
+
+9. **Clean up - always, even if a step above failed.**
+
+   ```
+   az postgres flexible-server firewall-rule delete -g $rg -s $server -n $rule --yes
+   az postgres flexible-server firewall-rule list -g $rg -s $server --query "[?name=='$rule']" -o tsv
+   Remove-Variable adminUrl, askUrl, pw
+   ```
+
+   The list prints nothing. Close the window.
 
 ---
 
@@ -12504,10 +12695,11 @@ bas:analyze:role` (local) were updated on 2026-11-10 for
 `bas_site_occupancy`, but a role made before then never received the
 grant, and the Analyze schema context counts every table it is allowed,
 so one missing grant fails every question. Found on the development
-database on 2026-11-16, where the role predated Reports Phase 1.
-**Production was not checked** (no access from the agent); if the
-deployed Analyze tab answers, it has the grant. **Fix:** re-run the role
-script against that database as its administrator. It is idempotent,
+database on 2026-11-16, where the role predated Reports Phase 1, and
+**on production on 2026-11-17**, where the role was made on 2026-10-13.
+**Fix:** re-run the role script against that database as its
+administrator - on production, *Analyze answers "permission denied" for
+every question* → *Re-run after a migration*. It is idempotent,
 refuses an unclassified table, and proves the boundary (report tables
 refused, `bas_site_occupancy` readable). Locally pass the current
 password back with `-- --password=…` so `BAS_ASK_DATABASE_URL` stays

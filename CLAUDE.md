@@ -84,6 +84,8 @@ it is mail for this purpose.
 seed, never by a migration. Migrations contain no email addresses. See
 `docs/05-database-and-sources.md` for what belongs in a migration versus a seed.
 
+**A new `bas_*` table needs a line in `setup-bas-analyze-role.sql` and a production re-run of it** — CI enforces the line (`tests/bas-analyze-grant-guard.test.ts`), nothing can enforce the re-run (`runbook.md` → *Re-run after a migration*).
+
 ---
 
 ## Hard prohibitions
