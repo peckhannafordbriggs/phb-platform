@@ -14023,3 +14023,490 @@ reportlab; qpdf optional, halves the size) and commit the PDF.
 `tests/fp-form.test.ts` opens the committed PDF and fails if the field names or
 dropdown choices no longer match `form.ts`. Change the marker version
 (`phb-fp-form/v1`) only when old forms can no longer be read correctly.
+
+# Knowledge Base
+
+Module 4. Design and decisions: `docs/KB-P0-P1.md`. The `kb_*` tables are a
+derived index of the SharePoint library *Knowledge Base - Documents*: they can be
+truncated and rebuilt by re-running the sync, and nothing in them exists only here.
+
+## A migration fails with `extension "vector" is not allow-listed`
+
+**Symptom.** `prisma migrate deploy` stops at `20261027120000_add_kb_index` with
+`extension "vector" is not allow-listed for users in Azure Database for PostgreSQL`
+(or, locally, `could not open extension control file ... vector.control`). Every
+later deploy fails at the same place, including deploys that have nothing to do with
+the Knowledge Base.
+
+**Cause.** The migration runs `CREATE EXTENSION vector`. Azure Flexible Server only
+creates extensions named in the server parameter `azure.extensions`; a local
+PostgreSQL only creates extensions that are installed.
+
+**Fix, Azure.** Read the current list first. The value **replaces** the whole list,
+so if anything is already there, keep it and append `,VECTOR`:
+
+```bash
+az postgres flexible-server parameter show \
+  --resource-group <resource-group> --server-name <server> \
+  --name azure.extensions --query value
+
+az postgres flexible-server parameter set \
+  --resource-group <resource-group> --server-name <server> \
+  --name azure.extensions --value VECTOR
+```
+
+No restart is needed. Then re-run the deploy.
+
+**A restore needs it too.** A nightly dump of a database holding the Knowledge
+Base contains `CREATE EXTENSION vector`, so restoring it onto a new server fails
+the same way until that server allows `VECTOR`. Set the parameter on the target
+before `pg_restore`. The migration is all-or-nothing, so a
+failed attempt left nothing behind; if `_prisma_migrations` records it as failed,
+`npx prisma migrate resolve --rolled-back 20261027120000_add_kb_index` first, as in
+*A migration fails* above. `infra/main.bicep` carries the same value, but CI does not
+deploy Bicep, so a live server needs the command above.
+
+**Fix, local or CI.** Install pgvector into the PostgreSQL the URL points at
+(`DEVELOPER-SETUP.md` -> *pgvector*). CI uses the `pgvector/pgvector:pg17` image; a
+CI failure here means the service image was changed back to plain `postgres`.
+
+## Knowledge Base search got slow after a migration
+
+**Symptom.** Searches that were instant take seconds, and get slower as documents
+are added. Results are still correct.
+
+**Cause.** The HNSW index `kb_chunks_embedding_hnsw_idx` is gone, so every search is
+a sequential scan over every vector. Prisma cannot represent an HNSW index, so
+`prisma migrate dev` generates a `DROP INDEX` for it in whatever migration someone
+authors next. `tests/kb-schema.test.ts` is meant to stop that reaching `main`.
+
+**Check.**
+
+```sql
+SELECT indexname, indexdef FROM pg_indexes
+ WHERE tablename = 'kb_chunks' AND indexname = 'kb_chunks_embedding_hnsw_idx';
+```
+
+**Fix.** Recreate it in a new migration (never by hand on production), and delete the
+`DROP INDEX` line from the migration that removed it if that migration is not yet
+applied anywhere:
+
+```sql
+CREATE INDEX "kb_chunks_embedding_hnsw_idx"
+    ON "kb_chunks" USING hnsw ("embedding" vector_cosine_ops);
+```
+
+## A document is in SharePoint but search never finds it
+
+**Check its row first.** Every file the sync saw has one, indexed or not:
+
+```sql
+SELECT path, status, skip_reason, error, chunk_count, indexed_at, last_seen_at
+  FROM kb_documents
+ WHERE file_name ILIKE '%<part of the name>%';
+```
+
+| What you see | Meaning |
+|---|---|
+| No row | The sync has not run since the file was added, or it is outside the library |
+| `skipped`, `restricted_folder` | Deliberate. Folders 2A, 5A and 8 are not indexed because the module has one flat grant. `docs/KB-P0-P1.md` |
+| `skipped`, `drawings` | Deliberate. Folders 1A and 1D, and `_Drawings_` files under folder 1 (bulletin sets in 1E) |
+| `skipped`, `draft_prefix` | The file name starts `DRAFT_`. Rename it in SharePoint if it should be searchable |
+| `skipped`, `project_root_file` | It sits directly in the project folder, outside the template folders (a gap log, a curation note). Move it into a template folder if it is project knowledge |
+| `skipped`, `unsupported_type` | Not PDF, DOCX, XLSX, XLSM, MD or TXT. A legacy `.doc` can be saved as `.docx`; `.msg` mail is not read |
+| `skipped`, `too_large` | Over 250 MB |
+| `is_archived` true | An `ARCHIVE_` file. Indexed, but never `is_latest`, so answers cite it only to explain a change. This is expected, not a fault |
+| `skipped`, `empty_text` | A scanned PDF with no text layer |
+| `failed` | `error` says why. Re-running the sync retries it |
+| `indexed` with chunks | Indexed. The question is a retrieval problem, not a sync problem |
+
+## The Knowledge Base says embeddings or the source are not configured
+
+**Cause.** The KB variables are read lazily, and a missing one disables only the KB.
+`.env.example` -> *Knowledge Base* lists them. In production, `KB_EMBEDDING_API_KEY`
+must be **absent**: production uses the managed identity, and the reader refuses a
+key there on purpose. `KB_LOCAL_SOURCE_DIR` is likewise refused in production.
+
+The source is `KB_SHAREPOINT_LIBRARY_URL` with the KB app's three
+`PHB_PLATFORM_KB_APP_*` variables, or else `KB_LOCAL_SOURCE_DIR`. The sync's
+message names the variable that is missing. `PHB_PLATFORM_KB_APP_SECRET` is local
+only; production refuses it, like the Cost Intelligence secret.
+
+## Pointing the Knowledge Base at its SharePoint folder
+
+The projects are the folders directly inside **`+++CURATED_FOLDERS`** in the
+Knowledge Base site's Documents library. The KB app registration (request KB-3)
+reads it; its grant is on the library, so the folder is covered.
+
+1. Open the folder in the browser and copy the address bar as it is (a
+   `.../Forms/AllItems.aspx?id=...` link is fine).
+2. `npm run kb:source:check -- "<that URL>"`. It signs in as the KB app, finds
+   the folder, prints the `ids:<driveId>/<itemId>` value, lists the projects the
+   sync will index (flagging any folder name without a six-digit job number),
+   and any files lying loose in the folder, which no project owns and which are
+   not indexed.
+3. Locally: `KB_SHAREPOINT_LIBRARY_URL="ids:..."` in `.env.local`. It wins over
+   `KB_LOCAL_SOURCE_DIR`, which can stay. Restart `npm run kb:worker`.
+4. **Start fresh, then Index now** on `/knowledge-base/admin`. A sync removes
+   only projects from its own source, so the projects indexed from the local
+   folder would otherwise stay beside the SharePoint ones and every file would
+   appear twice. History and reports are kept; re-embedding is a few minutes and
+   under a dollar.
+5. Production: the same value in `infra/main.parameters.json` as
+   `kbSharePointLibraryUrl` (*Knowledge Base worker in Azure*, step 3).
+
+Prefer the `ids:` value to a URL in configuration: it survives the folder being
+renamed or moved. A URL is accepted too (`normalizeFolderUrl` in
+`lib/sharepoint/folder-store.ts` reads address-bar links, `%20` and a literal
+`+`), resolved through Graph's `/shares` on each sync.
+
+| `kb:source:check` says | Why, and what to do |
+|---|---|
+| *Set PHB_PLATFORM_KB_APP_TENANT_ID and ...* | The KB app's ids are not in `.env.local` (locally also its secret) |
+| *SharePoint answered 403 ... The KB app has no grant* | The read grant from KB-3 is missing on the library or folder. IT adds it (the `POST .../permissions` in Request KB-3) |
+| *SharePoint answered 404* | Wrong URL, or a folder the app cannot see. Copy the address bar again from inside the folder |
+| *(none: is this the folder that holds the project folders?)* | The URL points one level too deep (a project) or too shallow (the library) |
+| *<- no job number in the name* | That folder is indexed, but its answers and citations show no job number and a job number in a question will not scope to it |
+
+## Running a Knowledge Base sync
+
+**From the screen.** A Knowledge Base module admin opens *Knowledge Base* ->
+*Manage the index* (`/knowledge-base/admin`) and presses **Index now**. That only
+asks: it writes one `queued` row in `kb_sync_runs`, and the worker job (*Knowledge
+Base worker in Azure*, below) picks it up within about 15 seconds, runs it, and
+exits. The screen polls while it waits and works. Only one sync can be queued or
+running at a time; a second press says so. Locally, `npm run kb:worker` is the
+worker: leave it running and the button works against your machine.
+
+**From a terminal.** `npm run kb:sync` syncs the configured source once and prints the outcome;
+`npm run kb:sync -- --dir "C:\Users\<you>\OneDrive - Peck Hannaford + Briggs\KB"`
+syncs a local copy instead (refused in production); `-- --no-index` lists and queues
+without reading any file. It lists the library, writes `kb_projects` and
+`kb_documents`, reads every new or changed file into passages (`kb_chunks`), and
+leaves one `kb_sync_runs` row and one audit row (`kb.synced` or `kb.sync_failed`).
+An unchanged indexed file is not read again, so a second run right after the first
+changes nothing but `last_seen_at`.
+
+**How long.** About 5 seconds per 300-page PDF and 3 seconds for a large estimate
+workbook, one file at a time: the first run over a project of 500 files takes tens
+of minutes, later runs seconds. Passages have no embedding yet (`embedding` NULL
+until Azure OpenAI, request KB-2); keyword search works on them already.
+
+What it decides per file is in *A document is in SharePoint but search never finds
+it* below. Versions: the newest non-archived file of a family is `is_latest`; a
+family whose files are all `ARCHIVE_` has none, by design.
+
+Office lock files (`~$...`), `Thumbs.db`, `desktop.ini` and files sitting directly
+in the library root get no row at all.
+
+## A Knowledge Base sync failed, or says `partial`
+
+```sql
+SELECT started_at, status, trigger, source_kind, projects_seen, files_seen,
+       files_skipped, files_removed, error
+  FROM kb_sync_runs ORDER BY started_at DESC LIMIT 5;
+```
+
+| What you see | Meaning and fix |
+|---|---|
+| `failed`, *holds no project folders* | The configured folder is empty or wrong, or OneDrive has not synced it. **Nothing was changed**: an empty listing never empties the index. Check the path or URL |
+| `failed`, *Could not read the library* | The folder is missing or the KB app has no grant. `403` names the KB app: request KB-3 below |
+| `failed`, *A Knowledge Base sync is already running* | Another sync holds the one `running` slot. A `running` row older than an hour is closed as *Abandoned* by the next sync |
+| `partial` | One or more project folders could not be read; `error` names them. Their rows were kept exactly as they were, and the rest of the library was synced. Fix access to that folder and run the sync again |
+| `failed`, *stopped unexpectedly* | A bug or a database error. Projects saved before it keep their new state, each project being its own transaction; the log has `kb.sync_project_failed` with the detail. Running the sync again is safe |
+| `failed`, *Abandoned: no sign of life for ten minutes* | The process running the sync died (closed terminal, container restart). A running sync stamps `heartbeat_at` after every project and every file, and the next sync closes one silent for ten minutes. Run the sync again: it continues with the files still `pending` |
+
+## The Index button says "Waiting for the worker" and nothing happens
+
+The sync is queued and no worker has claimed it. In production: `az containerapp
+job execution list --name <baseName>-kb-worker -g <rg>`. No executions means the
+job does not exist (`enableKbWorker` is false, see *Knowledge Base worker in Azure*)
+or its scale rule cannot reach the database (the `database-url` secret, or the
+firewall's Azure-services rule). Executions that fail at once: `az containerapp job
+logs show`; the first lines name what is missing (`PHB_PLATFORM_KB_APP_*`,
+`KB_SHAREPOINT_LIBRARY_URL`). Locally: start `npm run kb:worker`.
+
+A queued sync nobody picks up is closed after an hour as *Never picked up*, so the
+button works again; nothing was changed.
+
+## Knowledge Base worker in Azure
+
+**What it is.** A Container Apps Job, `<baseName>-kb-worker` (`kbWorkerJob` in
+`infra/main.bicep`), the Cost Intelligence worker's shape. Every 15 s its scaler
+counts `queued` rows in `kb_sync_runs` and starts one execution, which runs
+`kb-worker.ts --once`: claims the sync, lists the library, reads every new or
+changed file, and exits. One at a time. Up to four hours per execution
+(`replicaTimeout`); a first index that needs longer stops there, its heartbeat goes
+quiet, and the next press continues with the files still `pending`. It costs
+nothing while idle. Image: `Dockerfile.kb-worker` (Node and the repo; no Python,
+unlike the CIP worker).
+
+**Built 2026-10-30, not yet turned on.** Nothing exists in Azure until the steps
+below are done.
+
+**Turning it on, once, in this order.**
+
+1. Check the KB app registration (request KB-3) has its read grant on the library
+   and a federated credential for the platform's user-assigned identity
+   (`managedIdentityClientId` output). No secret is involved anywhere.
+2. Build the first image: `az acr build --registry <registry> --image
+   kb-worker:<sha> --file Dockerfile.kb-worker .`
+3. In `infra/main.parameters.json` set `enableKbWorker: true`, `kbAppTenantId`,
+   `kbAppClientId` and `kbSharePointLibraryUrl` (the `ids:<driveId>/<itemId>` of
+   `+++CURATED_FOLDERS` that `npm run kb:source:check` prints; *Pointing the
+   Knowledge Base at its SharePoint folder*). Pass `kbWorkerImage` as the image from step 2 and
+   `containerImage` as the image now running; both have no default.
+4. `az deployment group what-if ...` (see `infra/README.md`), review, then `create`,
+   passing nothing secure, as for the CIP worker.
+5. Set the repository variable `AZURE_KB_WORKER_JOB` to the `kbWorkerJobName`
+   output. From the next push to `main`, `deploy.yml` builds `kb-worker:<sha>` and
+   points the job at it. Until it is set those steps are skipped.
+6. Press **Index now** and watch the first execution:
+   `az containerapp job execution list --name <baseName>-kb-worker -g <rg>`.
+
+## Knowledge Base embeddings
+
+**What they are.** Every passage gets a vector of 1,536 numbers from Azure
+OpenAI's `text-embedding-3-small` (Foundry), stored in `kb_chunks.embedding`.
+They are written by the **sync's last step** (`lib/modules/knowledge-base/embedder.ts`),
+after indexing, for every indexed passage that has none - so the first sync after
+configuring them embeds everything indexed before, and a sync that stops half way
+is finished by the next. What is embedded is the file name and location, then the
+passage text (`embeddingInput` in `embed.ts`).
+
+**Turning them on locally.** In `.env.local`: `KB_EMBEDDING_ENDPOINT` (the
+resource URL or the deployment's Target URI; only the host is used),
+`KB_EMBEDDING_DEPLOYMENT` (the deployment's name) and `KB_EMBEDDING_API_KEY`. Then
+`npm run kb:embed:check`: one request, no database, prints the URL, the vector width
+(must be 1536), tokens and time. Then restart `kb:worker` and press **Index now**.
+
+**In production** there is no key: the app and the worker sign in with the managed
+identity, which needs the role *Cognitive Services OpenAI User* on the Foundry
+resource (request KB-2), and the template parameters `kbEmbeddingEndpoint` and
+`kbEmbeddingDeployment`. `KB_EMBEDDING_API_KEY` set in production is refused.
+
+**How long and how much.** Batches of 64 passages. Azure's quota on the deployment
+(tokens per minute) sets the pace: a 429 is waited out for as long as Azure says,
+up to six tries per batch. Tokens per run are on the admin screen (hover the
+*Embedded* count) and in `kb_sync_runs.embedding_tokens`.
+
+| What you see | Cause and fix |
+|---|---|
+| *Could not reach ... : ... (UNABLE_TO_GET_ISSUER_CERT_LOCALLY)* or another certificate code | A proxy on the network is inspecting HTTPS and Node does not trust its certificate (Node keeps its own list, not Windows'). Set `NODE_OPTIONS=--use-system-ca` before starting the process, or `NODE_EXTRA_CA_CERTS` to the proxy's root certificate. `curl.exe` working while Node fails is the sign |
+| *Could not reach ... : ... ENOTFOUND* | The host name does not resolve: the endpoint is misspelt, or the network or VPN cannot see it |
+| *Could not reach ... : fetch failed* with no code | Run `npm run kb:embed:check` again on the current code, which prints the code; then the two rows above |
+| Admin: *Embedding is not configured here* | The three variables above are missing in the process that runs the sync. Not an error: keyword search works on every passage |
+| Sync `partial`, *Embedding stopped after N passages: ... 401* | The key (locally) or token (production) was refused. Check `KB_EMBEDDING_API_KEY`, or the managed identity |
+| ... *403* | The identity has no *Cognitive Services OpenAI User* role on the resource |
+| ... *404* | No deployment by that name on that host, or the endpoint is a different resource |
+| ... *429* after six tries | The deployment's tokens-per-minute quota is too low for the backlog. Raise it in Foundry, or let successive syncs finish it |
+| ... *N-dimension vectors* | The deployment is not `text-embedding-3-small`. Changing model is a migration plus a full re-embed, never a variable change |
+
+In every case the passages embedded so far keep their vectors, the rest stay NULL
+(keyword search still finds them), and the next sync continues.
+
+## Knowledge Base search finds nothing, or the wrong file
+
+Search is **hybrid**, then **re-sorted by Claude Haiku** when the KB has its
+Claude key (*Knowledge Base answers*, below), (`lib/modules/knowledge-base/search.ts`): a keyword search
+(passages holding the question's words, ranked by how many) and a meaning search
+(the question embedded, nearest passage vectors by cosine) run side by side and
+are merged by rank, so a passage both find comes first. Current versions sit above
+older and archived ones. Each result says how it was found: *Holds X of Y words*,
+*Found by meaning*, or both. What that means in use:
+
+| Symptom | Why, and what to do |
+|---|---|
+| *Those words are too common to search for* | Every word was a stop word ("what is the"). Use the tag, a number, a product name |
+| A synonym finds nothing ("air handling unit" when the file says "AHU") | The meaning half should find it. If the line *Searched by words only* shows, the meaning half did not run (next two rows). If it did run, the passage may have no vector yet: the sync embeds last, so check the admin page's embedded count |
+| *Searched by words only: meaning-based search is not configured here* | `KB_EMBEDDING_ENDPOINT` / `KB_EMBEDDING_DEPLOYMENT` unset (locally also `KB_EMBEDDING_API_KEY`). See *Knowledge Base embeddings* |
+| *Searched by words only: meaning-based search did not answer this time* | The question could not be embedded within 2 tries / 5 s (quota, network). Search still answered by words. The log has `kb.query_embedding_failed` with Azure's reason |
+| Unrelated files listed as *Found by meaning* | The similarity threshold (`KB_MIN_SIMILARITY`, 0.3) is too low for this corpus. Measure with `npm run kb:eval` before raising it |
+| *Nothing in the indexed documents matches that closely enough* | Neither half found anything above the threshold. Try the term the documents use |
+| A result says *Same text also in:* other files | The same passage (a spec section copied into a submittal, a page carried into the next version) is listed once, with the other places beneath. The current version always fronts the group, even when an archived or older copy scored higher; archived and older copies carry an orange *Archived* / *Older version* tag. Two passages count as the same when about 80% of their three-word runs match (`duplicates.ts`); a page with much text of its own stays a result of its own |
+| A file you expected is not a result, but you know it holds that page | Look under *Same text also in* of the results above it. `npm run kb:eval` counts a file there at that result's rank |
+| A file you know is there is missing | Check its row (*A document is in SharePoint but search never finds it*, above): it must be `indexed`. A scanned PDF is `skipped`, `empty_text` |
+| *Limited to <project> from the job number* | A six-digit job number in the question scopes the search to that project. Leave it out to search everything |
+| An archived version is listed | Older versions are returned on purpose, labelled, below the current one |
+
+**Measuring it.** `npm run kb:eval` runs the questions in `.kb-eval/questions.json`
+(git-ignored: they name real project files) and prints, for each, the rank of the
+first file that holds the answer, then the share found first and in the top five.
+It runs every question twice, words only and hybrid, side by side, with totals
+for each (`--mode keyword` or `--mode hybrid` runs one). Run it before and after
+any change to search; a mode that fell back to words is said so in the output.
+
+## Knowledge Base answers
+
+A question goes: search (words and meaning, copies collapsed) -> Claude Haiku
+re-sorts the top 30 and keeps the ones that help -> Claude Sonnet answers from
+those, citing each -> the answer is checked and saved to the history
+(`lib/modules/knowledge-base/ask.ts`). Key: `KB_ANTHROPIC_API_KEY`, the KB's
+own (`infra/README.md`); models `claude-haiku-5-5` and `claude-sonnet-5-5`,
+overridable with `KB_RERANK_MODEL` / `KB_ANSWER_MODEL` without a code change.
+
+| Symptom | Why, and what to do |
+|---|---|
+| *Answers are not configured here* (503), search results shown | `KB_ANTHROPIC_API_KEY` unset. Locally `.env.local`; production the Key Vault secret and `kbAnthropicApiKeyInKeyVault` |
+| *Not re-sorted: Claude is not configured* under the results | Same cause; search still works in its own order |
+| *Not re-sorted: the re-sorting step did not answer this time* | Haiku failed or took over 10 s. Log: `kb.rerank_failed` with Anthropic's reason. A 404 there usually means the model name was retired: set `KB_RERANK_MODEL` |
+| *Claude did not answer this time* (502) | Sonnet failed (timeout 90 s, overload, refusal, an answer past 4,096 tokens). Nothing is saved. Log: `kb.answer_failed`. A retired model: set `KB_ANSWER_MODEL` |
+| *The documents found do not answer this* | Haiku kept no passage (Sonnet is then not called, nothing spent), or Sonnet's answer cited nothing, which the platform never shows as an answer. Check the search results beneath: if the right page is there, the re-sort prompt (`RERANK_RULES` in `rerank.ts`) is the place to look |
+| A citation number is missing or jumps | Citations are renumbered 1..n in order of first use, and a citation to a passage that was not sent is removed (`finishAnswer` in `answer.ts`) |
+| *That is 10 questions in a minute* (429) | Per-person limit (`KB_QUESTIONS_PER_MINUTE`), in memory, resets with a new revision |
+| *Only the person who started this conversation can add to it* (409) | A module admin can open anyone's conversation but not add to it. Ask it as a new question |
+| *That conversation no longer exists* for a link someone sent | Each person sees only their own history; only Knowledge Base module admins open anyone's. Grant module admin, or have the asker look |
+| A project name is not highlighted in an answer | The screen marks the project as its sources are labelled (`221457 MAGNODE`), the name alone or the job number. A paraphrase ("the Magnode job") is marked only on the word that matches. Answers saved before 2026-11-16 use the folder name |
+| A follow-up answers about the wrong thing | A follow-up is rewritten by Haiku to stand alone for the search (shown as what was searched in the stored answer, `searchedFor`); without Claude it is the last question plus the follow-up. It keeps the earlier question's projects unless it names a job number |
+| An old answer cites a file that is gone | The history keeps a snapshot of each answer and its sources; clearing or rebuilding the index sets the links (`kb_question_sources`) to NULL and leaves the snapshot |
+
+**Changing what answers say.** The rules are `ANSWER_RULES` in
+`lib/modules/knowledge-base/answer.ts`, one string, the first version written
+from the specification. `tests/kb-answer.test.ts` holds only the parts the code
+relies on (cite by number, passages only, current version first, data is not
+instructions).
+
+## A Knowledge Base file is `failed`
+
+```sql
+SELECT path, error FROM kb_documents WHERE status = 'failed' ORDER BY path;
+```
+
+The sync could not read that one file; every other file was indexed. The next sync
+tries it again. What the `error` usually means:
+
+| `error` | Cause and fix |
+|---|---|
+| *The PDF is password-protected* | Save an unprotected copy in SharePoint in its place |
+| *Not a readable PDF* / *Invalid PDF structure* | The file is damaged or is not really a PDF. Open it; if Acrobat repairs it, save the repaired copy |
+| *Reading the file took longer than 5 minutes* | An unusually heavy file. Check it opens; if it is a drawing set, it belongs in 1A or 1E |
+| *unexpected close tag*, or another XML error on `.xlsx` / `.xlsm` | A workbook part exceljs cannot parse. Legacy VML drawings (comments, form buttons) are already removed before parsing; anything else, open and re-save the workbook in Excel |
+| A `403` or `404` from SharePoint | The file moved or the KB app lost its grant between the listing and the read. Run the sync again |
+
+A scanned PDF with no text layer is not a failure: it is `skipped` with
+`empty_text`. OCR is not built.
+
+## Rebuilding the Knowledge Base index from scratch
+
+**When.** The index is wrong in a way a normal sync will not fix: a change of
+embedding model, a bug in extraction that wrote bad passages, or a test that
+filled a database with fixtures.
+
+**From the screen.** `/knowledge-base/admin` -> *Start fresh* -> **Clear index**,
+then type `clear`. Module admins only; refused while a sync is queued or running;
+recorded in the audit log as `kb.index_cleared` with the counts removed
+(`lib/modules/knowledge-base/clear.ts`). Then press **Index now**: every file is
+read and embedded again, which takes as long as the first index did. The SQL
+below is the same thing by hand.
+
+**What is safe.** Everything under `kb_projects` is derived from SharePoint and
+comes back on the next sync. The question history is not derived and is **not**
+touched: each question keeps its answer exactly as shown, sources included, and
+only its links into the index go empty.
+
+```sql
+-- Index only. kb_documents and kb_chunks go with kb_projects (ON DELETE CASCADE);
+-- kb_question_sources keeps its rows with document_id and chunk_id set to NULL.
+DELETE FROM kb_projects;
+```
+
+Never `TRUNCATE ... CASCADE` here: TRUNCATE does not run the foreign keys'
+`ON DELETE SET NULL`, it empties every table that references the truncated ones -
+which includes `kb_question_sources`, the history. Then run a sync.
+
+## A Knowledge Base answer was reported as wrong
+
+**Where reports land.** *Report a wrong answer* under each answer (anyone with
+the module, on anyone's answer) writes a row to `kb_answer_reports`
+(`lib/modules/knowledge-base/reports.ts`): a reason, optionally which source
+and a comment. Reporting again while it is open updates the same report. The
+queue is on `/knowledge-base/admin` under *Reported answers*, for **Knowledge
+Base module admins**; the Ask page's *Admin* link shows the open count. Each
+report shows the question, the answer as it was shown, and a link to open it
+with its sources. Filing and closing are audited (`kb.answer_reported`,
+`kb.answer_report_closed`). The same queue in SQL, newest first:
+
+```sql
+SELECT r.created_at, e.email AS reported_by, r.reason, r.citation_n, r.comment,
+       q.question, q.id AS question_id
+  FROM kb_answer_reports r
+  JOIN kb_questions q ON q.id = r.question_id
+  LEFT JOIN employees e ON e.id = r.reported_by_id
+ WHERE r.status = 'open'
+ ORDER BY r.created_at DESC;
+```
+
+**Investigate.** `kb_questions.answer` on that row is exactly what the person saw,
+with every cited passage and its location; `citation_n` names the citation they
+disputed, if any. `kb_question_sources` links each citation number to the
+document and passage in the index, if they still exist. Decide which it is:
+
+| Finding | Cause | Fix |
+|---|---|---|
+| The cited passage does not say what the file says at that location | Extraction | Check the file; re-index it; if the format is the problem, it is an extractor bug |
+| A document that answers it exists and was not cited | Search, or the file was skipped | Check its `kb_documents` row (*A document is in SharePoint but search never finds it*) |
+| The passage is right and the answer overstates it | Answering | Record the question for the evaluation set |
+| A newer version says something else | Versions | Check `family_key` / `is_latest` on both rows |
+
+**Close it.** On the admin page: write what you found, then *Resolved*
+(something was wrong and was dealt with) or *Dismiss: the answer was right*.
+The note is required, and the database refuses a closed report without a note
+and a time. Two admins closing the same report: the second is told someone
+already closed it (409). Once closed, the reporter can report that answer again.
+
+## Knowledge Base: what to ask IT for
+
+Three requests, in order of need. Vitis Technologies owns Azure and Entra.
+
+### Request KB-1 - allow pgvector on the database server (before the KB branch merges)
+
+> Subject: Allow the pgvector extension on the PH+B platform PostgreSQL server
+>
+> Please add `VECTOR` to the server parameter `azure.extensions` on the PH+B
+> platform's Azure Database for PostgreSQL Flexible Server in resource group
+> `<resource-group>`. If the parameter already lists extensions, append `,VECTOR`
+> rather than replacing them. No restart is required. This lets a database migration
+> create the pgvector extension, which the platform's Knowledge Base search uses.
+
+### Request KB-2 - Azure OpenAI for embeddings
+
+> Subject: Azure OpenAI resource for the PH+B platform Knowledge Base
+>
+> Please create an Azure OpenAI resource in resource group `<resource-group>`
+> (East US 2 or the nearest region offering it) with a deployment of
+> `text-embedding-3-small`, owned by the platform's M365 group rather than a person.
+> Please grant the platform container app's managed identity the role
+> **Cognitive Services OpenAI User** on that resource. No API key is needed in
+> Azure; the platform authenticates with the managed identity. For local
+> development, one key shared over Teams, not email, is enough.
+
+### Request KB-3 - read access to the Knowledge Base library
+
+> Subject: Read-only Graph access to the Knowledge Base legacy projects folder
+>
+> Please create a new Entra app registration for the PH+B platform Knowledge Base,
+> owned by the platform's M365 group, separate from the Change Orders and Cost
+> Intelligence registrations. Grant it Microsoft Graph
+> **Files.SelectedOperations.Selected** (Application) with admin consent, then
+> grant it **read** on the legacy projects folder only - the same folder-level
+> grant Cost Intelligence already has on its two folders:
+>
+>     POST https://graph.microsoft.com/v1.0/drives/<drive-id>/items/<folder-item-id>/permissions
+>     { "roles": ["read"],
+>       "grantedTo": { "application": { "id": "<new-app-client-id>",
+>                                       "displayName": "PHB Platform KB" } } }
+>
+> Please also add a federated identity credential on it for the platform's
+> managed identity, matching the one on the Cost Intelligence registration, so no
+> client secret is needed in Azure.
+
+### Request KB-4 - employees can open what the Knowledge Base cites
+
+> Subject: Read access to the legacy projects folder for platform users
+>
+> The platform's Knowledge Base links each answer to the original file in
+> SharePoint. The platform's own identity reads the files to index them, but
+> that gives employees no access: the link opens only for someone SharePoint
+> already lets read the file. Please make sure the employees who will use the
+> Knowledge Base have read access to the legacy projects folder, for example
+> through the group that already reads the project library.

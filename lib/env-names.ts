@@ -4,7 +4,8 @@
  * them: lib/env.ts (which re-exports them, so the web app and its readers
  * import from there as before), lib/modules/bas/analyze/env.ts,
  * lib/modules/bas/credentials.ts, lib/modules/change-orders/anthropic-env.ts,
- * lib/modules/freeze-protection/anthropic-env.ts and the Reports jobs'
+ * lib/modules/freeze-protection/anthropic-env.ts, lib/modules/knowledge-base/anthropic.ts
+ * and the Reports jobs'
  * reader, lib/modules/bas/reports/job-env.ts. infra/main.bicep spells the
  * same names in its `env:` lists, and tests/deploy-guards.test.ts holds them
  * to each other: a rename in one place that misses another fails the build
@@ -41,6 +42,12 @@ export const CO_ANTHROPIC_API_KEY_VAR = "CO_ANTHROPIC_API_KEY";
  * default name, never a fallback to another module's key.
  */
 export const FP_ANTHROPIC_API_KEY_VAR = "FP_ANTHROPIC_API_KEY";
+/**
+ * The Knowledge Base's own key (2026-11-10): Haiku re-sorts search results and
+ * Sonnet writes answers with it. Same rules as the Change Orders key: never the
+ * SDK default name, never a fallback to another module's key.
+ */
+export const KB_ANTHROPIC_API_KEY_VAR = "KB_ANTHROPIC_API_KEY";
 export const BAS_CREDENTIAL_KEY_VAR = "BAS_CREDENTIAL_KEY";
 export const BAS_CREDENTIAL_KEY_VERSION_VAR = "BAS_CREDENTIAL_KEY_VERSION";
 /** The bas_analyze role's URL (2026-10-13): the third secret by reference, same shape. */

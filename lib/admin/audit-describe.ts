@@ -691,6 +691,47 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "cip.workflow_deleted": ({ actor, meta }) =>
     `${actor} deleted the draft Cost Intelligence workflow "${stringField(meta, "name") ?? "(unnamed)"}"`,
 
+  "kb.synced": ({ actor, meta }) => {
+    const n = (key: string) => {
+      const v = meta[key];
+      return typeof v === "number" ? v : 0;
+    };
+    const failed = n("projectsFailed");
+    return (
+      `${actor} synced the Knowledge Base: ${n("projectsSeen")} projects, ${n("filesSeen")} files, ` +
+      `${n("filesQueued")} new or changed, ${n("filesIndexed")} indexed, ${n("filesFailed")} could not be read, ` +
+      `${n("filesSkipped")} skipped, ${n("filesRemoved")} removed` +
+      (failed > 0 ? `, ${failed} project(s) could not be read` : "")
+    );
+  },
+
+  "kb.index_cleared": ({ actor, meta }) => {
+    const n = (key: string) => {
+      const v = meta[key];
+      return typeof v === "number" ? v : 0;
+    };
+    return (
+      `${actor} cleared the Knowledge Base index: ${n("projects")} projects, ${n("documents")} files and ` +
+      `${n("chunks")} passages removed, to be rebuilt by the next sync`
+    );
+  },
+
+  "kb.answer_reported": ({ actor, meta }) => {
+    const reason = stringField(meta, "reason") ?? "no reason recorded";
+    const n = meta.citationN;
+    return (
+      `${actor} ${meta.updated === true ? "updated their report on" : "reported"} a Knowledge Base answer as wrong ` +
+      `(${reason.replace(/_/g, " ")}${typeof n === "number" ? `, source [${n}]` : ""})`
+    );
+  },
+
+  "kb.answer_report_closed": ({ actor, meta }) =>
+    `${actor} ${stringField(meta, "status") === "dismissed" ? "dismissed" : "resolved"} a report on a Knowledge Base answer: ` +
+    `${stringField(meta, "note") ?? "no note"}`,
+
+  "kb.sync_failed": ({ actor, meta }) =>
+    `${actor}'s sync of the Knowledge Base failed: ${stringField(meta, "error") ?? "no reason recorded"}`,
+
   // Freeze Protection. Every sentence names the job number, which is how people
   // find a project; the unit tag where there is one.
   "fp.project_created": ({ actor, meta }) =>
@@ -1026,6 +1067,11 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "cip.workflow_updated": "Cost Intelligence workflow updated",
   "cip.workflow_steps_changed": "Cost Intelligence workflow steps changed",
   "cip.workflow_deleted": "Cost Intelligence workflow deleted",
+  "kb.synced": "Knowledge Base synced",
+  "kb.sync_failed": "Knowledge Base sync failed",
+  "kb.index_cleared": "Knowledge Base index cleared",
+  "kb.answer_reported": "Knowledge Base answer reported",
+  "kb.answer_report_closed": "Knowledge Base report closed",
   "fp.project_created": "Freeze Protection project created",
   "fp.project_updated": "Freeze Protection project updated",
   "fp.project_deleted": "Freeze Protection project deleted",

@@ -109,6 +109,9 @@
     "coAnthropicApiKeyInKeyVault": {
       "value": false
     },
+    "kbAnthropicApiKeyInKeyVault": {
+      "value": false
+    },
     "fpAnthropicApiKeyInKeyVault": {
       "value": false
     },
@@ -136,6 +139,25 @@
     },
     "cipSharePointProjectsFolder": {
       "value": "ids:<driveId>/<itemId>"
+    },
+
+    "enableKbWorker": {
+      "value": false
+    },
+    "kbAppTenantId": {
+      "value": ""
+    },
+    "kbAppClientId": {
+      "value": ""
+    },
+    "kbSharePointLibraryUrl": {
+      "value": ""
+    },
+    "kbEmbeddingEndpoint": {
+      "value": ""
+    },
+    "kbEmbeddingDeployment": {
+      "value": ""
     },
 
     "coReviewAppTenantId": {

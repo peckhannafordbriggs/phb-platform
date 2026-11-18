@@ -344,7 +344,7 @@ describe("the BAS credential key reaches the container only by Key Vault referen
       /var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'/,
     );
     // All four hand-set secrets are read under that same identity.
-    for (const secret of ["anthropic-api-key", "co-anthropic-api-key", "bas-credential-key", "bas-ask-database-url"]) {
+    for (const secret of ["anthropic-api-key", "co-anthropic-api-key", "kb-anthropic-api-key", "bas-credential-key", "bas-ask-database-url"]) {
       expect(bicep).toMatch(
         new RegExp(`name:\\s*'${secret}'[\\s\\S]{0,160}identity:\\s*identity\\.id`),
       );
@@ -375,7 +375,10 @@ describe("the BAS credential key reaches the container only by Key Vault referen
     expect(changeOrders).not.toMatch(/process\.env\.CO_ANTHROPIC_API_KEY/);
     // And the bicep spells the same names, so the readers cannot drift from it.
     const bicep = await readBicep();
-    for (const name of [env.ANTHROPIC_API_KEY_VAR, env.CO_ANTHROPIC_API_KEY_VAR, env.BAS_CREDENTIAL_KEY_VAR, env.BAS_CREDENTIAL_KEY_VERSION_VAR, env.BAS_ASK_DATABASE_URL_VAR]) {
+    const kb = strip(await readSource("lib/modules/knowledge-base/anthropic.ts"));
+    expect(kb).not.toMatch(/["'`]KB_ANTHROPIC_API_KEY["'`]/);
+    expect(kb).not.toMatch(/process\.env\.KB_ANTHROPIC_API_KEY/);
+    for (const name of [env.ANTHROPIC_API_KEY_VAR, env.CO_ANTHROPIC_API_KEY_VAR, env.KB_ANTHROPIC_API_KEY_VAR, env.BAS_CREDENTIAL_KEY_VAR, env.BAS_CREDENTIAL_KEY_VERSION_VAR, env.BAS_ASK_DATABASE_URL_VAR]) {
       expect(bicep).toContain(`name: '${name}'`);
     }
   });
@@ -407,6 +410,7 @@ describe("the BAS credential key reaches the container only by Key Vault referen
     ) as { parameters: Record<string, { value: unknown }> };
     expect(example.parameters.anthropicApiKeyInKeyVault?.value).toBe(false);
     expect(example.parameters.coAnthropicApiKeyInKeyVault?.value).toBe(false);
+    expect(example.parameters.kbAnthropicApiKeyInKeyVault?.value).toBe(false);
     expect(example.parameters.basCredentialKeyInKeyVault?.value).toBe(false);
     expect(example.parameters.basAskDatabaseUrlInKeyVault?.value).toBe(false);
     expect(example.parameters.basCredentialKeyVersion?.value).toBe("1");
@@ -1248,7 +1252,7 @@ describe("the two secure parameters are optional, and omitted means unchanged (2
     // gives Bicep the dependency. ARM ignores a dependency on a resource
     // whose condition is false, so an omitted secret does not block a redeploy.
     const databaseUrlRefs = code.match(/secrets\/\$\{databaseUrlSecret\.name\}/g) ?? [];
-    expect(databaseUrlRefs.length).toBe(5); // the app, the CIP worker job, the backup job, the two BAS Reports jobs
+    expect(databaseUrlRefs.length).toBe(6); // the app, the CIP and KB worker jobs, the backup job, the two BAS Reports jobs
     expect(code).toMatch(/secrets\/\$\{authSecretSecret\.name\}/);
   });
 
@@ -1719,6 +1723,80 @@ describe("the nightly database backup is conditional, identity-only, and holds n
   );
 });
 
+/**
+ * The Knowledge Base worker job (2026-10-30): the CIP worker's shape, with
+ * the KB app registration and no secret but the database URL. The mutations
+ * these are for: give the job a `PHB_PLATFORM_KB_APP_SECRET` entry, point its
+ * scaler at a table that is not the KB queue, or let the deploy workflow
+ * build the image when the job does not exist.
+ */
+describe("the Knowledge Base worker job", () => {
+  const read = (relative: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, relative), "utf8"));
+  const jobBlock = async () => {
+    const bicep = (await read("infra/main.bicep")).replace(/\r\n/g, "\n");
+    const start = bicep.indexOf("resource kbWorkerJob");
+    expect(start).toBeGreaterThan(0);
+    return bicep.slice(start, bicep.indexOf("\n}\n", start));
+  };
+
+  it("is off by default, and holds no secret but the database URL", async () => {
+    const bicep = await read("infra/main.bicep");
+    expect(bicep).toMatch(/param enableKbWorker bool = false/);
+    expect(bicep).toMatch(/param kbWorkerImage string = ''/);
+    expect(bicep).not.toContain("PHB_PLATFORM_KB_APP_SECRET");
+    const job = await jobBlock();
+    expect([...job.matchAll(/secretRef:\s*'([\w-]+)'/g)].map((m) => m[1])).toEqual(["database-url", "database-url"]);
+  });
+
+  it("carries the KB app's identifiers as plain values from parameters that default to blank", async () => {
+    const bicep = await read("infra/main.bicep");
+    const job = await jobBlock();
+    for (const [name, param] of [
+      ["PHB_PLATFORM_KB_APP_TENANT_ID", "kbAppTenantId"],
+      ["PHB_PLATFORM_KB_APP_CLIENT_ID", "kbAppClientId"],
+      ["KB_SHAREPOINT_LIBRARY_URL", "kbSharePointLibraryUrl"],
+    ]) {
+      expect(job).toMatch(new RegExp(`name:\\s*'${name}'[\\s\\S]{0,60}value:\\s*${param}\\b`));
+      expect(bicep).toMatch(new RegExp(`param ${param} string = ''`));
+    }
+  });
+
+  it("is started by queued syncs and runs one with --once", async () => {
+    const job = await jobBlock();
+    expect(job).toMatch(/query: 'SELECT count\(\*\) FROM kb_sync_runs WHERE status = \\'queued\\''/);
+    expect(job).toMatch(/'scripts\/kb-worker\.ts'\s+'--once'/);
+    expect(job).toMatch(/maxExecutions: 1\b/);
+  });
+
+  it("gives the app and the job the embedding endpoint and deployment as plain values, and never a key", async () => {
+    const bicep = (await read("infra/main.bicep")).replace(/\r\n/g, "\n");
+    expect(bicep).not.toContain("KB_EMBEDDING_API_KEY");
+    expect(bicep).not.toMatch(/KB-EMBEDDING/);
+    for (const [name, param] of [
+      ["KB_EMBEDDING_ENDPOINT", "kbEmbeddingEndpoint"],
+      ["KB_EMBEDDING_DEPLOYMENT", "kbEmbeddingDeployment"],
+    ]) {
+      expect(bicep.match(new RegExp(`name:\\s*'${name}'\\s*\\n\\s*value:\\s*${param}\\b`, "g"))).toHaveLength(2);
+      expect(bicep).toMatch(new RegExp(`param ${param} string = ''`));
+    }
+    expect(await jobBlock()).toMatch(/name:\s*'KB_EMBEDDING_ENDPOINT'/);
+  });
+
+  it("is built and updated by the deploy workflow only once the job exists", async () => {
+    const workflow = await read(".github/workflows/deploy.yml");
+    expect(workflow).toMatch(
+      /if: vars\.AZURE_KB_WORKER_JOB != ''\s+run: \|\s+az acr build[\s\S]{0,200}--file Dockerfile\.kb-worker/,
+    );
+    expect(workflow).toMatch(
+      /if: vars\.AZURE_KB_WORKER_JOB != ''\s+run: \|\s+az containerapp job update \\\s+--name "\$\{\{ vars\.AZURE_KB_WORKER_JOB \}\}"/,
+    );
+    const dockerfile = await read("Dockerfile.kb-worker");
+    expect(dockerfile).toMatch(/CMD \["npx", "tsx", "scripts\/kb-worker\.ts"\]/);
+    expect(dockerfile).toMatch(/^USER node$/m);
+  });
+});
+
 describe("the Phase 12 Part E shadow run: three jobs behind one flag, two identities, one secret (2026-10-30)", () => {
   /**
    * docs/phase-12-part-e-plan.md section 5, decided in section 14: the shadow
@@ -2155,6 +2233,42 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(scheduler!.properties?.template?.containers?.[0]?.command).toEqual(["npx", "tsx", "scripts/bas-reports-scheduler.ts"]);
     const assignments = resources.filter((r) => r.type === "Microsoft.Authorization/roleAssignments");
     expect(assignments.length).toBe(3);
+  });
+});
+
+/**
+ * The Knowledge Base's Anthropic key (2026-11-10): a third key, the same
+ * shape as the Change Orders one. The per-module separation is
+ * tests/anthropic-key-per-module.test.ts; this is the Key Vault wiring.
+ */
+describe("the Knowledge Base Anthropic key reaches the container only by Key Vault reference (2026-11-10)", () => {
+  const readBicep = () =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, "infra/main.bicep"), "utf8"),
+    );
+
+  it("is an environment variable backed by its own secretRef, never a plain value", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(/name:\s*'KB_ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'kb-anthropic-api-key'/);
+    expect(bicep).not.toMatch(/name:\s*'KB_ANTHROPIC_API_KEY'[\s\S]{0,80}value:/);
+    expect(bicep).toMatch(/var kbAnthropicApiKeySecretName = 'KB-ANTHROPIC-API-KEY'/);
+    expect(bicep).toMatch(
+      /name:\s*'kb-anthropic-api-key'\s*keyVaultUrl:\s*'\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{kbAnthropicApiKeySecretName\}'\s*identity:\s*identity\.id/,
+    );
+  });
+
+  it("is behind its own boolean that defaults to false, and is never written by the template", async () => {
+    const bicep = await readBicep();
+    expect(bicep).toMatch(/param kbAnthropicApiKeyInKeyVault bool = false/);
+    expect(bicep).not.toMatch(/vaults\/secrets@[\d-]+'\s*=\s*\{[\s\S]{0,120}name:\s*'KB-ANTHROPIC-API-KEY'/);
+    expect(bicep).toMatch(/\.\.\.\(kbAnthropicApiKeyInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'kb-anthropic-api-key'/);
+    expect(bicep).toMatch(/\.\.\.\(kbAnthropicApiKeyInKeyVault\s*\?\s*\[\s*\{\s*name:\s*'KB_ANTHROPIC_API_KEY'/);
+  });
+
+  it("is neither other module's key", async () => {
+    const bicep = await readBicep();
+    expect(bicep).not.toMatch(/name:\s*'KB_ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'(co-)?anthropic-api-key'/);
+    expect(bicep).not.toMatch(/name:\s*'(CO_)?ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'kb-anthropic-api-key'/);
   });
 });
 
