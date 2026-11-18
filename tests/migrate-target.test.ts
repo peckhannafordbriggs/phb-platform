@@ -90,9 +90,30 @@ beforeAll(async () => {
   }
 });
 
+/**
+ * The teardown has a budget of its own, and retries (2026-11-18). In a full
+ * local run - 130-odd files against one Postgres, about 13 minutes on a
+ * laptop against about 5 in CI - the DROP DATABASE here has outlasted the
+ * suite's 30-second hookTimeout, and the FILE reported failed with every
+ * test in it passed. A slow drop is a loaded disk, not a defect, so it gets
+ * three attempts inside two minutes. It still fails loudly if the database
+ * cannot be dropped at all: a leftover zz_ database is worth hearing about.
+ * In CI the first attempt finishes in well under a second, as before.
+ */
+const TEARDOWN_TIMEOUT_MS = 120_000;
+const TEARDOWN_ATTEMPTS = 3;
+
 afterAll(async () => {
-  await withAdmin((admin) => admin.query(`DROP DATABASE IF EXISTS "${PROBE_DATABASE}"`));
-});
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await withAdmin((admin) => admin.query(`DROP DATABASE IF EXISTS "${PROBE_DATABASE}"`));
+      return;
+    } catch (error) {
+      if (attempt >= TEARDOWN_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
+    }
+  }
+}, TEARDOWN_TIMEOUT_MS);
 
 /** A counter that records what it was asked and answers a fixed value. */
 function stubCounter(answer: number | null): LiveRowCounter & { calls: string[] } {
