@@ -13234,6 +13234,20 @@ variable `AZURE_CIP_WORKER_JOB` is set, so `deploy.yml` points the job at a
 new `cip-worker:<sha>` on every merge to `main`. The steps below are how it
 was done, kept as the procedure for an empty resource group.
 
+**The image holds production dependencies only (2026-11-18).**
+`Dockerfile.cip-worker` was slimmed the way `Dockerfile.bas-reports` was:
+`/app` is the `node` user's from its first layer instead of re-owned at the
+end, and the install is `npm ci --omit=dev`. One local build of each from the
+same source: **5.24 GB before, 2.24 GB after**, as `docker image ls` reports
+it. So an execution that fails within seconds on `ERR_MODULE_NOT_FOUND`, or
+with `npx` offering to install `tsx`, has the same cause and fix as the
+Reports jobs: a package the worker loads is under `devDependencies` -
+*Reports: a job execution fails with `Cannot find package` or
+`ERR_MODULE_NOT_FOUND`*. `tests/bas-reports-jobs-env.test.ts` walks
+`scripts/cip-worker.ts`'s import graph against `dependencies` and should fail
+first. The skills' `docx` and `pptxgenjs` are global installs outside `/app`
+and unaffected.
+
 **Turning it on, once, in this order.**
 
 1. Create the Key Vault secret `ANTHROPIC-API-KEY-CIP` by hand, in the Portal

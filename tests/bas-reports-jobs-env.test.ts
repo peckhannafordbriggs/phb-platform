@@ -53,7 +53,14 @@ const SCRIPTS = {
 // 1. The static import graph
 // ---------------------------------------------------------------------------
 
-const IMPORT_RE = /(?:^|\n)\s*(?:import|export)\s+(?:[^'"\n]*?\s+from\s+)?['"]([^'"]+)['"]/g;
+/**
+ * A static import or re-export, across lines: `import {\n a,\n b,\n} from "x"`
+ * is the usual shape for more than two names, and a single-line pattern never
+ * saw it (2026-11-18: the Cost Intelligence worker's import of the agent SDK
+ * was invisible). `import type` / `export type` statements are skipped -
+ * they are erased before anything runs, so they load no package.
+ */
+const IMPORT_RE = /(?:^|\n)\s*(?:import|export)\s+(?!type\s)(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/g;
 const ENV_READ_RE = /process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*(?:['"]([A-Za-z_][A-Za-z0-9_]*)['"]|([A-Za-z_][A-Za-z0-9_]*))\s*\])/g;
 
 /** `import("x")` and `require("x")`: a package loaded lazily is still a package the image must carry. */
@@ -233,6 +240,54 @@ describe("everything a job loads at run time is a production dependency", () => 
     const config = stripComments(readFileSync(path.join(ROOT, "prisma.config.ts"), "utf8"));
     const bare = [...config.matchAll(IMPORT_RE)].map((m) => m[1]!).filter((spec) => !spec.startsWith(".") && !isBuiltin(spec));
     expect(bare.sort()).toEqual(["dotenv", "prisma/config"]);
+  });
+});
+
+/**
+ * The Cost Intelligence worker image installs the same way (2026-11-18,
+ * Dockerfile.cip-worker slimmed as Dockerfile.bas-reports was), so the same
+ * rule holds for its one script. Its env reads are not held here: it reads
+ * its own variables directly and has its own tests.
+ */
+describe("everything the Cost Intelligence worker loads at run time is a production dependency", () => {
+  const CIP_SCRIPT = "scripts/cip-worker.ts";
+  const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")) as {
+    dependencies: Record<string, string>;
+    devDependencies: Record<string, string>;
+  };
+  const dockerfile = readFileSync(path.join(ROOT, "Dockerfile.cip-worker"), "utf8")
+    .split(/\r?\n/)
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+
+  it("the image installs production dependencies only into /app", () => {
+    const installs = (dockerfile.match(/npm (?:ci|install|i)\b[^\n&\\]*/g) ?? []).map((i) => i.trim());
+    // The skills' global docx/pptx libraries are outside /app and outside the lockfile.
+    expect(installs).toEqual(["npm install -g docx pptxgenjs", "npm ci --omit=dev"]);
+  });
+
+  it(`every package on the import graph of ${CIP_SCRIPT} is in dependencies`, () => {
+    const { packages, modules } = walk(CIP_SCRIPT);
+    // The walk follows the script's lazy import of the worker and sees its packages.
+    expect(modules).toContain("lib/modules/cost-intelligence/worker.ts");
+    for (const name of ["@prisma/adapter-pg", "dotenv", "@anthropic-ai/claude-agent-sdk"]) expect([...packages.keys()], name).toContain(name);
+    const missing = [...packages].filter(([name]) => !(name in pkg.dependencies)).map(([name, from]) => `${name} (loaded by ${from})`);
+    expect(missing, "move these from devDependencies to dependencies, or the CIP worker image lacks them").toEqual([]);
+  });
+
+  it("the agent SDK's peers are production dependencies, and its platform binaries are optional dependencies that --omit=dev keeps", () => {
+    const sdk = JSON.parse(
+      readFileSync(path.join(ROOT, "node_modules/@anthropic-ai/claude-agent-sdk/package.json"), "utf8"),
+    ) as { peerDependencies?: Record<string, string>; optionalDependencies?: Record<string, string> };
+    for (const peer of Object.keys(sdk.peerDependencies ?? {})) expect(pkg.dependencies, peer).toHaveProperty([peer]);
+    expect(Object.keys(sdk.optionalDependencies ?? {})).toContain("@anthropic-ai/claude-agent-sdk-linux-x64");
+    const lock = JSON.parse(readFileSync(path.join(ROOT, "package-lock.json"), "utf8")) as {
+      packages: Record<string, { dev?: boolean; devOptional?: boolean; optional?: boolean }>;
+    };
+    const linux = lock.packages["node_modules/@anthropic-ai/claude-agent-sdk-linux-x64"];
+    expect(linux).toBeDefined();
+    expect(linux!.dev).toBeUndefined();
+    expect(linux!.devOptional).toBeUndefined();
   });
 });
 

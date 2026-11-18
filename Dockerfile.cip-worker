@@ -15,34 +15,61 @@
 #
 # LibreOffice is left out (about 600 MB). Only phb-state-form needs it; add
 # `libreoffice-calc-nogui` to the apt line when that skill is piloted.
+#
+# Slimmed the way Dockerfile.bas-reports was on 2026-11-13 (PR #125): /app is
+# the `node` user's from its first layer instead of re-owned at the end, and
+# the install is production dependencies only. No behaviour change.
 
 FROM node:24-bookworm-slim
 
+# The skills' system tools, as root. The global npm cache goes in the layer
+# it was written in.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip poppler-utils ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && pip3 install --no-cache-dir --break-system-packages openpyxl reportlab pypdf Pillow \
- && npm install -g docx pptxgenjs
+ && npm install -g docx pptxgenjs \
+ && rm -rf /root/.npm
 
 # Lets the skills' .js generators `require("docx")` from anywhere.
 ENV NODE_PATH=/usr/local/lib/node_modules
 
+# /app belongs to `node` from its first layer, and every COPY below says
+# --chown. The image used to end with `chown -R node:node /app`, and a layer
+# that changes a file's owner holds a second copy of every file in it: all
+# of node_modules and the source, twice. tests/deploy-guards.test.ts refuses
+# a recursive chown of /app here, as it does in Dockerfile.bas-reports.
+RUN mkdir /app && chown node:node /app
 WORKDIR /app
+
+# The install runs as `node`, so node_modules is the user's own without a
+# chown either.
+USER node
 
 # Same order as the web Dockerfile: postinstall runs `prisma generate`, which
 # needs the schema and config before `npm ci`.
-COPY package.json package-lock.json ./
-COPY prisma ./prisma
-COPY prisma.config.ts ./
-RUN npm ci
+COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node prisma ./prisma
+COPY --chown=node:node prisma.config.ts ./
 
-COPY . .
-RUN npx prisma generate && chown -R node:node /app
+# Production dependencies only: no eslint, vitest, typescript, tailwind or
+# jsdom in an image that runs one script. What it loads at run time - tsx,
+# dotenv through scripts/load-env.ts, the agent SDK and its platform binary
+# (an optional dependency of a production package, so --omit=dev keeps it) -
+# is in `dependencies`, and tests/bas-reports-jobs-env.test.ts walks
+# scripts/cip-worker.ts's import graph against that list. The `prisma` CLI
+# survives --omit=dev as an optional peer of @prisma/client, which is what
+# lets postinstall generate the client here; lib/generated is in
+# .dockerignore, so this is the only copy and the COPY below cannot replace
+# it. The download cache goes in the same layer it was written in.
+RUN npm ci --omit=dev \
+ && npm cache clean --force \
+ && test -f lib/generated/prisma/client.ts
+
+COPY --chown=node:node . .
 
 ENV NODE_ENV=production \
     CIP_WORKSPACE_DIR=/tmp/cip-runs
-
-USER node
 
 # Polls for queued runs. The Container Apps Job (infra/main.bicep, cipWorkerJob)
 # runs it with --once: one run per execution, then exit.
