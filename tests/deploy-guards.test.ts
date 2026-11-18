@@ -1783,6 +1783,23 @@ describe("the Knowledge Base worker job", () => {
     expect(await jobBlock()).toMatch(/name:\s*'KB_EMBEDDING_ENDPOINT'/);
   });
 
+  // 2026-11-18: the first production Index now answered "Set
+  // KB_SHAREPOINT_LIBRARY_URL ..." because only the job had the source.
+  // queueKbSync runs in the web app and checks the source before queueing.
+  it("gives the app the same KB source as the job, since Index now queues from the app", async () => {
+    const bicep = (await read("infra/main.bicep")).replace(/\r\n/g, "\n");
+    const job = await jobBlock();
+    for (const [name, param] of [
+      ["PHB_PLATFORM_KB_APP_TENANT_ID", "kbAppTenantId"],
+      ["PHB_PLATFORM_KB_APP_CLIENT_ID", "kbAppClientId"],
+      ["KB_SHAREPOINT_LIBRARY_URL", "kbSharePointLibraryUrl"],
+    ]) {
+      const entry = new RegExp(`name:\\s*'${name}'\\s*\\n\\s*value:\\s*${param}\\b`, "g");
+      expect(bicep.match(entry), name).toHaveLength(2);
+      expect(job.match(entry), name).toHaveLength(1);
+    }
+  });
+
   it("is built and updated by the deploy workflow only once the job exists", async () => {
     const workflow = await read(".github/workflows/deploy.yml");
     expect(workflow).toMatch(

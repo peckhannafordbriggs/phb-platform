@@ -14132,6 +14132,16 @@ The source is `KB_SHAREPOINT_LIBRARY_URL` with the KB app's three
 message names the variable that is missing. `PHB_PLATFORM_KB_APP_SECRET` is local
 only; production refuses it, like the Cost Intelligence secret.
 
+**Index now says *Set KB_SHAREPOINT_LIBRARY_URL (SharePoint) or
+KB_LOCAL_SOURCE_DIR ...* in production while the worker job is configured.**
+The button queues the sync from the web app (`queueKbSync`), which checks the
+source first, so the app needs the same three values as the job:
+`KB_SHAREPOINT_LIBRARY_URL` and the two `PHB_PLATFORM_KB_APP_*` ids. Until
+2026-11-18 the template gave them to the job only. Both now come from the same
+parameters (`kbSharePointLibraryUrl`, `kbAppTenantId`, `kbAppClientId`); a
+template deployment applies them, never the portal. `tests/deploy-guards.test.ts`
+holds the app and the job to the same three.
+
 ## Pointing the Knowledge Base at its SharePoint folder
 
 The projects are the folders directly inside **`+++CURATED_FOLDERS`** in the

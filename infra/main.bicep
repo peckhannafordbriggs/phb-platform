@@ -1259,6 +1259,23 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'KB_EMBEDDING_DEPLOYMENT'
               value: kbEmbeddingDeployment
             }
+            // The KB source, the same three values the worker job carries.
+            // Index now (queueKbSync) runs HERE and refuses to queue a sync
+            // when the source is not configured, so the job alone is not
+            // enough. Identifiers, not secrets: the app reads SharePoint
+            // through the managed identity's federated credential.
+            {
+              name: 'PHB_PLATFORM_KB_APP_TENANT_ID'
+              value: kbAppTenantId
+            }
+            {
+              name: 'PHB_PLATFORM_KB_APP_CLIENT_ID'
+              value: kbAppClientId
+            }
+            {
+              name: 'KB_SHAREPOINT_LIBRARY_URL'
+              value: kbSharePointLibraryUrl
+            }
           ]
           probes: [
             {
