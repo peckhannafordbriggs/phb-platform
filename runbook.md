@@ -4806,10 +4806,19 @@ deployed configuration.
 ## "audit_events is append-only" errors
 
 **Symptom.** A write fails with
-`audit_events is append-only; UPDATE is not permitted`.
+`audit_events is append-only; UPDATE is not permitted` (or `DELETE`) — that is
+the wording in `psql` and in the PostgreSQL log. **Through the application it
+reads differently:** since Prisma 7.10 (2026-11-18) the error is `P2003` with
+the message *"Foreign key constraint violated on the (not available)"*, and the
+trigger's own sentence is in the error's
+`meta.driverAdapterError.cause.originalMessage`, beside `originalCode: "23001"`.
+A P2003 whose model is `AuditEvent`, or that comes from deleting an employee, is
+this entry, not a missing foreign key.
 
-**Cause.** A database trigger refuses `UPDATE` and `DELETE` on `audit_events`.
-This is deliberate — see the `20260814000100_audit_append_only` migration.
+**Cause.** A database trigger refuses `UPDATE` and `DELETE` on `audit_events`,
+raising SQLSTATE 23001 (`restrict_violation`), which Prisma's pg adapter maps
+to P2003. This is deliberate — see the `20260814000100_audit_append_only`
+migration.
 
 **The most common way to hit it is deleting an employee.** The audit foreign
 keys are `ON DELETE SET NULL`, so removing an employee row tries to rewrite
