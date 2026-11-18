@@ -92,11 +92,19 @@ seed, never by a migration. Migrations contain no email addresses. See
 
 Violating any of these can break a production pipeline PH+B runs on daily.
 
-1. **Never auto-send email.** Every outbound message is created as an unsent draft and
-   sent by a human who has read it. `sendMail` appears zero times across all 11 Power
-   Automate flows — deliberately. Never add auto-send, bulk-send, send-all, multi-select
-   send, or scheduled send. One human, one draft, one deliberate action. This is the
-   entire safety model of the change-order system.
+1. **Never auto-send email from the Change Orders mailbox.** Every outbound message
+   from `changeorder@phb1899.com` is created as an unsent draft and sent by a human who
+   has read it. `sendMail` appears zero times across all 11 Power Automate flows —
+   deliberately. Never add auto-send, bulk-send, send-all, multi-select send, or
+   scheduled send to it, by any route. One human, one draft, one deliberate action.
+   This is the entire safety model of the change-order system, and nothing below
+   loosens it.
+   **Scope, stated so it is not read wider or narrower:** the one deliberate automatic
+   sender in the platform is BAS report email — a scheduled report, one message per
+   recipient, from `controlls@phb1899.com` through its own app registration whose
+   Exchange policy refuses every other mailbox, sent only by the Reports worker and only
+   while `BAS_REPORTS_ALLOW_SEND` is `true` (`WHY-ITS-BUILT-THIS-WAY.md` § 87). It is
+   not a precedent: any other automatic send, from any mailbox, is a stop-and-ask.
 2. **Never modify, disable, re-authorize, or export any Power Automate flow.**
 3. **Never write these filenames anywhere:** `scrub_result.json`, `vendor_drafts.json`,
    `transfer_ready.json`, `classification_result.json`. They are live flow triggers.
