@@ -385,6 +385,17 @@ Cohere on Foundry is likely closed to the CSP subscription.
   so, and the screen highlights the full label, the name alone or the job number
   wherever it appears in the answer, and tags each source and search result with
   it. Answers saved before then fall back to the folder name.
+- **Source: `+++CURATED_FOLDERS`** (2026-11-16) in the KB site's Documents
+  library is the folder whose subfolders are the projects.
+  `npm run kb:source:check` resolves it as the KB app and prints the `ids:`
+  value; the shared folder store now also reads address-bar
+  (`AllItems.aspx?id=`) links, so Cost Intelligence's folder settings accept
+  them too. Switching source: Start fresh, then Index now.
+- **Staging tags left out of project names** (2026-11-16): the curated folders
+  end in `_curated_Test2`, `_Test4` and the like; `projectFromFolder` in
+  `location.ts` drops a trailing `_curated` and/or `_Test<n>` from the name the
+  sync stores and every label shows ("224070 UC OLD CHEM"). The folders keep
+  them. Applies at the next sync; answers saved before keep the label they had.
 - **Not built yet**: the real answer rules, `kb:eval` for answers.
 
 ## Open questions

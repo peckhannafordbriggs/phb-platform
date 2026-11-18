@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   localStore,
+  normalizeFolderUrl,
   readOnly,
+  resolveSharePointFolder,
   SharePointError,
   sharePointStore,
   type GraphFetch,
@@ -117,5 +119,84 @@ describe("sharePointStore", () => {
   it("refuses a malformed ids: value", async () => {
     await expect(sharePointStore("ids:d/", token).list("")).rejects.toBeInstanceOf(SharePointError);
     await expect(sharePointStore("ids:d/a/b", token).list("")).rejects.toBeInstanceOf(SharePointError);
+  });
+});
+
+/**
+ * A folder URL as people copy it (2026-11-16): the address bar of a library
+ * view, a folder URL with %20 in it, or one typed with spaces, all reach
+ * /shares as the same folder, encoded once. The KB's folder is named
+ * "+++CURATED_FOLDERS", so the "+" must survive too.
+ */
+describe("folder URLs as copied from the browser", () => {
+  const SITE = "https://phb1899.sharepoint.com";
+  const FOLDER = `${SITE}/sites/KnowledgeBase/Shared Documents/+++CURATED_FOLDERS`;
+
+  it("reads a library view's id, keeping a plus as a plus", () => {
+    const view =
+      `${SITE}/sites/KnowledgeBase/Shared%20Documents/Forms/AllItems.aspx` +
+      "?id=%2Fsites%2FKnowledgeBase%2FShared%20Documents%2F%2B%2B%2BCURATED_FOLDERS&viewid=1b2c3d4e";
+    expect(normalizeFolderUrl(view)).toBe(FOLDER);
+    // A literal "+" in the id is a plus, not the space URLSearchParams would make it.
+    expect(normalizeFolderUrl(`${SITE}/sites/KnowledgeBase/Shared%20Documents/Forms/AllItems.aspx?id=/sites/KnowledgeBase/Shared%20Documents/+++CURATED_FOLDERS`)).toBe(FOLDER);
+  });
+
+  it("reads a view with no id as the library itself", () => {
+    expect(normalizeFolderUrl(`${SITE}/sites/KnowledgeBase/Shared%20Documents/Forms/AllItems.aspx`)).toBe(
+      `${SITE}/sites/KnowledgeBase/Shared Documents`,
+    );
+  });
+
+  it("decodes a folder URL once and leaves a typed one alone", () => {
+    expect(normalizeFolderUrl(`${SITE}/sites/KnowledgeBase/Shared%20Documents/%2B%2B%2BCURATED_FOLDERS`)).toBe(
+      `${SITE}/sites/KnowledgeBase/Shared Documents/%2B%2B%2BCURATED_FOLDERS`,
+    );
+    expect(normalizeFolderUrl(`  ${FOLDER} `)).toBe(FOLDER);
+    expect(normalizeFolderUrl("not a url")).toBe("not a url");
+  });
+
+  function sharesGraph() {
+    const asked: string[] = [];
+    const fetchImpl: GraphFetch = async (url) => {
+      const share = /\/shares\/u!([^/]+)\/driveItem/.exec(url)?.[1];
+      if (share) {
+        asked.push(Buffer.from(share, "base64url").toString("utf8"));
+        return Response.json({ id: "item-9", name: "+++CURATED_FOLDERS", webUrl: FOLDER, parentReference: { driveId: "drive-7" } });
+      }
+      if (url.includes("/drives/drive-7/items/item-9?")) return Response.json({ id: "item-9", name: "+++CURATED_FOLDERS", webUrl: FOLDER });
+      if (url.includes("/children")) return Response.json({ value: [] });
+      return new Response("{}", { status: 404 });
+    };
+    return { fetchImpl, asked };
+  }
+
+  it("sends /shares the folder URL encoded exactly once, whichever form was pasted", async () => {
+    const encoded = encodeURI(FOLDER);
+    for (const pasted of [
+      `${SITE}/sites/KnowledgeBase/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FKnowledgeBase%2FShared%20Documents%2F%2B%2B%2BCURATED_FOLDERS&viewid=x`,
+      `${SITE}/sites/KnowledgeBase/Shared%20Documents/+++CURATED_FOLDERS`,
+      FOLDER,
+    ]) {
+      const { fetchImpl, asked } = sharesGraph();
+      expect(await resolveSharePointFolder(pasted, token, fetchImpl, "KB")).toEqual({
+        driveId: "drive-7",
+        itemId: "item-9",
+        name: "+++CURATED_FOLDERS",
+        webUrl: FOLDER,
+      });
+      expect(asked).toEqual([encoded]);
+    }
+    // The store resolves its root the same way.
+    const { fetchImpl, asked } = sharesGraph();
+    await sharePointStore(`${SITE}/sites/KnowledgeBase/Shared%20Documents/+++CURATED_FOLDERS`, token, fetchImpl).list("");
+    expect(asked).toEqual([encoded]);
+  });
+
+  it("checks an ids: value against SharePoint and names the KB app on a 403", async () => {
+    const { fetchImpl } = sharesGraph();
+    expect(await resolveSharePointFolder("ids:drive-7/item-9", token, fetchImpl, "KB")).toMatchObject({ driveId: "drive-7", itemId: "item-9" });
+    await expect(resolveSharePointFolder(FOLDER, token, async () => new Response("{}", { status: 403 }), "KB")).rejects.toThrow(
+      /The KB app has no grant/,
+    );
   });
 });

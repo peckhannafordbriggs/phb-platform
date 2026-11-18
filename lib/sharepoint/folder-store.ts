@@ -225,9 +225,85 @@ export interface SharePointStoreOptions {
 }
 
 /**
+ * A folder URL as people copy it, made into one /shares can resolve. Pure.
+ *
+ *   - A library view from the address bar,
+ *     `.../Forms/AllItems.aspx?id=%2Fsites%2FKB%2FShared%20Documents%2F%2B%2B%2BCURATED_FOLDERS&viewid=...`,
+ *     is the site's origin plus the decoded `id` path. `id` is decoded by hand,
+ *     not with URLSearchParams, which would read a literal "+" as a space.
+ *   - The same view with no `id` is the library's root.
+ *   - Anything else (a folder's own URL, a sharing link) is kept, decoded once,
+ *     so a copied `%20` is not encoded a second time on the way to /shares.
+ *
+ * Returned decoded; the caller encodes it exactly once.
+ */
+export function normalizeFolderUrl(input: string): string {
+  const raw = input.trim();
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+  const decode = (s: string) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  };
+  if (/\.aspx$/i.test(url.pathname)) {
+    const id = /(?:^|[?&])id=([^&#]*)/.exec(url.search)?.[1];
+    if (id) return `${url.origin}${decode(id)}`;
+    const library = url.pathname.replace(/\/Forms\/[^/]+\.aspx$/i, "");
+    if (library !== url.pathname) return `${url.origin}${decode(library)}`;
+  }
+  try {
+    return decodeURI(raw);
+  } catch {
+    return raw;
+  }
+}
+
+export type SharePointFolder = { driveId: string; itemId: string; name: string; webUrl: string | null };
+
+/**
+ * Finds a folder as the app sees it: `ids:` read as given, a URL through
+ * /shares. Throws SharePointError (403: no grant, 404: not there or not
+ * visible). The store uses it for its root; scripts use it to show people the
+ * exact `ids:` value to configure.
+ */
+export async function resolveSharePointFolder(
+  folder: string,
+  getToken: () => Promise<string>,
+  fetchImpl: GraphFetch = fetch,
+  app = "CIP",
+): Promise<SharePointFolder> {
+  const get = async <T>(url: string): Promise<T> => {
+    const response = await fetchImpl(`${GRAPH}${url}`, { headers: { Authorization: `Bearer ${await getToken()}` } });
+    if (!response.ok) throw await graphError(response, app);
+    return (await response.json()) as T;
+  };
+  const select = "$select=id,name,webUrl,parentReference";
+  if (folder.startsWith("ids:")) {
+    const [driveId, itemId, extra] = folder.slice(4).split("/");
+    if (!driveId || extra !== undefined || itemId === "") {
+      throw new SharePointError("The folder must look like ids:<driveId>/<itemId> or ids:<driveId>.", 0);
+    }
+    const item = await get<GraphItem>(`/drives/${driveId}/${itemId ? `items/${itemId}` : "root"}?${select}`);
+    return { driveId, itemId: itemId ? item.id : "root", name: item.name, webUrl: item.webUrl ?? null };
+  }
+  const share = `u!${Buffer.from(encodeURI(normalizeFolderUrl(folder)), "utf8").toString("base64url")}`;
+  const item = await get<GraphItem>(`/shares/${share}/driveItem?${select}`);
+  const driveId = item.parentReference?.driveId;
+  if (!driveId) throw new SharePointError("SharePoint returned the folder without a drive id.", 0);
+  return { driveId, itemId: item.id, name: item.name, webUrl: item.webUrl ?? null };
+}
+
+/**
  * `folder` is `ids:<driveId>/<itemId>`, `ids:<driveId>` (the drive's root,
- * i.e. a whole library), or the folder's URL as the browser shows it
- * (resolved through /shares).
+ * i.e. a whole library), or the folder's URL as the browser shows it,
+ * library-view links included (normalizeFolderUrl; resolved through /shares).
  */
 export function sharePointStore(
   folder: string,
@@ -272,7 +348,7 @@ export function sharePointStore(
         }
         return { driveId, itemId: itemId ?? "root" };
       }
-      const share = `u!${Buffer.from(encodeURI(folder), "utf8").toString("base64url")}`;
+      const share = `u!${Buffer.from(encodeURI(normalizeFolderUrl(folder)), "utf8").toString("base64url")}`;
       const item = await json<GraphItem>(`/shares/${share}/driveItem?$select=id,parentReference`);
       const driveId = item.parentReference?.driveId;
       if (!driveId) throw new SharePointError("SharePoint returned the folder without a drive id.", 0);

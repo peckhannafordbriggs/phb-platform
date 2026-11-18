@@ -283,7 +283,7 @@ param kbAppTenantId string = ''
 @description('Client ID of the KB app registration. Production signs in as it with the managed identity and a federated credential; no secret.')
 param kbAppClientId string = ''
 
-@description('The Knowledge Base library: ids:<driveId> (the whole Documents library) or ids:<driveId>/<itemId>.')
+@description('The folder holding the Knowledge Base project folders, as ids:<driveId>/<itemId>: +++CURATED_FOLDERS in the Knowledge Base site\'s Documents library (ids:<driveId> alone is the whole library). `npm run kb:source:check -- "<folder URL>"` checks the KB app can read it and prints the value.')
 param kbSharePointLibraryUrl string = ''
 
 @description('Azure OpenAI (Foundry) endpoint for Knowledge Base embeddings: the resource URL or the deployment\'s Target URI; only its host is used. Not a secret. Both the app and the KB worker read it; they sign in with the managed identity (role Cognitive Services OpenAI User on the resource), never a key.')

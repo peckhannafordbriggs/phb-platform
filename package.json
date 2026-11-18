@@ -29,7 +29,8 @@
     "kb:sync": "tsx scripts/kb-sync.ts",
     "kb:worker": "tsx scripts/kb-worker.ts",
     "kb:eval": "tsx scripts/kb-eval.ts",
-    "kb:embed:check": "tsx scripts/kb-embed-check.ts"
+    "kb:embed:check": "tsx scripts/kb-embed-check.ts",
+    "kb:source:check": "tsx scripts/kb-source-check.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.296",

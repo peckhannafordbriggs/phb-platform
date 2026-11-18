@@ -11159,6 +11159,42 @@ The source is `KB_SHAREPOINT_LIBRARY_URL` with the KB app's three
 message names the variable that is missing. `PHB_PLATFORM_KB_APP_SECRET` is local
 only; production refuses it, like the Cost Intelligence secret.
 
+## Pointing the Knowledge Base at its SharePoint folder
+
+The projects are the folders directly inside **`+++CURATED_FOLDERS`** in the
+Knowledge Base site's Documents library. The KB app registration (request KB-3)
+reads it; its grant is on the library, so the folder is covered.
+
+1. Open the folder in the browser and copy the address bar as it is (a
+   `.../Forms/AllItems.aspx?id=...` link is fine).
+2. `npm run kb:source:check -- "<that URL>"`. It signs in as the KB app, finds
+   the folder, prints the `ids:<driveId>/<itemId>` value, lists the projects the
+   sync will index (flagging any folder name without a six-digit job number),
+   and any files lying loose in the folder, which no project owns and which are
+   not indexed.
+3. Locally: `KB_SHAREPOINT_LIBRARY_URL="ids:..."` in `.env.local`. It wins over
+   `KB_LOCAL_SOURCE_DIR`, which can stay. Restart `npm run kb:worker`.
+4. **Start fresh, then Index now** on `/knowledge-base/admin`. A sync removes
+   only projects from its own source, so the projects indexed from the local
+   folder would otherwise stay beside the SharePoint ones and every file would
+   appear twice. History and reports are kept; re-embedding is a few minutes and
+   under a dollar.
+5. Production: the same value in `infra/main.parameters.json` as
+   `kbSharePointLibraryUrl` (*Knowledge Base worker in Azure*, step 3).
+
+Prefer the `ids:` value to a URL in configuration: it survives the folder being
+renamed or moved. A URL is accepted too (`normalizeFolderUrl` in
+`lib/sharepoint/folder-store.ts` reads address-bar links, `%20` and a literal
+`+`), resolved through Graph's `/shares` on each sync.
+
+| `kb:source:check` says | Why, and what to do |
+|---|---|
+| *Set PHB_PLATFORM_KB_APP_TENANT_ID and ...* | The KB app's ids are not in `.env.local` (locally also its secret) |
+| *SharePoint answered 403 ... The KB app has no grant* | The read grant from KB-3 is missing on the library or folder. IT adds it (the `POST .../permissions` in Request KB-3) |
+| *SharePoint answered 404* | Wrong URL, or a folder the app cannot see. Copy the address bar again from inside the folder |
+| *(none: is this the folder that holds the project folders?)* | The URL points one level too deep (a project) or too shallow (the library) |
+| *<- no job number in the name* | That folder is indexed, but its answers and citations show no job number and a job number in a question will not scope to it |
+
 ## Running a Knowledge Base sync
 
 **From the screen.** A Knowledge Base module admin opens *Knowledge Base* ->
@@ -11243,8 +11279,9 @@ below are done.
 2. Build the first image: `az acr build --registry <registry> --image
    kb-worker:<sha> --file Dockerfile.kb-worker .`
 3. In `infra/main.parameters.json` set `enableKbWorker: true`, `kbAppTenantId`,
-   `kbAppClientId` and `kbSharePointLibraryUrl` (`ids:<driveId>` for the whole
-   Documents library). Pass `kbWorkerImage` as the image from step 2 and
+   `kbAppClientId` and `kbSharePointLibraryUrl` (the `ids:<driveId>/<itemId>` of
+   `+++CURATED_FOLDERS` that `npm run kb:source:check` prints; *Pointing the
+   Knowledge Base at its SharePoint folder*). Pass `kbWorkerImage` as the image from step 2 and
    `containerImage` as the image now running; both have no default.
 4. `az deployment group what-if ...` (see `infra/README.md`), review, then `create`,
    passing nothing secure, as for the CIP worker.

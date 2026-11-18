@@ -10,6 +10,7 @@ import { azureEmbedder, KB_EMBEDDING_MODEL, type KbEmbedder } from "./embed";
 import { embedPending } from "./embedder";
 import { readKbEmbeddingEnv } from "./env";
 import { indexPending, type KbIndexCounts } from "./indexer";
+import { projectFromFolder } from "./location";
 import { kbSource, type KbSource } from "./source";
 import type { KbSyncTrigger } from "./types";
 
@@ -53,7 +54,6 @@ export const KB_SYNC_ABANDONED_AFTER_MS = 10 * 60 * 1000;
 /** OS litter, Office and LibreOffice lock files. Never a row. */
 const IGNORED = /^(?:~\$.*|\.~lock\..*#|\.DS_Store|Thumbs\.db|desktop\.ini)$/i;
 
-const PROJECT_NUMBER = /^(\d{6})_(.*)$/;
 
 type ListedFile = {
   /** Relative to the library root: `<project>/<folders>/<file>`. */
@@ -503,11 +503,12 @@ async function saveProject(kind: "sharepoint" | "local", project: ListedProject,
 
   const counts = { filesSeen: plan.length, filesQueued: 0, filesUnchanged: 0, filesSkipped: 0, filesRemoved: 0 };
   const folderName = project.entry.name;
-  const numbered = PROJECT_NUMBER.exec(folderName);
+  // Job number and name, staging tags ("_curated_Test2") left out: location.ts.
+  const { projectNumber, projectName } = projectFromFolder(folderName);
   const projectData = {
     folderName,
-    projectNumber: numbered?.[1] ?? null,
-    name: (numbered?.[2] ?? folderName).replace(/_/g, " ").trim() || folderName,
+    projectNumber,
+    name: projectName,
     webUrl: kind === "sharepoint" ? project.entry.location : null,
     isLegacy: true,
     lastSeenAt: now,
