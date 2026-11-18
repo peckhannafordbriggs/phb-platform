@@ -4880,67 +4880,53 @@ Then commit the `package.json` change. Do not disable the check globally.
 
 ## `npm audit` reports findings that no upgrade removes
 
-**Symptom.** `npm audit` reports high-severity findings in `mysql2`,
-`deepmerge-ts`, `@prisma/config` and `prisma`, and one moderate on `next` via
-`postcss`. `npm audit fix` does not clear them, and `npm audit fix --force`
-offers to fix them by installing **`prisma@6.19.3`**.
+**Symptom.** `npm audit` reports a high-severity finding in `postcss` and a
+moderate one on `next` because of it. `npm audit fix` does not clear them, and
+`npm audit fix --force` offers to fix them by installing **`next@16`**.
 
-**Cause.** These are known and accepted. None of them is reachable, and the fix
-npm proposes is a downgrade.
-
-*`mysql2` (via `prisma`).* The Prisma CLI depends on a MySQL driver for
-projects that use MySQL. This project is PostgreSQL through `@prisma/adapter-pg`.
-The CLI runs in two places only — `prisma generate` in CI and the image's build
-stage, and `prisma migrate deploy` in the deploy job — and neither opens a
-MySQL connection. The runtime image does not contain the CLI at all (see the
-Dockerfile's note on Prisma), so `mysql2` is not in anything that serves a
-request.
-
-*`deepmerge-ts` (via `@prisma/config`).* Used to merge Prisma's configuration
-objects. The only input is our own `prisma.config.ts`. The advisory is stack
-exhaustion on a recursive object graph, which needs hostile input; there is
-none. Same two places as above; also absent from the runtime image.
+**Cause.** Known and accepted. It is not reachable, and the fix npm proposes is
+a major version of Next, off the decided stack.
 
 *`postcss@8.4.31` (nested under `next`).* Next 15.5.x pins this exact version
-inside its own `node_modules`. It **is** in the standalone runtime image — the
-file tracer copies it — so do not argue it away as build-stage-only. What was
-checked instead (2026-09-23): every file in the shipped `next/dist` that
-requires `postcss` is under `build/webpack/` or `compiled/` (the CSS loader,
-the CSS minimiser, `cssnano`, `postcss-preset-env`), which is `next build`
-tooling that the request-serving code does not load. The `postcss` our own
-server bundles reach is the one `sanitize-html` uses to parse `style`
-attributes, and Node resolves that from the **top-level** copy, which is a
-current version outside the advisory range. Check with `npm ls postcss --all`:
-the nested copy shows under `next`, the top-level copy under
-`@tailwindcss/postcss` and `sanitize-html`.
+inside its own `node_modules`; 15.5.29 still does. It **is** in the standalone
+runtime image — the file tracer copies it — so do not argue it away as
+build-stage-only. What was checked instead (2026-09-23, re-checked on 15.5.29
+on 2026-11-18): every file in the shipped `next/dist` that requires `postcss`
+is under `build/webpack/`, `esm/build/webpack/` or `compiled/` (the CSS
+loader, the CSS minimiser, `cssnano`, `postcss-preset-env`), which is
+`next build` tooling that the request-serving code does not load. The
+`postcss` our own server bundles reach is the one `sanitize-html` uses to
+parse `style` attributes, and Node resolves that from the **top-level** copy,
+which is a current version outside the advisory range. Check with
+`npm ls postcss --all`: the nested copy shows under `next`, the top-level copy
+under `@tailwindcss/postcss` and `sanitize-html`.
 
-**Why the suggested fix is wrong.** Every released Prisma at the time of
-writing — 7.10.0 and the 8.0.0 release candidates — still pins the same
-`mysql2` and `deepmerge-ts` versions, so no version of Prisma 7 or 8 clears
-the findings. npm's `fixAvailable` therefore points at the newest version
-outside the affected range, which is **Prisma 6**. That is a major version
-*down*, off the decided stack (Prisma 7, `prisma-client` generator, driver
-adapters), and would break the generated client. Do not take it.
+**Why not an `overrides` entry.** An override forcing a `postcss` version Next
+has not tested would make the audit read clean while leaving the question of
+whether `next build` still works to whoever next deploys. A finding someone
+can read about here is better than a finding hidden behind an override.
+**Do not add `overrides` for it.**
 
-**Why not an `overrides` entry.** An override forcing `mysql2` or
-`deepmerge-ts` to a version Prisma has not tested would make the audit read
-clean while leaving the question of whether the CLI still works to whoever
-next runs a migration. A finding someone can read about here is better than a
-finding hidden behind an override. **Do not add `overrides` for these.**
-
-**Fix.** None needed. Re-check the two conditions when Prisma or Next is next
-upgraded:
+**Fix.** None needed. Re-check when Next is next upgraded:
 
 ```bash
-npm view prisma@latest dependencies.mysql2 dependencies.@prisma/config
-npm view @prisma/config@latest dependencies.deepmerge-ts
 npm view next@<version> dependencies.postcss
 ```
 
-When Prisma ships a release that moves `mysql2` to 3.22.0 or later and
-`deepmerge-ts` to 8.0.0 or later, take that release through the normal
-upgrade path and delete this entry. When Next moves its nested `postcss`
-past 8.5.22, the same.
+When a 15.5.x release moves its nested `postcss` past 8.5.22, take it and
+delete this entry.
+
+**The Prisma half of this entry is closed (2026-11-18).** Until then the
+entry also accepted `mysql2`, `deepmerge-ts`, `@prisma/config` and `prisma`,
+with `npm audit fix --force` offering `prisma@6.19.3` — a major version down,
+refused. Prisma **7.10.1** moved `mysql2` to 3.24.4 and `deepmerge-ts` to
+8.0.2, which was the condition written here for taking it, and the pins went
+from 7.9.1 to 7.10.1 the normal way. The same change took `next` and
+`eslint-config-next` to 15.5.29 (clearing the critical image-optimisation RCE
+with SVG input, GHSA-2464-fhr4-w9xw) and `zod` to 4.6.7. All three are exact
+pins in `package.json`, which is why `npm audit fix` never moves them even for
+a patch: a pinned package is bumped by editing the pin, and that is not a
+breaking upgrade.
 
 **What did change on 2026-09-23.** `next` and `eslint-config-next` went
 from 15.5.23 to 15.5.26, clearing two Next advisories that *were* reachable —
@@ -4952,6 +4938,31 @@ runtime image; the `/_next/image` route is outside the login gate by design
 serve vendor-supplied bytes with the vendor's content type. Keep Next current
 for that reason. `fast-uri`, `js-yaml` and `vitest` were patch-bumped the same
 day; all three are development-only.
+
+---
+
+## A download from the platform shows no file size or progress
+
+**Symptom.** Downloading an attachment, a report PDF or an inline image shows
+an indeterminate progress bar or "unknown size". `curl -sD - -o /dev/null`
+against the route shows `Transfer-Encoding: chunked` and no `Content-Length`,
+although the route's code sets one.
+
+**Cause.** Since Next **15.5.29** (taken 2026-11-18) Next removes
+`Content-Length`, `Content-Encoding` and `Transfer-Encoding` from **every**
+App Router route-handler response (`FORBIDDEN_HEADERS` in
+`next/dist/server/send-response.js`). It is Next's fix for routes that forward
+a `fetch()` response whose body was decompressed on the way in, and it applies
+to all routes, not only those. The three routes that set a length — the
+report PDF, the change-order attachment download and the inline-image route —
+still set it, and Next discards it. The body is the complete file; only the
+size hint is gone.
+
+**Fix.** None needed. A file that arrives **short** is a different fault.
+`tests/bas-reports-pdf.test.ts` and `tests/mail-inline-images.test.ts` call
+their handlers directly, so they still see the header the code set, and they
+compare the bytes; Next's stripping happens after the handler and no test
+sees it.
 
 ---
 
