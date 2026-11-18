@@ -2740,6 +2740,48 @@ one module's events because that module wants its history on the screen
 reopens the question for every module; the module's own screens, which
 Freeze Protection already has, are where a unit's history belongs.
 
+## 74 · The engine's file-access guard reads references and replays real COs, because a list of calls is what failed
+
+**What.** Phase 12 Part B put one interface, `FileStore`, between the
+change-order engine and its files, and a test held the extraction: no raw
+filesystem call left in `run_workflow.py` or `co_state.py` except the ones
+listed with a reason. The third Part C comparison run (2026-10-28), the
+first in which the engine ran against a Graph-backed tree, failed every CO on
+`sorted(cands, key=os.path.getmtime)`. The guard now has two halves: a static
+scan that reads every `Name` and `Attribute` node with import aliases
+resolved, and a runtime trap (`tests/fs_trap.py`) that replays the eight
+fixture COs through the real engine with every disk-reaching function
+wrapped to log and raise when an engine frame names a tree path.
+
+**Why.** The old scan visited `ast.Call` nodes and read `node.func`. That is
+the natural way to write "find the calls to X", and it is wrong for the
+question being asked, which was "does anything here reach the disk". A key
+function, a callback handed to `map`, a function stored under another name
+and `from os.path import getmtime` all reach the disk without a call node
+whose function is `os.path.getmtime`. The scan also compared spelled names,
+so `import glob as _glob; _glob.glob(...)` never matched its own allow-list
+entry; that entry had matched nothing since the day it was written, and the
+engine's docstring calling the glob "the only filesystem call left" was a
+claim nothing had checked. In local mode none of this shows: the store's
+disk and the OS's disk are one, so a bypass returns the right answer. It
+takes a store whose files are somewhere else to make the line visible, and
+that is why Part C exists.
+
+The runtime half is there because the static half, however widened, is a
+list of names, and a list of names is exactly what just failed. The trap
+needs no list: wrap what can touch a disk, watch the caller's file, and run
+the real engine over real inputs. It is proved on itself - the exact pre-fix
+function is reinstated for one CO and must be caught - and the eight-of-eight
+clean replay is the same evidence the Part B differential rests on.
+
+**What breaks if you undo it.** Narrowing the scanner back to calls lets the
+next `key=` or `map(open, …)` through to the first Graph run, where it fails
+every CO at once and nothing in local testing predicts it. Dropping the
+mutation test lets the trap rot silently: a trap that wraps the wrong
+functions passes every replay. Routing the stage directory through the trap
+would flag every workbook save, because staging is local by the interface's
+own contract, and the first response would be to loosen the trap.
+
 ## 47 · The judgment I'd most want to pass on
 
 Three things, none of them technical.
@@ -2764,3 +2806,889 @@ because a laptop was closed.
 
 None of those crashed. When you add something, ask what it looks like when it silently
 doesn't work — and make that state visible.
+
+## 75 · The classifier is code with four judgments, every judgment can decline, and the laptop's answers are the bar
+
+**Decision (Phase 12 Part D, 2026-10-28/29).** The `co-response-classifier`
+Cowork task — a model reading a 65 KB spec and doing the whole job by hand
+each morning — was replaced by `co_classifier/`, in which every rule the
+spec states is Python and only four things go to a model: the bid-leader
+master-row match when code finds more than one plausible row, the
+classification, the Q&A extraction, and the CO match by body inference
+when neither the conversation id nor Power Automate resolved it. Each is
+behind a switch; a switched-off judgment declines; a judgment may always
+decline; every decline is `needs_human` through the Flow 2 route that
+already exists. One client, one key (`CO_ANTHROPIC_API_KEY`, never the
+SDK's default), one turn, structured output, no tools, a closed schema
+and then the candidate-list check — the model picks among what code
+supplied or says null, and can name no file, path, recipient or CO the
+tracker does not hold.
+
+**Why code first.** The plan assumed the judgment was the work. Reading the
+spec judgment by judgment showed that most of the task — the pm_thread
+first-check, the conversation-id lookup, the duplicate-key refusal, the
+received-count and revision rules, the rename target, the note template,
+the locked summary — is a rule written down, which the agent re-read every
+morning. A rule in code is tested; a rule in a prompt is hoped for. It also
+made every model call small and specific, which is what makes a closed
+schema and a candidate list possible at all.
+
+**Why the laptop's own answers are the bar, with three replays each.** The
+only definition of "correct" this phase has is what the laptop produced.
+Twenty live answers were captured read-only; every step was replayed three
+times against them under `docs/phase-12-part-e-equivalence.md` before the
+next began, and the one row that stops a shadow run — the laptop declined,
+the container decided — never appeared. Three runs because a model
+disagreeing with itself is a finding about the prompt, not about the
+laptop (Part 4 of that doc); on the one email where it happened, nothing
+was tuned.
+
+**Why named divergences rather than silent ones.** Three times the owner
+decided the container should answer differently from the laptop (internal
+senders, one Q&A entry per commitment, `answers_note`). Each is a dated
+section in the equivalence doc, a verdict word in the replay, and a cutover
+item in `docs/PHASE-14.md` that updates the live spec and prompt. A shadow
+run that failed on them would be measuring the decision, not the code; a
+scorer that quietly passed them would be hiding a difference a bid leader
+will see on the PDF.
+
+**What breaks if you undo it.** Let a client be built without `api_key=`
+and the pipeline bills to BAS Analyze's key with no error anywhere (§ 68).
+Send the full schema to the API and every array field is a 400 at the
+grammar (`minimum`, `maxItems`: measured on the first real call). Let the
+model name a filename and the next injected email names `Bid Tracker.xlsx`.
+Configure a fallback model and a refusal becomes a second model's answer
+the log does not show. Drop a divergence from the equivalence doc and the
+shadow run's first internal email is a FAIL that is not one. Tune a prompt
+on one disagreement and the next replay is the one that moved.
+
+## 76 · The shadow run reads live with an identity that cannot write, and stops itself on one row
+
+**Decision (Phase 12 Part E, 2026-10-29/30).** The shadow run feeds a copy
+of the change-order tree from the live one, so something has to read
+`CO Managment Process`. It does not read as the engine's app, which holds
+Write on the whole site; it reads as a fourth registration,
+`phb-co-engine-reader`, whose grant is Read on that one folder, through a
+reader (`co_shadow/reader.py`) whose session has no verb but GET, which
+addresses the live folder and nothing else — the mirror image of the
+store's jail — and which refuses to be built with the engine app's client
+id. Every live item it touches is fingerprinted and read again at the end
+of the run; a changed fingerprint writes STOP. The copy is written through
+the engine's store, rooted on the copy, refusing the live folder by name as
+it has since Part C. A STOP file at the copy's root stops the feed before it
+reads anything; the collector writes it on the one row the equivalence doc
+says stops a window — the laptop declined and the container decided — and
+only a person removes it.
+
+**Why.** Every guard in this project is incapacity, not care, and a feeder
+kept off the live tree by its own code would be the weaker kind. The grant
+makes a write a 403 whatever the code asks; the verb wrapper makes it
+unreachable before a request exists; the path rule makes the reader and the
+store incapable of addressing the same tree. Three refusals, each enough on
+its own. The STOP file exists because the window's one unacceptable outcome
+— the container deciding where the laptop refused — must stop the next pass
+without anyone remembering to stop it, and because a stop that a job can
+clear is not a stop: a person reads the reason, records the finding, and
+deletes the file.
+
+**Two smaller decisions that ride with it.** The live tracker workbooks are
+read through the Graph workbook API, as prohibition 4 reads, and their names
+are configuration on the job — the packages spell neither, and the Bid
+Tracker guard would refuse them if they did. And the state-prefix rule in
+the differ is off by default: the Part B and Part C differentials compare a
+state file as the JSON it is, and only the shadow's intake half, where the
+laptop's state has moved on through the flows and the copy's has not, turns
+the rule on.
+
+**What breaks if you undo it.** Read live as the engine app and the fence
+is a line of configuration. Add a verb to the reader and the first bug that
+builds a wrong path writes into the live tree. Let a job clear STOP and the
+inverted row becomes a line in a report nobody read that morning.
+
+`docs/phase-12-part-e-plan.md` § 2, § 6, § 7; `runbook.md` → *The
+change-order shadow run*; `phb-co-engine` → `tests/test_shadow_reader.py`,
+`tests/test_shadow_feed.py`, `tests/test_shadow_collect.py`.
+
+
+## 77 · The report owner is never a recipient row, and five `bas_` tables the model is never told about
+
+**What I did.** Reports (Phase 1, 2026-11-10) stores who receives a report in
+`bas_report_recipients` - **additional** recipients only. The owner is not a
+row. The sender adds the owner's address from the employee record at send
+time, and the recipients API refuses the owner's address whether you try to
+add it or remove it (`owner_is_recipient`). The owner always receives the
+report, and there is no row whose deletion could change that.
+
+Five of the phase's six tables - definitions, questions, recipients, the
+shared library, personal questions - match the `bas_` prefix and hold no
+building data: configuration people typed, email addresses, an employee's own
+words. They are excluded from `bas_v_data_dictionary` by name, withheld from
+`bas_analyze` and `bas_collector` by name, and listed as not moving in the
+Azure migration script. `bas_site_occupancy`, the sixth, is building data and
+visible to all three.
+
+**Why.** A row-based "owner recipient" is exactly the thing a bulk delete, a
+reassign or a careless edit removes, and a report nobody asked for receiving
+is a report nobody reads when it says *Action Needed*. The plan asked for the
+owner to be "enforced server-side"; a fact derived at send time cannot be
+un-enforced by any client, because no client holds it.
+
+The exclusion is the credentials-table lesson applied a fourth time: the
+dictionary view is pasted into a prompt, the role scripts refuse an object
+they have not been told about, and every `bas_` table is therefore a decision
+to make rather than a pattern to match. A model told about a table it is then
+refused writes a query that fails and reports it could not answer; telling it
+nothing is the honest schema.
+
+**What breaks if you undo it.** Make the owner a row and the first "clear
+recipients" removes them. Drop a table from any one of the lists and that
+script refuses to run - which is the point, and the reason `phb-bas`'s own
+read-only role script will stop at its gate until it learns the six names
+(`runbook.md` → *Reports (Phase 1)*).
+
+`docs/bas-reports-tab-plan.md` §A, §D1, §D7; `lib/modules/bas/reports/`;
+`tests/bas-reports-routes.test.ts`, `tests/bas-schema.test.ts`.
+
+## 78 · One UI kit for every module, and the kit knows no colour
+
+**What I did.** Cost Intelligence arrived (PR #64) with a component kit of its
+own under `app/(modules)/cost-intelligence/ui/`, and Freeze Protection (#78,
+#108) copied most of it and added form fields, an empty state and a callout.
+On 2026-11-10 the two became one kit at `components/ui/` - the Cost
+Intelligence components verbatim, Freeze Protection's additions folded in -
+and the module paths became re-exports, so neither module's views moved and
+both render what they rendered before. `tests/ui-kit.test.tsx` pins that at
+the markup: the module path IS the kit's function, not a copy; the class sets
+of every default are the strings the module shipped with; Freeze Protection's
+five tone words render the kit's five tones byte for byte.
+
+Change Orders' chrome was then moved onto it: the tab bar, the pane headers,
+every button, the Draft pill, the Conversations / All messages control, the
+three dialogs, the review list. Its reading pane, the draft editor, the body
+renderer and the attachment flow were not touched - the same test refuses the
+kit in those four files - and neither was any of its colours.
+
+The kit has two properties, both enforced by that test. It carries no
+behaviour: a component takes values and callbacks, and the view owns the
+handlers. And it carries no colour: every value is a platform token or
+`--module-accent`; no kit file holds a hex value, a Tailwind palette colour,
+a module key or an import from `lib/modules`. The one exception is
+deliberate and small: the three fills a button may take (the platform's button
+red, white, the danger ink) and the five tones a state may take (ok, warn, bad,
+draft, muted) are platform decisions, recorded once, in the kit.
+
+**Why.** Three modules had three buttons, two pills and two eyebrows, each a
+little different, and the next module was about to add a fourth set. A
+module-local kit is right for a module's own vocabulary - Freeze Protection's
+funnel, the Change Orders folder tree - and wrong for a button, because a
+button that differs between modules says nothing except that two people wrote
+it. The two-register rule (§ 39) is about *content*: the reading pane stays
+quiet because a vendor's email competes with it. It was never a reason for the
+module's own furniture to differ from the next module's.
+
+Colour stays out of the kit for the reason the module header exists
+(`components/module-header.tsx`): a control reads `--module-accent` and never
+learns which module it is in. The moment a kit component took a `module` prop,
+every colour decision would be made twice, and § 38's separation of decorative
+from semantic colour would have a second place to go wrong.
+
+Change Orders kept its colours because the request was a physical restyle, and
+because the one place the kit's palette and the module's disagree is a
+distinction worth keeping: the confirm in its three dialogs is the platform
+accent, or maroon for a delete, never the red of the Send button. Nothing in
+that module that is not Send may look like Send, so those three buttons take
+the kit's shape by hand and keep their own fill.
+
+**What breaks if you undo it.** Write a button in a view and it drifts the
+first time the kit changes. Name a colour in a kit file and the build fails.
+Delete a module's `ui/` re-exports and its views stop compiling - the path is
+a courtesy, not a second kit. Put a `module` prop on a kit component and the
+module header's rule is gone.
+
+`components/ui/`; `docs/07-conventions.md` → *UI*; `tests/ui-kit.test.tsx`;
+the before/after screenshots in `docs/design/shared-ui-kit/`.
+## 78 · Code computes, the model narrates: every number on a report page is read from a finding, and a flagged sensor is a Data Health row and nothing else
+
+**What I did.** Reports (Phase 2, 2026-11-10) splits a report's work in
+two. The engine - TypeScript, deterministic, tested with synthetic series
+whose answers are known - resolves the scope, measures coverage, decides
+what applies and what is monitored, runs the analyses, compares with the
+previous run and rolls the status up. Every finding it produces carries its
+evidence: the actual value, the expected one, the duration or the percent,
+and when. The model is called once per rendered section, is handed those
+findings as a data block, and returns a status sentence and, per finding by
+index, a likely cause worded as likely and a next check. Its answer is
+validated against a closed schema and matched to the findings by index; it
+cannot add a finding, drop one or change a number, because the renderer
+(`render.tsx`) reads every number from the finding's evidence and never
+from the prose. The call is estimated before it is made and the run stops
+at the budget, partial and saying so; a declined call leaves the section's
+evidence standing.
+
+Before any equipment question runs, Data Health runs, and every point it
+flags - offline, stale, flat, outside its physical range - is withheld from
+every other question. A flat sensor is one row under Data Health, not a
+zone that was in band all week.
+
+**Why.** A report is read by someone who may send a truck. The spec's whole
+structure is numbers under persistence rules and thresholds, and numbers
+are the thing a language model is worst at keeping straight across a page:
+a model asked to write the report would, sooner or later, state a percent
+that is not in the data, and nobody would know which one. Giving it only
+the wording of a finding the code already made bounds the damage to a
+wrong *cause* - which the page labels as likely and the reader checks - and
+never a wrong *fact*. It also makes the model optional: the run with no key
+is the same report without sentences, and the suite proves the engine with
+a fixed narrator and no model at all.
+
+The exclusion is the plausibility lesson applied to a second consumer. On
+the office, VAV-8's zone temperature has read exactly 70.5 °F for weeks.
+Offered to the comfort question it is a perfect zone; it is a dead sensor,
+and the comfort question was built never to see it. Data Health first is
+the ordering that makes every later "in band" a claim about a live reading.
+
+**What breaks if you undo it.** Let the renderer take a number from the
+narrative and the first transposed digit is on a page with the company's
+name on it. Let a flagged point through to the equipment questions and a
+dead sensor becomes the best-behaved zone in the building. Call the model
+per finding instead of per section and a weekly report at nine sections
+costs many times more for the same words. Drop the estimate before the
+call and a mis-set budget is discovered by the bill.
+
+`lib/modules/bas/reports/engine/` (`run.ts`, `narrative.ts`, `render.tsx`,
+`analysis/data-health.ts`); `tests/bas-reports-render.test.tsx` (*takes
+every number from the evidence*), `tests/bas-reports-engine.test.ts`
+(*keeps the flat point out of the comfort section*);
+`docs/bas-reports-phase-2-verification.md`.
+
+## 79 · Not Applicable is what the building has; Not Monitored is what it trends
+
+**What I did.** The plan's wording was "classify equipment from roles
+present: hydronic if `*_valve_cmd`, DX if `compressor_*`". The engine
+decides *applicability* from equipment type first - a boiler, chiller or
+plant row makes the hydronic questions apply; an RTU, split system, CRAC or
+VRF row makes the DX questions apply - and from roles only as a second way
+in. Whether an applicable question is *monitored* is then decided from
+roles and coverage, the missing groups named, a present but short one
+labelled *(coverage N %)*. Both outcomes are on the run page; neither
+touches the status.
+
+**Why.** The office has a rooftop unit with no compressor point trended.
+By roles alone the DX questions would be Not Applicable there, which reads
+as "this building has no DX cooling" - false, and the kind of false that
+hides an unmonitored unit forever, because Not Applicable is the one
+outcome nobody is asked to fix. Not Monitored with *compressor status or
+stage command* named is a work order.
+
+**What breaks if you undo it.** Classify by roles alone and every
+unmonitored unit leaves the report as Not Applicable, which is the opposite
+of what Jim's checklist asks the first remote building to show. Fold a
+coverage shortfall into "missing" and the next person trends a point that
+is already trended.
+
+`lib/modules/bas/reports/engine/inventory.ts`;
+`tests/bas-reports-analysis.test.ts` (*applies the hydronic questions to
+nothing on a DX-only building*, *a coverage shortfall is a miss*).
+
+
+## 80 · The report worker runs under tsx, not a compiled build
+
+**The decision.** The two BAS Reports jobs (Phase 3) run their scripts the way
+the laptop runs `npm run bas:report:run`: `npx tsx scripts/bas-reports-worker.ts`
+and `npx tsx scripts/bas-reports-scheduler.ts`, from an image that copies the
+repository and compiles nothing (`Dockerfile.bas-reports`). The Cost
+Intelligence worker already runs this way; this entry says why it was kept
+when the alternative was weighed.
+
+**Why it was weighed at all.** Run 1 on the development database failed with
+*React is not defined* (PR #112): the report template is JSX, and tsx's
+esbuild reads this repository's `jsx: "preserve"` - Next's requirement - as
+the classic transform, with no React in scope. Next and vitest both use the
+automatic runtime, so no in-process test could see it. The fix is a
+`@jsxRuntime automatic` pragma on the template, and
+`tests/bas-reports-worker-render.test.ts` spawns tsx on the engine's own
+render and holds its HTML byte for byte to vitest's. A compiled build for the
+image would have been another way out: `tsc` or esbuild with `jsx:
+react-jsx`, and `node dist/...` in the container.
+
+**Why tsx won.** One loader, everywhere the engine runs: the laptop's dev
+script, the worker in Azure, and the test that proves the render. A compiled
+image is a fourth transform of the same source - a second tsconfig or a
+build flag that only the image uses - and the thing that went wrong in run 1
+was precisely a transform the tests did not exercise. The loader test is
+load-bearing only if production runs the loader it spawns. With tsx in the
+image, the test, the dev script and the job agree by construction, and
+`tests/bas-reports-jobs.test.ts` goes further: it runs both scripts as child
+processes under tsx against the test database, so the worker's entry point
+and its loader are exercised on every CI run. The cost is a second or so of
+startup per execution for esbuild to transform the sources, and an image
+that carries TypeScript rather than JavaScript; at one execution per run and
+a handful of runs a week, neither registers.
+
+**What breaks if you undo it.** Switching the image to a compiled build
+without extending the loader test to the compiled path brings back the one
+class of failure that cannot be seen from inside vitest: a transform
+production uses and no test does. If a compiled build is ever wanted - for
+startup time at hundreds of runs an hour, say - the user's own condition
+applies: extend `tests/bas-reports-worker-render.test.ts` to render through
+the compiled artefact too, in the same CI run, before the Dockerfile changes.
+
+## 82 · Inline images are served through a signed link, not a cookie
+
+(§ 81 is the Reports questions checklist, on its own branch at the time of
+writing.)
+
+**The decision.** A `cid:` image in a message body is rendered through
+`/api/modules/change-orders/messages/{id}/inline-images/{attachmentId}?exp=…&sig=…`:
+a link the grant-gated message route writes for each inline image it finds
+among the message's attachments, signed with HMAC-SHA256 under a key derived
+from `AUTH_SECRET`, good for an hour. The image route (`withInlineImageLink`)
+checks the signature and the expiry and consults no session. The bytes come
+through the same `downloadAttachment` the download link uses, the type is
+decided from the bytes (five raster formats; SVG and everything else refused),
+and the response is `inline`, `nosniff`, `no-store`, with a sandboxing CSP of
+its own. The sandboxed reading pane is unchanged, and its document's CSP names
+the platform's origin plus the message routes' path - the one same-origin
+destination a body can now reach - rather than `'self'`, which an opaque origin
+cannot satisfy.
+
+**Why not the obvious route.** The obvious design is an `<img>` pointing at a
+route behind `withMailbox`, same auth as everything else in the module. It
+cannot work, and the reason was measured rather than reasoned: the pane is a
+sandboxed iframe without `allow-same-origin`, so its origin is opaque, and in
+Chrome and Edge an `<img>` inside it goes out as `Sec-Fetch-Site: cross-site`
+with **no** `SameSite=Lax` cookie - which is what Auth.js sets. The same
+`<img>` in the top document, or in an unsandboxed frame, carries the cookie.
+The probe was sixty lines on 2026-11-12: a Node HTTP server that sets a Lax
+cookie on its one page, that page holding an `<img>` of its own, an
+unsandboxed srcdoc frame with one, and a frame with the pane's exact
+`sandbox` attribute with one, headless Chrome and then Edge opening it from a
+fresh profile, and the server logging which `/img` requests carried the
+cookie and what `Sec-Fetch-Site` they declared. A cookie-gated route would
+answer 401 to every image in every message.
+
+**Why not the other two.** `allow-same-origin` on the frame makes the cookie
+flow and removes one of the three layers between a vendor's markup and the
+platform's origin (message-body.tsx: sanitizer, sandbox, CSP). The sandbox
+would still forbid script, but a sanitizer bypass plus a browser bug would
+then land in the platform's origin rather than an opaque one, and the frame's
+own requests would carry the viewer's credentials wherever a body pointed
+them. Inlining the bytes as `data:` URLs keeps every layer and was the design
+the runbook had already declined: it puts every image into the message JSON,
+every time the message is read, on the one screen where vendor content meets
+a send button; a blob: URL fails for the same reason a cookie does - Blink
+checks a blob URL's origin against the requesting document's, and an opaque
+origin can request none.
+
+**What the link is and is not.** It is a capability to read one image of one
+message for an hour, minted only after the viewer passed the grant check,
+carried only inside a document that sends no referrer. The attachment id is
+part of what is signed, so a link cannot be pointed at another attachment, and
+the key is derived with a purpose label, so the session secret is never used
+as a MAC key directly. It is not a session: it cannot list, move, send or
+read anything else, and the route it reaches consults the session for nothing
+- a test holds that `auth()` is never called. Rotating `AUTH_SECRET` voids
+every link in every open pane at once, which is harmless.
+
+**Two Graph facts that shaped the service, both verified live.**
+`hasAttachments` is `false` on a message whose only attachments are inline
+images, so the attachments are read whenever the body contains `cid:` and not
+only when Exchange says so. `contentId` lives on the `fileAttachment` subtype
+and is selected as `microsoft.graph.fileAttachment/contentId`; a bare
+`contentId` fails the request with 400, and so does casting the collection.
+Exchange also gives ordinary attachments a Content-ID, so a reference is
+matched only against attachments whose declared type is an image - and the
+route still decides from the bytes, because the declared type is the
+vendor's.
+
+**What breaks if you undo it.** Put the image route behind `withMailbox` and
+every inline image is a 401 broken-image glyph, in every message, with no
+error in any pane - the request happens inside the frame. Add `'self'` to the
+document's CSP instead of the origin and nothing loads either. Serve the
+declared content type and an SVG attachment opened directly runs script in
+the platform's origin. Drop the `cid:` test on the body and the mail filter's
+banner icons go back to dashed boxes on every inbound message, because
+Exchange reports those messages as having no attachments.
+## 81 · A report's questions are a checklist, a preset is a label, and the only cap is the module's
+
+**What I did (2026-11-12).** The editor's Questions section keeps its
+segmented control - *Standard weekly*, *Daily critical-site*, *Custom* - and
+makes each tab a checklist over ONE selection. A preset's tab lists that
+preset's questions grouped by section, each with a box ticked from the
+shared set, with its own *Select all* and *Clear* that act on that tab's
+questions only; Daily is a subset of Standard, so a tick on one shows on the
+other, and switching tabs changes nothing. *Custom* lists My questions with
+boxes, the custom questions on this report with a *save for reuse* tick,
+and the box to type one. The count at the right of the tab row is the whole
+set and *Show selected* lists it in report order. The selection is saved
+whole with the report and stored in one order - shared in library order,
+then the owner's own, then typed. `preset_key` stays on the definition as a
+label of the preset whose *Select all* was last used, kept while the shared
+selection still matches that set and cleared by the service the moment it
+does not; it restricts nothing, and the `preset_locked` refusal and the
+per-question add / remove / reorder routes are gone. The per-report cost
+budget and time cap are gone too: one row, `bas_report_settings`, holds the
+module's safety ceiling - $10.00 and 25 minutes per run by default - edited
+by BAS module admins from the Usage page (Reports → Usage, or Settings →
+Usage, the same view at a second route under a Settings bar drawn like
+the Reports bar, both as data on one shared shape) and read by the engine
+for every run; the two definition columns are dropped and the create / update APIs
+refuse the keys with 400. The Usage page itself was a Phase 1 placeholder
+that said *There have been no runs* without asking; it now reads
+`bas_report_runs` on the same components as Cost Intelligence's *Usage &
+cost*, which moved to `components/ui/Usage.tsx` for both modules to share.
+
+**Why.** Phase 1 made the presets locks because the spec's twenty questions
+are meant to compare week to week and building to building, and a lock
+seemed the way to keep them whole. In use the lock was the obstacle: the
+first real request was "the standard weekly plus two questions of mine",
+and the only route to it was clearing the preset, losing the label, and
+adding questions one call at a time on a saved draft. A checklist gives the
+same twenty in the same order with one click, and the label survives
+exactly as long as it is true - the service judges the shared selection
+against the preset's set on every save, so the Scheduled list's *Standard
+weekly health report* under a report is a fact about its questions, not a
+memory of a button. Custom questions do not count against the match, on
+purpose: they are what the person added to the standard, not a departure
+from it. *Select all* is not a preset click and earns no label, for the
+same reason - the label says what was chosen, not what happens to coincide.
+
+The first cut that day was a flat list of all twenty with four buttons
+above it. It was reversed the same day for the three tabs, because the two
+named reports are things people talk about by name - "the standard weekly",
+"the daily" - and a tab shows each as the report it is, six or twenty
+questions under its own name, where a flat list shows one undifferentiated
+twenty and makes the presets into buttons. What survived the reversal is
+the part that matters: one selection behind every tab, so the tabs are
+views and never modes, and nothing is lost by looking.
+
+The per-report budget asked every author to decide a dollar figure they had
+no basis for, and a report's author is not the person who pays the bill.
+What the module needs is one ceiling no run may pass, set by the people who
+see the spend - which is why it lives on the Usage page, beside the figures
+it bounds, and nowhere else. The ceiling is read when a run executes, not
+when it was queued, and stamped on the run so the record says what applied.
+
+The placeholder was the honest page on 10 November and a false one by the
+12th; the lesson is the Projects-cards one again: a screen that reports a
+number must read it. The Usage service carries the same joinless count the
+other BAS lists do, and the page goes red when the tallies and the count
+disagree.
+
+**What breaks if you undo it.** Put the lock back and the first mixed
+report is impossible again. Let the client set `preset_key` and the label
+becomes a memory. Move the ceiling back onto the definition and every
+author decides a number for the company's bill; drop the 400 and an old
+editor believes it set a cap it did not. Read the ceiling at queue time and
+an admin's change waits an unknown time to apply. Replace the Usage query
+with a placeholder and the page lies within a day.
+
+`lib/modules/bas/reports/service.ts` (`resolveSelection`, `setSafetyCeiling`),
+`lib/modules/bas/reports/ceiling.ts`, `lib/modules/bas/reports/usage.ts`,
+`prisma/migrations/20261112150000_bas_reports_safety_ceiling/`;
+`tests/bas-reports-routes.test.ts`, `tests/bas-reports-usage.test.ts`,
+`tests/bas-reports-ui.test.tsx`; `runbook.md` → *Reports: the safety
+ceiling*, *The editor's Questions section is a checklist*.
+
+## 82 · Ten points that stop at the same minute are one finding, and a data problem is Watch until Jim says otherwise
+
+**What I did (2026-11-12).** The first production run of the office
+report listed ten points as *No readings* since the same minute on the
+same station, one row each, and the page read as ten faults. Data Health
+now clusters the points on one station whose last readings fall within
+fifteen minutes of each other and, at three or more, carries them inside
+ONE `collection_stopped` finding: the rows stay in the table, under a block
+that says how many stopped, when, and that they count once; the subject is
+`station:<id>@<minute>`, so the fingerprint keys on the station and the
+minute the first point stopped; and the narrative is told it is one event
+and asked to name the causes in order - the device network trunk from the
+JACE to its controllers, the histories stopped on the station, the
+collector. A point that never reported, or that stopped alone, stays a row
+of its own. Every member is still excluded from the equipment questions.
+
+The same run rolled the building up to *Watch* with ten of twenty-six
+points out, and that stays. Jim's spec gives Data Health no status line in
+its template and no share-of-points or duration rule; its three status
+words are about equipment. A test pins Watch so that the first change to it
+is a decision, not a drift.
+
+The page changed around it: *Equipment types found* now lists the
+equipment types by count and a *Classification* line carries Step 1 per
+unit; every Data Health row and every Summary finding shows the model's
+likely cause and recommended action; a Not Monitored section is its badge
+and one line pointing at the inventory; the footer is the spend and the
+duration, with no limit.
+
+**Why.** A reader who sends a truck reads a table of ten identical rows as
+ten jobs. The signature of one stop - one station, one minute - is in the
+data and the code can see it; the model cannot be trusted to merge ten
+findings into one (it may not add or drop a finding, by § 78), so the
+merging had to be the engine's, before the narrative, with the status and
+the counts following the one finding rather than the ten. Fingerprinting
+on the station and the minute is what makes the same stop *Still open*
+next week and a second stop on the same station *New*: a fingerprint on
+the station alone would make every later outage the same open item
+forever.
+
+Keeping Watch is the same discipline as § 79: a severity rule the spec
+does not state is a rule I would be inventing, and it would decide whether
+somebody drives to a building. The honest state is Watch with the question
+on record.
+
+The rest is the difference between a label and what it labels. "Equipment
+types found: economizer" was a true sentence about the wrong thing; "0 of
+70" counted checks under a word that means points. A report that will be
+compared week to week by people who did not build it cannot carry a line
+that means something other than it says.
+
+**What breaks if you undo it.** Flatten the incident back into rows and the
+status counts the same outage ten times, the summary's three findings are
+three of its rows, and the narrative writes ten likely causes for one
+event. Fingerprint it on the station alone and outages never clear.
+Decide a severity threshold here and the next person reads it as Jim's.
+Print the limit beside the spend and the page claims a per-report budget
+the editor no longer has.
+
+`lib/modules/bas/reports/engine/analysis/data-health.ts`
+(`INCIDENT_WINDOW_MS`, `INCIDENT_MIN_POINTS`, `INCIDENT_CAUSES`),
+`inventory.ts` (`equipmentTypesFound`, `classificationText`),
+`wording.ts`, `render.tsx`, `narrative.ts`;
+`prisma/migrations/20261112200000_bas_report_findings_station_incident/`;
+`tests/bas-reports-analysis.test.ts` (*groups points on one station that
+stopped together*, *rolls ten of fourteen interval points offline ... up
+to Watch*), `tests/bas-reports-engine.test.ts` (*a period after the data
+stopped*), `tests/bas-reports-render.test.tsx`; `runbook.md` → *Data
+Health lists ten identical "No readings" rows*, *Data Health rolled up to
+Watch with half the building offline*.
+
+## 83 · The PDF is the page printed, Chromium lives in the job image, and a render claims by writing its failure first
+
+**What I did (2026-11-13).** Reports' Phase 4, the PDF half. After the
+engine stores a run's page, the worker prints that same `report_html` with
+headless Chromium - Playwright's, installed into `Dockerfile.bas-reports`
+at the version the lockfile pins, with a launch-and-print check as the
+image's unprivileged user so a browser that cannot start fails the build -
+to a Letter PDF with the report's name and period in the header, page
+numbers in the footer and Figtree embedded from `app/fonts`, and stores the
+bytes on the run as bytea with five columns beside them, each held to
+`pdf_status` by a CHECK. A render is queued the moment the page is stored
+and by *Retry PDF* on a failed one; the worker job's scaler counts queued
+renders; a worker takes one by setting it to `failed` with a sentence
+saying a render started at this time and has not finished, and overwrites
+that with `ready`. A failed render never touches the run. The run page
+carries *Print* and a red *Download* in the bar's actions slot, the
+Freeze Protection pair; the list carries a *PDF* column. Every
+`basReportRun` read in the app is a `select` that leaves the bytes out,
+and the web app's import graph never reaches the module that launches a
+browser.
+
+In the same change, the spin guard: the scheduler's pass fails a run
+queued for an hour and never claimed, a run lost twice, and a render
+queued for an hour, each with an error naming what happened and what to
+do, so the scaler's count returns to zero.
+
+**Why.** One rendering: the plan's decision, because a screen and a PDF
+that disagree are two reports, and the model's prose is already held to
+the findings by § 78 - a second renderer would be a second place for a
+number to come from. The browser in the job image and nowhere else,
+because the web app never prints, and 400 MB of Chromium in the image that
+serves pages is 400 MB of attack surface and cold start for nothing; the
+graph test is there because "never" has to be checked, not remembered.
+
+The claim that writes its failure first is the honest shape for a step
+that can die without a word. A `rendering` state needs a heartbeat and a
+reaper to be true, and a worker killed by memory under Chromium would
+leave it forever. Writing "started and has not finished" and overwriting
+it on success means the row is true at every instant a person can read it,
+and *Retry PDF* is the only recovery there is, offered exactly when it is
+needed. A failed render never failing the run follows from what a PDF is
+here: a copy of the page, for sending; the page and the findings are the
+record.
+
+The `select` rule is arithmetic: a few hundred KB a row, two hundred rows,
+every ten seconds, per open tab. A global `omit` on the Prisma client was
+tried first and retyped every `PrismaClient` parameter in the codebase; a
+select per read, with a test walking every read, costs nothing at runtime
+and nothing in types.
+
+The spin guard sits in the scheduler because the worker is the thing that
+is broken when it is needed. On 2026-11-12 the scaler restarted a worker
+that could not boot every 45 seconds all night against one queued run: the
+count the scaler reads never fell, because only a worker reduces it. The
+scheduler is the job still running in that state, so it is the job that
+takes abandoned work out of the count - and the test runs the template's
+own scaler query, read from `infra/main.bicep`, so "returns to zero" is
+the real predicate and not a copy of it.
+
+**What breaks if you undo it.** Render the PDF from a second template and
+the two drift on the first change to one of them. Put Chromium in the web
+image and every revision carries a browser it never uses, with the graph
+test failing to say so. Replace the claim-writes-failure with a `rendering`
+state and a worker killed mid-render leaves a render that reads "in
+progress" forever, with no Retry. Let a failed render fail the run and a
+browser crash deletes a week's findings from the Reports list. Read runs
+with `include` and the list pulls every PDF on every poll. Move the spin
+guard into the worker and the night of 2026-11-12 happens again.
+
+`lib/modules/bas/reports/pdf/` (`render.ts`, `jobs.ts`, `naming.ts`),
+`queue-guards.ts`, `worker.ts`, `scheduler.ts`, `runs-service.ts`
+(`loadRunPdf`, `retryRunPdf`), the two routes under
+`app/api/modules/bas/reports/runs/[runId]/pdf/`,
+`app/(modules)/bas/reports-run-actions.tsx`, `Dockerfile.bas-reports`,
+`infra/main.bicep` (the worker's scaler query),
+`prisma/migrations/20261113090000_bas_report_runs_pdf/`;
+`tests/bas-reports-pdf.test.ts`, `tests/bas-reports-queue-guards.test.ts`,
+`tests/deploy-guards.test.ts`; `runbook.md` → *Reports: the PDF*, *Reports:
+a run is stuck or failed*.
+
+## 84 · Every question is on the report in its own words, and a question that found nothing says what it checked
+
+**What I did (2026-11-13).** The rendered report lists each question a
+report carries as a sub-heading in the spec's words inside its section -
+*Q3. What percent of occupied hours did each zone hold within ±2°F of
+setpoint?* - with its answer directly beneath: the findings it raised, or
+one line from the analysis's own numbers when there were none, or the
+reason it did not run with the points it lacks. The inventory keeps its
+building lines and nothing per question - its bullets and its count went,
+because a thing said once under its heading need not be said again above
+it; the Summary heads its halves with the spec's first two questions; cleared findings are
+grouped under their question; a custom question is its text over its note.
+The analysis functions return the headline numbers the positive line needs
+(how many zones, the lowest share in band; how many units, the most hours
+outside schedule; how many points judged), and the engine stores them in
+the question's metrics beside what the question needed, so the page is
+derived from the document, and a document from before this change renders
+with the library's words for the same keys.
+
+**Why.** The first production run was read by someone who knew the spec by
+number, and the page assumed everyone would: *Q3 (Space Comfort): missing
+…*, *Q6 could run but has no analysis yet*, a Not Monitored section that
+said *see Point Inventory*. A PDF goes to people who have never seen the
+spec's table. A reader who has to look up what Q3 is does not look it up;
+they skim the chips. Putting the question on the page is what makes the
+thing under it an answer.
+
+The positive line is written from numbers rather than as a stock phrase
+for the reason every number on the page comes from a finding (§ 78).
+*Nothing found* is a claim about how hard the question looked, and *All 10
+zones judged held setpoint for at least 95% of occupied hours* is
+checkable - it names the count that would be wrong if a zone had been
+quietly skipped, and the skipped ones are listed beside it. A report that
+says *Good* without saying what it judged is the plausibility lesson
+again: a dead sensor is the best-behaved zone in the building until
+someone asks how many zones were judged.
+
+The library as the fallback for old documents, rather than a migration of
+stored JSON, because the document is the record of a run: the words a
+question had when it ran are stored from this change on, and a run from
+before is rendered with the words the library holds now - the spec's,
+verbatim, held to the migration by a test - which are the words it had.
+
+**What breaks if you undo it.** Drop the heading and the PDF is a list of
+chips keyed by numbers nobody has. Replace the positive line with a stock
+sentence and a question that judged nothing reads the same as one that
+judged everything. Number the heading without the Q and the two schemes -
+sections 0-9, questions 1-20 - collide on the page: *3. VAV* is a section
+and *Q3* is a question, and the prefix is what keeps them apart.
+
+`lib/modules/bas/reports/engine/render.tsx`, `wording.ts`, `run.ts`
+(`needs`, `summary.questions`, the headline metrics),
+`analysis/comfort.ts`, `analysis/schedules.ts`;
+`tests/bas-reports-render.test.tsx`;
+`docs/design/bas-report-question-layout/`; `runbook.md` → *Every question
+is a sub-heading on the report, and what the line under it means*.
+
+## 85 · Every number a question judges by is either the spec's or chosen in one file, and a function never guesses past what its points prove
+
+**What I did (2026-11-16).** Questions 6-18 are thirteen pure functions
+over the units the inventory already qualified, one shape for all of them
+(`analysis/common.ts`), each returning its findings, the units it skipped
+with the reason, and the headline numbers its one-line answer prints. Every
+threshold they apply is a named constant in `analysis/thresholds.ts`,
+marked SPEC (the library text's figure, used exactly) or CHOSEN (the spec
+leaves it open) with its reason, and `CHOSEN_THRESHOLDS` lists the chosen
+ones, held to the file by a test that reads the source. Three judgments
+went further than "pick a number":
+
+1. **Q12 judges only while the unit calls for cooling.** The library's
+   required points for Q12 are Jim's - OA damper, OAT, RAT - and they
+   cannot tell an economizer at minimum in its deadband (correct) from one
+   at minimum while compressors or a cooling valve run (the fault). So the
+   function needs a cooling point the row does not name, and a unit
+   without one is listed as not judged with that reason rather than judged
+   on a guess. The row was left as Jim wrote it.
+2. **The DX questions apply by Step 1, not by type alone.** The library's
+   type list for Q15-Q17 includes `ahu` (an air handler can be DX), so a
+   hydronic air handler made the whole DX section read Not Monitored on a
+   building with no compressors. Now a unit is DX when its points say so or
+   its type is a packaged DX type, and Q18's gas or electric heat likewise.
+3. **A fan's first 15 minutes are not judged** (Q9, Q10), and a compressor
+   trend coarser than five minutes is not judged for short cycling (Q15).
+
+**Why.** The spec's first rule is that a false alarm costs a truck roll,
+and each of the three is a place where the data looked like an answer and
+was not one. An economizer at minimum on a mild afternoon with no cooling
+call is the deadband working. A hydronic air handler "missing compressor
+status" tells the reader the building has DX it is not trending, which is
+false. Every morning's cold start misses a ±1.5 °F band for ten minutes,
+and the spec's own "two or more days" rule turns that into a recurring
+finding on every unit in the building. A 15-minute trend cannot show five
+starts an hour, so "no short cycling" from it would be a claim the data
+cannot support - not judging it, and saying why, is the honest answer.
+
+The numbers live in one file, split SPEC from CHOSEN, because the next
+argument about a finding will be about a number, and the person having it
+needs to know in one place whether it is Jim's or ours. A chosen number
+that drifts from what the runbook prints is a report nobody can audit; the
+test that reads the file's comments makes the list and the code one thing.
+
+**What breaks if you undo it.** Drop Q12's cooling-call rule and every
+economizer that rests at minimum between calls is a Watch, weekly, on
+every building. Apply DX by type alone and Phase 7's checklist item - the
+hydronic building leaves the DX section out - fails on any building with
+an `ahu`. Remove the settle time and Q9 and Q10 raise a finding on every
+unit that starts every morning. Inline a threshold in a function and the
+list in the runbook is wrong without anything failing.
+
+`lib/modules/bas/reports/engine/analysis/` (`common.ts`, `thresholds.ts`,
+`vav.ts`, `air-handlers.ts`, `hydronic.ts`, `dx.ts`), `inventory.ts`
+(`applicableUnits`); `tests/bas-reports-phase5.test.ts`,
+`tests/bas-reports-phase5-building.test.ts`; `runbook.md` → *Reports: a
+VAV, air handler, plant or DX finding looks wrong, or a unit reads "Not
+judged"*.
+
+---
+
+## 86 · A report's planner questions run on the Analyze tab's own path, after the narrative, shown and never tracked
+
+**What I did (2026-11-16).** Reports Phase 6 made planner questions run.
+Steps 4-9 of an Analyze question moved from `analyze/service.ts` into
+`analyze/core.ts`, unchanged, and both the tab and the report engine call
+that one function. A report's question gets the same guard, the same
+read-only role, the same provenance and the same no-data rule as a
+question typed on the tab; what differs is around it - no rate limit, no
+`bas.question_asked` row (the run stores the question, SQL and outcome),
+and a fixed context in the plan call's user turn.
+
+**Why a separate file and not an export of `service.ts`.** The report
+worker must not import `lib/env.ts` (§ 80's amendment: it parses the web
+app's boot schema on import, and the worker died on it), and `service.ts`
+reads the environment through `analyze/env.ts`. `core.ts` reads nothing but
+its arguments. `tests/bas-reports-jobs-env.test.ts` walks the worker's
+import graph and boots it with only the template's variables.
+
+**Why after the narrative.** The ceiling is shared. The computed findings
+are the report; a custom question is an addition. Run in D3's order, a
+report with ten planner questions could spend the ceiling and leave the
+findings without their likely cause and next check. Run last, the
+planner gets what is left and says by name what it skipped.
+
+**Why checked after, not only told before.** The plan call is told the
+building, stations and period, and that no one can answer a clarifying
+question. Prompts get ignored (the planner's own header says so), so the
+platform compares the provenance it computed with the context and prints
+an amber note for a point on another building or a different period. The
+`bas_analyze` role is still what stops a read of a report table; a test
+asks the planner for `bas_report_runs` and the database refuses it.
+
+**Why shown, never tracked.** A planner answer is model-written SQL and
+model-written prose. A fingerprint over that would say an issue "cleared"
+when the model phrased it differently. So the answers carry no marker, no
+finding row and no part in a status, and the section says so once.
+
+**Why the estimate is a history average.** The narrative estimates from
+prompt length; a planner question's cost is mostly the schema block and
+whatever the model writes, which prompt length does not predict. The
+counters on the run (`planner_asked`, `planner_cost_usd`) give the
+average over the last 20 runs that asked any, and a starting $0.25 before
+there is any (above the dearer of the two measured office questions). A
+CHECK holds the planner's cost within the run's, which is also what
+caught a mutation that dropped the planner's cost from the total.
+
+**Why the page shows only the answer (same day, twice).** The first
+version printed everything the Analyze tab shows; the second still
+printed a table and a provenance line; in the office's run both buried
+two answers. A report is read by somebody deciding what to do about a
+building, often from the PDF. So the page and the PDF carry the question
+and the planner's prose - which already names the numbers that matter -
+and two amber lines, each the platform's verdict that the answer may not
+mean what it reads as: the note for another building or period (it may be
+about the wrong thing), and the coverage shortfall (a number in it
+describes less of the period than it says). The shortfall was in the
+panel for one revision and came back to the page at the owner's direction
+the same day, which is where the Analyze tab has always kept it. The
+rest is behind a button on the web run view for whoever wants to check
+the planner's work. The summariser's own coverage paragraph is
+split off at display time by a conservative pattern rule, because the
+answer is stored as one string and the stored document is not rewritten.
+The button is a slot the web page fills rather than a flag on the
+template, so the static render the worker prints has no way to include
+it, and a print rule covers the web page's own Print.
+
+**What breaks if you undo it.** Duplicate steps 4-9 and the report and
+the tab drift on what "no data" means. Import `service.ts` from the
+engine and the worker boots the web app's environment. Run planner
+questions first and a large custom list can starve the narrative.
+Fingerprint planner answers and New / Cleared becomes a measure of the
+model's wording.
+
+## 87 · Report email: the worker is the only sender, one message per address, behind a gate of its own, on the Change Orders credential
+
+**What I did (2026-11-17).** The email half of Reports Phase 4. A ready
+PDF writes the run's delivery rows (owner first, from the employee
+record; then the recipient rows), unique on (run, email), and the worker
+sends one `sendMail` per row from `controlls@phb1899.com` as
+`phb-platform-bas-mail`. Three attempts on a 1- and 5-minute backoff,
+then *Failed* and Resend. `BAS_REPORTS_ALLOW_SEND` gates it.
+
+**Why this does not break prohibition 1.** Prohibition 1 is the
+change-order system's safety model: vendor mail from `changeorder@`, one
+human, one draft. This is a different mailbox, a different app whose
+Exchange policy refuses every other mailbox, and a decision the owner
+made in the plan (§A *Sender*, §D5) - a scheduled report to the people
+who asked for it. Nothing here can reach `changeorder@`: the mailbox is
+this module's configuration and the app's policy is the fence at Exchange.
+
+**Why the worker and never the web app.** One sender is one place to
+gate, log and test. Resend and Send to me write rows; the scaler counts
+due rows, so they still go within seconds. A test holds `sendMail` to one
+file and the mailer's importers to the worker's path.
+
+**Why a gate of its own, set explicitly.** `PHB_ALLOW_SEND` is the change
+orders' and has been `true` since 2026-10-14; reusing it would open report
+email the moment the code deployed. The new gate is written on every
+template deployment from a boolean, so it is never absent (which would
+read as shut, silently) and never hand-typed. Shut, the worker marks rows
+*Not sent* in one statement before any claim, and the mailer refuses again
+before any request.
+
+**Why `sendMail` and no message id.** Request 7 grants Mail.Send only: the
+app may send as the mailbox and may not read or write its items, so the
+draft-then-send the Change Orders module uses is not open to it, and
+`sendMail` answers 202 with no body. The row keeps Graph's request id; the
+message carries `X-PHB-Report-Delivery: <delivery id>` for a trace. The
+price: a worker that dies between the 202 and the database write sends
+that one message again after the lease. Asking for Mail.ReadWrite to close
+that window would widen the app's grant for a rare duplicate of a report
+email - not worth it.
+
+**Why the shared `lib/mail/`.** The worker's import graph must never reach
+`lib/env.ts` (§ 80), and the Change Orders credential imported it at the
+top. The mechanism - assertion in production, secret on a developer
+machine, a secret in production refused - moved to `lib/mail/credential.ts`
+with `production` passed in, and the middleware chain to
+`lib/mail/graph-client.ts`; Change Orders keeps its file names, its
+MailError vocabulary and every test unchanged. A second copy of the
+credential path would be two places for prohibition 7 to drift.
+
+**Why rows are written at PDF-ready and not at run end.** The plan sends
+after the PDF exists; writing rows earlier would mean a row waiting on a
+render that may fail. A failed render writes none, and Retry PDF's success
+writes them then.
+
+**What breaks if you undo it.** Send from the web app and the gate has two
+homes. Reuse `PHB_ALLOW_SEND` and production starts mailing reports the
+day this merges. Drop the unique key and a repeated worker mails everyone
+twice. Read the owner from a recipient row and a removed row silences the
+owner. Copy the credential instead of sharing it and the next
+prohibition-7 fix lands in one of the two.

@@ -21,6 +21,10 @@ Your module will live in this same repo alongside Change Orders and Building Aut
 - **PostgreSQL 16 or newer** — the installer will ask you to set a password for the
   `postgres` user. Write it down, you'll need it in step 3
 - **Git**
+- **Chromium for Playwright**, after step 5's `npm install`: `npx playwright install chromium`
+  (about 170 MB, into your user profile). The BAS Reports worker prints a report to PDF
+  with it, and `tests/bas-reports-pdf.test.ts` does the same; until it is there that test
+  fails with *Executable doesn't exist*, which is the message and not a bug
 
 ## 2 · Clone the repo
 
@@ -63,7 +67,7 @@ comes from. Short version:
 | `BAS_ASK_DATABASE_URL` | **Optional.** Only for the BAS Analyze tab. Run `npm run bas:analyze:role` and paste what it prints; leave it out and the tab says it is not configured while everything else works. Needs `ANTHROPIC_API_KEY` beside it. `runbook.md` → *Analyze says it is not configured* |
 | `CO_MAILBOX` | `changeorder@phb1899.com` |
 
-**Ask Mahi for these** — they're the same for everyone, they're just not in the repo:
+**Ask Karthik (`krachamolla@phb1899.com` or platform admin) for these** — they're the same for everyone, they're just not in the repo:
 
 - `AUTH_MICROSOFT_ENTRA_ID_ID` (client ID, not secret)
 - `AUTH_MICROSOFT_ENTRA_ID_TENANT_ID`
@@ -135,7 +139,9 @@ npm test
 ```
 
 1,274 of them as of September 2026, against your real test database. If they pass,
-you're set up correctly.
+you're set up correctly. One file prints a PDF with Chromium: if
+`tests/bas-reports-pdf.test.ts` says the executable doesn't exist, run
+`npx playwright install chromium` once (step 1) and run it again.
 
 ---
 
@@ -188,10 +194,7 @@ refusal; read what it says.
 ## How we're working in the repo
 
 One branch per change. Branch from an up-to-date `main`, commit, push, open a pull
-request, and delete the branch once it merges. Mahi reviews and merges. Nothing goes
-straight to `main` — the platform is running change orders and building automation data
-now, so changes get a second pair of eyes. Nobody keeps a long-lived personal branch,
-Mahi included.
+request, and delete the branch once it merges. Platform admin review and approves.
 
 Name the branch for what the change is:
 

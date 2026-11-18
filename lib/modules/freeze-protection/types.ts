@@ -15,6 +15,8 @@ export type CoilType = "none" | "water" | "glycol" | "steam";
 
 /** Step 3, answered by a PH+B engineer. `no` closes the line; `unknown` is unresolved. */
 export type Exposure = "yes" | "no" | "unknown";
+/** The schedule import's reading of exposure. A hint for step 3, never its answer. */
+export type ExposureSuggestion = "likely" | "unlikely";
 
 /** Step 4. `none` and `unknown` stop work until the owner or vendor is notified. */
 export type Protection = "manual" | "auto" | "software" | "glycol" | "drainable" | "none" | "unknown";
@@ -110,6 +112,10 @@ export type FpLine = {
   deficiency: FpDeficiency | null;
   documentation: FpDocumentation | null;
   notes: string | null;
+  /** From the schedule import; null for a unit added by hand. */
+  exposureSuggestion: ExposureSuggestion | null;
+  exposureEvidence: string | null;
+  source: string | null;
   updatedAt: string;
   updatedBy: string | null;
 };

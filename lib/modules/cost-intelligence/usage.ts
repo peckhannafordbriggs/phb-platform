@@ -1,4 +1,19 @@
 import { prisma } from "@/lib/db";
+import {
+  DAY_MS,
+  USAGE_RANGES,
+  addToTally,
+  dayKey,
+  monthLabel,
+  rangeDays,
+  tallyRows,
+  type Tally,
+  type UsageDay,
+  type UsageMonth,
+  type UsageRange,
+  type UsageRow,
+  type UsageTotals,
+} from "@/lib/usage/range";
 import type { RunStatus, RunStepSnapshot } from "./runs";
 
 /**
@@ -6,17 +21,14 @@ import type { RunStatus, RunStepSnapshot } from "./runs";
  * `step_cost` events (one per run step, kept current as the step goes), so a
  * step is counted on the day it last spent. Days are America/New_York.
  * The hard limit is the Anthropic Console spend limit; this page only reports.
+ *
+ * The range arithmetic and the row shapes are shared with the BAS Reports
+ * Usage page (lib/usage/range.ts, 2026-11-12); re-exported here so this
+ * module's importers keep their path.
  */
 
-export const USAGE_RANGES = { "7d": 7, "30d": 30, "90d": 90 } as const;
-export type UsageRange = keyof typeof USAGE_RANGES;
+export { USAGE_RANGES, parseUsageRange, type UsageRange, type UsageRow } from "@/lib/usage/range";
 
-/** Anything not a known range falls back to 30 days. */
-export const parseUsageRange = (raw: unknown): UsageRange =>
-  typeof raw === "string" && Object.hasOwn(USAGE_RANGES, raw) ? (raw as UsageRange) : "30d";
-
-/** Spend in US dollars. `runs` counts runs that spent in the range. */
-export type UsageRow = { label: string; runs: number; tokens: number; spend: number };
 export type UsageRun = {
   id: string;
   workflowName: string;
@@ -28,47 +40,14 @@ export type UsageRun = {
 };
 export type Usage = {
   range: UsageRange;
-  totals: { runs: number; tokens: number; spend: number };
-  thisMonth: { label: string; spend: number };
-  days: { date: string; label: string; spend: number }[];
+  totals: UsageTotals;
+  thisMonth: UsageMonth;
+  days: UsageDay[];
   bySkill: UsageRow[];
   byProject: UsageRow[];
   byWorkflow: UsageRow[];
   topRuns: UsageRun[];
 };
-
-const ZONE = "America/New_York";
-const DAY_MS = 86_400_000;
-const KEY = new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
-const SHORT = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" });
-const MONTH = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "long" });
-
-/** YYYY-MM-DD in New York. */
-const dayKey = (at: Date) => KEY.format(at);
-
-/** The calendar days of the range, oldest first, ending today. */
-function rangeDays(today: string, count: number): { date: string; label: string }[] {
-  const [y, m, d] = today.split("-").map(Number) as [number, number, number];
-  return Array.from({ length: count }, (_, i) => {
-    const day = new Date(Date.UTC(y, m - 1, d - (count - 1 - i)));
-    return { date: day.toISOString().slice(0, 10), label: SHORT.format(day) };
-  });
-}
-
-type Tally = Map<string, { label: string; runs: Set<string>; tokens: number; spend: number }>;
-
-function add(tally: Tally, key: string, runId: string, tokens: number, spend: number) {
-  const row = tally.get(key) ?? { label: key, runs: new Set<string>(), tokens: 0, spend: 0 };
-  row.runs.add(runId);
-  row.tokens += tokens;
-  row.spend += spend;
-  tally.set(key, row);
-}
-
-const rows = (tally: Tally): UsageRow[] =>
-  [...tally.values()]
-    .map((r) => ({ label: r.label, runs: r.runs.size, tokens: r.tokens, spend: r.spend }))
-    .sort((a, b) => b.spend - a.spend || a.label.localeCompare(b.label));
 
 export async function getUsage(range: UsageRange, now = new Date()): Promise<Usage> {
   const count = USAGE_RANGES[range];
@@ -110,9 +89,9 @@ export async function getUsage(range: UsageRange, now = new Date()): Promise<Usa
     const runId = e.runId.toString();
     const skill = (e.run.steps as RunStepSnapshot[])[e.step ?? -1]?.folderName ?? `Step ${(e.step ?? 0) + 1}`;
     perDay.set(key, (perDay.get(key) ?? 0) + spend);
-    add(bySkill, skill, runId, tokens, spend);
-    add(byProject, e.run.project.folderName, runId, tokens, spend);
-    add(byWorkflow, e.run.workflowName, runId, tokens, spend);
+    addToTally(bySkill, skill, runId, tokens, spend);
+    addToTally(byProject, e.run.project.folderName, runId, tokens, spend);
+    addToTally(byWorkflow, e.run.workflowName, runId, tokens, spend);
 
     const run = perRun.get(runId) ?? {
       id: runId,
@@ -129,7 +108,6 @@ export async function getUsage(range: UsageRange, now = new Date()): Promise<Usa
   }
 
   const runs = [...perRun.values()];
-  const [y, m] = month.split("-").map(Number) as [number, number];
   return {
     range,
     totals: {
@@ -137,11 +115,11 @@ export async function getUsage(range: UsageRange, now = new Date()): Promise<Usa
       tokens: runs.reduce((a, r) => a + r.tokens, 0),
       spend: runs.reduce((a, r) => a + r.spend, 0),
     },
-    thisMonth: { label: MONTH.format(new Date(Date.UTC(y, m - 1, 1))), spend: thisMonth },
+    thisMonth: { label: monthLabel(month), spend: thisMonth },
     days: days.map((d) => ({ ...d, spend: perDay.get(d.date) ?? 0 })),
-    bySkill: rows(bySkill),
-    byProject: rows(byProject),
-    byWorkflow: rows(byWorkflow),
+    bySkill: tallyRows(bySkill),
+    byProject: tallyRows(byProject),
+    byWorkflow: tallyRows(byWorkflow),
     topRuns: runs.sort((a, b) => b.spend - a.spend).slice(0, 10),
   };
 }

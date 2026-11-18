@@ -902,6 +902,8 @@ export interface StationActivity {
 
 export interface SettingsStation {
   stationId: string;
+  /** An active point with an occupancy role is trended on this station (Reports, Phase 2). */
+  hasOccupancyPoint: boolean;
   /** Exactly as Niagara spells it. Never normalised - it is in every oBIX URL. */
   niagaraStationName: string;
   /** What a person calls it. Null means nobody has, and the UI shows the Niagara name. */
@@ -930,11 +932,20 @@ export interface SettingsStation {
   activity: StationActivity;
 }
 
+/** One weekday's occupied hours, HH:MM in the building's zone (Reports, Phase 2). */
+export interface OccupancyDay {
+  weekday: number;
+  start: string;
+  end: string;
+}
+
 export interface SettingsBuilding {
   siteId: string;
   name: string;
   timezone: string;
   address: string | null;
+  /** The manual occupied hours, the report engine's fallback when no occupancy point is trended. */
+  occupancy: OccupancyDay[];
   stations: SettingsStation[];
 }
 

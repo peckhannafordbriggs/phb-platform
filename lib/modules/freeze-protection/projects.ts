@@ -70,6 +70,12 @@ export async function listProjects(): Promise<FpProjectSummary[]> {
   return rows.map((p) => ({ id: p.id.toString(), jobNumber: p.jobNumber, name: p.name, equipmentCount: p._count.equipment }));
 }
 
+/** Every project with its verification, newest job number first, for the catalog (catalog.ts). */
+export async function listProjectViews(): Promise<FpProject[]> {
+  const rows = await prisma.fpProject.findMany({ orderBy: [{ jobNumber: "desc" }, { id: "desc" }], include: SIGNERS });
+  return Promise.all(rows.map(toView));
+}
+
 /** One project and its verification, or null if the id is malformed or missing. */
 export async function getProject(rawId: string): Promise<FpProject | null> {
   const id = parseId(rawId);

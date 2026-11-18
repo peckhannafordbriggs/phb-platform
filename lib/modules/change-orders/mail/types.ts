@@ -56,11 +56,17 @@ export interface MessageBody {
   /** Remote images removed by the sanitizer, for an honest UI prompt. */
   remoteImagesBlocked: number;
   /**
-   * Inline (`cid:`) images - attachments on this message that cannot be
-   * rendered yet. Reported so the placeholder has an explanation beside it
-   * rather than looking like a failure.
+   * Inline (`cid:`) images - attachments on this message rather than remote
+   * content. Each one the message actually carries is rendered through the
+   * platform's own signed link to the attachment; see mail/inline-images.ts.
    */
   inlineImages: number;
+  /**
+   * How many of those named an attachment the message does not carry. Left
+   * as a marked placeholder, and reported so the placeholder has an
+   * explanation beside it rather than looking like a failure.
+   */
+  inlineImagesUnresolved: number;
 }
 
 export interface MessageDetail extends MessageSummary {
@@ -74,6 +80,15 @@ export interface MessageDetail extends MessageSummary {
 }
 
 /**
+ * What `getMessage` returns: the message, and the attachment metadata it had to
+ * read to render the body. One read serves both - the body may reference the
+ * attachments by Content-ID, and the reading pane wants both anyway.
+ */
+export interface MessageRead extends MessageDetail {
+  attachments: AttachmentSummary[];
+}
+
+/**
  * Attachment metadata. No content, by design - Phase 4 does not download
  * attachment bytes, and nothing persists them ever.
  */
@@ -83,6 +98,13 @@ export interface AttachmentSummary {
   contentType: string | null;
   sizeBytes: number | null;
   isInline: boolean;
+  /**
+   * The Content-ID a body references this attachment by (`src="cid:…"`), as
+   * Exchange stores it: without angle brackets. Null for an item attachment
+   * and for a file that was never referenced inline. Exchange gives some
+   * ordinary attachments one too, so a value here does not mean inline.
+   */
+  contentId: string | null;
   /** A message forwarded as an attachment rather than a file. */
   isItemAttachment: boolean;
 }

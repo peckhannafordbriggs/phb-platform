@@ -46,6 +46,19 @@ function declaredTables(): Array<{ ordinal: number; name: string; kind: string }
 const declared = declaredTables();
 const declaredNames = declared.map((t) => t.name);
 
+/**
+ * The tables common.sql says do NOT move (mig_excluded): created after the
+ * one-shot move and platform-side. The gate must know them, the protected
+ * fingerprint must cover them, and nothing below may move them.
+ */
+function excludedTables(): string[] {
+  const start = common.indexOf("INSERT INTO mig_excluded");
+  if (start < 0) throw new Error("common.sql has no mig_excluded block");
+  const block = common.slice(start, common.indexOf(";", start));
+  return [...block.matchAll(/\('(bas_[a-z_]+)',/g)].map((m) => m[1]!);
+}
+const excludedNames = excludedTables();
+
 describe("common.sql declares the tables", () => {
   it("lists fourteen bas_* tables with consecutive ordinals", () => {
     expect(declared.length).toBe(14);
@@ -55,13 +68,15 @@ describe("common.sql declares the tables", () => {
     expect(new Set(declaredNames).size).toBe(14);
   });
 
-  it("names exactly the bas_* base tables in the database", async () => {
+  it("names exactly the bas_* base tables in the database, moved or deliberately not", async () => {
     const rows = await testDb.$queryRawUnsafe<Array<{ relname: string }>>(
       `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname LIKE 'bas\\_%'
         ORDER BY 1`,
     );
-    expect([...declaredNames].sort()).toEqual(rows.map((r) => r.relname));
+    expect([...declaredNames, ...excludedNames].sort()).toEqual(rows.map((r) => r.relname));
+    // Decided one way or the other, never both.
+    expect(declaredNames.filter((n) => excludedNames.includes(n))).toEqual([]);
   });
 
   it("orders every foreign key's parent before its child", async () => {
@@ -75,7 +90,9 @@ describe("common.sql declares the tables", () => {
           AND conrelid <> confrelid`,
     );
     expect(fks.length).toBeGreaterThan(10);
-    for (const fk of fks) {
+    // Only the tables that move are ordered; a table that stays references
+    // whatever it likes.
+    for (const fk of fks.filter((f) => declaredNames.includes(f.child))) {
       const child = declaredNames.indexOf(fk.child);
       const parent = declaredNames.indexOf(fk.parent);
       expect(parent, `${fk.conname}: ${fk.parent} must be listed before ${fk.child}`).toBeLessThan(child);
@@ -89,20 +106,34 @@ describe("common.sql declares the tables", () => {
          JOIN pg_class t ON t.oid = d.refobjid
         WHERE s.relkind = 'S' AND t.relname LIKE 'bas\\_%' ORDER BY 1`,
     );
-    expect(rows.length).toBe(8);
-    for (const row of rows) {
+    const moving = rows.filter((r) => declaredNames.includes(r.tbl));
+    const staying = rows.filter((r) => !declaredNames.includes(r.tbl));
+    expect(moving.length).toBe(8);
+    for (const row of moving) {
       expect(common, `${row.seq} (${row.tbl}) is missing from mig_tables`).toContain(`'${row.seq}'`);
+    }
+    // A sequence behind a table that stays belongs to an excluded table, and
+    // the move must not touch it.
+    for (const row of staying) {
+      expect(excludedNames, `${row.tbl} is neither moved nor excluded`).toContain(row.tbl);
+      expect(common).not.toContain(`'${row.seq}'`);
     }
   });
 
-  it("only the credentials table leaves the bas_* family, and it is fingerprinted without updated_by", async () => {
+  it("among the tables that move, only the credentials table leaves the bas_* family, and it is fingerprinted without updated_by", async () => {
     const rows = await testDb.$queryRawUnsafe<Array<{ child: string; parent: string }>>(
       `SELECT conrelid::regclass::text AS child, confrelid::regclass::text AS parent
          FROM pg_constraint
         WHERE contype = 'f' AND conrelid::regclass::text LIKE 'bas\\_%'
           AND confrelid::regclass::text NOT LIKE 'bas\\_%'`,
     );
-    expect(rows).toEqual([{ child: "bas_station_credentials", parent: "employees" }]);
+    expect(rows.filter((r) => declaredNames.includes(r.child))).toEqual([
+      { child: "bas_station_credentials", parent: "employees" },
+    ]);
+    // The report tables reference employees too, and stay where they are.
+    for (const r of rows.filter((r) => !declaredNames.includes(r.child))) {
+      expect(excludedNames, `${r.child} -> ${r.parent}`).toContain(r.child);
+    }
     expect(common).toMatch(
       /row_expr = '\(t\.station_id, t\.username, t\.password_ciphertext, t\.key_version, t\.updated_at\)::text'\s+WHERE table_name = 'bas_station_credentials'/,
     );
@@ -252,7 +283,9 @@ describe.skipIf(!havePsql)("the migration, end to end through psql", () => {
     // 1. Export from the fixture.
     const exported = runPsql(["-f", path.join(SCRIPTS, "export.sql")], work);
     expect(exported.status, exported.stderr + exported.stdout).toBe(0);
-    expect(exported.stderr).toContain("gate: 14 bas_* table(s) present, all 14 listed");
+    expect(exported.stderr).toContain(
+      `gate: ${declaredNames.length + excludedNames.length} bas_* table(s) present, ${declaredNames.length} move, ${excludedNames.length} stay by decision`,
+    );
     expect(readFileSync(path.join(work, "bas-migration-data/bas_readings.csv"), "utf8").split("\n").length).toBe(5);
 
     // 2. The target: the same database, emptied. Sequences back to 1, which is

@@ -462,15 +462,21 @@ describe("list search, filters and pagination", () => {
     };
   }
 
-  it("defaults to employees with at least one grant", async () => {
+  /**
+   * Everyone, since 2026-11-13 ("with a grant" until then). The question the
+   * list opens on is "who signed in and has no access yet", and a default
+   * that hid exactly those people answered it with an empty screen; the
+   * default sort puts them first instead (admin-list-volume.test.ts).
+   */
+  it("defaults to everyone", async () => {
     const { data } = await list("");
-    expect(data.total).toBe(8);
-  });
-
-  it("shows everyone when the scope is switched", async () => {
-    const { data } = await list("scope=all");
     // 120 seeded + the acting admin.
     expect(data.total).toBe(121);
+  });
+
+  it("narrows to those with a grant when the scope is switched", async () => {
+    const { data } = await list("scope=granted");
+    expect(data.total).toBe(8);
   });
 
   it("paginates", async () => {

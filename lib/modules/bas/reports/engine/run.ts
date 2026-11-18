@@ -1,0 +1,892 @@
+import { Prisma } from "@/lib/generated/prisma/client";
+import { prisma } from "@/lib/db";
+import { writeAuditEvent } from "@/lib/audit";
+import { logger } from "@/lib/logger";
+import { BAS_MODULE_KEY } from "../../constants";
+import { LIBRARY_SECTIONS, describeRequiredRoles, parseRoleRequirements, sectionLabel, type LibrarySection } from "../library";
+import { WINDOW_LABELS } from "../schedule";
+import {
+  ANALYSIS_AVAILABILITY,
+  EQUIPMENT_QUESTIONS,
+  NOT_BUILT_NOTE,
+  dataHealth,
+  manualOverrides,
+  runOutsideSchedule,
+  zoneComfort,
+  type AnalysisContext,
+} from "./analysis";
+import { carriedForward, compareFindings, type PreviousFinding } from "./compare";
+import { classifications, decideQuestion, equipmentTypesFound } from "./inventory";
+import type { Narrator, NarrativeInput } from "./narrative";
+import {
+  PLANNER_HISTORY_RUNS,
+  plannerEstimate,
+  plannerNotAsked,
+  toPlannerAnswer,
+  type PlannerQuestionMeta,
+  type ReportPlanner,
+} from "./planner-questions";
+import { renderReportHtml } from "./html";
+import type { SafetyCeiling } from "../ceiling";
+import { readSafetyCeiling } from "../ceiling-read";
+import { ReportRunError, enqueueRun } from "./queue";
+import { buildingStatus, sectionStatus, topFindings } from "./rollup";
+import { loadDefinition, resolveScope, type DefinitionForRun } from "./scope";
+import { TIME_CAP_NOTE, missingForSection, notApplicableLine, notMonitoredLine, notMonitoredSentence } from "./wording";
+import type {
+  Finding,
+  Interval,
+  PlannerAnswer,
+  QuestionResult,
+  RawFinding,
+  ReportDocument,
+  RunStatus,
+  SectionDocument,
+} from "./types";
+
+/**
+ * One run, end to end (Reports, Phase 2): resolve the scope, compute
+ * coverage and occupancy, decide every question, run the analysis functions
+ * that exist, compare with the previous run, roll up the status, ask the
+ * model for the narrative within the budget, render, store.
+ *
+ * The order is the spec's: Data Health FIRST, because a point it flags is
+ * excluded from every equipment question; then the inventory decides Not
+ * Applicable and Not Monitored; then the functions; then comparison and
+ * status, with no model involved; then the narrative, which can only word
+ * what is already decided; then the page.
+ *
+ * Status is decided at the end: `succeeded` when everything ran and every
+ * section with findings has its narrative; `partial` with a reason when the
+ * narrative was cut short - by the budget, by a missing key, by a declined
+ * call - or when a question that could have run has no analysis (a library
+ * key the code does not know; every one of the twenty has one since Phase 5), or
+ * when the run's time cap was reached (Phase 3); `failed` with the error
+ * when the run threw. A failed run is stored too, so the Reports list can
+ * show it.
+ *
+ * THE RUN ROW COMES FIRST (Phase 3). A run is a row in `queued` before it
+ * is anything else: the scheduler and Run now insert one with `enqueueRun`,
+ * the worker claims it (`running`, heartbeat) and calls `executeQueuedRun`.
+ * The dev script's `executeReportRun` is the same three steps in one call,
+ * so there is one execution path and the worker is on it.
+ *
+ * ONE CEILING, TWO HALVES (2026-11-12; two per-report caps before). The
+ * module's safety ceiling - bas_report_settings, read here for every run -
+ * stops narrative calls when the run's spend would pass its dollars, and
+ * its minutes are a deadline read from the clock before every question and
+ * every narrative call; past it, what is left is skipped and named in the
+ * reason. Neither half aborts: the comparison, the roll-up and the page are
+ * always produced from whatever was computed. The ceiling that applied is
+ * stamped on the run (`budget_usd`) and printed on the page.
+ */
+
+export interface RunOptions {
+  periodEnd: Date;
+  trigger: "manual" | "scheduled";
+  /** The employee who asked, or null for the platform. */
+  startedById: string | null;
+  /** Null means no model is configured; the run finishes partial and says so. */
+  narrator: Narrator | null;
+  /**
+   * Answers the report's planner questions (Phase 6). Null or absent: they
+   * are not answered, and when the report carries any the run finishes
+   * partial with `plannerUnavailable` as the reason.
+   */
+  planner?: ReportPlanner | null;
+  /** Why there is no planner, naming the missing variables. */
+  plannerUnavailable?: string | null;
+  now?: Date;
+  /** The clock the time cap reads, in epoch milliseconds. Tests move it. */
+  clock?: () => number;
+}
+
+export interface ExecuteOptions {
+  narrator: Narrator | null;
+  planner?: ReportPlanner | null;
+  plannerUnavailable?: string | null;
+  now?: Date;
+  clock?: () => number;
+  /** Which claim of the run this is: 1 normally, 2 after a reclaim. In the audit row. */
+  attempt?: number;
+}
+
+export interface RunOutcome {
+  runId: string;
+  status: RunStatus;
+  partialReason: string | null;
+  document: ReportDocument;
+  findings: number;
+}
+
+// The time-cap note lives in wording.ts (no React, no Prisma) so the
+// template and its test can word it without importing the engine.
+export { TIME_CAP_NOTE };
+
+// The queue side lives in queue.ts, which imports no React: the service and
+// the scheduler queue runs through it without pulling in the renderer.
+export { ReportRunError, enqueueRun };
+
+/**
+ * Queue, claim and execute in one call - the dev script's path, and the
+ * tests'. The worker does the same three things through `claimNextRun` and
+ * `executeQueuedRun`.
+ */
+export async function executeReportRun(reportIdText: string | bigint, options: RunOptions): Promise<RunOutcome> {
+  const reportId = typeof reportIdText === "bigint" ? reportIdText : BigInt(reportIdText);
+  const now = options.now ?? new Date();
+  const { runId } = await enqueueRun(prisma, {
+    reportId,
+    trigger: options.trigger,
+    periodEnd: options.periodEnd,
+    startedById: options.startedById,
+  });
+  await prisma.basReportRun.update({
+    where: { runId },
+    data: { status: "running", startedAt: now, heartbeatAt: now, attempts: { increment: 1 } },
+  });
+  return executeQueuedRun(runId, {
+    narrator: options.narrator,
+    planner: options.planner,
+    plannerUnavailable: options.plannerUnavailable,
+    now,
+    clock: options.clock,
+    attempt: 1,
+  });
+}
+
+/**
+ * Execute a run that has been claimed (`running`). Reads the period and the
+ * trigger from the row, loads the definition as it is now, marks the previous
+ * finished run for the comparison, and stores the result - or the failure.
+ */
+export async function executeQueuedRun(runIdInput: bigint | string, options: ExecuteOptions): Promise<RunOutcome> {
+  const runId = typeof runIdInput === "bigint" ? runIdInput : BigInt(runIdInput);
+  const row = await prisma.basReportRun.findUnique({
+    where: { runId },
+    select: { reportId: true, status: true, trigger: true, periodStart: true, periodEnd: true, startedById: true, attempts: true },
+  });
+  if (row === null) throw new ReportRunError("run_not_found", `No run ${runId}.`);
+  if (row.status !== "running") throw new ReportRunError("run_not_claimed", `Run ${runId} is ${row.status}; it has to be claimed before it is executed.`);
+
+  const def = await loadDefinition(row.reportId);
+  if (def === null) throw new ReportRunError("report_not_found", `No report definition ${row.reportId}.`);
+  // The ceiling as it stands when the run executes, not when it was queued.
+  const ceiling = await readSafetyCeiling(prisma);
+
+  const now = options.now ?? new Date();
+  const clock = options.clock ?? Date.now;
+  const range: Interval = { start: row.periodStart.getTime(), end: row.periodEnd.getTime() };
+  const trigger: "manual" | "scheduled" = row.trigger === "scheduled" ? "scheduled" : "manual";
+
+  const previous = await prisma.basReportRun.findFirst({
+    where: { reportId: row.reportId, status: { in: ["succeeded", "partial"] }, runId: { not: runId } },
+    orderBy: [{ finishedAt: "desc" }, { runId: "desc" }],
+    select: { runId: true },
+  });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.basReportRun.update({ where: { runId }, data: { previousRunId: previous?.runId ?? null } });
+    await writeAuditEvent(tx, {
+      action: "bas.report_run_started",
+      actorEmployeeId: row.startedById,
+      moduleKey: BAS_MODULE_KEY,
+      metadata: {
+        reportId: row.reportId.toString(),
+        runId: runId.toString(),
+        name: def.name,
+        trigger,
+        attempt: options.attempt ?? row.attempts,
+        periodStart: row.periodStart.toISOString(),
+        periodEnd: row.periodEnd.toISOString(),
+      },
+    });
+  });
+
+  try {
+    const result = await produce(def, range, runId, previous?.runId ?? null, options.narrator, now, clock, ceiling, {
+      planner: options.planner ?? null,
+      unavailable: options.plannerUnavailable ?? null,
+    });
+    await prisma.$transaction(async (tx) => {
+      await tx.basReportRun.update({
+        where: { runId },
+        data: {
+          status: result.status,
+          partialReason: result.partialReason,
+          budgetUsd: ceiling.usd.toFixed(2),
+          reportJson: result.document as unknown as Prisma.InputJsonValue,
+          reportHtml: result.html,
+          costUsd: new Prisma.Decimal(result.document.cost.costUsd.toFixed(6)),
+          inputTokens: result.document.cost.inputTokens,
+          outputTokens: result.document.cost.outputTokens,
+          plannerAsked: result.planner.asked,
+          plannerAnswered: result.planner.answered,
+          plannerUnanswered: result.planner.unanswered,
+          plannerSkipped: result.planner.skipped,
+          plannerCostUsd: new Prisma.Decimal(result.planner.costUsd.toFixed(6)),
+          finishedAt: new Date(),
+          heartbeatAt: new Date(),
+          // The PDF (Phase 4): queued the moment the page is stored. The
+          // worker renders it in the same execution (pdf/jobs.ts); a dev
+          // script, which carries no Chromium, leaves it queued for the next
+          // worker and says so.
+          pdfStatus: "queued",
+          pdfQueuedAt: new Date(),
+        },
+      });
+      if (result.rows.length > 0) {
+        await tx.basReportFinding.createMany({
+          data: result.rows.map((f, position) => ({
+            runId,
+            position,
+            questionKey: f.questionKey,
+            section: f.section,
+            subjectKey: f.subjectKey,
+            subjectName: f.subjectName,
+            equipmentId: f.equipmentId === null ? null : BigInt(f.equipmentId),
+            issueCode: f.issueCode,
+            priority: f.priority,
+            evidence: f.evidence as unknown as Prisma.InputJsonValue,
+            likelyCause: f.likelyCause,
+            recommendedAction: f.recommendedAction,
+            fingerprint: f.fingerprint,
+            state: f.state,
+            firstSeenRunId: f.firstSeenRunId === null ? null : BigInt(f.firstSeenRunId),
+          })),
+        });
+      }
+      await writeAuditEvent(tx, {
+        action: "bas.report_run_finished",
+        actorEmployeeId: row.startedById,
+        moduleKey: BAS_MODULE_KEY,
+        metadata: {
+          reportId: row.reportId.toString(),
+          runId: runId.toString(),
+          name: def.name,
+          status: result.status,
+          partialReason: result.partialReason,
+          buildingStatus: result.document.summary.status,
+          findings: result.rows.filter((f) => f.state !== "cleared").length,
+          cleared: result.rows.filter((f) => f.state === "cleared").length,
+          costUsd: result.document.cost.costUsd,
+          inputTokens: result.document.cost.inputTokens,
+          outputTokens: result.document.cost.outputTokens,
+          plannerAnswered: result.planner.answered,
+          plannerUnanswered: result.planner.unanswered,
+          plannerSkipped: result.planner.skipped,
+          plannerCostUsd: result.planner.costUsd,
+        },
+      });
+    });
+    logger.info("bas.report_run", {
+      outcome: result.status,
+      reason: `run ${runId} of report ${row.reportId}: $${result.document.cost.costUsd.toFixed(4)}, ${result.rows.length} findings`,
+    });
+    return {
+      runId: runId.toString(),
+      status: result.status,
+      partialReason: result.partialReason,
+      document: result.document,
+      findings: result.rows.length,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await prisma.$transaction(async (tx) => {
+      await tx.basReportRun.update({
+        where: { runId },
+        data: { status: "failed", error: message, finishedAt: new Date() },
+      });
+      await writeAuditEvent(tx, {
+        action: "bas.report_run_finished",
+        actorEmployeeId: row.startedById,
+        moduleKey: BAS_MODULE_KEY,
+        metadata: { reportId: row.reportId.toString(), runId: runId.toString(), name: def.name, status: "failed", error: message },
+      });
+    });
+    logger.error("bas.report_run_failed", { outcome: "failed", reason: `run ${runId} of report ${row.reportId}: ${message}` });
+    throw new ReportRunError("run_failed", message);
+  }
+}
+
+interface Produced {
+  status: RunStatus;
+  partialReason: string | null;
+  document: ReportDocument;
+  html: string;
+  rows: Finding[];
+  planner: PlannerTally;
+}
+
+/** The counters stored on the run for Usage and for the next run's estimate. */
+interface PlannerTally {
+  /** Sent to the planner - the questions that cost. */
+  asked: number;
+  answered: number;
+  /** Everything not answered and not skipped: no data, declined, clarify, not monitored, not applicable, not configured. */
+  unanswered: number;
+  /** Never sent: a half of the ceiling was reached first. */
+  skipped: number;
+  costUsd: number;
+}
+
+async function produce(
+  def: DefinitionForRun,
+  range: Interval,
+  runId: bigint,
+  previousRunId: bigint | null,
+  narrator: Narrator | null,
+  now: Date,
+  clock: () => number,
+  ceiling: SafetyCeiling,
+  plannerSetup: { planner: ReportPlanner | null; unavailable: string | null },
+): Promise<Produced> {
+  // The ceiling's minutes: a deadline on the clock, read before every
+  // question and every narrative call. Past it, nothing new is started.
+  const startedMs = clock();
+  const deadlineMs = startedMs + ceiling.minutes * 60_000;
+  const pastDeadline = () => clock() > deadlineMs;
+  const skippedQuestions: number[] = [];
+  const skippedNarrative: string[] = [];
+
+  const scope = await resolveScope(def, range);
+  const tz = def.site.timezone;
+
+  // Data Health first; its flagged points are excluded from everything else.
+  // Station names go in so a collection incident - several points on one
+  // station stopping together - is named after the station.
+  const health = dataHealth(scope.points, range, tz, new Map(scope.stations.map((s) => [s.stationId, s.name])));
+  const excluded = health.excluded;
+
+  // Computed questions run below; planner-kind shared questions, the
+  // owner's own and typed ones go to the Analyze planner after the
+  // narrative (Phase 6), in the report's order.
+  const libraryQuestions = def.questions.filter((q) => q.library !== null && q.library.kind !== "planner").map((q) => q.library!);
+  const plannerQuestions = def.questions.filter((q) => q.library === null || q.library.kind === "planner");
+
+  const stationOf = (unit: { equipmentId: string }) => scope.stationOfUnit.get(unit.equipmentId) ?? null;
+  const results: QuestionResult[] = [];
+  const rawFindings: RawFinding[] = [];
+  const partialReasons: string[] = [];
+  let requiredFound = 0;
+  let requiredTotal = 0;
+  const lowCoverage = new Map<string, number>();
+  const comfortCache = new Map<string, ReturnType<typeof zoneComfort>>();
+  // What questions 6-18 read: the excluded points, each unit's station's
+  // occupied hours (null where the station has no source), and the
+  // station's points for a building-level role such as outdoor air.
+  const analysisContext: AnalysisContext = {
+    range,
+    timezone: tz,
+    excluded,
+    occupiedFor: (unit) => {
+      const station = scope.stationOfUnit.get(unit.equipmentId);
+      return (station === undefined ? null : scope.occupancyByStation.get(station)?.intervals) ?? null;
+    },
+    stationPointsFor: (unit) => {
+      const station = scope.stationOfUnit.get(unit.equipmentId);
+      return station === undefined ? [] : (scope.pointsByStation.get(station) ?? []);
+    },
+  };
+
+  for (const q of libraryQuestions.sort((a, b) => a.position - b.position)) {
+    const availability = ANALYSIS_AVAILABILITY[q.key] ?? "not_built";
+    const base: QuestionResult = {
+      key: q.key,
+      position: q.position,
+      section: q.section as LibrarySection,
+      text: q.text,
+      kind: q.kind === "planner" ? "planner" : "computed",
+      outcome: "answered",
+      needs: describeRequiredRoles(parseRoleRequirements(q.requiredRoles)),
+      missing: [],
+      reason: null,
+      equipment: [],
+      skipped: [],
+      metrics: {},
+    };
+
+    // Data Health is already computed above, so the cap never skips it.
+    if (q.key === "q20_data_health") {
+      rawFindings.push(...health.findings);
+      // `flagged` counts POINTS (every flagged point is excluded); an
+      // incident of eighteen points is one finding and eighteen flagged.
+      results.push({ ...base, metrics: { judged: health.judged, flagged: health.excluded.size, findings: health.findings.length } });
+      continue;
+    }
+    if (availability === "derived") {
+      results.push({ ...base, metrics: {} });
+      continue;
+    }
+    if (pastDeadline()) {
+      results.push({ ...base, outcome: "not_run", reason: TIME_CAP_NOTE });
+      skippedQuestions.push(q.position);
+      continue;
+    }
+
+    const decision = decideQuestion(q, scope.units, scope.pointsByStation, scope.occupancyByStation, stationOf, excluded);
+    for (const lc of decision.lowCoverage) lowCoverage.set(lc.name, lc.coverage);
+    // The inventory's "required points found" counts units that had what the question needs.
+    requiredTotal += decision.qualified.length + decision.skipped.length;
+    requiredFound += decision.qualified.length;
+
+    if (decision.outcome === "not_applicable") {
+      results.push({ ...base, outcome: "not_applicable", reason: decision.reason });
+      continue;
+    }
+    if (decision.outcome === "not_monitored") {
+      results.push({ ...base, outcome: "not_monitored", missing: decision.missing, skipped: decision.skipped });
+      continue;
+    }
+    if (availability === "not_built") {
+      results.push({
+        ...base,
+        outcome: "not_run",
+        reason: NOT_BUILT_NOTE,
+        equipment: decision.qualified.map((u) => u.name),
+        skipped: decision.skipped,
+        missing: decision.missing,
+      });
+      partialReasons.push(`Q${q.position} could run but has no analysis yet`);
+      continue;
+    }
+
+    // Occupancy for the qualified units: one source per station; the
+    // comfort and schedule questions take the union across the stations in
+    // scope, each unit judged against its own station's hours.
+    const occupiedFor = (unitId: string): Interval[] => {
+      const station = scope.stationOfUnit.get(unitId);
+      return (station === undefined ? null : scope.occupancyByStation.get(station)?.intervals) ?? [];
+    };
+
+    switch (q.key) {
+      case "q03_zone_comfort":
+      case "q04_worst_zones": {
+        const cacheKey = decision.qualified.map((u) => u.equipmentId).join(",");
+        let comfort = comfortCache.get(cacheKey);
+        if (comfort === undefined) {
+          // Units may sit on different stations with different occupancy; judge per station.
+          const byStation = new Map<string, typeof decision.qualified>();
+          for (const u of decision.qualified) {
+            const s = scope.stationOfUnit.get(u.equipmentId) ?? "";
+            byStation.set(s, [...(byStation.get(s) ?? []), u]);
+          }
+          const parts = [...byStation.entries()].map(([, units]) =>
+            zoneComfort(units, occupiedFor(units[0]!.equipmentId), range, tz, excluded),
+          );
+          const lowest = parts.map((p) => p.lowestPercentInBand).filter((v): v is number => v !== null);
+          comfort = {
+            zones: parts.flatMap((p) => p.zones),
+            findings: parts.flatMap((p) => p.findings),
+            overallPercentInBand: weightedPercent(parts.flatMap((p) => p.zones)),
+            worst: parts
+              .flatMap((p) => p.zones)
+              .filter((z) => z.percentInBand !== null)
+              .sort((a, b) => a.percentInBand! - b.percentInBand!)
+              .slice(0, 10),
+            skipped: parts.flatMap((p) => p.skipped),
+            zonesJudged: parts.reduce((s, p) => s + p.zonesJudged, 0),
+            lowestPercentInBand: lowest.length === 0 ? null : Math.min(...lowest),
+          };
+          comfortCache.set(cacheKey, comfort);
+        }
+        if (q.key === "q03_zone_comfort") {
+          rawFindings.push(...comfort.findings);
+          results.push({
+            ...base,
+            equipment: decision.qualified.map((u) => u.name),
+            skipped: [...decision.skipped, ...comfort.skipped],
+            metrics: {
+              overallPercentInBand: comfort.overallPercentInBand,
+              zones: comfort.zones,
+              zonesJudged: comfort.zonesJudged,
+              lowestPercentInBand: comfort.lowestPercentInBand,
+            },
+          });
+        } else {
+          results.push({
+            ...base,
+            equipment: decision.qualified.map((u) => u.name),
+            skipped: decision.skipped,
+            metrics: { worstZones: comfort.worst },
+          });
+        }
+        break;
+      }
+      case "q05_manual_overrides": {
+        const r = manualOverrides(scope.points, range, tz, excluded);
+        rawFindings.push(...r.findings);
+        results.push({ ...base, equipment: decision.qualified.map((u) => u.name), skipped: decision.skipped, metrics: { judged: r.judged } });
+        break;
+      }
+      case "q19_run_outside_schedule": {
+        const byStation = new Map<string, typeof decision.qualified>();
+        for (const u of decision.qualified) {
+          const s = scope.stationOfUnit.get(u.equipmentId) ?? "";
+          byStation.set(s, [...(byStation.get(s) ?? []), u]);
+        }
+        const parts = [...byStation.entries()].map(([, units]) =>
+          runOutsideSchedule(units, occupiedFor(units[0]!.equipmentId), range, tz, excluded),
+        );
+        rawFindings.push(...parts.flatMap((p) => p.findings));
+        const longest = parts
+          .map((p) => p.longestOutside)
+          .filter((l): l is { name: string; hours: number } => l !== null)
+          .sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name))[0] ?? null;
+        results.push({
+          ...base,
+          equipment: decision.qualified.map((u) => u.name),
+          skipped: decision.skipped,
+          metrics: {
+            schedules: parts.flatMap((p) => p.results),
+            judged: parts.reduce((s, p) => s + p.judged, 0),
+            longestOutside: longest,
+          },
+        });
+        break;
+      }
+      default: {
+        // Questions 6-18 (Phase 5), one shape: the qualified units in.
+        const fn = EQUIPMENT_QUESTIONS[q.key];
+        if (fn === undefined) {
+          results.push({ ...base, outcome: "not_run", reason: NOT_BUILT_NOTE, equipment: decision.qualified.map((u) => u.name) });
+          partialReasons.push(`Q${q.position} could run but has no analysis yet`);
+          break;
+        }
+        const r = fn(decision.qualified, analysisContext);
+        rawFindings.push(...r.findings);
+        results.push({
+          ...base,
+          equipment: decision.qualified.map((u) => u.name),
+          skipped: [...decision.skipped, ...r.skipped],
+          metrics: r.metrics,
+        });
+      }
+    }
+  }
+
+  // Comparison with the previous run.
+  const previousFindings: PreviousFinding[] =
+    previousRunId === null
+      ? []
+      : (
+          await prisma.basReportFinding.findMany({
+            where: { runId: previousRunId },
+            include: { firstSeenRun: { select: { startedAt: true, createdAt: true } } },
+          })
+        ).map((f) => ({
+          fingerprint: f.fingerprint,
+          state: f.state,
+          priority: f.priority === "action_needed" ? "action_needed" : "watch",
+          firstSeenRunId: f.firstSeenRunId?.toString() ?? null,
+          firstSeenAt: (f.firstSeenRun?.startedAt ?? f.firstSeenRun?.createdAt)?.toISOString() ?? null,
+          finding: {
+            questionKey: f.questionKey,
+            section: f.section as LibrarySection,
+            subjectKey: f.subjectKey,
+            equipmentId: f.equipmentId?.toString() ?? null,
+            subjectName: f.subjectName,
+            issueCode: f.issueCode,
+            issue: (f.evidence as { issue?: string }).issue ?? f.issueCode,
+            priority: f.priority === "action_needed" ? "action_needed" : "watch",
+            evidence: f.evidence as Finding["evidence"],
+            firstSeenRunId: f.firstSeenRunId?.toString() ?? null,
+            firstSeenAt: (f.firstSeenRun?.startedAt ?? f.firstSeenRun?.createdAt)?.toISOString() ?? null,
+            likelyCause: f.likelyCause,
+            recommendedAction: f.recommendedAction,
+            fixLocation: null,
+          },
+        }));
+  // The issue label travels in the evidence so a cleared row can show it.
+  for (const f of rawFindings) f.evidence.issue = f.issue;
+  const comparison = compareFindings(rawFindings, previousFindings, runId.toString(), now.toISOString());
+
+  // Sections, in the template's order, from the questions this report carries.
+  const sections: SectionDocument[] = [];
+  for (const s of LIBRARY_SECTIONS) {
+    if (s.key === "summary") continue;
+    const questions = results.filter((r) => r.section === s.key);
+    if (questions.length === 0) continue;
+    const findings = comparison.findings.filter((f) => f.section === s.key);
+    const answered = questions.some((q) => q.outcome === "answered");
+    const status: SectionDocument["status"] = questions.every((q) => q.outcome === "not_applicable")
+      ? "not_applicable"
+      : answered
+        ? sectionStatus(findings)
+        : questions.every((q) => q.outcome === "not_run" || q.outcome === "not_applicable")
+          ? "not_run"
+          : "not_monitored";
+    const notRunSentence = questions.filter((q) => q.outcome === "not_run").every((q) => q.reason === TIME_CAP_NOTE)
+      ? TIME_CAP_NOTE
+      : NOT_BUILT_NOTE;
+    sections.push({
+      key: s.key,
+      label: s.label,
+      status,
+      // A Not Monitored section says in one line what it needs and points
+      // at the inventory, which lists every question's missing points once.
+      statusSentence:
+        status === "good"
+          ? "Everything judged was within tolerance."
+          : status === "not_monitored"
+            ? notMonitoredSentence(missingForSection(questions))
+            : status === "not_run"
+              ? notRunSentence
+              : "",
+      questions,
+      findings,
+    });
+  }
+
+  // The narrative, within the ceiling's dollars and its minutes.
+  const cost = { inputTokens: 0, outputTokens: 0, costUsd: 0, calls: 0 };
+  const toNarrate = sections.filter((s) => (s.status === "watch" || s.status === "action_needed") && s.findings.some((f) => f.state !== "cleared"));
+  let narrated = 0;
+  if (narrator === null) {
+    if (toNarrate.length > 0) partialReasons.unshift("Narrative not generated: no model key is configured");
+  } else {
+    const periodLabel = `${new Date(range.start).toISOString().slice(0, 10)} to ${new Date(range.end).toISOString().slice(0, 10)}`;
+    for (const section of toNarrate) {
+      if (pastDeadline()) {
+        skippedNarrative.push(section.label);
+        continue;
+      }
+      const live = section.findings.filter((f) => f.state !== "cleared");
+      const input: NarrativeInput = {
+        buildingName: def.site.name,
+        periodLabel,
+        sectionLabel: section.label,
+        status: section.status as "watch" | "action_needed",
+        findings: live.map((f, index) => ({ index, subject: f.subjectName, issue: f.issue, priority: f.priority, state: f.state, evidence: f.evidence })),
+      };
+      const estimate = narrator.estimate(input);
+      if (cost.costUsd + estimate > ceiling.usd) {
+        partialReasons.unshift(
+          `Safety ceiling of $${ceiling.usd.toFixed(2)} reached after ${narrated} of ${toNarrate.length} sections had narrative; the rest show their evidence only`,
+        );
+        break;
+      }
+      const result = await narrator.narrate(input);
+      cost.calls += 1;
+      cost.inputTokens += result.usage.inputTokens + result.usage.cacheReadTokens + result.usage.cacheWriteTokens;
+      cost.outputTokens += result.usage.outputTokens;
+      cost.costUsd += result.costUsd;
+      if (result.declined !== null) {
+        partialReasons.unshift(`${section.label}: ${result.declined}`);
+        continue;
+      }
+      narrated += 1;
+      section.statusSentence = result.statusSentence ?? section.statusSentence;
+      for (const out of result.findings) {
+        const f = live[out.index];
+        if (f === undefined) continue;
+        f.likelyCause = out.likelyCause;
+        f.recommendedAction = out.recommendedAction;
+        f.fixLocation = out.fixLocation === "unknown" ? null : out.fixLocation;
+      }
+    }
+  }
+
+  // Planner questions (Phase 6), after the narrative so the computed
+  // report's prose is never what the ceiling cuts. Each is checked against
+  // both halves of the ceiling before it is sent; what is left once either
+  // is reached is listed by name. Shown, never tracked: nothing here makes
+  // a finding, a fingerprint or a status.
+  const plannerAnswers: PlannerAnswer[] = [];
+  const plannerTally: PlannerTally = { asked: 0, answered: 0, unanswered: 0, skipped: 0, costUsd: 0 };
+  const skippedPlannerForTime: string[] = [];
+  const skippedPlannerForSpend: string[] = [];
+  if (plannerQuestions.length > 0) {
+    const context = {
+      siteId: def.site.siteId.toString(),
+      siteName: def.site.name,
+      timezone: tz,
+      stations: scope.stations.map((s) => ({ stationId: s.stationId, name: s.name })),
+      periodStart: new Date(range.start).toISOString(),
+      periodEnd: new Date(range.end).toISOString(),
+      windowLabel: WINDOW_LABELS[def.analysisWindow],
+    };
+    const planner = plannerSetup.planner;
+    const history = planner === null ? { askedQuestions: 0, costUsd: 0 } : await plannerHistory(runId);
+    let spendCapHit: { spent: number; estimate: number } | null = null;
+    let timeCapHit = false;
+    for (const q of plannerQuestions) {
+      const meta: PlannerQuestionMeta = {
+        position: q.position,
+        text: q.text,
+        source: q.kind,
+        libraryKey: q.library?.key ?? null,
+        sectionLabel: q.library === null ? null : sectionLabel(q.library.section),
+      };
+      if (planner === null) {
+        plannerAnswers.push(
+          plannerNotAsked(meta, "not_configured", plannerSetup.unavailable ?? "No planner is configured for this run, so the question was not asked."),
+        );
+        continue;
+      }
+      // A shared planner question carries applies-to and required roles; the
+      // building is judged against them before anything is spent. A typed or
+      // personal question carries neither and is always asked.
+      const lib = q.library;
+      if (lib !== null && (lib.appliesToEquipment.length > 0 || parseRoleRequirements(lib.requiredRoles).length > 0)) {
+        const decision = decideQuestion(lib, scope.units, scope.pointsByStation, scope.occupancyByStation, stationOf, excluded);
+        if (decision.outcome === "not_applicable") {
+          plannerAnswers.push(plannerNotAsked(meta, "not_applicable", notApplicableLine(decision.reason)));
+          continue;
+        }
+        if (decision.outcome === "not_monitored") {
+          plannerAnswers.push(plannerNotAsked(meta, "not_monitored", notMonitoredLine(decision.missing)));
+          continue;
+        }
+      }
+      if (timeCapHit || pastDeadline()) {
+        timeCapHit = true;
+        skippedPlannerForTime.push(q.text);
+        plannerAnswers.push(
+          plannerNotAsked(meta, "skipped", `Skipped — time cap: the run reached the safety ceiling's ${ceiling.minutes} minutes before this question was asked.`),
+        );
+        continue;
+      }
+      const estimate = plannerEstimate(history, { askedQuestions: plannerTally.asked, costUsd: plannerTally.costUsd }).perQuestionUsd;
+      if (spendCapHit !== null || cost.costUsd + estimate > ceiling.usd) {
+        spendCapHit = spendCapHit ?? { spent: cost.costUsd, estimate };
+        skippedPlannerForSpend.push(q.text);
+        plannerAnswers.push(
+          plannerNotAsked(
+            meta,
+            "skipped",
+            `Skipped — spending cap: $${spendCapHit.spent.toFixed(2)} of the $${ceiling.usd.toFixed(2)} safety ceiling was spent, and a planner question is estimated at $${spendCapHit.estimate.toFixed(2)}.`,
+          ),
+        );
+        continue;
+      }
+      const call = await planner.answer(q.text, context);
+      const answer = toPlannerAnswer(meta, call, context);
+      plannerAnswers.push(answer);
+      plannerTally.asked += 1;
+      plannerTally.costUsd += call.costUsd;
+      cost.calls += call.calls;
+      cost.inputTokens += call.usage.inputTokens + call.usage.cacheReadTokens + call.usage.cacheWriteTokens;
+      cost.outputTokens += call.usage.outputTokens;
+      cost.costUsd += call.costUsd;
+      logger.info("bas.report_planner_question", {
+        moduleKey: BAS_MODULE_KEY,
+        outcome: answer.outcome,
+        durationMs: call.durationMs,
+        count: answer.table?.rowCount ?? undefined,
+        question: q.text,
+        sql: answer.sql ?? undefined,
+        reason: `run ${runId}: ${call.calls} call(s), $${call.costUsd.toFixed(4)}`,
+      });
+    }
+    for (const a of plannerAnswers) {
+      if (a.outcome === "answered") plannerTally.answered += 1;
+      else if (a.outcome === "skipped") plannerTally.skipped += 1;
+      else plannerTally.unanswered += 1;
+    }
+    if (planner === null) {
+      partialReasons.push(`Planner questions not answered: ${plannerSetup.unavailable ?? "no planner is configured"}`);
+    }
+    if (skippedPlannerForSpend.length > 0) {
+      partialReasons.unshift(
+        `Safety ceiling of $${ceiling.usd.toFixed(2)} reached: planner questions skipped: ${skippedPlannerForSpend.map((t) => `"${t}"`).join("; ")}`,
+      );
+    }
+  }
+
+  if (skippedQuestions.length > 0 || skippedNarrative.length > 0 || skippedPlannerForTime.length > 0) {
+    const elapsedMin = Math.max(1, Math.round((clock() - startedMs) / 60_000));
+    const parts = [
+      skippedQuestions.length > 0 ? `${skippedQuestions.map((p) => `Q${p}`).join(", ")} not analysed` : null,
+      skippedNarrative.length > 0 ? `narrative skipped for ${skippedNarrative.join(", ")}` : null,
+      skippedPlannerForTime.length > 0 ? `planner questions skipped: ${skippedPlannerForTime.map((t) => `"${t}"`).join("; ")}` : null,
+    ].filter((p): p is string => p !== null);
+    partialReasons.unshift(`Safety ceiling of ${ceiling.minutes} min reached after ${elapsedMin} min: ${parts.join("; ")}`);
+  }
+
+  const liveFindings = comparison.findings;
+  const summaryStatus = buildingStatus(sections);
+  const status: RunStatus = partialReasons.length > 0 ? "partial" : "succeeded";
+  const partialReason = partialReasons.length > 0 ? partialReasons.join("; ") : null;
+
+  const document: ReportDocument = {
+    version: 1,
+    header: {
+      definitionName: def.name,
+      presetLabel: def.presetLabel,
+      buildingName: def.site.name,
+      stationNames: scope.stations.map((s) => s.name),
+      periodStart: new Date(range.start).toISOString(),
+      periodEnd: new Date(range.end).toISOString(),
+      timezone: tz,
+      windowLabel: WINDOW_LABELS[def.analysisWindow],
+      outdoor: scope.outdoor,
+      generatedAt: now.toISOString(),
+      durationMs: clock() - startedMs,
+      status,
+      partialReason,
+    },
+    inventory: {
+      equipmentTypesFound: equipmentTypesFound(scope.units),
+      classification: classifications(scope.units),
+      requiredPointsFound: requiredFound,
+      requiredPointsTotal: requiredTotal,
+      lowCoverage: [...lowCoverage.entries()].map(([name, coverage]) => ({ name, coverage })).sort((a, b) => a.coverage - b.coverage),
+      notMonitored: results.filter((r) => r.outcome === "not_monitored").map((r) => ({ position: r.position, key: r.key, text: r.text, missing: r.missing })),
+      notApplicable: results.filter((r) => r.outcome === "not_applicable").map((r) => ({ position: r.position, key: r.key, text: r.text, reason: r.reason ?? "" })),
+      occupancy: [...scope.occupancyByStation.values()].map((o) => ({ stationName: o.stationName, kind: o.kind, detail: o.detail })),
+      pointsInScope: scope.points.length,
+      equipmentInScope: scope.units.length,
+    },
+    summary: {
+      status: summaryStatus,
+      questions: results.filter((r) => r.section === "summary"),
+      topFindings: topFindings(liveFindings),
+      counts: comparison.counts,
+      siteVisit: liveFindings.filter((f) => f.fixLocation === "site").map((f) => f.subjectName),
+      remoteFix: liveFindings.filter((f) => f.fixLocation === "remote").map((f) => f.subjectName),
+    },
+    sections,
+    cleared: comparison.cleared,
+    carriedForward: carriedForward(liveFindings),
+    plannerQuestions: [],
+    plannerAnswers,
+    cost: { ...cost, budgetUsd: ceiling.usd, model: modelsUsed(narrator, plannerTally.asked > 0 ? plannerSetup.planner : null) },
+  };
+
+  const rows: Finding[] = [...liveFindings, ...comparison.cleared];
+  return { status, partialReason, document, html: renderReportHtml(document), rows, planner: plannerTally };
+}
+
+/** "claude-opus-5-5, claude-opus-5": the narrator's model and the planner's, when it was asked anything. */
+function modelsUsed(narrator: Narrator | null, planner: ReportPlanner | null): string | null {
+  const models = [narrator?.model, planner?.model].filter((m): m is string => typeof m === "string");
+  return models.length === 0 ? null : [...new Set(models)].join(", ");
+}
+
+/**
+ * The planner's history for the per-question estimate: what planner
+ * questions cost over the most recent runs that asked any, this run
+ * excluded. Every report's runs count - the question mix differs, the
+ * planner and its schema block do not.
+ */
+async function plannerHistory(runId: bigint): Promise<{ askedQuestions: number; costUsd: number }> {
+  const rows = await prisma.basReportRun.findMany({
+    where: { plannerAsked: { gt: 0 }, runId: { not: runId }, finishedAt: { not: null } },
+    orderBy: [{ finishedAt: "desc" }, { runId: "desc" }],
+    take: PLANNER_HISTORY_RUNS,
+    select: { plannerAsked: true, plannerCostUsd: true },
+  });
+  return {
+    askedQuestions: rows.reduce((sum, r) => sum + r.plannerAsked, 0),
+    costUsd: rows.reduce((sum, r) => sum + Number(r.plannerCostUsd), 0),
+  };
+}
+
+function weightedPercent(zones: Array<{ judgedMinutes: number; inBandMinutes: number }>): number | null {
+  const judged = zones.reduce((s, z) => s + z.judgedMinutes, 0);
+  if (judged === 0) return null;
+  return Math.round((zones.reduce((s, z) => s + z.inBandMinutes, 0) / judged) * 1000) / 10;
+}
+
+export { sectionLabel };

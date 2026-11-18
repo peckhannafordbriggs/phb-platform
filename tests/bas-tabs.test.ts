@@ -37,13 +37,15 @@ describe("the tabs are real routes", () => {
    * a given viewer is actually OFFERED is `visibleBasTabs`, covered in
    * tests/bas-settings.test.ts.
    */
-  it("registers Projects, Point Explorer, Analyze, Collection Health and Settings, in that order", () => {
+  it("registers Projects, Point Explorer, Analyze, Reports, Collection Health and Settings, in that order", () => {
     // The Projects tab (component: Dashboard) took the module root on 2026-09-30 and Collection Health
-    // moved to /bas/health, after Analyze. Settings stays last.
+    // moved to /bas/health, after Analyze. Reports joined between the two on
+    // 2026-11-10 (Phase 1). Settings stays last.
     expect(BAS_TABS.map((tab) => tab.href)).toEqual([
       "/bas",
       "/bas/points",
       "/bas/analyze",
+      "/bas/reports",
       "/bas/health",
       "/bas/settings",
     ]);
@@ -51,6 +53,7 @@ describe("the tabs are real routes", () => {
       "Projects",
       "Point Explorer",
       "Analyze",
+      "Reports",
       "Collection Health",
       "Settings",
     ]);
@@ -102,6 +105,7 @@ describe("the tabs are real routes", () => {
     expect(basTab("/bas/health").label).toBe("Collection Health");
     expect(basTab("/bas/points").label).toBe("Point Explorer");
     expect(basTab("/bas/analyze").label).toBe("Analyze");
+    expect(basTab("/bas/reports").label).toBe("Reports");
     expect(() => basTab("/bas/nope")).toThrow();
   });
 });

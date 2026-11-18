@@ -158,6 +158,12 @@ const FP_FIELD_WORDS: Record<string, string> = {
   documentedMethod: "the confirmation method",
 };
 
+/** The uploaded schedule's file name, quoted, for import rows. */
+function fpFile(meta: Record<string, unknown>): string {
+  const file = stringField(meta, "fileName");
+  return file === null ? "an equipment schedule" : `"${file}"`;
+}
+
 /** The unit's name. Rows written before 2026-10-23 called it "tag". */
 function fpUnit(meta: Record<string, unknown>): string {
   return stringField(meta, "name") ?? stringField(meta, "tag") ?? "a unit";
@@ -430,6 +436,159 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     return `${actor} asked Building Automation "${question}"${suffix}`;
   },
 
+  // Reports (Phase 1). The report is named from metadata, never joined: it
+  // may since have been renamed or deleted, and the log says what happened
+  // at the time.
+  "bas.report_created": ({ actor, meta }) =>
+    `${actor} created the report ${stringField(meta, "name") ?? "(unnamed)"}` +
+    `${stringField(meta, "siteName") !== null ? ` for ${stringField(meta, "siteName")}` : ""}`,
+
+  "bas.report_updated": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const previous = stringField(meta, "previousName");
+    return previous !== null && previous !== name
+      ? `${actor} renamed the report ${previous} to ${name}`
+      : `${actor} updated the report ${name}`;
+  },
+
+  "bas.report_deleted": ({ actor, meta }) =>
+    `${actor} deleted the report ${stringField(meta, "name") ?? "(unnamed)"}`,
+
+  // The transition is the sentence: "activated", "paused", "resumed".
+  "bas.report_state_changed": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const to = stringField(meta, "to");
+    const from = stringField(meta, "from");
+    if (to === "paused_owner_disabled") {
+      return `${actor} paused the report ${name} because its owner's account (${stringField(meta, "ownerEmail") ?? "unknown"}) is disabled`;
+    }
+    const verb =
+      to === "active" && from === "paused"
+        ? "resumed"
+        : to === "active"
+          ? "activated"
+          : to === "paused"
+            ? "paused"
+            : `moved to ${to ?? "an unknown state"}`;
+    return `${actor} ${verb} the report ${name}`;
+  },
+
+  "bas.report_questions_changed": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const change = stringField(meta, "change");
+    const count = typeof meta.count === "number" ? meta.count : null;
+    switch (change) {
+      case "added":
+        return `${actor} added a ${stringField(meta, "kind") ?? ""} question to the report ${name}`.replace("  ", " ");
+      case "removed":
+        return `${actor} removed a question from the report ${name}`;
+      case "reordered":
+        return `${actor} reordered the questions on the report ${name}`;
+      case "preset":
+        return `${actor} set the report ${name} to the preset ${stringField(meta, "presetKey") ?? "(none)"}` +
+          `${count !== null ? ` (${count} questions)` : ""}`;
+      // The checklist (2026-11-12): one row per save that changed the set,
+      // with the count and the preset label when the shared part matches one.
+      case "set": {
+        const preset = stringField(meta, "presetKey");
+        return `${actor} set the questions on the report ${name}` +
+          `${count !== null ? ` (${count} question${count === 1 ? "" : "s"}` : ""}` +
+          `${preset !== null ? `${count !== null ? ", " : " ("}${preset}` : ""}` +
+          `${count !== null || preset !== null ? ")" : ""}`;
+      }
+      default:
+        return `${actor} changed the questions on the report ${name}`;
+    }
+  },
+
+  // "outside the company" is said every time it is true: that is the fact
+  // the row exists to record.
+  "bas.report_recipient_added": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const email = stringField(meta, "email") ?? "(address not recorded)";
+    return meta.isExternal === true
+      ? `${actor} added ${email}, an address outside the company, to the report ${name}`
+      : `${actor} added ${email} to the report ${name}`;
+  },
+
+  "bas.report_recipient_removed": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const email = stringField(meta, "email") ?? "(address not recorded)";
+    return meta.isExternal === true
+      ? `${actor} removed ${email}, an address outside the company, from the report ${name}`
+      : `${actor} removed ${email} from the report ${name}`;
+  },
+
+  "bas.personal_question_created": ({ actor, meta }) =>
+    `${actor} saved a question to their library: "${clip(stringField(meta, "text") ?? "", 100)}"`,
+
+  "bas.personal_question_updated": ({ actor, meta }) =>
+    `${actor} edited a question in their library: "${clip(stringField(meta, "text") ?? "", 100)}"`,
+
+  "bas.personal_question_deleted": ({ actor, meta }) =>
+    `${actor} deleted a question from their library: "${clip(stringField(meta, "text") ?? "", 100)}"`,
+
+  "bas.library_question_promoted": ({ actor, meta }) => {
+    const section = stringField(meta, "sectionLabel");
+    return `${actor} added a question to the shared library, answered by the planner${section !== null ? ` under ${section}` : ""}: "${clip(stringField(meta, "text") ?? "", 100)}"`;
+  },
+
+  "bas.report_run_started": ({ actor, meta }) =>
+    `${actor} started a ${stringField(meta, "trigger") ?? "manual"} run of the report ${stringField(meta, "name") ?? "(unnamed)"}`,
+
+  // Queued, not started: the worker starts it. The scheduler names the
+  // period; a person's request is just that.
+  "bas.report_run_requested": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "(unnamed)";
+    if (stringField(meta, "trigger") === "scheduled") {
+      const end = stringField(meta, "periodEnd");
+      return `The scheduler queued a run of the report ${name}${typeof end === "string" ? ` for the period ending ${end.slice(0, 10)}` : ""}`;
+    }
+    return `${actor} queued a run of the report ${name}`;
+  },
+
+  "bas.report_owner_transferred": ({ actor, meta }) =>
+    `${actor} transferred the report ${stringField(meta, "name") ?? "(unnamed)"} to ${stringField(meta, "toEmail") ?? "a new owner"}${meta !== null && typeof meta === "object" && (meta as { resumed?: unknown }).resumed === true ? ", which resumed it" : ""}`,
+
+  // The outcome is the sentence, and a partial run says why.
+  "bas.report_run_finished": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "a report";
+    const status = stringField(meta, "status");
+    const cost = typeof meta.costUsd === "number" ? ` ($${meta.costUsd.toFixed(4)})` : "";
+    if (status === "failed") {
+      return `${actor}: the run of the report ${name} failed - ${stringField(meta, "error") ?? "no error recorded"}`;
+    }
+    if (status === "partial") {
+      return `${actor}: the run of the report ${name} finished partial${cost} - ${stringField(meta, "partialReason") ?? "no reason recorded"}`;
+    }
+    return `${actor}: the run of the report ${name} succeeded${cost}`;
+  },
+
+  "bas.building_occupancy_updated": ({ actor, meta }) =>
+    `${actor} set the occupied hours for the building ${stringField(meta, "name") ?? "(unnamed)"}: ${stringField(meta, "hours") ?? "none"}`,
+
+  // Both halves named every time: the ceiling is one setting with two numbers.
+  "bas.report_ceiling_changed": ({ actor, meta }) => {
+    const words = (value: unknown): string => {
+      const v = value as { usd?: unknown; minutes?: unknown } | null;
+      const usd = typeof v?.usd === "number" ? `$${v.usd.toFixed(2)}` : "?";
+      const minutes = typeof v?.minutes === "number" ? `${v.minutes} minutes` : "?";
+      return `${usd} and ${minutes}`;
+    };
+    return `${actor} set the Reports safety ceiling to ${words(meta.to)} per run (was ${words(meta.from)})`;
+  },
+
+  "bas.report_pdf_retry_requested": ({ actor, meta }) =>
+    `${actor} asked for the PDF of the report ${stringField(meta, "name") ?? "(unnamed)"} to be rendered again`,
+
+  "bas.report_resend_requested": ({ actor, meta }) => {
+    const count = typeof meta.count === "number" ? meta.count : 0;
+    return `${actor} asked for ${count} failed email${count === 1 ? "" : "s"} of the report ${stringField(meta, "name") ?? "(unnamed)"} to be sent again`;
+  },
+
+  "bas.report_send_to_me_requested": ({ actor, meta }) =>
+    `${actor} asked for a copy of the report ${stringField(meta, "name") ?? "(unnamed)"} to be emailed to ${stringField(meta, "email") ?? "them"}`,
+
   // Counts rather than names: a sync can touch every skill, and the sync row
   // in cip_skill_syncs holds the detail.
   "cip.skills_synced": ({ actor, meta }) => {
@@ -596,11 +755,30 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "fp.building_deleted": ({ actor, meta }) =>
     `${actor} removed the building "${stringField(meta, "name") ?? "(unnamed)"}" from ${fpJob(meta)}`,
   "fp.equipment_created": ({ actor, meta }) =>
-    `${actor} added ${fpUnit(meta)} to the ${fpJob(meta)} register`,
+    stringField(meta, "source") === "import"
+      ? `${actor} imported ${fpUnit(meta)} into the ${fpJob(meta)} equipment list from ${fpFile(meta)}`
+      : stringField(meta, "source") === "form"
+        ? `${actor} added ${fpUnit(meta)} to the ${fpJob(meta)} equipment list from the form ${fpFile(meta)}`
+        : `${actor} added ${fpUnit(meta)} to the ${fpJob(meta)} equipment list`,
+  "fp.form_imported": ({ actor, meta }) => {
+    const n = (key: string) => (typeof meta[key] === "number" ? (meta[key] as number) : 0);
+    const parts = [`added ${n("created")} unit${n("created") === 1 ? "" : "s"}`, `filled blanks on ${n("filled")}`];
+    const differences = n("differences");
+    return `${actor} imported a freeze protection form ${fpFile(meta)} into ${fpJob(meta)}: ${parts.join(", ")}${
+      differences > 0 ? `, ${differences} answer${differences === 1 ? "" : "s"} differing from the platform kept as they were` : ""
+    }`;
+  },
+  "fp.schedule_imported": ({ actor, meta }) => {
+    const created = typeof meta.created === "number" ? meta.created : 0;
+    const skipped = Array.isArray(meta.skipped) ? meta.skipped.length : 0;
+    return `${actor} imported ${created} unit${created === 1 ? "" : "s"} into the ${fpJob(meta)} equipment list from ${fpFile(meta)}${
+      skipped > 0 ? `, skipping ${skipped} already there` : ""
+    }`;
+  },
   "fp.equipment_updated": ({ actor, meta }) =>
     `${actor} changed ${fpFields(meta)} of ${fpUnit(meta)} on ${fpJob(meta)}`,
   "fp.equipment_deleted": ({ actor, meta }) =>
-    `${actor} removed ${fpUnit(meta)} and its results from the ${fpJob(meta)} register`,
+    `${actor} removed ${fpUnit(meta)} and its results from the ${fpJob(meta)} equipment list`,
   "fp.verification_created": ({ actor, meta }) =>
     `${actor} started the ${stringField(meta, "verificationDate") ?? "?"} freeze protection verification on ${fpJob(meta)}`,
   "fp.verification_updated": ({ actor, meta }) =>
@@ -852,6 +1030,26 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.equipment_updated": "BAS equipment updated",
   "bas.equipment_deleted": "BAS equipment deleted",
   "bas.question_asked": "BAS question asked",
+  "bas.report_created": "BAS report created",
+  "bas.report_updated": "BAS report updated",
+  "bas.report_deleted": "BAS report deleted",
+  "bas.report_state_changed": "BAS report activated, paused or resumed",
+  "bas.report_questions_changed": "BAS report questions changed",
+  "bas.report_recipient_added": "BAS report recipient added",
+  "bas.report_recipient_removed": "BAS report recipient removed",
+  "bas.personal_question_created": "BAS personal question saved",
+  "bas.personal_question_updated": "BAS personal question edited",
+  "bas.personal_question_deleted": "BAS personal question deleted",
+  "bas.library_question_promoted": "BAS question promoted to the shared library",
+  "bas.report_run_started": "BAS report run started",
+  "bas.report_run_finished": "BAS report run finished",
+  "bas.report_run_requested": "BAS report run queued",
+  "bas.report_owner_transferred": "BAS report owner transferred",
+  "bas.building_occupancy_updated": "BAS building occupied hours set",
+  "bas.report_ceiling_changed": "BAS Reports safety ceiling changed",
+  "bas.report_pdf_retry_requested": "BAS report PDF retried",
+  "bas.report_resend_requested": "BAS report email resent",
+  "bas.report_send_to_me_requested": "BAS report emailed to self",
   "cip.skills_synced": "Cost Intelligence skills synced",
   "cip.projects_synced": "Cost Intelligence projects synced",
   "cip.run_started": "Cost Intelligence run started",
@@ -889,6 +1087,8 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "fp.verification_signed": "Freeze Protection verification signed",
   "fp.verification_unsigned": "Freeze Protection signature removed",
   "fp.result_updated": "Freeze Protection result recorded",
+  "fp.schedule_imported": "Freeze Protection schedule imported",
+  "fp.form_imported": "Freeze Protection form imported",
   "position.created": "Position added",
   "position.updated": "Position renamed or hidden",
   "department.created": "Department added",

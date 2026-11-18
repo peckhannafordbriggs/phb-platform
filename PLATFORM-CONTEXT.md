@@ -162,6 +162,7 @@ page, and a test will check the route resolves.
 | Admin screen and grant toggles | Its own audit action strings |
 | Sidebar rendering | Its own credentials, separate from other modules |
 | Audit log infrastructure | |
+| The UI kit, `components/ui/` (`docs/07-conventions.md` â†’ *UI*) | Its own components, built from the kit |
 
 Credentials are per-module deliberately. A future module must not be able to reach
 another module's external system.
@@ -258,7 +259,7 @@ open a PR, and delete the branch on merge. The prefix says what the change is â€
 `fix/`, `refactor/`, `chore/` or `release/`, with documentation under `chore/`; the full
 list is in `DEVELOPER-SETUP.md`. Nothing goes straight to `main`: the platform is running
 change orders and building-automation collection now, so changes get a second pair of
-eyes. The platform owner reviews and merges.
+eyes. The platform owner (Karthik Rachamolla) reviews and merges.
 
 **CI deploys the whole application.** There is one pipeline and one container. Your
 module ships when the platform ships, and a broken test in your module blocks everyone's

@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CHANGE_ORDERS_MODULE_KEY } from "@/lib/modules/change-orders/constants";
 import { ModuleHeader } from "@/components/module-header";
+import { TabBar } from "@/components/ui";
 import { fetchReviewCount } from "./review-client";
 import { CO_TABS, REVIEW_TAB_HREF, activeTabHref } from "./tabs";
 
@@ -30,7 +30,7 @@ export function CoShell({
   return (
     <>
       <ModuleHeader moduleKey={CHANGE_ORDERS_MODULE_KEY} title="Change Orders" blurb={blurb}>
-        <TabBar />
+        <CoTabBar />
       </ModuleHeader>
       {children}
     </>
@@ -93,43 +93,28 @@ function useReviewCount(): number | null {
 }
 
 /**
- * A bottom-border underline on the active tab, and nothing else - the same
- * markup as the BAS tab bar. The Needs Review label carries the live count in
- * parentheses, as decided: "Needs Review (5)".
+ * The shared kit's tab bar (components/ui/TabBar, 2026-11-10): a bottom-border
+ * underline on the active tab in the module's colour, and nothing else. Which
+ * tab is active is decided here, by longest prefix, because the bar only
+ * draws. The Needs Review label carries the live count in parentheses, as
+ * decided: "Needs Review (5)".
  */
-function TabBar() {
+function CoTabBar() {
   const pathname = usePathname();
   const active = activeTabHref(pathname);
   const count = useReviewCount();
 
   return (
-    <nav aria-label="Change Orders sections" className="mt-3 border-b border-[var(--border)]">
-      <ul className="-mb-px flex gap-1">
-        {CO_TABS.map((tab) => {
-          const isActive = tab.href === active;
-          const label =
-            tab.href === REVIEW_TAB_HREF && count !== null
-              ? `${tab.label} (${count})`
-              : tab.label;
-          return (
-            <li key={tab.href}>
-              <Link
-                href={tab.href}
-                aria-current={isActive ? "page" : undefined}
-                className={
-                  "inline-block border-b-2 px-3 py-2 text-[0.8125rem] transition-colors " +
-                  (isActive
-                    ? "font-medium text-[var(--foreground)]"
-                    : "border-transparent text-[var(--muted)] hover:border-[var(--neutral-300)] hover:text-[var(--foreground)]")
-                }
-                style={isActive ? { borderColor: "var(--module-accent)" } : undefined}
-              >
-                {label}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
+    <TabBar
+      label="Change Orders sections"
+      tabs={CO_TABS.map((tab) => ({
+        href: tab.href,
+        active: tab.href === active,
+        label:
+          tab.href === REVIEW_TAB_HREF && count !== null
+            ? `${tab.label} (${count})`
+            : tab.label,
+      }))}
+    />
   );
 }

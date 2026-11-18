@@ -117,7 +117,89 @@ export type BasErrorCode =
    * equipment: there is no building to look the equipment up on. Attach the
    * station first. 409.
    */
-  | "station_unassigned";
+  | "station_unassigned"
+  // --- Reports (Phase 1) ---
+  /**
+   * No such report, or one this employee may not see. Owner or module admin
+   * sees it; everyone else gets this, which the route renders as 404 - the
+   * same conflation as every other not-found here, and the one the plan
+   * asks for by name.
+   */
+  | "report_not_found"
+  /** A station in the subset is on a different building from the report. 409. */
+  | "station_other_building"
+  /** A schedule that can never fire, or carries a value outside its range. 422. */
+  | "invalid_schedule"
+  /** Activation refused: no questions, or a schedule that cannot be read. 409. */
+  | "report_not_ready"
+  /** The action does not apply in the report's current state. 409. */
+  | "invalid_state"
+  /** The same library or personal question twice in one report's selection. 409. */
+  | "question_exists"
+  | "library_question_not_found"
+  /** In the library, but turned off by a module admin. 409. */
+  | "library_question_disabled"
+  /** A personal question that is not the viewer's. 404. */
+  | "personal_question_not_found"
+  /**
+   * A personal question is the owner's alone: it goes on the owner's own
+   * reports and nobody else's, so an admin working on another person's
+   * report types the question in instead. 409.
+   */
+  | "personal_question_not_owner"
+  /** Still on a report. Refused, never cascaded. 409. */
+  | "personal_question_in_use"
+  /**
+   * A promotion named an equipment type or a point role the vocabulary
+   * does not have (Reports, Phase 6). 422.
+   */
+  | "unknown_vocabulary_key"
+  /**
+   * The owner's address. The owner is always a recipient and never a row,
+   * so it can be neither added nor removed. 409.
+   */
+  | "owner_is_recipient"
+  | "recipient_exists"
+  | "recipient_not_found"
+  /**
+   * An address outside the company, sent without `confirmed: true`. The
+   * client shows the warning and sends again. 409: well-formed, needs a
+   * second deliberate step.
+   */
+  | "external_unconfirmed"
+  /**
+   * The report has runs (Phase 2), which are kept indefinitely. Pause it
+   * instead; deleting would take its history with it. 409.
+   */
+  | "report_has_runs"
+  /**
+   * Run now was asked for while a run of the same report is queued or
+   * running (Phase 3). One in flight per report: the worker would otherwise
+   * produce two reports for the same period, and the second would mark the
+   * first's findings still open an hour after they were new.
+   */
+  | "run_in_flight"
+  /** A module-admin action asked for by a plain owner: transferring a report, or the safety ceiling (2026-11-12). */
+  | "admin_required"
+  /** A new owner who is not an active employee with the BAS grant, or is the owner already. */
+  | "owner_not_eligible"
+  /** A run that does not exist, or whose report the viewer may not see. 404. */
+  | "run_not_found"
+  /**
+   * The run is visible but has no PDF to download (Phase 4): the render is
+   * queued or in progress, it failed (the message says so and offers Retry
+   * PDF), or the run is from before PDFs existed. 409: the run is real, the
+   * file is not - a 404 here would read as "no such run".
+   */
+  | "pdf_not_available"
+  /** Retry PDF asked for on a run whose PDF is not failed: ready, queued, or never rendered. 409. */
+  | "pdf_not_retryable"
+  /** Resend asked for on a run with no failed delivery (Phase 4, email). 409: Resend re-queues failed rows only. */
+  | "nothing_to_resend"
+  /** Send to me on a run that has not finished, or finished failed: there is no report to send. 409. */
+  | "run_not_sendable"
+  /** Send to me while a copy to the same address is already waiting for the worker. 409. */
+  | "delivery_pending";
 
 export class BasError extends Error {
   constructor(

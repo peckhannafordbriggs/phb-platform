@@ -13,7 +13,9 @@ multiple internal systems as modules, admin-controlled access per employee.
 Microsoft 365 mailbox and automation pipeline that already works. We are building
 *around* that system, not rebuilding it. **BAS** (building automation) is module
 #2. **Cost Intelligence** is module #3, in progress, built by Karthik
-(`krachamolla@phb1899.com`) in this repository.
+(`krachamolla@phb1899.com`) in this repository. **Freeze Protection**
+(`freeze-protection`) is module #5, built by Karthik: each job's equipment
+schedule and its one freeze protection verification.
 
 Two people now work in this repo. `DEVELOPER-SETUP.md` is how a new developer
 gets running; `PLATFORM-CONTEXT.md` is the contract a new module satisfies.
@@ -81,6 +83,8 @@ it is mail for this purpose.
 **Bootstrap admins come from `BOOTSTRAP_ADMIN_EMAIL`** (comma-separated), applied by the
 seed, never by a migration. Migrations contain no email addresses. See
 `docs/05-database-and-sources.md` for what belongs in a migration versus a seed.
+
+**A new `bas_*` table needs a line in `setup-bas-analyze-role.sql` and a production re-run of it** — CI enforces the line (`tests/bas-analyze-grant-guard.test.ts`), nothing can enforce the re-run (`runbook.md` → *Re-run after a migration*).
 
 ---
 
@@ -167,6 +171,18 @@ that mocked transports agreed with:
   out as two query parameters and Graph answered `400 BadRequest` - for a real project
   name - from the day search shipped until 2026-10-21. Every filter now goes through
   `filterParam` in the mail service; nothing else in the module builds a query string
+- `hasAttachments` is **false** on a message whose only attachments are inline images
+  (the mail filter's banner icons, a pasted screenshot). Anything that reads the
+  attachments only when Exchange says there are some never finds the pictures a body
+  references by `cid:`
+- `contentId` is on the `fileAttachment` subtype: `$select=contentId` on the attachments
+  collection fails the whole request with 400, and so does casting the collection. The
+  form Graph answers is `$select=…,microsoft.graph.fileAttachment/contentId`. Exchange
+  gives ordinary attachments a Content-ID too, so having one does not mean inline
+- The sandboxed reading pane sends **no session cookie** with the images it loads: its
+  origin is opaque, so a `SameSite=Lax` cookie stays home (`Sec-Fetch-Site: cross-site`,
+  measured in Chrome and Edge, 2026-11-12). A cookie-gated image route answers 401 to
+  every picture, silently, inside the frame
 
 Fixtures are right for hostile-HTML tests and error mapping. Anything about Graph's
 actual behaviour needs the real mailbox.
@@ -394,10 +410,11 @@ competing content, and a vendor's own email is competing content. See
 `WHY-ITS-BUILT-THIS-WAY.md` §§ 38–39, `docs/DESIGN-BRIEF.md`, and the token
 comments in `app/globals.css`, which are the authority on any colour value.
 
-**Phase 12 Parts A and B complete. Part C onward not started.** The change-order
-engine — `run_workflow.py`, ~196 KB, which had no version control at all — is
-now a repository, `phb-co-engine`, with the first commit verified byte-identical
-to the SharePoint copy. `docs/12-ai-layer-inventory.md` is the inventory every
+**Phase 12 Parts A, B, C and D complete — Part D's six steps landed
+2026-10-28/29; Part E not started.** The change-order engine —
+`run_workflow.py`, ~196 KB, which had no version control at all — is now a
+repository, `phb-co-engine`, with the first commit verified byte-identical to
+the SharePoint copy. `docs/12-ai-layer-inventory.md` is the inventory every
 later part depends on, and it distinguishes what was observed from what was
 inferred.
 
@@ -412,77 +429,138 @@ Two findings from it that change what a later part may assume:
   tree is, and its cost was serialisation rather than volume. Measured, fixed,
   and recorded in `runbook.md` → *The Change Orders screen feels slow*.
 
-Part B extracted one file-access interface with two implementations.
-`GraphFileStore` is written and **has never issued an HTTP request** — its open
-questions are marked `GRAPH-TODO` in place.
+**Part C, complete.** The engine is containerised and reaches SharePoint
+through `GraphFileStore` as its own app registration — `Sites.Selected`,
+granted Write on the AI Sandbox site only, with a federated credential that
+names the platform's production identity, so it authenticates only from
+inside Azure and holds no secret. The store is confined to the root it is
+given and refuses `CO Managment Process` by name at every call and at
+construction, before any token is fetched. The two-store comparison
+(`tests/compare_stores.py`, one container, both halves on the same inputs,
+the Part E equivalence definition as the bar) reached **eight of eight
+EQUIVALENT on the fifth run, `20261028-155543`**, both halves reading the
+same intake for every two-intake CO. It took five runs, and the four before
+it failed in the instrument or the engine and never in the store: inputs
+byte-checked where SharePoint rewrites workbooks (run 1); the instrument's
+own report directory outside the engine's jail (run 2); the job never
+updated to the fixed image, and then one `os.path.getmtime` the Part B
+guard could not see because a key function is a reference, not a call (run
+3); the local tree's back-to-back mtimes tying on the job's kernel so the two
+halves read different intakes (run 4). **`docs/phase-12-part-c-verification.md`
+is the record** — the bar, the five runs, what the result proves, what it
+does not (no PDF rendering in the image, the later gates, flow triggering,
+concurrency, speed at volume: the Graph half is about twenty times slower per
+CO), and what was kept and deleted; `docs/phase-12-part-c-plan.md` is the
+reasoning run by run. Two guards later parts inherit: the file-access scan
+in `phb-co-engine` reads references with aliases resolved, and
+`tests/test_no_fs_bypass_runtime.py` replays the fixture COs with the engine
+forbidden to touch its tree. The job and the scratch copy were deleted on
+2026-10-28; the verification record says how to recreate both.
 
-**Part C is underway, and it is far less blocked than `docs/PHASE-12.md`
-implies.** That doc says Part C needs `Sites.Selected`; read literally it
-blocks the whole part on a request to Vitis, and it does not — that permission
-gates talking to one SharePoint site with an *application* identity, which is
-the last step, not the first. The engine is containerised, and running the Part
-B differential inside it settled three things Part B could only infer: the
-engine runs on **Linux** with all eight COs still equivalent; the `NEWLINE`
-prediction holds; and the `Z`-suffixed timestamps are measured — the laptop
-emits local time labelled UTC, the container emits real UTC, so the same event
-stamps four to five hours later after cutover, in three fields, two of which
-are inside `scrub_result.json` and `vendor_drafts.json`.
+**The two before-cutover items, both decided yes and both CLOSED on
+2026-10-28 (the plan doc's *Before cutover* sections):**
 
-That run also found a defect in the differ itself: `normalize_text` erases line
-endings **and** timestamps, so a timestamp-only difference was reported as
-*"differs only in line endings"* — in a file with no CR byte. Fixed, with the
-classes split, because Part E is nothing but weeks of difference
-classification. `docs/phase-12-part-c-plan.md` is the reasoning and the
-blocked/not-blocked split; do not re-derive it from `PHASE-12.md` alone.
+1. **The intake-selection rule — done, in the repository** (merged).
+   `_find_intake_json` takes the newest `intake_*.json` by the creation time
+   Gate A stamped into its name, reading the store's mtime only for a legacy
+   `intake.json` or a tie, the exact name last; eleven tests, differential
+   still eight of eight. A read-only survey of the live tree found no folder
+   where name order and either clock disagree, so no current outcome changes.
+   **The laptop's engine keeps the old rule until cutover**, by decision;
+   it is item 1.1 of the cutover checklist, `docs/PHASE-14.md`.
+2. **The flow-trigger check — PASSED, two samples.** A throwaway flow in the
+   owner's account on SharePoint's *When a file is created (properties
+   only)* fired for both files the engine's identity wrote through Graph by
+   the engine's two sentinel shapes (one PUT; PUT then rename), under their
+   final names both times, no `.tmp` ever seen; the job logs and the four
+   Graph items name `phb-co-engine` as creator. Phase 14 is no longer gated
+   on it. The job, the folder and the flow are deleted.
 
-**Step 7 status (2026-10-14).** `Sites.Selected` is **consented** on
-`phb-co-engine` (read live from Entra), the app has **no credential of any
-kind** and no public-client flow, and the **site grant cannot be verified from
-this account** — the site's principal list shows no entry for the app, which
-is consistent with the grant not having been made. Step 5 ran for the first
-time, half of it: writes, `create_exclusive`'s real 409, and path addressing
-hold on the real library; every content read fails because SharePoint refuses
-the Azure CLI's token for content transfer, which the harness now diagnoses
-first. `phb-co-engine/tests/probe_site_grant.py` is the instrument for the
-grant once anything can authenticate as the app. The plan doc's *Step 7*
-section has the three routes and the identifiers. **2026-10-21:** the
-federated credential landed and names the **platform's production
-identity**, so the app authenticates only from inside Azure; the engine
-gained `--graph-auth federated` (the platform's assertion exchange in
-Python, reading the container app's identity endpoint rather than IMDS), the
-image `phb-co-engine:step7` is in the production registry, and the probe and
-harness are packaged as a one-off Container Apps job, created and run by
-the owner the same day: **probe exit 0, the site grant present and Write,
-15 of 16 conformance checks passing as the app** — every `GRAPH-TODO`
-exercised on the real library by the real identity. The 16th was the
-check's own premise (it named `@microsoft.graph.downloadUrl` in `$select`,
-which Graph ignores; it now tests a read). The app also carries a 2029
-certificate from Vitis's PnP tooling; keeping it is an open decision
-recorded in the plan doc and `runbook.md`. **Later on 2026-10-21:** the
-owner chose a **sibling folder in AI Sandbox** for the copy over the plan
-doc's second-site recommendation, and two guards in `GraphFileStore` make
-the fence incapacity rather than configuration — the store is confined to
-the root it is given, and refuses `CO Managment Process` by name at every
-call and at construction, before any token is fetched. 14 offline tests
-including the real engine as a subprocess pointed where the laptop points;
-mutation run; the Part B differential re-run, eight of eight equivalent.
-The copy is built at `/phb-co-engine scratch/part-c-copy-2026-10-21`
-(eight COs' replay inputs, real data by decision, nothing a flow writes),
-the comparison is packaged as `tests/compare_stores.py` and image
-`phb-co-engine:part-c-compare`, and **running the job is the owner's
-action.** The first run failed before comparing anything: SharePoint
-rewrote 7 of the 8 uploaded workbooks (4 with no size change), so Office
-inputs now verify by the differ's structural fingerprint; and a folder
-create answered 400 with the body dropped, so every store error now
-carries Graph's code and request id and `makedirs` looks again before
-failing. The second run's inputs verified, but the Graph engine never ran: the
-instrument put the report directory beside `CMP` while the jail root was
-`CMP`, the engine refused in one second eight times, and the instrument
-printed only `rc=1`. Layout fixed and held inside the jail by test, any
-non-zero engine exit now quotes its stderr. Image `part-c-compare-3`; the
-third run has not happened. The twelfth-flow question is deferred by the
-owner and is a **required step before Phase 14** — the plan doc's *Before
-cutover* section has the evidence in hand and the two ways to close it.
+**Part D, complete 2026-10-29 — the classifier is code with four model
+judgments.** `phb-co-engine/AI Files/CO Intake Engine/co_classifier/` does
+what the laptop's `co-response-classifier` Cowork task does, and the
+inventory's claim held: the intake engine makes no model call and the
+classifier is the only judgment. What A2 did not say and D1 found: most of
+the classifier's task is a rule the spec states outright (the pm_thread
+first-check, the conversation-id lookup, the duplicate CO Key refusal, the
+received-count derivation, the rename target, the note template) and is
+now tested Python; four judgments go to `claude-opus-5-5` — bid leader on
+ambiguity, classification, Q&A extraction, CO match by body inference —
+each behind a switch (`CO_CLASSIFIER_MODEL_STEPS`), each through one client
+that reads **`CO_ANTHROPIC_API_KEY` only**, sends one turn with structured
+output and no tools, validates the answer against a closed schema and then
+against the candidates code supplied, and logs metadata and never the
+email. **A judgment may always decline**, and every decline is
+`needs_human` through the existing Flow 2 route. Measured, not argued: the
+laptop's twenty live answers were captured read-only as fixtures and every
+step was replayed three times against them under
+`docs/phase-12-part-e-equivalence.md`'s bars — 15 of 17 matches equivalent,
+every item the laptop declined declined by the container too, **no STOP row
+ever**, no instability with all four judgments on. Three things the owner
+decided on the way are **named divergences** from the laptop, recorded in
+the equivalence doc and carried to the live spec at cutover: a
+`@phb1899.com` sender in a vendor thread is never a vendor reply (code,
+before the model; forwarded vendor content goes to a person); one Q&A entry
+per commitment, not per email; `answers_note` for an answer to a
+scope-request note. Two things the first real call found that no fixture
+could: the structured-output grammar refuses `minimum` and `maxItems` (the
+request carries a stripped copy of the schema, our validator keeps the
+full one), and a toy prompt was refused under `reasoning_extraction` while
+the real one was not. The archive sweep runs through the store with a
+differential against the shipped script; the response-side scripts ride in
+the image by name; the job spec is `infra/classify-job.yaml.template`,
+Manual trigger, the key as a Key Vault reference under the platform's
+identity — **`coAnthropicApiKeyInKeyVault` stays false**, because the web
+app never reads it. Both Anthropic keys are **personal keys linked to Jim**,
+kept that way by the owner's decision of 2026-10-29 as an accepted risk:
+the day Jim leaves the organization, Anthropic archives his keys and both
+the Analyze tab and the classifier stop at the next call (`docs/PHASE-14.md`
+item 0.6; `runbook.md` → *Both Anthropic keys fail at once*). The repo's `render_qa_pdf.py` differs
+from the live script (item 1.12). `docs/phase-12-part-d-verification.md` is
+the record, D0 through D6; `runbook.md` → *Running a classifier pass, and
+reading its summary and log*; `WHY-ITS-BUILT-THIS-WAY.md` § 75.
+
+**Part E — built, waiting on one grant (2026-10-30).** The plan was approved
+on 2026-10-29 (`docs/phase-12-part-e-plan.md`, § 14 the owner's eight
+decisions, § 15 the dates) and every delivery item that does not need the
+reader's grant was built the same day and the next, in `phb-co-engine`
+(`co_shadow/`: the read-only reader - GET only by construction, its own
+app registration, the live folder named in one module; the capture renamed
+by role with attachment bytes never read; the batch, the pairing and strip
+rules, the feed, the collector with the Part E scorer lifted unchanged into
+the package, the report and `WINDOW.md`, the STOP file the feed refuses to
+run past; the intake replay as an instrument beside the differ, with the
+state-prefix rule) and in this repository (three jobs behind
+`enableCoShadow` in the template, two identities, one secret; `runbook.md`
+→ *The change-order shadow run*). **The one external dependency is Request
+6**, the reader app registration with Read on the live folder, sent
+2026-10-29. The window starts the business day after it lands; the floor
+is **ten laptop weekdays** after the first clean batch, by decision, and
+the exit is path coverage. `docs/phase-12-part-e-verification.md` is the
+record, to be filled week by week; `WHY-ITS-BUILT-THIS-WAY.md` § 76.
+
+**Two findings from cutover prep, 2026-11-02, both true today.** (1) The
+`phb-co-engine` image never carried `infra/`: the three shadow jobs in the
+Bicep run `sh /app/infra/<script>` and every one would have failed on its
+first line. Fixed in `phb-co-engine` (the Dockerfile copies `infra/*.sh`,
+the image's own check asserts them, the image test holds it); **the shadow
+image must be built from a checkout with that fix** — `runbook.md` → *The
+change-order shadow run*, step 3, and the symptom entry beside it. (2)
+`render_xlsx_to_pdf` has no caller, in the laptop's engine or the
+repository's, so the intake engine renders no PDF on either side and
+LibreOffice changes nothing it writes; cutover item 1.7's premise is
+corrected in `docs/PHASE-14.md`, `docs/12-ai-layer-inventory.md` § 3c and
+`docs/phase-12-part-c-verification.md`.
+
+**Part C therefore has nothing left that gates Phase 14.** The one item it
+left open, the `PnP.Powershell` certificate on the `phb-co-engine` app
+registration, was **decided on 2026-11-02: it stays**, an accepted exposure
+(`runbook.md` → *Decision — the `PnP.Powershell` certificate on
+`phb-co-engine` stays*; `docs/PHASE-14.md` 6.1). **Everything any document
+says must happen at, before or after cutover is gathered in one place,
+`docs/PHASE-14.md`, each item with its source** — the cutover diff, the
+prompts' change of authority, the schedule, rollback, and where the
+documents disagree. Add to it only from a source document.
 
 **The BAS collector's first sync takes everything, and every pass checks that
 it did (2026-09-17).** The first sync of PHBoffice reported 28/28 points ok with
@@ -1150,6 +1228,51 @@ trees for a bare `new Anthropic(`. The Python engine must pass `api_key=`
 explicitly for the same reason. `WHY-ITS-BUILT-THIS-WAY.md` § 68;
 `runbook.md` → *The Change Orders Anthropic key, the same way*.
 
+**Freeze Protection has its own Anthropic key (2026-11-04).**
+`FP_ANTHROPIC_API_KEY`, a third key, read only by the equipment schedule import
+(`lib/modules/freeze-protection/import/`). Name in `lib/env.ts`
+(`FP_ANTHROPIC_API_KEY_VAR`), reader `readFreezeProtectionAnthropicEnv`, Key
+Vault `FP-ANTHROPIC-API-KEY` behind `fpAnthropicApiKeyInKeyVault`, on the web
+container app only. Same rule as Change Orders: every client passes `apiKey`,
+never a fallback; `tests/fp-anthropic-key.test.ts` holds it. The import reads PDFs with
+`pdfjs-dist` (Apache-2.0), listed in `serverExternalPackages`.
+`runbook.md` → *The equipment schedule import*.
+
+**Template drift found and reconciled (2026-11-11).** The first what-if since
+the 22 October template deployment showed the live app losing the FP key's
+secret and variable, gaining the three Needs Review variables blank, and its
+probes going from `tcpSocket` back to `httpGet /api/health`. The template was
+right on all three: the FP reference was put on the live app by hand on 4-5
+November (Karthik, then the owner renaming it) under the runbook's own steps,
+and the parameters-file step was missed; the Needs Review three stay blank by
+decision, because the registration (client id in `HANDOVER.md`) has no
+federated credential yet; the probes were retyped in the portal, and the
+route is on `main`, in the live image and answered 200 live. **A by-hand
+change to the container app is drift until the parameters file says the same
+thing.** Also found: the owner's parameters file carried a stale
+`cipWorkerImage` - `infra/README.md` → *Deploy* now reads every running image
+and passes it on the command line - and with `enableDbBackup` true before the
+backup exists, what-if fails on `roleAssignments/write` before it lists
+anything. `runbook.md` → *A template what-if shows the container app losing a
+secret, gaining blank variables, or changing its probes*; guards in
+`tests/deploy-guards.test.ts`.
+
+**Template drift, second instance: the app's scale (2026-11-12).** A
+read-only what-if the next day showed the live app at `minReplicas` 1 with an
+`http-scaler` rule (10 concurrent requests) the template did not declare; a
+deployment would have reverted both. The activity log puts the change in one
+of Karthik's two by-hand `PATCH`es on 2026-11-12 (15:03 or 18:52 UTC); the
+log carries no body and the revisions between are pruned, so which one is
+not recorded. The template now declares the app's scale in full -
+`appMinReplicas` (0), `appMaxReplicas` (3), `appHttpConcurrentRequests`
+(10) and the rule - in place of the old `minReplicas` / `maxReplicas`
+parameters, the example file carries the three, and the parameters file is
+where the live values (1 and 10) go. **What-if must show no Delete lines
+and no scale changes under the app; if it does, reconcile first**
+(`infra/README.md` → *Deploy*). Always-on costs about $10 a month at this
+container size (`runbook.md` → *Keeping one replica warm*); whether it is
+intended is the owner's to confirm with Jim.
+
 **Needs Review, Phase 1 - visibility, read-only (2026-10-21).** The Change
 Orders module has a tab bar on the BAS pattern (`app/(modules)/change-orders/tabs.ts`,
 `co-shell.tsx`): *Mailbox* at `/change-orders` and *Needs Review* at
@@ -1307,6 +1430,369 @@ and the managed identity in production; tests clear `KB_EMBEDDING_*` and never
 reach Azure. **Search is hybrid (2026-11-10)**: keyword and vector results merged by reciprocal rank, a 0.3 similarity floor, and a stated fallback to words when embeddings are unavailable; `npm run kb:eval` compares the two modes. **Answers and shared history are built (2026-11-11)**: Claude Haiku re-sorts the top 30, Claude Sonnet answers from what it kept with every statement cited, checked by `finishAnswer`, saved to the history; the KB's own key `KB_ANTHROPIC_API_KEY` (Key Vault `KB-ANTHROPIC-API-KEY`, `kbAnthropicApiKeyInKeyVault`), never a fallback to the other two. The answer rules are a first version. *Report a wrong answer* and the module admins' queue on `/knowledge-base/admin` are built (`reports.ts`, audited). Access requests KB-1 to KB-4 approved; the Azure OpenAI deployment (KB-2) exists on Foundry as of 2026-11-10, and the managed identity's role on it is not yet verified. `docs/KB-P0-P1.md`; `runbook.md` ->
 *Knowledge Base*.
 
+**Reports, Phase 1 - the tab, the library and the schedule; nothing runs
+(2026-11-10, PR #109).** A *Reports* tab in the BAS module between Analyze
+and Collection Health, four sub-tabs (Reports, Generated, Usage, Library),
+six `bas_*` tables (`add_bas_reports`), the spec's twenty questions
+(`docs/BAS Health Report Build Spec.md`, Jim, 27 October) seeded as the
+shared library with their sections, applies-to types and required roles,
+two locked presets as data (`health_weekly`, `health_daily`), definitions
+with questions, a schedule as a local time of day in the building's zone
+(`next_run_at` derived, never a day added to an instant, tested across the
+November change), recipients and a stored budget. **The owner is never a
+recipient row**: the sender adds the owner at send time and the API refuses
+the owner's address both ways. An address outside `phb1899.com` is refused
+until confirmed, and the audit row says `isExternal`. **Five of the six
+tables are platform configuration, not building data**: excluded from
+`bas_v_data_dictionary`, withheld from `bas_analyze` and `bas_collector`,
+not moved by the Azure migration script; `bas_site_occupancy` is building
+data and visible to all three. `WHY-ITS-BUILT-THIS-WAY.md` § 77;
+`runbook.md` → *Reports (Phase 1)*; `docs/bas-reports-tab-plan.md`.
+
+**Reports, Phase 2 - the engine core, proven on the office and the lab
+(2026-11-10).** `lib/modules/bas/reports/engine/` turns a definition and a
+period end into a stored run: scope (site → stations → equipment → points
+with roles), per-point coverage in SQL, the occupancy source per station
+(a trended `occupancy_status` point, else `occupancy_cmd`, else the
+building's occupied hours from the new Settings field, else none - and the
+report says which), Jim's Step 1 classification, Not Applicable (no unit
+of the type) against Not Monitored (the missing roles named, a shortfall
+labelled *(coverage N%)*), four analyses - Data Health (q20: offline,
+stale, flat by the plausibility thresholds, outside the physical range),
+zone comfort (q03/q04), overrides (q05, `occupancy_override`, the one
+override role the vocabulary has), run outside schedule (q19) - as pure
+functions over sample-and-hold series under the spec's persistence rule,
+fingerprints `sha256(question|subject|issue)` for New / Still open /
+Cleared and the carry-forward, a status roll-up that NA and NM never touch,
+one `claude-opus-5-5` call per rendered section writing ONLY the status
+sentence and each finding's likely cause and next check in the `docs/11`
+voice, estimated before each call and stopped at `budget_usd` (partial,
+with the reason), and a server-rendered React template that is both the
+Generated sub-tab's page and the standalone HTML stored on the run. **Code
+computes, the model narrates**: every number on the page is read from a
+finding and never from prose, and every point Data Health flags is
+withheld from every equipment question. Two tables, `bas_report_runs` and
+`bas_report_findings`, both platform-side and in every gated list;
+`bas_analyze` cannot read them. `npm run bas:report:run -- --definition
+<id> --period-end <iso>` is the only trigger: no scheduler, worker, PDF or
+email (Phases 3 and 4), and Q6-Q18 are decided but not analysed (Phase 5).
+**Measured on the office and the lab, not argued**: the office run stores
+one finding (VAV-8's zone temperature flat at 70.5 °F, under Data Health
+only), the hydronic sections Not Applicable, fourteen questions Not
+Monitored naming airflow, setpoint, compressor and fan-status roles, and a
+second run marks it still open; the lab run puts `points_RoomT` (-40 °F)
+under Data Health only. Each cost under a cent. Found on the way, now a
+rule: the office's damper and static points declare a 900 s interval and
+log on change (1,454 readings a week, one 47-hour silence), so **a point
+with more readings than its interval allows is change-of-value everywhere**
+(`COV_LIKE_FACTOR`) and its silences are held values, not holes.
+`docs/bas-reports-phase-2-verification.md` is the record;
+`WHY-ITS-BUILT-THIS-WAY.md` §§ 78-79; `runbook.md` → *Reports (Phase 2)*.
+
+**Reports, Phase 3 - the jobs (2026-11-12, built, not yet turned on).**
+Reports run unattended: a scheduler pass (`scripts/bas-reports-scheduler.ts`)
+queues ONE run for every active definition whose `next_run_at` has passed
+and advances it in the same locked transaction - missed ticks collapse into
+one run for the latest occurrence, never a backfill - and pauses reports
+whose owner is disabled as `paused_owner_disabled` with the reason on the
+row; a module admin's owner transfer (new: service, route, editor control)
+resumes them. A worker (`scripts/bas-reports-worker.ts`) claims runs with
+`FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the engine and
+drains the queue; a stalled run is reclaimed once (`attempts`) and failed
+with a clear error the second time. **The run row comes first**: the engine
+is `enqueueRun` + claim + `executeQueuedRun`, and the dev script is the
+three in one call, so there is one execution path. Two caps: `budget_usd`
+and the new `max_minutes` (1-25, default 20), a deadline read before every
+question and narrative call; past it the run finishes partial naming the
+cap and what was skipped. *Run now* on Scheduled, owner or admin, one in
+flight per report. Infrastructure behind `enableBasReports`: two Container
+Apps Jobs from `Dockerfile.bas-reports` (`bas-reports:<sha>`, built by
+`deploy.yml`), the scheduler on `*/15 * * * *` UTC, the worker on a
+PostgreSQL scaler, two executions at most, 30-minute timeout, **no new role
+assignment**; the worker runs under tsx, not a compiled build
+(`WHY-ITS-BUILT-THIS-WAY.md` § 80). `tests/bas-reports-jobs.test.ts` drives
+every rule above against the real test database, both scripts included as
+child processes. `runbook.md` → *Reports: turning the jobs on* has the
+parameter lines and the order of commands; *Reports: a run is stuck or
+failed*; *Reports: the safety ceiling* (*what the caps do* until 2026-11-12). **First production deployment
+2026-11-11: failed on the scheduler job's name** - `-bas-reports-scheduler`
+made it 34 characters against Azure's cap of 32 - after the worker job and
+the app revision had gone through. The scheduler is
+`${baseName}-bas-reports-sched` from that day, the worker keeps its name
+because it exists, nothing in Azure is deleted before the redeploy, and a
+deploy guard now computes every app and job name with the production
+values and holds each to the rule. `runbook.md` → *A template deployment
+fails with `ContainerAppInvalidName`*. **Then every worker execution failed
+at startup** on `ALLOWED_EMAIL_DOMAINS`: the script imported one function
+from `lib/env.ts`, which parses the web app's whole boot schema on import.
+The jobs now read their few variables through
+`lib/modules/bas/reports/job-env.ts`, the names come from the
+side-effect-free `lib/env-names.ts` (re-exported by `lib/env.ts`), and
+**nothing a job runs may import `lib/env.ts`** -
+`tests/bas-reports-jobs-env.test.ts` walks each script's import graph,
+holds the template's env lists to the readers, and boots each script from
+an empty directory with only the template's variables. No template change.
+`runbook.md` → *Reports: a job execution fails at startup naming a web-app
+variable*.
+
+**Pictures in a message body are shown, and a hidden preheader stays hidden
+(2026-11-12).** Reported as *"emails with pictures show blank gaps"* with
+Josh Bittner's `RFI 310` reply of 5 November as the example; the live
+mailbox showed two causes, and the example had only the second. (1) `cid:`
+images were counted and placeholdered, never fetched: 10 of the 35 messages
+since mid-October carry them - the mail filter's banner icons on every
+inbound message, pasted screenshots on internal replies. Now the message
+route resolves each Content-ID among the message's attachments (read
+whenever the body contains `cid:`, because `hasAttachments` is false for
+inline-only messages) and writes the platform's own **signed link** in place
+of the src: one message, one attachment, an hour, HMAC under a key derived
+from `AUTH_SECRET`. `GET …/messages/{id}/inline-images/{attachmentId}` is
+the one mail route not behind `withMailbox`, by measurement rather than
+choice - the sandboxed pane's opaque origin sends no session cookie - and
+it decides the type from the bytes (raster only, SVG refused), answers
+inline with `nosniff` and `no-store`, and consults no session. The pane's
+CSP names the platform's origin and the message routes' path, since
+`'self'` is nothing to an opaque origin. Neither `allow-same-origin` nor
+`data:` inlining, for the reasons in `WHY-ITS-BUILT-THIS-WAY.md` § 82. (2)
+Josh's reply has no images: the mail filter's hidden preheader `<div>`
+(`display:none; max-height:0; overflow:hidden; max-width:0; font-size:1px`)
+lost its hiding declarations to the style allowlist and kept `max-width:0`,
+so two hundred characters of 1px white text wrapped one per line and pushed
+the message a few hundred pixels down. `display` (flow values only),
+`visibility`, `overflow` and `max-height` are allowed now; `opacity` still
+is not. A relative `<img src>` from a vendor is removed, so the only
+same-origin request a body can cause is one the service wrote. `runbook.md`
+→ *Images in a message body*, *A message opens on a blank screen*.
+**Reports - the questions checklist, one safety ceiling, and a Usage page
+that reads the database (2026-11-12).** The editor's Questions section
+keeps its three tabs - *Standard weekly* / *Daily critical-site* / *Custom*
+- and each tab is a checklist over ONE selection: a preset's tab lists its
+questions with boxes and its own *Select all* and *Clear* (that tab's
+questions only), Daily's ticks are Standard's, switching tabs changes
+nothing, My questions have boxes on *Custom*, and a custom question is
+typed in with a *save for reuse* tick; the count and *Show selected* at the
+right of the tab row are the whole set. **Nothing is locked**: the
+selection is saved whole with the report, stored shared-then-mine-then-
+typed, and `preset_key` is a label kept only while the shared part still
+matches the preset (custom questions do not count against it). The
+per-report budget and time cap are **gone** - columns dropped, editor
+section removed, `400 limits_removed` to a client still sending them - in
+favour of **one module safety ceiling**, `bas_report_settings` ($10.00 and
+25 minutes per run by default), edited by module admins from the bottom of
+the Usage page and read by the engine for every run; a run that reaches
+either half finishes partial and says so. The Usage page was a Phase 1
+placeholder that said *There have been no runs* without asking; it now
+reads `bas_report_runs` on the shared usage components
+(`components/ui/Usage.tsx`, promoted from Cost Intelligence), and is also
+*Settings → Usage*: Settings now swaps the module bar for a bar of its own
+exactly as Reports does - *Back · General · Usage* - with both bars data
+on one shared sub-bar shape (`app/(modules)/bas/sub-bar.ts`). Same day: the tinted ground stopped 4rem short on
+any page shorter than the window (`min-height: 100%` under border-box on an
+element bleeding into `<main>`'s padding); it is content-box now and a
+guard refuses a viewport unit on any ground element.
+`WHY-ITS-BUILT-THIS-WAY.md` § 81; `runbook.md` → *Reports: the safety
+ceiling*, *The editor's Questions section is three tabs over one
+checklist*, *Settings shows a bar of its own*, *The page background stops
+short of the bottom*.
+
+**Reports - the rendered report, corrected from the first production run
+(2026-11-12).** The office's first production run read *Equipment types
+found: economizer* and *Required points found: 0 of 70*. Traced on the dev
+database: the lookup is right and the office's points lack the roles -
+no zone setpoint, no fan status, no compressor point is trended on the
+JACE at all, so Q3/Q4/Q9/Q19 need histories added on the station before
+anything is assigned in Settings (`docs/bas-reports-phase-2-verification.md`
+→ *The office inventory, traced*). The page now lists the equipment TYPES
+by count with a separate per-unit *Classification* line, labels the count
+as checks, shows the model's likely cause and recommended action under
+every Data Health row and Summary finding, says what a Not Monitored
+section needs in one line pointing at the inventory, and prints the spend
+and the run's duration with no limit. **Points on one station that stop
+within fifteen minutes of each other, three or more, are ONE
+`collection_stopped` finding** (subject `station:<id>@<minute>`, a CHECK
+widened by migration), rendered as a block above the Data Health table
+with the rows beneath; the narrative names the causes in order (device
+network trunk, histories stopped, collector). **Every Data Health finding
+stays Watch**: the spec is silent on a share or a duration, a test pins it,
+and the question is Jim's (`runbook.md` → *Data Health rolled up to Watch
+with half the building offline*). `WHY-ITS-BUILT-THIS-WAY.md` § 82.
+
+**Reports, Phase 4, the PDF half (2026-11-13; email waits on the sender
+app registration, Request 7).** After the engine stores a run's page the
+worker prints the SAME HTML to PDF with headless Chromium - Playwright's,
+in the job image only (`Dockerfile.bas-reports`, with a launch-and-print
+check as the `node` user) and never the web image, held by a walk of the
+web app's import graph - Letter, the report name and period in the header,
+page numbers in the footer, Figtree embedded - and stores it as bytea on
+the run (`bas_report_runs.pdf` and five columns beside it, each held to
+`pdf_status` by a CHECK). **A failed render never fails the run**: the
+failure is on the PDF columns, with *Retry PDF* on the run page and the
+list, which queues a render without re-running the analysis. **A worker
+claims a render by writing the failure first** - *a render started at …
+and has not finished* - and overwrites it with ready, so a worker that
+dies mid-render leaves an honest row and there is no stuck state. On the
+run page: *Print* and a red *Download*, Freeze Protection's pair, in the
+bar's actions slot; on the Reports list, a *PDF* column with Download per
+row, greyed with *PDF not available for this run — use Re-run* for runs
+from before. `GET /api/modules/bas/reports/runs/<id>/pdf` is guarded
+exactly as viewing the run. **Every `basReportRun` read in `lib/` and
+`app/` is a `select` that leaves the bytes out**, held by a test: the list
+polls 200 rows every ten seconds. **The spin guard:** on the night of
+2026-11-12 a worker crashing at startup was restarted by the scaler every
+45 seconds all night against one queued run; the scheduler's pass now fails
+a run queued for an hour and never claimed, a run lost twice, and a PDF
+queued for an hour, so the scaler's count returns to zero
+(`queue-guards.ts`, shared with the worker; the test runs the template's
+own scaler query). The worker's scaler query gained `OR pdf_status =
+'queued'`, a template change the owner deploys; the image rebuilds on
+merge. `WHY-ITS-BUILT-THIS-WAY.md` § 83; `runbook.md` → *Reports: the
+PDF*; `docs/design/bas-reports-pdf/`.
+
+**The Reports jobs image is production dependencies and the headless shell
+only (2026-11-13).** `Dockerfile.bas-reports` built to 6.56 GB; it is 2.9 GB
+from the same source. `chown -R node:node /app` stored `/app` twice, so
+`/app` is the user's from its first layer and every `COPY` says `--chown`;
+the install is `npm ci --omit=dev`, run as `node`; and Playwright installs
+with `--only-shell`, because a headless launch never runs the full browser
+(the sample report prints byte-identical in both images, dates and id
+aside). **A package a job loads at run time must be in `dependencies`**:
+`tsx` and `dotenv` moved there, and `tests/bas-reports-jobs-env.test.ts`
+walks both scripts' import graphs against the list. The `prisma` CLI stays
+a development dependency and survives `--omit=dev` as an optional peer of
+`@prisma/client`; the install asserts the generated client exists. No
+template or job env change. `runbook.md` → *Reports: a job execution fails
+with `Cannot find package` or `ERR_MODULE_NOT_FOUND`*.
+
+**Reports - every question on the page, in its own words (2026-11-13).**
+The rendered report lists each question a report carries as a sub-heading
+in the spec's words inside its section - *Q3. What percent of occupied
+hours…* - with its answer beneath: the findings, or one factual line from
+numbers the analysis now returns (zones judged and the lowest share in
+band; units judged and the most hours outside schedule; points judged), or
+the muted reason it did not run with the points it lacks, and the units it
+skipped. The Point Inventory keeps its building lines only - the question
+bullets and the *Required point checks met* count are off the page, since
+every question is in its section; the Summary's halves are headed by Q1
+and Q2 and
+name the findings behind each count; cleared findings are grouped under
+their question; a custom question is its text over its note. `needs` and
+`summary.questions` are stored on new documents; old ones render with the
+library's words. **The `Q` prefix keeps question numbers apart from
+section numbers** - *3. VAV* is a section, *Q3* a question.
+`WHY-ITS-BUILT-THIS-WAY.md` § 84; `runbook.md` → *Every question is a
+sub-heading on the report, and what the line under it means*.
+
+**Reports, Phase 5 - every one of the twenty questions has an analysis
+(2026-11-16).** Q6-Q18 are thirteen pure functions in
+`lib/modules/bas/reports/engine/analysis/` (`vav.ts`, `air-handlers.ts`,
+`hydronic.ts`, `dx.ts`, one shape in `common.ts`, dispatched from
+`EQUIPMENT_QUESTIONS`), each returning findings with actual / expected /
+duration, the units it skipped and why, and the headline its one-line
+answer prints. **Every number is in `analysis/thresholds.ts`, marked SPEC
+(the library text's, used exactly) or CHOSEN (with its reason)**, and
+`CHOSEN_THRESHOLDS` is held to the file by a test. Three rules a later
+change must not undo: Q12 judges only while the unit calls for cooling,
+so a unit with no cooling point is not judged (the one place a function
+asks more than its library row, which stays as Jim wrote it); the DX
+questions apply by Step 1 (points or a packaged DX type), so a hydronic
+`ahu` no longer reads the DX section Not Monitored; and Q9/Q10 skip the
+fan's first 15 minutes, Q15 a trend coarser than five minutes. No role was
+added. Proven by fixture tests per question (finding, no finding, a Data
+Health exclusion, NA/NM) and a full run on a synthetic building with
+every role - all twenty answered, `succeeded`, exactly the planted
+faults; the office re-run on `main` and on the branch is identical, Q6-Q18
+still Not Monitored. CI now builds `Dockerfile.bas-reports` and prints a
+report with the worker's renderer in it (job `reports-image`).
+`WHY-ITS-BUILT-THIS-WAY.md` § 85; `runbook.md` → *Reports: a VAV, air
+handler, plant or DX finding looks wrong, or a unit reads "Not judged"*,
+*CI: "Reports jobs image builds and prints" fails*.
+
+**Reports, Phase 6 - planner questions run (2026-11-16).** A report's
+typed, saved and shared planner-kind questions are answered by the
+Analyze planner in the run, through the tab's own steps 4-9, moved
+unchanged into `lib/modules/bas/analyze/core.ts` so the worker never
+imports the environment reader - with the report's building, stations
+and period as fixed context, checked after the query (an amber note for a
+point on another building or another period). They run **after** the
+narrative, each checked against both halves of the safety ceiling with an
+estimate averaged from the last 20 runs ($0.25 before any history);
+what is left past either is listed by name, *Skipped — spending cap* /
+*time cap*, and the run is partial. Answers are one *Planner questions*
+section, **shown, never tracked**: no fingerprint, no finding row, no
+status. On the page and in the PDF an answer is the question and the
+planner's prose only (its coverage paragraph split off by a conservative
+pattern rule), plus two amber lines - another building or period, and the
+coverage shortfall; the
+coverage paragraph, the reading, every point, the table, the SQL and the
+cost are behind *Show how this was answered* on the web run view only (a
+`ReportView` slot the stored HTML never fills, plus a print rule). Five counters on the run (`20261116120000_bas_report_runs_planner`)
+feed the Usage page and the estimate. A BAS module admin can promote
+their own saved question to the shared library as a planner question
+(section, applies-to, required roles; audited
+`bas.library_question_promoted`); a promoted question's requirements are
+judged before the planner is asked. Office dev run 18: $0.2313 and
+$0.0631 for the two custom questions, $0.3012 the run. **Found on the
+way:** the local `bas_analyze` role predated `bas_site_occupancy` and
+failed every Analyze question until the role script was re-run;
+production was not checked. `WHY-ITS-BUILT-THIS-WAY.md` § 86;
+`runbook.md` → *Reports: a planner question says …*.
+
+**Reports, Phase 4, the email half - built 2026-11-17, cannot send until
+Request 7 lands and the gate is opened.** When a run has finished
+(succeeded or partial) and its PDF is ready, the worker writes one
+`bas_report_deliveries` row per address - the owner first, from the
+employee record, never a recipient row; then the recipient rows - unique
+on (run, email), and sends **one message per row** from
+`controlls@phb1899.com` through a fifth app registration,
+`phb-platform-bas-mail` (Mail.Send, fenced by its own
+ApplicationAccessPolicy), with `sendMail`: three attempts on a 1- and
+5-minute backoff, then *Failed* with **Resend**. The PDF rides along under
+Graph's 3 MB simple-upload line, the link alone above it. **The worker is
+the only sender**: Resend (failed rows only) and *Send to me* write rows,
+audited, and the scaler counts due rows; `sendMail` appears in one file
+(`email/mailer.ts`) and nothing under `app/` imports it, held by a test.
+**`BAS_REPORTS_ALLOW_SEND`** mirrors `PHB_ALLOW_SEND` - exactly `true`
+opens it - is written on every deployment from `basReportsAllowSend`
+(default false), and shut means every due row is *Not sent — sending
+disabled* with no token fetched; outside production the sender also
+refuses any non-`@phb1899.com` address. **No Key Vault secret**: the
+managed identity and a federated credential, from the Change Orders
+credential and client, now shared as `lib/mail/` (Change Orders' tests
+unchanged and green); a client secret in production is refused. The
+template must be deployed before the gate can open - the worker's
+environment and the scaler's count come only from it. Prohibition 1 is
+the change-order system's and is untouched: a different mailbox and app,
+decided in the plan (§A *Sender*, §D5). `graph_request_id`, not a message
+id: `sendMail` answers 202 with no body. `WHY-ITS-BUILT-THIS-WAY.md` § 87;
+`runbook.md` → *Turning report email on*, *A report email did not arrive*,
+*What to ask IT for* → Request 7.
+
+**Admin → Employees on the shared kit (2026-11-13).** The page wears the
+module shells' chrome - the tinted ground, the header with the chrome purple
+by name (`ModuleHeader`'s new `accent`; Admin is not a module and has no key
+in `lib/module-accent.ts`), one tab row with *Copy invite email*, *Audit log*
+and *Positions & departments* as kit buttons at its right - and the kit's
+search box, dropdowns, table, pills and buttons below, every colour it had
+kept. Three behaviour changes, all decided by the owner: **the default Show
+is Everyone** (was *With a grant*); **the default sort is fewest grants
+first, then most recent sign-in** (`sort=access`, a fourth sort key), so the
+people who signed in and have nothing are the top rows; and **one Access
+column** - a count in words, *4 modules* or *No access* in grey, and nothing
+else - replaces the column per module. A chevron expands a row in place to
+every module, granted ones first, each with its diamond in its colour, its
+full name, a switch for the grant and one for settings rights, through the
+employee page's own routes and audit events, as a wrapping grid that holds
+fifteen modules without a sideways scroll; **the panel is the only place on
+the list that names a specific grant** (the owner's decision, same day, over
+a first pass that put a chip per module on the collapsed row). The filters
+narrow the page live as you type; Apply, the red primary, runs the server
+query into the URL; Reset clears both. Two kit additions, each defaulting to
+the old rendering: `Table` `columns` and `detail`, and `Switch`; the four
+other modules were re-captured byte-identical to prove it
+(`docs/design/admin-employees-kit/`).
+The audit log and the lists pages keep their own chrome. `runbook.md` →
+*Admin panel (Phase 10)*; `tests/admin-employees-ui.test.tsx`.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---
@@ -1337,8 +1823,12 @@ Name the branch for what the change is:
 
 Documentation is `chore/`. There is no `docs/` prefix.
 
-**An agent stops at the push.** Create the branch, commit, push, and report the
-branch name — the human opens the pull request.
+**An agent finishes at the pull request, never at the merge (rule of
+2026-11-02).** When the work on a branch is done: push it, open a pull request
+against `main` with `gh pr create`, and end the report with the PR link. If the
+branch is built on top of another branch that has not merged yet, open its PR
+against *that* branch and say so in the PR description. **Never merge** — the
+platform owner merges everything, in the order the report gives.
 
 **`main` is protected by a repository ruleset** — pull request required, no
 force-push, no deletion — and the ruleset is authoritative. Where this file and
@@ -1405,6 +1895,7 @@ either anywhere else — point at them.
 | `docs/04-auth-and-permissions.md` | Login rules, authorization contract, admin security |
 | `docs/05-database-and-sources.md` | Schema ownership, migration vs seed, source of truth |
 | `docs/06-roadmap.md` | Phases 1–14 |
+| `docs/PHASE-14.md` | **The cutover checklist — the one list for cutover day.** Every item any document says must happen at, before or after the cloud engine takes over, with its source; first the cutover diff (the intake rule, the by-name refusal, the Bid Tracker write, the timezone stamps), then prompts, schedule, rollback, and where the documents disagree |
 | `docs/07-conventions.md` | Code, API, errors, logging, secrets, environments |
 | `docs/08-bas-and-niagara.md` | **BAS: why the module is shaped this way** — Niagara, oBIX, the roll horizon, headroom |
 | `docs/09-bas-what-is-built.md` | BAS: what exists, and which of the two repos owns each piece |
@@ -1421,3 +1912,12 @@ either anywhere else — point at them.
 | `docs/phase-12-part-b-verification.md` | The file-access extraction: what was measured, and what is still unproven |
 | `docs/bas-plausibility-verification.md` | **The value-plausibility check against live data:** both dead sensors flagged, nothing else, the thresholds defended by the longest healthy runs, the cost measured, four mutations |
 | `docs/phase-12-part-c-plan.md` | **Part C: what `Sites.Selected` actually blocks**, what it does not, and what has already been settled by measurement |
+| `docs/phase-12-part-c-verification.md` | **Part C's record, 2026-10-28:** the bar, the five comparison runs including the four that failed and why, what eight-of-eight proves and does not, what was kept and deleted, and how to re-run |
+| `docs/phase-12-part-d-plan.md` | **Part D, the plan, approved 2026-10-28:** the classifier is the only judgment, most of its task is deterministic rule and becomes code, four model judgments in consequence order behind switches, schema and candidate-list validation, the key's type question and why `coAnthropicApiKeyInKeyVault` stays false; § 14 holds the owner's six decisions |
+| `docs/phase-12-part-d-verification.md` | **Part D's record, step by step:** D0's capture (20 laptop answers, three excluded with evidence); D1's harness and the first replay — every reproducible deterministic item equivalent, no FAIL, no STOP, no model call made; D2's bid leader — the scorer against the live master names, the first real call and the two things it found (the schema keywords the API refuses; a refusal on a toy prompt), the cache read back; D3's classification — the first replay on the real emails, 13 of 15 labels exact three of three, the injection fixture answered as a plain quote, and the internal-sender rule the owner decided the same day — a named divergence from the laptop, decided by code before the model, after which both unstable internal items come out the same way every run; D4's Q&A log — code keeps the record in the laptop's own shape, the model adds the writer's words, one prompt change after a consistent miss, the owner's two Q&A decisions built the same day; D5's match by body inference — 15 of 17 equivalent, every item the laptop declined declined by the container too, no STOP, no instability across three runs, the two gaps both closed COs the container was never offered; D6's plumbing — the archive sweep through the store held to the shipped script by a differential, the tracker-unreadable rule, the image with the scripts, the job spec |
+| `docs/phase-12-part-e-plan.md` | **Part E, the plan, approved 2026-10-29:** a read-only reader identity with Read on the live tree, the state snapshot before each laptop run, both halves (the classifier as a scheduled shadow, the intake engine as a post-hoc replay with the Part C instrument), Phase 13's schedule without its alerts, the STOP file, the daily report, exit by path coverage with a ten-laptop-weekday floor, the cost, what `PHASE-13.md` now gets wrong, the owner's eight decisions (§ 14) and the dates counting the IT grant (§ 15) |
+| `docs/phase-12-part-e-equivalence.md` | **Part E: what counts as equivalent**, written 2026-09-22 before any comparison ran so the bar cannot be set to fit a disagreement; recovered and re-checked 2026-10-28 |
+| `docs/phase-12-part-e-verification.md` | **Part E's record:** what E1–E6 built and where it is held, the one finding from the real engine on the way, then day one, the weeks, every disagreement, the path coverage table at close, what the window proves and does not |
+| `docs/BAS Health Report Build Spec.md` | **Jim's spec for the BAS health report** (27 October 2026): the twenty questions with their sections, applies-to and points required, the persistence rules, the Not Applicable / Not Monitored rule and the template every report follows |
+| `docs/bas-reports-tab-plan.md` | **The Reports tab plan:** the decisions from the clarifying round, the data model, the engine's twelve steps, the seven phases and what each is done when |
+| `docs/bas-reports-phase-2-verification.md` | **Reports Phase 2's record:** the office and the lab runs verbatim, the bar item by item, the change-of-value coverage finding, what the tests prove with synthetic series, what the phase does not prove, and the deviations from the plan with their reasons |

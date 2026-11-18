@@ -131,6 +131,15 @@ Two constraints that survive the refactor:
 
 ## Part C — Containerize
 
+> **Complete 2026-10-28.** The comparison acceptance bar was met on its
+> fifth run: `docs/phase-12-part-c-verification.md` is the record,
+> `docs/phase-12-part-c-plan.md` the reasoning. The "needs `Sites.Selected`"
+> framing below was wrong in a useful way — the permission gated only the
+> last step — and the plan doc says what was actually blocked. The two
+> decisions Part C left were both closed on 2026-10-28 (the plan doc's
+> *Before cutover* sections); what remains for cutover day is gathered in
+> `docs/PHASE-14.md`.
+
 **Needs: Azure (Phase 7 complete), and `Sites.Selected` Graph permission on the
 AISandbox site — a third request to Vitis.**
 
@@ -157,6 +166,17 @@ it, because the flows are the thing that must not break.
 ---
 
 ## Part D — Move the judgment to the Claude API
+
+> **Complete 2026-10-29.** Six steps in two days, each its own pull request
+> and each measured against the laptop's own answers before the next began:
+> `docs/phase-12-part-d-verification.md` is the record, `docs/phase-12-part-d-plan.md`
+> the plan as approved. What the inventory predicted held — the classifier
+> is the only judgment — and what it did not: most of the classifier's task
+> is a rule the spec states and is now code, with four model judgments left.
+> Three named divergences from the laptop were decided by the owner on the
+> way (`docs/phase-12-part-e-equivalence.md` → *Named divergences*). The
+> "language review, then classification, then draft composition" ordering
+> below was the plan's guess; A2's was right.
 
 **Needs: a company Anthropic API key — the change-order module's OWN one.** As of
 2026-10-16 the two modules have two keys: `ANTHROPIC_API_KEY` is BAS Analyze's, and
@@ -262,25 +282,25 @@ period, and the disagreements are understood. **Not when it runs.**
 
 **Part C**
 
-- [ ] Container runs against a copy, never live
-- [ ] `GraphFileStore` output byte-identical to `LocalFileStore`
-- [ ] Graph metadata changes verified not to affect flow triggering
-- [ ] The container cannot acquire the live lock
+- [x] Container runs against a copy, never live — the store is confined to the root it is given and refuses `CO Managment Process` by name (2026-10-21)
+- [x] `GraphFileStore` output byte-identical to `LocalFileStore` — equivalent once time-derived bytes are normalized, the bar `docs/phase-12-part-e-equivalence.md` set; eight of eight on 2026-10-28
+- [x] Graph metadata changes verified not to affect flow triggering — observed 2026-10-28, two samples: the sentinel flows' trigger fired on app-created items for both write shapes, final names (`docs/phase-12-part-c-plan.md` → *Before cutover: the flow-trigger decision*)
+- [x] The container cannot acquire the live lock — the lock is a file under the live folder, and the store refuses that path at every call (2026-10-21)
 
 **Part D**
 
-- [ ] Each judgment step replaced individually, lowest consequence first
-- [ ] Every response schema-validated before touching disk
-- [ ] No model output can name a file, choose a recipient, or trigger a send
-- [ ] Prompts versioned in the repo; SharePoint still authoritative
-- [ ] Every call logged with prompt version and outcome
+- [x] Each judgment step replaced individually, lowest consequence first — bid leader (D2), classification (D3), Q&A (D4), CO match (D5), each replayed three times against the laptop's twenty answers before the next (2026-10-29)
+- [x] Every response schema-validated before touching disk — the API's structured output, our own closed schema, the candidate-list check, then the § 4.2 result contract; nothing reaches the store that fails one (D1)
+- [x] No model output can name a file, choose a recipient, or trigger a send — no tool is declared, the sentinel is a constant at one write site, every filename and path is built by code, and the injection fixture holds with the API absent (D1, D3)
+- [x] Prompts versioned in the repo; SharePoint still authoritative — six immutable versions with sha256 manifests, the rubric extracted verbatim from the mirrored spec, the live copies untouched until `docs/PHASE-14.md` items 2.1–2.4 (D2–D5)
+- [x] Every call logged with prompt version and outcome — one metadata line per call: version, sha256, model, tokens, latency, stop reason, outcome, never the email (D1)
 
 **Part E**
 
-- [ ] Shadow running on schedule against a copy
-- [ ] Automated diff of sentinel JSON, state files and run reports
-- [ ] Equivalence defined in writing for the judgment steps before comparison began
-- [ ] A sustained period of equivalent output, with every disagreement investigated
+- [ ] Shadow running on schedule against a copy — built 2026-10-30 (the three jobs behind `enableCoShadow`, the feed and the collector); starts the business day after the reader app's grant lands (Request 6, sent 2026-10-29)
+- [ ] Automated diff of sentinel JSON, state files and run reports — built: the Part E scorer over every item with both sides, and the intake replay with the state-prefix rule; the run reports are not compared, by decision (plan § 4b)
+- [x] Equivalence defined in writing for the judgment steps before comparison began — `docs/phase-12-part-e-equivalence.md`, 2026-09-22, re-checked 2026-10-28, with the two named divergences of 2026-10-29
+- [ ] A sustained period of equivalent output, with every disagreement investigated — the floor is ten laptop weekdays after the first clean batch (owner's decision 2026-10-29) and the exit is path coverage; `docs/phase-12-part-e-verification.md` is the record
 
 ---
 

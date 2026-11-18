@@ -74,7 +74,7 @@ describe("paging", () => {
    * on none.
    */
   it("pages a column full of ties without losing anybody", async () => {
-    for (const sort of ["status", "lastLogin", "name"] as const) {
+    for (const sort of ["access", "status", "lastLogin", "name"] as const) {
       const first = await listEmployees(query({ scope: "all", sort }));
       const seen: string[] = [];
 
@@ -161,7 +161,7 @@ describe("sorting", () => {
     expect([...times].sort((a, b) => b - a)).toEqual(times);
   });
 
-  it("refuses a sort column that is not one of the three", () => {
+  it("refuses a sort column that is not one of the four", () => {
     // A caller-supplied column name would be an injection surface and a way to
     // order by something the table does not show.
     expect(employeeListQuerySchema.safeParse({ sort: "email" }).success).toBe(false);
@@ -169,20 +169,66 @@ describe("sorting", () => {
     expect(employeeListQuerySchema.safeParse({ dir: "sideways" }).success).toBe(false);
   });
 
-  it("defaults to name ascending", () => {
+  /**
+   * The default since 2026-11-13 (name ascending until then): the people who
+   * signed in and have no access are what an admin opens this screen to
+   * find, so they come first, newest arrival first.
+   */
+  it("defaults to fewest grants first", () => {
     const parsed = employeeListQuerySchema.parse({});
-    expect(parsed.sort).toBe("name");
+    expect(parsed.sort).toBe("access");
     expect(parsed.dir).toBe("asc");
+  });
+
+  it("orders the default view by grant count, then most recent sign-in, never-signed-in last within a count", async () => {
+    // A few with two grants, so the order is checked across three counts and
+    // not just across "none" and "one". Put back afterwards: the module
+    // filter test below counts on nobody holding BAS.
+    const twoGrants = [ids[1]!, ids[2]!, ids[3]!, ids[6]!];
+    await testDb.moduleGrant.createMany({
+      data: twoGrants.map((employeeId) => ({ employeeId, moduleKey: "bas" })),
+      skipDuplicates: true,
+    });
+    try {
+      const result = await listEmployees(query({ pageSize: "130" }));
+      const rows = result.employees;
+      expect(rows).toHaveLength(130);
+
+      const counts = rows.map((e) => e.grantedModuleKeys.length);
+      expect([...counts].sort((a, b) => a - b)).toEqual(counts);
+      expect(counts[0]).toBe(0);
+      expect(counts[counts.length - 1]).toBe(2);
+
+      // Within one count: dated rows newest first, then the nulls.
+      for (const count of [0, 1, 2]) {
+        const group = rows.filter((e) => e.grantedModuleKeys.length === count);
+        expect(group.length).toBeGreaterThan(0);
+        const times = group.map((e) => (e.lastLoginAt === null ? null : e.lastLoginAt.getTime()));
+        const firstNull = times.indexOf(null);
+        const dated = times.filter((t): t is number => t !== null);
+        expect([...dated].sort((a, b) => b - a), `count ${count}`).toEqual(dated);
+        if (firstNull !== -1) {
+          expect(times.slice(firstNull).every((t) => t === null), `count ${count}: nulls last`).toBe(true);
+        }
+      }
+    } finally {
+      await testDb.moduleGrant.deleteMany({ where: { employeeId: { in: twoGrants }, moduleKey: "bas" } });
+    }
   });
 });
 
 describe("filtering", () => {
-  it("defaults to employees with at least one grant", async () => {
-    const granted = await listEmployees(query({}));
-    const all = await listEmployees(query({ scope: "all" }));
+  /**
+   * Everyone, since 2026-11-13 ("with a grant" until then). The default view
+   * is no longer a filter; the default SORT is what puts the people with no
+   * access at the top, which is what hiding them was failing to do.
+   */
+  it("defaults to everyone", async () => {
+    const byDefault = await listEmployees(query({}));
+    const granted = await listEmployees(query({ scope: "granted" }));
 
     // Every 5th has no grant: 26 of 130.
-    expect(all.total).toBe(130);
+    expect(byDefault.total).toBe(130);
     expect(granted.total).toBe(104);
   });
 

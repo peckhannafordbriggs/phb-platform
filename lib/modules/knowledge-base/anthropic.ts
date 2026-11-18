@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { KB_ANTHROPIC_API_KEY_VAR } from "@/lib/env";
+import { KB_ANTHROPIC_API_KEY_VAR } from "@/lib/env-names";
 
 /**
  * The Knowledge Base's Anthropic configuration, read LAZILY like the rest of
@@ -7,7 +7,7 @@ import { KB_ANTHROPIC_API_KEY_VAR } from "@/lib/env";
  * Absent means search keeps its own order (no Haiku re-sort) and no answers
  * are written; the screen says which.
  *
- * Its OWN key, KB_ANTHROPIC_API_KEY, decided in lib/env.ts. Not
+ * Its OWN key, KB_ANTHROPIC_API_KEY, decided in lib/env-names.ts. Not
  * ANTHROPIC_API_KEY, which is BAS Analyze's and also the SDK's default name:
  * a client built without `apiKey` would read it unprompted, so every client
  * here is built by `kbAnthropicClient`, which passes the key explicitly, and

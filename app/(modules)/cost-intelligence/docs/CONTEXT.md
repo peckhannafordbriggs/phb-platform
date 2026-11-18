@@ -61,11 +61,10 @@ app/(modules)/cost-intelligence/
     projects-view.tsx       ProjectsView - list, detail and live file tree
     access-view.tsx         AccessView
     usage-view.tsx          UsageView (client) - range, stats, spend per day, breakdowns, top runs
-  ui/
-    Button.tsx Card.tsx Dropdown.tsx FilterMenu.tsx Label.tsx
-    Pill.tsx Segmented.tsx Table.tsx searchbar.tsx
-    LinkPending.tsx         inside a <Link>: a small spinner while its page loads (side list rows,
-                            tabs, link buttons); the current page stays on screen
+  ui/                       re-exports of the platform's shared kit, components/ui/, which was
+                            promoted from here on 2026-11-10: Button Card Dropdown FilterMenu
+                            Label LinkPending Pill Segmented Table. searchbar.tsx is the one file
+                            with content - it supplies what the kit's SearchBar searches
 
 lib/modules/cost-intelligence/
   constants.ts              module key and name
@@ -230,15 +229,15 @@ page checks this itself with `requireModuleAdmin`.
 
 | Component | File | What it is |
 |---|---|---|
-| `Button` | `ui/Button.tsx` | A button with no behaviour of its own. `variant`: `primary` (PHB red, `--phb-red-btn`) or `secondary` (white). Pass `onClick` for an action or `href` for navigation; also `disabled`, `fullWidth`, `type`. Icons go in `children` |
-| `Card` | `ui/Card.tsx` | The platform's `.card` surface. Change the padding with the `padding` prop (default `p-5`), never with a `p-*` in `className`: that one loses to the default |
-| `Pill` | `ui/Pill.tsx` | A small status label. `tone`: `ok` (teal), `draft` (purple), `muted` (grey), `warn` (orange). A tone is a state, never decoration |
-| `Segmented` | `ui/Segmented.tsx` | Mutually exclusive buttons in one strip. `options`, `value`, `onChange`, `label`; `tone` `dark` (date range) or `light` |
-| `Dropdown` | `ui/Dropdown.tsx` | A custom select with a rounded list. `options`, `placeholder`, `label` (accessible name); pass `value` + `onChange` to control it. Closes on blur |
-| `FilterMenu` | `ui/FilterMenu.tsx` | A filter icon that opens a small option list; for a table header. `label`, `options`, `value`, `onChange`. Closes on blur |
-| `Label` | `ui/Label.tsx` | Small uppercase section label (`.eyebrow`) |
-| `Table` | `ui/Table.tsx` | Equal-width columns. `headers` (text or any node, e.g. a heading with a `FilterMenu`), `rows` (cells are any React node), optional `pageSize` for Previous / Next paging, optional `onRowClick` + `selected` (indexes into the whole `rows` array, not the page) |
-| `SearchBar` | `ui/searchbar.tsx` | Live search; for now only (admins only) placeholder skills, run results come back with real search. `/` anywhere focuses it; arrows and Enter open a result, Escape closes. Marked `TODO(backend)` |
+| `Button` | `components/ui/Button.tsx` | A button with no behaviour of its own. `variant`: `primary` (PHB red, `--phb-red-btn`), `secondary` (white) or `danger` (white, the danger ink). `size`: `md` (36px, the default) or `sm`. Pass `onClick` for an action or `href` for navigation; also `disabled`, `fullWidth`, `title`, `type`. Icons go in `children` |
+| `Card` | `components/ui/Card.tsx` | The platform's `.card` surface. Change the padding with the `padding` prop (default `p-5`), never with a `p-*` in `className`: that one loses to the default |
+| `Pill` | `components/ui/Pill.tsx` | A small status label. `tone`: `ok` (teal), `draft` (purple), `muted` (grey), `warn` (orange), `bad` (maroon). A tone is a state, never decoration |
+| `Segmented` | `components/ui/Segmented.tsx` | Mutually exclusive buttons in one strip. `options`, `value`, `onChange`, `label`; `tone` `dark` (date range) or `light`; `fullWidth` stretches it across its container |
+| `Dropdown` | `components/ui/Dropdown.tsx` | A custom select with a rounded list. `options`, `placeholder`, `label` (accessible name); pass `value` + `onChange` to control it. Closes on blur |
+| `FilterMenu` | `components/ui/FilterMenu.tsx` | A filter icon that opens a small option list; for a table header. `label`, `options`, `value`, `onChange`. Closes on blur |
+| `Label` | `components/ui/Label.tsx` | Small uppercase section label (`.eyebrow`) |
+| `Table` | `components/ui/Table.tsx` | Equal-width columns. `headers` (text or any node, e.g. a heading with a `FilterMenu`), `rows` (cells are any React node), optional `pageSize` for Previous / Next paging, optional `onRowClick` + `selected` (indexes into the whole `rows` array, not the page) |
+| `SearchBar` | `ui/searchbar.tsx` over `components/ui/SearchBar.tsx` | Live search; for now only (admins only) placeholder skills, run results come back with real search. `/` anywhere focuses it; arrows and Enter open a result, Escape closes. Marked `TODO(backend)` |
 
 Icons come from **`lucide-react`**; do not hand-draw SVGs.
 
@@ -288,5 +287,7 @@ as the backend for it lands, never inside `Button`.
 - Colours come from the platform tokens in `app/globals.css`. The module's colour is
   `var(--module-accent)` (teal); teal, orange and maroon also mean ok, warning and error,
   so never use them for decoration. Primary buttons are PHB red (`--phb-red-btn`).
-- Keep `ui/` components free of behaviour: handlers and data live in the view.
+- The kit is shared (`components/ui/`, `docs/07-conventions.md` → *UI*): a new piece goes
+  there, free of behaviour and of colour, never into this module's `ui/`, which only
+  re-exports it. Handlers and data live in the view.
 - **If you add, rename or move a component, update this file in the same change.**

@@ -3,27 +3,21 @@
 import { useEffect, useState } from "react";
 import type { TrendCalendar, TrendRange } from "@/lib/modules/bas/types";
 import { compareCalendarDates, yearRange } from "@/lib/modules/bas/range";
+import { FieldLabel, INPUT, Segmented } from "@/components/ui";
 import { WINDOW_PRESETS, formatCalendarDate } from "./health-client";
 
 /**
- * The time range control: three presets, Custom, and one button per calendar
- * year that actually holds readings.
+ * The Point Explorer's time range: the three presets, a Custom pair of dates,
+ * and one button per calendar year that holds readings (2026-09-22).
  *
- * THE DATES ARE THE BUILDING'S. A person typing 14 August means 14 August
- * where the sensor is. The two `<input type="date">` fields produce
- * `YYYY-MM-DD` text and that text goes into the URL and to the server
- * unchanged; nothing here turns it into a Date, because a JavaScript Date is
- * in the browser's zone and that is precisely the zone the request is not
- * about. The zone the dates belong to is written under the fields.
+ * The dates travel as `YYYY-MM-DD` text and PostgreSQL resolves them against
+ * the building's time zone - midnight to midnight where the building is, end
+ * exclusive - so the form says which zone it means and where the data begins.
+ * A draft that cannot be a range (end before start, end in the future) is
+ * refused here, with the reason, before anything is asked of the server.
  *
- * The year buttons come from `calendar.years`, which the server derives from
- * the earliest and latest reading the viewer may see. No readings in 2023, no
- * 2023 button. The current year's shortcut ends today rather than on 31
- * December, because an end in the future is refused and a shortcut that
- * produced a refusal would be a broken button.
- *
- * Native date inputs, on purpose: they open the browser's own calendar, they
- * are keyboard-operable, and they add no dependency to a page that has none.
+ * The strips are the kit's Segmented in the platform accent, announcing
+ * themselves as toggle groups as they always have (2026-11-10).
  */
 export function RangePicker({
   range,
@@ -39,15 +33,11 @@ export function RangePicker({
   const isCustom = range.kind === "custom";
   const [open, setOpen] = useState(isCustom);
 
-  // The draft the fields hold. Seeded from the range on screen, or from the
-  // last day with data so the calendar opens where the readings are.
   const seedFrom = range.fromDate ?? calendar?.latestDate ?? calendar?.today ?? "";
   const seedTo = range.toDate ?? calendar?.latestDate ?? calendar?.today ?? "";
   const [from, setFrom] = useState(seedFrom);
   const [to, setTo] = useState(seedTo);
 
-  // A range applied from a year button, or a bookmark, arrives from outside:
-  // the fields follow it rather than showing a stale draft.
   useEffect(() => {
     if (range.fromDate !== null && range.toDate !== null) {
       setFrom(range.fromDate);
@@ -59,86 +49,58 @@ export function RangePicker({
   const today = calendar?.today ?? null;
   const problem = describeDraftProblem(from, to, today);
 
-  const yearPressed = (year: number): boolean => {
-    if (!isCustom || today === null) return false;
-    const span = yearRange(year, today);
-    return range.fromDate === span.from && range.toDate === span.to;
+  const pressedYear = (): string => {
+    if (!isCustom || today === null) return "";
+    for (const year of calendar?.years ?? []) {
+      const span = yearRange(year, today);
+      if (range.fromDate === span.from && range.toDate === span.to) return String(year);
+    }
+    return "";
   };
 
-  const segment =
-    "border-l border-[var(--border)] px-2.5 py-1 text-sm first:border-l-0 ";
-  const pressed = "bg-[var(--accent)] text-white";
-  const idle = "bg-white hover:bg-[var(--surface)]";
+  const rangeValue = isCustom ? "custom" : range.kind === "preset" ? String(range.days) : "";
 
   return (
     <div className="flex flex-wrap items-start gap-3">
-      <div
-        className="flex items-center gap-2 text-sm"
-        role="group"
-        aria-label="Time range"
-      >
+      <div className="flex items-center gap-2 text-sm">
         <span className="text-[var(--muted)]">Range</span>
-        <div className="flex overflow-hidden rounded border border-[var(--border)]">
-          {WINDOW_PRESETS.map((preset) => {
-            const on = range.kind === "preset" && range.days === preset.days;
-            return (
-              <button
-                key={preset.days}
-                type="button"
-                aria-pressed={on}
-                onClick={() => onPreset(preset.days)}
-                className={segment + (on ? pressed : idle)}
-              >
-                {preset.label}
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            aria-pressed={isCustom}
-            aria-expanded={open}
-            aria-controls="bas-custom-range"
-            onClick={() => setOpen((value) => !value || !isCustom)}
-            className={segment + (isCustom ? pressed : idle)}
-          >
-            Custom
-          </button>
-        </div>
+        <Segmented
+          semantics="pressed"
+          tone="accent"
+          label="Time range"
+          options={[
+            ...WINDOW_PRESETS.map((preset) => ({ value: String(preset.days), label: preset.label })),
+            { value: "custom", label: "Custom" },
+          ]}
+          value={rangeValue}
+          onChange={(next) => {
+            if (next === "custom") setOpen((value) => !value || !isCustom);
+            else onPreset(Number(next));
+          }}
+        />
       </div>
 
       {calendar !== null && calendar.years.length > 0 && (
-        <div
-          className="flex items-center gap-2 text-sm"
-          role="group"
-          aria-label="Calendar year"
-        >
+        <div className="flex items-center gap-2 text-sm">
           <span className="text-[var(--muted)]">Year</span>
-          <div className="flex overflow-hidden rounded border border-[var(--border)]">
-            {calendar.years.map((year) => {
-              const on = yearPressed(year);
-              return (
-                <button
-                  key={year}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => {
-                    const span = yearRange(year, calendar.today);
-                    onCustom(span.from, span.to);
-                  }}
-                  className={segment + (on ? pressed : idle)}
-                >
-                  {year}
-                </button>
-              );
-            })}
-          </div>
+          <Segmented
+            semantics="pressed"
+            tone="accent"
+            label="Calendar year"
+            options={calendar.years.map((year) => ({ value: String(year), label: String(year) }))}
+            value={pressedYear()}
+            onChange={(next) => {
+              const span = yearRange(Number(next), calendar.today);
+              onCustom(span.from, span.to);
+            }}
+          />
         </div>
       )}
 
       {open && (
         <form
           id="bas-custom-range"
-          className="flex w-full flex-wrap items-end gap-3 rounded border border-[var(--border)] bg-[var(--surface)] px-4 py-3"
+          className="flex w-full flex-wrap items-end gap-3 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] px-4 py-3"
           onSubmit={(event) => {
             event.preventDefault();
             if (problem === null && from.length > 0 && to.length > 0) {
@@ -146,34 +108,33 @@ export function RangePicker({
             }
           }}
         >
-          <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
-            Start
+          <FieldLabel label="Start">
             <input
               type="date"
               value={from}
               max={today ?? undefined}
               onChange={(event) => setFrom(event.target.value)}
-              className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm text-[var(--foreground)]"
+              className={INPUT + " w-40 font-mono"}
               aria-label="Start date"
               required
             />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
-            End
+          </FieldLabel>
+          <FieldLabel label="End">
             <input
               type="date"
               value={to}
               max={today ?? undefined}
               onChange={(event) => setTo(event.target.value)}
-              className="rounded border border-[var(--border)] bg-white px-2 py-1 text-sm text-[var(--foreground)]"
+              className={INPUT + " w-40 font-mono"}
               aria-label="End date"
               required
             />
-          </label>
+          </FieldLabel>
+          {/* The kit's shape in the module's own colour: the platform accent, as the strips above. */}
           <button
             type="submit"
             disabled={problem !== null || from.length === 0 || to.length === 0}
-            className="rounded border border-[var(--accent)] bg-[var(--accent)] px-3 py-1 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--accent)] px-4 text-[0.8125rem] font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Apply
           </button>
@@ -202,10 +163,8 @@ export function RangePicker({
 }
 
 /**
- * The two things a person can get wrong before the server is asked, in
- * words. `null` when the draft is fine. The server checks both again, in the
- * building's zone, and the third thing - a day that does not exist - which a
- * date input cannot produce.
+ * Why a draft pair of dates cannot be asked for, or null when it can. Pure, so
+ * the two refusals are tested without a screen.
  */
 export function describeDraftProblem(
   from: string,

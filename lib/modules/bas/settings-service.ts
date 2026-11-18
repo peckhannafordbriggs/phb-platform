@@ -32,6 +32,7 @@ import type {
   UpdatePointLabelInput,
   UpdatePointRoleInput,
   UpdatePointVisibilityInput,
+  SiteOccupancyInput,
 } from "@/lib/validation/bas-settings";
 import {
   COLLECTING_WITHIN_HOURS,
@@ -42,6 +43,7 @@ import {
 import type {
   BasSettingsFilters,
   BasSettingsTree,
+  OccupancyDay,
   BasVocabularies,
   BuildingEquipmentList,
   BulkClassifyResult,
@@ -118,6 +120,7 @@ interface StationRow {
   last_run_status: string | null;
   newest_record_at: Date | null;
   ever_collected: boolean;
+  has_occupancy_point: boolean;
 }
 
 /**
@@ -139,6 +142,7 @@ function reachOf(row: StationRow): StationReach {
 function toStation(row: StationRow): SettingsStation {
   return {
     stationId: row.station_id.toString(),
+    hasOccupancyPoint: row.has_occupancy_point,
     niagaraStationName: row.niagara_station_name,
     displayName: row.display_name,
     reach: reachOf(row),
@@ -291,6 +295,14 @@ export async function getBasSettingsTree(
 ): Promise<BasSettingsTree> {
   const { entitled } = await basSiteScope(viewer);
   const active = settingsFiltersActive(filters);
+  // The occupied hours per building (Reports, Phase 2): a handful of rows,
+  // read on their own rather than folded into the hierarchy walk.
+  const occupancyRows = await prisma.basSiteOccupancy.findMany({ orderBy: [{ siteId: "asc" }, { weekday: "asc" }] });
+  const occupancyBySite = new Map<string, OccupancyDay[]>();
+  for (const o of occupancyRows) {
+    const key = o.siteId.toString();
+    occupancyBySite.set(key, [...(occupancyBySite.get(key) ?? []), { weekday: o.weekday, start: minuteText(o.startMinute), end: minuteText(o.endMinute) }]);
+  }
   const where = stationPredicate(filters);
   const stationsOnly = narrowsStations(filters);
   const q = filters.q.trim();
@@ -379,6 +391,11 @@ export async function getBasSettingsTree(
         parent.niagara_station_name AS parent_station_name,
         st.is_active,
         st.last_seen_at,
+        -- Reports (Phase 2): whether a report of this building can take
+        -- occupancy from a trended point, or falls back to the hours typed in.
+        EXISTS (SELECT 1 FROM bas_points op
+                 WHERE op.station_id = st.station_id AND op.is_active
+                   AND op.point_role IN ('occupancy_status', 'occupancy_cmd')) AS has_occupancy_point,
         -- Counted by correlated subqueries on bas_points ALONE, not through the
         -- LEFT JOIN below (B8.2). The Points list under this row compares what
         -- it rendered against a joinless count, and the number on the row has
@@ -502,6 +519,7 @@ export async function getBasSettingsTree(
       name: row.site_name ?? "",
       timezone: row.timezone ?? "",
       address: row.address,
+      occupancy: occupancyBySite.get(siteKey) ?? [],
       stations: stationsBySite.get(siteKey) ?? [],
     };
     project.buildings.push(building);
@@ -2523,4 +2541,74 @@ export function basCredentialAvailability(): {
   return state.available
     ? { available: true, message: null }
     : { available: false, message: new CredentialError(state.reason).message };
+}
+
+// ---------------------------------------------------------------------------
+// Occupied hours (Reports, Phase 2)
+// ---------------------------------------------------------------------------
+
+const WEEKDAY_WORDS = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function minuteText(minute: number): string {
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+}
+
+function minuteOf(text: string): number {
+  const [h, m] = text.split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+/** "Mon-Fri 08:00-18:00" style words for the audit row and the screen. */
+export function describeOccupancy(days: ReadonlyArray<OccupancyDay>): string {
+  if (days.length === 0) return "none";
+  return [...days]
+    .sort((a, b) => a.weekday - b.weekday)
+    .map((d) => `${WEEKDAY_WORDS[d.weekday]} ${d.start}-${d.end}`)
+    .join(", ");
+}
+
+/**
+ * Replace a building's occupied hours. The whole week at once: what is sent
+ * is what is stored, and a weekday left out is unoccupied. A report of the
+ * building reads these only when no station in its scope trends an
+ * occupancy point, and says which source it used.
+ */
+export async function setBasSiteOccupancy(
+  viewer: Viewer,
+  siteIdText: string,
+  input: SiteOccupancyInput,
+): Promise<{ days: OccupancyDay[] }> {
+  if (!/^\d{1,18}$/.test(siteIdText)) {
+    throw new BasError("building_not_found", "That building does not exist.");
+  }
+  const siteId = BigInt(siteIdText);
+  const site = await prisma.basSite.findUnique({ where: { siteId }, select: { siteId: true, name: true } });
+  if (site === null) throw new BasError("building_not_found", "That building does not exist.");
+
+  const before = await prisma.basSiteOccupancy.findMany({ where: { siteId }, orderBy: { weekday: "asc" } });
+  const previous = before.map((o) => ({ weekday: o.weekday, start: minuteText(o.startMinute), end: minuteText(o.endMinute) }));
+  const next = [...input.days].sort((a, b) => a.weekday - b.weekday);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.basSiteOccupancy.deleteMany({ where: { siteId } });
+    if (next.length > 0) {
+      await tx.basSiteOccupancy.createMany({
+        data: next.map((d) => ({ siteId, weekday: d.weekday, startMinute: minuteOf(d.start), endMinute: minuteOf(d.end) })),
+      });
+    }
+    await writeAuditEvent(tx, {
+      action: "bas.building_occupancy_updated",
+      actorEmployeeId: viewer.id,
+      moduleKey: BAS_MODULE_KEY,
+      metadata: {
+        siteId: siteIdText,
+        name: site.name,
+        hours: describeOccupancy(next),
+        previousHours: describeOccupancy(previous),
+        days: next,
+      },
+    });
+  });
+
+  return { days: next };
 }

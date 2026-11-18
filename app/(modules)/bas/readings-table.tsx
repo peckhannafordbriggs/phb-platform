@@ -10,6 +10,7 @@ import type {
 } from "@/lib/modules/bas/types";
 import { withUnit } from "@/lib/modules/bas/units";
 import { stateWord, type BooleanStates, type ValueKind } from "@/lib/modules/bas/value-kind";
+import { Button } from "@/components/ui";
 import {
   ApiError,
   describeNoReadings,
@@ -19,42 +20,22 @@ import {
 } from "./health-client";
 
 /**
- * The raw readings behind the chart, as rows.
- *
- * This exists for one question: "the chart looks wrong - what is actually
- * stored?" So every row is a stored row (`ReadingRow`, all three value
- * columns), the order is newest first, the timestamp is the chart tooltip's
- * own formatter in the chart's own zone so a row and a point match by eye,
- * and the value is the stored value with its unit symbol - never the rounded
- * reading the tooltip shows, never a bucket's average. A state point's rows
- * read as its words, the same words as its axis; a string point's rows are
- * the stored strings.
- *
- * Mounted only while the toggle says "table", so a person on the chart never
- * makes this request. Fetches on mount and whenever the point, the range or
- * the page changes; a poll that moves a preset's window moves the table with
- * it, quietly, keeping the rows up while the next page loads.
+ * The readings table behind the chart (2026-10-09): the STORED rows for the
+ * same point over the very two instants the chart's response carries, newest
+ * first, 200 a page. Never bucketed - a separate path from the chart's series,
+ * importing nothing from it. A boolean row is its state word, a numeric row
+ * is the stored value whole with the unit symbol, and a timestamp is the
+ * tooltip's format in the building's zone with the exact instant as its title.
  */
 
 export interface ReadingsTableProps {
   point: PointOption;
   range: TrendRange;
   extent: PointExtent;
-  /** Called with the range's total whenever a page arrives, for the heading. */
   onTotal?: (total: number) => void;
 }
 
-/**
- * The stored value as the row shows it, by the point's kind.
- *
- * The kind's own column first: a state as its word, a string verbatim, a
- * number as JavaScript prints it (shortest round-trip, so `72.02734375` is
- * shown whole) with the unit symbol through the one formatter. When the
- * kind's column is empty and another is not - a `real` point with a stray
- * boolean row, a collector defect - the stray value is shown raw rather than
- * hidden behind a dash, because a dash would say "null record" about a row
- * that is not one. A row with nothing in any column is "—", as on the tiles.
- */
+/** The stored value as text: the state word, the string, or the number with its unit. */
 export function renderStoredReading(
   row: ReadingRow,
   kind: ValueKind,
@@ -66,7 +47,6 @@ export function renderStoredReading(
   }
   if (kind === "string" && row.valueStr !== null) return row.valueStr;
   if (kind === "numeric" && row.valueNum !== null) return withUnit(String(row.valueNum), unit);
-  // The kind's column is empty. Whatever IS stored, shown as stored.
   if (row.valueNum !== null) return String(row.valueNum);
   if (row.valueBool !== null) return String(row.valueBool);
   if (row.valueStr !== null) return row.valueStr;
@@ -78,10 +58,7 @@ export function ReadingsTable({ point, range, extent, onTotal }: ReadingsTablePr
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // A new point or range starts at page 1: page 12 of one range is not a
-  // place in another. The page is remembered WITH the selection it belongs
-  // to, so a change of selection reads as page 1 in the same render and
-  // never fetches the old page first.
+  // The page belongs to one selection; a new point or range starts at page 1.
   const selectionKey = `${point.pointId}|${range.from}|${range.to}`;
   const [pageFor, setPageFor] = useState<{ key: string; page: number }>({
     key: selectionKey,
@@ -101,8 +78,6 @@ export function ReadingsTable({ point, range, extent, onTotal }: ReadingsTablePr
         );
         setData(next);
         setError(null);
-        // The server clamps a page past the end; follow it, so the pager
-        // and the rows agree about where we are.
         if (next.page !== page) setPage(next.page);
         onTotal?.(next.total);
       } catch (caught) {
@@ -115,7 +90,7 @@ export function ReadingsTable({ point, range, extent, onTotal }: ReadingsTablePr
       }
     })();
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the selection is keyed by selectionKey
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the key is the selection; the callbacks are the parent's
   }, [selectionKey, page]);
 
   if (error !== null && data === null) {
@@ -156,24 +131,23 @@ export function ReadingsTable({ point, range, extent, onTotal }: ReadingsTablePr
       )}
       {/* The one scroll box: about seven rows, a sticky header. */}
       <div className="max-h-72 overflow-auto" aria-busy={loading}>
-        <table className="w-full border-collapse text-sm" data-testid="bas-readings-table">
+        <table className="w-full border-collapse text-[0.8125rem]" data-testid="bas-readings-table">
           <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
             <tr>
-              <th className="px-3 py-2 font-medium">Time</th>
-              <th className="px-3 py-2 text-right font-medium">Value</th>
+              <th className="eyebrow px-3 py-2.5 text-[var(--muted)]">Time</th>
+              <th className="eyebrow px-3 py-2.5 text-right text-[var(--muted)]">Value</th>
             </tr>
           </thead>
           <tbody>
             {data.rows.map((row) => (
-              <tr key={row.ts} className="border-t border-[var(--border)]">
+              <tr key={row.ts} className="border-t border-[var(--divider-soft)]">
                 <td
-                  className="px-3 py-1.5 text-[var(--muted)] tabular-nums"
-                  // The exact stored instant, for matching against the CSV.
+                  className="px-3 py-2 text-[var(--muted)] tabular-nums"
                   title={row.ts}
                 >
                   {formatTimestamp(row.ts, undefined, zone)}
                 </td>
-                <td className="px-3 py-1.5 text-right tabular-nums" data-testid="bas-reading-value">
+                <td className="px-3 py-2 text-right tabular-nums" data-testid="bas-reading-value">
                   {renderStoredReading(row, point.valueKind, point.unit, point.states)}
                 </td>
               </tr>
@@ -182,55 +156,30 @@ export function ReadingsTable({ point, range, extent, onTotal }: ReadingsTablePr
         </table>
       </div>
       <nav
-        className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]"
+        className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--divider-soft)] px-4 py-2.5 text-xs text-[var(--muted)]"
         aria-label="Readings pages"
       >
         <span data-testid="bas-readings-position">
           {formatCount(first)}–{formatCount(last)} of {formatCount(data.total)}, newest first
         </span>
         <span className="flex items-center gap-1">
-          <PagerButton label="First" disabled={data.page <= 1} onClick={() => setPage(1)} />
-          <PagerButton
-            label="Previous"
-            disabled={data.page <= 1}
-            onClick={() => setPage(data.page - 1)}
-          />
+          <Button size="sm" disabled={data.page <= 1} onClick={() => setPage(1)}>
+            First
+          </Button>
+          <Button size="sm" disabled={data.page <= 1} onClick={() => setPage(data.page - 1)}>
+            Previous
+          </Button>
           <span className="px-1 tabular-nums" data-testid="bas-readings-page">
             Page {formatCount(data.page)} of {formatCount(data.pages)}
           </span>
-          <PagerButton
-            label="Next"
-            disabled={data.page >= data.pages}
-            onClick={() => setPage(data.page + 1)}
-          />
-          <PagerButton
-            label="Last"
-            disabled={data.page >= data.pages}
-            onClick={() => setPage(data.pages)}
-          />
+          <Button size="sm" disabled={data.page >= data.pages} onClick={() => setPage(data.page + 1)}>
+            Next
+          </Button>
+          <Button size="sm" disabled={data.page >= data.pages} onClick={() => setPage(data.pages)}>
+            Last
+          </Button>
         </span>
       </nav>
     </>
-  );
-}
-
-function PagerButton({
-  label,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="rounded border border-[var(--border)] bg-[var(--neutral-0)] px-2 py-0.5 text-[0.6875rem] hover:bg-[var(--neutral-100)] disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--neutral-0)]"
-    >
-      {label}
-    </button>
   );
 }

@@ -581,6 +581,34 @@ describe("the Needs Review app registration reaches the container without a secr
     expect(result.present).toBe(false);
   });
 
+  it("treats a blank value as absent, so the template's blank defaults leave the tab not connected rather than half-configured", async () => {
+    // A template deployment with coReviewAppTenantId, coReviewAppClientId and
+    // coReviewSharePointFolder unset in the parameters file puts all three on
+    // the container app with value '' (what-if, 2026-11-11, against a live app
+    // that carried none of them). Blank must read as absent: withReview answers
+    // review_not_configured, the tab says "not connected", nothing throws at
+    // boot and no request reaches Graph. A reader that took '' as a value
+    // would try to sign in as client id '' and fail somewhere less clear.
+    const env = await import("@/lib/env");
+    const names = [
+      env.CO_REVIEW_APP_TENANT_ID_VAR,
+      env.CO_REVIEW_APP_CLIENT_ID_VAR,
+      env.CO_REVIEW_SHAREPOINT_FOLDER_VAR,
+    ];
+    const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+      for (const name of names) process.env[name] = "";
+      const result = env.readReviewEnv();
+      expect(result.present).toBe(false);
+      if (!result.present) expect(result.missing).toEqual([...names].sort());
+    } finally {
+      for (const name of names) {
+        if (before[name] === undefined) delete process.env[name];
+        else process.env[name] = before[name]!;
+      }
+    }
+  });
+
   it("ships the three parameters blank in the example file, beside the CIP ones", async () => {
     const example = JSON.parse(
       await import("node:fs/promises").then((fs) =>
@@ -591,6 +619,228 @@ describe("the Needs Review app registration reaches the container without a secr
     expect(example.parameters.coReviewAppTenantId?.value).toBe("");
     expect(example.parameters.coReviewAppClientId?.value).toBe("");
     expect(example.parameters.coReviewSharePointFolder?.value).toBe("");
+  });
+});
+
+/**
+ * Template drift, found and reconciled 2026-11-11 (runbook.md -> "A template
+ * what-if shows the container app losing a secret, gaining blank variables,
+ * or changing its probes"). The Freeze Protection key was put on the live
+ * app by hand on 4-5 November under the runbook's own steps 1-3; step 4, the
+ * flag in infra/main.parameters.json, was missed, and the first what-if
+ * afterwards listed the secret and its variable as Delete. The template was
+ * never wrong - the parameters file was silent. These guards hold the pieces
+ * an operator reads when wiring a hand-set secret to each other: every flag
+ * the template declares is in the example file (so a copied parameters file
+ * cannot be silent about it), each flag gates BOTH halves of its reference on
+ * the web app (the secret and the env entry that names it), and the README
+ * and the runbook name every flag. The mutation each is for: add a sixth
+ * `...InKeyVault` flag to the bicep without the example-file line and the
+ * third test fails; gate the secret and the env entry on different flags and
+ * the second does.
+ */
+describe("every Key Vault flag the template declares is visible where a hand-set secret is wired", () => {
+  const readFile = (rel: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, rel), "utf8"));
+  const flagsIn = (bicep: string) =>
+    [...bicep.matchAll(/^param (\w+InKeyVault) bool = (true|false)$/gm)].map((m) => ({ flag: m[1]!, def: m[2]! }));
+
+  it("declares each flag false by default, and the five known ones are among them", async () => {
+    const flags = flagsIn(await readFile("infra/main.bicep"));
+    expect(flags.map((f) => f.flag)).toEqual(
+      expect.arrayContaining([
+        "anthropicApiKeyInKeyVault",
+        "coAnthropicApiKeyInKeyVault",
+        "fpAnthropicApiKeyInKeyVault",
+        "basCredentialKeyInKeyVault",
+        "basAskDatabaseUrlInKeyVault",
+      ]),
+    );
+    // True by default would reference a secret that may not exist and fail
+    // the whole revision - the reason every one of these is a flag at all.
+    for (const { flag, def } of flags) expect(def, flag).toBe("false");
+  });
+
+  it("gates a secret entry AND the env entry that names it on the web app with the same flag", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const app = bicep.split("resource containerApp ")[1]!.split(/\n(?=resource )/)[0]!;
+    for (const { flag } of flagsIn(bicep)) {
+      const secret = app.match(
+        new RegExp(`\\.\\.\\.\\(${flag}\\s*\\?\\s*\\[\\s*\\{\\s*name:\\s*'([a-z0-9-]+)'\\s*keyVaultUrl:`),
+      );
+      expect(secret, `${flag} gates a secret entry`).not.toBeNull();
+      const env = app.match(
+        new RegExp(`\\.\\.\\.\\(${flag}\\s*\\?\\s*\\[\\s*\\{\\s*name:\\s*'([A-Z0-9_]+)'\\s*secretRef:\\s*'([a-z0-9-]+)'`),
+      );
+      expect(env, `${flag} gates an env entry`).not.toBeNull();
+      expect(env![2], `${flag}: the env entry names the secret the same flag creates`).toBe(secret![1]);
+    }
+  });
+
+  it("is in the example parameters file as false, so a copied parameters file cannot be silent about it", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    for (const { flag } of flagsIn(await readFile("infra/main.bicep"))) {
+      expect(example.parameters[flag]?.value, flag).toBe(false);
+    }
+  });
+
+  it("is named in the README and in the runbook, beside the record of the 2026-11-11 drift", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const readme = await readFile("infra/README.md");
+    const runbook = await readFile("runbook.md");
+    for (const { flag } of flagsIn(bicep)) {
+      expect(readme, flag).toContain(flag);
+      expect(runbook, flag).toContain(flag);
+    }
+    const heading =
+      "## A template what-if shows the container app losing a secret, gaining blank variables, or changing its probes";
+    expect(runbook).toContain(heading);
+    const section = runbook.split(heading)[1]!.split("\n## ")[0]!;
+    // The record names the flag that was missed and the rule that came out of it.
+    expect(section).toContain("fpAnthropicApiKeyInKeyVault");
+    expect(section).toMatch(/by-hand change to the live app is drift/i);
+    expect(readme).toContain("A template what-if shows the container app losing a secret");
+  });
+});
+
+/**
+ * The image parameters are passed on the command line and never carried by
+ * the parameters file. A file names the image of the day it was written: on
+ * 2026-11-11 the owner's file still named the cip-worker image of 2 November
+ * while the job ran 11 November's, and the README's routine command, which
+ * then read only the web app's image, would have rolled the worker back 28
+ * commits. The routine command reads every running image.
+ */
+describe("the image parameters are read from the running resources, never from the parameters file", () => {
+  const readFile = (rel: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, rel), "utf8"));
+
+  it("ships none of them in the example file", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    for (const name of ["containerImage", "cipWorkerImage", "basReportsImage"]) {
+      expect(Object.keys(example.parameters), name).not.toContain(name);
+    }
+  });
+
+  it("reads each of them in the README's routine deploy command", async () => {
+    const readme = await readFile("infra/README.md");
+    // CRLF on a Windows checkout, LF in CI: anchor on the heading, not on one newline form.
+    const deploy = readme.split(/\r?\n## Deploy\r?\n/)[1]!.split("\n## ")[0]!;
+    expect(deploy).toMatch(/IMAGE="\$\(az containerapp show/);
+    expect(deploy).toMatch(/CIP="\$\(az containerapp job show -n <baseName>-cip-worker/);
+    expect(deploy).toMatch(/REPORTS="\$\(az containerapp job show -n <baseName>-bas-reports-worker/);
+    expect(deploy).toContain('containerImage="$IMAGE" cipWorkerImage="$CIP" basReportsImage="$REPORTS"');
+  });
+});
+
+/**
+ * Every Container App and Container Apps Job name the template generates,
+ * computed with the production values and held to Azure's rule for the
+ * resource type: 2 to 32 characters, lowercase alphanumerics and '-', a
+ * letter first, an alphanumeric last, no '--'. The first production
+ * deployment of the Reports jobs (2026-11-11, `bas-reports-enable`) failed
+ * with ContainerAppInvalidName on '<baseName>-bas-reports-scheduler' - 34
+ * characters with the production baseName - after the worker job and the
+ * app revision had already gone through. Nothing in the repository looked
+ * at a generated name's length; this does, so the next name that is too
+ * long fails here and not in Azure. The mutation it is for: lengthen any
+ * job's suffix past 19 characters and the first test names it.
+ */
+describe("every Container App and Container Apps Job name fits Azure's naming rule with the production baseName", () => {
+  const readFile = (rel: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, rel), "utf8"));
+  // namePrefix is the example the template's own @description gives; environmentName the example file's.
+  const PRODUCTION = { namePrefix: "phbplat", environmentName: "prod" };
+  const RULE = /^[a-z][a-z0-9-]*[a-z0-9]$/;
+  const MAX = 32;
+
+  const violations = (name: string) => {
+    const out: string[] = [];
+    if (name.length > MAX) out.push(`${name.length} characters, the cap is ${MAX}`);
+    if (name.length < 2) out.push("shorter than 2 characters");
+    if (!RULE.test(name)) out.push("not lowercase alphanumerics and '-', starting with a letter and ending alphanumeric");
+    if (name.includes("--")) out.push("contains '--'");
+    return out;
+  };
+
+  /** A bicep name expression as a string: a '${baseName}-...' literal, or a var holding one. */
+  const resolve = (bicep: string, expr: string, baseName: string): string => {
+    const literal = /^'([^']*)'$/.exec(expr.trim());
+    let text: string;
+    if (literal) {
+      text = literal[1]!;
+    } else {
+      const v = new RegExp(`^var ${expr.trim()} = '([^']*)'$`, "m").exec(bicep);
+      if (!v) throw new Error(`cannot resolve the name expression ${expr.trim()}`);
+      text = v[1]!;
+    }
+    const resolved = text.replace(/\$\{baseName\}/g, baseName);
+    if (/\$\{/.test(resolved)) throw new Error(`${expr.trim()} still holds an expression after baseName: ${resolved}`);
+    return resolved;
+  };
+
+  const generatedNames = (bicep: string, values: { namePrefix: string; environmentName: string }) => {
+    expect(bicep).toMatch(/^var baseName = toLower\('\$\{namePrefix\}-\$\{environmentName\}'\)$/m);
+    const baseName = `${values.namePrefix}-${values.environmentName}`.toLowerCase();
+    // The resource line and its `name:` as the first property, with comment
+    // lines allowed between - every app and job in the template is written
+    // that way, and a container's `name:` deeper in a block is not matched.
+    const heads = [
+      ...bicep.matchAll(/^resource (\w+) 'Microsoft\.App\/(containerApps|jobs)@[^']+'[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*name: ([^\n]+)$/gm),
+    ];
+    return heads.map((m) => ({ resource: m[1]!, type: m[2]!, name: resolve(bicep, m[3]!, baseName) }));
+  };
+
+  it("finds the app and every job, and each generated name passes", async () => {
+    const bicep = await readFile("infra/main.bicep");
+    const names = generatedNames(bicep, PRODUCTION);
+    expect(names.map((n) => n.resource)).toEqual(
+      expect.arrayContaining([
+        "containerApp",
+        "cipWorkerJob",
+        "basReportsSchedulerJob",
+        "basReportsWorkerJob",
+        "dbBackupJob",
+        "coShadowFeedJob",
+        "coShadowCollectJob",
+        "coClassifyJob",
+      ]),
+    );
+    expect(names.filter((n) => n.type === "containerApps").length).toBe(1);
+    for (const { resource, name } of names) {
+      expect(violations(name), `${resource} -> '${name}'`).toEqual([]);
+    }
+  });
+
+  it("would have refused the name that failed in Azure, and keeps the worker's name because that job exists", async () => {
+    expect(violations("phbplat-prod-bas-reports-scheduler")).toEqual(["34 characters, the cap is 32"]);
+    expect(violations("phbplat-prod--x")).toEqual(["contains '--'"]);
+    expect(violations("Phbplat-prod-app")).toHaveLength(1);
+    const bicep = await readFile("infra/main.bicep");
+    const names = Object.fromEntries(generatedNames(bicep, PRODUCTION).map((n) => [n.resource, n.name]));
+    expect(names.basReportsSchedulerJob).toBe("phbplat-prod-bas-reports-sched");
+    expect(names.basReportsWorkerJob).toBe("phbplat-prod-bas-reports-worker");
+  });
+
+  it("holds with the values in the local parameters file too, when there is one", async () => {
+    // Gitignored, so absent in CI; locally it carries the real production values.
+    let local: Record<string, { value?: unknown }>;
+    try {
+      local = (JSON.parse(await readFile("infra/main.parameters.json")) as { parameters: Record<string, { value?: unknown }> }).parameters;
+    } catch {
+      return;
+    }
+    const namePrefix = local.namePrefix?.value;
+    const environmentName = local.environmentName?.value;
+    if (typeof namePrefix !== "string" || typeof environmentName !== "string" || namePrefix.startsWith("<")) return;
+    const bicep = await readFile("infra/main.bicep");
+    for (const { resource, name } of generatedNames(bicep, { namePrefix, environmentName })) {
+      expect(violations(name), `${resource} -> '${name}'`).toEqual([]);
+    }
   });
 });
 
@@ -890,6 +1140,8 @@ describe("the two deploy paths cannot diverge on the image or the port", () => {
       "--memory",
       "--min-replicas",
       "--max-replicas",
+      "--scale-rule-name",
+      "--scale-rule-http-concurrency",
       "--secrets",
     ]) {
       expect(deploy, flag).not.toContain(flag);
@@ -1000,7 +1252,7 @@ describe("the two secure parameters are optional, and omitted means unchanged (2
     // gives Bicep the dependency. ARM ignores a dependency on a resource
     // whose condition is false, so an omitted secret does not block a redeploy.
     const databaseUrlRefs = code.match(/secrets\/\$\{databaseUrlSecret\.name\}/g) ?? [];
-    expect(databaseUrlRefs.length).toBe(4); // the app, the CIP and KB worker jobs, the backup job
+    expect(databaseUrlRefs.length).toBe(6); // the app, the CIP and KB worker jobs, the backup job, the two BAS Reports jobs
     expect(code).toMatch(/secrets\/\$\{authSecretSecret\.name\}/);
   });
 
@@ -1242,12 +1494,19 @@ describe("the nightly database backup is conditional, identity-only, and holds n
       .split(/\r?\n/)
       .filter((line) => !line.trim().startsWith("//"))
       .join("\n");
-  /** The dbBackupJob resource block, from its declaration to the next section rule. */
+  /**
+   * The dbBackupJob resource block, from its declaration to the next
+   * declaration or section rule. `codeOnly` has already dropped the comment
+   * lines, so the section rule is not there to stop at; until the Part E
+   * shadow jobs were added after this one (2026-10-30) the block ran to the
+   * end of the file and happened to hold only this job.
+   */
   const jobBlock = (bicep: string) => {
     const start = bicep.indexOf("resource dbBackupJob ");
     expect(start).toBeGreaterThan(-1);
-    const rest = bicep.slice(start);
-    return rest.slice(0, rest.indexOf("\n// ----"));
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\nvar "), rest.indexOf("\n// ----")].filter((i) => i > 0);
+    return rest.slice(0, ends.length ? Math.min(...ends) : undefined);
   };
   /** One resource block, from its declaration to the next declaration. */
   const resourceBlock = (bicep: string, name: string) => {
@@ -1538,6 +1797,445 @@ describe("the Knowledge Base worker job", () => {
   });
 });
 
+describe("the Phase 12 Part E shadow run: three jobs behind one flag, two identities, one secret (2026-10-30)", () => {
+  /**
+   * docs/phase-12-part-e-plan.md section 5, decided in section 14: the shadow
+   * run's jobs live in the Bicep behind enableCoShadow - off by default, like
+   * enableDbBackup and for the same reason (the image has to be in the
+   * registry first). The feed reads the LIVE tree as the reader app and
+   * writes the COPY as the engine app; only the feed and the by-hand classify
+   * job carry the Change Orders Anthropic key, by reference; the collector
+   * makes no model call and carries no secret. The two live tracker
+   * workbooks are configuration here and spelled nowhere in code.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) =>
+      fs.readFile(path.join(projectRoot, relative), "utf8"),
+    );
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  /** One resource block, from its declaration to the next declaration or section rule. */
+  const resourceBlock = (bicep: string, name: string) => {
+    const start = bicep.indexOf(`resource ${name} `);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\n// ----")].filter((i) => i > 0);
+    return rest.slice(0, Math.min(...ends));
+  };
+
+  const SHADOW_JOBS = ["coShadowFeedJob", "coShadowCollectJob", "coClassifyJob"];
+
+  it("is off by default, and all three jobs are conditional on the same parameter with ternary outputs", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param enableCoShadow bool = false$/m);
+    for (const name of SHADOW_JOBS) {
+      expect(code, name).toMatch(new RegExp(`^resource ${name} '[^']+' = if \\(enableCoShadow\\) \\{$`, "m"));
+    }
+    const conditional = code.match(/^resource (\w+) '[^']+' = if \(enableCoShadow\)/gm) ?? [];
+    expect(conditional.length).toBe(SHADOW_JOBS.length);
+    const outputs = code.split("\n").filter((line) => /^output (coShadowFeedJobName|coShadowCollectJobName|coClassifyJobName)/.test(line));
+    expect(outputs.length).toBe(3);
+    for (const line of outputs) expect(line).toMatch(/= enableCoShadow \? \w+\.name : ''$/);
+  });
+
+  it("schedules the feed and the collector in UTC with a bounded run and no retry, and keeps the classify job manual", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const feed = resourceBlock(code, "coShadowFeedJob");
+    expect(feed).toMatch(/triggerType: 'Schedule'/);
+    expect(feed).toMatch(/cronExpression: coShadowFeedCron/);
+    expect(feed).toMatch(/parallelism: 1/);
+    expect(feed).toMatch(/replicaCompletionCount: 1/);
+    expect(feed).toMatch(/replicaRetryLimit: 0/);
+    // shorter than the hour between feed runs, so two can never overlap
+    const feedTimeout = Number(/replicaTimeout: (\d+)/.exec(feed)?.[1]);
+    expect(feedTimeout).toBeGreaterThan(0);
+    expect(feedTimeout).toBeLessThan(3600);
+    const collect = resourceBlock(code, "coShadowCollectJob");
+    expect(collect).toMatch(/triggerType: 'Schedule'/);
+    expect(collect).toMatch(/cronExpression: coShadowCollectCron/);
+    expect(collect).toMatch(/replicaRetryLimit: 0/);
+    const classify = resourceBlock(code, "coClassifyJob");
+    expect(classify).toMatch(/triggerType: 'Manual'/);
+    expect(classify).toMatch(/manualTriggerConfig/);
+    // the defaults are the window's crons, in UTC, under Eastern standard time
+    expect(code).toMatch(/^param coShadowFeedCron string = '45 11-22 \* \* 1-5'$/m);
+    expect(code).toMatch(/^param coShadowCollectCron string = '0 16,21,23 \* \* 1-5'$/m);
+    expect(code).toMatch(/^param coShadowSnapshotHoursUtc string = '12,17'$/m);
+    // and the template says what those are in New York, both halves of the year
+    expect(await readFile("infra/main.bicep")).toMatch(/13:00 and 18:00 UTC/);
+  });
+
+  it("gives the feed and the classify job the Change Orders key by reference, and the collector no secret at all", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    for (const name of ["coShadowFeedJob", "coClassifyJob"]) {
+      const job = resourceBlock(code, name);
+      expect(job, name).toMatch(/name:\s*'CO_ANTHROPIC_API_KEY'\s*\n\s*secretRef:\s*'co-anthropic-api-key'/);
+      expect(job, name).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{coAnthropicApiKeySecretName\}'/);
+      expect(job, name).not.toMatch(/ANTHROPIC_API_KEY'\s*\n\s*value:/);
+      expect(job, name).not.toMatch(/anthropicApiKeySecretName\b(?!.*co)/);
+    }
+    const collect = resourceBlock(code, "coShadowCollectJob");
+    expect(collect).not.toMatch(/secrets:/);
+    expect(collect).not.toMatch(/ANTHROPIC/);
+    expect(collect).not.toMatch(/secretRef/);
+    // never the BAS key: the shadow is the change-order module's
+    for (const name of SHADOW_JOBS) expect(resourceBlock(code, name)).not.toMatch(/\banthropicApiKeySecretName\b/);
+  });
+
+  it("names both identities as plain values and never a workbook path in code", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const common = code.slice(code.indexOf("var coShadowCommonEnv"), code.indexOf("resource coShadowFeedJob"));
+    expect(common).toMatch(/name: 'CO_GRAPH_APP_CLIENT_ID'\s*\n\s*value: coEngineAppClientId/);
+    expect(common).toMatch(/name: 'CO_READER_APP_CLIENT_ID'\s*\n\s*value: coReaderAppClientId/);
+    expect(common).toMatch(/name: 'CO_GRAPH_AUTH'\s*\n\s*value: 'federated'/);
+    expect(common).toMatch(/name: 'CO_READER_GRAPH_AUTH'\s*\n\s*value: 'federated'/);
+    expect(common).toMatch(/name: 'CO_SHADOW_ROOT'\s*\n\s*value: coShadowRoot/);
+    // the two workbooks are parameters with blank defaults; the words never appear as values
+    expect(code).toMatch(/^param coShadowBidTrackerPath string = ''$/m);
+    expect(code).toMatch(/^param coShadowMasterPath string = ''$/m);
+    expect(code).not.toMatch(/Bid Tracker\.xlsx/);
+    expect(code).not.toMatch(/Managment/);
+    // the reader's id reaches only the feed and the collector through the common env; the engine app's id too
+    const feed = resourceBlock(code, "coShadowFeedJob");
+    expect(feed).toMatch(/CO_SHADOW_BID_TRACKER_PATH/);
+    expect(feed).toMatch(/CO_SHADOW_SNAPSHOT_HOURS_UTC/);
+    expect(feed).toMatch(/CO_CLASSIFIER_MODEL_STEPS/);
+  });
+
+  it("runs the three scripts by path with no argument, from one image that is a required parameter when the flag is on", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param coEngineImage string = ''$/m);
+    expect(code).not.toMatch(/phb-co-engine:[a-z0-9-]+'/);
+    const scripts: Record<string, string> = {
+      coShadowFeedJob: "/app/infra/shadow-feed.sh",
+      coShadowCollectJob: "/app/infra/shadow-collect.sh",
+      coClassifyJob: "/app/infra/classify-job.sh",
+    };
+    for (const [name, script] of Object.entries(scripts)) {
+      const job = resourceBlock(code, name);
+      expect(job, name).toMatch(/image: coEngineImage/);
+      const command = /command: \[([\s\S]*?)\]/.exec(job)?.[1] ?? "";
+      expect(command.trim().split(/\s+/), name).toEqual(["'sh'", `'${script}'`]);
+    }
+  });
+
+  it("ships the flag off and the nine plain values blank in the example parameters", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    expect(example.parameters.enableCoShadow?.value).toBe(false);
+    for (const name of ["coEngineImage", "coEngineAppClientId", "coReaderAppClientId", "coGraphTenantId",
+      "coShadowDriveId", "coShadowRoot", "coShadowBidTrackerPath", "coShadowMasterPath"]) {
+      expect(example.parameters[name]?.value, name).toBe("");
+    }
+  });
+
+  it("is documented where the other optional pieces are", async () => {
+    expect(await readFile("infra/README.md")).toMatch(/enableCoShadow/);
+    expect(await readFile("runbook.md")).toMatch(/enableCoShadow/);
+  });
+
+  describe("in the compiled ARM, when az is installed", () => {
+    const arm = (() => {
+      const r = spawnSync("az", ["bicep", "build", "--file", "infra/main.bicep", "--stdout"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        shell: true,
+      });
+      if (r.status !== 0 || !r.stdout) return null;
+      return JSON.parse(r.stdout) as {
+        parameters: Record<string, { type: string; defaultValue?: unknown }>;
+        resources: Array<{ type: string; name: string; condition?: string; properties?: Record<string, unknown> }>;
+      };
+    })();
+    const itIfArm = arm ? it : it.skip;
+
+    itIfArm("every shadow job is conditional on enableCoShadow, and the flag defaults to false", () => {
+      expect(arm!.parameters.enableCoShadow).toMatchObject({ type: "bool", defaultValue: false });
+      const jobs = arm!.resources.filter((r) => r.type === "Microsoft.App/jobs" && /co-shadow|co-classify/.test(r.name));
+      expect(jobs.length).toBe(3);
+      for (const j of jobs) expect(j.condition, j.name).toBe("[parameters('enableCoShadow')]");
+    });
+
+    itIfArm("the collector carries no secret and the feed's one secret is the Change Orders key", () => {
+      const byName = (part: string) => arm!.resources.find((r) => r.type === "Microsoft.App/jobs" && r.name.includes(part));
+      const collect = byName("co-shadow-collect")!;
+      const cfg = (collect.properties as { configuration?: { secrets?: unknown[] } }).configuration ?? {};
+      expect(cfg.secrets ?? []).toEqual([]);
+      const feed = byName("co-shadow-feed")!;
+      const fcfg = (feed.properties as { configuration: { secrets: Array<{ name: string; keyVaultUrl: string }> } }).configuration;
+      expect(fcfg.secrets.map((s) => s.name)).toEqual(["co-anthropic-api-key"]);
+      // the compiled reference names the variable, which holds CO-ANTHROPIC-API-KEY
+      expect(fcfg.secrets[0]!.keyVaultUrl).toMatch(/coAnthropicApiKeySecretName/);
+    });
+  });
+});
+
+describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one image, and no new role assignment (2026-11-12)", () => {
+  /**
+   * Reports Phase 3. Two Container Apps Jobs from one image behind
+   * enableBasReports - off by default, like enableCipWorker and for the same
+   * reason - the scheduler on a cron and the worker on a PostgreSQL scaler
+   * that counts queued runs and stalled ones. The identity, the registry
+   * pull and the vault read are the ones the platform already holds, so a
+   * Contributor deploys this; secrets reach both jobs by reference only;
+   * the worker's replica timeout is above the longest time cap a definition
+   * may set plus the worker's drain window; and the deploy workflow builds
+   * the image and updates each job only once its variable is set.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, relative), "utf8"));
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  const resourceBlock = (bicep: string, name: string) => {
+    const start = bicep.indexOf(`resource ${name} `);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\nvar "), rest.indexOf("\noutput ")].filter((i) => i > 0);
+    return rest.slice(0, ends.length ? Math.min(...ends) : undefined);
+  };
+  const JOBS = ["basReportsSchedulerJob", "basReportsWorkerJob"];
+
+  it("is off by default, both jobs are conditional on the one flag, and the outputs read them only through a ternary", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param enableBasReports bool = false$/m);
+    expect(code).toMatch(/^param basReportsImage string = ''$/m);
+    expect(code).toMatch(/^param basReportsSchedulerCron string = '\*\/15 \* \* \* \*'$/m);
+    for (const name of JOBS) {
+      expect(code, name).toMatch(new RegExp(`^resource ${name} '[^']+' = if \\(enableBasReports\\) \\{$`, "m"));
+    }
+    const conditional = code.match(/^resource (\w+) '[^']+' = if \(enableBasReports\)/gm) ?? [];
+    expect(conditional.length).toBe(JOBS.length);
+    const outputs = code.split("\n").filter((line) => /^output (basReportsSchedulerJobName|basReportsWorkerJobName)/.test(line));
+    expect(outputs.length).toBe(2);
+    for (const line of outputs) expect(line).toMatch(/= enableBasReports \? \w+\.name : ''$/);
+  });
+
+  it("schedules the scheduler on the cron and scales the worker on the queue, two at most, with the claim's own predicate", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const scheduler = resourceBlock(code, "basReportsSchedulerJob");
+    expect(scheduler).toMatch(/triggerType: 'Schedule'/);
+    expect(scheduler).toMatch(/cronExpression: basReportsSchedulerCron/);
+    expect(scheduler).toMatch(/parallelism: 1/);
+    expect(scheduler).toMatch(/replicaRetryLimit: 1/);
+    expect(scheduler).toMatch(/command: \[\s*'npx'\s*'tsx'\s*'scripts\/bas-reports-scheduler\.ts'\s*\]/);
+
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    expect(worker).toMatch(/triggerType: 'Event'/);
+    expect(worker).toMatch(/maxExecutions: 2/);
+    expect(worker).toMatch(/minExecutions: 0/);
+    expect(worker).toMatch(/replicaRetryLimit: 0/);
+    expect(worker).toMatch(/type: 'postgresql'/);
+    // Queued runs, stalled runs, queued PDF renders (Phase 4) and - since the email half, 2026-11-17 - due report
+    // emails, so Retry PDF, Resend and Send to me each wake a worker (tests/bas-reports-queue-guards.test.ts runs this exact query).
+    expect(worker).toMatch(
+      /query: 'SELECT \(SELECT count\(\*\) FROM bas_report_runs WHERE status = \\'queued\\' OR \(status = \\'running\\' AND heartbeat_at < now\(\) - interval \\'10 minutes\\'\) OR pdf_status = \\'queued\\'\) \+ \(SELECT count\(\*\) FROM bas_report_deliveries WHERE status = \\'pending\\' AND next_attempt_at <= now\(\) AND attempts < 3\) AS count'/,
+    );
+    expect(worker).toMatch(/secretRef: 'database-url'\s*\n\s*triggerParameter: 'connection'/);
+    expect(worker).toMatch(/command: \[\s*'npx'\s*'tsx'\s*'scripts\/bas-reports-worker\.ts'\s*\]/);
+    // Both run the same image, from the parameter with no placeholder default.
+    expect(scheduler).toMatch(/image: basReportsImage/);
+    expect(worker).toMatch(/image: basReportsImage/);
+  });
+
+  it("keeps the worker's replica timeout above the most minutes the safety ceiling may hold plus the drain window", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    const timeout = Number(/replicaTimeout: (\d+)/.exec(worker)?.[1]);
+    expect(timeout).toBe(1800);
+    // One number, decided in ceiling.ts (2026-11-12; a per-report cap before).
+    const ceiling = await readFile("lib/modules/bas/reports/ceiling.ts");
+    const capMinutes = Number(/^export const MAX_CEILING_MINUTES = (\d+);$/m.exec(ceiling)?.[1]);
+    const workerSource = await readFile("lib/modules/bas/reports/worker.ts");
+    const drainMinutes = Number(/export const DRAIN_WINDOW_MS = (\d+) \* 60 \* 1000;/.exec(workerSource)?.[1]);
+    expect(capMinutes).toBeGreaterThan(0);
+    expect(drainMinutes).toBeGreaterThan(0);
+    expect(timeout).toBeGreaterThanOrEqual((capMinutes + drainMinutes) * 60 + 60);
+    // The migration's CHECK, its default and the validation's bound agree with it.
+    const migration = await readFile("prisma/migrations/20261112150000_bas_reports_safety_ceiling/migration.sql");
+    expect(migration).toMatch(new RegExp(`CHECK \\(ceiling_minutes BETWEEN 1 AND ${capMinutes}\\)`));
+    expect(migration).toMatch(new RegExp(`"ceiling_minutes" INTEGER NOT NULL DEFAULT ${capMinutes}`));
+    expect(ceiling).toMatch(new RegExp(`minutes: ${capMinutes} \\}`));
+    const validation = await readFile("lib/validation/bas-reports.ts");
+    expect(validation).toMatch(/\.max\(MAX_CEILING_MINUTES, "The time cap cannot be more than 25 minutes\."\)/);
+    // And the definition no longer carries a cap of its own.
+    expect(migration).toMatch(/DROP COLUMN "max_minutes"/);
+    const schema = await readFile("prisma/schema.prisma");
+    expect(schema).not.toMatch(/max_minutes|budget_usd"\) @db\.Decimal\(8, 2\)\s*\n\s*\/\/\/ The wall-clock/);
+  });
+
+  it("reads every secret by reference - three for the worker, one for the scheduler - and nothing secret as a value", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    const scheduler = resourceBlock(code, "basReportsSchedulerJob");
+    expect(worker).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{databaseUrlSecret\.name\}'/);
+    expect(worker).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{basAskDatabaseUrlSecretName\}'/);
+    expect(worker).toMatch(/keyVaultUrl: '\$\{keyVault\.properties\.vaultUri\}secrets\/\$\{anthropicApiKeySecretName\}'/);
+    expect((worker.match(/keyVaultUrl:/g) ?? []).length).toBe(3);
+    expect((scheduler.match(/keyVaultUrl:/g) ?? []).length).toBe(1);
+    for (const block of [worker, scheduler]) {
+      for (const line of block.split("\n").filter((l) => /^\s*value:/.test(l))) {
+        // authUrl is the platform's public address, the email's link (2026-11-17): not a secret.
+        if (/^\s*value: authUrl$/.test(line)) continue;
+        expect(line).not.toMatch(/password|secret|Url|Key|Password/);
+      }
+      expect(block).toMatch(/name:\s*'DATABASE_URL'\s*\n\s*secretRef:\s*'database-url'/);
+      expect(block).toMatch(/identity: \{\s*type: 'UserAssigned'/);
+    }
+    expect(worker).toMatch(/name:\s*'ANTHROPIC_API_KEY'\s*\n\s*secretRef:\s*'anthropic-api-key'/);
+    expect(worker).toMatch(/name:\s*'BAS_ASK_DATABASE_URL'\s*\n\s*secretRef:\s*'bas-ask-database-url'/);
+    expect(scheduler).not.toMatch(/ANTHROPIC/);
+  });
+
+  it("adds no role assignment: both jobs depend only on the pull and the vault read the identity already holds", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    for (const name of JOBS) {
+      expect(resourceBlock(code, name)).toMatch(/dependsOn: \[\s*acrPull\s*keyVaultRead\s*\]/);
+    }
+    const assignments = code.match(/^resource \w+ 'Microsoft\.Authorization\/roleAssignments@[^']+'/gm) ?? [];
+    // The three that existed before this phase: the registry pull, the vault read, the backup's blob write.
+    expect(assignments.length).toBe(3);
+    expect(code).not.toMatch(/roleAssignments@[^\n]*basReports/);
+  });
+
+  it("builds one image on merge and updates each job only once its variable is set; the Dockerfile runs the worker under tsx and carries Chromium for the PDF", async () => {
+    const workflow = await readFile(".github/workflows/deploy.yml");
+    // The workflow file is CRLF on a Windows checkout: \s* spans the line break.
+    expect(workflow).toMatch(/--image "bas-reports:\$\{\{ github\.sha \}\}"\s*\\\s*--file Dockerfile\.bas-reports/);
+    expect(workflow).toMatch(/if: vars\.AZURE_BAS_REPORTS_SCHEDULER_JOB != '' \|\| vars\.AZURE_BAS_REPORTS_WORKER_JOB != ''/);
+    for (const v of ["AZURE_BAS_REPORTS_SCHEDULER_JOB", "AZURE_BAS_REPORTS_WORKER_JOB"]) {
+      expect(workflow).toMatch(new RegExp(`if: vars\\.${v} != ''\\s*run: \\|\\s*az containerapp job update \\\\\\s*--name "\\$\\{\\{ vars\\.${v} \\}\\}"`));
+    }
+    expect(workflow).toMatch(/azurecr\.io\/bas-reports:\$\{\{ github\.sha \}\}/);
+    const dockerfile = await readFile("Dockerfile.bas-reports");
+    expect(dockerfile).toMatch(/^FROM node:24-bookworm-slim$/m);
+    expect(dockerfile).toMatch(/CMD \["npx", "tsx", "scripts\/bas-reports-worker\.ts"\]/);
+    // Chromium for the PDF (Phase 4, 2026-11-13): Playwright's browser at the
+    // version the lockfile pins, with its apt dependencies, at a path the
+    // unprivileged user can read, and a launch-and-print check AS that user,
+    // so a browser that cannot start fails the build and not the first report.
+    const instructions = dockerfile.split(/\r?\n/).filter((line) => !line.trim().startsWith("#")).join("\n");
+    expect(instructions).toMatch(/^ENV PLAYWRIGHT_BROWSERS_PATH=\/ms-playwright$/m);
+    // The headless shell only (2026-11-13): a headless launch never runs the
+    // full browser, and a plain `install chromium` downloads both.
+    expect(instructions).toMatch(/RUN npx playwright install --with-deps --only-shell chromium\s*\\\s*&& chmod -R a\+rX \/ms-playwright/);
+    expect((instructions.match(/playwright install/g) ?? []).length).toBe(1);
+    expect(instructions.indexOf("ENV PLAYWRIGHT_BROWSERS_PATH")).toBeLessThan(instructions.indexOf("npx playwright install"));
+    // The check runs as `node`: the last USER in the file, and before the check.
+    const users = [...instructions.matchAll(/^USER (\S+)$/gm)];
+    expect(users.at(-1)![1]).toBe("node");
+    expect(users.at(-1)!.index).toBeLessThan(instructions.indexOf("chromium.launch()"));
+    // No layer re-owns /app (2026-11-13): `chown -R node:node /app` after the
+    // install and the copy stored node_modules and the source a second time.
+    // /app is made the user's while empty, and every COPY says whose it is.
+    expect(instructions).not.toMatch(/chown\s+-R/);
+    expect(instructions).toMatch(/^RUN mkdir \/app && chown node:node \/app\nWORKDIR \/app$/m);
+    const copies = instructions.match(/^COPY .*$/gm) ?? [];
+    expect(copies.length).toBe(4);
+    for (const copy of copies) expect(copy).toMatch(/^COPY --chown=node:node /);
+    // Nothing is installed into /app by root: the install is after the first USER node and before root's turn for apt.
+    expect(instructions.indexOf("USER node")).toBeLessThan(instructions.indexOf("npm ci --omit=dev"));
+    expect(instructions.indexOf("npm ci --omit=dev")).toBeLessThan(instructions.indexOf("USER root"));
+    expect(instructions).toMatch(/RUN node -e "require\('playwright'\)\.chromium\.launch\(\)/);
+    expect(instructions).toMatch(/p\.pdf\(\{ format: 'Letter' \}\)/);
+    // The web image never gets a browser.
+    const web = (await readFile("Dockerfile")).split(/\r?\n/).filter((line) => !line.trim().startsWith("#")).join("\n");
+    expect(web).not.toMatch(/chromium|playwright/i);
+    // Playwright is pinned exactly, so the image and CI print with one browser build.
+    const pkgJson = JSON.parse(await readFile("package.json")) as { dependencies: Record<string, string> };
+    expect(pkgJson.dependencies.playwright).toMatch(/^\d+\.\d+\.\d+$/);
+    // CI installs the same browser the same way, before the tests that print.
+    const ci = await readFile(".github/workflows/ci.yml");
+    expect(ci).toMatch(/- name: Install Chromium for the PDF tests\s*run: npx playwright install --with-deps --only-shell chromium/);
+    expect(ci.indexOf("npx playwright install")).toBeLessThan(ci.indexOf("run: npm test"));
+    expect(ci.indexOf("run: npm ci")).toBeLessThan(ci.indexOf("npx playwright install"));
+    const pkg = JSON.parse(await readFile("package.json")) as { scripts: Record<string, string> };
+    expect(pkg.scripts["bas:reports:worker"]).toBe("tsx scripts/bas-reports-worker.ts");
+    expect(pkg.scripts["bas:reports:scheduler"]).toBe("tsx scripts/bas-reports-scheduler.ts");
+  });
+
+  it("ships the flag off and the cron in the example parameters, and is documented in the README and the runbook", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as { parameters: Record<string, { value: unknown }> };
+    expect(example.parameters.enableBasReports?.value).toBe(false);
+    expect(example.parameters.basReportsSchedulerCron?.value).toBe("*/15 * * * *");
+    expect(Object.keys(example.parameters)).not.toContain("basReportsImage");
+    const readme = await readFile("infra/README.md");
+    expect(readme.split("## What gets created")[1]?.split("\n## ")[0] ?? "").toMatch(/enableBasReports/);
+    const runbook = await readFile("runbook.md");
+    // "Reports: what the caps do" until 2026-11-12, when the two per-report caps became the module's one ceiling.
+    for (const heading of ["Reports: turning the jobs on", "Reports: a run is stuck or failed", "Reports: the safety ceiling", "Reports: the PDF"]) {
+      expect(runbook, heading).toContain(`## ${heading}`);
+    }
+    const section = runbook.split("\n## Reports: turning the jobs on")[1]?.split("\n## ")[0] ?? "";
+    expect(section).toMatch(/az acr build/);
+    expect(section).toMatch(/what-if/);
+    expect(section).toMatch(/az containerapp job start/);
+    expect(section).toMatch(/AZURE_BAS_REPORTS_WORKER_JOB/);
+  });
+
+  const az = spawnSync("az", ["bicep", "version"], { encoding: "utf8", shell: true });
+  const azAvailable = az.status === 0;
+
+  it.skipIf(!azAvailable)("compiles to ARM where both jobs carry the condition, the worker scales on PostgreSQL and every secret is a vault reference", () => {
+    const build = spawnSync("az", ["bicep", "build", "--file", "infra/main.bicep", "--stdout"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      shell: true,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    expect(build.status, build.stderr).toBe(0);
+    interface ArmJob {
+      type: string;
+      name: string;
+      condition?: string;
+      properties?: {
+        configuration?: {
+          triggerType?: string;
+          replicaTimeout?: number;
+          eventTriggerConfig?: { scale?: { maxExecutions?: number; rules?: Array<{ type: string; auth?: Array<{ secretRef: string }> }> } };
+          secrets?: Array<{ name: string; keyVaultUrl?: string; value?: string }>;
+        };
+        template?: { containers?: Array<{ command?: string[] }> };
+      };
+    }
+    const arm = JSON.parse(build.stdout.replace(/^\uFEFF/, "")) as {
+      parameters: Record<string, { type: string; defaultValue?: unknown }>;
+      resources: Record<string, ArmJob> | ArmJob[];
+    };
+    expect(arm.parameters.enableBasReports).toMatchObject({ type: "bool", defaultValue: false });
+    expect(arm.parameters.basReportsImage).toMatchObject({ type: "string", defaultValue: "" });
+    const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
+    const jobs = resources.filter((r) => r.type === "Microsoft.App/jobs");
+    const scheduler = jobs.find((j) => j.name.includes("bas-reports-sched"));
+    const worker = jobs.find((j) => j.name.includes("bas-reports-worker"));
+    expect(scheduler).toBeDefined();
+    expect(worker).toBeDefined();
+    for (const job of [scheduler!, worker!]) {
+      expect(job.condition).toBe("[parameters('enableBasReports')]");
+      for (const s of job.properties?.configuration?.secrets ?? []) {
+        expect(s.keyVaultUrl, s.name).toBeDefined();
+        expect(s.value, s.name).toBeUndefined();
+      }
+    }
+    expect(scheduler!.properties?.configuration?.triggerType).toBe("Schedule");
+    expect(worker!.properties?.configuration?.triggerType).toBe("Event");
+    expect(worker!.properties?.configuration?.replicaTimeout).toBe(1800);
+    const scale = worker!.properties?.configuration?.eventTriggerConfig?.scale;
+    expect(scale?.maxExecutions).toBe(2);
+    expect(scale?.rules?.[0]).toMatchObject({ type: "postgresql", auth: [{ secretRef: "database-url" }] });
+    expect(worker!.properties?.template?.containers?.[0]?.command).toEqual(["npx", "tsx", "scripts/bas-reports-worker.ts"]);
+    expect(scheduler!.properties?.template?.containers?.[0]?.command).toEqual(["npx", "tsx", "scripts/bas-reports-scheduler.ts"]);
+    const assignments = resources.filter((r) => r.type === "Microsoft.Authorization/roleAssignments");
+    expect(assignments.length).toBe(3);
+  });
+});
+
 /**
  * The Knowledge Base's Anthropic key (2026-11-10): a third key, the same
  * shape as the Change Orders one. The per-module separation is
@@ -1571,5 +2269,207 @@ describe("the Knowledge Base Anthropic key reaches the container only by Key Vau
     const bicep = await readBicep();
     expect(bicep).not.toMatch(/name:\s*'KB_ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'(co-)?anthropic-api-key'/);
     expect(bicep).not.toMatch(/name:\s*'(CO_)?ANTHROPIC_API_KEY'[\s\S]{0,80}secretRef:\s*'kb-anthropic-api-key'/);
+  });
+});
+
+/**
+ * Template drift, second instance (2026-11-12): the app's scale. A read-only
+ * what-if the day after the first reconciliation showed the live app at
+ * minReplicas 1 with an HTTP scale rule (`http-scaler`, 10 concurrent
+ * requests) the template did not declare - a by-hand change in the portal -
+ * and a deployment would have reverted both (runbook.md -> "A template
+ * what-if shows the container app losing a secret, gaining blank variables,
+ * or changing its probes", the 2026-11-12 record). The template now declares
+ * the app's scale in full, parameterised, so the parameters file can say what
+ * the live app is. These guards hold: the three parameters with the defaults
+ * the first deployment chose; the scale block reading them and declaring the
+ * rule; the example file carrying all three (a copied file cannot be silent);
+ * the deploy procedure's rule and the runbook's record; the compiled ARM; and
+ * the workflow never touching scale (the flag list above). The mutation each
+ * is for: put a literal back in the scale block and the second test fails;
+ * drop a parameter from the example file and the third does.
+ */
+describe("the container app's scale is the template's, parameterised (2026-11-12)", () => {
+  const readFile = (rel: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, rel), "utf8"));
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  const appBlock = (bicep: string) => bicep.split("resource containerApp ")[1]!.split(/\n(?=resource )/)[0]!;
+  const DEFAULTS = { appMinReplicas: 0, appMaxReplicas: 3, appHttpConcurrentRequests: 10 } as const;
+
+  it("declares appMinReplicas, appMaxReplicas and appHttpConcurrentRequests with the first deployment's defaults, and the old unprefixed pair is gone", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^@minValue\(0\)\nparam appMinReplicas int = 0$/m);
+    expect(code).toMatch(/^@minValue\(1\)\nparam appMaxReplicas int = 3$/m);
+    expect(code).toMatch(/^@minValue\(1\)\nparam appHttpConcurrentRequests int = 10$/m);
+    expect(code).not.toMatch(/^param (minReplicas|maxReplicas) /m);
+    // Each carries a description a person reads at the prompt.
+    for (const name of Object.keys(DEFAULTS)) {
+      expect(code, name).toMatch(new RegExp(`@description\\('[^\\n]+'\\)\\n(@minValue\\(\\d+\\)\\n)?param ${name} int`));
+    }
+  });
+
+  it("feeds the app's scale block from the three parameters and declares the http-scaler rule, with no literal left in it", async () => {
+    const app = codeOnly(appBlock(await readFile("infra/main.bicep")));
+    const scale = /\n\s{6}scale: \{([\s\S]*?)\n\s{6}\}/.exec(app)?.[1];
+    expect(scale, "the app's scale block").toBeDefined();
+    expect(scale).toMatch(/minReplicas: appMinReplicas\b/);
+    expect(scale).toMatch(/maxReplicas: appMaxReplicas\b/);
+    expect(scale).toMatch(/name: 'http-scaler'/);
+    expect(scale).toMatch(/http: \{\s*metadata: \{\s*concurrentRequests: string\(appHttpConcurrentRequests\)\s*\}\s*\}/);
+    // No number is decided inside the block: a literal here is the next drift.
+    expect(scale).not.toMatch(/(minReplicas|maxReplicas|concurrentRequests):\s*['"]?\d/);
+    // One rule, named as the live app names it.
+    expect((scale!.match(/name: '/g) ?? []).length).toBe(1);
+  });
+
+  it("carries all three in the example parameters file at the template's defaults, so a copied file cannot be silent about the app's scale", async () => {
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as {
+      parameters: Record<string, { value: unknown }>;
+    };
+    for (const [name, value] of Object.entries(DEFAULTS)) {
+      expect(example.parameters[name]?.value, name).toBe(value);
+    }
+  });
+
+  it("states the rule in the deploy procedure and records the instance in the runbook, beside the first", async () => {
+    const readme = await readFile("infra/README.md");
+    const deploy = readme.split("## Deploy")[1]!.split("\n## ")[0]!;
+    expect(deploy).toMatch(/What-if must show no \*Delete\* lines and no `scale` changes under\s+`Microsoft\.App\/containerApps\/<app>`; if it does, reconcile first\./);
+    for (const name of Object.keys(DEFAULTS)) expect(deploy, name).toContain(name);
+
+    const runbook = await readFile("runbook.md");
+    const heading =
+      "## A template what-if shows the container app losing a secret, gaining blank variables, or changing its probes";
+    const section = runbook.split(heading)[1]!.split("\n## ")[0]!;
+    expect(section).toContain("**The record, 2026-11-12: the app's scale.**");
+    expect(section).toContain("**The record, 2026-11-11.**");
+    expect(section.indexOf("The record, 2026-11-11.")).toBeLessThan(section.indexOf("The record, 2026-11-12: the app's scale."));
+    expect(section).toContain("http-scaler");
+    for (const name of Object.keys(DEFAULTS)) expect(section, name).toContain(name);
+    expect(section).toContain('"appMinReplicas": { "value": 1 }');
+    expect(section).toMatch(/no \*Delete\*\s+lines and no `scale` changes under the app; if it does, reconcile first/);
+    // The cost section a person is pointed at for the decision, under the new name.
+    expect(runbook).toContain("## Keeping one replica warm — what `appMinReplicas: 1` costs");
+    expect(runbook).not.toMatch(/`minReplicas: 1`/);
+  });
+
+  const az = spawnSync("az", ["bicep", "version"], { encoding: "utf8", shell: true });
+  const azAvailable = az.status === 0;
+
+  it.skipIf(!azAvailable)("compiles to ARM where the app's scale reads the three parameters and carries the one rule", () => {
+    const build = spawnSync("az", ["bicep", "build", "--file", "infra/main.bicep", "--stdout"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      shell: true,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    expect(build.status, build.stderr).toBe(0);
+    interface ArmApp {
+      type: string;
+      name: string;
+      properties?: { template?: { scale?: { minReplicas?: unknown; maxReplicas?: unknown; rules?: unknown[] } } };
+    }
+    const arm = JSON.parse(build.stdout.replace(/^\uFEFF/, "")) as {
+      parameters: Record<string, { type: string; defaultValue?: unknown; minValue?: number }>;
+      resources: Record<string, ArmApp> | ArmApp[];
+    };
+    for (const [name, value] of Object.entries(DEFAULTS)) {
+      expect(arm.parameters[name], name).toMatchObject({ type: "int", defaultValue: value });
+    }
+    expect(arm.parameters.appMinReplicas!.minValue).toBe(0);
+    expect(arm.parameters.appMaxReplicas!.minValue).toBe(1);
+    const resources = Array.isArray(arm.resources) ? arm.resources : Object.values(arm.resources);
+    const apps = resources.filter((r) => r.type === "Microsoft.App/containerApps");
+    expect(apps).toHaveLength(1);
+    const scale = apps[0]!.properties?.template?.scale;
+    expect(scale?.minReplicas).toBe("[parameters('appMinReplicas')]");
+    expect(scale?.maxReplicas).toBe("[parameters('appMaxReplicas')]");
+    expect(scale?.rules).toEqual([{ name: "http-scaler", http: { metadata: { concurrentRequests: "[string(parameters('appHttpConcurrentRequests'))]" } } }]);
+  });
+});
+
+describe("the BAS report email: a send gate set explicitly from a boolean, the worker only, and no secret (2026-11-17)", () => {
+  /**
+   * Reports, Phase 4, the email half. The worker sends each finished run from
+   * the BAS mailbox through phb-platform-bas-mail (Request 7). Mirrors the
+   * PHB_ALLOW_SEND guard above: the gate is a PLAIN value on the worker,
+   * present on every deployment - never absent, which would read as closed
+   * silently, and never a hand-typed string - written from the boolean
+   * parameter basReportsAllowSend, default false. The worker opens it for
+   * exactly "true" (lib/modules/bas/reports/job-env.ts), so the template's
+   * two literals are exactly 'true' and 'false'. No Key Vault secret: the
+   * app is reached with the managed identity and a federated credential,
+   * and a client secret in production is refused by the sender.
+   */
+  const readFile = async (relative: string) =>
+    import("node:fs/promises").then((fs) => fs.readFile(path.join(projectRoot, relative), "utf8"));
+  const codeOnly = (bicep: string) =>
+    bicep
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+  const resourceBlock = (bicep: string, name: string) => {
+    const start = bicep.indexOf(`resource ${name} `);
+    expect(start, name).toBeGreaterThan(-1);
+    const rest = bicep.slice(start + 1);
+    const ends = [rest.indexOf("\nresource "), rest.indexOf("\nvar "), rest.indexOf("\noutput ")].filter((i) => i > 0);
+    return rest.slice(0, ends.length ? Math.min(...ends) : undefined);
+  };
+
+  it("the gate is a boolean parameter, false by default, written to the worker as exactly 'true' or 'false' on every deployment", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).toMatch(/^param basReportsAllowSend bool = false$/m);
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    expect(worker).toMatch(/name: 'BAS_REPORTS_ALLOW_SEND'\s*\n\s*value: basReportsAllowSend \? 'true' : 'false'\n/);
+    // One entry, a value, never a secretRef.
+    expect(worker.match(/'BAS_REPORTS_ALLOW_SEND'/g)).toHaveLength(1);
+    expect(worker).not.toMatch(/name: 'BAS_REPORTS_ALLOW_SEND'\s*\n\s*secretRef/);
+    // The reader opens it for exactly "true": the two literals above are the only ones it can receive.
+    const reader = await readFile("lib/modules/bas/reports/job-env.ts");
+    expect(reader).toMatch(/allowSend: env\[BAS_REPORTS_ALLOW_SEND_VAR\] === "true"/);
+  });
+
+  it("only the worker carries it: the scheduler and the web app never send a report", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(resourceBlock(code, "basReportsSchedulerJob")).not.toMatch(/BAS_REPORTS_ALLOW_SEND|BAS_MAIL/);
+    expect(code.match(/'BAS_REPORTS_ALLOW_SEND'/g)).toHaveLength(1);
+    expect(code.match(/name: 'BAS_MAIL_CLIENT_ID'/g)).toHaveLength(1);
+  });
+
+  it("the sender app's ids and mailbox come from parameters with empty defaults, as plain values", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    for (const param of ["basMailClientId", "basMailTenantId", "basMailbox"]) {
+      expect(code, param).toMatch(new RegExp(`^param ${param} string = ''$`, "m"));
+    }
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    expect(worker).toMatch(/name: 'BAS_MAIL_CLIENT_ID'\s*\n\s*value: basMailClientId\n/);
+    expect(worker).toMatch(/name: 'BAS_MAIL_TENANT_ID'\s*\n\s*value: basMailTenantId\n/);
+    expect(worker).toMatch(/name: 'BAS_MAILBOX'\s*\n\s*value: basMailbox\n/);
+    expect(worker).toMatch(/name: 'GRAPH_MANAGED_IDENTITY_CLIENT_ID'\s*\n\s*value: identity\.properties\.clientId\n/);
+    expect(worker).toMatch(/name: 'PLATFORM_URL'\s*\n\s*value: authUrl\n/);
+    // The example parameters file names the four, with the gate shut and no address: blank is the reader's default mailbox.
+    const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as { parameters: Record<string, { value: unknown }> };
+    expect(example.parameters.basReportsAllowSend?.value).toBe(false);
+    expect(example.parameters.basMailbox?.value).toBe("");
+    expect(await readFile("lib/modules/bas/reports/job-env.ts")).toMatch(/export const DEFAULT_BAS_MAILBOX = "controlls@phb1899\.com";/);
+    expect(example.parameters.basMailClientId?.value).toBe("");
+    expect(example.parameters.basMailTenantId?.value).toBe("");
+  });
+
+  it("adds no secret: no client secret anywhere in the template, and the worker still reads three by reference", async () => {
+    const code = codeOnly(await readFile("infra/main.bicep"));
+    expect(code).not.toMatch(/BAS_MAIL_CLIENT_SECRET|BAS-MAIL/);
+    const worker = resourceBlock(code, "basReportsWorkerJob");
+    expect((worker.match(/keyVaultUrl:/g) ?? []).length).toBe(3);
+    // The sender refuses a secret in production, the Change Orders credential's rule.
+    const reader = await readFile("lib/modules/bas/reports/job-env.ts");
+    expect(reader).toMatch(/is set in production\. Production sends with the managed identity and a federated identity credential/);
+    const mailer = await readFile("lib/modules/bas/reports/email/mailer.ts");
+    expect(mailer).toMatch(/secretInProduction:/);
+    expect(mailer).toMatch(/createManagedIdentityAssertionProvider/);
   });
 });

@@ -92,11 +92,25 @@ param containerCpu string = '0.5'
 @description('Memory per replica.')
 param containerMemory string = '1Gi'
 
-@description('Scale to zero is deliberate at this user count - a cold start is cheaper than a replica idling all night.')
-param minReplicas int = 0
+// The web app's scale, parameterised in full since 2026-11-12. A what-if
+// that day showed the live app at minReplicas 1 with an HTTP scale rule the
+// template did not declare - a by-hand change (runbook.md, "A template
+// what-if shows the container app losing a secret, gaining blank variables,
+// or changing its probes", the 2026-11-12 record). A template deployment
+// would have reverted both. The three parameters below let the parameters
+// file say what the live app is, so it is no longer drift.
+
+@description('Replicas kept running with no traffic. 0 scales to zero, with a cold start of about 30 s on the first request after five idle minutes (runbook.md, "A cold start takes about 30 seconds"); 1 keeps one replica warm, about $10 a month at this container size (runbook.md, "Keeping one replica warm"). The live app has carried 1 since 2026-11-12; the parameters file says so.')
+@minValue(0)
+param appMinReplicas int = 0
 
 @description('Upper bound on replicas. Small on purpose: Graph throttling concentrates on one mailbox through one app identity.')
-param maxReplicas int = 3
+@minValue(1)
+param appMaxReplicas int = 3
+
+@description('The HTTP scale rule (http-scaler): concurrent requests per replica before KEDA adds another, up to appMaxReplicas. 10 is the Azure default and what the live app carried by hand from 2026-11-12; declared here so it is no longer drift.')
+@minValue(1)
+param appHttpConcurrentRequests int = 10
 
 // ---------------------------------------------------------------------------
 // PostgreSQL
@@ -233,6 +247,9 @@ param anthropicApiKeyInKeyVault bool = false
 @description('Set to true once the Change Orders module\'s own Anthropic API key exists in Key Vault as CO-ANTHROPIC-API-KEY - a SECOND key, issued separately in the Anthropic Console so the change-order pipeline is billed, rate-limited and revoked independently of BAS Analyze, placed in the vault by hand, never as a template parameter. Read by the container app as CO_ANTHROPIC_API_KEY (lib/env.ts decides the name); nothing reads it until Phase 12 Part D is built, and absent it disables that and nothing else. Same conditional as the Anthropic key above, for the same reason.')
 param coAnthropicApiKeyInKeyVault bool = false
 
+@description('Set to true once the Freeze Protection module\'s own Anthropic API key exists in Key Vault as FP-ANTHROPIC-API-KEY - a third key, issued separately in the Anthropic Console, placed in the vault by hand, never as a template parameter. Read by the web container app only, as FP_ANTHROPIC_API_KEY (lib/env.ts decides the name); absent it disables the equipment schedule import and nothing else. Same conditional as the Anthropic key above, for the same reason.')
+param fpAnthropicApiKeyInKeyVault bool = false
+
 @description('Set to true once the Knowledge Base\'s own Anthropic API key exists in Key Vault as KB-ANTHROPIC-API-KEY - a THIRD key, issued separately in the Anthropic Console so KB search re-sorting and answers are billed, rate-limited and revoked independently of BAS Analyze and Change Orders, placed in the vault by hand, never as a template parameter. Read by the container app as KB_ANTHROPIC_API_KEY (lib/env.ts decides the name); absent, KB search keeps its own order and writes no answers, and nothing else changes. Same conditional as the Anthropic key above, for the same reason.')
 param kbAnthropicApiKeyInKeyVault bool = false
 
@@ -310,6 +327,249 @@ param coReviewSharePointFolder string = ''
 
 @description('Model the skills run on. Empty means the default in lib/modules/cost-intelligence/runs.ts.')
 param cipRunModel string = ''
+
+// ---------------------------------------------------------------------------
+// Knowledge Base sync worker
+//
+// The same shape as the CIP worker: a Container Apps Job that runs only while
+// there is work. The admin's Index button writes a `queued` kb_sync_runs row;
+// every 15 seconds the scaler counts them and starts an execution, which runs
+// `kb-worker.ts --once` - claims the sync with FOR UPDATE SKIP LOCKED, lists
+// the library, reads every new or changed file, and exits. One at a time: the
+// database allows one queued-or-running sync (kb_sync_runs_one_active_key).
+//
+// The first index of a whole library can take hours; replicaTimeout is four.
+// A sync cut off by it stops sending heartbeats, is closed by the next one,
+// and the files it had not reached stay pending for the next press. No retry.
+//
+// Reads SharePoint as the KB app registration through the managed identity's
+// federated credential (request KB-3). No secret: the job holds only the
+// database URL, by reference.
+// ---------------------------------------------------------------------------
+
+resource kbWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableKbWorker) {
+  name: '${baseName}-kb-worker'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Event'
+      replicaTimeout: 14400
+      replicaRetryLimit: 0
+      eventTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+        scale: {
+          minExecutions: 0
+          maxExecutions: 1
+          pollingInterval: 15
+          rules: [
+            {
+              name: 'kb-syncs-queued'
+              type: 'postgresql'
+              metadata: {
+                query: 'SELECT count(*) FROM kb_sync_runs WHERE status = \'queued\''
+                targetQueryValue: '1'
+              }
+              auth: [
+                {
+                  secretRef: 'database-url'
+                  triggerParameter: 'connection'
+                }
+              ]
+            }
+          ]
+        }
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'kb-worker'
+          image: kbWorkerImage
+          command: [
+            'npx'
+            'tsx'
+            'scripts/kb-worker.ts'
+            '--once'
+          ]
+          resources: {
+            cpu: json('2.0')
+            memory: '4Gi'
+          }
+          env: [
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'database-url'
+            }
+            {
+              name: 'NODE_ENV'
+              value: 'production'
+            }
+            {
+              name: 'GRAPH_MANAGED_IDENTITY_CLIENT_ID'
+              value: identity.properties.clientId
+            }
+            {
+              name: 'PHB_PLATFORM_KB_APP_TENANT_ID'
+              value: kbAppTenantId
+            }
+            {
+              name: 'PHB_PLATFORM_KB_APP_CLIENT_ID'
+              value: kbAppClientId
+            }
+            {
+              name: 'KB_SHAREPOINT_LIBRARY_URL'
+              value: kbSharePointLibraryUrl
+            }
+            {
+              name: 'KB_EMBEDDING_ENDPOINT'
+              value: kbEmbeddingEndpoint
+            }
+            {
+              name: 'KB_EMBEDDING_DEPLOYMENT'
+              value: kbEmbeddingDeployment
+            }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// BAS Reports jobs (Reports, Phase 3): a scheduler and a worker
+// ---------------------------------------------------------------------------
+
+@description('Create the two BAS Reports jobs: the scheduler on a cron and the worker on a scaler. Off by default for the reason enableCipWorker is: the jobs name an image that has to be in the registry first.')
+param enableBasReports bool = false
+
+@description('The BAS Reports jobs image, for both jobs. Required when enableBasReports is true: the image the jobs run now (`az containerapp job show`), or on first enable a bas-reports image built with `az acr build`. No placeholder default, so a redeploy cannot reset it.')
+param basReportsImage string = ''
+
+@description('When the scheduler runs, as a cron in UTC. Every fifteen minutes: a report due at 06:00 in its building\'s zone is queued within fifteen minutes of that, and the scheduler itself collapses the ticks it missed into one run.')
+param basReportsSchedulerCron string = '*/15 * * * *'
+
+// The report email (Reports, Phase 4, the email half - 2026-11-17). The
+// worker sends each finished run from the BAS mailbox through its own app
+// registration, phb-platform-bas-mail (Vitis Request 7: Graph Mail.Send,
+// application, fenced to the one mailbox by an Exchange
+// ApplicationAccessPolicy, with a federated identity credential for this
+// deployment's managed identity). Every value here is an identifier, not a
+// secret, and NO Key Vault secret is added: production signs in as the app
+// with the managed identity's token, exactly as the Change Orders mail app
+// does, and the worker refuses to send with a client secret set.
+@description('Client ID of the phb-platform-bas-mail app registration (Request 7). Not a secret. Blank: the worker reports the email as not configured and sends nothing.')
+param basMailClientId string = ''
+
+@description('Tenant ID of the phb-platform-bas-mail app registration. Not a secret.')
+param basMailTenantId string = ''
+
+@description('The mailbox report email is sent from. Blank means the controls team mailbox named in lib/modules/bas/reports/job-env.ts (DEFAULT_BAS_MAILBOX); no address is written in this file.')
+param basMailbox string = ''
+
+@description('The report email send gate, mirroring PHB_ALLOW_SEND. False: every delivery is recorded as not sent and nothing leaves the platform. Set true only once Request 7 is complete and a Send to me has been verified (runbook: Turning report email on).')
+param basReportsAllowSend bool = false
+
+
+// ---------------------------------------------------------------------------
+// Phase 12 Part E - the change-order shadow run
+// ---------------------------------------------------------------------------
+//
+// Three scheduled Container Apps Jobs, all behind enableCoShadow, off by
+// default for the reason enableDbBackup is: they name an image that has to be
+// in the registry first (phb-co-engine:<tag>, built from the phb-co-engine
+// repository with `az acr build`). docs/phase-12-part-e-plan.md section 5 is
+// the schedule; runbook.md "The change-order shadow run" is the operation.
+//
+//   feed      hourly at :45 on weekdays. Reads the LIVE change-order tree as
+//             the READER app (phb-co-engine-reader: Files.SelectedOperations
+//             .Selected, Read on the one folder, GET only by construction),
+//             writes the COPY as the engine app (phb-co-engine: Sites.Selected,
+//             Write on the site, the live folder refused by name in code),
+//             takes the state snapshot at the UTC hours a quarter before the
+//             laptop's two runs, builds the batch and runs the classifier's
+//             pass on it with the Change Orders Anthropic key by reference.
+//   collect   after each laptop run plus three hours and at the end of the
+//             day: the laptop's answers, the comparison, the report, STOP.
+//             No model call, so no key.
+//   classify  the Part D job kept for one batch by hand during an
+//             investigation. Manual trigger. (infra/classify-job.yaml.template
+//             in phb-co-engine is the by-hand spec it replaces.)
+//
+// Container Apps evaluates a cron in UTC. The window runs under Eastern
+// STANDARD time (DST ended 2026-11-01), so the laptop's 08:00 and 13:00 are
+// 13:00 and 18:00 UTC; the feed's snapshot hours are 12 and 17; the collector
+// runs at 16:00, 21:00 and 23:00 UTC. The next shift is March 2027 and is a
+// deliberate change to these defaults in a commit that says so.
+//
+// Every identity below is a plain value: two app registrations' client ids
+// and the tenant, authenticated with the managed identity through federated
+// credentials. Nothing here expires and nothing here is a secret except the
+// one Key Vault reference the feed carries.
+
+@description('Create the three Phase 12 Part E shadow-run jobs: feed, collect and the Part D classify job, against the COPY of the change-order tree, never the live one. Off by default: the jobs name an image that has to be in the registry first (coEngineImage). See docs/phase-12-part-e-plan.md and runbook.md, "The change-order shadow run".')
+param enableCoShadow bool = false
+
+@description('The phb-co-engine image the shadow jobs run, as <registry>/phb-co-engine:<tag>. Required when enableCoShadow is true: the image the jobs run now (`az containerapp job show`), or on first enable the tag built with `az acr build` from the phb-co-engine repository. No placeholder default, so a redeploy cannot reset it.')
+param coEngineImage string = ''
+
+@description('Client ID of the phb-co-engine app registration (Sites.Selected, Write on the AI Sandbox site). The copy is written as it. Not a secret.')
+param coEngineAppClientId string = ''
+
+@description('Client ID of the phb-co-engine-reader app registration (Files.SelectedOperations.Selected, Read on the live folder). The live tree is read as it and only as it. Not a secret.')
+param coReaderAppClientId string = ''
+
+@description('Tenant ID both change-order app registrations live in. Not a secret.')
+param coGraphTenantId string = ''
+
+@description('Drive id of the AI Sandbox library (Documents), which holds both the live tree and the copy.')
+param coShadowDriveId string = ''
+
+@description('Drive-relative root of the shadow copy, a sibling top-level folder outside every watched folder; must contain "scratch", e.g. /phb-co-engine scratch/part-e-shadow-2026-11-09.')
+param coShadowRoot string = ''
+
+@description('Drive-relative path of the live bid tracker workbook, read through the Graph workbook API by the reader app at each snapshot. Configuration on the job, never spelled in code.')
+param coShadowBidTrackerPath string = ''
+
+@description('Drive-relative path of the live master tracker workbook, read the same way.')
+param coShadowMasterPath string = ''
+
+@description('When the feed runs, as a cron in UTC. The default is every weekday hour at :45 from 11:45 to 22:45 UTC; the runs whose hour is in coShadowSnapshotHoursUtc also take the state snapshot.')
+param coShadowFeedCron string = '45 11-22 * * 1-5'
+
+@description('The UTC hours at which a feed run takes the state snapshot: a quarter before each laptop classifier run. 12,17 under Eastern standard time (08:00 and 13:00 ET).')
+param coShadowSnapshotHoursUtc string = '12,17'
+
+@description('When the collector runs, as a cron in UTC. The default is each laptop run plus three hours and the end of the day, under Eastern standard time.')
+param coShadowCollectCron string = '0 16,21,23 * * 1-5'
+
+@description('Which model judgments the shadow classifier runs: a comma-separated subset of bid_leader,classify,qa,match. All four for the window.')
+param coShadowClassifierSteps string = 'bid_leader,classify,qa,match'
 
 // ---------------------------------------------------------------------------
 // Nightly database backup
@@ -628,6 +888,11 @@ var anthropicApiKeySecretName = 'ANTHROPIC-API-KEY'
 // name only.
 var coAnthropicApiKeySecretName = 'CO-ANTHROPIC-API-KEY'
 
+// Freeze Protection's key, the same shape and a different key (2026-11-04):
+// read by the web app's equipment schedule import, nothing else. The template
+// knows the name only.
+var fpAnthropicApiKeySecretName = 'FP-ANTHROPIC-API-KEY'
+
 // The Knowledge Base's Anthropic key (2026-11-10): the same shape, a third
 // key, so KB answers are billed and revoked on their own.
 var kbAnthropicApiKeySecretName = 'KB-ANTHROPIC-API-KEY'
@@ -751,6 +1016,15 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               {
                 name: 'co-anthropic-api-key'
                 keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${coAnthropicApiKeySecretName}'
+                identity: identity.id
+              }
+            ]
+          : [])
+        ...(fpAnthropicApiKeyInKeyVault
+          ? [
+              {
+                name: 'fp-anthropic-api-key'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${fpAnthropicApiKeySecretName}'
                 identity: identity.id
               }
             ]
@@ -890,6 +1164,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                   }
                 ]
               : [])
+            // Freeze Protection's key, read lazily by
+            // readFreezeProtectionAnthropicEnv for the equipment schedule
+            // import. A third key, never a fallback to either above. Absent
+            // disables the import and nothing else. By reference only.
+            ...(fpAnthropicApiKeyInKeyVault
+              ? [
+                  {
+                    name: 'FP_ANTHROPIC_API_KEY'
+                    secretRef: 'fp-anthropic-api-key'
+                  }
+                ]
+              : [])
             // The Knowledge Base's key, read lazily by readKbAnthropicEnv in
             // lib/modules/knowledge-base/anthropic.ts. A third key, never a
             // fallback to either above. Absent: search keeps its own order
@@ -1005,8 +1291,20 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: minReplicas
-        maxReplicas: maxReplicas
+        minReplicas: appMinReplicas
+        maxReplicas: appMaxReplicas
+        // The one rule the live app carries. Scale-rule metadata is strings
+        // on the wire, so the int parameter is stringified here.
+        rules: [
+          {
+            name: 'http-scaler'
+            http: {
+              metadata: {
+                concurrentRequests: string(appHttpConcurrentRequests)
+              }
+            }
+          }
+        ]
       }
     }
   }
@@ -1185,26 +1483,119 @@ resource cipWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableCipWorker) {
 }
 
 // ---------------------------------------------------------------------------
-// Knowledge Base sync worker
+// BAS Reports jobs (Reports, Phase 3)
 //
-// The same shape as the CIP worker: a Container Apps Job that runs only while
-// there is work. The admin's Index button writes a `queued` kb_sync_runs row;
-// every 15 seconds the scaler counts them and starts an execution, which runs
-// `kb-worker.ts --once` - claims the sync with FOR UPDATE SKIP LOCKED, lists
-// the library, reads every new or changed file, and exits. One at a time: the
-// database allows one queued-or-running sync (kb_sync_runs_one_active_key).
+// Two Container Apps Jobs from one image, behind enableBasReports:
 //
-// The first index of a whole library can take hours; replicaTimeout is four.
-// A sync cut off by it stops sending heartbeats, is closed by the next one,
-// and the files it had not reached stay pending for the next press. No retry.
+//   the SCHEDULER, on a cron (basReportsSchedulerCron, UTC): one pass of
+//   scripts/bas-reports-scheduler.ts, which queues ONE run for every active
+//   report whose next run time has passed and advances that time in the
+//   same transaction - a report that missed several ticks gets one run,
+//   never a backfill - and pauses reports whose owner's account is
+//   disabled. It needs the database and nothing else;
 //
-// Reads SharePoint as the KB app registration through the managed identity's
-// federated credential (request KB-3). No secret: the job holds only the
-// database URL, by reference.
+//   the WORKER, on a scaler that counts queued runs, stalled ones, queued
+//   PDF renders and - since 2026-11-17 - report emails that are due, exactly
+//   like the Cost Intelligence worker: every
+//   fifteen seconds the count is read, and one execution per run starts,
+//   two at most. Each execution runs scripts/bas-reports-worker.ts, which
+//   claims runs with FOR UPDATE SKIP LOCKED, heartbeats every 30 s while
+//   the engine works, prints each finished run's page to PDF with the
+//   Chromium the image carries (Phase 4, 2026-11-13; 2Gi is room for one
+//   page at a time), and exits when the queue is empty or its drain window
+//   closes. The replica timeout, 30 minutes, is above the longest time cap
+//   a definition may set (25 minutes) plus the worker's drain window (4),
+//   so a run is never killed by the platform before its own cap stops it.
+//
+// The same identity, the same registry pull and the same vault read the
+// identity already holds: NO role assignment is added, so a Contributor can
+// deploy this as the CIP worker was deployed. The worker reads three secrets
+// by reference - DATABASE-URL, BAS-ASK-DATABASE-URL (the read-only role,
+// for Phase 6's planner questions) and ANTHROPIC-API-KEY (the BAS key, the
+// one Analyze uses) - and the scheduler only DATABASE-URL, because it calls
+// no model and should hold no key it never reads.
 // ---------------------------------------------------------------------------
 
-resource kbWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableKbWorker) {
-  name: '${baseName}-kb-worker'
+resource basReportsSchedulerJob 'Microsoft.App/jobs@2024-03-01' = if (enableBasReports) {
+  // 30 characters with the production baseName. Azure caps a Container Apps
+  // Job name at 32 and '-bas-reports-scheduler' took this one to 34: the first
+  // deployment (2026-11-11) failed on it with ContainerAppInvalidName after
+  // the worker below had already been created. The worker keeps its name (31)
+  // because it exists. tests/deploy-guards.test.ts computes every app and job
+  // name with the production values and holds each to the rule.
+  name: '${baseName}-bas-reports-sched'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // A pass is a handful of queries; ten minutes is the ceiling for a
+      // database that is slow to answer, after which the execution is Failed
+      // and the next tick runs the same pass again.
+      replicaTimeout: 600
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: {
+        cronExpression: basReportsSchedulerCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'bas-reports-scheduler'
+          image: basReportsImage
+          command: [
+            'npx'
+            'tsx'
+            'scripts/bas-reports-scheduler.ts'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: [
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'database-url'
+            }
+            {
+              name: 'NODE_ENV'
+              value: 'production'
+            }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
+resource basReportsWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableBasReports) {
+  name: '${baseName}-bas-reports-worker'
   location: location
   tags: tags
   identity: {
@@ -1217,21 +1608,42 @@ resource kbWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableKbWorker) {
     environmentId: managedEnvironment.id
     configuration: {
       triggerType: 'Event'
-      replicaTimeout: 14400
+      // Above the longest time cap a definition may carry (25 minutes,
+      // lib/validation/bas-reports.ts) plus the worker's drain window (4,
+      // lib/modules/bas/reports/worker.ts). The engine's own cap stops a
+      // run; this stops a worker that has lost its mind.
+      replicaTimeout: 1800
       replicaRetryLimit: 0
       eventTriggerConfig: {
         parallelism: 1
         replicaCompletionCount: 1
         scale: {
           minExecutions: 0
-          maxExecutions: 1
+          maxExecutions: 2
           pollingInterval: 15
           rules: [
             {
-              name: 'kb-syncs-queued'
+              name: 'bas-report-runs-to-work-on'
               type: 'postgresql'
               metadata: {
-                query: 'SELECT count(*) FROM kb_sync_runs WHERE status = \'queued\''
+                // The same predicate the worker claims by: queued, or
+                // running with no heartbeat for ten minutes, or - since
+                // Phase 4 (2026-11-13) - a PDF render queued, by the engine
+                // as it stores a page or by Retry PDF, so a retry wakes a
+                // worker on its own. A run that stalled twice is in this
+                // count until the next execution fails it, which is the
+                // first thing an execution does; a run or render nobody has
+                // claimed for an hour is failed by the scheduler's pass
+                // (lib/modules/bas/reports/queue-guards.ts), so a worker that
+                // cannot start does not hold the count above zero with the
+                // scaler restarting it all night (2026-11-12).
+                //
+                // Since 2026-11-17 the count also holds the report emails that
+                // are due - pending, their time come, an attempt left - which
+                // is what deliveries.ts claims, so a Resend, a Send to me or a
+                // retry after its backoff wakes a worker too. The scheduler's
+                // pass fails a delivery due for an hour and never taken.
+                query: 'SELECT (SELECT count(*) FROM bas_report_runs WHERE status = \'queued\' OR (status = \'running\' AND heartbeat_at < now() - interval \'10 minutes\') OR pdf_status = \'queued\') + (SELECT count(*) FROM bas_report_deliveries WHERE status = \'pending\' AND next_attempt_at <= now() AND attempts < 3) AS count'
                 targetQueryValue: '1'
               }
               auth: [
@@ -1256,22 +1668,31 @@ resource kbWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableKbWorker) {
           keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
           identity: identity.id
         }
+        {
+          name: 'bas-ask-database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${basAskDatabaseUrlSecretName}'
+          identity: identity.id
+        }
+        {
+          name: 'anthropic-api-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${anthropicApiKeySecretName}'
+          identity: identity.id
+        }
       ]
     }
     template: {
       containers: [
         {
-          name: 'kb-worker'
-          image: kbWorkerImage
+          name: 'bas-reports-worker'
+          image: basReportsImage
           command: [
             'npx'
             'tsx'
-            'scripts/kb-worker.ts'
-            '--once'
+            'scripts/bas-reports-worker.ts'
           ]
           resources: {
-            cpu: json('2.0')
-            memory: '4Gi'
+            cpu: json('1.0')
+            memory: '2Gi'
           }
           env: [
             {
@@ -1279,32 +1700,51 @@ resource kbWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableKbWorker) {
               secretRef: 'database-url'
             }
             {
+              name: 'BAS_ASK_DATABASE_URL'
+              secretRef: 'bas-ask-database-url'
+            }
+            {
+              name: 'ANTHROPIC_API_KEY'
+              secretRef: 'anthropic-api-key'
+            }
+            {
               name: 'NODE_ENV'
               value: 'production'
             }
+            // The report email (2026-11-17): identifiers, never a secret.
+            {
+              name: 'BAS_MAIL_CLIENT_ID'
+              value: basMailClientId
+            }
+            {
+              name: 'BAS_MAIL_TENANT_ID'
+              value: basMailTenantId
+            }
+            {
+              name: 'BAS_MAILBOX'
+              value: basMailbox
+            }
+            // The send gate, set EXPLICITLY on every deployment from a
+            // boolean, so it is never absent and never a hand-typed string:
+            // the worker opens it for exactly 'true' and nothing else, as
+            // PHB_ALLOW_SEND's guard does. tests/deploy-guards.test.ts holds
+            // the expression. Only the worker carries it: the worker is the
+            // only process that sends a report.
+            {
+              name: 'BAS_REPORTS_ALLOW_SEND'
+              value: basReportsAllowSend ? 'true' : 'false'
+            }
+            // The platform's one identity, which the federated credential
+            // on phb-platform-bas-mail names; the CIP worker reads the same
+            // variable for the same reason.
             {
               name: 'GRAPH_MANAGED_IDENTITY_CLIENT_ID'
               value: identity.properties.clientId
             }
+            // Where the email's link points: the platform's own address.
             {
-              name: 'PHB_PLATFORM_KB_APP_TENANT_ID'
-              value: kbAppTenantId
-            }
-            {
-              name: 'PHB_PLATFORM_KB_APP_CLIENT_ID'
-              value: kbAppClientId
-            }
-            {
-              name: 'KB_SHAREPOINT_LIBRARY_URL'
-              value: kbSharePointLibraryUrl
-            }
-            {
-              name: 'KB_EMBEDDING_ENDPOINT'
-              value: kbEmbeddingEndpoint
-            }
-            {
-              name: 'KB_EMBEDDING_DEPLOYMENT'
-              value: kbEmbeddingDeployment
+              name: 'PLATFORM_URL'
+              value: authUrl
             }
           ]
         }
@@ -1570,6 +2010,265 @@ resource dbBackupJob 'Microsoft.App/jobs@2024-03-01' = if (enableDbBackup) {
   ]
 }
 
+
+// ---------------------------------------------------------------------------
+// Phase 12 Part E - the shadow run's three jobs
+// ---------------------------------------------------------------------------
+//
+// One image, three commands. Each command is the script in the phb-co-engine
+// repository by its path in the image, with no argument: everything the
+// script needs is in the environment below, and an argument would be on the
+// command line of every execution's record. The feed is the only job that
+// holds a secret, the Change Orders Anthropic key, by reference under the
+// platform's identity - the same reference the web app carries behind
+// coAnthropicApiKeyInKeyVault, which stays false because the web app never
+// reads it.
+
+var coShadowCommonEnv = [
+  {
+    name: 'CO_GRAPH_AUTH'
+    value: 'federated'
+  }
+  {
+    name: 'CO_GRAPH_MANAGED_IDENTITY_CLIENT_ID'
+    value: identity.properties.clientId
+  }
+  {
+    name: 'CO_GRAPH_APP_CLIENT_ID'
+    value: coEngineAppClientId
+  }
+  {
+    name: 'CO_GRAPH_TENANT_ID'
+    value: coGraphTenantId
+  }
+  {
+    name: 'CO_GRAPH_DRIVE_ID'
+    value: coShadowDriveId
+  }
+  {
+    name: 'CO_READER_GRAPH_AUTH'
+    value: 'federated'
+  }
+  {
+    name: 'CO_READER_APP_CLIENT_ID'
+    value: coReaderAppClientId
+  }
+  {
+    name: 'CO_SHADOW_ROOT'
+    value: coShadowRoot
+  }
+  {
+    name: 'CO_STAGE_DIR'
+    value: '/tmp'
+  }
+]
+
+resource coShadowFeedJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
+  name: '${baseName}-co-shadow-feed'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // Shorter than the hour between runs, so two feeds can never overlap.
+      // The Graph store takes about fifty seconds per intake CO; a pass over
+      // a handful of items with its model calls is minutes.
+      replicaTimeout: 2700
+      replicaRetryLimit: 0
+      scheduleTriggerConfig: {
+        cronExpression: coShadowFeedCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'co-anthropic-api-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${coAnthropicApiKeySecretName}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'feed'
+          image: coEngineImage
+          command: [
+            'sh'
+            '/app/infra/shadow-feed.sh'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: concat(coShadowCommonEnv, [
+            {
+              name: 'CO_ANTHROPIC_API_KEY'
+              secretRef: 'co-anthropic-api-key'
+            }
+            {
+              name: 'CO_CLASSIFIER_MODEL_STEPS'
+              value: coShadowClassifierSteps
+            }
+            {
+              name: 'CO_SHADOW_BID_TRACKER_PATH'
+              value: coShadowBidTrackerPath
+            }
+            {
+              name: 'CO_SHADOW_MASTER_PATH'
+              value: coShadowMasterPath
+            }
+            {
+              name: 'CO_SHADOW_SNAPSHOT_HOURS_UTC'
+              value: coShadowSnapshotHoursUtc
+            }
+          ])
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
+resource coShadowCollectJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
+  name: '${baseName}-co-shadow-collect'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Schedule'
+      // Hours apart, so overlap is impossible; the intake replays run the
+      // engine through the Graph store, about a minute a CO.
+      replicaTimeout: 5400
+      replicaRetryLimit: 0
+      scheduleTriggerConfig: {
+        cronExpression: coShadowCollectCron
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'collect'
+          image: coEngineImage
+          command: [
+            'sh'
+            '/app/infra/shadow-collect.sh'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: coShadowCommonEnv
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+  ]
+}
+
+// The Part D classify job, Manual, for re-running one batch by hand during
+// an investigation. Its root and snapshot folder are set at start time
+// (`az containerapp job start --env-vars`), which is why none is here.
+resource coClassifyJob 'Microsoft.App/jobs@2024-03-01' = if (enableCoShadow) {
+  name: '${baseName}-co-classify'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Manual'
+      replicaTimeout: 1800
+      replicaRetryLimit: 0
+      manualTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'co-anthropic-api-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${coAnthropicApiKeySecretName}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'classify'
+          image: coEngineImage
+          command: [
+            'sh'
+            '/app/infra/classify-job.sh'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: concat(coShadowCommonEnv, [
+            {
+              name: 'CO_ANTHROPIC_API_KEY'
+              secretRef: 'co-anthropic-api-key'
+            }
+            {
+              name: 'CO_CLASSIFIER_MODEL_STEPS'
+              value: coShadowClassifierSteps
+            }
+          ])
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
+
 // ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
@@ -1622,10 +2321,19 @@ output managedIdentityPrincipalId string = identity.properties.principalId
 // Set as the AZURE_CIP_WORKER_JOB repository variable so deploys update its image.
 output cipWorkerJobName string = enableCipWorker ? cipWorkerJob.name : ''
 output kbWorkerJobName string = enableKbWorker ? kbWorkerJob.name : ''
+
+// The two BAS Reports jobs (Phase 3), for the deploy workflow's variables.
+output basReportsSchedulerJobName string = enableBasReports ? basReportsSchedulerJob.name : ''
+output basReportsWorkerJobName string = enableBasReports ? basReportsWorkerJob.name : ''
 // The backup job and where its dumps land, for `az containerapp job execution
 // list` and `az storage blob list` in runbook.md -> "Nightly database backup".
 output dbBackupJobName string = enableDbBackup ? dbBackupJob.name : ''
 output dbBackupStorageAccountName string = enableDbBackup ? backupStorage.name : ''
+// The shadow run's three jobs, for `az containerapp job execution list` and
+// `job logs show` in runbook.md -> "The change-order shadow run".
+output coShadowFeedJobName string = enableCoShadow ? coShadowFeedJob.name : ''
+output coShadowCollectJobName string = enableCoShadow ? coShadowCollectJob.name : ''
+output coClassifyJobName string = enableCoShadow ? coClassifyJob.name : ''
 // The redirect URI IT has to add to the SSO app registration in Part B.
 output ssoRedirectUri string = 'https://${containerApp.properties.configuration.ingress.fqdn}/api/auth/callback/microsoft-entra-id'
 // The custom hostname's address and ITS redirect URI, empty when no custom

@@ -24,6 +24,7 @@ import { PATCH as patchPoint } from "@/app/api/modules/bas/settings/points/[poin
 import { POST as bulkPoints } from "@/app/api/modules/bas/settings/points/bulk/route";
 import { GET as vocabularies } from "@/app/api/modules/bas/settings/vocabularies/route";
 import { GET as buildingEquipment } from "@/app/api/modules/bas/settings/buildings/[siteId]/equipment/route";
+import { PUT as buildingOccupancy } from "@/app/api/modules/bas/settings/buildings/[siteId]/occupancy/route";
 import { POST as createEquipment } from "@/app/api/modules/bas/settings/equipment/route";
 import {
   DELETE as deleteEquipment,
@@ -321,12 +322,12 @@ describe("no settings route ever returns the password or the ciphertext", () => 
   }
 
   it("exercises every route file that exists", async () => {
-    // 15: settings, projects, projects/[id], buildings, buildings/[id],
+    // 16: settings, projects, projects/[id], buildings, buildings/[id],
     // stations, stations/[id], stations/[id]/credential,
-    // stations/[id]/points (B8.2), points/[id] (B8.3), and the five from
+    // stations/[id]/points (B8.2), points/[id] (B8.3), the five from
     // B8.5: points/bulk, vocabularies, buildings/[id]/equipment, equipment,
-    // equipment/[id].
-    expect((await routeFiles()).length).toBe(15);
+    // equipment/[id], and buildings/[id]/occupancy (Reports, Phase 2).
+    expect((await routeFiles()).length).toBe(16);
   });
 
   it("returns neither the plaintext nor the ciphertext from ANY of them", async () => {
@@ -437,6 +438,19 @@ describe("no settings route ever returns the password or the ciphertext", () => 
         await buildingEquipment(new Request("http://localhost/api/modules/bas/settings"), {
           params: Promise.resolve({ siteId: siteId.toString() }),
         })
+      ).text(),
+      // Occupied hours (Reports, Phase 2): a save and a rejected save on the
+      // building. Neither joins bas_station_credentials; this keeps that true.
+      await (
+        await buildingOccupancy(json({ days: [{ weekday: 1, start: "08:00", end: "18:00" }] }, "PUT"), {
+          params: Promise.resolve({ siteId: siteId.toString() }),
+        })
+      ).text(),
+      await (
+        await buildingOccupancy(
+          json({ days: [{ weekday: 1, start: "08:00", end: "18:00" }, { weekday: 1, start: "09:00", end: "17:00" }] }, "PUT"),
+          { params: Promise.resolve({ siteId: siteId.toString() }) },
+        )
       ).text(),
       ...(await (async () => {
         // A type to create against, so the create succeeds and the edit,

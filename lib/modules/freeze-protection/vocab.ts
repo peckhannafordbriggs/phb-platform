@@ -1,4 +1,4 @@
-import type { ConfirmedWith, CoilType, EquipmentStatus, Exposure, Protection, TestKey } from "./types";
+import type { ConfirmedWith, CoilType, EquipmentStatus, Exposure, ExposureSuggestion, Protection, TestKey } from "./types";
 
 /** Every label a person reads for a stored value, in one place. Order is display order. */
 
@@ -20,6 +20,12 @@ export const EXPOSURE_LABEL: Record<Exposure, string> = {
   yes: "Yes, outside air can reach the coil",
   no: "No outside air element",
   unknown: "Unknown",
+};
+
+/** The schedule import's reading, shown beside step 3. */
+export const EXPOSURE_SUGGESTION_LABEL: Record<ExposureSuggestion, string> = {
+  likely: "Schedule suggests outside air can reach the coil",
+  unlikely: "Schedule suggests no outside air at the coil",
 };
 
 /** Short form for tables, where the full sentence does not fit. */
@@ -66,5 +72,6 @@ const keys = <T extends string>(record: Record<T, string>) => Object.keys(record
 export const STATUS_VALUES = keys(STATUS_LABEL);
 export const COIL_VALUES = keys(COIL_LABEL);
 export const EXPOSURE_VALUES = keys(EXPOSURE_LABEL);
+export const EXPOSURE_SUGGESTION_VALUES = keys(EXPOSURE_SUGGESTION_LABEL);
 export const PROTECTION_VALUES = keys(PROTECTION_LABEL);
 export const CONFIRMED_WITH_VALUES = keys(CONFIRMED_WITH_LABEL);

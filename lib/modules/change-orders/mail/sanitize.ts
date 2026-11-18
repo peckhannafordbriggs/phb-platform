@@ -1,4 +1,5 @@
 import sanitizeHtml from "sanitize-html";
+import { contentIdReference } from "./inline-images";
 
 /**
  * Vendor email bodies are attacker-controlled HTML.
@@ -163,6 +164,34 @@ const ALLOWED_STYLES: Record<string, Record<string, RegExp[]>> = {
     "min-width": LENGTH,
     "max-width": LENGTH,
     height: LENGTH,
+    "max-height": LENGTH,
+
+    /**
+     * The four below hide or clip content, and they are here because leaving
+     * them out broke the layout of real mail rather than protected anything.
+     *
+     * The phish-fence banner the company's mail filter injects at the top of
+     * every inbound message starts with a hidden "preheader" div -
+     * `display:none; max-height:0; overflow:hidden; max-width:0; font-size:1px;
+     * color:#fff` - holding about two hundred characters of From/Sent/To text.
+     * With `display`, `max-height` and `overflow` dropped and `max-width` kept,
+     * that text wrapped one character per 1px line and pushed the message a few
+     * hundred pixels down the pane: a reply with no images at all opened on a
+     * blank screen (2026-11-12). Outlook honours `display:none`; so does the
+     * pane now.
+     *
+     * None of the four can name a URL or position an element, which is the
+     * test the table is built on. `display` is a closed list of flow values,
+     * never `contents` and nothing from the grid or flex families, and
+     * `visibility` cannot be used to make an invisible link that still takes
+     * a click. `opacity` is deliberately absent: a zero-opacity anchor is
+     * exactly that.
+     */
+    display: [
+      /^(?:none|block|inline|inline-block|table|table-row|table-cell|table-row-group|table-header-group|table-footer-group|list-item)$/i,
+    ],
+    visibility: [/^(?:visible|hidden|collapse)$/i],
+    overflow: [/^(?:visible|hidden|clip|auto|scroll)$/i],
   },
 };
 
@@ -188,10 +217,9 @@ const SAFE_LINK_SCHEMES = ["http", "https", "mailto", "tel"];
  * loaded as an image - and it is how an inline logo survives without a fetch.
  *
  * `cid:` is listed so the parser does not treat it as a disallowed scheme and
- * discard the element, but the src is then removed by the transform below: a
- * browser cannot resolve `cid:` and the platform does not yet turn it into
- * bytes, so leaving it in place produced a broken-image glyph and no
- * explanation. See INLINE image handling in sanitizeEmailHtml.
+ * discard the element. The transform below then replaces the src with the
+ * platform's own link to the attachment, or removes it when no attachment
+ * matches. See INLINE image handling in sanitizeEmailHtml.
  */
 const SAFE_IMAGE_SCHEMES = ["cid", "data"];
 
@@ -204,15 +232,16 @@ export interface SanitizedBody {
   remoteImagesBlocked: number;
   /**
    * How many `cid:` images were found - inline images that are attachments on
-   * this message rather than remote content.
-   *
-   * Counted for the same reason as the blocked ones: the message is being shown
-   * altered, and saying so is better than a placeholder with no explanation.
-   * These are not blocked for privacy - loading one costs nothing and tells the
-   * sender nothing - they simply cannot be resolved yet. Every message in the
-   * real mailbox that has images has some of these.
+   * this message rather than remote content. Resolved or not; the next field
+   * says how many were not.
    */
   inlineImages: number;
+  /**
+   * How many of those named a Content-ID that no attachment on the message
+   * carries. Each is left as a marked placeholder, and the count drives an
+   * honest note beside it rather than an unexplained box.
+   */
+  inlineImagesUnresolved: number;
 }
 
 export interface SanitizeOptions {
@@ -221,6 +250,16 @@ export interface SanitizeOptions {
    * sender the mail was opened, from which IP, and when.
    */
   allowRemoteImages?: boolean;
+  /**
+   * Turns the Content-ID a `cid:` src names into the platform's own URL for
+   * that attachment, or null when the message carries no such attachment.
+   *
+   * Supplied by the mail service, which knows the message's attachments and
+   * holds the signing key. The sanitizer never sees either: it hands over a
+   * normalised id and writes back whatever it is given. Absent, every `cid:`
+   * image is unresolved.
+   */
+  resolveInlineImage?: (contentId: string) => string | null;
 }
 
 function isRemoteHttpUrl(value: string): boolean {
@@ -236,8 +275,10 @@ export function sanitizeEmailHtml(
   options: SanitizeOptions = {},
 ): SanitizedBody {
   const allowRemoteImages = options.allowRemoteImages ?? false;
+  const resolveInlineImage = options.resolveInlineImage ?? (() => null);
   let remoteImagesBlocked = 0;
   let inlineImages = 0;
+  let inlineImagesUnresolved = 0;
 
   const clean = sanitizeHtml(html, {
     allowedTags: ALLOWED_TAGS,
@@ -275,23 +316,34 @@ export function sanitizeEmailHtml(
       }),
       img: (tagName, attribs) => {
         const src = attribs.src;
+        if (src === undefined) return { tagName, attribs };
 
         /**
          * An inline image: an attachment on this very message.
          *
-         * The src is removed rather than kept, and that is a change from the
-         * first implementation. A browser cannot resolve the `cid:` scheme and
-         * the platform does not yet turn one into bytes, so leaving it produced
-         * the browser's broken-image glyph - which reads as "this application is
-         * broken" rather than "this image lives in an attachment". Without a src
-         * the element renders as the marked placeholder the stylesheet draws,
-         * with its alt text, and the count drives an honest note beside it.
+         * The Content-ID is handed to the service's resolver, which answers
+         * with the platform's own signed link to the attachment - the only
+         * same-origin URL the body document's CSP admits - or with null when
+         * the message carries no attachment by that id. A resolved image is an
+         * ordinary <img> from here on.
          *
-         * Removing it is also why `cid` may stay in the allowed-schemes list: it
-         * has to survive the parser to reach this transform at all.
+         * An unresolved one has its src removed rather than kept. A browser
+         * cannot load `cid:`, and the broken-image glyph it draws reads as
+         * "this application is broken" rather than "this image is missing from
+         * the message". Without a src the element renders as the marked
+         * placeholder the stylesheet draws, with its alt text, and the count
+         * drives an honest note beside it.
          */
-        if (src !== undefined && /^cid:/i.test(src.trim())) {
+        const contentId = contentIdReference(src);
+        if (contentId !== null || /^cid:/i.test(src.trim())) {
           inlineImages += 1;
+
+          const url = contentId === null ? null : resolveInlineImage(contentId);
+          if (url !== null) {
+            return { tagName, attribs: { ...attribs, src: url } };
+          }
+
+          inlineImagesUnresolved += 1;
 
           const withoutSrc = { ...attribs };
           delete withoutSrc.src;
@@ -302,9 +354,24 @@ export function sanitizeEmailHtml(
           };
         }
 
-        if (src === undefined || allowRemoteImages || !isRemoteHttpUrl(src)) {
-          return { tagName, attribs };
+        // Bytes already in the body. Nothing to fetch, nothing to consent to.
+        if (/^data:/i.test(src.trim())) return { tagName, attribs };
+
+        /**
+         * Neither inline, nor embedded, nor remote: a relative path, or a
+         * scheme nothing here recognises. Such a src could not have loaded in
+         * any mail client - but a relative one WOULD resolve against the
+         * platform's own address inside the pane, and the only same-origin
+         * request a body may cause is one the service wrote for it. Removed,
+         * and not counted as anything, because there is nothing to show.
+         */
+        if (!isRemoteHttpUrl(src)) {
+          const withoutSrc = { ...attribs };
+          delete withoutSrc.src;
+          return { tagName, attribs: withoutSrc };
         }
+
+        if (allowRemoteImages) return { tagName, attribs };
 
         remoteImagesBlocked += 1;
 
@@ -323,5 +390,5 @@ export function sanitizeEmailHtml(
     },
   });
 
-  return { html: clean, remoteImagesBlocked, inlineImages };
+  return { html: clean, remoteImagesBlocked, inlineImages, inlineImagesUnresolved };
 }

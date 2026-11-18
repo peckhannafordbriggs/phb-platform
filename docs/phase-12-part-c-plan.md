@@ -1,5 +1,16 @@
 # Phase 12 Part C — plan, and what has been settled so far
 
+**Status, 2026-10-28: the comparison acceptance bar is met.** The fifth run,
+`20261028-155543`, produced equivalent output through both stores for all
+eight fixture COs, with both halves reading the same intake for each
+two-intake CO. The record — the bar, the five runs including the four that
+failed, what the result proves and does not, what was kept and deleted — is
+`docs/phase-12-part-c-verification.md`. The two before-cutover decisions were
+both taken and closed the same day: the intake rule is in the repository, and
+the flow-trigger check passed with two samples (*Before cutover*, twice,
+below). Nothing in Part C gates Phase 14 now. This file keeps the reasoning
+run by run.
+
 Companion to `docs/PHASE-12.md`, which is the phase, and
 `docs/phase-12-part-b-verification.md`, which is what Part C inherited.
 
@@ -136,7 +147,7 @@ resulting diff unreadable.
 | Describe the timezone discrepancy | **done** — measured above |
 | `--store` selection seam | **done** — `--store local\|graph`, defaulting to local |
 | Container cannot reach the live library | **done by construction** — see below |
-| Part E equivalence definitions | not started — desk work, and `PHASE-12.md` says to write them *before* comparisons begin |
+| Part E equivalence definitions | **done** — `docs/phase-12-part-e-equivalence.md`, written 2026-09-22 before any comparison ran, as `PHASE-12.md` requires, and re-checked against the differ and the Part C findings on 2026-10-28 |
 
 ### 2 · Buildable now, verifiable on a substitute drive
 
@@ -576,8 +587,292 @@ seven empty folders — nothing the engine wrote, since it never ran — plus
 the empty `runs/20261021-193816` from the first run. Left in place until the
 comparison is written up.
 
-**Third attempt:** image `phb-co-engine:part-c-compare-3`, the same job spec
-with the tag changed. Not yet run.
+**Third attempt (prepared 2026-10-21, re-checked 2026-10-28):** image
+`part-c-compare-3` was built by `az acr build` twelve seconds after the fix
+commit, and on 2026-10-28 it was pulled and checked rather than trusted:
+`layout()` puts `rep` inside `CMP`, `tests/test_compare_layout.py` is in the
+image, and both it and the root-jail suite pass when run inside it. The
+refusal was reproduced again offline the same day - the second run's
+arguments with a dummy token end in `refusing to run: CO_REPORT_DIR
+'…/rfi238/rep' is outside this store's root '…/rfi238/CMP'`, exit 1, no
+request; with `rep` inside `CMP` the engine reaches its first Graph call.
+
+**But the job was never told.** Read back through the REST API on
+2026-10-28, `phbplat-prod-co-compare` still carried
+`phb-co-engine:part-c-compare-2`, and its only execution is the second run.
+The filled spec on disk said `-3`; the spec in Azure did not. A third start
+would have been the second run again.
+
+**One more thing both logs showed: Log Analytics returns the job log out of
+order.** Both saved logs have one CO's *only in local* list threaded through
+the next CO's heading, because the log is ordered by ingestion time, not by
+the order the lines were written, and a scrambled log is a second way a run
+reads as something it was not. So the instrument now keeps its own record,
+through its own store, inside the copy root:
+
+| path, under `runs/<id>/` | contents |
+|---|---|
+| `compare-transcript.txt` | everything the instrument printed, stdout and stderr in the order written; rewritten after every CO, so a run the 1800 s timeout cuts off still leaves what it had |
+| `_logs/<tag>-local.log`, `_logs/<tag>-graph.log` | each engine's exit code and its **whole** stdout and stderr, not the 40-line tail the log shows |
+
+`_logs` is beside the per-CO trees and never inside one, because
+`download_tree` mirrors a tree whole and the differ would otherwise see a log
+as an engine output; `tests/test_compare_layout.py` holds the record paths
+inside the copy root and outside every tree. A record that cannot be written
+is said on the log and changes no verdict. Image **`part-c-compare-4`**, the
+filled spec updated to match. The commands, one at a time, from PowerShell:
+
+```
+az containerapp job update -n phbplat-prod-co-compare -g <resource group> --image phbplatprodovwzv7.azurecr.io/phb-co-engine:part-c-compare-4
+az containerapp job show   -n phbplat-prod-co-compare -g <resource group> --query properties.template.containers[0].image -o tsv
+az containerapp job start  -n phbplat-prod-co-compare -g <resource group>
+az containerapp job execution list -n phbplat-prod-co-compare -g <resource group> -o table
+az containerapp job logs show -n phbplat-prod-co-compare -g <resource group> --container compare --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\compare-job-run3.log
+```
+
+The second command is the check the second attempt skipped: it must print
+the `-4` tag before `start`. Expect the execution to run ten to fifteen
+minutes - the second run spent five with no engine runs at all - and read
+`runs/<id>/compare-transcript.txt` in the copy folder, not the job log. The
+partial `runs/` folders from the first two runs stay until the comparison is
+written up.
+
+### The third run (2026-10-28, `runs/20261028-142400`): the Graph engine ran, and reached the wrong disk
+
+Image `part-c-compare-4`, the job updated and started by the owner. Every
+input verified, every tree built, the local half ran, and the Graph engine
+started for the first time - past the jail, past the token, into the CO -
+and every CO failed at the same line:
+
+```
+run_workflow.py line 3285, in _find_intake_json
+    for p in sorted(cands, key=os.path.getmtime, reverse=True)
+FileNotFoundError: … intake_….json
+```
+
+`os.path.getmtime` is the operating system's call, not the store's. The
+candidates were found through `FS.listdir` and confirmed through
+`FS.is_file`, both Graph requests, and then sorted by the mtime of a path on
+the container's disk, where nothing of the kind exists. In local mode the two
+clocks are the same file and the line is invisible; this was the first run
+in which they were not.
+
+**Why Part B missed it.** `tests/test_filestore_interface.py` has held
+"every read and write goes through the store" since the extraction, and
+`os.path.getmtime` was in its raw-call set. The scan visited `ast.Call`
+nodes and read `node.func`. A key function is an `ast.Attribute` passed as
+an argument; no call node has it as its function, so the scan never saw it.
+The same scan compared spelled names, so `import glob as _glob;
+_glob.glob(...)` never matched its `glob.glob` allow-list entry either - that
+entry had matched nothing since Part B, and the docstring on
+`_glob_session_mount` calling itself "the only filesystem call left" was a
+claim the test could not have checked.
+
+**The inventory, before anything was changed.** An AST walk over
+`run_workflow.py` and `co_state.py` recording every reference to `os`,
+`os.path`, `open`, `glob`, `shutil`, `pathlib`, `tempfile`, `zipfile`,
+`subprocess`, `openpyxl.load_workbook` and `docx.Document` - as a call, a
+key, a stored name or a bare mention - with import aliases resolved, then a
+grep for the method-style writers an AST walk by module name cannot see
+(`.save(`, reportlab, `csv.writer`, `json.dump`):
+
+| where | what | verdict |
+|---|---|---|
+| `_find_intake_json` 3285 | `os.path.getmtime` as a `sorted` key, on a tree path | **the bypass** - fixed |
+| `_glob_session_mount` 410 | `glob.glob("/sessions/*/mnt/…")` | sandbox mount probe; graph mode passes the root in and never reaches it; allowed by name |
+| module level 135, 144 | `os.path.expanduser("~")` | default host paths; reads the environment, touches no disk |
+| `render_xlsx_to_pdf` 1763, 1767 | `openpyxl.load_workbook(stage_xlsx)`, `subprocess.run(libreoffice …)` | the stage directory, local by the interface's contract; allowed by name |
+| `_try_base64_repair` 884 | `openpyxl.load_workbook(BytesIO)` | in memory |
+| `write_summary_docx` 1835 | `Document()` | no path; saved through `FS.save_docx` |
+| `co_state.migrate_legacy_filenames` 185 | `os.path.abspath` twice, in an equality | path-string work; on a drive-relative path under Linux a no-op |
+| everywhere else | `os.path.join / basename / dirname / splitext`, `os.environ`, `os.getpid` | pure |
+| `.save(`, `Canvas(`, `csv.writer`, `json.load/dump` on a path | none outside `FS.*` | - |
+
+So exactly one disk access on a tree path, and it is the one that failed.
+The store module itself was walked too: the base-class helpers load
+workbooks and zips from `BytesIO(self.read_bytes(path))`, and the only
+`open`/`os.*` calls in `GraphFileStore` are its `stage_*` methods.
+
+**The fix** is `key=FS.mtime` - both stores implement it; the Graph store
+reads `lastModifiedDateTime` and the local one calls `getmtime`, so the local
+half's behaviour is unchanged and the Part B differential re-run afterwards
+is still eight of eight.
+
+**The guard, in two halves, because a list of names is what just failed.**
+
+1. *Static.* The scanner in `test_filestore_interface.py` now reads every
+   `Name` and `Attribute` node wherever it sits, resolves `import … as` and
+   `from … import` first, covers `shutil`, `glob`, `pathlib`, `tempfile`
+   wholesale and `os`/`os.path` by function, and holds an allow-list keyed by
+   (module, function, resolved name) with a count, so a stale entry fails as
+   loudly as a new use. `test_the_scanner_sees_references_and_aliases`
+   feeds it seven snippets of the shapes it used to miss - a key function, a
+   callback in `map`, a module alias, a from-import, an aliased from-import,
+   a stored reference, `pathlib` - and the pure helpers under every spelling,
+   which must stay quiet. Run against the pre-fix engine, it reports the
+   3285 site and nothing else.
+2. *Runtime, needing no list.* `tests/fs_trap.py` wraps the functions that
+   can reach a disk - `os.path.exists/isfile/isdir/getmtime/getsize/…`,
+   `os.stat/listdir/scandir/remove/replace/makedirs/…`, `shutil.*`,
+   `glob.*`, `open`, `io.open`, `zipfile.ZipFile`, `openpyxl.load_workbook`,
+   `docx.Document` - and, when one is given a path under the tree from a
+   frame in `run_workflow.py` or `co_state.py`, appends a line to a log AND
+   raises. Both, because the engine wraps whole steps in `except Exception`
+   and a raised error alone could be swallowed. `co_filestore.py`'s own calls
+   pass; the stage directory is outside the tree and passes.
+   `tests/test_no_fs_bypass_runtime.py` replays the eight fixture COs
+   through the real engine in local mode under the trap (eight of eight
+   clean, each writing its state file), then reinstates the exact pre-fix
+   `_find_intake_json` for one CO and asserts the run is caught - it is, on
+   `os.path.getmtime` in that frame. Without the fixture store the replay
+   reports SKIPPED in capitals and the trap's self-test still runs.
+
+**Fourth attempt:** image **`part-c-compare-5`**, built 2026-10-28 and
+checked inside the image the same way as before; the filled spec updated.
+The commands are the third attempt's with the tag changed:
+
+```
+az containerapp job update -n phbplat-prod-co-compare -g <resource group> --image phbplatprodovwzv7.azurecr.io/phb-co-engine:part-c-compare-5
+az containerapp job show   -n phbplat-prod-co-compare -g <resource group> --query properties.template.containers[0].image -o tsv
+az containerapp job start  -n phbplat-prod-co-compare -g <resource group>
+az containerapp job execution list -n phbplat-prod-co-compare -g <resource group> -o table
+az containerapp job logs show -n phbplat-prod-co-compare -g <resource group> --container compare --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\compare-job-run4.log
+```
+
+`job show` must print `-5` before `job start`. Read
+`runs/<id>/compare-transcript.txt` and `_logs/` in the copy folder. The
+`runs/` folders from the first three runs stay until the comparison is
+written up.
+
+### The fourth run (2026-10-28, `runs/20261028-150825`): the Graph engine ran clean, and the two halves read different intakes
+
+Image `part-c-compare-5`. The Graph engine exited 0 on all eight COs, in 44
+to 59 seconds each against 2 to 3 seconds for the local half. Six
+EQUIVALENT. Two DIFFERS: **CCHMC Bulletin 12** and **ZZ PR-98**. The
+transcript said only DIFFERS, because the differ's `report()` bound
+`out=sys.stdout` at import time, before the transcript's tee existed, so
+every report went to the job log that Log Analytics scrambles; the classes
+below were recovered by reproduction and from the two halves' engine logs
+under `_logs/`.
+
+**What differed**, reproduced on the laptop by running the engine on each CO
+twice with the other intake made newest, and diffed with the Part C differ:
+
+| CO | class | files |
+|---|---|---|
+| Bulletin 12 | unlisted time field | `state/CCHMC_Bulletin_12__e4ec9335.json` (`date_received`) |
+| | content differs (3) | `.Tracking_lastgood.xlsx`, `CO Status Tracker.xlsx`, the run report's WARN line (which rejected ACC link it names) |
+| ZZ PR-98 | unlisted time field | `state/ZZ_PR-98__7b04f4d3.json` (`date_received`) |
+| | content differs (6) | the two trackers, `…/01/CO Request - PR-98 - … - Review.xlsx`, `…/01/Review.docx`, `…/01/scrub_result.json` (`auto_fixes_applied`: the ACC link merged from the intake), the run report (`Auto-fixes: 1`) |
+
+Every one of those is a field that comes from the intake JSON - subject,
+date received, ACC link, submitter note - or a document built from one.
+
+**The cause: the two halves ran on different intake files.** Both COs have
+two `intake_*.json` (a submission and a resubmission), and `_find_intake_json`
+takes the newest by the store's mtime. Read from the run folder:
+
+| | Bulletin 12 | ZZ PR-98 |
+|---|---|---|
+| Graph half's state file, `extra.intake_json` | `intake_20260730141559.json` (the newer) | `intake_20260722172908.json` (the newer) |
+| Graph half's engine log | WARN names the rejected link whose id decodes to `changeorder@phb1899.com/…` - the newer intake's | no WARN; the newer intake carries the Autodesk link |
+| Local half's engine log | WARN names the link whose id decodes to `amayse@phb1899.com/…` - the **older** intake's | *"has no valid ACC Link"* - only the **older** intake has none |
+
+So the hypothesis as first stated - that the Graph store's
+`lastModifiedDateTime` put the copies in a different order and the Graph
+half picked the wrong one - is the inverse of what happened. **The Graph half
+picked the newer intake, which is what the laptop picks; the local half in
+the container picked the older one.** Not a store disagreement: the Graph
+store did what the local store does on the laptop.
+
+**Why the local half picked the older one** - inferred, and the fifth run is
+built to observe it. The instrument wrote the local tree's files back to
+back from the downloaded bytes, so their mtimes were whatever the job node's
+kernel stamped: on a kernel with per-tick file timestamps, two writes a few
+hundred microseconds apart carry the same value. `sorted(…, reverse=True)`
+is stable, so a tie keeps `os.listdir` order, which on Linux is the
+directory's hash order, not name order. Checked: thirty trials of the same
+two writes inside the same image on this laptop's WSL2 kernel (6.18, which
+has fine-grained file timestamps) never tied and always picked the newer;
+the job runs on an older node kernel. Bulletin 13 also has two intakes with
+different subjects and was EQUIVALENT, which fits a per-folder hash order
+that happened to list its newer name first, and is also why "two intakes"
+alone was not the pattern. The fifth run prints each intake's mtime and the
+intake each half's state file names, so this stops being inference.
+
+**Quirk of the comparison, or a fragility of the engine? Both, and they are
+different sizes.**
+
+- *The comparison's quirk is real and is fixed in the instrument.* The
+  Graph tree is now built first, each inbox file's mtime is read from the
+  copy through `store.mtime`, and the local tree is given those same
+  values, so both halves sort by one clock; two intakes on the same second
+  are printed in capitals, because then the engine's choice falls to a
+  directory order the two stores do not share.
+- *The engine's fragility is real and latent in production.* "Newest by
+  mtime" assumes the store's clock orders the intakes as Gate A created
+  them. In production it does: the flow creates them minutes apart, and
+  both today's OneDrive-synced mtime and the Graph store's
+  `lastModifiedDateTime` follow creation. What breaks the assumption is
+  anything that re-stamps a file - an operator opening and re-saving an
+  older intake, a restore from the recycle bin or version history, a
+  migration or copy exactly like this one - after which the older
+  submission silently becomes the one the CO is built from. The
+  deterministic key is already in the filename: `intake_<yyyymmddhhmmss>`
+  is Gate A's `utcNow()` at creation and never changes, and `date_received`
+  inside agrees with it. **Recommendation: sort by the name's timestamp,
+  with mtime only for a legacy `intake.json` or a tie.** It is an engine
+  behaviour change, with the Part B differential as its regression check,
+  and it is **not made here** - the owner asked for classification before
+  change. It belongs on the *Before cutover* list below, to be made or
+  knowingly declined; the engine's docstring and the inventory's "newest
+  wins" line now say "newest by mtime" and point here.
+
+**Fifth attempt:** image **`part-c-compare-6`**, built 2026-10-28, with the
+instrument changes above plus: `report()` resolves `out` at call time, so
+the differ's full report is in the transcript; the SUMMARY carries, under
+any CO that DIFFERS, one line per class with the files (`content differs
+(3): …`, `unlisted time field (1): … [date_received]`, `only in local …`,
+`could not compare …`) and `intake choice differs: local X, graph Y` when
+the halves' state files disagree. The commands are the fourth attempt's
+with `-6`; `job show` must print `-6` before `job start`. The `runs/`
+folders from the first four runs stay until the comparison is written up.
+
+### The fifth run (2026-10-28, `runs/20261028-155543`): eight of eight EQUIVALENT
+
+Image `part-c-compare-6`, execution `oynbdk3`. The Graph engine exited 0 on
+all eight COs (44 to 54 s each against 2 to 3 s locally), every input
+verified, no `400`, and the differ found nothing that survives
+normalization. The only class reported was *differ only in a timestamp* on
+seven run reports, the two halves having run a minute apart; the two COs
+that ran within one minute reported no class at all. For the three COs with
+two intakes the copies landed one to two seconds apart, the local tree
+carried those same mtimes, and both halves named the newer intake in their
+state files:
+
+```
+intakes   intake_20260729200259.json 2026-10-28T15:57:25Z, intake_20260730141559.json 2026-10-28T15:57:27Z
+intake    local picked intake_20260730141559.json, graph picked intake_20260730141559.json
+```
+
+(Bulletin 12; Bulletin 13 and ZZ PR-98 the same shape.) The verbatim
+SUMMARY, the per-CO table, and what the result does and does not prove are
+in `docs/phase-12-part-c-verification.md`. **That is the Part C acceptance
+bar, met.** The job and the copy were deleted the same day, after the
+record was written; the verification record says what was kept and how to
+re-run.
+
+**The five runs in one table** — the honest version, since the plan above
+reads as if each run were the last:
+
+| # | run id | image | result | fault |
+|---|---|---|---|---|
+| 1 | `20261021-193816` | `part-c-compare` | nothing compared | instrument: byte-checked inputs SharePoint rewrites; a `400` with its body dropped |
+| 2 | `20261021-203211` | `-2` | nothing compared | instrument, setup: report dir outside the engine's jail; `rc=1` read as "ran" |
+| — | — | `-3` built, never run | — | process: the job in Azure was never updated |
+| 3 | `20261028-142400` | `-4` | nothing compared | engine: `os.path.getmtime` as a sort key, past the store |
+| 4 | `20261028-150825` | `-5` | 6 of 8 | instrument, setup: local tree's mtimes tied, the halves read different intakes |
+| 5 | `20261028-155543` | `-6` | **8 of 8** | — |
 
 ## Step 7, second pass (2026-10-21): the credential is the platform's identity, and the test needs a job
 
@@ -731,14 +1026,62 @@ changes only how the check decides, not what the store does.
 **What remains for Part C** is now exactly the plan's bucket 3: the
 byte-identical comparison of `GraphFileStore` output against `LocalFileStore`
 on a copy of the tree, and the flow-trigger check. Step 6 (Part E
-equivalence, in writing) is still not started. The job can be re-created from
-the same spec for the next run; the image is in the registry.
+equivalence, in writing) is done: `docs/phase-12-part-e-equivalence.md`,
+recovered on 2026-10-28 from the branch it had been written on. The job can
+be re-created from the same spec for the next run; the image is in the
+registry.
 
 **Later the same day**, the guards were built, the copy was built and the
 comparison was packaged as a job — *Where the copy lives*, *The two guards*
 and *The comparison instrument* above. The comparison itself has not run.
 
-## Before cutover: the flow-trigger decision (required)
+## Before cutover: the intake-selection rule — DECIDED YES, 2026-10-28, done in the repository
+
+`_find_intake_json` took the newest `intake_*.json` by the store's mtime.
+The fourth comparison run showed what a re-stamped file does to that rule
+(*The fourth run*): the older submission becomes the one the CO is built
+from, silently. The owner decided for the deterministic key the same day.
+
+**The rule now** (`phb-co-engine`, branch `feat/intake-by-name-stamp`,
+`_intakes_newest_first`): the creation time Gate A stamped into the name
+decides — `intake_<yyyymmddhhmmss>.json`, UTC, written once by the flow's
+Create file and never re-stamped. The store's mtime is read only when it
+must be: a legacy `intake.json` has no stamp, two candidates can carry one
+stamp (two spellings), a stamp can fail to parse. The exact name is the
+last key, so the order is total and never the directory's. For distinctly
+stamped names no mtime is read at all, which under Graph is one request
+fewer per candidate. `tests/test_intake_selection.py` holds every branch —
+the re-stamped older file, the tie in both listing orders, a legacy file
+alone and against a stamped one, an unparsable stamp, two spellings of one
+stamp, an unreadable newest — and the end-to-end case on disk through
+`LocalFileStore` with the mtimes set the wrong way round. The Part B
+differential is still eight of eight, the static scanner and the runtime
+trap pass, and `ci_suites` requires the suite.
+
+**Repository only.** The laptop's copy of the engine keeps the old rule
+until cutover, by the same decision; the function's docstring says so. The
+two copies now differ by this one function, and Phase 14's cutover diff
+must list it.
+
+**Does it change any current outcome? No.** Read-only survey of the live
+tree on 2026-10-28 — the synced folder for local mtimes, Graph for
+`lastModifiedDateTime`, the state files for what the engine chose, nothing
+opened but state JSON and nothing written:
+
+| Folder (under `1 - New Requests\Archive`) | Intakes | Newest by name | Newest by local mtime | Newest by Graph | State file says the engine used |
+|---|---|---|---|---|---|
+| CCHMC Bulletin 12 | `…200259`, `…141559` | `…141559` | same | same | same |
+| CCHMC Bulletin 13 | `…171424`, `…172438` | `…172438` | same | same | same |
+| ZZ PR-98 | `…170746`, `…172908` | `…172908` | same | same | same |
+
+Twenty-three folders in the tree hold an intake file; those three hold two.
+In every one the mtimes trail the name stamp by zero to two seconds (the
+flow's Create file, or the sync engine for the synthetic CO), all three
+orders agree, and the engine's recorded choice is the newest by name. The
+rule changes which file would be chosen only after something re-stamps an
+older intake, which nothing in the tree has done.
+
+## Before cutover: the flow-trigger decision — PASSED 2026-10-28, two samples
 
 `PHASE-12.md` Part C: *"writing a file through Graph changes its metadata.
 Power Automate matches on filenames, so this should be irrelevant — verify
@@ -780,19 +1123,197 @@ that is reasoning, and the phase doc asks for observation.
 
 1. **A disposable personal flow.** In the owner's own environment and
    connection, trigger *When a file is created (properties only)* on the AI
-   Sandbox library with the folder set to the copy's
-   `…/CMP/Change Order Intake/2 - Returned for Info`, one Compose action,
-   deleted after one observed run on a file the comparison job wrote. It
-   touches none of the eleven, uses no shared connection and sends nothing;
-   whether it sits inside prohibition 2's spirit is the owner's call. It does
-   not need a copy site.
+   Sandbox library, one Compose action, deleted after one observed run on a
+   file the engine's identity wrote. It touches none of the eleven, uses no
+   shared connection and sends nothing; whether it sits inside prohibition
+   2's spirit is the owner's call. It does not need a copy site.
 2. **Observe what the trigger would see.** Query the library's list items the
    way the trigger does (`/sites/{id}/lists/{listId}/items` filtered on
    `Created`, or the drive `delta`) and show an app-created item appears with
    the same shape as a Power Automate-created one. Strong, and still not the
    trigger.
 
-Record the outcome, or the waiver and its reasoning, here.
+### DECIDED YES, 2026-10-28: way 1, built and waiting for the owner to run it
+
+**What the four sentinel flows actually use**, from the specs in
+`phb-co-engine` (`AI Files/CO Intake Engine/specs/power-automate/`):
+Intake 2 (`scrub_result.json`) — SharePoint, *When a file is created
+(properties only)*, subfolders included, a Condition on
+`Name == 'scrub_result.json'` (`GateA_Incomplete_Path_Context.md`); Intake
+3 (`vendor_drafts.json`) — the same trigger on site `AISandbox`, library
+`Documents`, *Include Subfolders: Yes*, Condition
+`@equals(triggerBody()?['{FilenameWithExtension}'], 'vendor_drafts.json')`
+(`Gate_B_SharePoint_Repoint_Fixes_2026-07-09.md`); Intake 4
+(`transfer_ready.json`) — the same trigger (`Gate_C_SharePoint_Repoint_Fixes_2026-07-09.md`).
+Response 2 (`classification_result.json`) is documented only in the
+Response engine's as-built: a SharePoint file-created trigger under
+`_to_classify/` with a trigger condition
+`endsWith(…['body/Name'], 'classification_result.json')` and `splitOn`,
+so the same connector and event with the gate in the trigger rather than
+an action. The throwaway flow uses the first shape, with no condition at
+all, so every item the probe creates shows as a run.
+
+**What the engine writes, and why the probe writes two files.** The two
+sentinels leave the engine by different methods: `scrub_result.json` by
+`FS.write_text`, one PUT of the final name; `vendor_drafts.json` by
+`FS.write_text_via_tmp`, a PUT of `<name>.tmp` then a rename onto the
+final name. A "file created" trigger can see those differently — the
+second creates the item under the tmp name and renames it, and a poll
+between the two sees the tmp name. So the probe,
+`tests/probe_flow_trigger.py` *(phb-co-engine, branch
+`feat/flow-trigger-probe`)*, writes `probe_direct_<run id>.json` by the
+first method and `probe_via_tmp_<run id>.json` by the second, by the same
+store class, the same methods and the same argument shapes —
+`tests/test_flow_trigger_probe.py` ties both to the engine's two write
+sites, so a change of shape there fails there. The sentinel names
+themselves are refused by construction.
+
+**Straight into the folder, no subfolder — changed 2026-10-28 after the
+flow was built.** The engine writes into a fresh attempt folder it creates
+first, and the probe's first version did the same. The owner's trigger
+turned out to offer four fields — site, library, folder, columns — and no
+subfolder option, and whether *When a file is created (properties only)*
+watches subfolders is not documented either way: Microsoft's page for the
+older folder-scoped trigger says that one does not, third-party pages for
+this one say it does, and forum reports conflict. The test must not be
+able to fail for that reason, so the probe writes directly into
+`flow-trigger-probe` with the run id in each name, because this trigger
+fires on creation and a second run must create new items rather than
+modify the first run's. Depth is not the question being asked: Intake 2
+and 3 fire today on sync-written files two folders below their trigger
+folder with this same trigger type, so depth is established in production
+for this connector; what nobody has observed is the *principal*, and that
+is what the flat probe isolates.
+The root must contain `scratch`, and the store refuses the live folder by
+name whatever the root says. `infra/flow-trigger-job.sh` is the job's
+command; the filled spec is `C:\Users\Msheth\flowprobe-job.filled.yaml`
+on the owner's machine (job `phbplat-prod-co-flowprobe`, image
+`phb-co-engine:flow-probe`, 300 s, the compare job's identity and
+environment, `CO_PROBE_ROOT=/phb-co-engine scratch/flow-trigger-probe`).
+
+**Nothing has been run.** Image not built, folder not created, flow not
+built, job not created — by the owner's instruction. The sequence:
+
+**A. The scratch folder (SharePoint, in the browser).** Open the AI Sandbox
+site → *Documents* → the top-level folder `phb-co-engine scratch` (empty
+since the copy was deleted) → *New* → *Folder* → `flow-trigger-probe`. It
+must exist before the flow is built, because the trigger's folder picker
+only offers folders that exist. It sits beside `CO Managment Process`,
+never inside it.
+
+**B. The throwaway flow (Power Automate, your own account) — as built on
+2026-10-28, which is the record; the steps as first written assumed an
+*Include Subfolders* option this trigger does not have.**
+
+1. `make.powerautomate.com`, your default environment, *My flows* → *New
+   flow* → *Automated cloud flow*, named so nobody mistakes it for one of
+   the eleven. Trigger: **SharePoint → When a file is created (properties
+   only)**.
+2. The trigger has exactly four fields, and they are set to: *Site
+   Address* `https://peckhannafordbriggs.sharepoint.com/sites/AISandbox`;
+   *Library Name* `Documents`; *Folder* `/phb-co-engine scratch/flow-trigger-probe`;
+   *Limit Columns by View* `Use all columns (Do not limit)`. There is no
+   subfolder option and no trigger condition. The connection is the owner's
+   own account, which needs only read on the library.
+3. One **Compose** whose inputs are the trigger's *File name with
+   extension*, *Full Path*, *Created*, *Modified*, *Created By* and *ID*.
+4. Saved and **On**. No other action: it emails nobody and writes nothing.
+   The job is the test; the *Test* button is not used.
+
+**C. The image, the job, the run — PowerShell, one at a time.** From the
+`phb-co-engine` checkout on `feat/flow-trigger-probe` (or `main` after it
+merges):
+
+```powershell
+$env:PYTHONIOENCODING = 'utf-8'
+```
+```powershell
+az acr build --registry phbplatprodovwzv7 --image phb-co-engine:flow-probe --build-arg INCLUDE_LIBREOFFICE=false .
+```
+```powershell
+az containerapp job create -n phbplat-prod-co-flowprobe -g <resource group> --yaml C:\Users\Msheth\flowprobe-job.filled.yaml
+```
+```powershell
+az containerapp job show -n phbplat-prod-co-flowprobe -g <resource group> --query properties.template.containers[0].image -o tsv
+```
+(must print the `flow-probe` tag)
+```powershell
+az containerapp job start -n phbplat-prod-co-flowprobe -g <resource group>
+```
+```powershell
+az containerapp job execution list -n phbplat-prod-co-flowprobe -g <resource group> -o table
+```
+```powershell
+az containerapp job logs show -n phbplat-prod-co-flowprobe -g <resource group> --container flowprobe --execution <execution name> --format text | Out-File -Encoding utf8 C:\Users\Msheth\flowprobe-run1.log
+```
+
+The log must end `### PROBE EXIT 0` after a `this run :` line naming
+exactly `probe_direct_<run id>.json` and `probe_via_tmp_<run id>.json`
+(the `run id` line above it gives the id; `folder now:` also lists any
+earlier runs' files), and two `item` lines whose `createdBy.application`
+names `phb-co-engine`. A `.tmp` for this run in the listing, or `PROBE EXIT
+2`, is a finding about the via-tmp shape before the flow is even consulted.
+
+**D. What counts as a pass.** Open the flow → *28-day run history*; allow
+up to fifteen minutes (the trigger polls; Intake 2's spec says every
+minute, Intake 3's every five, and a personal flow may be slower).
+
+| You see | It means |
+|---|---|
+| a run whose *File name with extension* is `probe_direct_<run id>.json` | the `scrub_result.json` shape fires on an item the app created through Graph — **pass for Intake 2 and 4's shape** |
+| a run whose *File name with extension* is `probe_via_tmp_<run id>.json` | the `vendor_drafts.json` shape fires with its **final** name — **pass for Intake 3's shape**; together with the line above, **the check passes** |
+| a run showing `probe_via_tmp_<run id>.json.tmp` and **no** run showing `probe_via_tmp_<run id>.json` | the rename is invisible to the trigger: under Graph, Gate B's condition would never match. **A finding** — the via-tmp write must become a direct write before Phase 14 (it is a `write_text_via_tmp` → `write_text` change at one site, with the differential as its check) |
+| *Created By* is the app (`phb-co-engine`) rather than a person | expected; record it — no card in the seven intake flows reads author (inferred, from the card map) |
+| **no run at all** for `probe_direct_<run id>.json` after fifteen minutes, while the job log shows both items created | the trigger does not see application-created items. **Cutover blocked**; this is the finding the phase doc feared, and it goes to Vitis with the item ids from the log |
+
+What the flat layout changes in this table: nothing about the two shapes
+or the principal, which is the question; the folder row is gone because no
+folder is created; and a pass here says nothing new about depth, which the
+live flows already demonstrate for this trigger type and which Phase 14's
+first shadow run, writing into real attempt folders, will show for the app
+principal as a matter of course.
+
+Run the job a second time for a second sample before concluding; the via-tmp
+race, if it exists, is a timing race.
+
+**E. Afterwards.** Record the outcome below with the run id from the log.
+Then `az containerapp job delete -n phbplat-prod-co-flowprobe -g <resource
+group> --yes`, delete the flow (*My flows* → … → *Delete*), and delete the
+`flow-trigger-probe` folder in SharePoint. Save the job log beside the
+comparison logs.
+
+**Outcome: PASSED, 2026-10-28, two samples.** Image `phb-co-engine:flow-probe`
+built from `feat/flow-trigger-probe` (merged as PR #7); job
+`phbplat-prod-co-flowprobe` created and started twice by the owner.
+
+| Run id | Execution | Job log | Items (Graph, read back) | Flow runs seen |
+|---|---|---|---|---|
+| `20261028-180408` | `gv2pfh9` | `### PROBE EXIT 0`; both written in 4.8 s | `probe_direct_…` created 18:04:11Z; `probe_via_tmp_…` created 18:04:12Z, modified 18:04:13Z (the rename); both `createdBy.application` = `phb-co-engine (85ca496d-…)`, `createdBy.user` = `SharePoint App` | one run each for `probe_direct_20261028-180408.json` and `probe_via_tmp_20261028-180408.json`, **both under their final names** |
+| `20261028-180729` | `0zdc4x2` | `### PROBE EXIT 0`; both written in 5.5 s | `probe_direct_…` created 18:07:34Z; `probe_via_tmp_…` created 18:07:34Z, modified 18:07:35Z; same creator | one run each, **both final names** |
+
+**No `.tmp` name appeared in any flow run.** So: SharePoint's *When a file is
+created (properties only)* trigger fires on an item an application-only
+principal creates through Graph; it fires for the one-PUT shape
+(`scrub_result.json`'s) and for the PUT-then-rename shape
+(`vendor_drafts.json`'s), and for the latter it reports the final name,
+twice out of two with the rename landing one second after the create. The
+trigger's *Created By* is the app. Four Graph items, two job logs
+(`C:\Users\Msheth\compare-runs\flowprobe-executions.log`, pulled from Log
+Analytics) and the flow's run history as read by the owner agree. This is
+the observation `PHASE-12.md` asked for in place of the inference; Phase 14
+is no longer gated on it.
+
+What two samples do not prove: that the rename can never be polled between
+the create and the rename. The window is about one second against a poll
+interval of a minute or more, and Intake 3 lives with the same window today
+under the sync client; Phase 14's shadow run is where a miss would show, and
+the engine-side cure (write the final name once, as the scrub result does)
+is one call-site change if it ever does.
+
+Cleaned up the same day: the job deleted (ARM `DELETE`, confirmed
+`ResourceNotFound`), the folder `flow-trigger-probe` with its four files
+deleted to the site recycle bin (confirmed `itemNotFound`, parent folder
+empty), the throwaway flow deleted by the owner.
 
 ## Sequence
 
@@ -808,8 +1329,9 @@ Record the outcome, or the waiver and its reasoning, here.
    tests/store_conformance.py --store graph --drive-id <id> --root
    "/<scratch>"`; from Git Bash set `MSYS_NO_PATHCONV=1`, or the shell rewrites
    the root into a Windows path and every request is a 400.
-6. Define Part E equivalence for the judgment steps, in writing, first — not
-   started
+6. ~~Define Part E equivalence for the judgment steps, in writing, first~~ —
+   done, `docs/phase-12-part-e-equivalence.md`; written 2026-09-22, before any
+   comparison ran, and re-checked 2026-10-28
 7. **Done through the probe and the harness, 2026-10-21** (*Step 7, third
    pass*): the credential works, the site grant is present and Write, and
    15 of 16 checks pass as the app with the 16th a defect in the check
@@ -817,16 +1339,24 @@ Record the outcome, or the waiver and its reasoning, here.
    copied (*The two guards*)
 9. **The copy — built 2026-10-21** at
    `/phb-co-engine scratch/part-c-copy-2026-10-21` (*Where the copy lives*)
-10. **The byte-identical comparison — first run failed before comparing
-    anything** (*The first run*): inputs verified by bytes where SharePoint
-    rewrites workbooks, and a 400 whose body was dropped. Both fixed; image
-    `phb-co-engine:part-c-compare-2`; the second run is the owner's to start
-11. **The flow-trigger decision — deferred, required before Phase 14**
-    (*Before cutover*)
+10. **The byte-identical comparison — DONE 2026-10-28, on the fifth run**
+    (`20261028-155543`: eight of eight EQUIVALENT, both halves reading the
+    same intake for every two-intake CO). Runs 1, 2 and 4 failed in the
+    instrument, run 3 in the engine (`os.path.getmtime` past the store), and
+    between runs 2 and 3 the job was never updated to the fixed image; each
+    is written up above and in `docs/phase-12-part-c-verification.md`,
+    which is the record. The job and the copy are deleted
+11. **The flow-trigger decision — PASSED 2026-10-28, two samples** (*Before
+    cutover: the flow-trigger decision*): the trigger fires on app-created
+    items for both sentinel shapes, final names both times
+12. **The intake-selection rule — decided yes 2026-10-28, done in the
+    repository, no current outcome changed** (*Before cutover: the
+    intake-selection rule*)
 
-Steps 1–4 and 8–9 are complete without anybody granting anything. Step 5 needs
-a token from the right client, not a permission. Step 10 needs the owner to run
-one job. Step 11 needs a decision.
+All twelve steps are complete. Part C has nothing left that gates Phase 14.
+The `PnP.Powershell` certificate on the app registration, left open here,
+was decided on 2026-11-02: it stays (`runbook.md` → *Decision — the
+`PnP.Powershell` certificate on `phb-co-engine` stays*).
 
 ---
 

@@ -130,6 +130,9 @@ building is not recorded.
 | **Value plausibility** | Does the data mean anything: a run of identical readings past a per-kind threshold is flagged, by role, never by a bad-value list; a card on Collection Health and a *Value* column on the Points list; both known dead sensors flagged live, nothing else | `feat/bas-value-plausibility` (2026-09-28), landed from `feat/bas-value-plausibility-reland` (2026-10-01) under the quiet-UI rules |
 | **Value kinds on the chart** | The Point Explorer reads the column a point's readings live in, from `data_type`; a boolean point is a stepped line between two labelled states with no numeric axis; string points recognised and left alone | `feat/bas-chart-value-kinds` (2026-10-06) |
 | **Readings table and CSV** | A *Chart / Table* toggle on Point Explorer shows the raw rows behind the chart, newest first, paged in SQL, never bucketed; *Download CSV* streams every row in the range with an honest 500,000-row cap; nothing fetched until used | `feat/bas-readings-table` (2026-10-09) |
+| **Reports, Phase 1** | A Reports tab: six `bas_*` tables, the spec's twenty questions seeded as the shared library, report definitions with questions, schedule in the building's zone, recipients (owner never a row) and a stored budget; no runs, no jobs, no email, no PDF | `feat/bas-reports-phase-1` (2026-11-10) |
+| **Reports, Phase 2** | The engine core: scope, coverage in SQL, the occupancy source, Jim's Step 1 classification, Not Applicable against Not Monitored, four analyses (Data Health, zone comfort, overrides, run outside schedule), fingerprints and New / Still open / Cleared, the roll-up, one narrative call per section under the budget, the HTML template, the Generated sub-tab, the Settings occupied-hours form and a dev script; proven on the office and the lab; no scheduler, PDF or email | `feat/bas-reports-phase-2` (2026-11-10) |
+| **Reports, Phase 5** | The remaining thirteen computed questions (VAV, AHU/RTU, hot and chilled water, DX) as pure functions, every number SPEC or CHOSEN in one file; DX applicability by Step 1; the hydronic headline and the DX table on the page; a CI job that builds and prints with the jobs image; the office unchanged | `feat/bas-reports-phase5` (2026-11-16) |
 
 ### Test count
 
@@ -143,7 +146,10 @@ building is not recorded.
 ## The database
 
 **Fourteen** tables under `public` with a `bas_` prefix, managed by Prisma.
-Counted from `@@map("bas_*")` in `prisma/schema.prisma`.
+Counted from `@@map("bas_*")` in `prisma/schema.prisma`. **Twenty-two since
+2026-11-10**: the Reports tab added six (*Reports*, under *The screens*), five
+of them platform configuration rather than building data, and its engine two
+more, `bas_report_runs` and `bas_report_findings`, both platform-side.
 
 ```
 bas_orgs
@@ -235,7 +241,7 @@ constraints and triggers.
 
 ## The screens
 
-One module, **five** tabs — real routes, not client-side state, so each is
+One module, **six** tabs — real routes, not client-side state, so each is
 bookmarkable and each guards itself independently. Listed in
 `app/(modules)/bas/tabs.ts`, which is the one place that knows they exist. The
 module opens on Projects (2026-09-30); Collection Health, which opened it
@@ -520,6 +526,31 @@ asserts it first, on every screen, with the fixture's labels all NULL; the
 same file asserts the station-name fallback (`bas_stations.display_name` is
 NULL on both real stations too). The oBIX key is editable nowhere.
 
+**Points editing (2026-11-10).** Changing a point's display name was not
+discoverable: the *Label* cell was an inline editor that looked like text.
+Now every row shows its display name - the label, or Niagara's name until
+one is set - with a pencil that appears on hover and on focus, and an
+unlabelled row says *Add label* beneath the name. The pencil opens a side
+drawer for that one point: the display name, the role picker and the
+equipment picker the row already had, *Shown* or *Hidden*, and a read-only
+line *Niagara name: `<niagara_history_name>`* saying that this is the
+collector's key and cannot change. Save writes only what changed, through
+the same four single-field `PATCH /settings/points/{id}` requests the row
+uses - `{ label }`, `{ role }`, `{ equipmentId }`, `{ visible }` - so the
+audit rows are the ones those requests already write
+(`bas.point_label_changed`, `bas.point_role_changed`,
+`bas.point_equipment_changed`, `bas.point_visibility_changed`); there is no
+new endpoint and no new audit action. The row's own role and equipment
+pickers, the *Shown* checkbox, bulk assign and the suggestions all stay.
+The search box over the Points list is the shared kit's and now matches the
+role's name and the equipment's as well as the three names, so *zone temp*
+or *RTU-1* finds the points that carry them; the Settings tree's box still
+matches the five things it always did. The module's screens moved onto the
+shared UI kit the same day (`docs/07-conventions.md` → *UI*): the kit's tab
+bar, buttons, dropdowns, segmented strips and search boxes, with every
+colour, filter, guard and counting check exactly as before.
+`runbook.md` → *How do I rename a point*; `tests/bas-points-drawer.test.tsx`.
+
 **Value plausibility (built 28 September, landed 1 October).** The
 third check: a measured quantity whose value has held still past the
 threshold for its kind, by role. One phrase on the *Checks:* line when
@@ -572,6 +603,296 @@ about lagging a horizon, and this is about a history that is gone. The four
 deliberate reasons stay out. `runbook.md` → *Collection Health says a point
 is no longer reported by the station*.
 
+### Reports — `/bas/reports` (Phase 1, 2026-11-10)
+
+**What exists.** A tab between Analyze and Collection Health. Opening it
+swaps the module's tab bar for a **Reports bar** (2026-11-11): the same kit
+component in the same place, one row, never two. Left to right: *Back*,
+which returns to the module bar with Projects selected and carries the
+query string; *Reports* (`/bas/reports`, the runs - the default when the
+tab is opened - and a run at `/bas/reports/generated/<runId>`);
+*Scheduled* (`/bas/reports/scheduled`, the definitions, with *New report*
+top right, and the editor at `/bas/reports/new` and `/bas/reports/<id>`);
+*Questions* (`/bas/reports/library` - the route and the tables keep the
+name Library; the screen says Questions everywhere); and *Usage* (an
+honest placeholder until Phase 6). `/bas/reports/generated` redirects to
+`/bas/reports`, so every older link lands where it did. Until 2026-11-11
+these were a second, smaller row of sub-tabs under the module's, named
+*Reports*, *Generated*, *Library* and *Usage*. The list is
+`app/(modules)/bas/reports/bar.ts`; `tests/bas-reports-ui.test.tsx` holds
+the bar, the deep links and Back. The plan is
+`docs/bas-reports-tab-plan.md`; the spec it serves is `docs/BAS Health
+Report Build Spec.md` (Jim, 27 October 2026). Phase 1 is schema, library,
+definitions and screens; the engine is Phase 2, below. **Nothing fires on
+its own**: no scheduler, no worker, no email, no PDF. A report activated
+today is scheduled - `next_run_at` is computed - and nothing fires until
+Phase 3.
+
+**Six tables** (`add_bas_reports`): `bas_report_definitions`,
+`bas_report_questions`, `bas_library_questions`, `bas_personal_questions`,
+`bas_report_recipients`, `bas_site_occupancy`. Twenty-six CHECK constraints of
+their own (`tests/bas-reports-schema.test.ts`). **The owner is never a
+recipient row**: the sender adds the owner's address at send time, and the
+recipients API refuses the owner's address on the way in and on the way
+out. An address outside `phb1899.com` is refused until the client sends
+`confirmed: true`, and the audit row (`bas.report_recipient_added`)
+carries `isExternal`. **Five of the six are platform-side**, not building
+data: they are excluded from `bas_v_data_dictionary` by name, withheld
+from `bas_analyze`, withheld from `bas_collector`, and listed as not
+moving in `scripts/bas-migrate-to-azure/common.sql`; `bas_site_occupancy`
+is building data and visible to all three. `runbook.md` → *Reports (Phase
+1)* has the consequence for `phb-bas`'s own read-only role script.
+
+**The shared library** is the spec's twenty questions as rows, kind
+`computed`, each with its section, the spec's *Applies to* wording beside
+equipment-type keys, the *Points required* column as role-key requirement
+groups (`lib/modules/bas/reports/library.ts`), `min_coverage` 0.800, and
+`analysis_fn` naming the function Phase 2 implements. One TypeScript
+source, installed by the seed and by the migration (`ON CONFLICT DO
+NOTHING`), held to each other by `tests/bas-reports-library.test.ts`. Two
+presets as data (`presets.ts`): `health_weekly`, all twenty in the
+spec's order; `health_daily`, Summary, Space Comfort and Data Health.
+**Locked until 2026-11-12, buttons since** - the entry at the end of the
+Reports sections says what changed; in Phase 1 a preset report's questions
+were materialised into `bas_report_questions` and the question routes
+refused to edit them (`preset_locked`), and custom reports took library,
+personal (the owner's own, nobody else's) and typed questions one call at
+a time.
+
+**The schedule** is a local time of day plus the building's zone; the
+instant is derived (`schedule.ts`, pure, used by the editor's preview and
+the service alike) and recomputed on activation and on any change to the
+clock inputs, never by adding a day to an instant. Four kinds: daily,
+every N days from an anchor date, weekly on weekdays, monthly on a day
+clamped to the month. `tests/bas-reports-schedule.test.ts` walks the
+November 2026 change both ways. **Visibility**: owner or module admin,
+everyone else 404, decided in the service per row. State machine: draft →
+active ↔ paused; `paused_owner_disabled` is in the CHECK for Phase 3 and
+nothing sets it yet. The budget is stored and not enforced. API under
+`app/api/modules/bas/reports/**`, every route through `withBas`
+(`tests/bas-reports-routes.test.ts` walks them). Not built in Phase 1:
+the Settings tab's occupied-hours field (built in Phase 2, below), admin
+promotion to the shared library, *Run now*, *History*.
+
+### Reports — Phase 2 (2026-11-10): the engine core
+
+**What exists.** `lib/modules/bas/reports/engine/` turns one definition
+and one period end into a stored run: `run.ts` (`executeReportRun`) owns
+the sequence, `scope.ts` loads it, `inventory.ts` decides it, `analysis/`
+judges it, `compare.ts` and `rollup.ts` summarise it, `narrative.ts` words
+it, `render.tsx` draws it. Two more tables (`add_bas_report_runs`):
+`bas_report_runs` - status (`queued`, `running`, `succeeded`, `partial`,
+`failed`), trigger, period, zone, budget, metered cost and tokens, timing,
+`partial_reason`, `error`, the report as JSON and as standalone HTML,
+`previous_run_id` - and `bas_report_findings`, one row per finding with
+its evidence, fingerprint, state and the run it was first seen in.
+Sixteen CHECKs between them (`partial` must carry a reason, `failed` an
+error, a finished run a document, a run is never its own previous).
+**Both are platform-side**: excluded from `bas_v_data_dictionary`,
+withheld from `bas_analyze` and `bas_collector`, not moved by the Azure
+script - a run holds the rendered report and the model's sentences, and
+the model that answers Analyze questions must not read its own prose back
+as data. `runbook.md` → *Reports (Phase 2)*.
+
+**The sequence, in the order the code runs it.**
+
+1. *Scope.* Site → stations (the definition's subset, or all) → equipment
+   → active points with roles. Per point: the readings in the period (raw,
+   or `date_bin`-bucketed above 20,000), the last reading before the
+   period as the carry-in value, the recorded gaps, and **coverage in
+   SQL** - for an interval trend, the share of the period within a hold
+   of three intervals (at least 15 minutes) of a reading; for a
+   change-of-value trend, the period minus the collector's recorded gaps.
+   **A point with more readings than its declared interval allows (1.5×,
+   `COV_LIKE_FACTOR`) is change-of-value in practice and is treated so
+   everywhere**: the office's damper and static points declare 900 s and
+   log on change, and the first live run read a 47-hour quiet stretch as
+   a hole.
+2. *Occupancy per station*, recorded on the report: a trended
+   `occupancy_status` point, else `occupancy_cmd`, else the building's
+   occupied hours from `bas_site_occupancy` - the new *Occupied hours*
+   form on a building's row in Settings, `PUT
+   /settings/buildings/{siteId}/occupancy`, module admin, one start and
+   end per weekday, audited as `bas.building_occupancy_updated` - else
+   none; a question that needs occupancy is then Not Monitored for it.
+3. *Data Health first* (q20): offline (an interval trend with no reading
+   in the period), stale (last reading more than six intervals, at least
+   two hours, before the end), out of physical range (per role and unit,
+   `PHYSICAL_RANGES`, under the persistence rule), flat (the plausibility
+   thresholds and `MIN_READINGS`, the longest identical run). **Every
+   flagged point is excluded from every equipment question.** A
+   change-of-value point is never offline or stale for keeping quiet; a
+   setpoint, a status or a state point is never judged for flatness.
+4. *Classification* (Jim's Step 1) and *applicability*: hydronic from
+   plant equipment types or water-side roles, DX from unit type or
+   compressor roles, staged heat from the role; reheat and economizer
+   sub-types from the roles a VAV or RTU carries. **Not Applicable is
+   decided by what the building has** (no unit of the type); **Not
+   Monitored by what it trends** (no applicable unit has every required
+   group at 80 % coverage or better; the missing groups named, a present
+   but short one as *(coverage N %)*). The building-wide missing list is
+   what every skipped unit lacks, falling back to the union; a unit's own
+   lack is on its own skipped line.
+5. *Analysis*, pure functions over sample-and-hold series (`series.ts`):
+   q03/q04 zone comfort (percent of occupied minutes within ±2 °F of the
+   active setpoint or the heating/cooling pair; Watch past 10 %, Action
+   Needed past 50 % or 5 °F; the worst ten with their busiest two-hour
+   window), q05 overrides (`occupancy_override`, the one override role
+   the vocabulary has), q19 run outside schedule (eight status roles;
+   hours and days; Action Needed past twenty hours). The spec's
+   persistence rule throughout: 30 minutes in one stretch, or two days of
+   more than a spike. Q6-Q18 are decided (NA / NM / could run) and not
+   analysed until Phase 5; a question that could run makes the run
+   partial and says so.
+6. *Comparison*: fingerprint `sha256(question|subject|issue)` with the
+   subject `equipment:<id>` or `point:<id>`; New / Still open / Cleared
+   against the previous finished run of the same definition; open Action
+   Needed items carried forward with their first-seen run and date.
+7. *Roll-up*: section status from its findings' priorities, building
+   status from the sections; NA and NM never move either.
+8. *Narrative*: one `claude-opus-5-5` call per rendered section with the
+   findings as a data block, returning only the status sentence and, per
+   finding by index, a likely cause (worded as likely) and a next check,
+   in the `docs/11` voice; validated against a closed schema; metered at
+   the price table in `pricing.ts`; estimated before each call and stopped
+   at `budget_usd` with the reason. A declined call leaves the section's
+   evidence standing and the run partial.
+9. *Render and persist*: `ReportView` is the run's page and, through
+   `renderReportHtml`, the standalone HTML on the run; it follows the
+   spec's template - point inventory (types found, Not Monitored with the
+   missing points, Not Applicable dropped and listed), summary, sections,
+   Data Health, Open Items Carried Forward - and **every number on it is
+   read from a finding's evidence, never from the prose**.
+
+**Screens.** *Reports*, the Reports bar's first item and the tab's default
+view (the *Generated* sub-tab until 2026-11-11), lists runs (status,
+period, duration, cost) for the reports the viewer owns or, as a module
+admin, all, and
+opens one at `/bas/reports/generated/<runId>`. Visibility is the
+definition's (owner or module admin, everyone else 404), decided in
+`runs-service.ts`. A report with runs cannot be deleted
+(`report_has_runs`, 409). The dev script `npm run bas:report:run --
+--definition <id> --period-end <iso>` is the only trigger; `--as`,
+`--no-narrative` and `--fixed-narrative` are its options.
+
+**Tested** with synthetic series (`tests/bas-reports-analysis.test.ts`),
+the template and the prompt (`tests/bas-reports-render.test.tsx`), and a
+synthetic building run end to end against the real schema
+(`tests/bas-reports-engine.test.ts`); and **run on the office and the
+lab**, `docs/bas-reports-phase-2-verification.md`. Not built, by the
+phase's scope: scheduler, worker, PDF, email, *Run now*, the Usage tab,
+Q6-Q18's analyses. `WHY-ITS-BUILT-THIS-WAY.md` §§ 78-79.
+
+**The template under the worker's loader (2026-11-11).** Run 1 on the
+development database had failed with `React is not defined`:
+`engine/render.tsx` is JSX, and the dev script runs under tsx, whose
+esbuild reads this repository's `jsx: "preserve"` (Next's requirement) as
+the classic transform - `React.createElement` with no React imported. Next
+and vitest both use the automatic runtime, so every in-process test passed
+and the fault existed only under the worker. The template names its
+runtime in a pragma on line 1 (added the same day, minutes after that run;
+every run since has rendered), and `tests/bas-reports-worker-render.test.ts`
+now spawns tsx on `scripts/bas-report-render.ts` - the engine's own
+`renderReportHtml`, under the worker's loader - holds its HTML byte for
+byte to vitest's, and proves it can see the fault by rendering a copy of
+the template without the pragma and expecting the stored run's error.
+`npm run -s bas:report:render -- <document.json>` renders any run's
+`report_json` to HTML by hand. `runbook.md` → *A run failed with "React
+is not defined"*.
+
+### Reports — Phase 3 (2026-11-12): the jobs
+
+**What exists.** Reports run unattended. A **scheduler**
+(`lib/modules/bas/reports/scheduler.ts`, `scripts/bas-reports-scheduler.ts`,
+`npm run bas:reports:scheduler`) runs one pass: for every active definition
+whose `next_run_at` has passed it inserts ONE `queued` run - trigger
+`scheduled`, the period the definition's window ending at the occurrence
+that was due - and advances `next_run_at` in the same transaction on the
+locked row, so two passes cannot queue the same occurrence. A definition
+that missed several ticks gets one run for the latest occurrence that has
+passed, never a backfill (`collapseMissedTicks`, pure, built on Phase 1's
+`computeNextRun`; the DST cases are that file's tests and are not
+repeated). Before any of that, every active definition whose owner's
+account is disabled is moved to `paused_owner_disabled` with the reason on
+the new `paused_reason` column and a `bas.report_state_changed` audit row;
+a module admin's **transfer of the owner** (`transferReportOwner`,
+`PATCH /api/modules/bas/reports/<id>/owner`, the editor's *Transfer to
+another owner* control for admins) is what resumes it - that path did not
+exist before this phase, and the runbook's SQL workaround is retired.
+
+A **worker** (`lib/modules/bas/reports/worker.ts`,
+`scripts/bas-reports-worker.ts`, `npm run bas:reports:worker`) claims the
+oldest run that needs one with `FOR UPDATE SKIP LOCKED` - queued, or
+running with no heartbeat for ten minutes and a reclaim left - heartbeats
+every 30 s, executes the engine through `executeQueuedRun` and goes back
+for the next until the queue is empty or its four-minute drain window
+closes. A stalled run is reclaimed once (`bas_report_runs.attempts`, 1 → 2,
+`started_at` restarted) and failed with a clear error if it stalls again;
+the Container Apps scaler counts by the same predicate the claim uses.
+**The run row comes first**: the engine was split into `enqueueRun`
+(queued row), the claim, and `executeQueuedRun` (reads the period and the
+trigger from the row); the dev script's `executeReportRun` is the three in
+one call, so the laptop, the worker and the tests are one execution path.
+
+**Two caps** (per report until 2026-11-12; the module's one safety
+ceiling since - the entry at the end of the Reports sections). Beside
+`budget_usd`, a wall-clock cap `max_minutes` per definition (1 to 25,
+default 20; the editor's *Limits* section). The engine reads a deadline
+before every question and every narrative call; past it, the questions
+still waiting are `not_run` with the time-cap note, the narrative still
+waiting is skipped, and the run is `partial` with a reason naming the cap,
+the elapsed minutes and exactly what was skipped - on the run's row, on the
+Reports list and at the top of the page. Data Health is computed before the
+loop and is never the cap's victim. The worker job's replica timeout (30
+minutes) is held above the cap plus the drain window by a deploy guard.
+
+**Run now.** On the Scheduled list, per report, owner or module admin
+(decided in the service): `POST /api/modules/bas/reports/<id>/runs` queues a
+`manual` run with the period ending now, audited as
+`bas.report_run_requested`; refused with `run_in_flight` (409) while a run of
+that report is queued or running, and with `report_not_ready` for a report
+with no questions. The Last run cell shows the newest run - *Queued just
+now*, *Running*, then its outcome, linked to the run page - and both the
+Scheduled list (while a run is in flight) and the Reports list reload every
+ten seconds while visible.
+
+**Infrastructure**, on the `cipWorkerJob` and `dbBackupJob` patterns: in
+`infra/main.bicep`, `enableBasReports` (default false), `basReportsImage`
+(no placeholder default, passed on the command line) and
+`basReportsSchedulerCron` (`*/15 * * * *`, UTC); two jobs,
+`basReportsSchedulerJob` (Schedule trigger, 600 s timeout, one retry) and
+`basReportsWorkerJob` (Event trigger, a `postgresql` KEDA rule on the
+queued-or-stalled count, two executions at most, 1800 s timeout, no retry),
+both on the platform's identity with the registry pull and vault read it
+already holds - **no new role assignment**. The worker reads `DATABASE-URL`,
+`BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` by reference; the scheduler
+only `DATABASE-URL`. One image, `Dockerfile.bas-reports` (Node 24, no
+Chromium until Phase 4), built as `bas-reports:<sha>` by `deploy.yml` on
+merge and applied to each job once its repository variable
+(`AZURE_BAS_REPORTS_SCHEDULER_JOB`, `AZURE_BAS_REPORTS_WORKER_JOB`) is set.
+**The worker runs under tsx**, not a compiled build - the same loader as
+`bas:report:run` and the one `tests/bas-reports-worker-render.test.ts`
+proves the template under (`WHY-ITS-BUILT-THIS-WAY.md` § 80).
+
+**Tested** in `tests/bas-reports-jobs.test.ts` against the real test
+database: missed ticks → one run with the next time advanced, and nothing
+on the next pass; owner disabled → paused with the reason and resumed by a
+transfer (and the transfer refused to a plain owner, to an employee without
+the grant, and to a stranger); two workers never claim the same run, with
+one row held locked in a transaction while the other claims, and two
+simultaneous claims taking two runs; a stalled run reclaimed once then
+failed with the error; the time cap → partial naming the cap and the
+questions it skipped; Run now refused in flight, refused with no questions,
+404 to a stranger, 202 then 409 through the route; the worker end to end in
+process; **and both scripts as child processes under tsx** against the same
+database. `tests/deploy-guards.test.ts` pins the flag, the parameters, both
+jobs, the secrets, the absence of a role assignment, the workflow steps, the
+Dockerfile and the three numbers of the time cap. Not built, by the phase's
+scope: PDF and email (Phase 4); nothing here makes either harder - a
+delivery is a step after `executeQueuedRun` stores the run. `runbook.md` →
+*Reports: turning the jobs on*, *Reports: a run is stuck or failed*,
+*Reports: the safety ceiling* (*what the caps do* until 2026-11-12).
+
 ### Filters
 
 Time range (24 h / 7 d / 30 d, and on Point Explorer a custom `from`/`to`
@@ -585,6 +906,452 @@ range scopes only run history and the screen spans buildings, so there is no
 single zone to resolve a calendar date in.
 
 ---
+
+### Reports — the questions checklist, the safety ceiling, and a Usage page that reads (2026-11-12)
+
+**What changed.** Three product decisions on the Reports tab, in one
+branch (`feat/bas-reports-editor-questions-usage`).
+
+**The editor's Questions section is three tabs over one checklist.** The
+segmented control it always had - *Standard weekly*, *Daily critical-site*,
+*Custom* - with each tab a checklist and ONE selection behind all three. A
+preset's tab lists that preset's questions grouped by section, each with a
+box ticked from the shared set, with *section · computed/planner · applies
+to* beside it, and its own *Select all* and *Clear* acting on that tab's
+questions only; Daily is a subset of Standard, so a tick on one shows on the
+other, and switching tabs changes nothing. *Custom* lists My questions with
+boxes, the custom questions on this report (kind `inline`, with a *save for
+reuse* tick per question and one on the box to type one), and the box
+itself. The count at the right of the tab row is the whole set and *Show
+selected* lists it in report order. Visible on a new report before any
+save. The selection travels whole as `questions` on create and update
+(`lib/validation/bas-reports.ts`), the service validates it and stores it
+in one order - shared in library order, then personal, then inline
+(`resolveSelection`, `writeQuestions`) - and `preset_key` is a label of the
+preset whose *Select all* was last used, kept while the shared part matches
+(`presetMatching`). Nothing is locked: `preset_locked`, `invalid_reorder`,
+`question_not_found`, the per-question routes and the move buttons are
+gone. A Phase 1 preset report round-trips through the new save to the same
+rows (`tests/bas-reports-routes.test.ts`); the tabs and the shared selection
+are `tests/bas-reports-ui.test.tsx`. The Questions page is unchanged.
+(The first cut that day was a flat list with four buttons; the tabs
+replaced it the same day, and the one selection behind them is what
+survived.)
+
+**Settings → Usage, and the ground.** Settings gained a bar of its own on
+the Reports bar's shape - *Back · General · Usage*, drawn by the shell in
+place of the module tabs, one row, never two: *General*, the screen
+Settings always was, and *Usage*, the Reports Usage view at
+`/bas/settings/usage` - one component, two routes, the ceiling card
+editable because every Settings page is module-admin. Both bars are data
+on one shared sub-bar shape (`sub-bar.ts`, the registry `sub-bars.ts`,
+`reports/bar.ts`, `settings/bar.ts`), with the longest-prefix routing and
+the Back item written once. The Reports bar is unchanged. And the tinted ground on every shell now covers the document:
+`.dashboard-ground` is `box-sizing: content-box` with `min-height: 100%`,
+because the border-box version stopped 4rem short on any page shorter than
+the window (`runbook.md` → *The page background stops short of the
+bottom*; `tests/design-tokens.test.ts`). No colour changed.
+
+**One safety ceiling.** `bas_report_settings`, one row
+(`bas_reports_safety_ceiling`): `ceiling_usd` (default 10.00, at most
+1,000) and `ceiling_minutes` (default and at most 25), `updated_by_id`;
+`budget_usd` and `max_minutes` DROPPED from `bas_report_definitions`;
+`bas_report_runs.budget_usd` kept as the ceiling in force when the run
+executed, stamped at queue time and re-read at execution. Read by
+`readSafetyCeiling` (`ceiling.ts`, importable by the jobs), set by
+`setSafetyCeiling` (module admin, audited `bas.report_ceiling_changed`),
+`GET` / `PATCH /api/modules/bas/reports/ceiling`. The engine's two partial
+reasons now read *Safety ceiling of $N reached...* and *Safety ceiling of
+N min reached...*. The editor's Limits section is gone and the create /
+update APIs answer `400 limits_removed` to `budgetUsd` or `maxMinutes`.
+The new table is withheld from `bas_analyze` and `bas_collector`, excluded
+from the dictionary, and listed as not moving in the Azure migration
+script - every allowlist, as the Phase 1 tables were.
+
+**Usage reads the database.** `lib/modules/bas/reports/usage.ts` over the
+finished runs the viewer may see (the runs list's `visibilityWhere`),
+counted on the day they finished in New York: totals, the month so far,
+spend per day, by report and by building, the ten most expensive runs, a
+joinless count, and the ceiling. The page (`reports-usage.tsx`) is built on
+`components/ui/Usage.tsx` - the stat tile, the bar chart and the breakdown
+table, moved there from Cost Intelligence's `usage-view.tsx`, which now
+imports them - with the BAS run-status chip and a *Safety ceiling* card at
+the bottom. The range helpers are shared too (`lib/usage/range.ts`). The
+bug it replaced: the page was the Phase 1 placeholder, static, saying
+*There have been no runs* beside a Reports list showing one;
+`tests/bas-reports-usage.test.ts` seeds that run ($0.0397, 4,310 tokens)
+and reads it back. `WHY-ITS-BUILT-THIS-WAY.md` § 81; `runbook.md` →
+*Reports: the safety ceiling*, *The editor's Questions section is a
+checklist*, *The Reports list says there is nothing, or Usage shows zero*.
+
+### Reports — the rendered report, corrected from the first production run (2026-11-12)
+
+**What changed** (`fix/bas-report-rendering`). The first production run of
+the office report read *Equipment types found: economizer* and *Required
+points found: 0 of 70*, showed Data Health as point / problem / evidence /
+since with no cause or action, repeated every Not Monitored question's
+missing roles in its section after the inventory had listed them, printed
+the spend as *$0.0397 of $2.00* after the per-report budget was gone, and
+listed ten points that stopped at the same minute as ten faults.
+
+- **The inventory.** *Equipment types found* lists the types in scope by
+  count with the vocabulary's names (`EquipmentTypeFound[]`, from
+  `bas_equipment_types.display_name`, loaded in `scope.ts`); a
+  *Classification* line carries Jim's Step 1 per unit in words
+  (`classificationText`: *DX (by type; compressors not trended) with
+  economizer*); the count is labelled *Required point checks met: N of M
+  (one check per question per unit it applies to)*. The diagnosis that
+  prompted it is `docs/bas-reports-phase-2-verification.md` → *The office
+  inventory, traced*: the lookup was right, the office's points lack the
+  roles, and most of the missing points are not trended on the JACE at all.
+- **Likely cause and recommended action everywhere.** A Data Health row
+  carries the model's two sentences on a second line under it, and so does
+  each Summary finding; the Data Health evidence cell carries the duration.
+  The narrative call is unchanged - one per section, by index, numbers
+  final.
+- **Collection incidents.** Points on one station whose last readings fall
+  within fifteen minutes of each other, three or more, are ONE
+  `collection_stopped` finding with the points inside its evidence
+  (`IncidentPoint[]`), subject `station:<id>@<minute>`, rendered as a block
+  above the Data Health table with the member rows below it; the status,
+  the summary, the counts and the narrative see one finding, and the
+  narrative is asked to name the causes in order - the device network
+  trunk, the histories stopped on the station, the collector. The
+  `subject_key` CHECK admits the third shape
+  (`bas_report_findings_station_incident`).
+- **Severity.** Every Data Health finding stays Watch: the spec is silent
+  on a share or a duration, and a test pins the decision until Jim decides
+  one (`runbook.md` → *Data Health rolled up to Watch with half the
+  building offline*).
+- **Repetition and the footer.** A Not Monitored section is its badge and
+  one line from `wording.ts` (*Not monitored — needs ...; see Point
+  Inventory*), derived from the stored questions so old runs render the
+  same way; the footer prints the spend and the run's duration
+  (`header.durationMs`) and no limit.
+
+Documents stored before this date render too: their types line is printed
+as the words it held, and they have no classification line and no
+duration. `tests/bas-reports-render.test.tsx` holds every change above
+against the fixture and a pre-change copy of it; the incident is driven
+through `dataHealth` in `tests/bas-reports-analysis.test.ts` and end to end
+in `tests/bas-reports-engine.test.ts` (*a period after the data stopped*).
+`WHY-ITS-BUILT-THIS-WAY.md` § 82.
+
+### Reports — Phase 4, the PDF half (2026-11-13)
+
+**What exists.** A run's report as a PDF, rendered by the worker from the
+stored `report_html` with headless Chromium
+(`lib/modules/bas/reports/pdf/render.ts`: Playwright, Letter, backgrounds,
+the report name and period in the header, *Page N of M* in the footer,
+Figtree embedded from `app/fonts`; the browser is in `Dockerfile.bas-reports`
+only, with its own launch-and-print check as the `node` user) and stored on
+the run as bytea (`bas_report_runs.pdf`, with `pdf_status`, `pdf_error`,
+`pdf_bytes`, `pdf_queued_at` and `pdf_rendered_at`, each held to the status
+by a CHECK in `20261113090000_bas_report_runs_pdf`). The engine queues the
+render as it stores the page; the worker drains queued renders after every
+run and once more at the end of an execution (`pdf/jobs.ts`:
+`claimNextPdfJob` writes the in-progress failure first and
+`renderClaimedPdf` overwrites it with ready, or records why not). A failed
+render never changes the run. *Retry PDF* (`retryRunPdf`,
+`POST /api/modules/bas/reports/runs/<id>/pdf/retry`, 202, audited as
+`bas.report_pdf_retry_requested`) queues a failed render again; the
+worker's scaler query counts queued renders so a retry wakes a worker.
+`GET /api/modules/bas/reports/runs/<id>/pdf` serves the bytes as
+`<report name> <start> to <end>.pdf` under the run's own visibility rule
+(`loadRunPdf`, the one read of the bytes); a visible run with no PDF is 409
+`pdf_not_available` with the reason. Email is the other half of Phase 4,
+built 2026-11-17 (below), and needs the sender app registration to send.
+
+**On screen.** The run page's bar carries *Print* (the browser's dialog
+over `PRINT_PAGE_CSS`, the report alone) and a red *Download*
+(`reports-run-actions.tsx`, the Freeze Protection pair, in `BasShell`'s new
+`actions` slot); the Reports list has a *PDF* column with the state in
+words and a *Download* per row, greyed with its reason until the PDF is
+ready - *PDF not available for this run — use Re-run* for runs from before
+- and *Retry PDF* when a render failed. While a render is queued or in
+progress the run page polls every ten seconds.
+
+**The spin guard** (`queue-guards.ts`, shared with the worker): the
+scheduler's pass fails a run queued for an hour and never claimed, a run
+claimed and lost twice, and a render queued for an hour, each with an error
+saying what happened and what to do, so the worker job's scaler count
+returns to zero. The scheduler's summary line ends `..., N abandoned`.
+
+**Held by** `tests/bas-reports-pdf.test.ts` (the real Chromium on the
+sample document: three pages, header, footer; the queue, the routes, the
+CHECKs, the import graph, the `select` rule),
+`tests/bas-reports-queue-guards.test.ts` (each guard, the template's own
+scaler query before and after, the script), `tests/bas-reports-jobs.test.ts`
+(the worker script prints the PDF), `tests/bas-reports-ui.test.tsx` (the
+column, the row, the actions slot) and `tests/deploy-guards.test.ts` (the
+Dockerfile, CI's browser install, the scaler query). Captures:
+`docs/design/bas-reports-pdf/`. `WHY-ITS-BUILT-THIS-WAY.md` § 83;
+`runbook.md` → *Reports: the PDF*.
+
+### Reports — every question on the page, in its own words (2026-11-13)
+
+**What changed** (`feat/bas-report-question-layout`). The rendered report
+(`lib/modules/bas/reports/engine/render.tsx`, the run page and the PDF
+alike) lists each question the report carries inside its section as a
+sub-heading in the spec's words - *Q3. What percent of occupied hours did
+each zone hold within ±2°F of setpoint?* - with its answer directly beneath:
+
+- the findings it raised this period (the existing rows with evidence,
+  likely cause, recommended action and the New / Still open / Cleared
+  chips); Q4 is answered by its worst-zones table, Q19 shows its hours
+  table above its findings;
+- or one factual line when it ran and found nothing, written from numbers
+  the analysis now returns and the engine stores in the question's
+  `metrics` - `zonesJudged` and `lowestPercentInBand` on `ComfortResult`,
+  `judged` and `longestOutside` on `SchedulesResult`, `judged` on the
+  overrides and Data Health results: *All 10 zones judged held setpoint for
+  at least 95% of occupied hours*, *None of the 11 units judged ran outside
+  its schedule for 30 minutes at a stretch or on two days; the most time
+  outside was 0.3 h (RV)*, *All 26 points judged were reporting, changing
+  and within physical range*;
+- or, muted, why it did not run: *Not monitored — this building does not
+  trend: airflow; airflow setpoint*, *Not applicable — no hydronic heating
+  on this building*, *Not analysed — the analysis for this question is
+  built in Phase 5. Its points were checked and it could run. Units it
+  would run over: RV*.
+
+Units a question skipped are named under it (*Not judged: VAV-5 (no
+setpoint trended)*). The section's badge stays on the section heading; a
+Not Monitored section no longer carries a line of its own. The Point
+Inventory lost its *Not Monitored* bullets, its *Not Applicable and left
+out* line and its *Required point checks met* count - a question table
+stood in for the bullets for one commit and went as a duplicate - and
+keeps the equipment types, the classification, the coverage line, the
+occupancy source and the points in scope; every question is in its
+section. `needs` (the spec's Points-required words from the library row
+the engine read, `describeRequiredRoles`) is stored on every
+`QuestionResult` as the record of what was checked and printed nowhere.
+The Summary heads its two
+halves with the spec's Q1 and Q2 (`summary.questions`, stored) and names
+the findings behind each count. Cleared findings are grouped under the
+question they came from; a custom question is its text over its note. The
+`Q` prefix is what keeps question numbers apart from the section numbers
+(*3. VAV* is a section; *Q3* is a question). Documents stored before this
+date render with the library supplying the words, the needs and the
+Summary's two questions, and a positive line that says only what the
+stored metrics support. The wording is in `wording.ts` (`questionHeading`,
+`positiveAnswer`, `notMonitoredLine`, `notApplicableLine`, `notRunLine`,
+`skippedLine`; `TIME_CAP_NOTE` moved there so the template and its test
+need no engine import), and `h3` joined the print rules' `break-after:
+avoid`. The dev script prints the same positive line, and the
+required-checks count.
+
+**Held by** `tests/bas-reports-render.test.tsx`: the order of heading and
+answer for every outcome, all twenty questions under their headings and
+once only, the inventory kept to its building lines, the cleared groups,
+the pre-change document, and the stylesheet's colour set unchanged; `tests/bas-reports-pdf.test.ts` holds
+the sample document's new page count. Captures:
+`docs/design/bas-report-question-layout/`. `WHY-ITS-BUILT-THIS-WAY.md`
+§ 84; `runbook.md` → *Every question is a sub-heading on the report, and
+what the line under it means*.
+
+### Reports — Phase 5 (2026-11-16): the remaining computed questions
+
+**What exists.** Every one of the twenty questions has an analysis. Q6-Q18
+are thirteen pure functions in four files under
+`lib/modules/bas/reports/engine/analysis/` - `vav.ts` (Q6 airflow below
+80% of setpoint while occupied, Q7 damper at 100% and still off setpoint,
+Q8 reheat open above cooling setpoint), `air-handlers.ts` (Q9 DAT held
+setpoint, ±1.5 °F modulating and ±4 °F staged DX; Q10 duct static tracked
+setpoint; Q11 heating and cooling together; Q12 economizer at minimum with
+free cooling available), `hydronic.ts` (Q13 and Q14, one loop function:
+supply on setpoint and delta T at its minimum), `dx.ts` (Q15 starts per
+sliding hour per stage, Q16 DAT drop with compressors on 15 minutes, Q17
+compressors below 55 °F with the economizer shut, Q18 DAT rise with heat on
+10 minutes). One shape for all thirteen (`common.ts`): the units the
+inventory qualified and an `AnalysisContext` (period, zone, excluded
+points, each unit's occupied hours or null, its station's points for
+outdoor air) in; findings, skipped units with reasons, and metrics out.
+`EQUIPMENT_QUESTIONS` in `analysis/index.ts` is the table `run.ts`
+dispatches through; `ANALYSIS_AVAILABILITY` has no `not_built` entry left,
+and `NOT_BUILT_NOTE` stays for documents stored before.
+
+**The numbers** are in `analysis/thresholds.ts`, each marked SPEC (the
+library text's own figure, used exactly) or CHOSEN (the spec leaves it
+open; each with its reason). `CHOSEN_THRESHOLDS` lists the chosen ones and
+a test holds the list to the file. `runbook.md` → *Reports: a VAV, air
+handler, plant or DX finding looks wrong, or a unit reads "Not judged"*
+prints them. Every question raises Watch the moment the spec's persistence
+rule is met; what makes Action Needed is per question and chosen.
+
+**What each returns for its one-line answer** - `judged`, and the headline
+the line prints when nothing was found: the most hours (Q6-Q8, Q11, Q12,
+Q17), the lowest share in band (Q9, Q10), on-target share and average
+delta T (Q13, Q14 - also the template's *HWS on target: x% | Avg delta T:
+x °F* line under the question), the peak starts (Q15), the lowest average
+drop or rise (Q16, Q18). The DX section draws the template's table (Unit |
+starts/hr peak | avg DAT drop | avg DAT rise) from Q15, Q16 and Q18's
+per-unit metrics (`dxTableRows` in `render.tsx`).
+
+**Hours judged.** Q6 occupied hours (its required points include
+occupancy). Q7 occupied hours where the station has an occupancy source,
+every hour where it has none, and `metrics.hoursJudged` says which. Q9 and
+Q10 while the fan is proven on, less 15 minutes after each start. Q16
+after 15 minutes of compressor run and Q18 after 10 of heat, as the spec
+says. Q13 and Q14 while the plant is in service (its status, or supply and
+return 2 °F apart). Q8, Q11, Q12 and Q17 any hour the condition holds.
+
+**Two applicability changes in `inventory.ts`.** The DX questions (Q15-Q17)
+apply to a unit that is DX by its points or by a packaged DX type, and Q18
+to one with a heat stage point or a packaged heat type: the library's type
+list includes `ahu`, so by type alone a hydronic air handler read the DX
+section as Not Monitored on a building with no DX. The office is
+unchanged (RV is a rooftop unit). And `align` - the slice-by-slice join of
+several series that comfort used privately - moved to `series.ts` with
+`slicesWhere`, `slicesMs`, `slicesMean` and `afterFirst`.
+
+**The one place a function asks for more than the library row.** Q12
+needs a call for cooling (a cooling valve, compressor or cooling stage on
+the unit) to tell an economizer at minimum in its deadband, which is
+right, from one at minimum while mechanical cooling runs, which is the
+fault. The library row - Jim's Points-required column, *OA damper, OAT,
+RAT* - is unchanged, so a unit without a cooling point is runnable, is
+judged by nothing, and is listed under the question as not judged with
+that reason. No vocabulary role was added: every role the functions read
+was already in `prisma/bas-vocabularies.ts`.
+
+**Held by** `tests/bas-reports-phase5.test.ts` (pure, 57 tests): per
+question a case that must raise a finding with its numbers, a case just
+under the threshold or shorter than the persistence rule, a case where
+Data Health flags one of the unit's points (flat, out of range, stopped)
+and the equipment finding is absent although the same data without the
+exclusion raises it, and Not Applicable / Not Monitored; plus a unit with
+exactly the library's roles judged by every function, and the CHOSEN list
+held to the file. Mutations run: no fan settle, return air before mixed,
+excluded points read, Q6 over every hour, four starts an hour counted as
+short cycling - each fails a named test. `tests/bas-reports-phase5-building.test.ts`
+runs both presets through the real engine against the test database on a
+building with every role: all twenty questions answered, the run
+`succeeded`, exactly the four planted faults found with their numbers,
+the headline and the DX table on the page.
+
+**Re-run on the office** (local copy, `--fixed-narrative`), the same two
+periods on `main`'s code and on this branch: identical question outcomes,
+missing lists, findings and inventory. Q6-Q18 still read Not Monitored, or
+Not Applicable for Q8, Q13 and Q14.
+
+**CI.** `.github/workflows/ci.yml` gained the job *Reports jobs image
+builds and prints*: it builds `Dockerfile.bas-reports` (its own cache
+scope), refuses a root user, repeats the launch-and-print check at run
+time, and prints the shared fixture report with the worker's own Chromium
+renderer under tsx, mounted read-only. Until then only `deploy.yml` built
+that image, after a merge. `runbook.md` → *CI: "Reports jobs image builds
+and prints" fails*.
+
+### Reports — Phase 6 (2026-11-16): planner questions run
+
+**What exists.** A report's typed questions, the owner's saved ones and
+shared planner-kind questions are answered by the Analyze planner in the
+run, one question at a time, with the report's building, stations and
+period as fixed context. `lib/modules/bas/analyze/core.ts` is steps 4-9
+of an Analyze question (plan, guard, run, provenance, no-data check,
+summarise), taken out of `service.ts` so the Analyze tab and the report
+worker share one path; `service.ts` wraps it exactly as before.
+`lib/modules/bas/reports/engine/planner-questions.ts` is the batch side:
+`createAnthropicReportPlanner` (claude-opus-5 through `ANTHROPIC_API_KEY`,
+SQL as `bas_analyze` through `BAS_ASK_DATABASE_URL`), a meter that prices
+every plan and summary call from the API's usage, the per-question
+estimate, and `toPlannerAnswer`, which stores the outcome and checks it
+against the context (a point on another building, a period other than the
+report's) - the prompt asks, the platform verifies.
+
+**In the run** (`run.ts`), after the narrative, so the computed report's
+prose is never what the ceiling cuts. A shared planner question with
+applies-to or required roles is judged against the building first (Not
+applicable / Not monitored, nothing spent). Before each question both
+halves of the safety ceiling are checked; past either, every remaining
+question is listed by name, *Skipped — spending cap* or *Skipped — time
+cap*, and the run finishes partial naming them. No planner (a variable
+missing) is also partial, naming the variable. Answers are stored on the
+document as `plannerAnswers`, rendered as one *Planner questions* section
+whose header says once that they are shown and not tracked; nothing there
+is a finding, a fingerprint or a status input. Five counters on the run
+(`planner_asked`, `_answered`, `_unanswered`, `_skipped`, `_cost_usd`,
+migration `20261116120000_bas_report_runs_planner`) feed the Usage page's
+*Planner questions* line and the next run's estimate.
+
+**What a reader sees (revised twice the same day).** The page and the PDF
+show two things per planner question: the question as the sub-heading
+and the planner's prose answer - its paragraphs and list as written -
+less the summariser's coverage paragraph ("This covers 22 September …
+these are not current conditions"), which `splitPlannerAnswer` moves to
+the panel by a conservative rule (a later, non-list paragraph that opens
+or reads the way those sentences do; anything unrecognised stays on the
+page). Two amber lines are the exceptions and stay visible on both: the
+note for a query that read another building or another period, and the
+coverage shortfall ("Any figure above describes N days of the M asked
+about"). Everything else - the coverage paragraph, how the question was
+read, the period and every point, the gap figures, the results table (dates
+local), the SQL and the cost - is behind a kit secondary Button, *Show
+how this was answered*, on the web run view only
+(`app/(modules)/bas/reports-planner-how.tsx`, filling `ReportView`'s
+`plannerDetails` slot; `engine/planner-display.tsx` holds the split, the
+cell formatter and the panel). The stored HTML has no slot, so the PDF
+never has the button or the panel, and `REPORT_CSS` hides `.planner-how`
+under `@media print` for the web page's own Print; a test prints both
+through the real Chromium and reads the PDF's text. Nothing stored
+changed: the answer is stored whole. Runs stored before this keep their
+old `report_html` and PDF; the web view re-renders from the document.
+
+**Promotion.** A BAS module admin can put one of their own saved
+questions into the shared library as a planner question with a section,
+applies-to and required roles - *Promote to shared* on the personal row,
+or *Promote a question* on the shared table. `POST
+/api/modules/bas/reports/library` (403 `admin_required` otherwise),
+audited as `bas.library_question_promoted`; `GET
+/api/modules/bas/reports/library/promotion` says whether the viewer may.
+
+**Measured on the office** (run 18 on the development database, period
+ending 29 September): *Which zone was warmest on average during occupied
+hours?* answered in 41 s for $0.2313; *How many readings did the
+collector store per day?* in 23 s for $0.0631; the run $0.3012 with the
+narrative. Captures in `docs/design/bas-reports-planner/`.
+`WHY-ITS-BUILT-THIS-WAY.md` § 86; `runbook.md` → *Reports: a planner
+question*.
+
+### Reports — Phase 4, the email half (2026-11-17)
+
+**What exists.** `bas_report_deliveries` (`20261117120000_add_bas_report_deliveries`):
+one row per address per run, unique on (run, email), status `pending` /
+`sent` / `failed` / `not_sent`, attempts (at most three), the next attempt
+time, the last error, Graph's request id and when it was sent. Written by
+`enqueueRunDeliveries` (`deliveries.ts`) in the transaction that stores a
+ready PDF (`pdf/jobs.ts`), for a run that succeeded or finished partial:
+the owner first from the employee record, then the recipient rows. Sent
+by the worker (`email/send.ts` `drainDeliveries`, after each run's PDFs and
+at the end of an execution) through `email/mailer.ts`: the gate, then the
+company-only fence outside production, then one `sendMail` per row from
+`BAS_MAILBOX` (default `controlls@phb1899.com`) as `phb-platform-bas-mail`
+on the shared credential and client (`lib/mail/`, moved out of the Change
+Orders module the same day). The message is `email/message.ts`: subject,
+building status, three top findings, New / Still open / Cleared, the Not
+monitored line, the PDF line and the link. *Resend* (failed rows only) and
+*Send to me* (`runs-service.ts`; `POST …/runs/<id>/deliveries/resend` and
+`…/send-to-me`, 202, audited) write rows for the worker. The scheduler's
+pass fails a delivery due for an hour and never taken (`queue-guards.ts`).
+
+**On screen.** The Reports list's *Delivery* column (`DeliveryCell`):
+*3 of 3 sent*, *1 failed* with Resend, *Not sent — sending disabled*,
+*Waiting for the PDF*. The run page's *Email* card (`RunDeliveries`): every
+address with its state, attempts and reason, Resend and Send to me.
+
+**Template.** The worker job gains six plain values - `BAS_MAIL_CLIENT_ID`,
+`BAS_MAIL_TENANT_ID`, `BAS_MAILBOX` from parameters with empty defaults,
+`BAS_REPORTS_ALLOW_SEND` from `basReportsAllowSend` (default false),
+`GRAPH_MANAGED_IDENTITY_CLIENT_ID` and `PLATFORM_URL` - and its scaler
+counts due deliveries. No secret, no role assignment.
+
+**Not built.** Anything that sends without the worker; a per-report
+choice of whether to email; a digest across reports; message ids (the app
+holds Mail.Send only). **Not proven:** a send to the live mailbox - the
+app does not exist yet. Every Graph behaviour here is from the
+documentation and the fake transport, and CLAUDE.md's rule applies: the
+first real Send to me is the verification (*Turning report email on*).
 
 ## Classification — the office building, in SQL
 

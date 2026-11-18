@@ -127,6 +127,87 @@ export type AuditAction =
    */
   | "bas.question_asked"
   /**
+   * Reports, Phase 1. Every write to a report definition, its questions,
+   * its recipients, and an employee's personal library. Metadata always
+   * carries `reportId` (a string) and `name` where a report is the subject,
+   * because the row it describes may since have been renamed or deleted.
+   *
+   * `bas.report_recipient_added` carries `email`, `isExternal` and
+   * `confirmed`: the plan asks for the external decision to be on the audit
+   * row, so that "who sent this building's report outside the company" is
+   * answerable from the log alone. The owner is never a recipient row and
+   * so never appears here as one.
+   *
+   * `bas.report_state_changed` carries `from` and `to`; one action for
+   * activate, pause and resume, because the sentence is the transition.
+   */
+  | "bas.report_created"
+  | "bas.report_updated"
+  | "bas.report_deleted"
+  | "bas.report_state_changed"
+  | "bas.report_questions_changed"
+  | "bas.report_recipient_added"
+  | "bas.report_recipient_removed"
+  | "bas.personal_question_created"
+  | "bas.personal_question_updated"
+  | "bas.personal_question_deleted"
+  /**
+   * Reports, Phase 6. A BAS module admin promoted one of their own saved
+   * questions to the shared library as a planner-kind question, with the
+   * section, applies-to and required roles it was given. The metadata
+   * carries the personal question's id and text and the new library row's
+   * id and key, so the row can be traced back to who wrote it.
+   */
+  | "bas.library_question_promoted"
+  /**
+   * Reports, Phase 2. A run is started (by the dev script, or by the worker
+   * from Phase 3) and finished - succeeded, partial with the reason, or
+   * failed with the error - with its cost in tokens and dollars on the
+   * finished row. The actor is the person who asked for a manual run, or
+   * null for a scheduled one: the platform acted.
+   *
+   * `bas.building_occupancy_updated` is the Settings tab's occupied-hours
+   * field: the fallback occupancy source a report uses when no occupancy
+   * point is trended, so the previous and new hours are both recorded.
+   */
+  | "bas.report_run_started"
+  | "bas.report_run_finished"
+  /**
+   * A run was queued for the worker (Phase 3): by a person from Run now
+   * (trigger manual, the actor) or by the scheduler when next_run_at passed
+   * (trigger scheduled, actor null). Carries the run id and its period.
+   */
+  | "bas.report_run_requested"
+  /** A module admin gave a report a new owner; `resumed` says whether that un-paused it. */
+  | "bas.report_owner_transferred"
+  /**
+   * A module admin changed the Reports safety ceiling (2026-11-12): the
+   * most a run may spend and the longest it may take, one row for the
+   * module. Carries `from` and `to`, each `{ usd, minutes }`.
+   */
+  | "bas.report_ceiling_changed"
+  /**
+   * A person asked for a run's PDF to be rendered again (Phase 4), after a
+   * failed render. Carries the run id, the report's name and the error the
+   * failed render had left. The render itself is the worker's and is on the
+   * run's own columns, not here.
+   */
+  | "bas.report_pdf_retry_requested"
+  /**
+   * A person asked for a run's FAILED email deliveries to be tried again
+   * (Phase 4, the email half, 2026-11-17). Carries the run, the report's
+   * name, the addresses and how many rows were queued. The sending is the
+   * worker's; each row's outcome is on bas_report_deliveries.
+   */
+  | "bas.report_resend_requested"
+  /**
+   * A person asked for a copy of a run to be emailed to their own address
+   * (2026-11-17). Carries the run, the report's name, the address and the
+   * state the row for that address had before, or null when it had none.
+   */
+  | "bas.report_send_to_me_requested"
+  | "bas.building_occupancy_updated"
+  /**
    * The Cost Intelligence skill catalog was synced from the skills folder.
    * Carries the sync id, trigger and counts. One row per completed sync; a
    * sync that failed changed nothing and is recorded only in cip_skill_syncs.
@@ -221,6 +302,20 @@ export type AuditAction =
   | "fp.verification_signed"
   | "fp.verification_unsigned"
   | "fp.result_updated"
+  /**
+   * The equipment schedule import (2026-11-03): one summary row per import
+   * (fileName, created, skipped names), beside one `fp.equipment_created` per
+   * unit carrying `source: "import"`, so each unit's history starts there.
+   */
+  | "fp.schedule_imported"
+  /**
+   * The verification form import (2026-11-10): one summary row per form
+   * (fileName, created, filled, differences). New units get
+   * `fp.equipment_created` with `source: "form"`; answers it filled are
+   * `fp.equipment_updated` / `fp.result_updated` rows carrying the same source,
+   * so history and the review rules see them like a person's own saves.
+   */
+  | "fp.form_imported"
   | "position.created"
   | "position.updated"
   | "department.created"

@@ -179,22 +179,58 @@ describe("remote content", () => {
    * A `cid:` image is an attachment on this very message, so it is not remote -
    * loading one would cost nothing and tell the sender nothing.
    *
-   * But its src is removed anyway, and that changed after a browser pass: a
-   * browser cannot resolve the `cid:` scheme and the platform does not yet turn
-   * one into bytes, so leaving the src produced the broken-image glyph. That
-   * reads as "this application is broken" rather than "this image lives in an
-   * attachment". Without a src the stylesheet draws a marked placeholder with
-   * the alt text, and `inlineImages` drives an honest note beside it.
+   * The service resolves the Content-ID to the platform's own link for the
+   * attachment (mail/inline-images.ts). The sanitizer's part is to hand over
+   * the normalised id, write back whatever link it is given, and leave an
+   * honest placeholder when it is given nothing: a browser cannot load `cid:`,
+   * and the broken-image glyph it draws reads as "this application is broken"
+   * rather than "this image is missing from the message".
    *
    * Every message in the real mailbox that has images has some of these - the
-   * automation's own notification mail has two to four.
+   * mail filter's banner adds two to every inbound message.
    */
-  it("counts a cid: inline image and removes the src it cannot resolve", () => {
-    const result = sanitizeEmailHtml('<img src="cid:logo123" alt="logo">');
+  it("resolves a cid: image to the link the resolver gives", () => {
+    const seen: string[] = [];
+    const result = sanitizeEmailHtml('<img src="cid:logo123" alt="logo" width="24">', {
+      resolveInlineImage: (id) => {
+        seen.push(id);
+        return "/api/modules/change-orders/messages/m1/inline-images/a1?exp=1&sig=s";
+      },
+    });
 
+    expect(seen).toEqual(["logo123"]);
     // Not remote: this is not a privacy decision.
     expect(result.remoteImagesBlocked).toBe(0);
     expect(result.inlineImages).toBe(1);
+    expect(result.inlineImagesUnresolved).toBe(0);
+
+    expect(result.html).toContain(
+      'src="/api/modules/change-orders/messages/m1/inline-images/a1?exp=1&amp;sig=s"',
+    );
+    expect(result.html).not.toContain("cid:");
+    // An ordinary image from here on: no placeholder mark, attributes kept.
+    expect(result.html).not.toContain("data-inline-image");
+    expect(result.html).toContain('alt="logo"');
+    expect(result.html).toContain('width="24"');
+  });
+
+  it("hands the resolver a Content-ID without brackets, encoding or padding", () => {
+    const seen: string[] = [];
+    sanitizeEmailHtml(
+      '<img src="cid:%3Cimage001.png%4001DC%3E"><img src=" CID:<sig@x> ">',
+      { resolveInlineImage: (id) => (seen.push(id), null) },
+    );
+
+    expect(seen).toEqual(["image001.png@01DC", "sig@x"]);
+  });
+
+  it("counts a cid: image the resolver cannot place and removes its src", () => {
+    const result = sanitizeEmailHtml('<img src="cid:logo123" alt="logo">', {
+      resolveInlineImage: () => null,
+    });
+
+    expect(result.inlineImages).toBe(1);
+    expect(result.inlineImagesUnresolved).toBe(1);
 
     // The unresolvable src is gone, so the browser attempts no load at all.
     expect(result.html).not.toContain("cid:logo123");
@@ -203,20 +239,53 @@ describe("remote content", () => {
     expect(result.html).toContain('alt="logo"');
   });
 
+  it("treats every cid: image as unresolved when there is no resolver at all", () => {
+    const result = sanitizeEmailHtml('<img src="cid:logo123"><img src="cid:">');
+
+    expect(result.inlineImages).toBe(2);
+    expect(result.inlineImagesUnresolved).toBe(2);
+    expect(result.html).not.toContain("cid:");
+  });
+
   it("keeps remote and inline images as separate counts", () => {
     const result = sanitizeEmailHtml(
       '<img src="cid:logo123"><img src="https://tracker.invalid/px.gif">' +
         '<img src="cid:sig456"><img src="data:image/gif;base64,R0lGODlh">',
+      { resolveInlineImage: (id) => (id === "logo123" ? "/api/x" : null) },
     );
 
     // They mean different things and drive different copy: one is blocked for
-    // privacy and offers a "show images" button, the other simply cannot be
-    // rendered yet and offers nothing.
+    // privacy and offers a "show images" button, the other is either shown or
+    // explained as missing.
     expect(result.inlineImages).toBe(2);
+    expect(result.inlineImagesUnresolved).toBe(1);
     expect(result.remoteImagesBlocked).toBe(1);
 
     // A data: image is inert and needs no fetch, so it is left entirely alone.
     expect(result.html).toContain("data:image/gif;base64,R0lGODlh");
+  });
+
+  /**
+   * A relative src could not have loaded in any mail client, but inside the
+   * pane it WOULD resolve against the platform's own address. The only
+   * same-origin request a body may cause is one the service wrote for it, so
+   * anything that is not inline, embedded or remote loses its src - and it is
+   * not a blocked remote image, because there is nothing a person could choose
+   * to show.
+   */
+  it("removes a relative or unrecognised src without counting it", () => {
+    const result = sanitizeEmailHtml(
+      '<img src="/api/modules/change-orders/messages/m/attachments/a" alt="a">' +
+        '<img src="image001.png" alt="b"><img src="file:///C:/x.png" alt="c">' +
+        '<img src="/api/modules/change-orders/messages/m/inline-images/a?exp=1&sig=x" alt="d">',
+      { allowRemoteImages: true },
+    );
+
+    expect(result.html).not.toContain("src=");
+    expect(result.html).not.toContain("/api/");
+    expect(result.remoteImagesBlocked).toBe(0);
+    expect(result.inlineImages).toBe(0);
+    expect(result.html).toContain('alt="d"');
   });
 
   it("never lets a javascript: URL through the blocked-image attribute", () => {
@@ -258,10 +327,42 @@ describe("inline CSS that is kept", () => {
     ],
     ["direction", '<div style="direction:ltr">x</div>', "direction:ltr"],
     ["box-sizing", '<table style="box-sizing:border-box">x</table>', "box-sizing:border-box"],
+    // The mail filter's hidden preheader. Dropping `display:none` while keeping
+    // `max-width:0` stacked its text one character per 1px line and pushed a
+    // real reply off the first screen (2026-11-12).
+    ["display:none", '<div style="display:none">x</div>', "display:none"],
+    ["display:block on a banner icon", '<img style="display:block; height:24px; width:24px">', "display:block"],
+    ["max-height and overflow", '<div style="max-height:0px;overflow:hidden">x</div>', "max-height:0px;overflow:hidden"],
+    ["visibility", '<span style="visibility:hidden">x</span>', "visibility:hidden"],
   ];
 
   it.each(cases)("keeps %s", (_label, input, expected) => {
     expect(clean(input)).toContain(expected);
+  });
+
+  /**
+   * The hiding properties are closed lists. A value that is not on the list is
+   * dropped whole, so none of them can be the carrier for anything else, and
+   * `opacity` is not on any list: a zero-opacity anchor is an invisible link
+   * that still takes a click.
+   */
+  it("drops a hiding declaration whose value is not on its list", () => {
+    const output = clean(
+      '<div style="display:url(https://evil.invalid/x);visibility:expression(1);' +
+        'overflow:url(https://evil.invalid/y);max-height:url(z);opacity:0;color:#333">x</div>',
+    );
+
+    expect(output).not.toContain("evil.invalid");
+    expect(output).not.toContain("url(");
+    expect(output).not.toContain("expression");
+    expect(output).not.toContain("opacity");
+    expect(output).toContain("color:#333");
+  });
+
+  it("keeps display to flow values and never contents, grid or flex", () => {
+    for (const value of ["contents", "grid", "flex", "inline-flex", "run-in", "ruby"]) {
+      expect(clean(`<div style="display:${value}">x</div>`), value).not.toContain("display:");
+    }
   });
 });
 
@@ -425,6 +526,7 @@ describe("legitimate business email survives", () => {
       html: "",
       remoteImagesBlocked: 0,
       inlineImages: 0,
+      inlineImagesUnresolved: 0,
     });
   });
 });

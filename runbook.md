@@ -40,6 +40,7 @@ requested, and two of those are already written down below.
 | `AUTH_URL` | `http://localhost:3000`. |
 | `BOOTSTRAP_ADMIN_EMAIL` | Your own work address is enough locally. It seeds an admin row in *your* database and has no effect anywhere else. |
 | `PHB_ALLOW_SEND` | `false`. Always. Never set it to `true` outside production — development runs against the live `changeorder@phb1899.com` mailbox and there is no test mailbox. |
+| `BAS_REPORTS_ALLOW_SEND` | `false`, except during a deliberate, supervised test of report email from your own machine (*Turning report email on* → *Locally*). `BAS_MAILBOX` may stay blank: it defaults to `controlls@phb1899.com`. |
 | `CO_MAILBOX` | `changeorder@phb1899.com`. |
 | `ALLOWED_EMAIL_DOMAINS` | `phb1899.com`. Confirm the full verified-domain list with IT only if a legitimate account is being rejected with `domain_not_allowed`. |
 
@@ -65,6 +66,8 @@ Only these. Everything else above you can do without talking to anyone.
 | `AUTH_MICROSOFT_ENTRA_ID_SECRET` | Owner of the **SSO** app registration (client ID above) | The current client secret **value**, sent over something that is not email. Needed only to sign in — see below. |
 | `GRAPH_CLIENT_ID`, `GRAPH_TENANT_ID` | Owner of the **Graph** app registration | Both IDs. Not secret. |
 | `GRAPH_CLIENT_SECRET` | Same | A client secret value for local development. Production never has one. |
+| `BAS_MAIL_CLIENT_ID`, `BAS_MAIL_TENANT_ID` | Owner of the **phb-platform-bas-mail** app registration (Request 7 below) | Both IDs. Not secret. Blank: the Reports worker records every email as not configured. |
+| `BAS_MAIL_CLIENT_SECRET` | Same | A client secret value for local development. Production never has one and refuses to send with one. |
 
 | `PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID`, `PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID` | Owner of the **phb-platform-co-review** app registration (Request 5 below) | Both IDs. Not secret. |
 | `PHB_PLATFORM_CO_REVIEW_APP_SECRET` | Same | A client secret value for local development. Production never has one. |
@@ -81,7 +84,8 @@ nothing else changes.
 each comes from the company Anthropic Console, and the platform owner holds
 them. **They are two different keys, one per module** (since 2026-10-16).
 `ANTHROPIC_API_KEY` is BAS Analyze's - blank disables the Analyze tab and
-nothing else. `CO_ANTHROPIC_API_KEY` is Change Orders' - blank disables the
+nothing else (locally it is also what the CIP worker and Freeze Protection's
+schedule import fall back to). `CO_ANTHROPIC_API_KEY` is Change Orders' - blank disables the
 Phase 12 Part D engine calls and nothing else, and as of 2026-10-16 Part D is
 not built, so nothing reads it yet. Both names are decided in `lib/env.ts`
 (`ANTHROPIC_API_KEY_VAR`, `CO_ANTHROPIC_API_KEY_VAR`); do not introduce a
@@ -193,7 +197,8 @@ most likely to be reported as bugs.
 | **"Nothing to review"** in Drafts | The Drafts folder is empty. It is empty most of the day — the automation produces drafts in bursts. | Nothing. This is the normal resting state and the default view. |
 | **"The mailbox is not connected yet"** | No Graph credential is configured. Every pane shows this together, not one pane failing. | *The mailbox is not connected*, above. |
 | **"That message is no longer here"** | The message was moved or sent between the list being drawn and the row being clicked. Power Automate moves messages constantly. | Nothing. The list refreshes itself. It is a normal event, not an error. |
-| **"N inline images are part of this message and are not shown here yet"** | The message has `cid:` images — attachments on the message itself, not remote content. The platform does not turn them into bytes yet. | Nothing, unless somebody needs to see them: Outlook renders them. See *Images in a message body* below. |
+| **"N inline images are referenced by this message but not attached to it"** | The body names a `cid:` image that no attachment on the message carries. Every inline image the message does carry is simply shown; this note is only for the ones it does not. | Nothing. Outlook has no bytes to draw either. See *Images in a message body* below. |
+| **A message opens on a blank area, or shows dashed boxes where pictures should be** | Two different causes, fixed together on 2026-11-12: a hidden preheader whose hiding styles were stripped, and `cid:` images that were never fetched. On a build from before that date both are expected. | Confirm the build date. See *Images in a message body* and *A message opens on a blank screen* below. |
 | **"N remote images were blocked"** with a *Show images* button | Genuinely remote images. Loading one tells the sender the message was opened, by whom and when, so it is a per-message decision. | Nothing. Click it if the images matter. |
 | **"N subject matches, newest first. Search does not look inside messages."** | Search matches the subject only, by design — `$search` returns ids that go stale on a move, so it is not used. Results are sorted by the service, because Graph will not sort a filtered collection. | Nothing. To find text inside a message, use Outlook. See *Folder search* below. |
 | **"Showing the first N subject matches — there are more"** | The search hit its 500-match cap. | Narrow the term. The cap and why it is reported are under *Folder search* below. |
@@ -430,39 +435,96 @@ section.
 
 ---
 
-## Images in a message body — two kinds, two different notes
+## Images in a message body — three kinds, and how each is shown
 
-Reported as a bug — *"I opened a message and only saw broken placeholders, and
-the Show images banner never appeared."* The banner was working. The message had
-no remote images at all.
+Reported twice. First (2026-09) — *"I opened a message and only saw broken
+placeholders, and the Show images banner never appeared."* The banner was
+working; the message had no remote images at all. Then (2026-11-12) — *"emails
+with pictures in the body show blank gaps where the pictures should be"*: the
+`cid:` images were never fetched, and a hidden preheader made one message open
+on a blank screen (next section).
 
 A mail body can carry three kinds of image, and they are not interchangeable:
 
 | In the source | What it is | What the platform does |
 |---|---|---|
 | `src="https://…"` | **Remote.** Loading it tells the sender the mail was opened, from which IP, and when. | src removed, counted as `remoteImagesBlocked`, amber note with a *Show images* button. |
-| `src="cid:…"` | **Inline.** An attachment on this very message. No privacy question — loading it costs nothing and tells nobody anything. | src removed, counted as `inlineImages`, neutral note with **no** button, because there is nothing to consent to. |
+| `src="cid:…"` | **Inline.** An attachment on this very message, named by its Content-ID. No privacy question — loading it costs nothing and tells nobody anything. | **Shown**, since 2026-11-12: the src becomes the platform's own signed link to the attachment, served by `GET /api/modules/change-orders/messages/{id}/inline-images/{attachmentId}`. One the message does not actually carry has its src removed and is counted as `inlineImagesUnresolved`, with a neutral note and no button. |
 | `src="data:…"` | Inline bytes, already in the body. | Left completely alone. It needs no fetch. |
 
-**Why a `cid:` src is removed rather than left in place.** A browser cannot
-resolve the `cid:` scheme, and the platform does not yet fetch the attachment and
-inline it. Leaving the src produced the browser's broken-image glyph, which reads
-as *"this application is broken"* rather than *"this image lives in an
-attachment"* — which is exactly how it was reported. With the src gone, the
-stylesheet draws a labelled placeholder with the image's alt text and the note
-above explains it. `cid:` was dropped from the CSP's `img-src` at the same time:
-nothing in the document can carry one any more.
+**How an inline image is served, and why it is a signed link rather than a
+cookie.** The reading pane is a sandboxed iframe with no `allow-same-origin`,
+so its origin is opaque and the browser sends **no session cookie** with the
+images it loads — measured in Chrome and Edge on 2026-11-12 (`Sec-Fetch-Site:
+cross-site`, cookie absent; the same `<img>` in the top document carries it).
+A route behind `withMailbox` would answer 401 to every image. So the message
+route, which *is* behind the grant, writes a link for each image it resolves:
+this message, this attachment, an expiry one hour out, and an HMAC over the
+three under a key derived from `AUTH_SECRET`. The image route checks the
+signature and the expiry and nothing else, fetches the bytes through the same
+`downloadAttachment` the download link uses, decides the type **from the
+bytes** (PNG, JPEG, GIF, WebP, BMP; anything else, SVG above all, is 404),
+and answers `inline` with `nosniff`, `no-store` and a sandboxing CSP. No
+image byte is written anywhere. `WHY-ITS-BUILT-THIS-WAY.md` § 82 has the
+alternatives that were weighed.
 
-**In this mailbox, nearly every message with images has inline ones.** Measured
-across Inbox: the automation's own failure notifications carry 4 remote and 2–4
-inline; the `RE: Reminder — Change Order pricing` thread carries 2–3 inline and
-**no** remote at all. So a message showing only the inline note is the normal
-case, not a defect.
+**Three things Graph does that the code has to know.** `hasAttachments` is
+`false` on a message whose only attachments are inline images — the mail
+filter's banner icons, a colleague's pasted screenshot — so the service reads
+the attachments whenever the body contains `cid:` as well as whenever Exchange
+says there are some. `contentId` is on the `fileAttachment` subtype and must be
+selected as `microsoft.graph.fileAttachment/contentId`; a bare `contentId`
+fails the whole request with 400. And Exchange gives *ordinary* attachments a
+Content-ID too (the PDF on the `Reminder — Change Order pricing` reply has
+one), so a Content-ID is matched only against attachments whose declared type
+is an image, and the route still decides from the bytes.
 
-**If somebody needs inline images rendered**, that is real work and deliberately
-not done: fetching each attachment and rewriting the body to `data:` URIs. It
-inflates the body, and the reading pane is the one screen where vendor content
-meets a send button. Outlook renders them today.
+**In this mailbox, nearly every message with images has inline ones.** On
+2026-11-12, 10 of the 35 messages received since mid-October carried `cid:`
+images: the mail filter's two banner icons on every inbound message, the
+automation's failure notifications (2 inline, 4 remote), and internal replies
+on the `RFI 267.1` thread with pasted screenshots (1–2 inline, nothing
+remote, `hasAttachments: false` on most).
+
+**An image link that stopped working.** A link is good for an hour from the
+moment the message was read. If a pane has been open longer than that and
+something makes the frame re-render, the images reload and the route answers
+`403 inline_image_link_expired`; reopening the message writes fresh links.
+`403 inline_image_link_invalid` means the signature did not match: the link
+was altered, or was written under a different `AUTH_SECRET` — rotating that
+secret invalidates every link in every open pane at once, which is harmless.
+
+**A picture that still shows as a dashed box.** The note above the body says
+how many images the message *references but does not carry*. That is the
+message's own state — a `cid:` with no matching attachment — and Outlook has
+no bytes to draw either. If the note is absent and a box still shows, the
+image route refused the bytes: the attachment is not a raster image (an SVG
+logo, say), or `downloadAttachment` refused it as over 25 MB. The log line is
+the route's own `mail.graph_call_failed` or a 404 on the inline-images path.
+
+---
+
+## A message opens on a blank screen, with its text further down
+
+**Symptom.** A reply with no pictures at all opens on a mostly blank pane; the
+*Report This Email* link sits a few hundred pixels down, and the text below it.
+In Outlook the same message starts at the top.
+
+**Cause.** The company's mail filter (INKY) injects a banner at the top of every
+inbound message, and the banner starts with a hidden "preheader" `<div>` holding
+about two hundred characters of From / Sent / To text, hidden with
+`display:none; max-height:0; overflow:hidden; max-width:0; font-size:1px;
+color:#fff`. The sanitizer's style allowlist had `max-width` and `font-size`
+but not `display`, `max-height` or `overflow`, so the hiding declarations were
+dropped and the sizing ones kept: the text wrapped one character per 1px line
+and pushed everything down by its own length. Josh Bittner's reply of
+2026-11-05 on `CCHMC RFI 310` was the report; it has no images.
+
+**Fix (2026-11-12).** `display` (a closed list of flow values), `visibility`,
+`overflow` and `max-height` are on the allowlist, with the rule the table is
+built on intact — none can name a URL or position anything. `opacity` is still
+out, on purpose: a zero-opacity link is invisible and still takes a click.
+`tests/mailbox-body-render.test.ts` renders the preheader as it arrived.
 
 ---
 
@@ -1424,10 +1486,11 @@ broken auth callback. **Do not remove the `-p`.**
 |---|---|---|---|
 | SSO client secret | `AUTH_MICROSOFT_ENTRA_ID_SECRET` in `.env.local` | **13 August 2028** | Local sign-in only. Production authenticates with the managed identity — see *Production sign-in authenticates with the managed identity*. **Cannot affect production**, which refuses to boot with it set |
 | Graph client secret | `GRAPH_CLIENT_SECRET` in `.env.local` | **13 August 2028** — *unconfirmed, see below* | Local development only. **Cannot affect production** |
-| Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** Revocable in the Anthropic Console, and a revoked key fails as `401 authentication_error` on the next call | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
-| Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire.** A second, separately issued key, revocable on its own in the Anthropic Console | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
+| Anthropic API key (BAS) | Key Vault `ANTHROPIC-API-KEY` → `ANTHROPIC_API_KEY` on the container app; `.env.local` locally | **Does not expire, but is a personal key linked to Jim** (checked in the Console 2026-10-28; kept so by decision 2026-10-29, accepted risk): Anthropic archives it the day Jim leaves the organization, and it then fails as `401 authentication_error` on the next call, with no warning beforehand. Also revocable in the Console. *Both Anthropic keys fail at once* has the fix | The Analyze tab (B5), and only it: Change Orders has its own key, the next row. The platform boots and everything else runs without it |
+| Anthropic API key (Freeze Protection) | Key Vault `FP-ANTHROPIC-API-KEY` → `FP_ANTHROPIC_API_KEY` on the web container app only; `.env.local` locally | **Does not expire.** A third, separately issued key, revocable on its own | The equipment schedule import only. Adding units by hand and everything else in the module work without it |
+| Anthropic API key (Change Orders) | Key Vault `CO-ANTHROPIC-API-KEY` → `CO_ANTHROPIC_API_KEY` on the container app and on the classifier job; `.env.local` locally | **Does not expire, but is a personal key linked to Jim**, like the BAS key and with the same ending: archived the day Jim leaves, `401` on the next call. A second, separately issued key, revocable on its own. *Both Anthropic keys fail at once* has the fix | The Phase 12 Part D engine calls, once built; nothing reads it as of 2026-10-16. Never the Analyze tab, which does not fall back to it |
 | BAS credential key | Key Vault `BAS-CREDENTIAL-KEY` → `BAS_CREDENTIAL_KEY` on the container app; the collector's `.env` on the office PC; `.env.local` locally | **Does not expire.** Rotated only on purpose - *Station credentials, and the one secret that lives in two places* | Storing and decrypting Niagara station logins in Settings; the collector, wherever it runs. A value that differs from the collector's makes every stored login unreadable |
-| `PnP.Powershell` certificate on `phb-co-engine` | Entra app registration `85ca496d-3af9-4c3a-aa11-a6b7fd51105d` → Certificates & secrets; the private key is on the IT workstation that ran the site grant, not anywhere PH+B controls | **19 October 2029** | **Nothing of ours.** No engine code path presents a certificate, so its expiry breaks nothing and is noticed by nothing — the exposure is the three years it stays *valid*. Whether it is removed is an **open decision**: *Open decision — the `PnP.Powershell` certificate on `phb-co-engine`* |
+| `PnP.Powershell` certificate on `phb-co-engine` | Entra app registration `85ca496d-3af9-4c3a-aa11-a6b7fd51105d` → Certificates & secrets; the private key is on the IT workstation that ran the site grant, not anywhere PH+B controls | **19 October 2029** | **Nothing of ours.** No engine code path presents a certificate, so its expiry breaks nothing and is noticed by nothing — the exposure is the three years it stays *valid*. **Kept, by the owner's decision of 2026-11-02** — an accepted exposure, not an oversight: *Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays* |
 
 > **The Graph secret's expiry date needs confirming in the portal.** `.env.local`
 > carries a note reading `Expiry Date of Entra : 8/13/2028`, but the same note
@@ -1871,7 +1934,12 @@ label carries no count, and every review route answers
 `CO_REVIEW_SHAREPOINT_FOLDER`, and outside production
 `PHB_PLATFORM_CO_REVIEW_APP_SECRET`. This is the expected state until Request
 5 is fulfilled, and it is a state rather than a fault: the folder is still
-readable in SharePoint and nothing about the automation changes.
+readable in SharePoint and nothing about the automation changes. In
+production this is the state on 2026-11-11, by decision: the three template
+parameters are blank because the registration has no federated identity
+credential yet (*What to ask IT for* → *Request 5 status*), and a template
+deployment that carries them blank changes nothing - the reader treats blank
+as absent, held by `tests/deploy-guards.test.ts`.
 
 **Fix.** Set them. The two IDs come with the app registration. The folder value
 is the folder's browser URL (open `_needs_review` in SharePoint, copy the
@@ -2413,6 +2481,28 @@ is on one folder.
 Two optional grants were deliberately not asked for and can be added later if
 Phase 2 is approved: Read on `Bid Tracker.xlsx` (the `Needs review?` column)
 and Write on `_needs_review` and `_archive` (resolving from the platform).
+
+**Request 5 status, read live from Entra on 2026-11-11.** The registration
+exists: `phb-platform-co-review`, client id
+`b9e81eed-5153-4d73-a72a-1f729e37ad21`, created 2026-10-21 at 19:08 UTC,
+within the hour of the request. Graph `Files.SelectedOperations.Selected`
+was consented at 19:10 and SharePoint Online `Sites.Selected` at 19:17 - the
+second was not asked for and grants nothing on its own. It carries **no
+federated identity credential, no secret and no certificate**, where the
+SSO, mail and CIP registrations each carry one credential naming the
+platform's user-assigned managed identity as its subject (issuer
+`https://login.microsoftonline.com/<tenant>/v2.0`, audience
+`api://AzureADTokenExchange`). The folder grant cannot be read by a
+non-admin. So production cannot sign in as it yet, and the three template
+parameters stay blank - set now, they would turn the tab's *not connected*
+into `review_auth_failed`. When the credential is added (same shape as the
+other three) and the folder grant is confirmed, the values are
+`coReviewAppTenantId` = the tenant id every other `*TenantId` parameter in
+the file carries, `coReviewAppClientId` =
+`b9e81eed-5153-4d73-a72a-1f729e37ad21`, and `coReviewSharePointFolder` = the
+folder's browser URL from `docs/13-needs-review.md` (`parseFolderSpec` takes
+the URL or `ids:<driveId>/<itemId>`).
+
 **Request 4 status, read live from Entra on 2026-10-14.** `phb-co-engine`
 exists (client id `85ca496d-3af9-4c3a-aa11-a6b7fd51105d`), `Sites.Selected`
 is consented, delegated `Files.ReadWrite.All` is consented for all users, and
@@ -2489,11 +2579,154 @@ below because it is derived from the hostname alone and will not change.
 >
 > Thanks,
 
-## Open decision — the `PnP.Powershell` certificate on `phb-co-engine`
+### Request 6 — the read-only reader for the shadow run (sent 2026-10-29)
 
-**Status: open, as of 2026-10-21.** Nothing below has been asked of Vitis yet.
-The platform owner decides; this section is so the decision is made on the
-facts rather than rediscovered.
+(Six, because the two sections above both carry *Request 5* — the Needs
+Review registration and the redirect URI were sent the same day and
+numbered the same way. They stay as they are; this one takes the next number.)
+
+For Phase 12 Part E (`docs/phase-12-part-e-plan.md` § 2). The shadow run
+feeds a copy of the change-order tree from the live one, and the engine's
+own app holds **Write on the whole site**, so the feeder does not use it:
+it reads as a fourth registration whose grant is Read and nothing else,
+federated to the platform's identity like the other three. Graph refuses a
+write from it with 403 whatever the code asks. It is the one external
+dependency of Part E; the window's start date is the day after this lands.
+
+> **Subject: Read-only app registration for the change-order shadow run**
+>
+> Hi Zac,
+>
+> One more app registration, please, on the pattern of the Needs Review
+> one you did for us on 21 October — the same permission, a different
+> folder, and a wider but still read-only grant.
+>
+> **What it is for.** We are about to run the containerised change-order
+> engine in Azure against a *copy* of the SharePoint tree for a few weeks,
+> alongside the laptop that runs the real process, and compare the two.
+> To keep the copy fed with new items, something has to read the live
+> folder. The engine's own app (`phb-co-engine`) has Write on the site, so
+> we do not want to read with it; we want an identity that can only read.
+>
+>     New app registration:   phb-co-engine-reader
+>     Owner:                  an M365 group, not a person
+>     Graph application permission:
+>                             Files.SelectedOperations.Selected  (admin consent)
+>     Grant, as a separate step after consent:
+>                             Read on  AI Sandbox / Documents / CO Managment Process
+>                             (the folder and everything under it)
+>     Credential:             a federated identity credential for the platform's
+>                             user-assigned managed identity - the same identity,
+>                             issuer and subject as the Change Order Mail app's and
+>                             the Needs Review app's. No client secret in Azure.
+>     For developer machines: one client secret, sent over Teams, not email.
+>
+> The permission grants nothing by itself; the folder grant is what makes
+> it work, and without it the app authenticates and then gets 403 on every
+> request. **Read, not Write** — that is the whole point of this one.
+>
+> Please send the client id and tenant id, and confirm the folder's drive
+> id and item id if that is easy; the browser URL is enough otherwise.
+>
+> This is the one thing the shadow run is waiting on, so if it can be done
+> this week we can start the window on Monday.
+>
+> Thanks,
+> Mahi
+
+**What to check when it lands**, before anything is scheduled: in Graph
+Explorer as the app, `GET /drives/{drive id}/root:/CO Managment Process:/children`
+answers 200 and a `PUT` of any name under it answers 403 — the grant is Read
+and the refusal is the fence. Then the first hand-run read of the live Bid
+Tracker through the workbook API with its `eTag`, `cTag` and
+`lastModifiedDateTime` recorded before and after (plan § 2c step 2), and
+Phase 11's table-binding check repeated the same day.
+
+**Status: sent 2026-10-29.** Nothing has landed yet.
+
+### Request 7 — the sender app registration for report email (BAS Reports, Phase 4)
+
+For the email half of Reports Phase 4 (`docs/bas-reports-tab-plan.md` §A
+*Sender*, §D5). The worker sends each finished report from the controls
+team's mailbox, `controlls@phb1899.com` (two L's), as a **fifth** app
+registration: never the Change Orders mail app, whose mailbox fence is the
+change-order system's safety model, and never a delegated sign-in. The
+code is built and refuses to send until this exists (*Turning report email
+on*).
+
+> **Subject: App registration to send BAS health reports from controlls@**
+>
+> Hi Zac,
+>
+> One more app registration, on the pattern of the Change Order Mail app -
+> the same kind of mailbox fence, a different mailbox, and **Mail.Send only**.
+>
+> **What it is for.** The platform's BAS module produces a weekly health
+> report per building as a PDF. We want it emailed from
+> controlls@phb1899.com to the report's owner and the people they add. The
+> platform's worker job sends one message per recipient; nothing reads the
+> mailbox.
+>
+>     New app registration:   phb-platform-bas-mail
+>     Owner:                  an M365 group, not a person
+>     Graph application permission:
+>                             Mail.Send  (admin consent)
+>     Exchange ApplicationAccessPolicy:
+>                             RestrictAccess to controlls@phb1899.com only, through a
+>                             mail-enabled security group holding that one mailbox.
+>                             Please run Test-ApplicationAccessPolicy for the app
+>                             against controlls@ (Granted) and changeorder@ (Denied)
+>                             and send me both results.
+>     Credential:             a federated identity credential for the platform's
+>                             user-assigned managed identity - the same identity,
+>                             issuer and subject as the Change Order Mail app's and
+>                             the Needs Review app's. No client secret in Azure.
+>     For developer machines: one client secret, sent over Teams, not email.
+>
+> And a confirmation, please: that controlls@phb1899.com exists as a
+> mailbox, whether it is a licensed user or a shared mailbox, and who owns
+> it - its Sent Items will hold a copy of every report.
+>
+> Please send the client id and tenant id.
+>
+> Thanks,
+> Mahi
+
+**What to check when it lands**, before the gate is opened: the two
+`Test-ApplicationAccessPolicy` results (*Granted* for controlls@, *Denied*
+for changeorder@); then the steps in *Turning report email on*, which send
+one message to your own address first.
+
+**Status:** named in the plan's Phase 0 (`docs/bas-reports-tab-plan.md` §F)
+as the prerequisite for email. Whether it has been sent, and its date, is
+not recorded in this repository on 2026-11-17 - write both here when known.
+
+## Decision — the `PnP.Powershell` certificate on `phb-co-engine` stays (2026-11-02)
+
+**Decided 2026-11-02, by the platform owner: the certificate stays.** Nothing
+is asked of Vitis; the credential is not removed. The facts, the risk and the
+options below are kept as they were written while it was open, because they
+are what the decision was made on and what the next owner should read before
+revisiting it. The *What expires, and when* table carries it as a decision,
+not an oversight.
+
+What keeping it means in practice:
+
+- `phb-co-engine` has **two** ways to obtain a token until 2029-10-19: the
+  federated credential production uses, and a certificate whose private key is
+  on the IT workstation that ran the site grant. The platform never presents
+  the certificate and nothing of ours depends on it.
+- The exposure accepted is the one described under *Why it matters*: a key
+  outside PH+B's inventory that can obtain Write on the AI Sandbox site, the
+  site the live `CO Managment Process` lives in, for three years.
+- Nothing watches it. Its expiry breaks nothing and is noticed by nothing,
+  and the date is written here so it is written somewhere PH+B owns.
+- **Revisit** if any of these happens: the IT workstation changes hands or is
+  retired; Vitis's engagement ends; the Part C copy moves to a second site
+  (the certificate is then used once more for the grant, and the question of
+  removing it afterwards is fresh); or the engine's own `co_graph_auth.py`
+  gains a certificate path, which it must not. Removal is the request
+  described at the end of this section, by `keyId`.
 
 ### What is there
 
@@ -2556,7 +2789,7 @@ on the one site that holds the live `CO Managment Process`.
 |---|---|---|
 | **Remove it now** | Vitis deletes the credential; the grant stays, the federated path is unaffected. Verified afterwards by `az ad app list --display-name phb-co-engine --query "[0].keyCredentials"` reading `[]` and the step 7 probe still exiting 0 | **Recommended.** One credential path, the one that cannot leak |
 | Keep it until the Part C copy site exists | The one plausible reason to wait. Record who holds the key, on which machine, and set a reminder to remove it the day the second grant is made | Acceptable if the second site is weeks away, not months |
-| Keep it indefinitely | Three years of a key outside the company's inventory on an app with Write on the live site | Not acceptable; if chosen anyway, record it in *What expires, and when* as the decision rather than as an oversight |
+| **Keep it indefinitely** | Three years of a key outside the company's inventory on an app with Write on the live site | Not recommended here; **chosen by the owner on 2026-11-02**, and recorded in *What expires, and when* as the decision rather than as an oversight |
 
 Removal is an Entra action on the app registration, which this account cannot
 perform — it is a request to Vitis, worded like the others under *What to ask
@@ -2564,8 +2797,8 @@ IT for*. Ask for the credential by its `keyId`
 (`17d6dc07-057e-40af-96ca-35ade2647d97`) rather than by name, so the right one
 goes and the federated credential stays.
 
-**When the decision is made, replace the first line of this section with the
-date and the outcome, and update the table row.**
+**The decision was made on 2026-11-02 (the first lines of this section). If
+it is reopened, the request above is the shape of the ticket.**
 
 ## The engine cannot reach the library (Phase 12 Part C)
 
@@ -2714,6 +2947,12 @@ become a trigger-shaped file in the library.
 
 ### The comparison job says `pristine inputs do not match`, naming an `.xlsx`
 
+*(The job `phbplat-prod-co-compare` and the copy it ran against were deleted
+on 2026-10-28, after the fifth run met the bar. This symptom and the five
+after it describe what each earlier run hit; before any of them can recur,
+`docs/phase-12-part-c-verification.md` → *Re-running the comparison* is how
+both are recreated.)*
+
 **Symptom.** `compare_stores.py` prints `INPUT <name>.xlsx: bytes differ from
 the fixture` or, before 2026-10-21, `pristine inputs do not match the
 manifest: ['….xlsx']`, for most COs, never for a JSON, PNG or PDF.
@@ -2783,6 +3022,101 @@ decided and `tests/test_compare_layout.py` holds it inside the jail. If it is
 a hand-run engine, put `--live-path` and `CO_REPORT_DIR` under
 `--sharepoint-root`. A one-second exit is never a store finding.
 
+If the symptom appears on a run **after** 2026-10-21 and the block still
+shows a bare `rc=1` with no quoted stderr, the job is running an old image:
+`az containerapp job show … --query properties.template.containers[0].image`
+names the tag, and on 2026-10-28 it still named `part-c-compare-2` a week
+after `-3` was built. A tag changed in the filled spec on disk changes
+nothing in Azure until `az containerapp job update --image …` is run; check
+the tag with `job show` before every `job start`.
+
+### The comparison job's log is out of order, or a CO's lines are missing
+
+**Symptom.** `az containerapp job logs show` returns the run with lines
+shuffled: one CO's *only in local* list appears under the next CO's heading,
+`SUMMARY` lines sit between two COs, a block's `graph rc=…` line comes
+before its `tree built by copy` line. Saved to a file from PowerShell with
+`>`, the file is also UTF-16.
+
+**Cause.** Log Analytics orders the lines by ingestion time, not by the
+order the container wrote them, and lines written within the same second
+come back in any order. Nothing is missing; it is unreadable. The UTF-16 is
+PowerShell's `>` redirect.
+
+**Fix.** Read the instrument's own record, not the job log. Since
+2026-10-28 `compare_stores.py` writes `compare-transcript.txt` under the
+run's folder in the copy root (`/phb-co-engine scratch/part-c-copy-<date>/
+runs/<id>/`), stdout and stderr in the order written, rewritten after every
+CO; and `_logs/<tag>-local.log` and `_logs/<tag>-graph.log` beside it, each
+engine's whole output. Open them in SharePoint. When saving the job log from
+PowerShell, pipe through `Out-File -Encoding utf8` rather than `>`. If the
+transcript is absent, the instrument said why on the log - `(could not keep
+…)` - and the run's verdict is unaffected.
+
+### The Graph engine fails with `FileNotFoundError` on a path that exists in SharePoint
+
+**Symptom.** In graph mode the engine gets past the jail and the token, then
+a CO fails with `FileNotFoundError` (or `NotADirectoryError`, `PermissionError`)
+naming a drive-relative path - `…/1 - New Requests/<CO>/intake_….json` - that
+is plainly there in the library. The same CO runs clean in local mode. On the
+third comparison run (2026-10-28) it was every CO, at
+`_find_intake_json`, `sorted(cands, key=os.path.getmtime)`.
+
+**Cause.** A call reached the operating system instead of the store. In
+local mode the store's disk and the OS's disk are the same, so the line is
+invisible; in graph mode the path exists only in SharePoint and the OS says
+not found. Part B routed the engine's I/O through `FS` and its guard test
+scanned *calls*; a function passed as a key, a callback, or stored under
+another name is a *reference* and was not seen, and aliases
+(`import glob as _glob`) were never resolved.
+
+**Fix.** Route the call through `FS` - every operation has a store method
+(`FS.mtime` for `getmtime`, `FS.exists`, `FS.listdir`, `FS.read_bytes`, …).
+Then run both halves of the guard from the `phb-co-engine` checkout:
+
+```
+python tests/test_filestore_interface.py      # static: every reference, aliases resolved
+python tests/test_no_fs_bypass_runtime.py     # runtime: the fixture COs under the trap
+```
+
+The static test names the file, line, function and resolved name of anything
+new, and fails on a stale allow-list entry too; the runtime test prints one
+line per CO and, on a bypass, the `FS BYPASS: <call>(<path>) from
+<file>:<line> in <function>()` lines from the trap log. A new, deliberately
+non-store access (there are five, all in `ALLOWED_RAW_REFERENCES` with a
+reason) is added there, with its reason, and nowhere else. To find such a
+call in a run that has already failed, read the traceback's last engine
+frame: if it is in `run_workflow.py` or `co_state.py` rather than
+`co_filestore.py`, it is a bypass.
+
+### A comparison CO DIFFERS on the state file's `date_received`, the two trackers and the run report
+
+**Symptom.** `compare_stores.py` reports a CO NOT EQUIVALENT with
+`unlisted time field: state/<CO>__<hash>.json [date_received]` and
+`content differs` on `.Tracking_lastgood.xlsx`, `CO Status Tracker.xlsx`
+and the run report - sometimes also the attempt folder's Review workbook,
+`Review.docx` and `scrub_result.json` (`auto_fixes_applied`). The CO has
+more than one `intake_*.json`. Since 2026-10-28 the block also prints
+`intake    local picked X, graph picked Y  <- NOT THE SAME INTAKE` and the
+SUMMARY carries `intake choice differs`.
+
+**Cause.** The two halves built the CO from different intake files. The
+engine takes the newest intake by the store's mtime; a tie on the second
+falls to directory order, which the two stores do not share, and the
+fourth run's local tree carried fresh back-to-back mtimes that tied on the
+job's kernel. Every differing field comes from the intake JSON - subject,
+date received, ACC link, submitter note. It is not a store disagreement.
+
+**Fix.** Nothing in the stores. Read the `intakes` line above the engine
+runs: since 2026-10-28 the local tree carries the Graph copy's mtimes, so
+the line should show two distinct seconds and both halves the same pick.
+`TIED TO THE SECOND` means the copy itself landed both intakes on one
+second - re-run the CO with `--only "<CO>"` after a minute, or accept that
+the engine's rule is nondeterministic for ties and decide the
+*Before cutover: the intake-selection rule* item in
+`docs/phase-12-part-c-plan.md`. Do not add `date_received` to the differ's
+time-field list to quiet the report: here it is a real difference.
+
 ## Deploy order
 
 `infra/README.md` has the canonical list. The part worth repeating here is why it is not
@@ -2828,7 +3162,16 @@ az consumption budget list --query "[].{name:name, amount:amount, notifications:
 
 The budget must have **notification contacts only**. A budget with an action group
 attached can trigger automation, and this server is not something a spending threshold
-may switch off.
+may switch off. **Who gets the budget email:** `budgetContactEmails` in the gitignored
+`infra/main.parameters.json` - since 2026-11-02 Mahi Sheth (`msheth@phb1899.com`,
+then the owner) and Jim Schwarz (`jschwarz@phb1899.com`);
+The platform owner is now also Karthik Rachamolla: put `krachamolla@phb1899.com` in the
+list and redeploy the template, or the budget
+email keeps going to someone who no longer owns the platform. The list reaches Azure only through a template
+deployment, so a change here is not live until the next one, and `az consumption budget
+list` above is how to read what is live. These are two people's addresses, not a group:
+when either leaves, replace the address in the parameters file and redeploy, or the
+forecast and the 100 % notices go to a mailbox nobody reads.
 
 **2. The collation, by actual values.** This is the step with a deadline: the cheap fix
 is to drop and recreate the database, and it is available only until migrations run.
@@ -3075,6 +3418,7 @@ old build.
 |---|---|---|
 | *Sign in to Azure* | The OIDC federated credential is missing, or its subject is not the one GitHub sent. | **Read the subject off the failing run, do not reason about it.** The step prints `subject claim - …` before the exchange; it must equal the credential's subject exactly, prefix included. It is currently `repo:peckhannafordbriggs@74662004/phb-platform@1334314549:environment:production` — this repository has immutable subject claims on, so it is **not** the plain `repo:<owner>/<repo>:…` form the Azure portal's GitHub Actions wizard builds, and **not** `:ref:refs/heads/main`, which is what a Branch credential would give. Both fail as `AADSTS70021` with no hint which half is wrong; see *What to ask IT for* → Request 3a. The credential is not a secret and does not expire — if the subject matches, confirm `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` in repository *variables*. |
 | *Build and push the image* | `az acr build` failed. Usually the Dockerfile, occasionally registry quota on Basic. | Reproduce locally: `docker build -t phb-platform:test .` |
+| *Build and push the image*, and the log ends in `next/font` `loader.js`: `Cannot read properties of null (reading '1')` | Until 2026-10-30 the build fetched Archivo, Figtree and JetBrains Mono from Google at build time through `next/font/google`, and Google answered with something the loader could not parse. **This cannot recur on a build from `main` after that date**: the three families are files in `app/fonts/`, loaded with `next/font/local`, and `tests/design-tokens.test.ts` fails the build if `next/font/google` is imported anywhere under `app/`. If you see it, the branch being built predates the change - rebase it. | Nothing to retry. Merge or rebase onto a `main` that carries `app/fonts/`. `app/fonts/README.md` says where each file came from and how to refresh one. |
 | *Open the database firewall* | The identity lacks rights on the server, or `AZURE_POSTGRES_SERVER` is wrong. | The deploy identity needs Contributor on the resource group. |
 | *Apply migrations* | See *A migration fails on deploy* below. |  |
 | *Deploy the new image* | The revision was rejected. | `az containerapp revision list -n <app> -g <rg> -o table`, then `az containerapp logs show -n <app> -g <rg>`. |
@@ -3157,6 +3501,68 @@ carries the redirect URI for whatever `AUTH_URL` says, and do not change
 deployment: the hostname leaves the ingress and the certificate resource is no
 longer deployed (it stays on the environment until deleted by hand; it costs
 nothing). The app's own address never changed.
+
+## A template deployment fails with `ContainerAppInvalidName`
+
+**Symptom.** `az deployment group create` ends `DeploymentFailed`, and the
+one failed operation is a `Microsoft.App/jobs` (or `containerApps`) *Create*
+with
+
+```
+ContainerAppInvalidName: Invalid ContainerAppsJob name '<name> (trimmed)'. A name must
+consist of lower case alphanumeric characters or '-', start with an alphabetic
+character, and end with an alphanumeric character and cannot have '--'. The length
+must be between 2 and 32 characters inclusive.
+```
+
+Azure prints the name cut to 32 characters with ` (trimmed)` after it, which
+is the clue: the name was too long, not malformed.
+
+**Cause.** Every app and job name in `infra/main.bicep` is
+`${baseName}-<suffix>`, and `baseName` is `<namePrefix>-<environmentName>` -
+**13 characters in production**, so a suffix may be at most **19**.
+`-bas-reports-scheduler` is 22, and `<baseName>-bas-reports-scheduler` came
+to 34. `az bicep build`, `lint` and `what-if` all pass such a name: the
+length is only checked by the resource provider, at creation, after
+everything before it in the deployment has already gone through.
+
+**Fix.** Shorten the **suffix** in the template, never the prefix (every
+other resource is named from it), update the commands in this runbook that
+name the job, and redeploy. Nothing needs deleting first: the deployment
+runs in incremental mode, so every resource that succeeded is in its final
+state and the redeploy only creates what failed; a resource whose name
+changes between attempts would be a different matter (the old one would be
+left behind, to be deleted by hand), which is why a job that exists keeps
+its name. `tests/deploy-guards.test.ts` → *every Container App and Container
+Apps Job name fits Azure's naming rule with the production baseName* now
+computes each generated name with the production values and holds it to the
+rule, so the next one fails in the test run and not in Azure.
+
+**The record, 2026-11-11.** Deployment `bas-reports-enable` at 18:46 UTC,
+the first with `enableBasReports` on, failed on
+`<baseName>-bas-reports-scheduler` (34) after these had succeeded: the web
+app (revision `0000116` - the FP secret kept, the three Needs Review
+variables blank, the probes back on `/api/health`, i.e. the reconciliation
+above), the PostgreSQL server (`backupRetentionDays` 7 → 35, the value the
+parameters file carried), and **`<baseName>-bas-reports-worker`, created**
+(31 characters) on `bas-reports:9e4adb5…`. The Cost Intelligence worker,
+the environment, the certificate, the budget and the two role assignments
+reported no change. The scheduler is `${baseName}-bas-reports-sched` (30)
+from the same day; the worker keeps its name because it exists. The image
+is unaffected: a job name is not baked into it (the Dockerfile copies the
+scripts and the job's `command` names the one to run), so the redeploy
+passes the same `basReportsImage`.
+
+| Resource | Production name | Length |
+|---|---|---|
+| web app | `<baseName>-app` | 16 |
+| Cost Intelligence worker | `<baseName>-cip-worker` | 23 |
+| Reports scheduler | `<baseName>-bas-reports-sched` | 30 |
+| Reports worker | `<baseName>-bas-reports-worker` | 31 |
+| database backup | `<baseName>-db-backup` | 22 |
+| shadow feed / collect / classify | `<baseName>-co-shadow-feed` / `-co-shadow-collect` / `-co-classify` | 27 / 30 / 24 |
+
+---
 
 ## A template deployment fails activation, and the console log says `Listening on :80...`
 
@@ -3295,6 +3701,150 @@ resource group since the change.)*
 
 ---
 
+## A template what-if shows the container app losing a secret, gaining blank variables, or changing its probes
+
+**Symptom.** `az deployment group what-if` lists `Microsoft.App/containerApps/<app>`
+as *Modify*, and inside it one or more of: a `properties.configuration.secrets`
+entry as *Delete*; an env entry whose `secretRef` goes to `null`; env entries
+created with no value; `tcpSocket` probes replaced by `httpGet` on
+`/api/health`; `properties.template.scale.minReplicas` going from `1` to
+`0`, or a scale rule (`http-scaler`) as *Delete*. Nothing in the template was
+changed for the drift to appear.
+
+**Cause.** The container app has two writers and only one of them is the
+record. `deploy.yml` runs `az containerapp update --image`, which swaps the
+image and keeps everything else from the running revision. A person in the
+portal - or `az containerapp secret set`, `az containerapp update
+--set-env-vars` - changes the running revision too, and nothing in the
+repository learns of it. A template deployment then writes the whole app from
+`infra/main.bicep` and the parameters file, and what the file does not say,
+the deployment removes. **A by-hand change to the live app is drift from the
+minute it is made, until the parameters file says the same thing.** The
+what-if is the only place the two are compared, and it compares them on the
+morning somebody is about to deploy.
+
+**Fix.** Read the live app and settle each difference in the parameters file
+or the template, never by hand on the app again:
+
+```bash
+az containerapp show -n <app> -g <resource-group> \
+  --query "{secrets: properties.configuration.secrets[].name, env: properties.template.containers[0].env[].{n:name, s:secretRef, v:value}, probes: properties.template.containers[0].probes[].{t:type, http:httpGet.path, tcp:tcpSocket.port}}" -o yaml
+```
+
+- A **secret the live app carries and the what-if deletes** is one of the
+  hand-set Key Vault references (`ANTHROPIC-API-KEY`, `CO-ANTHROPIC-API-KEY`,
+  `FP-ANTHROPIC-API-KEY`, `BAS-CREDENTIAL-KEY`, `BAS-ASK-DATABASE-URL`)
+  whose flag is off in `infra/main.parameters.json`. Set the flag
+  (`anthropicApiKeyInKeyVault`, `coAnthropicApiKeyInKeyVault`,
+  `fpAnthropicApiKeyInKeyVault`, `basCredentialKeyInKeyVault`,
+  `basAskDatabaseUrlInKeyVault`) to `true` and run the what-if again; the
+  *Delete* becomes array reordering (noise, below). The template is right
+  about every one of them; the file was silent.
+- **Env entries created with no value** are plain parameters the file does
+  not set and the template defaults to `''`. They are safe when the reader
+  treats blank as absent - every reader in `lib/env.ts` does, through
+  `blankAsAbsent`, and `tests/deploy-guards.test.ts` holds the Needs Review
+  three to it - and the feature reports itself not configured. Set them in
+  the file only when the thing they configure is ready to be live.
+- **Probes going from `tcpSocket` to `httpGet /api/health`** is the template
+  correcting a by-hand edit. The route has existed since Phase 7 Part A,
+  `deploy.yml` refuses a revision that does not answer 200 from it, and it
+  touches nothing (`app/api/health/route.ts`). Let the template win.
+
+- **The app's scale** - `minReplicas` going from `1` to `0`, `maxReplicas`
+  changing, or a rule named `http-scaler` as *Delete* - is the second
+  instance (2026-11-12, below). The template declares all of it since that
+  day: `appMinReplicas` (default 0), `appMaxReplicas` (default 3) and
+  `appHttpConcurrentRequests` (default 10, the rule's `concurrentRequests`).
+  Read the live block and put the values that differ from the defaults in
+  the parameters file; the what-if's app block then shows no `scale` line.
+
+```bash
+az containerapp show -n <app> -g <resource-group> --query properties.template.scale -o json
+# the containerapp extension is broken on one machine (runbook: az rest reads the same):
+# az rest --method get --url "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.App/containerApps/<app>?api-version=2024-03-01" --query properties.template.scale
+```
+
+Then run the routine deployment from `infra/README.md` → *Deploy*, with
+every running image on the command line. **What-if must show no *Delete*
+lines and no `scale` changes under the app; if it does, reconcile first.**
+The two *Delete* lines listed as noise below (`exposedPort 0`,
+`runningStatus`) are the only exceptions. Checked on 2026-11-12 with the
+reconciled template and the two live values on the command line: the app's
+block showed zero `scale` deltas and only those two.
+
+**The record, 2026-11-11.** The first what-if since the template deployment
+of 2026-10-22 (the `authUrl` move) showed four differences on the web app
+and none that mattered on the Cost Intelligence worker job:
+
+| What-if showed | What it was | Settled by |
+|---|---|---|
+| Secret `fp-anthropic-api-key` → `FP-ANTHROPIC-API-KEY` and env `FP_ANTHROPIC_API_KEY` (secretRef) as *Delete* | The Freeze Protection key, wired on the live app by hand under *The import says "Schedule import is not set up"* steps 1-3: by Karthik on 2026-11-04 at 17:32 and 17:36 UTC (as `anthropic-api-key-cip` / `CIP_ANTHROPIC_API_KEY`, the names PR #108 used that day), renamed to the FP names by the owner on 2026-11-05 at 16:37 and 16:40 UTC, the same hour as commit `d8e28e7`. The activity log shows these as the only writes to the app by a person since 22 October; everything else is the deploy workflow's identity. Step 4 - `fpAnthropicApiKeyInKeyVault: true` in the parameters file - was not done, so the flag held its default and the template, which has carried a reference for this key since 2026-11-04 (under the FP names since the 5th), left it out | `"fpAnthropicApiKeyInKeyVault": { "value": true }` in `infra/main.parameters.json`. Run again with the flag on: the secret list is the same six on both sides and no env entry is deleted |
+| `PHB_PLATFORM_CO_REVIEW_APP_TENANT_ID`, `PHB_PLATFORM_CO_REVIEW_APP_CLIENT_ID`, `CO_REVIEW_SHAREPOINT_FOLDER` as *Create*, value `''` | Needs Review's three plain parameters, in the template since 2026-10-21, not in the file, never on the live app | Left blank, deliberately: the registration has no federated identity credential yet (*Request 5 status* under *What to ask IT for*), so a value would turn the tab's "not connected" into `review_auth_failed`. Blank is the expected production state, and the reader's blank-is-absent rule is held by a test |
+| Both probes `tcpSocket: 3000` → `httpGet /api/health` | A by-hand edit. Every revision Azure still holds up to `0000019` (22 September) probes `/api/health`; the template has never said anything else; the only writes by a person since the 22 October template deployment are the four above, and the portal's *Edit and deploy* dialog is where a probe gets retyped | Nothing to change. `/api/health` is on `main` since commit `20d5efa`, in the live image (`phb-platform:9e4adb5…`, the current `main`), and answered 200 at `https://platform.phb1899.com/api/health` on 2026-11-11 - 24 s on a cold start from zero replicas, 0.15 s warm |
+| (worker job) nothing real | `phbplat-prod-cip-worker` matched the template on every secret, env entry, trigger, timeout and resource | The image on the command line was the running one |
+
+Three more differences were real and are the owner's decisions, not the
+template's: `cipWorkerImage` in the parameters file named the image of
+2 November while the job ran 11 November's (remove the line from the file;
+`infra/README.md` → *Deploy* now reads every running image on the command
+line); `postgresBackupRetentionDays` in the file was `35` against `7` on the
+server (*Nightly database backup* → step 2 says read it first); and the
+budget's contact list in the file had two addresses against one on the live
+budget.
+
+**The record, 2026-11-12: the app's scale.** A read-only what-if the day
+after the reconciliation above showed one more difference on the web app,
+and a template deployment would have reverted it:
+
+| What-if showed | What it was | Settled by |
+|---|---|---|
+| `properties.template.scale.minReplicas` `1` → `0`, and a rule `http-scaler` (type `http`, `concurrentRequests` `"10"`) as *Delete* | A by-hand change to the live app. `az rest` on the app confirmed the live block: `minReplicas` 1, `maxReplicas` 3, the one rule; the template said `minReplicas` 0 and declared no rule. The activity log for the 90 days to 2026-11-12 shows writes to the app by a person on four occasions since the 2026-11-11 reconciliation: the owner at 18:47 and 19:56 UTC on the 11th (the two template deployments that day, `bas-reports-enable` and the scheduler-name redeploy) and Karthik (`krachamolla@phb1899.com`) at **15:03 and 18:52 UTC on 2026-11-12**, each a `PATCH` preceded by `listSecrets`, the portal's *Edit and deploy* shape. The scale change is one of Karthik's two: the activity log carries no request body, and every revision between `0000019` (22 September) and the live `0000126` is pruned, so Azure's records cannot say which. The live revision `0000126` (20:13 UTC, the deploy of PR #121) carries the change forward, because `az containerapp update --image` keeps the running revision's scale | The template declares the app's scale in full (`appMinReplicas`, `appMaxReplicas`, `appHttpConcurrentRequests` and the `http-scaler` rule, 2026-11-12), the example file carries the three at the template's defaults, and the parameters file carries what the live app is: `"appMinReplicas": { "value": 1 }` and `"appHttpConcurrentRequests": { "value": 10 }`. With those two lines the next what-if shows no `scale` line under the app. Whether always-on is intended is the owner's to confirm with Jim: *Keeping one replica warm* has the cost, about $10 a month at this container size, against compute that sat entirely inside the free grant at scale-to-zero |
+
+**What-if noise, so nobody chases it again.** Every one of these appeared on
+the same run and means nothing: `exposedPort 0 → null`, `runningStatus`, the
+registry `server` and every `keyVaultUrl` and the
+`GRAPH_MANAGED_IDENTITY_CLIENT_ID` value turning into a `[reference(…)]`
+expression (same value, computed at deploy time), the whole `secrets` and
+`env` arrays reported entry by entry as *Modify* when only their ORDER differs
+(what-if compares arrays by index), the managed environment's `customerId`,
+`peerAuthentication` and `peerTrafficConfiguration`, the certificate's
+`validationMethod`, the registry's `anonymousPullEnabled`,
+`dataEndpointEnabled`, `encryption` and `azureADAuthenticationAsArmPolicy`,
+the PostgreSQL server's `activeDirectoryAuth`, `dataEncryption`, `replica`,
+`replicationRole` and `storage.iops/tier/type`, the two role assignments'
+`principalId` as a reference expression with `principalType` *NoEffect*, the
+budget's `endDate` and the date format of `startDate`, and three
+`Microsoft.CognitiveServices` accounts in the group as *Ignore* (not in the
+template, not touched).
+
+**What-if itself can fail before it shows anything.** With `enableDbBackup`
+true in the parameters file and the backup not yet deployed, the template
+contains a new role assignment, and Azure checks `roleAssignments/write`
+before it previews - a Contributor gets `InvalidTemplateDeployment …
+Authorization failed … Microsoft.Authorization/roleAssignments/write` at the
+storage container's scope and no listing at all (observed 2026-11-11). It is
+the second wall under *Deploying to Azure*, reached through a flag rather
+than a first deployment. To preview the rest meanwhile, pass
+`enableDbBackup=false` on the command line after the file; to deploy the
+backup, the grant in that section comes first.
+
+**The rule this leaves.** When a secret reference is added to the live app by
+hand because `deploy.yml` cannot carry it, the flag goes into
+`infra/main.parameters.json` in the same sitting, and the what-if is run
+before the day ends. The same for the app's scale: a replica count or a
+scale rule changed in the portal goes into the parameters file
+(`appMinReplicas`, `appMaxReplicas`, `appHttpConcurrentRequests`) the same
+day, and a setting the template has no parameter for is added to the
+template first. `tests/deploy-guards.test.ts` → *every Key Vault flag
+the template declares is visible where a hand-set secret is wired* and
+*the container app's scale is the template's, parameterised* hold the
+template, the example file, this runbook and `infra/README.md` to each
+other, so the next flag or scale setting cannot be added without the places
+a person reads.
+
+---
+
 ## A static file 404s in production and works locally
 
 **Symptom.** `/phb-logo.png` (or anything else in `public/`) returns 404 from the
@@ -3354,7 +3904,11 @@ decrypts the stored JACE credentials; `BAS-ASK-DATABASE-URL` points at the
 `bas_analyze` role created on the production server on 2026-10-13.
 `CO-ANTHROPIC-API-KEY` is set and parked: nothing reads it until Phase 12
 Part D and `coAnthropicApiKeyInKeyVault` stays false. The symptoms below
-describe a regression, not the current state.
+describe a regression, not the current state. `FP-ANTHROPIC-API-KEY`, the
+fifth (2026-11-04), exists and the live app has referenced it since
+2026-11-05 - by hand, six days ahead of its flag in the parameters file; *A
+template what-if shows the container app losing a secret, gaining blank
+variables, or changing its probes* has that record.
 
 The Anthropic key is the first secret the template does not write. `DATABASE-URL` and
 `AUTH-SECRET` are generated at deploy time and were passed on every deploy
@@ -3435,6 +3989,9 @@ tab says the model service could not be reached, or the database could not
 be reached.** The URL in the vault has a wrong host, password or
 `sslmode`; set the secret again and create a new revision. **Rotating**: run
 the script again with a new password, set the secret again, new revision.
+**After a migration that adds a `bas_*` table**: run it again with the SAME
+password - *Analyze answers "permission denied" for every question* →
+*Re-run after a migration* has the steps.
 
 ### The Change Orders Anthropic key, the same way
 
@@ -3473,6 +4030,199 @@ reverse.** One key was revoked or ran out of credit and the other did not;
 that is the separation working. Fix the one named, in the Anthropic Console.
 **Rotating**: set the secret again with the new key, then create a new
 revision; the BAS key is untouched.
+
+### Both Anthropic keys fail at once as `401 authentication_error`
+
+**Symptom.** The Analyze tab answers every question with *The model service
+rejected the API key.*, **and** the change-order classifier's call lines read
+`outcome: "api_error"`, `http_status: 401`, `error_class:
+"AuthenticationError"` — both on the same day, with nothing changed in
+Azure. One module failing alone is the
+separation working (*The Change Orders Anthropic key, the same way*); both
+at once is this.
+
+**Cause.** Both keys are **personal keys linked to Jim**, kept so by the
+owner's decision of 2026-10-29 as an accepted risk (`docs/PHASE-14.md`
+item 0.6). Anthropic archives a personal key the day its owner is removed
+from the organization — *"Personal keys are archived when you are removed
+from the organization. If you are re-invited, create new keys; archived
+keys are not restored"* — and sends no warning beforehand. Jim leaving the
+organization is the day both stop. Nothing in Azure, Key Vault or the code
+has changed and nothing there will show a cause.
+
+**Fix.** A key swap, not a design change, and the same shape as *Rotating*
+under *Secrets set by hand in Key Vault*:
+
+1. In the Claude Console (`platform.claude.com/settings/keys`), create two
+   new keys — one for Analyze, one for Change Orders, so the two modules
+   stay separately billed and revocable (§ 68). Expiration *Never*. Whose
+   account they are linked to is the decision this symptom exists because
+   of: a **service account** created by an organization admin outlives any
+   one person; a personal key linked to whoever creates it carries the same
+   risk forward to that person.
+2. Set each as a new version of the same vault secret, without printing it:
+
+   ```powershell
+   az keyvault secret set --vault-name <vault-name> --name ANTHROPIC-API-KEY --value (Read-Host "Analyze key")
+   az keyvault secret set --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --value (Read-Host "Change Orders key")
+   az keyvault secret show --vault-name <vault-name> --name CO-ANTHROPIC-API-KEY --query "{enabled:attributes.enabled, updated:attributes.updated}"
+   ```
+
+3. Restart the web app's revision so Analyze re-reads its reference
+   (`az containerapp revision restart`); the classifier job reads the
+   reference at each execution, so its next run picks the new key up by
+   itself.
+4. Confirm: one Analyze question answers; one classifier call line reads
+   `outcome: "valid"`.
+
+Until step 2 is done, nothing in either module guesses: Analyze reports the
+error, and every classifier item is *left unclassified, will retry next
+pass* with the item still in `_to_classify`.
+
+### The change-order classifier's model calls: a 400 naming the schema, and a refusal
+
+The Phase 12 Part D classifier (`phb-co-engine`, `co_classifier/`) calls the
+Claude API through one wrapper, `co_classifier/model.py`, with the key from
+`CO_ANTHROPIC_API_KEY` only. Every call writes one JSON line to the job's
+log with `kind: "call"`: the prompt version and sha256, the model, tokens,
+latency, `stop_reason`, `outcome`, and on an error its class, HTTP status
+and the API's own message cut to 300 characters. Never the email, never a
+body. The two failures below were both met on the first real call,
+2026-10-29 (`docs/phase-12-part-d-verification.md` → *D2*).
+
+**Symptom: a call line reads `outcome: "api_error"`, `http_status: 400`, and
+`error_message` starts `output_config.format.schema:`.** The structured-output
+grammar refused a keyword in the judgment's schema — on 2026-10-29 it was
+`minimum` on an integer and `maxItems` on an array. The request is meant to
+carry `schemas.api_schema(...)`, a copy with the refused keywords stripped
+(`UNSUPPORTED_IN_API` in `co_classifier/schemas.py`); the message names the
+keyword to add to that list. Our own validator keeps the full schema, so
+stripping a keyword from the API copy loses nothing. The item is left
+unwritten and retried on the next pass; nothing is misclassified.
+
+**Symptom: a call line reads `outcome: "refused"`, `stop_reason: "refusal"`,
+with a `refusal_category`.** The model's safety classifier declined the
+request. The classifier treats it as a decline: the item becomes
+`needs_human = true` with reason `model_refused`, a person decides it, and
+nothing is guessed. On 2026-10-29 a diagnostic's toy prompt ("which row is
+alpha?") was refused under `reasoning_extraction` while the real prompt was
+not; a pattern of refusals on real items means the prompt moved and is worth
+a look, one refusal is noise. No fallback model is configured, by decision
+(plan § 10): a second model answering silently is what the log would not
+show.
+
+**Symptom: an item from a `@phb1899.com` address lands in `_needs_review` with
+`needs_human_reason` starting `internal_forwarded_vendor_content`.** The
+internal-sender rule (owner's decision 2026-10-29): internal mail in a vendor
+thread is never a vendor reply, and when it forwards or quotes vendor content
+— the note names what was found: a quoted header from an outside address, a
+forward marker, a forward subject, a non-image attachment — a person decides
+whether that content belongs on the tracker or in the Q&A log. Not an error.
+Plain internal mail with none of those is `other` with no tracker effect and
+no note. A PM completeness reply is matched before this rule and never
+reaches it. The laptop classifier, until cutover, asks the model instead; the
+replay reports the difference as a named divergence.
+
+**Symptom: `tests/classifier_replay.py` exits 1 with `unstable items` above
+zero, or with a FAIL row.** Read the report before touching anything. An
+*unstable* item is one the container answered differently across the runs
+of the same replay — on 2026-10-29, two internal emails it declined twice
+and labelled once. The equivalence doc's Part 4 is the rule: three
+self-consistent runs before any investigation, and an unstable judgment is a
+finding that the prompt is under-constrained, never a reason to tune the
+prompt toward the laptop on one disagreement. A *FAIL* row is a consistent
+disagreement; the laptop is right until proven otherwise, and the fix, if
+one is due, is a new prompt version with the reasoning recorded in
+`docs/phase-12-part-d-verification.md`. Two rows the scorer reports as *not
+judged* rather than FAIL are not disagreements: a count withheld because the
+sender's company is in **today's** `Responded emails` (the tracker moved on
+after the laptop's run), and a label the container declined to give.
+
+**Symptom: a call line has `cache_read_input_tokens: 0` on every call of a
+pass.** The system block is meant to be cached for an hour and read back by
+every later call in the pass (the smoke measured 2,516 tokens written once,
+read on the next call). All zeros means the prompt text changed between
+calls — a timestamp or an id in the system text — or the version was
+bumped mid-pass. Cost, not correctness.
+
+### Running a classifier pass, and reading its summary and log
+
+The Phase 12 Part D classifier (`phb-co-engine`, `co_classifier/`) runs one
+pass with `python -m co_classifier …` — locally against a COPY of a Step 2
+tree with `--store local`, or in Azure as the job the owner creates from
+`infra/classify-job.yaml.template` (Manual trigger; Phase 13 schedules it).
+It refuses the live tree by name on both stores. A pass walks
+`_to_classify`, writes one `classification_result.json` per item through
+the store, appends the Q&A and completeness logs and their PDFs, runs the
+archive sweep, and overwrites `run_summary.md` in the spec's locked format.
+Its stdout is JSON lines: one `kind: "call"` per model call, one
+`kind: "item"` per item, one `kind: "pass"` at the end, plus the sweep's
+`[archive]` lines. To run it by hand in Azure: `az containerapp job start -n
+phbplat-prod-co-classify -g <resource group>`, then `job execution list` and
+`job logs show … --container classify`. To replay the fixtures on the laptop
+with real calls: `python tests/classifier_replay.py --steps
+bid_leader,classify,qa,match --runs 3` with `CO_ANTHROPIC_API_KEY` set (about
+$3; read the report's Q&A section by hand).
+
+**Symptom: `run_summary.md` ends `Archive: not run — …`.** The sweep did not
+run, and the line says why: switched off (`--no-archive`), or it failed with
+the exception named. Nothing was moved; the queue keeps its finished items
+until the next pass that sweeps. Never move items by hand — the sweep is
+idempotent and the next pass will. A failing sweep in Azure is a store
+error (the `[archive]` lines before it name the folder) and the Graph
+folder move is the one store operation Part C exercised least.
+
+**Symptom: `run_summary.md` carries `Bid Tracker not readable (…)`, and every
+vendor reply in the pass went to `_needs_review`.** The tracker snapshot
+(`--bid-tracker-json`) could not be read or parsed; the pass proceeded as
+the live prompt says it should — PM completeness replies still matched the
+pm_thread index, nothing matched by conversation id or body, every vendor
+reply declined with that reason. Fix the snapshot (re-capture with
+`tests/capture_classifier_fixtures.py`, or re-upload it beside the copy)
+and the items re-classify on the next pass once their result files are
+removed by a person. Not a model problem; no call was made for them.
+
+**Symptom: the summary lists `Left unclassified, will retry next pass: <item>
+— <error>`.** The API could not be reached for that item (the call line
+shows `outcome: "api_error"` with the class, status and message). The item
+has no result file and the next pass retries it; the rest of the pass ran.
+A whole pass of these is the key, the network or a rate limit; one is noise.
+
+**Symptom: an item's `needs_human_reason` starts `step_not_enabled`.** The
+judgment that would decide it is not in `CO_CLASSIFIER_MODEL_STEPS` on the
+job. With the variable empty every item declines; `bid_leader,classify,qa,match`
+is all four. Not an error: a disabled step declines rather than guesses.
+
+**Symptom: `needs_human_reason` starts `classifier_output_invalid`.** The
+model's answer failed the schema or the candidate check twice (the call
+lines show `schema_invalid` / `semantic_invalid` with the attempt number).
+The item went to a person with the validation failure in the note; nothing
+from that answer was written. One is noise; a run of them means the prompt
+version or the schema moved — compare the call lines' `prompt_version`.
+
+**Symptom: `needs_human_reason` starts with a model reason —
+`no_unique_match`, `low_confidence`, `conflicting_signals`,
+`ambiguous_candidates`.** The judgment declined, which is what the
+equivalence doc wants it to do rather than guess; the note names what it
+weighed. Work it as any `_needs_review` item (`docs/13-needs-review.md` § 9).
+
+**Symptom: `needs_human_reason` starts `duplicate_co_key`.** More than one
+tracker row carries the resolved key (spec § 2, the 2026-08-04 banner): Flow
+2 would write to the first row. The note names both rows' dates and
+respondents; a person picks. The classifier is the only place this can be
+seen.
+
+**Symptom: a `[archive]` line names a `.dup-<timestamp>` suffix.** A re-run
+collided with an item already in `_archive/`; the script's own rule, kept.
+Nothing lost; the later copy carries the suffix.
+
+**Where the twenty fixtures live, and the three that are excluded.**
+`C:\Users\Msheth\phb-co-engine-fixtures\classifier\` (outside both
+repositories, never committed), captured by
+`tests/capture_classifier_fixtures.py`; `excluded.json` beside them names
+the two synthetic results and the one whose tracker row no longer exists,
+with the evidence. Re-capture replaces the directory; re-check
+`excluded.json` after.
 
 ### The BAS credential key, the same way
 
@@ -3567,8 +4317,8 @@ migration. **Never `migrate reset` against production** — it drops every table
 left behind. It is scoped to one runner IP, but remove it:
 
 ```bash
-az postgres flexible-server firewall-rule list -g <rg> -n <server> -o table
-az postgres flexible-server firewall-rule delete -g <rg> -n <server> --rule-name gh-deploy-<run-id> --yes
+az postgres flexible-server firewall-rule list -g <rg> -s <server> -o table
+az postgres flexible-server firewall-rule delete -g <rg> -s <server> -n gh-deploy-<run-id> --yes
 ```
 
 The close step runs under `always()`, so this only happens if the runner itself is
@@ -3590,7 +4340,7 @@ outlasts it. Liveness answers "should this process be killed", and the answer is
 |---|---|---|
 | `P1001: Can't reach database server` | The firewall rule allowing Azure services was removed, or the server is stopped. Burstable tier servers can be stopped to save money and stay stopped — **which is why one may have been, and why it must not be.** Stopping this server destroys building data rather than merely postponing access to it: see `docs/08-bas-and-niagara.md`, *Azure: the container app may sleep, the database may not*. Restart it, then check the Collection Health screen for new `roll_overwrite` gaps. | `az postgres flexible-server show -g <rg> -n <server> --query state`. Confirm the `AllowAllAzureServicesAndResourcesWithinAzureIps` rule exists. |
 | `P1000: Authentication failed` | The admin password was rotated on the server but not in Key Vault - or, before 2026-10-21, a template deployment set it to whatever was typed at the prompt (*A template deployment rotated the database administrator password*). | Update the `DATABASE-URL` secret, then restart the revision — the container reads Key Vault at start, not per request. If the server's password is the unknown, rotate it deliberately with `postgresAdminPassword` on one template deployment, which writes the matching `DATABASE-URL` too. |
-| `P2024: Timed out fetching a connection` | More replicas than the server's connection limit allows. Burstable tiers have low limits. | Lower `maxReplicas`, or move up a tier. |
+| `P2024: Timed out fetching a connection` | More replicas than the server's connection limit allows. Burstable tiers have low limits. | Lower `appMaxReplicas`, or move up a tier. |
 
 Nothing here needs a redeploy. Fix the database or the secret and restart the revision.
 
@@ -3938,10 +4688,14 @@ way*.
 **Symptom.** The first page after the site has been idle takes far longer
 than a page normally does; once it answers, everything is fast again.
 
-**Cause.** Scale to zero, and nothing else. `minReplicas` is 0
-(`infra/main.bicep`, deliberately), so five minutes after the last request
-(`cooldownPeriod` 300) KEDA deactivates the only replica, and the next request
-waits while Container Apps starts one. Measured on 2026-09-30 with one timed
+**Cause.** Scale to zero, and nothing else. `appMinReplicas` is 0 by default
+(`infra/main.bicep`, deliberately; `minReplicas` until 2026-11-12), so five
+minutes after the last request (`cooldownPeriod` 300) KEDA deactivates the
+only replica, and the next request waits while Container Apps starts one.
+**The live app has kept one replica warm since 2026-11-12** (`appMinReplicas`
+1 in the parameters file, after a by-hand change - *A template what-if shows
+the container app losing a secret…*, the 2026-11-12 record), so this symptom
+is not seen while that holds. Measured on 2026-09-30 with one timed
 request to `/api/health` from a scaled-to-zero state, against the platform's
 own event timestamps:
 
@@ -3978,7 +4732,7 @@ keeps the running revision's probes, so the change sat in the template until the
 next template deployment carried it - see *A template deployment fails
 activation* for why the two paths each own half of the app.
 The remaining 16 s of scheduling and sidecars belongs to the Consumption
-platform; a Dedicated workload profile or `minReplicas: 1` are the only
+platform; a Dedicated workload profile or `appMinReplicas: 1` are the only
 things that remove it, and the cost of the latter is in *Keeping one replica
 warm* below.
 
@@ -3990,7 +4744,14 @@ session, which adds the Entra sign-in bounce on top.
 
 ---
 
-## Keeping one replica warm — what `minReplicas: 1` costs
+## Keeping one replica warm — what `appMinReplicas: 1` costs
+
+**Where it stands.** The live app has run with `minReplicas` 1 since a
+by-hand change on 2026-11-12 (*A template what-if shows the container app
+losing a secret…*, the 2026-11-12 record), and the parameters file carries
+`appMinReplicas: 1` so a template deployment keeps it. The figures below are
+what that costs; whether always-on is intended is a decision to confirm with
+Jim, and `appMinReplicas: 0` in the parameters file is the way back.
 
 Consumption billing in eastus2, from the retail price list (2026-09-30): a
 vCPU-second is $0.000024 active and $0.000003 idle; a GiB-second is $0.000003
@@ -5121,9 +5882,19 @@ Two different states, and they read differently on purpose.
 - **"No employees match these filters"** — rows exist, the filter hid them. The
   message gives the real total and a link to show everyone.
 
-**The default view is already a filter.** "With a grant" hides everyone who
-signed in and never got access, which on a new platform is everybody. If the list
-looks emptier than expected, check the Show dropdown before anything else.
+**The default view is everyone, since 2026-11-13.** Until then it was "With a
+grant", which hid everyone who signed in and never got access - on a new
+platform, everybody. If the list looks emptier than expected, check the Show
+dropdown before anything else: a shared link can carry `scope=granted` or
+`scope=none`.
+
+**The filters narrow the page as you type, and Apply runs the query.** Typing
+or picking narrows the rows already on screen; the count line then reads
+*3 of 25 on this page match. Apply to search all 130.* Apply, the red button,
+sends the drafted filters to the server and puts them in the URL, so the view
+can be shared or paged; Reset clears the draft and the URL together and
+restores the default sort. A column sort or a page link carries the draft too,
+so what you see narrowed is what the next page is narrowed by.
 
 **"No grants at all"** is its own option, not the absence of a module filter. It
 answers "who signed in and never got access", which no combination of the other
@@ -5131,8 +5902,47 @@ filters expresses.
 
 ## Sorting
 
-Name, status and last sign-in, by clicking the column heading. The sort travels
-in the URL, so a sorted view is bookmarkable and survives Apply.
+**The list opens on fewest grants first (since 2026-11-13)**, and within one
+count the most recent sign-in first: the people who signed in and have no
+access are the top rows, newest arrival first, because that is the row an
+admin opens the screen to find. Name, status, last sign-in and access sort by
+clicking the column heading; the sort travels in the URL, so a sorted view is
+bookmarkable and survives Apply, and Reset restores the default.
+
+**A row moves after a grant toggle.** The expanded panel (next section) edits
+through the same routes the employee page uses and then re-reads the page, so
+a person whose grant count just changed can sort to a different row under the
+default order. Their panel stays open wherever the row lands.
+
+## The Access column, and a row's expanded panel
+
+**One Access column instead of one column per module (2026-11-13).** A
+collapsed row says how many of the active modules the person holds - *4
+modules*, *1 module* - or *No access* in grey, and nothing else: no module is
+named until the row is expanded. The column sorts by that count.
+
+**The chevron at the left of a row expands it in place**, and that panel is
+the only place on the list that names a specific grant: every active module
+as a card, **granted ones first** and the rest after in the registry's order,
+each with the module's diamond in its colour, its full name, a switch for the
+grant and, once granted, a switch for *Can change settings*. The switches
+call the employee page's own routes - `POST`/`DELETE …/grants`, `PUT
+…/grants/<module>/admin` - so the audit rows are `grant.added`,
+`grant.removed`, `grant.admin_added`, `grant.admin_removed` exactly as from
+that page, and `withAdmin` guards every one. Fifteen modules are a wrapping
+grid of cards, not a sideways scroll.
+
+**The panel offers *Can change settings* for some modules and not others.**
+Only a module with a settings screen (`lib/module-settings.ts`) gets the
+switch; Change Orders has none. A flag that is already set on a module without
+one still shows, with *This module has no settings screen. Clear this.*, so it
+can be turned off - and the server refuses to turn it on, as
+`That module has no settings screen, so there is nothing to administer.` in
+the panel.
+
+**The panel has no platform-admin or disable switch.** Those are account
+changes, not module flags: *Open full record* in the panel's corner reaches
+the employee page, and the bulk bar enables or disables a selection.
 
 **Never-signed-in sorts to the end**, not scattered through the dates: it is the
 extreme of that column, so newest-first does not open with a screen of blanks.
@@ -8347,6 +9157,38 @@ collected and still in every Collection Health figure.
 
 ---
 
+## How do I rename a point
+
+**Symptom.** A point is called `VAV$2d8$20104$2d105_ZoneTemperature` in
+Point Explorer and on Collection Health, and somebody wants it to read
+*Zone Temp 104-105*. Or a point already has a label and it is wrong.
+
+**Cause.** Not a fault. The name those screens show is the point's
+**label** when one has been set, and Niagara's name until then (the
+precedence is the entry *A point has one name in Point Explorer and another
+in Settings*). Nobody has set one, or somebody set the wrong one. The oBIX
+key - the `$2d`-spelled name - is never the thing to change: it is what the
+collector asks the station for, and editing it would stop collection.
+
+**Fix.** Settings → the station → *Points (N)*. Find the row (the search box
+above the list matches the label, the station's name, the Niagara name, the
+role and the equipment), hover or tab to it, and click the pencil beside the
+name. In the drawer that opens, type the new name under *Display name* and
+press *Save*; leave it blank to go back to Niagara's name. The same drawer
+sets the role, the equipment and *Shown* / *Hidden*, each saved only if it
+changed, and shows the Niagara name as the one thing it will not edit. Point
+Explorer and Collection Health show the new name on their next load; the
+Settings row shows all three names, because the key is what you match
+against Workbench.
+
+What it does not change: the collector's URL (the key), Grafana and the
+`bas_v_*` views (they keep Niagara's name on purpose), and whether the point
+is collected. Each save is one audit row - `bas.point_label_changed` with
+the previous and new label and the key - so a label that "disappeared" is
+answered by `/admin/audit` or the previous entry. The drawer uses the same
+`PATCH /settings/points/{id}` route as the row, one field per request;
+nothing new was added for it (2026-11-10).
+
 ## The Points list says it could not place N points
 
 **Symptom.** Under a station in BAS Settings, the Points list carries a red
@@ -10095,7 +10937,195 @@ Unclassified bas_* object(s): {bas_alarms}. Nothing has been granted or revoked.
 
 That is the intended stop. `tests/bas-analyze-role.test.ts` builds a
 throwaway copy of the role from the same list on the test database, so the
-suite fails on the unclassified object too.
+suite fails on the unclassified object too. Since 2026-11-17
+`tests/bas-analyze-grant-guard.test.ts` also reads every migration for a
+`CREATE TABLE` or `CREATE VIEW` of a `bas_*` object and fails unless
+`scripts/setup-bas-analyze-role.sql` grants it or withholds it by name (every
+`bas_report_*`, `bas_library_*` and `bas_personal_*` table must be withheld).
+**No test can do the other half**: the script re-run on production, below.
+
+**In production** the role lives on the Azure server and the local command
+above never reaches it. A table classified in the script is still ungranted
+there until a person re-runs the script: *Re-run after a migration*.
+
+### Re-run after a migration
+
+**When.** A migration added a `bas_*` table or view that `bas_analyze` is
+allowed to read, it has deployed, and production's Analyze tab - and every
+Reports planner question, which runs as the same role through the worker's
+`BAS_ASK_DATABASE_URL` - answers `permission denied for table bas_<name>`.
+One missing grant fails **every** question, not only questions about that
+table, because the planner's schema context reads every allowed object.
+First seen with `bas_site_occupancy` (Reports Phase 1, 2026-11-10): the
+script listed it from that day, but the production role was made on
+2026-10-13 and nobody re-ran it, so production failed every question until
+it was (reported 2026-11-17).
+
+**What the re-run does.** It re-asserts the same allowlist, refuses an
+unclassified `bas_*` object before touching anything, never widens a grant
+and proves the boundary before it finishes. It also **sets the role's
+password**, so it is run with the password the role already has, read out of
+`BAS-ASK-DATABASE-URL`. The vault secret, the container app and the Reports
+worker then keep working unchanged: no `secret set`, no new revision.
+
+**Which machine.** A Windows laptop with this repository on an up-to-date
+`main`; `az` signed in as a person who can create firewall rules on the server
+and read secrets in the vault (the platform owner can); and PostgreSQL's own
+`psql` 15 or newer (`\getenv`, below), which the PostgreSQL 17 installer puts
+at `C:\Program Files\PostgreSQL\17\bin\psql.exe` (`DEVELOPER-SETUP.md`).
+This is the same route as *The collector's role on the Azure database*:
+`psql` from Windows with the production admin URL and `-f` on the repository
+file. (The office PC's `bas_backup` and `bas_readonly` roles are on the
+office database, not this server, and are not part of this.) The Cloud Shell
+route in the script's own header works too; this is the PowerShell one.
+
+**The firewall.** Yes, a rule is needed. The server takes public connections
+only from addresses its firewall rules name; the deploy workflow adds and
+removes its own `gh-deploy-<run-id>` rule, and a laptop's address is not
+covered unless somebody added it. Add a temporary rule for this run and
+delete it at the end. If an existing rule already covers your address the
+extra rule does no harm.
+
+Every step runs in **one** Windows PowerShell window, in order - each step
+uses variables the one before it set. Nothing below prints a password or a
+URL. Do not run it under `Start-Transcript`.
+
+1. **The repository, up to date.** The table the error names must be in the
+   script's grant list.
+
+   ```
+   cd C:\Users\<you>\phb-platform
+   git checkout main
+   git pull --ff-only
+   Select-String -Path .\scripts\setup-bas-analyze-role.sql -SimpleMatch -Pattern "('bas_site_occupancy')"
+   ```
+
+   One line printed (put the table from the error in place of
+   `bas_site_occupancy`). Nothing printed means the script does not grant it
+   yet: classify it first (*Fix*, above), merge, then come back.
+
+2. **Names.**
+
+   ```
+   $psqlExe = "C:\Program Files\PostgreSQL\17\bin\psql.exe"
+   $server  = "phbplat-prod-pg-ovwzv7"
+   $vault   = "phbplat-prod-kv-ovwzv7"
+   $fqdn    = "$server.postgres.database.azure.com"
+   $rule    = "laptop-analyze-grant"
+   $rg      = az postgres flexible-server list --query "[?name=='$server'].resourceGroup" -o tsv --only-show-errors
+   "resource group: $rg"
+   & $psqlExe --version
+   ```
+
+   The production resource group's name, and `psql (PostgreSQL) 17.x`. An
+   empty resource group means `az` is signed in to the wrong account or
+   subscription: `az login`, then again.
+
+3. **A temporary firewall rule for this laptop.**
+
+   ```
+   $ip = (Invoke-RestMethod -Uri "https://api.ipify.org").Trim()
+   az postgres flexible-server firewall-rule create -g $rg -s $server -n $rule --start-ip-address $ip --end-ip-address $ip -o none
+   az postgres flexible-server firewall-rule list -g $rg -s $server --query "[?name=='$rule']" -o table
+   ```
+
+   One row, your address at both ends. `-s` is the server and `-n` the rule;
+   `az` has no `--rule-name` on this command. A VPN that changes your address
+   mid-way needs this step again.
+
+4. **The two connection URLs, into variables, not onto the screen.**
+
+   ```
+   $adminUrl = az keyvault secret show --vault-name $vault --name DATABASE-URL --query value -o tsv --only-show-errors
+   $askUrl   = az keyvault secret show --vault-name $vault --name BAS-ASK-DATABASE-URL --query value -o tsv --only-show-errors
+   "admin URL read: $($adminUrl -like 'postgresql://phbplatadmin:*')"
+   "ask URL read:   $($askUrl -like 'postgresql://bas_analyze:*')"
+   ```
+
+   `True` twice. `DATABASE-URL` is the administrator's URL the template
+   writes, the one the platform itself runs on, so it is right by
+   construction. `False` or `ForbiddenByRbac`: your account cannot read the
+   vault's secrets (*Secrets set by hand in Key Vault*).
+
+5. **The role's current password, out of the ask URL.**
+
+   ```
+   if ($askUrl -notmatch '^postgresql://([^:/@]+):(.*)@([^@/]+)/') { throw "BAS-ASK-DATABASE-URL is not a postgresql://user:password@host/ URL" }
+   $pw = [Uri]::UnescapeDataString($Matches[2])
+   Remove-Variable Matches
+   ```
+
+   Prints nothing. The greedy match takes everything up to the last `@`, and
+   the unescape undoes the URL's percent-encoding.
+
+6. **Before changing anything: the password is the role's, and the fault is
+   this one.**
+
+   ```
+   $env:PGPASSWORD = $pw
+   & $psqlExe "host=$fqdn port=5432 dbname=phb_platform user=bas_analyze sslmode=require" -X -At -c "SELECT current_user"
+   & $psqlExe "host=$fqdn port=5432 dbname=phb_platform user=bas_analyze sslmode=require" -X -At -c "SELECT count(*) FROM bas_site_occupancy"
+   Remove-Item Env:PGPASSWORD
+   ```
+
+   `bas_analyze`, then `ERROR:  permission denied for table
+   bas_site_occupancy`. **Stop** on `password authentication failed`: the
+   password read in step 5 is not the role's, and step 7 would change the role
+   to it - find out why first. A timeout is the firewall: step 3 has not taken
+   effect yet (give it a minute) or your address changed.
+
+7. **Re-run the script, with the same password.**
+
+   ```
+   $env:PHB_ANALYZE_PW = $pw
+   & $psqlExe $adminUrl -X -c '\getenv pw PHB_ANALYZE_PW' -f .\scripts\setup-bas-analyze-role.sql
+   "psql exit code: $LASTEXITCODE"
+   Remove-Item Env:PHB_ANALYZE_PW
+   ```
+
+   Among the output, three `NOTICE` lines - `Gate passed: 29 bas_* object(s)
+   present, 20 readable, 9 withheld.` (the numbers grow with later
+   migrations), `Granted SELECT on 20 objects to bas_analyze, withheld 9,
+   revoked 8 platform tables by name.` and `bas_analyze: reads the allowlist,
+   refused everywhere else. OK.` - then `psql exit code: 0`. The password is
+   printed nowhere.
+
+   The password goes over as an environment variable that `\getenv` reads into
+   the script's `pw` variable, **not** as `-v pw=…` the way the file's header
+   shows for bash: Windows PowerShell 5.1 mangles a native argument containing
+   a double quote, and a mangled password would silently set the role to
+   something the vault does not hold. Rehearsed on 2026-11-17 against the test
+   database with a throwaway role and a password holding a quote, a space, a
+   backslash and `@ : / # ? %`: it reached the role unchanged.
+
+   If the gate refuses: *Unclassified bas_\* object(s)* means this checkout is
+   older than production's migrations (step 1 again); *Allowlisted object(s)
+   not found* means production has not applied the migration yet (let the
+   deploy finish). Either way it stopped before granting or changing anything.
+
+8. **Prove it from the outside, through the vault's own URL.**
+
+   ```
+   & $psqlExe $askUrl -X -At -c "SELECT count(*) FROM bas_site_occupancy"
+   & $psqlExe $askUrl -X -At -c "SELECT count(*) FROM bas_report_runs"
+   ```
+
+   A number (0 is fine: a building with no occupied hours entered), then
+   `ERROR:  permission denied for table bas_report_runs`. The first succeeding
+   **through `BAS-ASK-DATABASE-URL` itself** is the proof the password did not
+   move. Then ask one question on `/bas/analyze`; no restart is needed,
+   because a grant is checked when the query runs and the schema context is
+   cached only after a success.
+
+9. **Clean up - always, even if a step above failed.**
+
+   ```
+   az postgres flexible-server firewall-rule delete -g $rg -s $server -n $rule --yes
+   az postgres flexible-server firewall-rule list -g $rg -s $server --query "[?name=='$rule']" -o tsv
+   Remove-Variable adminUrl, askUrl, pw
+   ```
+
+   The list prints nothing. Close the window.
 
 ---
 
@@ -10465,6 +11495,638 @@ before the pool is touched. A new revision starts with an empty window.
 
 ---
 
+## Reports (Phase 1): the tables, the owner-recipient rule, and the scripts that gate on them
+
+**What exists, as of 2026-11-10.** A Reports tab in the BAS module and six
+`bas_*` tables (`add_bas_reports`): `bas_report_definitions`,
+`bas_report_questions`, `bas_library_questions`, `bas_personal_questions`,
+`bas_report_recipients`, `bas_site_occupancy`. A report is configured -
+building, questions, window, schedule, recipients - and stored (a per-report
+budget until 2026-11-12; the module's safety ceiling since, *Reports: the
+safety ceiling* below).
+**Nothing fires on its own.** No scheduler, no worker, no email, no PDF;
+the engine and the dev script that drives it are Phase 2, the next section.
+The entries below are the ways Phase 1 can surprise someone; the plan is
+`docs/bas-reports-tab-plan.md` and the record is `docs/09-bas-what-is-built.md`
+→ *Reports*.
+
+### The report owner cannot be added or removed as a recipient
+
+**Symptom.** Adding the owner's own address to a report answers `409
+owner_is_recipient` - *"The report's owner always receives it and is not added
+or removed here."* - and so does removing it, even though no such recipient is
+listed.
+
+**Cause.** By design, and the whole safety of the recipient list. The owner is
+**never a row** in `bas_report_recipients`: the sender (Phase 4) adds the
+owner's address from the employee record at send time, so no screen, no API
+call and no bulk delete can leave a report with nobody who asked for it
+receiving it. The API refuses the owner's address in both directions so that
+the absence of a row can never be read as "removed".
+
+**Fix.** None needed. To change who always receives a report, change its
+owner; that is a module-admin action in Phase 3 (*Transfer owner*) and is not
+built yet. Until then: `UPDATE bas_report_definitions SET owner_employee_id =
+'<uuid>' WHERE report_id = <n>;` and, if the new owner was a recipient row,
+delete that row.
+
+### Adding an address outside the company is refused the first time
+
+**Symptom.** `409 external_unconfirmed` - *"vendor@example.com is outside
+phb1899.com. Confirm that this building's report should go there."* The editor
+shows the same as an amber panel with *Add external recipient*.
+
+**Cause.** The warn-and-confirm step (plan §A, Recipients). Anything that is
+not `@phb1899.com` is external, decided by `isExternalAddress` in
+`lib/modules/bas/reports/recipients.ts`; the service wants `confirmed: true`
+in the body before it stores the row, and the row cannot be stored without a
+confirmation (`bas_report_recipients_external_confirmed`).
+
+**Fix.** Confirm in the dialog. The audit row `bas.report_recipient_added`
+carries `isExternal: true` and `confirmed: true`, so "which buildings' reports
+go outside the company, added by whom" is one query:
+
+```sql
+SELECT a.occurred_at, e.email AS added_by, a.metadata->>'name' AS report,
+       a.metadata->>'email' AS recipient
+  FROM audit_events a
+  LEFT JOIN employees e ON e.id = a.actor_employee_id
+ WHERE a.action = 'bas.report_recipient_added'
+   AND (a.metadata->>'isExternal')::boolean
+ ORDER BY a.occurred_at;
+```
+
+### A role script refuses to run: "Unclassified bas_* object(s): bas_report_definitions, ..."
+
+**Symptom.** `scripts/setup-bas-analyze-role.sql`,
+`scripts/setup-bas-collector-role.sql` or `scripts/bas-migrate-to-azure` stops
+at its gate naming one or more of the six Reports tables. Or, in `phb-bas`,
+`setup_readonly_role_platform.sql` (the `bas_readonly_platform` role for Grafana
+and the MCP server) stops the same way.
+
+**Cause.** Every one of those scripts holds an **explicit** list of `bas_*`
+objects and refuses an object it has not been told about, by design (*The
+read-only grant script will hand out the credentials table*). Six new tables
+match the prefix.
+
+**Fix.** In this repository all three were updated on 2026-11-10 and their
+tests run them against the real schema: `bas_analyze` reads
+`bas_site_occupancy` and is withheld the other five by name;
+`bas_collector` is withheld all six (it reads occupancy from the station,
+never from a table a person typed); the Azure migration lists all six as
+`mig_excluded` - created after the one-shot move and never moved.
+**`phb-bas` has not been updated** and will refuse on its next run until its
+list learns the six names: withhold `bas_report_definitions`,
+`bas_report_questions`, `bas_report_recipients`, `bas_library_questions` and
+`bas_personal_questions` (configuration people typed, email addresses, an
+employee's own words - not for Grafana), and allow `bas_site_occupancy`.
+`bas_v_data_dictionary` already excludes the five by name, so the Analyze
+planner is told nothing about them. **Phase 2 added `bas_report_runs` and
+`bas_report_findings` to every list in this repository the same way** - both
+withheld, because a run holds the rendered report and the model's own
+sentences - and **2026-11-12 added `bas_report_settings`** (the safety
+ceiling, one row, withheld) - so `phb-bas`'s script has nine names to
+learn: eight withheld and `bas_site_occupancy` allowed. Phase 4's
+`bas_report_deliveries` will be a tenth.
+
+### A report's next run is an hour off after the clocks change, or runs on the wrong clock
+
+**Symptom.** A report at 06:00 shows a next run of 10:00 UTC one week and
+11:00 UTC the next; or two buildings with the same schedule show different
+UTC instants.
+
+**Cause.** Not a fault. `time_of_day` is a **local** wall-clock time and
+`bas_sites.timezone` is the clock; `next_run_at` is derived from the two on
+every activation and on any change to the schedule or the building, never by
+adding 24 hours to the previous instant (`lib/modules/bas/reports/schedule.ts`,
+tested across the November 2026 change in `tests/bas-reports-schedule.test.ts`).
+The editor shows both clocks beside the schedule. A local time that happens
+twice on the autumn morning runs once, at its first occurrence; one the spring
+morning skips runs at the first instant after the gap.
+
+**Fix.** If the building's zone is wrong, fix it in Settings and save the
+report again - the next run follows the zone. Remember that nothing fires
+before Phase 3; `next_run_at` is a promise about the future, not a record of
+anything that happened.
+
+### A report reads "Paused - owner disabled" and will not resume
+
+**Symptom.** `409 invalid_state` on resume: *"A module admin has to reassign
+the owner before it can run again."*
+
+**Cause.** The state `paused_owner_disabled` is in the CHECK for Phase 3's
+scheduler, which pauses a report whose owner's account was disabled. **Nothing
+writes it in Phase 1**; a report in that state got there by hand.
+
+**Fix.** Reassign the owner (SQL above, until *Transfer owner* exists), then
+`UPDATE bas_report_definitions SET state = 'paused' WHERE report_id = <n>;`
+and resume from the screen, which recomputes the next run.
+
+### The Reports list says there is nothing, or Usage shows zero beside runs the list shows
+
+**Symptom.** *No reports have been generated yet* on Reports; or Usage
+showing $0.00 and no runs while the Reports list shows a finished run with
+a cost.
+
+**Cause.** Reports (the runs; the *Generated* sub-tab until 2026-11-11):
+true until a run is made - the dev script (*Reports (Phase 2)* → *Making a
+run today*), *Run now*, or the scheduler; the list shows the runs of the
+reports you own, or of every report if you are a module admin.
+
+Usage: **until 2026-11-12 the page was a placeholder** that said *There
+have been no runs* without asking the database, and kept saying it once
+runs existed - the Reports list beside it showed a succeeded run at $0.0397
+on 4,310 tokens. It reads `bas_report_runs` now
+(`lib/modules/bas/reports/usage.ts`, `tests/bas-reports-usage.test.ts`
+seeds exactly that run). If it still reads zero beside a run on the
+Reports list, check three things: the run has FINISHED (queued and running
+runs have spent nothing and are not counted); its `finished_at` is inside
+the range chosen (7 / 30 / 90 days, cut on the New York day); and the
+viewer may see it (their own reports, or every report for a module admin -
+the runs list's own visibility, `visibilityWhere`). A red line under the
+tiles - *These figures cover N of the M finished runs you may see* - means
+the tallies and the joinless count disagree; report that.
+
+### Settings shows a bar of its own, like Reports
+
+**Symptom.** Opening *Settings* replaces the module tabs with *Back ·
+General · Usage*, and somebody reports the module's tabs as missing; or a
+bookmark to `/bas/settings/usage` lands on a page whose only tab row is
+that bar.
+
+**Cause.** Not a fault (2026-11-12), the same shape as the Reports bar.
+*General* is the Settings screen as it always was (projects, buildings,
+stations, credentials, occupied hours) and the default; *Usage* is the
+Reports Usage view at a second route - one component, two routes - so the
+spend figures and the safety ceiling are reachable from the module's admin
+surface without opening the Reports bar, which is unchanged. The shell
+decides the bar from the path, so a deep link to either lands on the
+Settings bar directly; both pages are `requireModuleAdmin`, like every
+Settings page. Both bars are data on one shared shape
+(`app/(modules)/bas/sub-bar.ts`, `sub-bars.ts`; `reports/bar.ts`,
+`settings/bar.ts`), drawn by the kit's TabBar in the same place, one row,
+never two. `tests/bas-settings-nav.test.tsx`.
+
+**Fix.** *Back*, at the far left, returns to the module's tabs with
+Projects selected, carrying the query string.
+
+### The page background stops short of the bottom
+
+**Symptom.** On a page shorter than the window - the Usage page under its
+ceiling card, Home, a module placeholder - the tinted ground ends a few
+lines above the bottom and the flat lighter grey of `--background` shows
+beneath it.
+
+**Cause.** Fixed 2026-11-12. `.dashboard-ground` sits on each shell's
+outermost element with `-mx-8 -my-8`, bleeding into `<main>`'s 2rem
+padding, and declared `min-height: 100%` under `box-sizing: border-box` -
+so it resolved to main's CONTENT box and stopped exactly 4rem (main's
+vertical padding) short whenever the content was shorter than the window.
+On a page taller than the window the ground is the content's own height
+and nothing shows. Cost Intelligence and Freeze Protection size their
+ground to the viewport and scroll inside it, so they never showed it.
+
+**Fix.** Already in: the ground is `box-sizing: content-box` with the
+same `min-height: 100%`, so its own padding is added on top of main's
+content height and it ends where main ends; no viewport unit anywhere, so
+a scrolling page is covered to its last line. `tests/design-tokens.test.ts`
+→ *covers the whole document* pins the two declarations, the app shell's
+`min-h-screen` row and every shell's `-mx-8 -my-8`, and refuses a `100vh`
+on any ground element. If a band comes back, something put a height on a
+ground element or a padding on `<main>` that the shell does not bleed into.
+
+### The Reports tab shows a bar of its own, and the module tabs are gone
+
+**Symptom.** Opening *Reports* replaces Projects, Point Explorer, Analyze,
+Reports, Collection Health and Settings with *Back · Reports · Scheduled ·
+Questions · Usage*, and somebody reports the module's tabs as missing.
+
+**Cause.** Not a fault (2026-11-11). The Reports tab has more views than
+one row of module tabs can carry, so while it is open the same bar draws
+the Reports-only items instead - one row, never two. (Settings does the
+same since 2026-11-12, the entry above; both bars are data on one shape.) *Reports* is the runs
+(what was *Generated*), the default when the tab opens; *Scheduled* is the
+definitions, with *New report* top right; *Questions* is the shared
+questions and the viewer's own (what was *Library*; the route is still
+`/bas/reports/library` and the tables keep their names); *Usage* is
+unchanged.
+
+**Fix.** *Back*, at the far left of the bar, returns to the module's tabs
+with Projects selected, carrying the query string. Every older link still
+works: `/bas/reports/generated` redirects to `/bas/reports`, and an editor
+or run URL opens with the right item marked.
+
+### Reading what was done to a report
+
+Every write is an audit row in the same transaction, named by action:
+`bas.report_created`, `bas.report_updated` (with `changes`, field by field),
+`bas.report_deleted`, `bas.report_state_changed` (`from`, `to`),
+`bas.report_questions_changed` (`change`: `set` since 2026-11-12, one row per
+save that changed the selection, with `count`, `library` / `personal` /
+`inline` and the `presetKey` label; added / removed / reordered / preset on
+older rows), `bas.report_recipient_added` and `_removed` (with `isExternal`),
+`bas.personal_question_created` / `_updated` / `_deleted`, and
+`bas.report_ceiling_changed` (`from` and `to`, each `{ usd, minutes }`; no
+report, the module's). None of them is
+on the audit SCREEN (*The audit log screen does not show a mail send, a BAS
+question or a profile change*); read them with SQL on `metadata->>'reportId'`.
+
+### The editor's Questions section is three tabs over one checklist, and a preset is not locked
+
+**Symptom.** Somebody asks why a report labelled *Standard weekly health
+report* has 22 questions, or why the label disappeared after they unticked
+one question, or why ticks made on the Standard tab are already ticked on
+the Daily tab; or an old build of the editor cannot find the per-question
+routes.
+
+**Cause.** Not a fault (2026-11-12). The Questions section is the segmented
+control it always was - *Standard weekly*, *Daily critical-site*, *Custom* -
+but each tab is a checklist over ONE selection. A preset's tab lists that
+preset's questions grouped by section, each with a box, and its own *Select
+all* and *Clear*, which act on that tab's questions only; Daily is a subset
+of Standard, so a question ticked on one is ticked on the other. *Custom*
+lists My questions with boxes, the custom questions on this report, and
+the box to type one (this report only unless *save for reuse* is ticked).
+Switching tabs never clears anything; only the untick of a box, or *Clear*
+on a tab, removes a question. The count at the right of the tab row is the
+whole set and *Show selected* lists it in the order the report will hold
+it. `preset_key` is a **label**: which preset's *Select all* was last used
+(or the saved report's label), kept while the shared selection still
+matches that set - custom questions do not count against it, so "the
+standard weekly plus two of mine" keeps the label - and cleared by the
+service as soon as it does not. The selection is saved whole with the
+report (`questions` on `POST /api/modules/bas/reports` and `PATCH
+.../{id}`) and stored in one order: shared in library order, then the
+owner's own, then typed; the per-question add / remove / reorder routes
+were removed with the lock. A shared question turned off after it was
+saved stays on a report while it is ticked, and reads *turned off* on its
+tab.
+
+**Fix.** Nothing. To take a preset whole, open its tab and press *Select
+all*, then save.
+
+### Creating or saving a report answers 400 `limits_removed`
+
+**Symptom.** `400 limits_removed` - *Per-report limits were removed on
+2026-11-12. The module's safety ceiling on the Usage page applies to every
+run; do not send budgetUsd or maxMinutes.*
+
+**Cause.** The client is an old build of the editor, or a script, still
+sending the per-report cost budget or time cap. The two keys are refused
+by name (`parseReportBody`) rather than dropped, so a stale client fails
+loudly instead of believing it set a cap.
+
+**Fix.** Reload the editor; drop the two keys from the script. The ceiling
+is set on the Usage page (*Reports: the safety ceiling*).
+
+---
+
+## Reports (Phase 2): running the engine by hand, and reading what it says
+
+**What exists, as of 2026-11-10.** The engine core
+(`lib/modules/bas/reports/engine/`), two more tables (`bas_report_runs`,
+`bas_report_findings`), the runs list (*Reports* on the Reports bar; the
+*Generated* sub-tab until 2026-11-11), the *Occupied hours* form
+on a building's row in Settings, and a dev script. **Still nothing fires on
+its own**: no scheduler, no worker, no PDF, no email. What the engine did on
+the office and the lab is `docs/bas-reports-phase-2-verification.md`; the
+build record is `docs/09-bas-what-is-built.md` → *Reports — Phase 2*.
+
+### Making a run today
+
+There is one way, from a checkout with `.env.local` filled in:
+
+```
+npm run bas:report:run -- --definition <report id> --period-end <ISO instant> [--as <employee email>] [--no-narrative | --fixed-narrative]
+```
+
+- `--definition` is the `report_id`, the number in the editor's URL.
+- `--period-end` is the instant the analysis window ends; the window is the
+  definition's (`7d` for the weekly preset) counted back from it. Pick an
+  end the database has readings up to - on a copy of the data, the last
+  full week it holds.
+- `--as` records who started the run (`started_by_id`); absent, nobody.
+- The model is called with `ANTHROPIC_API_KEY` - **the BAS key**, the one
+  Analyze uses - at about a cent per section. `--no-narrative` skips it and
+  the run finishes `partial` saying so; `--fixed-narrative` uses a canned
+  narrator at a fixed cost per call, for a dry run of the budget logic.
+
+The script prints the run's status, the building status, the inventory,
+every question's outcome, every finding with its two model sentences, and
+the cost. The run is then under *Reports* on the Reports bar for the
+owner and every module admin, and in `bas_report_runs` /
+`bas_report_findings`. Run it twice on the same period to see the
+comparison: the second run marks the first's findings *Still open*.
+
+To look at a stored run's document without the platform:
+`npm run -s bas:report:render -- document.json > report.html`, where the
+file holds the row's `report_json` (or pipe it in from `psql -At`). It is
+the engine's own `renderReportHtml` under the same loader as the run
+script, which is also why a test drives it (next entry but one).
+
+### A section reads Not Applicable, or a question reads Not Monitored, and what the words mean
+
+**Symptom.** The office report shows Hot Water and Chilled Water as *Not
+Applicable* and fourteen questions as *Not Monitored*, each under its own
+heading with a line such as *Not monitored — this building does not trend:
+airflow; airflow setpoint*.
+
+**Cause.** Two different decisions, by design. **Not Applicable** is about
+what the building *has*: no equipment row of a type the question applies
+to (hydronic heating wants a boiler or hot-water plant row, or a water-side
+role on some point; DX wants an RTU, split system, CRAC or VRF row, or a
+compressor role; reheat and economizer are sub-types read from the roles a
+VAV or RTU carries). **Not Monitored** is about what the building
+*trends*: the question applies to at least one unit, but no applicable
+unit has every required group at 80 % coverage or better, and the list
+names the groups. A group that is present but short reads *(coverage
+72 %)* rather than being lumped in with absent. The building-wide list is
+what *every* skipped unit lacks; one unit's own lack (a sensor Data Health
+excluded, say) is the *Not judged: …* line under the question on the run
+page (shown since 2026-11-13; stored but not shown before).
+
+**Fix.** Not Applicable when the building has the plant: add the equipment
+row in Settings - type decides. Not Monitored: trend the named roles on the
+station and classify the points; the next run picks them up. *(coverage
+N %)*: look at the point on Collection Health; a genuine hole is a
+collector or station matter. A point that logs on change but reads low
+coverage should no longer happen: a point with more readings than its
+declared interval allows (1.5×) is treated as change-of-value and judged
+by recorded gaps. If it does happen, the point logs on change *and* under
+1.5× its declared rate, and the honest fix is to clear
+`collection_interval_s` on that point.
+
+### Occupancy reads `none`, or comes from the wrong source
+
+**Symptom.** The run page's inventory says *Occupancy: none (no occupancy
+point trended and no occupied hours entered for the building)*, and Space
+Comfort and Schedules are Not Monitored for *occupancy*.
+
+**Cause.** Per station, in this order: a trended `occupancy_status` point
+with a reading in or before the period; else an `occupancy_cmd` point;
+else the building's occupied hours (`bas_site_occupancy`); else none. The
+report records which it used, by name.
+
+**Fix.** Trend and classify an occupancy point on the station - that is
+the right source, and the office has one (`Occupied`). Until then, a module
+admin enters the hours: Settings → the building's row → *Occupied hours*,
+one start and end per weekday, saved as a whole (the form replaces every
+row for the building) and audited as `bas.building_occupancy_updated` with
+the hours before and after. A station with a trended point ignores the
+manual hours.
+
+### A run failed with "React is not defined"
+
+**Symptom.** A run on the Reports list reads *Failed*, its page says *It
+failed: React is not defined*, and `bas_report_runs.error` holds the same
+three words. Every finding and section was computed; the HTML render at
+the end threw.
+
+**Cause.** The report template (`lib/modules/bas/reports/engine/render.tsx`)
+is JSX. Under the dev script's loader, tsx, esbuild reads this repository's
+`jsx: "preserve"` (Next's own requirement; Next rewrites it back if it is
+changed) as the classic transform, `React.createElement(...)`, with no
+`React` imported. Next and vitest both compile the file with the automatic
+runtime, so the platform's run page and every in-process test render it
+fine; only the worker's render fails. The template's first line is a
+`@jsxRuntime automatic` pragma for exactly this; run 1 on the development
+database (2026-11-10 11:48) was made minutes before that line existed, and
+every run since has rendered. `tests/bas-reports-worker-render.test.ts`
+spawns tsx on `scripts/bas-report-render.ts` and holds the worker's HTML
+to vitest's byte for byte, then renders a copy of the template without the
+pragma and expects this very error - so the line going missing, or a
+second `.tsx` file arriving in the engine without one, fails the build.
+
+**Fix.** If the line is gone, put it back; the test names it. The failed
+row stays as the record it is. Run the definition again for the period
+(`npm run bas:report:run -- --definition <id> --period-end <iso>`) and the
+new run lists beside it.
+
+### A run finished `partial`
+
+**Symptom.** *Partial* on the Reports list, and a reason at the top of
+the run page.
+
+**Cause.** One of four, each named in `partial_reason`:
+
+- *Narrative not generated: no model key is configured* -
+  `ANTHROPIC_API_KEY` unset, or `--no-narrative`. The evidence is complete;
+  only the sentences are missing.
+- *Safety ceiling of $N reached after M of K sections had narrative; the
+  rest show their evidence only* - the module's ceiling in dollars
+  (`bas_report_settings`, the Usage page) would have been passed by the
+  next call's estimate. A module admin raises the ceiling, or accept the
+  evidence-only sections. (*Budget of $N reached* on runs before
+  2026-11-12, when the cap was the report's own.)
+- *Safety ceiling of N min reached after M min: ...* - the ceiling's
+  minutes; *Reports: the safety ceiling* below.
+- *<Section>: <reason>* - the model declined or refused the section, or
+  its answer failed the schema. Run again; if it repeats, the section's
+  findings are in the audit row.
+- *Qn could run but has no analysis yet* - the question's points are
+  trended and the building qualifies, and the analysis is Phase 5's.
+  Nothing to fix; the inventory decision is correct.
+
+A partial run is a stored, readable report. It is never a failed one.
+
+The page's footer prints the model, the calls, the tokens, the spend and
+how long the run took (*took 25 s*) - and no limit beside the spend, since
+2026-11-12: the ceiling is the module's and is on the Usage page. The dev
+script still prints the ceiling in force after the spend.
+
+### A run finished `failed`
+
+**Symptom.** *Failed* on the list, `error` on the row, no document.
+
+**Cause.** An exception in the engine; the row keeps the message and the
+log line `bas.report_run` has the same. One seen on 2026-11-10 and fixed:
+`React is not defined`, from running the template under `tsx` without the
+automatic JSX runtime; the pragma at the top of `render.tsx` is the fix and
+must stay.
+
+**Fix.** Read the error, fix the cause, run again. A failed run has no
+findings, and the next run compares with the last run that *finished*,
+succeeded or partial.
+
+### Data Health lists ten identical "No readings" rows, or one "Collection incident" block above the table
+
+**Symptom.** The Data Health section shows a block *Collection incident on
+PHBoffice: 18 points stopped reporting at the same time, last readings 29
+Sept, 13:00-13:10; since 29 Sept, 13:00, 7.3 days to the end of the period.
+Counted as one finding; the points are the rows below*, followed by the
+point names, the model's likely cause and recommended action, and then the
+table with one row per point. The Summary lists it once, as a Watch
+finding on the station. (Runs before 2026-11-12 showed the same event as
+ten or eighteen separate rows, each read as its own fault.)
+
+**Cause.** Several points on one station stopped within fifteen minutes of
+each other (`INCIDENT_WINDOW_MS`), three or more of them
+(`INCIDENT_MIN_POINTS`) - the signature of one event, not of ten sensors:
+in order of likelihood the device network trunk from the JACE to its
+controllers, the histories stopped on the station, or the collector
+(`INCIDENT_CAUSES`, which the narrative is asked to name in that order).
+The engine (`analysis/data-health.ts`) carries the points inside ONE
+`collection_stopped` finding whose subject is `station:<id>@<minute>` -
+the minute the first point stopped - so the status roll-up, the summary,
+the New / Still open / Cleared counts and the narrative see one finding,
+the fingerprint keys on the station and the time, and the same stop reads
+*Still open* next week. A point that has never reported is not a stop and
+stays a row of its own; so does a point that stopped alone, or two that
+stopped together. Every member is still excluded from the equipment
+questions.
+
+**Fix.** The incident's recommended action is the first check in that
+order; take them in order. On the platform side: Collection Health for
+the station (*A BAS run says `ok` and a point holds nothing*, *Collection
+Health says a point is no longer reported by the station*). When the
+points resume, the incident clears on the first run whose period is after
+the stop. If the point that stopped FIRST resumes while the others stay
+out, the incident re-fingerprints to the next minute and reads *New* once
+with the old one *Cleared*; the rows are the same points. The first run
+after 2026-11-12 on a building whose previous run held per-point rows
+shows the same one-time shift: the per-point findings clear and the
+incident is new.
+
+### Data Health rolled up to Watch with half the building offline
+
+**Symptom.** Ten of twenty-six points offline for the whole period, and
+the building status reads *Watch*, not *Action Needed*.
+
+**Cause.** By decision, pending Jim (2026-11-12). The spec gives Data
+Health no status line in its template and names no share of points or
+duration that would make a data problem Action Needed; its three status
+words describe equipment conditions. Every Data Health finding is Watch -
+a collection incident included - and
+`tests/bas-reports-analysis.test.ts` → *rolls ten of fourteen interval
+points offline for the whole period up to Watch* pins it so the change,
+when Jim decides one, is deliberate. The open question is whether a share
+of points, a duration, or both should raise it, and whether Data Health
+should affect the building status at all.
+
+**Fix.** None until Jim answers. When he does, the rule goes in
+`analysis/data-health.ts` beside the incident grouping, the test above
+changes with it, and this entry records the decision.
+
+### Every question is a sub-heading on the report, and what the line under it means
+
+**Symptom.** Since 2026-11-13 a report - the run page and the PDF, one
+template - lists each question inside its section in the spec's words,
+*Q3. What percent of occupied hours did each zone hold within ±2°F of
+setpoint?*, and directly under it one of:
+
+- the findings table (or, for Q4, the worst-zones table; Q19 has its hours
+  table above its findings);
+- one line when the question ran and found nothing - *All 10 zones judged
+  held setpoint for at least 95% of occupied hours*, *None of the 11 units
+  judged ran outside its schedule for 30 minutes at a stretch or on two
+  days; the most time outside was 0.3 h (RV)*, *All 26 points judged were
+  reporting, changing and within physical range*;
+- a muted line saying why it did not run: *Not monitored — this building
+  does not trend: airflow; airflow setpoint*; *Not applicable — no
+  hydronic heating on this building*; *Not analysed — the analysis for
+  this question is built in Phase 5. Its points were checked and it could
+  run. Units it would run over: RV*; *Not analysed — the run reached its
+  time cap before this question*.
+
+Under an answered question, *Not judged: VAV-5 (no setpoint trended)*
+names the units it skipped. The Point Inventory keeps only its building
+lines - equipment types, classification, the coverage line, the occupancy
+source, the points in scope - with no question list and no *Required
+point checks met* count (the dev script still prints the count); the
+Summary's two halves are headed by Q1 and Q2 and each count names its
+findings (*New this period: 2 —
+VAV-3 (Zone above setpoint), points_RoomT (Out of physical range)*);
+cleared findings sit under the question they came from; a custom question
+is its text over its note. A Not Monitored section has no sentence of its
+own any more - its badge is on the heading and each question says what it
+lacks. Runs stored before this date show the same layout.
+
+**Cause.** Deliberate: a reader with only the PDF must never need to look
+up what *Q3* is, so the question is on the page and the answer is under
+it. The positive line is written from numbers the analysis returns and the
+engine stores in the question's `metrics` (zones judged and the lowest
+share in band; units judged and the most hours outside; points judged),
+never a stock phrase: a question that judged nothing must not read like
+one that judged everything. The *Q* prefix keeps question numbers apart
+from section numbers (*3. VAV* is a section; *Q3* is a question). On a run
+stored before the change the library supplies a question's words, what it
+needs and the Summary's two questions by key - the spec's words, held to
+the migration by a test - and the positive line says only what the stored
+metrics support (*No data problems found in the period* when a Data
+Health run stored no count). The engine still stores a Not Monitored
+section's one-line sentence for the dev script; the page does not show
+it.
+
+**Fix.** Nothing to fix. To find what a building must trend for a
+question, read the line under the question; the full requirement is the
+question's row on the Library sub-tab of Reports. If a question is on the
+report and missing from the page, it is in no section's `questions` on
+the stored document - the dev script lists every question the engine
+decided.
+
+### The report's inventory reads "Equipment types found: economizer", or "Required points found: 0 of 70"
+
+**Symptom.** On runs before 2026-11-12 the inventory's first line printed
+the Step 1 classification words (*economizer*, *DX*, *hydronic*) where the
+reader expected the equipment list, and the second counted "required
+points" that were not points.
+
+**Cause.** Two labels, both wrong for what they showed. *Equipment types
+found* now lists the equipment types in scope by count from
+`bas_equipment.equip_type` and the vocabulary's display names - *Rooftop
+Unit × 1, VAV Box × 10* - and a separate *Classification* line carries
+Jim's Step 1 per unit, *RV: DX (by type; compressors not trended) with
+economizer*, which also says why the rooftop unit's DX questions read Not
+Monitored. The count is now labelled for what it is: *Required point
+checks met: 0 of 70 (one check per question per unit it applies to)* - 70
+is the number of question-and-unit pairs on the office (Q3 and Q4 over
+ten VAVs, Q19 over eleven units, and so on), not a number of points. A run
+stored before the change prints its old words as they were. Since
+2026-11-13 the count is not on the page at all - every question is in its
+section with its own line - and `npm run bas:report:run` is where it is
+printed.
+
+**Fix.** Nothing to fix on the platform. What the office needs trended for
+the questions to run is in `docs/bas-reports-phase-2-verification.md` →
+*The office inventory, traced (2026-11-12)*.
+
+### A finding is Still open after the fault was fixed, or New when it is old
+
+**Symptom.** A sensor was replaced and the next report still says *Still
+open*; or a finding the previous report carried reads *New*.
+
+**Cause.** The comparison is by fingerprint - the question, the subject
+(`equipment:<id>` or `point:<id>`) and the issue code - against the
+previous finished run of the same definition, whatever its period. *Still
+open* means the issue was found again in this period; a sensor that was
+flat last week and reads properly this week clears on the first run whose
+period is after the fix. *New* for an old fault means the subject's id
+changed - a point re-discovered under a new `point_id`, or equipment
+deleted and recreated - because names are not in the fingerprint, on
+purpose.
+
+### A report cannot be deleted: "has N runs and its history is kept"
+
+**Symptom.** `409 report_has_runs` from the editor's delete.
+
+**Cause.** By design: a run is a record someone may have acted on. Pause
+the report instead; a paused report keeps its history and never runs.
+
+**Fix.** If the history really is disposable (a test definition), delete
+the runs first - `DELETE FROM bas_report_runs WHERE report_id = <n>;`, the
+findings cascade - then delete the report from the screen.
+
+### Reading what a run did
+
+Each run writes two audit rows: `bas.report_run_started` as it begins and
+`bas.report_run_finished` with the report, the run, the status, the partial
+reason, the building status, the finding and cleared counts and the cost.
+Neither is on the audit screen; read them with SQL on `metadata->>'runId'`. The log line is `event: "bas.report_run"`
+with `outcome` and `reason`. The run page itself is the record a person
+reads.
+
+---
+
 # Cost Intelligence runs
 
 A run is one workflow against one project. The web app only queues it
@@ -10472,6 +12134,933 @@ A run is one workflow against one project. The web app only queues it
 (`lib/modules/cost-intelligence/worker.ts`, started by `npm run cip:worker` or the
 `cip-worker` image from `Dockerfile.cip-worker`). Every run works on a copy of the
 project and only ever adds files to the project's `AI FILES` folder.
+
+## Reports: turning the jobs on
+
+**What they are.** Two Container Apps Jobs from one image, `bas-reports:<sha>`
+(`Dockerfile.bas-reports`: Node, and Playwright's Chromium since Phase 4's PDF
+half on 2026-11-13 - *Reports: the PDF*), both behind `enableBasReports` in
+`infra/main.bicep`:
+
+| Job | Trigger | Runs | Needs |
+|---|---|---|---|
+| `<baseName>-bas-reports-sched` (`basReportsSchedulerJob`; 30 characters in production - the longer `-scheduler` name was 34 and failed the first deployment, *A template deployment fails with `ContainerAppInvalidName`*) | cron, `basReportsSchedulerCron`, default `*/15 * * * *` (UTC) | `scripts/bas-reports-scheduler.ts`, one pass: for every active report whose `next_run_at` has passed, ONE queued run and the next run time advanced in the same transaction; active reports whose owner's account is disabled are paused as *Paused - owner disabled* with the reason on the row | `DATABASE-URL` by reference, nothing else |
+| `<baseName>-bas-reports-worker` (`basReportsWorkerJob`) | a PostgreSQL scaler counting queued runs, stalled ones, queued PDF renders and (since 2026-11-17) due report emails, every 15 s, two executions at most | `scripts/bas-reports-worker.ts`: claims runs with `FOR UPDATE SKIP LOCKED`, heartbeats every 30 s, executes the Phase 2 engine, prints each finished run's page to PDF with the image's Chromium (*Reports: the PDF*), exits when the queue is empty or after its four-minute drain window | `DATABASE-URL`, `BAS-ASK-DATABASE-URL` and `ANTHROPIC-API-KEY` (the BAS key) by reference - read through `lib/modules/bas/reports/job-env.ts`, never `lib/env.ts` (*Reports: a job execution fails at startup naming a web-app variable*); `BAS-ASK-DATABASE-URL` is carried for Phase 6 and read by nothing yet |
+
+Same identity (`<baseName>-identity`), same registry pull and vault read; **no
+role assignment is added**, so a Contributor deploys this exactly as the CIP
+worker was deployed. The worker's replica timeout is 30 minutes, above the
+longest time cap a report may set (25) plus the drain window (4). A report
+that missed several ticks - the job was off, the platform was down - gets one
+run for the latest occurrence and never a backfill.
+
+**First deployment 2026-11-11 18:46 UTC (`bas-reports-enable`): failed on
+the scheduler's name, after creating the worker.** `<baseName>-bas-reports-worker`
+exists in Azure on `bas-reports:9e4adb5…`, the web app revision and the
+server's retention change in the same deployment went through, and
+`<baseName>-bas-reports-scheduler` was refused as 34 characters against a
+cap of 32 (*A template deployment fails with `ContainerAppInvalidName`*).
+The scheduler is `<baseName>-bas-reports-sched` since that day; the redeploy
+is the same step 3 command, nothing is deleted first, and what-if lists one
+*Create* (the scheduler) rather than two. **Then every worker execution
+failed at startup** on the web app's env schema - the worker script imported
+one function from `lib/env.ts` - while the scheduler ran; fixed the same
+day in the scripts, no template change (*Reports: a job execution fails at
+startup naming a web-app variable*). Built 2026-11-12 (the PR's date);
+both scripts were run end to end against the
+development database the same day (the record is in the pull request), and
+`tests/bas-reports-jobs.test.ts` holds every rule above against the real
+test database, including the two scripts as child processes under tsx.
+`tests/deploy-guards.test.ts` pins the template, the workflow and the
+Dockerfile. The date of the first execution in Azure goes here when it has
+run.
+
+**Template change 2026-11-13 (`feat/bas-reports-pdf`).** The worker's scaler
+query gained `OR pdf_status = 'queued'`, so a *Retry PDF* wakes a worker on
+its own (*Reports: the PDF*). Deploy it with the routine step-3 command
+below: `what-if` lists the worker job as *Modify* and nothing else. Until it
+has run, a retry is picked up by the next worker execution that starts for
+a run. The image itself needs no hand build: `deploy.yml` rebuilds it on
+the merge, Chromium included, and the Dockerfile's own launch check fails
+the build if the browser cannot start.
+
+**Template change 2026-11-17 (`feat/bas-reports-email`).** The worker job
+gains six plain environment values for report email and its scaler counts
+due deliveries; `basReportsAllowSend` stays false until *Turning report
+email on* says otherwise. The routine step-3 command deploys it; `what-if`
+lists the worker job as *Modify* and nothing else.
+
+### Turning it on, once, in this order
+
+The jobs name an image in the platform's registry, and a deployment that
+references an image that is not there fails at the job - the same shape as
+`enableCipWorker` and `enableDbBackup`.
+
+1. **Build the image, once, by hand**, from a checkout of `main` at the
+   commit you mean to run (afterwards `deploy.yml` rebuilds it on every merge,
+   step 5). Needs `AcrPush` or Contributor on the registry; `az acr build`
+   runs the build in Azure, so Docker is not needed locally.
+
+   ```bash
+   SHA="$(git rev-parse --short HEAD)"
+   az acr build --registry <registry-name> --image "bas-reports:$SHA" --file Dockerfile.bas-reports .
+   az acr repository show-tags --name <registry-name> --repository bas-reports -o tsv
+   ```
+
+2. **In `infra/main.parameters.json`** add, beside `enableCipWorker`:
+
+   ```json
+   "enableBasReports": { "value": true },
+   "basReportsSchedulerCron": { "value": "*/15 * * * *" }
+   ```
+
+   `basReportsImage` is **not** in the file: like `containerImage` and
+   `cipWorkerImage` it is passed on the command line, read from the running
+   job on every later deployment so a redeploy cannot reset it.
+
+3. **Deploy the template**, `what-if` first, then `create`, as under *Deploy*
+   in `infra/README.md`, passing the three images and neither secure parameter:
+
+   ```bash
+   IMAGE="$(az containerapp show -n <app> -g <resource-group> --query properties.template.containers[0].image -o tsv)"
+   CIP="$(az containerapp job show -n <baseName>-cip-worker -g <resource-group> --query properties.template.containers[0].image -o tsv)"
+   REPORTS="<registry-name>.azurecr.io/bas-reports:$SHA"     # from step 1; later, read it from the worker job the same way as CIP
+
+   az deployment group what-if --subscription <subscription-id> --resource-group <resource-group> \
+     --template-file infra/main.bicep --parameters @infra/main.parameters.json \
+     --parameters containerImage="$IMAGE" cipWorkerImage="$CIP" basReportsImage="$REPORTS"
+   # Expect the two jobs as Create on a first attempt - after 2026-11-11, where the
+   # worker already exists, exactly one, the scheduler - nothing as Delete, and NO
+   # Microsoft.Authorization/roleAssignments anywhere in the list.
+   az deployment group create ... (the same arguments)
+   ```
+
+   The three secrets the jobs reference (`DATABASE-URL`, `BAS-ASK-DATABASE-URL`,
+   `ANTHROPIC-API-KEY`) all exist in the production vault (set 2026-10-13 and
+   2026-10-16); a vault without one of them fails the worker job at creation,
+   which is the right time to find out.
+
+4. **Run the scheduler once by hand, and look.** On the Scheduled list,
+   activate a report (or use one that is active) and note its next run; set
+   nothing else. Then:
+
+   ```bash
+   az containerapp job start -n <baseName>-bas-reports-sched -g <resource-group>
+   az containerapp job execution list -n <baseName>-bas-reports-sched -g <resource-group> -o table   # one execution, Succeeded
+   az containerapp job logs show -n <baseName>-bas-reports-sched -g <resource-group> --container bas-reports-scheduler
+   # "[bas-reports-scheduler] 0 queued, 0 paused, 0 skipped" is the expected line
+   # when no report is due yet; a due report prints "queued run <id> of report <id>".
+   ```
+
+   To see a run happen without waiting for a schedule: *Run now* on the
+   Scheduled list. The run shows *Queued* in its Last run cell; within fifteen
+   seconds the worker job starts an execution
+   (`az containerapp job execution list -n <baseName>-bas-reports-worker ...`),
+   the cell reads *Running*, and then *Succeeded* or *Partial* with the run
+   on the Reports list and its page. The worker's log names the run:
+   `[bas-reports-worker] run <id> of report <id>: done`. In the database:
+
+   ```sql
+   SELECT run_id, report_id, status, trigger, attempts, created_at, started_at, finished_at, partial_reason, error
+     FROM bas_report_runs ORDER BY run_id DESC LIMIT 10;
+   ```
+
+   The first worker execution can fail to pull the image or to resolve a
+   secret while RBAC on the new job settles; start *Run now* again a minute
+   later. Record the date of the first successful execution at the top of
+   this section.
+
+5. **Set the two repository variables** `AZURE_BAS_REPORTS_SCHEDULER_JOB` and
+   `AZURE_BAS_REPORTS_WORKER_JOB` to the `basReportsSchedulerJobName` and
+   `basReportsWorkerJobName` outputs. From the next push to `main`,
+   `deploy.yml` builds `bas-reports:<sha>` and points both jobs at it, after
+   the web app answers. Until they are set those steps are skipped, and the
+   jobs keep running the image from step 1.
+
+**Turning it off.** `enableBasReports: false` and a template deployment
+removes both jobs; queued runs stay queued in the table until a worker
+exists again, and `Run now` keeps queueing them. Pausing every report from
+the Scheduled list is the gentler stop: the scheduler then queues nothing.
+
+**What it costs, roughly, per month.** The scheduler: 96 executions a day of
+a few seconds each on 0.5 vCPU, inside the environment's free grant. The
+worker: one execution per run, about ten seconds of 1 vCPU for a building the
+size of the office, plus the model - about a cent a run on the office and the
+lab (`docs/bas-reports-phase-2-verification.md`). A weekly report on three
+buildings is under a dollar a month all in.
+
+## Reports: a job execution fails at startup naming a web-app variable
+
+**Symptom.** Every execution of the worker job shows *Failed*, and its log
+ends in
+
+```
+Invalid environment configuration:
+  ALLOWED_EMAIL_DOMAINS: Invalid input: expected string, received undefined
+  ...
+Copy .env.example to .env.local and fill in every value.
+    at parseEnv (/app/lib/env.ts:83:11)
+```
+
+naming variables the job has no business carrying - `AUTH_SECRET`, the Entra
+ids, `ALLOWED_EMAIL_DOMAINS` - while the scheduler job on the same image
+succeeds.
+
+**Cause.** Something on the failing script's import path imports
+`lib/env.ts`, the WEB APP's boot schema, which parses the whole schema the
+moment it is imported (on purpose: a misconfigured web deployment fails on
+boot). A job's container carries only its own few variables
+(`infra/main.bicep`), so the parse fails on the first web-app variable it
+does not find. On 2026-11-11 the chain was one line long:
+`scripts/bas-reports-worker.ts` imported `readAnthropicApiKey` from
+`lib/env.ts` to read the model key. The scheduler imported nothing from it,
+which is why it passed. `tests/bas-reports-jobs.test.ts` had run both
+scripts and passed, because it hands them the developer's full `.env.local` -
+exactly what the container does not have.
+
+**Fix.** The jobs read their environment through their own reader,
+`lib/modules/bas/reports/job-env.ts` (`readSchedulerJobEnv`,
+`readWorkerJobEnv`), the way the Cost Intelligence worker reads its own; the
+variable NAMES come from `lib/env-names.ts`, a module with no imports and no
+side effects that `lib/env.ts` re-exports. Nothing a job runs may import
+`lib/env.ts`. `tests/bas-reports-jobs-env.test.ts` holds that three ways:
+it walks each script's import graph and fails if `lib/env.ts` is reachable
+(naming the chain), it holds the template's env list for each job to the
+reader's list, and it boots each script under tsx from an empty directory
+with a clean environment holding ONLY the template's variables - the test
+that would have caught this. If the symptom comes back, run that test; the
+chain it prints is the module to fix, and the fix is to read through the
+jobs' reader or lazily, never to add a web-app variable to the job.
+
+**What each job reads, and what the template gives it.** The scheduler
+reads `DATABASE_URL` (and `NODE_ENV`, which decides only whether the
+database client is cached per process) and the template gives it exactly
+those. The worker reads `DATABASE_URL`, `ANTHROPIC_API_KEY` (unset, every run
+finishes partial saying so) and `NODE_ENV`; the template gives it those and
+`BAS_ASK_DATABASE_URL`, carried for Phase 6's planner questions and read by
+nothing yet. The model name and its prices are constants in the engine
+(`narrative.ts`, `pricing.ts`), the report's dates resolve through the
+platform's own time-zone data (Node ships full ICU), and the report carries
+no link that needs a URL variable - so the jobs need no `AUTH_URL`, no
+platform address and no other value. No template change was needed for
+this fix: the image is rebuilt by `deploy.yml` on merge and both jobs are
+pointed at it, because `AZURE_BAS_REPORTS_SCHEDULER_JOB` and
+`AZURE_BAS_REPORTS_WORKER_JOB` are set.
+
+## Reports: a job execution fails with `Cannot find package` or `ERR_MODULE_NOT_FOUND`
+
+**Symptom.** A scheduler or worker execution shows *Failed* within a second
+or two, and its log's first lines are `Error [ERR_MODULE_NOT_FOUND]: Cannot
+find package '<name>' imported from /app/...`, or `npx` offering to install
+`tsx`. Every local run of the same script works, and so does every test.
+
+**Cause.** The jobs image installs **production dependencies only**
+(`Dockerfile.bas-reports`, `npm ci --omit=dev`, since 2026-11-13). A package
+a job loads at run time that is listed under `devDependencies` in
+`package.json` is not in the image at all; a laptop and CI install the whole
+tree, so nothing there can notice. `tsx` (the loader both job commands
+name) and `dotenv` (`scripts/load-env.ts`) were development dependencies
+until that day and were moved for this reason.
+
+**Fix.** Move the package from `devDependencies` to `dependencies` in
+`package.json`, run `npm install` so the lockfile follows, and merge; the
+image rebuilds on merge. `tests/bas-reports-jobs-env.test.ts` → *everything
+a job loads at run time is a production dependency* walks both scripts'
+import graphs (static imports, `import()` and `require()`) against the
+`dependencies` list and names the package and the module that loads it, so
+this should fail there first. What the walk cannot see is a package loaded
+through a computed name, or one that a dependency expects and does not
+declare; the image's own check and a boot against a database are the
+backstop (below).
+
+**The `prisma` CLI is the one exception, and it is deliberate.** It is a
+development dependency, and it is in the image anyway: the lockfile marks it
+as an optional peer of `@prisma/client`, which `--omit=dev` keeps, and
+postinstall's `prisma generate` writes the client during the install. The
+install line ends with `test -f lib/generated/prisma/client.ts`, so a Prisma
+release that drops the peer fails the image build - and the same test reads
+the lockfile's flag and fails first.
+
+**What the image holds, and why it is the size it is.** Built from `main` on
+2026-11-13 the image was **6.56 GB** as Docker reports it; after this change
+**2.9 GB**, from one local build of each. Three causes, in order of size:
+
+- `chown -R node:node /app` as its own layer stored `node_modules` and the
+  source a second time (1.49 GB): a layer that changes a file's owner holds a
+  whole copy of the file. `/app` is now made the user's while it is empty,
+  the install runs as `node`, and every `COPY` says `--chown=node:node`. A
+  deploy guard refuses `chown -R` in this Dockerfile.
+- The development tree and npm's download cache (2 GB for that layer, 1.31 GB
+  now).
+- Full Chromium beside the headless shell (1.06 GB for that layer, 627 MB
+  now). A headless launch - the only kind `pdf/render.ts` makes - runs
+  `chromium_headless_shell` and never the full browser, and a plain
+  `playwright install chromium` downloads both. The image and CI now install
+  with `--only-shell`. Measured rather than assumed: the sample report
+  printed in the old image and in the new one is the same file byte for byte
+  once the two creation dates and the document id are set aside (220,251
+  bytes, twice in each).
+
+What is left is mostly `node_modules` (about 1.2 GB: the Anthropic packages,
+Prisma, Next and its compiler) and Chromium's apt packages. Next is there
+because it is a dependency of the one `package.json`, not because a job
+uses it; taking it out means a second manifest for the jobs, which was not
+done.
+
+**To check an image by hand** (Docker Desktop running; the tag is yours):
+
+```bash
+docker build -f Dockerfile.bas-reports -t bas-reports:check .
+# the build's last RUN is the launch-and-print check as `node`: "chromium prints: N bytes"
+docker images bas-reports
+docker run --rm -e NODE_ENV=production -e DATABASE_URL='<a database with the migrations applied, never production>' \
+  bas-reports:check npx tsx scripts/bas-reports-scheduler.ts
+# "[bas-reports-scheduler] N queued, N paused, N skipped, N abandoned" and exit 0
+```
+
+Nothing in the template or in either job's environment changed with this:
+the commands are still `npx tsx scripts/…`, the variables are the same, and
+the image tag is still the commit's.
+
+## Reports: a run is stuck or failed
+
+**Symptom.** A run on the Reports list, or in a report's Last run cell, reads
+*Queued* or *Running* for longer than it should, or *Failed*.
+
+**Queued for more than fifteen minutes.** The worker job is not starting
+executions. `az containerapp job execution list -n <baseName>-bas-reports-worker -g <rg> -o table`:
+none at all means the scaler cannot count - the `database-url` secret on the
+job, or the database firewall's Azure-services rule (the same two causes as
+*A Cost Intelligence run stays Queued*); executions that start and fail at
+once mean the container cannot boot - `az containerapp job logs show` names a
+missing variable or an image that will not pull. Nothing is lost: the run is
+a row, and the first execution that works takes it. Locally, `npm run
+bas:reports:worker` drains the same queue.
+
+**Queued for an hour, then Failed: "Queued for N minutes and never picked up
+by a worker".** The scheduler's pass did that, deliberately (2026-11-13,
+`lib/modules/bas/reports/queue-guards.ts`). The worker job's scaler counts
+queued runs and starts an execution for each; on the night of 2026-11-12 a
+worker that crashed at startup was restarted every 45 seconds all night
+against one queued run, because a worker that cannot start never reduces
+the count. Now a run queued for more than an hour and never claimed
+(`attempts = 0`), a run claimed and lost twice, and a PDF render queued for
+an hour are each failed by the next scheduler pass - the one job still
+running - with an error saying what happened and what to do, one
+`bas.report_run_finished` audit row per run, and the count returns to zero.
+The run is a row; fix the worker (the checks above), then *Run now* queues a
+fresh one. The scheduler's log line ends `..., N abandoned`.
+
+**Running, and the Reports list shows no change for ten minutes.** The worker
+that held it stopped - killed by the platform, out of memory, or the
+execution's 30-minute timeout. After ten minutes without a heartbeat the next
+worker execution **reclaims it once** (`attempts` goes to 2, `started_at`
+restarts) and runs it from the beginning; nothing from the first attempt was
+stored, because a run's results are written in one transaction at the end.
+If it stalls again it is **failed**, with the error *The worker stopped twice
+while running this report. Run it again from Scheduled; if it stops again,
+see the runbook entry "Reports: a run is stuck or failed"* - this entry.
+Twice is a pattern, not bad luck: look at the worker's execution logs for the
+two attempts (`az containerapp job execution list`, then `logs show` for each),
+and at the run's period and building. A building with far more points than
+the office may be hitting the execution timeout before the engine's own time
+cap; lower the safety ceiling's minutes (*Reports: the safety ceiling*) so the engine
+stops itself and stores a partial report rather than being killed.
+
+**Failed, with the engine's own error.** The text under *Failed* is the
+exception the engine threw, stored verbatim; the run's page says the same
+and has no report. *React is not defined* is its own entry (*A run failed
+with "React is not defined"*). Anything else: the error names the point,
+the query or the step; `bas.report_run_finished` in the audit table carries
+it too. Fix the cause, then *Run now*.
+
+**Run now says a run is already queued or running.** One run in flight per
+report, by design: a second would produce two reports for the same period
+and mark the first's findings *still open* an hour after they were new.
+Wait for the one in flight, which the Reports list shows; if it is stuck,
+this entry.
+
+**The report reads "Paused - owner disabled".** The scheduler paused it
+because its owner's account is disabled; the reason under the state chip
+names the account and the date. It runs again when a module admin transfers
+it to another owner: the report's editor, *Recipients* → *Transfer to
+another owner* (admins only). The transfer resumes it with the next run
+computed from now; `bas.report_owner_transferred` records who did it and
+that it resumed.
+
+## Reports: the PDF
+
+**What it is (Phase 4, the PDF half, 2026-11-13; email is the other half,
+built 2026-11-17 - *Turning report email on*).** After the engine
+stores a run's page (`report_html`), the worker prints that SAME HTML to
+PDF with the headless Chromium its image carries (`Dockerfile.bas-reports`;
+never the web image, and `tests/bas-reports-pdf.test.ts` walks the web
+app's import graph to hold it) - Letter, backgrounds on, the report's name
+and period in the header, *Page N of M* in the footer, Figtree embedded
+from `app/fonts` so it reads like the screen - and stores the bytes on the
+run (`bas_report_runs.pdf`, bytea, the plan's D6) with `pdf_status`,
+`pdf_error`, `pdf_bytes`, `pdf_queued_at` and `pdf_rendered_at` beside
+them. On the run page the bar's right end carries *Print* (the browser's
+dialog, with a print stylesheet that keeps the report alone) and a red
+*Download* - Freeze Protection's Report pair; on the Reports list each
+row has a *PDF* column with the state and a *Download*. The file is
+`<report name> <start> to <end>.pdf`, the dates in the building's zone,
+from `GET /api/modules/bas/reports/runs/<id>/pdf`, guarded exactly as
+viewing the run: owner or module admin, 404 to anyone else, and 409
+`pdf_not_available` with the reason for a visible run that has no PDF.
+
+**The states, and what the buttons do.** `pdf_status` is one of:
+
+| State | Reads as | Download | Retry PDF |
+|---|---|---|---|
+| `none` | *Not available* | greyed, tooltip *PDF not available for this run — use Re-run*. Every run from before this change, and every run not yet finished | no |
+| `queued` | *Queued for the worker* | greyed | no - it is already queued |
+| `failed`, the error beginning *A PDF render started at …* | *Rendering…* | greyed | offered. The worker writes this sentence when it CLAIMS a render and replaces it with *ready* on success; if it stays, the worker stopped mid-render, and the sentence says so |
+| `failed` | *Failed*, the error as the tooltip | greyed, the tooltip says to retry | offered |
+| `ready` | *Ready · 80 KB* | downloads | no |
+
+**A render failed; the report is fine.** A failed render never changes the
+run: its status, page and findings are what the engine stored, and the run
+page shows the report. `pdf_error` holds why (*The PDF could not be
+rendered: …*), and *Retry PDF* - on the run page or the list - queues the
+render again without re-running the analysis (`POST …/pdf/retry`, 202,
+audited as `bas.report_pdf_retry_requested`; 409 `pdf_not_retryable` for
+any state but failed). The worker job's scaler counts a queued render
+beside queued runs, so a retry wakes a worker on its own **once the
+template change of 2026-11-13 is deployed** (*Reports: turning the jobs
+on*); before that, the next worker execution that starts for a run picks
+it up. If the retry fails the same way, read the worker's log:
+
+```bash
+az containerapp job execution list -n <baseName>-bas-reports-worker -g <resource-group> -o table
+az containerapp job logs show -n <baseName>-bas-reports-worker -g <resource-group> --container bas-reports-worker
+# "[bas-reports-worker] pdf of run <id> (<name>): FAILED - The PDF could not be rendered: ..." names the cause
+```
+
+Causes to expect: *Executable doesn't exist at /ms-playwright/...* - the
+image was built without the browser, which the Dockerfile's own
+launch-and-print check (as the `node` user) should have refused; rebuild
+from `main`. *Timeout 60000ms exceeded* (`RENDER_TIMEOUT_MS`,
+`lib/modules/bas/reports/pdf/render.ts`) - a page far larger than a report
+should be. *Target closed* or an exit code 137 - Chromium killed, most
+likely memory: the worker's 2Gi (`infra/main.bicep`) has been enough for
+one page at a time; if this appears, raise the worker's memory in the
+template (a what-if and a deployment) rather than lowering the report. A
+worker started with `--no-pdf`, and the dev script `bas:report:run`, carry
+no Chromium and leave the render *queued* for a worker that has one,
+saying so on the console.
+
+**Queued for an hour and nothing happens.** The scheduler's pass fails a
+render queued for more than an hour and never claimed, with *The PDF render
+was queued for N minutes and never picked up by a worker …* on
+`pdf_error` - the same guard it applies to runs (*Reports: a run is stuck
+or failed*). The report is untouched and *Retry PDF* is offered; the cause
+is the worker job not starting, with the same checks as a run queued too
+long.
+
+**Locally.** `npx playwright install chromium` once (`DEVELOPER-SETUP.md`);
+`npm run bas:reports:worker` then prints PDFs for the queued runs the way
+the job does, and `-- --no-pdf` skips it. `tests/bas-reports-pdf.test.ts`
+prints the sample document with the real browser and counts its pages
+(three), checks the header and the footer, drives the queue and the routes
+against the test database, and holds every `basReportRun` read in `lib/`
+and `app/` to a `select` that leaves the bytes out: the list reads up to
+200 runs every ten seconds, and a bytea on every row would be tens of MB a
+poll. The bytes are read in two places: `loadRunPdf` (the download) and,
+since 2026-11-17, `loadRunEmail` (`email/send.ts`, the attachment - and
+only once the PDF is known to be small enough to attach).
+
+**The tripwire (the plan's D6).** The PDFs are bytea in `bas_report_runs`:
+a few hundred KB a run, tens of MB a year for a building reporting weekly.
+Move them to the backup storage account's blob service - a second container
+beside `dumps`, written by the worker under the identity's existing Storage
+Blob Data Contributor assignment, the row keeping a blob name instead of
+the bytes - when EITHER the table passes about 2 GB or more than about
+twenty buildings report weekly. Check with:
+
+```sql
+SELECT pg_size_pretty(pg_total_relation_size('bas_report_runs')) AS table_size,
+       count(*) FILTER (WHERE pdf_status = 'ready')              AS pdfs,
+       pg_size_pretty(coalesce(sum(pdf_bytes), 0)::bigint)        AS pdf_bytes
+  FROM bas_report_runs;
+SELECT count(DISTINCT site_id) AS buildings_reporting FROM bas_report_definitions WHERE state = 'active';
+```
+
+Until then the nightly backup (`pg_dump`) carries them, and the restore
+steps are unchanged.
+
+## Turning report email on
+
+**What it is (Reports, Phase 4, the email half - built 2026-11-17, not yet
+turned on).** When a report run has finished - succeeded or partial - and
+its PDF is ready, the worker job writes one delivery row per address in
+`bas_report_deliveries`: the report's **owner first, from their employee
+record** (never a recipient row, so nothing can take the owner off), then
+each address on the report's recipient list in the order it was added. It
+then sends **one message per row** from `controlls@phb1899.com` through the
+`phb-platform-bas-mail` app registration (*What to ask IT for* -> Request
+7): subject *Report name — building — period*, a short HTML summary
+(building status, the three top findings, the New / Still open / Cleared
+counts, which questions were Not monitored) and a link to the run, with the
+PDF attached when it is under Graph's 3 MB simple-upload limit and the link
+alone, with a sentence saying why, above it. A failed attempt is tried
+again after 1 minute and after 5 more - three attempts - and then reads
+*Failed* with **Resend** beside it. A run whose PDF failed is not emailed
+until *Retry PDF* gives it one.
+
+**The worker is the only sender.** The web app never sends: *Resend* (the
+run's FAILED rows, and only those) and *Send to me* (one copy to your own
+address, whoever is on the list) each write a row, audited as
+`bas.report_resend_requested` and `bas.report_send_to_me_requested`, and
+the worker job's scaler counts rows that are due, so an execution starts
+for them within about fifteen seconds. Both are on the run page's *Email*
+card; *Resend* is also in the Reports list's *Delivery* column.
+
+**The send gate.** `BAS_REPORTS_ALLOW_SEND` on the worker job, mirroring
+`PHB_ALLOW_SEND`: exactly the lowercase string `true` opens it, and
+anything else - absent, `false`, `TRUE`, `1` - keeps it shut. Shut, the
+worker marks every due delivery **Not sent — sending disabled** and nothing
+leaves the platform: no token is fetched, no request is made. The template
+writes it on every deployment from the boolean parameter
+`basReportsAllowSend` (default `false`), so it is never absent and never
+hand-typed (`tests/deploy-guards.test.ts`). Rows the shut gate stopped stay
+*Not sent*: Resend does not touch them, by design, and *Send to me* is how
+to get one such run after the gate is opened.
+
+**No Key Vault secret.** In production the worker signs in as
+`phb-platform-bas-mail` with the platform's managed identity and the app's
+federated identity credential - the Change Orders mail app's mechanism,
+from the same shared code (`lib/mail/credential.ts`) - and **refuses to
+send if `BAS_MAIL_CLIENT_SECRET` is set** in production. The three values
+it needs are identifiers, plain template parameters:
+
+| Parameter (`infra/main.parameters.json`) | Worker variable | Value |
+|---|---|---|
+| `basMailClientId` | `BAS_MAIL_CLIENT_ID` | the app's client id, from Request 7 |
+| `basMailTenantId` | `BAS_MAIL_TENANT_ID` | the tenant id (the same one the other apps carry) |
+| `basMailbox` | `BAS_MAILBOX` | `controlls@phb1899.com`; blank means the same, the default in `lib/modules/bas/reports/job-env.ts` |
+| `basReportsAllowSend` | `BAS_REPORTS_ALLOW_SEND` | `false` until step 4 below |
+
+The template also gives the worker `GRAPH_MANAGED_IDENTITY_CLIENT_ID` (the
+platform's identity, which the federated credential names) and
+`PLATFORM_URL` (`authUrl`, where the email's link points). **None of this
+reaches the worker without a template deployment**: the job's environment
+comes only from the template, and the scaler's count of due deliveries is a
+template change too. The image needs nothing by hand - `deploy.yml`
+rebuilds it on the merge.
+
+### In this order
+
+1. **Request 7 has landed**, with *Granted* for controlls@ and *Denied* for
+   changeorder@ from `Test-ApplicationAccessPolicy`.
+
+2. **Add the four parameters to `infra/main.parameters.json`**, beside
+   `enableBasReports`:
+
+   ```json
+   "basMailClientId": { "value": "<client id of phb-platform-bas-mail>" },
+   "basMailTenantId": { "value": "<tenant id>" },
+   "basMailbox": { "value": "controlls@phb1899.com" },
+   "basReportsAllowSend": { "value": false }
+   ```
+
+3. **Deploy the template with the gate shut** - the routine command of
+   *Reports: turning the jobs on*, step 3, reading the three running images
+   first. `what-if` lists the worker job as *Modify* (six new plain
+   environment values and the scaler query) and nothing else: no secret, no
+   role assignment, no *Delete*. Then prove the path is live while nothing
+   can leave: open a finished run, press **Send to me**, and within a
+   minute the *Email* card reads *Not sent — sending disabled* for your
+   address. The worker's log says so on its fourth line:
+
+   ```bash
+   az containerapp job logs show -n <baseName>-bas-reports-worker -g <resource-group> --container bas-reports-worker
+   # [bas-reports-worker] email: sending disabled (BAS_REPORTS_ALLOW_SEND is not "true"): due deliveries are recorded as not sent
+   # [bas-reports-worker] delivery <id> of run <id>: not_sent
+   ```
+
+   *email: NOT CONFIGURED - BAS_MAIL_CLIENT_ID ... is not set* means step 2
+   did not reach the deployment.
+
+4. **Open the gate**: `"basReportsAllowSend": { "value": true }`, the same
+   deployment again. `what-if` shows one change, the worker's
+   `BAS_REPORTS_ALLOW_SEND` from `false` to `true`.
+
+5. **Verify with Send to me, to yourself, before anyone else.** On a
+   finished run: **Send to me**. Within about a minute the card reads
+   *Sent* for your address with the time, the message is in your inbox
+   from controlls@ with the PDF attached and the link opening the run, and
+   a copy is in controlls@'s *Sent Items*. If it reads *Failed*, the reason
+   is beside it: *A report email did not arrive*. Only then let a scheduled
+   run go to its list - every active report emails its owner and recipients
+   from its next run on.
+
+**Closing the gate in an emergency.** `"basReportsAllowSend": { "value":
+false }` and a deployment. Faster, by hand, then the parameters file to
+match (a by-hand change is drift until the file says the same):
+
+```bash
+az containerapp job update -n <baseName>-bas-reports-worker -g <resource-group> --set-env-vars BAS_REPORTS_ALLOW_SEND=false
+```
+
+Each worker execution reads the gate when it starts, so the next execution
+sends nothing; an execution already running finishes what it holds.
+
+**Locally.** `.env.local` takes `BAS_MAIL_CLIENT_ID`, `BAS_MAIL_TENANT_ID`
+and `BAS_MAIL_CLIENT_SECRET` (the developer secret from Request 7) and
+leaves `BAS_REPORTS_ALLOW_SEND=false` except during a deliberate,
+supervised test - the rule `PHB_ALLOW_SEND` has. Outside production the
+sender also refuses any address that is not `@phb1899.com`, so a local test
+reaches colleagues and never a contractor. `npm run bas:reports:worker`
+sends what is due; `-- --no-email` leaves deliveries pending.
+
+## A report email did not arrive
+
+Start on the run's page (Reports -> the run): the **Email** card lists every
+address with its state, attempts and the reason. Or in the database:
+
+```sql
+SELECT delivery_id, email, source, status, attempts, next_attempt_at, sent_at, graph_request_id, last_error
+  FROM bas_report_deliveries WHERE run_id = <run id> ORDER BY position;
+```
+
+| The card or the Delivery column says | What happened | What to do |
+|---|---|---|
+| *Waiting for the PDF* | The run finished; its PDF is queued, and the rows are written when it is ready | Nothing, unless it stays: *Reports: the PDF* |
+| *Not sent: no PDF* | The PDF failed, so no email was queued | *Retry PDF*; the email follows the ready PDF |
+| *Not emailed* | The run is from before report email, or finished without the worker ever printing its PDF | *Send to me* for a copy |
+| *Not sent — sending disabled* | The gate was shut when the worker reached it; nothing left the platform | *Turning report email on*; then *Send to me* - Resend does not reopen these rows |
+| *Waiting*, attempts 1 or 2, *Next attempt …* | An attempt failed and the backoff is running; the reason is beside it | Wait, or read the reason below |
+| *Failed* | Three attempts failed, or a failure no retry fixes | Fix the cause below, then **Resend** |
+| *Sent* | Graph accepted the message (202) | The last section of this entry |
+
+**What a *Failed* reason means:**
+
+- *BAS_MAIL_CLIENT_ID and BAS_MAIL_TENANT_ID are not set …* - the template
+  parameters never reached the worker (*Turning report email on*, steps
+  2-3). Failed on the first attempt: retrying cannot fix configuration.
+- *BAS_MAIL_CLIENT_SECRET is set in production …* - remove the variable
+  from the worker job; production signs in with the managed identity.
+- *Entra refused a token for the Graph app registration: … AADSTS…* - the
+  code after `AADSTS` is the answer. `AADSTS70021` or `AADSTS700213`: the
+  app's federated credential does not match the identity (issuer, subject
+  or audience; *Production sign-in bounces* has the same shape for the SSO
+  app). `AADSTS7000215`/`AADSTS7000218`: a secret where an assertion is
+  expected, or none. `AADSTS700016`: the client id is wrong or the app is
+  in another tenant.
+- *Graph refused the send: status=403 code=ErrorAccessDenied …* - the
+  Exchange ApplicationAccessPolicy denies the mailbox, or Mail.Send has no
+  admin consent. Ask IT for `Test-ApplicationAccessPolicy -Identity
+  controlls@phb1899.com -AppId <client id>`; it must say *Granted*. A
+  policy change can take up to an hour to apply.
+- *status=404* (`ErrorInvalidUser`, `MailboxNotEnabledForRESTAPI`) - the
+  mailbox does not exist, is misspelled (two L's), or is not an Exchange
+  Online mailbox. Check `basMailbox`.
+- *status=400* - Graph refused the request itself; the code says why. The
+  request id is on the row (`graph_request_id`) for Microsoft support.
+- *Not sent: outside production a report email goes only to @phb1899.com
+  addresses …* - the developer-machine fence; production does not apply it.
+- *Waiting for a worker for N minutes and never sent …* - the scheduler's
+  guard failed a delivery nobody took for an hour: the worker job is not
+  starting executions. *Reports: a run is stuck or failed* has the checks;
+  then Resend.
+- *3 attempts made and the worker stopped during the last …* - a worker
+  died mid-send three times; its log says why
+  (`az containerapp job logs show …`). Resend once the cause is fixed.
+
+**It says *Sent* and the person has nothing.** Graph accepted it; from here
+it is mail. The copy in controlls@'s *Sent Items* shows what left. An
+Exchange admin can run a message trace from controlls@ to the address for
+the day; every report email carries the header `X-PHB-Report-Delivery:
+<delivery id>` (the row's `delivery_id`), which tells one run's message
+from another's. An external address may have quarantined it. The row's
+`graph_request_id` is what Microsoft support asks for. There is no Graph
+message id: the app holds Mail.Send only, and `sendMail` answers 202 with
+no body.
+
+**Somebody received it twice.** One way this can happen, and only one: a
+worker that died after Graph's 202 and before it recorded *Sent* - the row
+was taken again when its five-minute lease ran out, and `sendMail` gives
+nothing to check whether the first went. The row's `attempts` is then 2 or
+more. Rows are unique per run and address, so a repeated worker or a
+second PDF render never sends twice on its own; *Send to me* and *Resend*
+send again on purpose.
+
+## Reports: the safety ceiling
+
+**One ceiling for the module, two halves, since 2026-11-12.** Every run is
+bounded by the same two numbers - dollars and minutes - held in ONE row,
+`bas_report_settings`, shown to everyone at the bottom of the Usage page in
+the *Safety ceiling* card and editable there by BAS module admins only
+(`PATCH /api/modules/bas/reports/ceiling`, 403 `admin_required` for anyone
+else). The defaults are **$10.00 and 25 minutes per run**; the migration
+inserts the row, and an absent row reads as the defaults. Until that date
+each report carried its own budget and time cap in the editor's *Limits*
+section; those columns are dropped, the editor section is gone, and a
+client still sending them gets `400 limits_removed` (*Creating or saving a
+report answers 400 `limits_removed`*). `bas_report_runs.budget_usd` stays:
+it is the ceiling in force when the run executed, stamped at queue time and
+re-read when the worker claims the run, and the Reports list prints it as
+*$0.0397 of $10.00*.
+
+Neither half aborts a run. When either is reached the engine finishes the
+sections it has, renders the page from them, stores the run as **Partial**,
+and the reason - which half, and what was left out - is on the run's row
+(under *Partial* on the Reports list) and at the top of the report page
+(*Partial report: ...*).
+
+**The dollars.** Before every narrative call the engine estimates the call
+and stops asking the model when the run's spend would pass the ceiling; the
+sections after that show their evidence with code's status sentence and no
+likely cause or next check. The reason reads *Safety ceiling of $10.00
+reached after 3 of 5 sections had narrative; the rest show their evidence
+only*. Every number on the page is already final: the ceiling never changes
+a finding, only the prose beside it.
+
+**The minutes** (1 to 25). A deadline on the clock from the moment the
+engine starts the run. Before every question and before every narrative
+call the engine reads the clock; past the deadline, the questions still
+waiting are recorded as *Not analysed: the run reached its time cap before
+this question* and the narrative calls still waiting are skipped, then the
+comparison, the roll-up and the page are produced from what was computed.
+The reason reads *Safety ceiling of 25 min reached after 26 min: Q6, Q7, Q9
+not analysed; narrative skipped for Space Comfort*. Data Health is computed
+before any question and is never the ceiling's victim. The minutes count
+work, not waiting: a run Queued for an hour has used none of them.
+
+**Why 25 is the most the ceiling may hold.** The worker job's replica
+timeout is 30 minutes (`infra/main.bicep`); above the ceiling plus the
+worker's four-minute drain window (`lib/modules/bas/reports/worker.ts`), so
+the engine always stops itself and stores a partial report before the
+platform kills the execution. A killed execution stores nothing and the run
+is reclaimed from the start (*Reports: a run is stuck or failed*). Raising
+`MAX_CEILING_MINUTES` (`lib/modules/bas/reports/ceiling.ts`) past 25 means
+raising the timeout first, and `tests/deploy-guards.test.ts` holds the
+numbers to each other - the constant, the migration's CHECK and default,
+and the validation's bound.
+
+**Changing it.** Reports → Usage, or Settings → Usage (the same view at a
+second route since 2026-11-12) → *Safety ceiling* → the two fields → *Save
+ceiling*. Either half or both; whole cents, whole minutes; at most $1,000
+and 25 minutes (the database CHECKs are the same bounds). Audited as
+`bas.report_ceiling_changed` with both halves before and after, and the
+card says who last set it and when. A run already executing keeps the
+ceiling it read when it started; the next run reads the new one.
+
+**A partial run is not a failed one.** It has a report, its findings are
+stored and compared, and the next run compares against it. What it lacks is
+named. If every run of a report is partial on the minutes, the building is
+bigger than the ceiling: raise it (a module admin), or narrow the report to
+a station subset.
+
+## Reports: a VAV, air handler, plant or DX finding looks wrong, or a unit reads "Not judged"
+
+**Symptom.** A finding under VAV, AHU / RTU, Hot Water, Chilled Water or
+DX Cooling and Heat (questions 6-18, built 2026-11-16) that the building
+operator says is not real; or a question that ran and lists a unit under
+*Not judged: …*; or a question you expected to run reads Not Applicable.
+
+**First, read the finding's two numbers.** Every finding carries the actual
+value, the expected value and how long, all computed by code from the
+trends (the model writes only the cause and the action). If the numbers
+are right and the conclusion is wrong, the threshold is the question - see
+the table. If the numbers are wrong, open the point in Point Explorer over
+the same period: a trend that moves but reads the wrong thing (a sensor in
+the wrong duct, a role on the wrong point) is a classification fix in
+Settings, not a report fix.
+
+**The numbers the questions judge by.** In
+`lib/modules/bas/reports/engine/analysis/thresholds.ts`. The spec's own
+figures (80% of airflow setpoint, ±1.5 °F and ±4 °F, 10 °F and 8 °F delta
+T, 4 starts an hour, 15 °F drop, 55 °F, 20 °F rise, 15 and 10 minutes
+running) are used exactly. These were CHOSEN because the spec leaves them
+open; each has its reason beside it in the file:
+
+| Question | Constant | Value | What it means |
+|---|---|---|---|
+| Q8, Q11, Q12 | `VALVE_OPEN_PCT` | 5% | a valve command above this is open |
+| Q6, Q7, Q9, Q10, Q13, Q14 | `ACTION_SHARE_PERCENT` | 50% of judged time | out of tolerance this much is Action Needed |
+| Q8, Q11, Q12, Q17 | `ENERGY_ACTION_HOURS` | 8 h in the period | energy waste this long is Action Needed |
+| Q7 | `DAMPER_FULL_PCT` | 95% | "100% damper" |
+| Q7 | `MISSED_SETPOINT_F` | 2 °F | "missed setpoint" is outside this, Q3's band |
+| Q8 | `ABOVE_COOLING_MARGIN_F` | 1 °F | "above cooling setpoint" is by more than this |
+| Q9, Q10 | `FAN_SETTLE_MS` | 15 min | not judged after each supply fan start |
+| Q10 | `STATIC_BAND_INWC` / `STATIC_BAND_FRACTION` | 0.1 in. w.c. or 10% of setpoint | duct static tolerance, whichever is larger |
+| Q12, Q17 | `ECON_MIN_POSITION_PCT` | 20% | an OA damper at or below this is at minimum |
+| Q12 | `ECON_DIFFERENTIAL_F` / `ECON_HIGH_LIMIT_F` | 5 °F / 65 °F | free cooling: OAT this far below RAT, and not above the high limit |
+| Q13 / Q14 | `HWS_BAND_F` / `CHWS_BAND_F` | ±4 °F / ±2 °F | supply holds setpoint within this |
+| Q13, Q14 | `LOOP_IN_SERVICE_DELTA_F` | 2 °F | with no plant status trended, in service while supply and return differ by this |
+| Q15 | `SHORT_CYCLE_MAX_INTERVAL_S` | 300 s | a compressor trend coarser than this is not judged |
+| Q15 | `SHORT_CYCLE_ACTION_DAYS` | 2 days | short cycling on two days is Action Needed; one is Watch |
+| Q18 | `HEAT_FAULT_RISE_F` | 10 °F | an average rise under this is Action Needed |
+
+Changing one is a code change with its test
+(`tests/bas-reports-phase5.test.ts` holds each from both sides, and holds
+the list above to the file); say in the commit which finding prompted it.
+Every finding is Watch the moment the spec's persistence rule is met (30
+minutes at a stretch during the hours that count, or two days).
+
+**Which hours each question judges.** Q6: occupied hours. Q7: occupied
+hours when the station has an occupancy source, otherwise every hour (the
+question's metrics say `occupied` or `all`). Q9, Q10: fan proven on, less
+the 15-minute settle. Q13, Q14: plant in service. Q16: compressors on
+after 15 minutes; Q18: heat on after 10. Q8, Q11, Q12, Q17: any hour. A
+finding at 03:00 from Q7 on a building with no occupancy source is the
+cue to set its occupied hours in Settings.
+
+**"Not judged" reasons, and what to do.**
+
+- *no cooling valve, compressor or cooling stage trended, so a call for
+  cooling cannot be told from deadband* (Q12). Deliberate: an economizer
+  at minimum is right when the unit is not cooling, and the library's
+  required points (OA damper, OAT, RAT) cannot say. Trend the unit's
+  cooling valve or compressor status and give it the role.
+- *<point> is trended every 15 min, too coarse to count starts* (Q15). A
+  start needs an off reading and an on reading; a 15-minute trend can
+  show at most two starts an hour. Make the compressor status history
+  change-of-value (or five minutes or finer) on the station.
+- *<point> readings were averaged into buckets* (Q15). More than 20,000
+  readings in the period; shorten the report's window.
+- *loop never in service in the period* / *plant never ran in the period*
+  (Q13, Q14). Supply and return within 2 °F all period, or the status
+  never on - a plant off for the season. Not a fault.
+- *fan never ran long enough to judge* (Q9, Q10), *never ran with
+  compressors on 15 min or more* (Q16), *never ran with heat stages on 10
+  min or more* (Q18). Nothing to judge this period.
+- *… trended in °C; judged in °F only*. The bands are Fahrenheit; a
+  Celsius point is not judged rather than judged on the wrong scale.
+- *missing …* - the inventory's Step 2: the unit lacks a required point,
+  or it is under 80% coverage, or Data Health flagged it this period (it
+  is then in Data Health, by name). Read Data Health first.
+
+**A question reads Not Applicable when you expected it to run.** Q15-Q17
+apply to a unit that is DX by its points (a compressor or cooling stage
+role) or by a packaged DX type (rooftop, split, CRAC, VRF); Q18 to one
+with a heat stage point or a packaged type (rooftop, unit heater, split).
+An air handler of type `ahu` with only valves is hydronic and the DX
+questions do not apply to it - until 2026-11-16 they did, and read Not
+Monitored, on a building with no DX at all. Give a DX air handler its
+compressor or cooling stage role and it applies. Q8 needs a reheat valve
+role on the VAV, Q12 and Q17 an OA damper role on the unit.
+
+## Reports: a planner question says "could not read the tables", "Skipped", "Not asked" or "No data"
+
+Planner questions (Reports, Phase 6) are a report's typed, saved and
+shared planner-kind questions, answered by the Analyze planner during the
+run. They appear in the report's last section, *Planner questions*. They
+never change the building status, so nothing in this entry is urgent for
+the building; each is about why a question has no answer.
+
+**"The platform could not read the tables it needs to check this answer.
+Contact IT. (permission denied for table bas_site_occupancy)"** - and the
+Analyze tab fails the same way. **Cause:** the `bas_analyze` role was
+created before a `bas_*` table it is meant to read existed. Its grants
+are explicit; `scripts/setup-bas-analyze-role.sql` (Azure) and `npm run
+bas:analyze:role` (local) were updated on 2026-11-10 for
+`bas_site_occupancy`, but a role made before then never received the
+grant, and the Analyze schema context counts every table it is allowed,
+so one missing grant fails every question. Found on the development
+database on 2026-11-16, where the role predated Reports Phase 1, and
+**on production on 2026-11-17**, where the role was made on 2026-10-13.
+**Fix:** re-run the role script against that database as its
+administrator - on production, *Analyze answers "permission denied" for
+every question* → *Re-run after a migration*. It is idempotent,
+refuses an unclassified table, and proves the boundary (report tables
+refused, `bas_site_occupancy` readable). Locally pass the current
+password back with `-- --password=…` so `BAS_ASK_DATABASE_URL` stays
+valid. **Rule from here:** every migration that adds a `bas_*` table the
+role is allowed to read needs that script re-run on every database.
+
+**"Skipped — spending cap: $X of the $Y safety ceiling was spent, and a
+planner question is estimated at $Z."** **Cause:** the run would have
+passed the module's safety ceiling. The estimate is the average cost of a
+planner question over the last 20 runs that asked any, or $0.25 before
+there is history (measured: $0.06 to $0.23 a question on the office).
+**Fix:** none needed if the cap is right; otherwise raise the ceiling on
+the Usage page (module admin) or move questions off the report. The
+partial reason at the top of the report names every question skipped.
+
+**"Skipped — time cap"**: the same for the ceiling's minutes. A planner
+question takes 20-45 seconds (two or three model calls and one query).
+
+**"Not asked: … is not set, so the planner could not be asked."** The
+worker (or `bas:report:run`) has no `ANTHROPIC_API_KEY` or no
+`BAS_ASK_DATABASE_URL`. Both reach the worker job by Key Vault reference
+(`infra/main.bicep`, `basReportsWorkerJob`); check the secrets exist and
+the job's latest execution log line `[bas-reports-worker] planner: …`.
+
+**"No data: Nothing in the data matched this question …"** or **"Not
+answered: …"** is the planner's own outcome, shown verbatim, as on the
+Analyze tab: the query ran and matched nothing, or the planner declined
+because the points are not collected. It is counted *unanswered* on the
+Usage page. Reword the question or collect the points; nothing is broken.
+**"The planner asked: …"** means it needed a choice nobody is present to
+make in a scheduled run - reword the question on the report to say which.
+
+**Where the table, the SQL, the points and the coverage sentence went.**
+On the page and in the PDF a planner answer is only the question and the
+planner's prose. Its coverage paragraph ("This covers … these are not
+current conditions"), how the question was read, the period and every
+point, the results table, the SQL and the
+cost are on the run and on the web run view behind *Show how this was
+answered* under each answer. The PDF never carries them, by design. A run
+stored before 2026-11-16 keeps its old, longer stored page and PDF (the
+web view shows the new layout from the same document). If a coverage
+sentence still shows on the page, the summariser worded it in a way
+`COVERAGE_PATTERNS` (`engine/planner-display.tsx`) does not recognise -
+the rule is deliberately conservative - and a pattern can be added there.
+
+**"Any figure above describes N days of the M asked about"** in amber
+under a planner answer is the coverage shortfall: the readings the
+platform holds do not span the period the answer is about, so a number in
+it (an average, a count) describes less than it appears to. It is printed
+on the page and in the PDF on purpose, as on the Analyze tab. Check
+Collection Health for the gap; nothing is wrong with the report.
+
+**An amber note under an answer** - *"This answer read N points on
+<other building>"* or *"The query covered … not the report's period"* - is
+the platform checking the planner against the report's fixed context
+after the query ran. The answer is still shown, labelled; if a report's
+question keeps drawing on another building, reword it to name this one.
+
+**Not monitored / Not applicable under a shared planner question.** An
+admin promoted it with required roles or applies-to the building lacks;
+the planner was not asked and nothing was spent.
+
+**Promoting a question** (module admins): *Reports → Questions*, *Promote
+to shared* on one of your saved questions, or *Promote a question* above
+the shared table. Each ticked role is required on its own. Refused with
+403 for anyone else; audited as `bas.library_question_promoted`.
+
+## CI: "Reports jobs image builds and prints" fails
+
+**Symptom.** The pull request's check *Reports jobs image builds and
+prints* is red (`.github/workflows/ci.yml`, job `reports-image`, since
+2026-11-16).
+
+**Cause, by step.**
+
+- *Build*: `Dockerfile.bas-reports` did not build - read the step's log
+  for the failing `RUN`. Its last `RUN` is the image's own check (launch
+  Chromium, print a page); if that line fails, the browser and its
+  libraries did not install or cannot start as `node`. A Playwright
+  version bump without the image rebuilding its browser, or a change to
+  the `--only-shell` install, are the usual causes.
+- *It does not run as root*: the Dockerfile lost its `USER node`.
+- *Chromium launches and prints at run time*: the build-time check passed
+  but the run-time environment differs - `PLAYWRIGHT_BROWSERS_PATH`
+  changed, or the browser directory is not readable by `node`.
+- *The worker's renderer prints a report under tsx*: the report template
+  or `lib/modules/bas/reports/pdf/render.ts` failed under the jobs'
+  loader. "React is not defined" is the JSX pragma at the top of
+  `render.tsx` (`WHY-ITS-BUILT-THIS-WAY.md` § 80); `Cannot find package`
+  is a dependency the job loads that sits in `devDependencies` (see
+  *Reports: a job execution fails with `Cannot find package`*); "not a
+  PDF" is the renderer.
+
+**Fix.** Fix the cause on the branch. Do not merge past this check: before
+it existed, the same failure first appeared in `deploy.yml` after the
+merge, with production already on the new web image.
 
 ## A Cost Intelligence run stays Queued
 
@@ -10674,6 +13263,226 @@ setting is named in the first lines.
 
 ---
 
+## The change-order shadow run (Phase 12 Part E)
+
+**What it is.** For the window `docs/phase-12-part-e-plan.md` describes, the
+containerised change-order engine and classifier run in Azure against a
+**copy** of the SharePoint tree while the laptop keeps running the real
+process, and their answers are compared. Three Container Apps Jobs from the
+`phb-co-engine` image, all behind `enableCoShadow` in `infra/main.bicep`
+(off by default; `coEngineImage` and eight plain values beside it), in the
+pattern of the nightly backup job:
+
+| Job | Trigger (UTC) | Does | Identity it reads live with | Identity it writes the copy with | Secret |
+|---|---|---|---|---|---|
+| `<baseName>-co-shadow-feed` | `45 11-22 * * 1-5` | captures new items and intake COs from the live tree; at 12:45 and 17:45 takes the state snapshot (trackers through the workbook API, index, logs, intake state, the spec's hash); builds a batch; runs the classifier's pass on it; rechecks every live item it touched | `phb-co-engine-reader` (Read only, GET only) | `phb-co-engine` (Write on the scratch root; the live folder refused by name) | `CO-ANTHROPIC-API-KEY` by reference |
+| `<baseName>-co-shadow-collect` | `0 16,21,23 * * 1-5` | collects the laptop's answers wherever Response 2 moved the folders; replays every captured intake attempt and diffs it; scores every item with both sides; writes the report and `reports/WINDOW.md`; writes `STOP` on the one row that stops the window | the same | the same | none |
+| `<baseName>-co-classify` | manual | the Part D job, for one batch by hand during an investigation | - | the engine app | the key, by reference |
+
+The crons are UTC and assume Eastern **standard** time (DST ended
+2026-11-01): the laptop's 08:00 and 13:00 ET are 13:00 and 18:00 UTC, the
+snapshots are a quarter before each, the collections three hours after each
+and at the end of the day. March 2027 moves them by an hour, in a commit
+that says so. Both scheduled jobs' timeouts are shorter than their intervals,
+so two of the same job never overlap.
+
+**Where everything is.** The copy's root (`coShadowRoot`, a sibling of
+`CO Managment Process` in the AI Sandbox library, containing `scratch`):
+
+```
+README.txt            says it is not the live tree and when to delete it
+items/<item_id>/      a captured email: request, body, attachment NAMES, item.json,
+                      and the laptop's answer once collected (renamed by role)
+snapshots/<label>/    the state before a laptop run
+intake/<CO>/          inputs, the laptop's attempt artifacts (renamed), state, replays/
+batches/<id>/         one container pass: step2/, trackers/, results/, pass.json, calls.jsonl
+reports/<utc>.md      one report per collector run; WINDOW.md is the running state
+captures/<run>.json   one manifest per feed or collector run, with the live items it
+                      touched and whether any changed
+STOP                  present = the window is stopped (below)
+```
+
+The job logs carry the same report (`az containerapp job logs show -n
+<baseName>-co-shadow-collect -g <resource group> --container collect`), out
+of order as Log Analytics returns them; the file in the copy is the record.
+
+**Turning it on, once, in this order.**
+
+1. Request 6 has landed (*What to ask IT for*). Check as the app in Graph
+   Explorer: a `GET` of the live folder's children answers 200, a `PUT` of
+   any name under it answers 403.
+2. The first read of the live Bid Tracker through the workbook API, by hand,
+   with `eTag`, `cTag` and `lastModifiedDateTime` recorded before and after,
+   and Phase 11's table-binding check repeated the same day (plan § 2c). If
+   that read changed anything, stop here: the owner's decision 2 (plan
+   § 14) is to switch the tracker read to download-and-parse, and that is a
+   code change first.
+3. Build the image into the registry from the `phb-co-engine` checkout:
+   `az acr build --registry <registry> --image phb-co-engine:<tag> --build-arg INCLUDE_LIBREOFFICE=false .`
+   The tag goes into `coEngineImage` in the gitignored parameters file as
+   `<registry>.azurecr.io/phb-co-engine:<tag>`. **From a checkout that
+   carries the fix of 2026-11-02** (`phb-co-engine` → *The image carries
+   the job scripts the Bicep jobs run by path*): before it the image had no
+   `/app/infra` at all, and every job in the table above would have failed
+   on its first line. Prove the image before any job names it:
+   `docker run --rm <registry>.azurecr.io/phb-co-engine:<tag>` runs the
+   image's own check, which prints `phb-co-engine image OK` and now asserts
+   the scripts are present.
+4. Create the copy's root with its README and the deletion date (thirty
+   days after cutover, decision 8): from a machine with a developer token,
+   `python -m co_shadow.feed --store graph --drive-id <drive> --graph-auth static --root "<coShadowRoot>" --init --delete-after <date>`.
+5. Fill the nine plain values in the parameters file (both app client ids,
+   the tenant, the drive id, the copy's root, the two live tracker workbook
+   paths, the image) and set `enableCoShadow` to `true`; deploy with the
+   routine template command (`infra/README.md` → *Deploy*, `containerImage`
+   read from the running app as always).
+6. Watch the first feed run land at the next :45 (`job execution list`,
+   then the log): `CAPTURED`, `SNAPSHOT` on the first run whatever the hour,
+   `BATCH` if any item was captured, `LIVE ITEMS TOUCHED n  CHANGED DURING
+   THE READ 0`. The first **clean batch** - items captured before a laptop
+   run with a snapshot that preceded it - is the window's day one; write the
+   date in `docs/phase-12-part-e-verification.md`.
+
+**The daily read.** Open the newest `reports/<utc>.md` in the copy (or the
+collector's log). In order: a STOP section if one was written; FAIL rows,
+each with its bar and both answers and, on the next day, *stability over
+4 runs*; *Container more cautious* (never a failure; a pattern of three on
+one reason is called out); named divergences; not-comparable rows with the
+cause; totals; the Q&A content section for a person to compare; intake
+replays with the differ's classes; the path coverage table; housekeeping -
+live items changed during today's reads (expected 0), the laptop's
+`run_summary.md` modified time, spec drift, laptop run days seen. Weekly,
+fold the week into the verification record.
+
+**Pausing the shadow is free; nothing live depends on it.** Set
+`enableCoShadow` to `false` and deploy, or stop the two scheduled jobs
+(`az containerapp job stop` ends a running execution; to stop the schedule,
+redeploy with the flag off). After cutover the same flag will govern the
+live schedule, and pausing it then stops the pipeline (`docs/PHASE-14.md`
+3.2).
+
+### Symptom: a job execution fails at once with `sh: /app/infra/<script>: not found`
+
+The image the job names predates the fix of 2026-11-02: the Dockerfile
+never copied `infra/` and the deny-by-default `.dockerignore` never let it
+back in, so the image carried no job scripts although the Bicep runs every
+job as `sh /app/infra/<script>`. Nothing ran and nothing live or in the
+copy was touched - the shell stopped before Python started. Rebuild the
+image from a `phb-co-engine` checkout that includes the fix (step 3
+above), confirm with `docker run --rm <image>` that the check prints
+`phb-co-engine image OK`, put the new tag in `coEngineImage` and redeploy.
+
+### Symptom: the feed exits 3 and its log reads `STOP PRESENT`
+
+The window is stopped. A `STOP` file sits at the copy's root; the feed reads
+it and does nothing - no read of the live tree, no pass. The file holds one
+line per reason with the run that wrote it. Read it, investigate the item or
+the read it names (the two sections below), record the finding in
+`docs/phase-12-part-e-verification.md`, and delete the file from the copy
+in SharePoint. The next feed proceeds. Nothing is lost while it is stopped:
+the laptop runs the real process throughout, and items that arrived
+meanwhile are captured when the feed resumes (paired with a later snapshot
+and reported as not comparable where that matters).
+
+### Symptom: the collector wrote STOP - `the laptop declined and the container decided`
+
+The one row in the equivalence doc that stops a window: on one item the
+laptop said `needs_human` and the container decided. The safety property
+has inverted for that item. Do not remove `STOP` until it is understood.
+Read the item's `response-classification-payload.json` under `items/` (the
+laptop's) beside `batches/<id>/results/<item>.json` (the container's), and
+the item's `review_text` on the laptop's side for why it refused. Then the
+equivalence doc's Part 4: request three re-runs (`rerun/<item>.json` with
+`{"item_id": ..., "runs": 3}` in the copy, or let the collector's FAIL path
+do it) and read the stability line. A consistent container that decided
+where the laptop refused is a finding about the prompt or a rule; the laptop
+is right until proven otherwise, and nothing is tuned to match. Record it;
+if a prompt or rule changes, that is a new prompt version and the window's
+count restarts for that judgment.
+
+### Symptom: a report says `live items changed during the read`, and STOP was written
+
+The reader recorded every live item's `eTag`, `cTag` and
+`lastModifiedDateTime` when it first saw it and read them all again at the
+end of the run; one differed. The reader cannot write - its grant is Read
+and its session has no verb but GET - so something else changed the item
+during the run, and the manifest (`captures/<run>.json`) names it with both
+fingerprints. A `classify_request.json` or a queue folder changing is the
+laptop or a flow at work in the same minute: compare the times, record it,
+remove `STOP`. **The live Bid Tracker's fingerprint changing on a snapshot
+run, with nothing else writing it, is the case plan § 2c predicted would
+not happen**: stop the schedule (the flag off), repeat the hand-run read
+with the fields recorded, and take the owner's decision 2 - the switch to
+downloading the bytes and reading the tables in memory - as a code change
+before the next run.
+
+### Symptom: the feed's log reads `READER APP PRESENT:` with nothing after it, or every read answers 403
+
+`CO_READER_APP_CLIENT_ID` is blank on the job (`coReaderAppClientId` in the
+parameters file), or the reader app has consent for
+`Files.SelectedOperations.Selected` and no grant on the folder yet
+(Request 6). The reader refuses to run as the engine app, by design, so
+there is no fallback: fill the value, or wait for the grant. Nothing has
+been captured; nothing live was touched.
+
+### Symptom: a report says `SPEC DRIFTED`
+
+The live `CO_Response_Agent_SKILL.md` no longer hashes to the repository's
+mirror (`Change Order Step 2/CO_Response_Agent_SKILL.md` in `phb-co-engine`,
+copied into the image). SharePoint is authoritative until cutover, so the
+laptop is now working to a rubric the container's prompts were extracted
+from an older copy of. Re-capture the mirror, re-extract the enabled steps'
+sections (`python -m co_classifier.spec_extract <step> <new version>`), and
+ship the new prompt version; the window's count restarts for the judgments
+whose extract changed. Until then every report carries the line.
+
+### Symptom: a report says `laptop silent today`
+
+The laptop's `run_summary.md` has not been modified for more than 26 hours
+on a weekday. The laptop did not run its classifier, or ran and did not
+write the summary. That is the laptop's problem, not the container's - the
+pipeline's own characteristic failure, which Phase 13's silence alert will
+watch for the cloud job - and the inventory saw it before (§ 5, the morning
+runs). Check the Cowork app on the laptop. Items that arrive meanwhile are
+captured and run by the container; their comparison waits for the laptop.
+
+### Symptom: a FAIL row in a report
+
+A disagreement to investigate, named by bar with both answers. The
+collector requested three re-runs the first time it saw it; the next
+report's line *stability over 4 runs* says `equivalent` (the container is
+self-consistent: now the laptop is right until proven otherwise - read both
+answers and the item) or `unstable` (the container disagreed with itself: a
+prompt or schema under-constrained, which is its own finding and never a
+reason to tune toward the laptop). Nothing is changed on one disagreement;
+a prompt change is a new version and a restart for that judgment.
+
+### Symptom: an intake replay reads `DIFFERS`
+
+The engine's half: the laptop's Gate A artifacts for one CO attempt against
+the container's replay of the same inputs, compared by
+`tests/co_output_diff.py` with the state-prefix rule on. The report lists
+the differ's classes and files. A `content differs` on a workbook, a
+document or the Gate A payload is the laptop's engine and the repository's
+disagreeing on that input: the laptop runs the pre-Part-B engine with the
+operator's in-place edits (`docs/PHASE-14.md` → *The cutover diff*), so first
+check whether the difference is one the cutover diff already names (the
+intake rule, 1.1) or an edit the laptop's engine carries that the repository
+does not - the laptop is right until proven otherwise, and the finding goes
+on the cutover diff. `only on the laptop` of a PDF or a flow-written file is
+set aside and said in the notes; anything else only on one side is a
+finding. `ENGINE FAILED` carries the stderr tail.
+
+### Symptom: a row reads `not comparable`, with a cause
+
+The cause is one of the scorer's named ones: *captured after the laptop's
+run (race window)* - the item arrived in the quarter hour between a
+snapshot and the laptop's run, so its count and Q&A rows are compared
+against a later state; *the sender's company is in today's Responded
+emails*; *that CO is closed or cancelled in today's tracker*; *that CO Key
+is on no row*; *tracker unreadable*. None is a failure; each is counted in
+the report so a pattern is visible.
+
 ## Nightly database backup
 
 **What it is.** A Container Apps Job, `<baseName>-db-backup` (`dbBackupJob` in
@@ -10796,6 +13605,15 @@ at the job.
    management policy, a role assignment and a job as *Create*, and nothing as
    *Delete*. The job reads `DATABASE-URL` by reference, so the version already
    in the vault is the one it gets.
+
+   **The what-if can fail here before it lists anything.** The role
+   assignment is new, Azure checks `Microsoft.Authorization/roleAssignments/write`
+   before it previews, and a Contributor gets `InvalidTemplateDeployment …
+   Authorization failed … roleAssignments/write` at the storage container's
+   scope (observed 2026-11-11, with the backup not yet deployed). It is the
+   second wall under *Deploying to Azure*; the grant there comes first. To
+   preview everything else meanwhile, add `enableDbBackup=false` on the
+   command line after the parameters file.
 
 4. **Run it once by hand, and look.**
 
@@ -11050,6 +13868,161 @@ review after any later change.
 **Fix.** Review again: remove the review signature, then a different engineer
 signs. The unit's History, or Admin → Audit filtered to Freeze Protection,
 shows what changed and who changed it.
+
+## The equipment schedule import (2026-11-03)
+
+New project (or **Import** on the project's Equipment page) takes the
+mechanical schedule PDF and adds the equipment on it. Three steps, three routes
+under `app/api/modules/freeze-protection/import/`:
+
+1. `split`: pdfjs-dist reads the text and its positions, and `import/split.ts`
+   cuts each sheet into schedules by their titles. No model, nothing stored.
+2. `analyze`, once per schedule, three at a time from the browser: one Claude
+   call (`import/analyze.ts`, `claude-sonnet-5-5`, key `FP_ANTHROPIC_API_KEY`),
+   then the checks in `import/validate.ts`. Nothing written.
+3. `commit`: the units chosen by `import/select.ts`, in one transaction. Each
+   gets an `fp.equipment_created` row with `source: "import"`, plus one
+   `fp.schedule_imported` row for the import.
+
+There is no review page: the summary card under the progress bar says what was
+added and names everything left out. The import never changes a unit already
+in the list. The schedule's outside air reading is stored as
+`exposure_suggestion` / `exposure_evidence` and shown beside step 3 as a hint;
+step 3 itself stays unanswered until the engineer answers it.
+
+## The import says "Schedule import is not set up"
+
+**Symptom.** The import stops with *Schedule import is not set up:
+FP_ANTHROPIC_API_KEY is missing.* (503 from `/import/analyze`.)
+
+**Cause.** Freeze Protection's own Anthropic key is not set. It is a third key,
+separate from BAS Analyze's and Change Orders', and never falls back to either.
+
+**Fix.** Locally: `FP_ANTHROPIC_API_KEY` in `.env.local`. Production:
+1. Key Vault → Secrets → Generate/Import: name `FP-ANTHROPIC-API-KEY`.
+2. Container app → Secrets → Add: key `fp-anthropic-api-key`, type Key Vault
+   reference, URL `https://<vault>.vault.azure.net/secrets/FP-ANTHROPIC-API-KEY`,
+   the platform's user-assigned identity.
+3. Container app → Containers → Edit and deploy → environment variable
+   `FP_ANTHROPIC_API_KEY`, source *Reference a secret*, `fp-anthropic-api-key`.
+4. `fpAnthropicApiKeyInKeyVault: true` in `infra/main.parameters.json`, so the
+   next template deployment keeps it instead of removing it. **Not optional,
+   and not later**: steps 1-3 are drift until step 4 is done, and on
+   2026-11-11 a what-if showed exactly that - the reference, live since
+   2026-11-05, listed as *Delete* because the flag was still at its default.
+   *A template what-if shows the container app losing a secret, gaining
+   blank variables, or changing its probes* has the record.
+Until then, add equipment by hand.
+
+**"The model service could not be reached" on every schedule, locally.** On
+the office network, HTTPS is inspected with the company's own certificate,
+which Node does not trust by default. Start the dev server with
+`$env:NODE_USE_SYSTEM_CA="1"` set in the same PowerShell window (it has to be
+in the environment before Node starts, so `.env.local` is too late).
+
+## The import finds no schedules, or says the PDF has no text
+
+**Symptom.** *That PDF has no text layer (it looks scanned)* or *No schedules
+were found in that PDF.*
+
+**Cause.** The import reads text, never pixels. A scanned or flattened PDF has
+no text. A schedule is found by its title: upper case, set noticeably larger
+than the table text, outside the title block on the right edge of the sheet.
+
+**Fix.** Export the schedule sheets from the drawing set (Revit or CAD) as a PDF
+with text, or ask the engineer of record for one. Otherwise add the units by
+hand.
+
+## The import left units out
+
+**Symptom.** The summary says some units were left out, or a schedule warns
+*Found 28 units, but the schedule has at least 29 marked rows.*
+
+**Cause.** By design (`import/select.ts`): the module holds freeze protection
+equipment only, meaning a water, glycol or steam coil that outside air can
+reach (2026-11-03). Units with no such coil (exhaust air valves, fans,
+humidifiers, pumps, tanks, heat exchangers, electric heat), coils the schedule
+shows outside air cannot reach (recirculating units, terminal units fed
+conditioned air; a schedule that does not say is treated as exposed), items on schedules that are not equipment
+(diffusers, grilles, valves, attenuators), names already in the list, and names
+Claude returned that do not appear in the PDF text (possibly misread) are not
+added. A coil Claude misread as none is left out the same way; the summary
+gives the count. The row warning compares Claude's count with the mark-like first
+cells in the schedule text, so a short count is worth a look.
+
+**Fix.** The summary names every unit left out. Add the ones that belong with
+**Add equipment**. Running the import again is safe: it only adds names that
+are not already in the list.
+
+## A schedule "could not be read"
+
+**Symptom.** The summary lists a schedule under *Not read* with the model
+service's reason.
+
+**Cause.** That schedule's Claude call failed (the service was down or rate
+limited, 502) or the schedule was too long for one answer (422). Other
+schedules are not affected.
+
+**Fix.** Run the import again later; units already added are skipped. A
+schedule that is always too long: add its units by hand.
+
+## The verification form import (2026-11-10)
+
+**Import** takes a second kind of PDF: the fillable verification form.
+**Template**, left of the project picker on the Equipment page (shown with or
+without a project), downloads it (`GET /import/form`, behind the grant;
+the file is `lib/modules/freeze-protection/import/assets/fp-verification-form.pdf`,
+built by `scripts/fp-build-form.py`). One row per unit, ten rows a page, two
+pages, twenty in all; for more units, fill and import a second form. Tested by
+and test date are asked once on page 1.
+
+`/import/split` checks for the form's hidden `fp_form` field before reading any
+page text, so a form never reaches the schedule split or Claude. Its rows go to
+`POST /import/form` (`import/form-commit.ts`): new names are added, blank fields
+on units already in the list are filled, and an answer already on the platform
+is never overwritten. Each disagreement is listed in the summary's *Different*
+table for a person to settle on the unit. Status has no blank, so it is filled
+only while the unit has no exposure, protection or test answer. Audit rows:
+`fp.equipment_created` (source `form`), `fp.equipment_updated` /
+`fp.result_updated` for what was filled, and one `fp.form_imported`.
+
+## The form import refuses the file
+
+**Symptom.** One of:
+*That form has no units filled in.* (422 `empty_form`),
+*That is the freeze protection form, but its fields were flattened* (422 `form_flattened`),
+*That form is for job X, and this project is job Y.* (422 `wrong_project`),
+*That form is from another version of the platform.* (422 `form_version`).
+
+**Cause.** In order: the answers were not saved into the PDF (some viewers,
+including browsers, need *Save as* rather than closing the tab); the form was
+printed to PDF, flattened or scanned, which turns its fields into pictures; the
+job number on page 1 is another project's (the check stops a form putting its
+units into the wrong job; a blank job number is accepted); the form was made by
+an older or newer `fp-build-form.py`.
+
+**Fix.** Save the filled form itself and upload that file. For the wrong job,
+upload it on the right project or clear the job number on the form. For an old
+version, download **Blank form** again and copy the answers across.
+
+## The form import says some answers differ
+
+**Symptom.** The summary has a *Different* table: unit, field, *Kept
+(platform)*, *Form says*.
+
+**Cause.** By design (Karthik, 2026-11-10): a form fills blanks only. An answer
+already recorded on the platform wins, because someone entered it deliberately
+and the form may be older.
+
+**Fix.** If the form is right, change the answer on the unit in the step pane.
+Text is compared ignoring case and spacing, so those never show as differences.
+
+**Changing the form.** Edit `scripts/fp-build-form.py` and
+`import/form.ts` together, then run `python scripts/fp-build-form.py` (needs
+reportlab; qpdf optional, halves the size) and commit the PDF.
+`tests/fp-form.test.ts` opens the committed PDF and fails if the field names or
+dropdown choices no longer match `form.ts`. Change the marker version
+(`phb-fp-form/v1`) only when old forms can no longer be read correctly.
 
 # Knowledge Base
 

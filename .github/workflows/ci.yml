@@ -65,6 +65,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Chromium for tests/bas-reports-pdf.test.ts, which prints a report the
+      # way the BAS Reports worker does (Dockerfile.bas-reports installs the
+      # same browser the same way). The version is pinned by `playwright` in
+      # package-lock.json; --with-deps adds its apt packages on the runner.
+      # --only-shell: the headless shell is the binary a headless launch runs
+      # and the only one the image carries, so the tests print with exactly
+      # what the worker has and fail here if that is ever not enough.
+      - name: Install Chromium for the PDF tests
+        run: npx playwright install --with-deps --only-shell chromium
+
       # lib/generated is gitignored, so nothing typechecks until this runs.
       - name: Generate Prisma client
         run: npx prisma generate
@@ -187,6 +197,75 @@ jobs:
       - name: Clean up
         if: always()
         run: docker rm -f phb-ci || true
+
+  # Builds the BAS Reports jobs image (Dockerfile.bas-reports) and proves it
+  # prints, without pushing anything (2026-11-16).
+  #
+  # Until this job, only deploy.yml built that image - on a merge to main,
+  # after the web image - so a jobs Dockerfile that did not build, or a
+  # browser that would not launch, failed the deploy rather than the pull
+  # request. The image's own RUN check (launch, print '<p>ok</p>') runs
+  # during the build here, so the build step alone already fails on it.
+  # The steps after it go further, at RUN time and as the user the jobs run
+  # as: the same check again, then the worker's real path - the report
+  # template rendered under tsx (the loader the jobs use, which compiles JSX
+  # differently from Next and vitest) and printed by the worker's own
+  # Chromium renderer, from the shared fixture document mounted in read-only
+  # (tests/ is in .dockerignore and never enters the image).
+  reports-image:
+    name: Reports jobs image builds and prints
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Its own cache scope: the web image's job uses the default one, and
+      # two images writing one scope evict each other's layers.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.bas-reports
+          push: false
+          load: true
+          tags: bas-reports:ci
+          cache-from: type=gha,scope=bas-reports
+          cache-to: type=gha,mode=max,scope=bas-reports
+
+      - name: It does not run as root
+        run: |
+          uid="$(docker run --rm --entrypoint id bas-reports:ci -u)"
+          echo "container uid: $uid"
+          if [ "$uid" = "0" ]; then
+            echo "The jobs image runs as root. Dockerfile.bas-reports sets USER node."
+            exit 1
+          fi
+
+      - name: Chromium launches and prints at run time
+        run: |
+          docker run --rm --entrypoint node bas-reports:ci -e "require('playwright').chromium.launch().then(async (b) => { const p = await b.newPage(); await p.setContent('<p>ok</p>'); const pdf = await p.pdf({ format: 'Letter' }); await b.close(); if (pdf.length < 100) throw new Error('empty pdf'); console.log('chromium prints: ' + pdf.length + ' bytes'); })"
+
+      - name: The worker's renderer prints a report under tsx
+        run: |
+          docker run --rm -v "$PWD/tests:/app/tests:ro" --entrypoint npx bas-reports:ci tsx -e '
+            import { reportDocument } from "./tests/fixtures/bas-report-document";
+            import { renderReportHtml } from "./lib/modules/bas/reports/engine/html";
+            import { createChromiumRenderer, looksLikePdf } from "./lib/modules/bas/reports/pdf/render";
+            (async () => {
+              const html = renderReportHtml(reportDocument());
+              if (!html.includes("BAS Health Report")) throw new Error("the template did not render");
+              const renderer = createChromiumRenderer();
+              try {
+                const pdf = await renderer.render({ html, title: "CI check", period: "2 Nov to 9 Nov 2026" });
+                if (!looksLikePdf(pdf)) throw new Error("not a PDF");
+                console.log("report printed: " + pdf.length + " bytes from " + html.length + " characters of HTML");
+              } finally {
+                await renderer.close();
+              }
+            })().catch((e) => { console.error(e); process.exit(1); });
+          '
 
   # Validates the infrastructure definition without an Azure subscription.
   # `az bicep build` is a compile, not a deployment, so it needs no credentials

@@ -380,6 +380,39 @@ export const updateEquipmentSchema = z
     { message: "Nothing to change." },
   );
 
+/**
+ * A building's occupied hours (Reports, Phase 2): one range per weekday,
+ * ISO numbered, as HH:MM in the building's zone; 24:00 is the end of the
+ * day. The whole week is sent at once and replaces what is stored, so a
+ * weekday absent from the list is unoccupied.
+ */
+const clockTime = z
+  .string()
+  .trim()
+  .regex(/^(([01][0-9]|2[0-3]):[0-5][0-9]|24:00)$/, "Enter the time as HH:MM.");
+
+export const siteOccupancySchema = z
+  .object({
+    days: z
+      .array(
+        z
+          .object({
+            weekday: z.number().int().min(1).max(7),
+            start: clockTime,
+            end: clockTime,
+          })
+          .strict()
+          .refine((d) => d.start < d.end, { message: "The end has to be after the start." }),
+      )
+      .max(7)
+      .refine((days) => new Set(days.map((d) => d.weekday)).size === days.length, {
+        message: "A weekday is listed twice.",
+      }),
+  })
+  .strict();
+
+export type SiteOccupancyInput = z.infer<typeof siteOccupancySchema>;
+
 export type CreateStationInput = z.infer<typeof createStationSchema>;
 export type UpdateStationInput = z.infer<typeof updateStationSchema>;
 export type UpdatePointInput = z.infer<typeof updatePointSchema>;

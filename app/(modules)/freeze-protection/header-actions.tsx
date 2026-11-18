@@ -1,13 +1,13 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { Download, Plus, Printer } from "lucide-react";
+import { Download, FileDown, Plus, Printer } from "lucide-react";
 import { Button } from "./ui/kit";
 import { REPORT_ID } from "./views/report-view";
 
 type ProjectOption = { id: string; jobNumber: string; name: string };
 
-/** Which project Register and Report show. Changing it rewrites `?project=` and drops the round. */
+/** Which project Register and Report show. Changing it rewrites `?project=`; All projects goes back to the catalog. */
 export function ProjectPicker({ projects, value }: { projects: ProjectOption[]; value: string }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -16,9 +16,10 @@ export function ProjectPicker({ projects, value }: { projects: ProjectOption[]; 
       <span className="eyebrow text-[var(--muted)]">Project</span>
       <select
         value={value}
-        onChange={(e) => router.push(`${pathname}?project=${encodeURIComponent(e.target.value)}`)}
+        onChange={(e) => router.push(e.target.value ? `${pathname}?project=${encodeURIComponent(e.target.value)}` : pathname)}
         className="h-9 max-w-[20rem] truncate rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 text-[0.8125rem]"
       >
+        <option value="">All projects</option>
         {projects.map((p) => (
           <option key={p.id} value={p.id}>
             {p.jobNumber} · {p.name}
@@ -29,9 +30,32 @@ export function ProjectPicker({ projects, value }: { projects: ProjectOption[]; 
   );
 }
 
+/**
+ * The blank verification form (import/form.ts), from GET /import/form behind the
+ * grant. A plain link, not the kit's Button: Button renders a Next Link, which
+ * would prefetch an API route. Shown with or without a project, so a field team
+ * can be handed the form before the job is set up here.
+ */
+export const TEMPLATE_URL = "/api/modules/freeze-protection/import/form";
+
+export function TemplateLink() {
+  return (
+    <a
+      href={TEMPLATE_URL}
+      download
+      title="Download the blank freeze protection verification form. Fill it in, then Import it on a project."
+      className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-4 text-[0.8125rem] font-medium text-[var(--foreground)] hover:bg-[var(--neutral-50)]"
+    >
+      <FileDown size={16} aria-hidden="true" />
+      Template
+    </a>
+  );
+}
+
 export function RegisterActions({ projects, projectId }: { projects: ProjectOption[]; projectId: string | null }) {
   return (
     <>
+      <TemplateLink />
       {projectId && projects.length > 0 && <ProjectPicker projects={projects} value={projectId} />}
       <Button variant="primary" href="/freeze-protection?new=project">
         <Plus size={16} aria-hidden="true" />

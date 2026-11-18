@@ -1,0 +1,87 @@
+# BAS Reports jobs image (scripts/bas-reports-scheduler.ts and
+# scripts/bas-reports-worker.ts), Reports Phase 3; Chromium since Phase 4.
+#
+# One image, two Container Apps Jobs (infra/main.bicep, basReportsSchedulerJob
+# and basReportsWorkerJob): the scheduler on a cron, the worker on a scaler
+# that counts queued runs and queued PDF renders. Each job names its script
+# in `command`.
+#
+# Separate from the web image for the same reason the Cost Intelligence
+# worker's is: the web app never runs a report, and a job never serves a
+# page. The browser below is the clearest case - the worker prints a run's
+# page to PDF with it (lib/modules/bas/reports/pdf/render.ts), and it goes
+# in THIS image and never the web one (tests/deploy-guards.test.ts and
+# tests/bas-reports-pdf.test.ts both hold that).
+#
+# The scripts run under tsx, the same loader `npm run bas:report:run` uses on
+# a laptop and the one tests/bas-reports-worker-render.test.ts proves the
+# report template renders under (WHY-ITS-BUILT-THIS-WAY.md § 80). There is no
+# compile step to drift from it.
+
+FROM node:24-bookworm-slim
+
+# Where Playwright puts the browser. The default is the installing user's
+# home (/root/.cache here), which the `node` user below could not read; a
+# fixed path, made world-readable, is what Playwright documents for Docker.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# /app belongs to `node` from its first layer, and every COPY below says
+# --chown. The image used to end with `chown -R node:node /app`, and a layer
+# that changes a file's owner holds a second copy of the file: all of
+# node_modules and the source, twice (2026-11-13, the image was 6.56 GB).
+# tests/deploy-guards.test.ts refuses a recursive chown of /app here.
+RUN mkdir /app && chown node:node /app
+WORKDIR /app
+
+# The install runs as `node`, so node_modules is the user's own without a
+# chown either.
+USER node
+
+# Same order as the web Dockerfile: postinstall runs `prisma generate`, which
+# needs the schema and config before `npm ci`.
+COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node prisma ./prisma
+COPY --chown=node:node prisma.config.ts ./
+
+# Production dependencies only: no eslint, vitest, typescript, tailwind or
+# jsdom in an image that runs two scripts. What the scripts load at run time
+# - tsx itself, and dotenv through scripts/load-env.ts - is in `dependencies`
+# for this line's sake, and tests/bas-reports-jobs-env.test.ts walks both
+# scripts' import graphs against that list. The `prisma` CLI survives
+# --omit=dev (it is an optional peer of @prisma/client), which is what lets
+# postinstall generate the client here; lib/generated is in .dockerignore, so
+# this is the only copy and the COPY below cannot replace it. The download
+# cache goes in the same layer it was written in.
+RUN npm ci --omit=dev \
+ && npm cache clean --force \
+ && test -f lib/generated/prisma/client.ts
+
+# Chromium's headless shell, at the version `playwright` in package-lock.json
+# pins, with the apt packages it needs on bookworm (--with-deps is
+# Playwright's own list, the same step CI runs before the PDF tests).
+# --only-shell because a headless launch - the only kind render.ts makes -
+# already runs the headless shell and never the full browser: a plain
+# `install chromium` downloads both, and the full one sat in the image
+# unused. One rendering of one page that the screen and the PDF then cannot
+# disagree on (docs/bas-reports-tab-plan.md, "PDF method"). As root, for apt.
+USER root
+RUN npx playwright install --with-deps --only-shell chromium \
+ && chmod -R a+rX /ms-playwright \
+ && rm -rf /var/lib/apt/lists/* /root/.npm
+
+USER node
+
+COPY --chown=node:node . .
+
+ENV NODE_ENV=production
+
+# The image's own check, as the user the jobs run as: the browser launches
+# and prints a page, or the build fails here rather than on the first report
+# in Azure. The sandbox is off (Playwright's default) because the container
+# runs unprivileged with no user namespaces.
+RUN node -e "require('playwright').chromium.launch().then(async (b) => { const p = await b.newPage(); await p.setContent('<p>ok</p>'); const pdf = await p.pdf({ format: 'Letter' }); await b.close(); if (pdf.length < 100) throw new Error('empty pdf'); console.log('chromium prints: ' + pdf.length + ' bytes'); })"
+
+# The worker, draining the queue. The scheduler job overrides this with its
+# own script in `command`; the worker job states this one explicitly too, so
+# the image's default is never what a job silently depends on.
+CMD ["npx", "tsx", "scripts/bas-reports-worker.ts"]

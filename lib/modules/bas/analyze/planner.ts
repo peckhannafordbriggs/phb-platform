@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import type { Planner } from "./service";
-import { PlannerError, type Plan, type PriorTurn, type Provenance, type ResultTable } from "./types";
+import type { Planner } from "./core";
+import { PlannerError, type Plan, type PriorTurn, type Provenance, type ReportContext, type ResultTable } from "./types";
 import { APP_TIME_ZONE, plainDateTime } from "../../../activity/rollover";
 
 /**
@@ -250,8 +250,10 @@ export function planUserMessage(input: {
   nowUtc: string;
   previous: { sql: string; error: string } | null;
   priorTurns: PriorTurn[];
+  reportContext?: ReportContext | null;
 }): string {
   const { question, nowUtc, previous, priorTurns } = input;
+  const report = input.reportContext ?? null;
   const earlier =
     priorTurns.length === 0
       ? []
@@ -278,6 +280,7 @@ export function planUserMessage(input: {
   return [
     `Current time (UTC): ${nowUtc}`,
     "",
+    ...(report === null ? [] : reportContextBlock(report)),
     ...earlier,
     previous === null
       ? ""
@@ -289,12 +292,63 @@ export function planUserMessage(input: {
   ].join("\n");
 }
 
-export function createAnthropicPlanner(apiKey: string): Planner {
+/**
+ * The fixed context of a report's planner question (Reports, Phase 6), as
+ * the plan call's user turn carries it. Exported so a test can hold it to
+ * three facts without a model: the building and period are stated, the
+ * names travel inside a data block, and no one is there to answer a
+ * clarifying question. The Analyze tab never sends it, so a question asked
+ * there is planned exactly as before.
+ */
+export function reportContextBlock(report: ReportContext): string[] {
+  return [
+    "This question is part of a scheduled building report, answered with no one present. Fixed context:",
+    `- Building: site_id ${report.siteId} (timezone ${report.timezone}); its name is in the data block below.`,
+    `- Stations in the report: ${report.stations.length === 0 ? "none" : report.stations.map((s) => `station_id ${s.stationId}`).join(", ")}. Restrict the query to points on these stations.`,
+    `- Analysis window: ${report.periodStart} to ${report.periodEnd} (UTC), the report's "${report.windowLabel}". Use exactly this as time_range and in the SQL unless the question itself names a different period; "this period", "the week" and an unstated period all mean this window.`,
+    "- Never answer about another building. Do not ask which building, which stations or which period: they are fixed above.",
+    "- No one can answer a clarifying question here. If the question can be read more than one way, choose the reading that best fits this building and window, say which in the interpretation, and write the query. Ask (kind = \"clarify\") only when no reasonable reading exists, and decline (kind = \"cannot_answer\") when the data is not there.",
+    "<data>",
+    JSON.stringify({ building: report.siteName, stations: report.stations.map((s) => ({ station_id: s.stationId, name: s.name })) }),
+    "</data>",
+    "",
+  ];
+}
+
+/** Token counts of one model call, as the API reported them. */
+export interface PlannerCallUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export interface AnthropicPlannerOptions {
+  /**
+   * Called once per model call that returned, plan or summary, with what it
+   * used. The Analyze tab passes nothing; the report engine meters every
+   * call into the run's cost (Reports, Phase 6).
+   */
+  onUsage?: (usage: PlannerCallUsage) => void;
+}
+
+function usageOf(response: { usage: Anthropic.Usage }): PlannerCallUsage {
+  return {
+    model: ANALYZE_MODEL,
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+    cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+  };
+}
+
+export function createAnthropicPlanner(apiKey: string, options: AnthropicPlannerOptions = {}): Planner {
   const client = new Anthropic({ apiKey, timeout: CALL_TIMEOUT_MS, maxRetries: 1 });
 
   return {
-    async plan({ question, schema, nowUtc, previous, priorTurns }) {
-      const user = planUserMessage({ question, nowUtc, previous, priorTurns });
+    async plan({ question, schema, nowUtc, previous, priorTurns, reportContext }) {
+      const user = planUserMessage({ question, nowUtc, previous, priorTurns, reportContext });
 
       let response;
       try {
@@ -315,6 +369,7 @@ export function createAnthropicPlanner(apiKey: string): Planner {
       } catch (error) {
         throw toPlannerError(error);
       }
+      options.onUsage?.(usageOf(response));
 
       if (response.stop_reason === "refusal") {
         throw new PlannerError("refused", "The model declined this request.");
@@ -349,6 +404,7 @@ export function createAnthropicPlanner(apiKey: string): Planner {
       } catch (error) {
         throw toPlannerError(error);
       }
+      options.onUsage?.(usageOf(response));
 
       if (response.stop_reason === "refusal") {
         throw new PlannerError("refused", "The model declined to summarise.");

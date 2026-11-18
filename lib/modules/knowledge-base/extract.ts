@@ -79,13 +79,24 @@ function standardFontDataUrl(): string {
   return path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") + path.sep;
 }
 
+/**
+ * pdfjs-dist 6, shared with Freeze Protection's import
+ * (lib/modules/freeze-protection/import/pdf.ts) and loaded the same way: the
+ * worker module handed to pdfjs as `globalThis.pdfjsWorker`, so it runs in
+ * process with no worker file to find at run time.
+ */
+async function loadPdfjs(): Promise<typeof import("pdfjs-dist/legacy/build/pdf.mjs")> {
+  const g = globalThis as { pdfjsWorker?: unknown };
+  if (!g.pdfjsWorker) g.pdfjsWorker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  return import("pdfjs-dist/legacy/build/pdf.mjs");
+}
+
 export async function readPdfPages(filePath: string): Promise<KbPage[]> {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfjs = await loadPdfjs();
   const data = new Uint8Array(await readFile(filePath));
   const task = pdfjs.getDocument({
     data,
-    // Text only: never evaluate PDF-supplied code, never load fonts or images.
-    isEvalSupported: false,
+    // Text only: never load fonts or images. (pdfjs 6 evaluates no PDF code.)
     disableFontFace: true,
     useSystemFonts: false,
     standardFontDataUrl: standardFontDataUrl(),
@@ -108,7 +119,7 @@ export async function readPdfPages(filePath: string): Promise<KbPage[]> {
     }
     return dropRunningHeaders(pages);
   } finally {
-    await doc.destroy();
+    await task.destroy();
   }
 }
 

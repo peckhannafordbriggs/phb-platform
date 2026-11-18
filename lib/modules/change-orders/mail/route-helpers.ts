@@ -1,16 +1,21 @@
 import type { NextResponse } from "next/server";
 import { denialResponse, requireModuleAccess, type Viewer } from "@/lib/authz";
-import { ok, validationFailed } from "@/lib/api/response";
+import { fail, ok, validationFailed } from "@/lib/api/response";
 import { CHANGE_ORDERS_MODULE_KEY } from "@/lib/modules/change-orders/constants";
 import {
   captureThrottleRetries,
   RETRY_COUNT_HEADER,
   RETRY_WAIT_HEADER,
 } from "@/lib/modules/change-orders/graph/retry-notice";
-import { mailErrorResponse, mailRouteError } from "./http";
+import { mailRouteError } from "./http";
 import { MailError } from "./errors";
-import { mailService, mailboxConnectionStatus } from "./service";
+import {
+  inlineImageSigningKey,
+  mailService,
+  mailboxConnectionStatus,
+} from "./service";
 import type { ChangeOrderMailService } from "./service";
+import { verifyInlineImageLink } from "./inline-images";
 
 /**
  * The wrapper every mail route uses, mirroring lib/admin/route-helpers.ts.
@@ -55,39 +60,97 @@ export async function withMailbox<T = undefined>(
    * HTML body. Every response from a mail route goes through the same mapping,
    * including the ones from before the handler runs.
    */
-  /**
-   * Everything below runs inside one throttle-retry scope.
-   *
-   * A request Graph throttled is retried once inside the middleware chain, after
-   * waiting out `Retry-After` - which the browser experiences as a single slow
-   * request and nothing else. Capturing it here and answering with a header is
-   * what lets the pane say "the mailbox was busy" instead of appearing frozen
-   * for no stated reason. It wraps the catch as well as the handler: a route
-   * that was throttled and then failed anyway still waited, and still wants to
-   * say why.
-   */
+  return mailResponse(route, async () => {
+    let input = undefined as T;
+    if (parse !== undefined) {
+      const parsed = await parse();
+      if (!parsed.ok) return validationFailed(parsed.message);
+      input = parsed.data;
+    }
+
+    return handler(connectedMailService(), access.viewer, input);
+  });
+}
+
+/**
+ * The wrapper for the ONE mail route that is not behind the session: the
+ * inline-image route the reading pane's sandboxed frame loads images from.
+ *
+ * The frame has an opaque origin, so the browser sends it no session cookie -
+ * measured, not assumed; see ./inline-images.ts. What stands in for the
+ * session is a link the grant-gated message route signed for exactly this
+ * message and attachment, with an expiry. The signature is checked BEFORE
+ * anything else, in the same position the grant check holds in withMailbox: a
+ * caller without a valid link learns nothing, not even whether the mailbox is
+ * connected. "Expired" is told apart from "invalid" so a person who opens a
+ * stale link sees a reason rather than a refusal.
+ */
+export async function withInlineImageLink(
+  route: string,
+  request: Request,
+  link: { messageId: string; attachmentId: string },
+  handler: (service: ChangeOrderMailService) => Promise<NextResponse>,
+): Promise<NextResponse> {
+  const params = new URL(request.url).searchParams;
+  const verdict = verifyInlineImageLink(inlineImageSigningKey(), {
+    messageId: link.messageId,
+    attachmentId: link.attachmentId,
+    exp: params.get("exp"),
+    sig: params.get("sig"),
+  });
+
+  if (verdict === "expired") {
+    return fail(
+      403,
+      "inline_image_link_expired",
+      "This image link has expired. Reopen the message to load its images again.",
+    );
+  }
+  if (verdict !== "valid") {
+    return fail(403, "inline_image_link_invalid", "This image link is not valid.");
+  }
+
+  return mailResponse(route, async () => handler(connectedMailService()));
+}
+
+/**
+ * The process-wide service, or the `not_configured` error every mail route
+ * reports in the same shape.
+ *
+ * Not an error, and not a crash. IT creates the app registration on its own
+ * schedule; until then every mail route says so in the same shape, and the UI
+ * renders one "not configured" state instead of a failure per pane.
+ */
+function connectedMailService(): ChangeOrderMailService {
+  const status = mailboxConnectionStatus();
+  if (!status.configured) {
+    throw new MailError("not_configured", {
+      detail: `Missing Graph configuration: ${status.missing.join(", ")}`,
+    });
+  }
+
+  return mailService();
+}
+
+/**
+ * Everything a mail route does runs inside one throttle-retry scope, and every
+ * failure leaves through one mapping.
+ *
+ * A request Graph throttled is retried once inside the middleware chain, after
+ * waiting out `Retry-After` - which the browser experiences as a single slow
+ * request and nothing else. Capturing it here and answering with a header is
+ * what lets the pane say "the mailbox was busy" instead of appearing frozen
+ * for no stated reason. It wraps the catch as well as the handler: a route
+ * that was throttled and then failed anyway still waited, and still wants to
+ * say why.
+ */
+async function mailResponse(
+  route: string,
+  run: () => Promise<NextResponse>,
+): Promise<NextResponse> {
   const { value, notice } = await captureThrottleRetries(async () => {
     try {
-      let input = undefined as T;
-      if (parse !== undefined) {
-        const parsed = await parse();
-        if (!parsed.ok) return validationFailed(parsed.message);
-        input = parsed.data;
-      }
-
-      // Not an error, and not a crash. IT creates the app registration on its own
-      // schedule; until then every mail route says so in the same shape, and the UI
-      // renders one "not configured" state instead of a failure per pane.
-      const status = mailboxConnectionStatus();
-      if (!status.configured) {
-        return mailErrorResponse(
-          new MailError("not_configured", {
-            detail: `Missing Graph configuration: ${status.missing.join(", ")}`,
-          }),
-        );
-      }
-
-      return await handler(mailService(), access.viewer, input);
+      return await run();
     } catch (error) {
       return mailRouteError(route, error);
     }

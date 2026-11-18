@@ -10,19 +10,45 @@ import type { MessageBody } from "@/lib/modules/change-orders/mail/types";
  */
 
 /**
+ * The path under which the platform serves a message's inline images, as the
+ * CSP below permits it: this prefix on the platform's own origin and nothing
+ * else of ours. Held to the URL the service writes by a test.
+ */
+export const INLINE_IMAGE_CSP_PATH = "/api/modules/change-orders/messages/";
+
+/** `scheme://host[:port]` and nothing after it - what `location.origin` is. */
+const ORIGIN_SHAPE = /^https?:\/\/[a-z0-9.-]+(?::\d{1,5})?$/i;
+
+/**
  * An allowlist of nothing, plus the few things a mail body legitimately needs.
  *
  * `img-src` is the only directive that changes with "show images". `data:` stays
  * permitted either way, because an inline logo is not a network request.
  *
- * `cid:` is no longer listed, and that is not a tightening for its own sake: the
- * sanitizer now removes a `cid:` src entirely, because a browser cannot resolve
- * the scheme and the resulting broken-image glyph read as an application fault
- * rather than as an image living in an attachment. Nothing in the document can
- * carry one any more, so permitting it would describe a case that cannot arise.
+ * `cid:` is not listed: the sanitizer never lets one reach the document. A
+ * `cid:` image the message carries is rewritten to the platform's own signed
+ * link for the attachment, and one it does not carry has its src removed. The
+ * links are what the platform's own origin is listed for - and listed with the
+ * message routes' path, so the only same-origin request a body can cause is one
+ * the service wrote for it.
+ *
+ * The origin is passed in rather than written as `'self'`. The frame is
+ * sandboxed without `allow-same-origin`, so its own origin is opaque and
+ * `'self'` would name nothing; the component reads `location.origin` instead,
+ * which is also why the links are relative - both of the platform's hostnames
+ * answer, and a srcdoc document resolves a relative URL against its parent's.
  */
-export function contentSecurityPolicy(allowRemoteImages: boolean): string {
-  const imgSrc = allowRemoteImages ? "https: data:" : "data:";
+export function contentSecurityPolicy(
+  allowRemoteImages: boolean,
+  inlineImageOrigin: string | null = null,
+): string {
+  const imgSrc = [
+    ...(allowRemoteImages ? ["https:"] : []),
+    "data:",
+    ...(inlineImageOrigin !== null && ORIGIN_SHAPE.test(inlineImageOrigin)
+      ? [`${inlineImageOrigin}${INLINE_IMAGE_CSP_PATH}`]
+      : []),
+  ].join(" ");
 
   return [
     "default-src 'none'",
@@ -53,10 +79,12 @@ const BODY_STYLES = `
   }
   a { color: #1d4ed8; }
   img { max-width: 100%; height: auto; }
-  /* A blocked or unresolvable image would otherwise collapse to a broken-image
-     glyph with no explanation of why it is missing. Both kinds have had their
-     src removed by the sanitizer, so the browser attempts no load at all and
-     draws this box with the alt text instead. */
+  /* A blocked remote image, or an inline one the message does not actually
+     carry, would otherwise collapse to a broken-image glyph with no
+     explanation of why it is missing. Both kinds have had their src removed by
+     the sanitizer, so the browser attempts no load at all and draws this box
+     with the alt text instead. An inline image the message DOES carry is an
+     ordinary <img> and takes none of this. */
   img[data-remote-blocked], img[data-inline-image] {
     display: inline-block;
     min-width: 120px;
@@ -84,9 +112,15 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * `inlineImageOrigin` is the platform's own origin as the browser sees it -
+ * `location.origin` - and is what lets the body's inline images load; see
+ * contentSecurityPolicy. Null (the server, a test without one) permits none.
+ */
 export function buildBodyDocument(
   body: MessageBody,
   allowRemoteImages: boolean,
+  inlineImageOrigin: string | null = null,
 ): string {
   // A plain-text body is escaped and wrapped, never interpreted as markup. A
   // text/plain message containing "<script>" is text, and must stay text.
@@ -99,7 +133,7 @@ export function buildBodyDocument(
     "<!doctype html>",
     '<html lang="en"><head>',
     '<meta charset="utf-8">',
-    `<meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(allowRemoteImages)}">`,
+    `<meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(allowRemoteImages, inlineImageOrigin)}">`,
     // Nothing in a mail body should be able to send a referrer anywhere.
     '<meta name="referrer" content="no-referrer">',
     `<style>${BODY_STYLES}</style>`,

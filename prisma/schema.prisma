@@ -68,11 +68,11 @@ model Employee {
 
   basCredentialsUpdated BasStationCredential[] @relation("BasCredentialUpdatedBy")
 
-  syncsTriggered CipSkillSync[]
-  workflowsCreated CipWorkflow[]
+  syncsTriggered        CipSkillSync[]
+  workflowsCreated      CipWorkflow[]
   projectSyncsTriggered CipProjectSync[]
-  runsStarted      CipRun[]
-  checkpointsAnswered CipRunCheckpoint[]
+  runsStarted           CipRun[]
+  checkpointsAnswered   CipRunCheckpoint[]
 
   fpProjectsCreated   FpProject[]   @relation("FpProjectCreatedBy")
   fpProjectsCompleted FpProject[]   @relation("FpProjectCompletedBy")
@@ -83,6 +83,14 @@ model Employee {
   kbSyncsTriggered KbSyncRun[]      @relation("KbSyncTriggeredBy")
   kbReportsFiled   KbAnswerReport[] @relation("KbAnswerReportsFiled")
   kbReportsResolved KbAnswerReport[] @relation("KbAnswerReportsResolved")
+  basReportsOwned          BasReportDefinition[] @relation("BasReportOwner")
+  basLibraryQuestionsAdded BasLibraryQuestion[]  @relation("BasLibraryQuestionAddedBy")
+  basPersonalQuestions     BasPersonalQuestion[] @relation("BasPersonalQuestionOwner")
+  basRecipientsAdded       BasReportRecipient[]  @relation("BasRecipientAddedBy")
+  basRecipientsConfirmed   BasReportRecipient[]  @relation("BasRecipientConfirmedBy")
+  basReportRunsStarted     BasReportRun[]        @relation("BasReportRunStartedBy")
+  basReportSettingsUpdated BasReportSettings[]   @relation("BasReportSettingsUpdatedBy")
+  basReportDeliveriesAsked BasReportDelivery[]   @relation("BasReportDeliveryRequestedBy")
 
   @@index([status])
   @@index([departmentId])
@@ -231,10 +239,10 @@ model BasPointRole {
 
 /// The customer or business unit that owns a set of buildings.
 model BasOrg {
-  orgId     BigInt    @id @default(autoincrement()) @map("org_id")
-  name      String    @unique
+  orgId     BigInt   @id @default(autoincrement()) @map("org_id")
+  name      String   @unique
   notes     String?
-  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
   projects BasProject[]
   sites    BasSite[]
@@ -285,6 +293,9 @@ model BasSite {
   stations  BasStation[]
   equipment BasEquipment[]
 
+  reportDefinitions BasReportDefinition[]
+  occupancy         BasSiteOccupancy[]
+
   @@unique([projectId, name])
   @@index([projectId])
   @@map("bas_sites")
@@ -303,7 +314,7 @@ model BasStation {
 
   connectionMode String @default("via_parent") @map("connection_mode")
 
-  baseUrl        String? @map("base_url")
+  baseUrl String? @map("base_url")
 
   tlsSha256 String? @map("tls_sha256")
 
@@ -375,6 +386,8 @@ model BasEquipment {
 
   points BasPoint[]
 
+  reportFindings BasReportFinding[]
+
   @@unique([siteId, name])
   @@index([siteId])
   @@index([equipType])
@@ -420,7 +433,7 @@ model BasPoint {
   tags  Json    @default("{}")
   notes String?
 
-  isActive    Boolean   @default(true) @map("is_active")
+  isActive Boolean @default(true) @map("is_active")
 
   inactiveReason String? @map("inactive_reason")
 
@@ -558,6 +571,339 @@ model BasDataGap {
   @@map("bas_data_gaps")
 }
 
+/// A configured BAS health report (Reports, Phase 1): which building, which questions, how often, and who receives it.
+model BasReportDefinition {
+  reportId BigInt @id @default(autoincrement()) @map("report_id")
+
+  ownerEmployeeId String   @map("owner_employee_id") @db.Uuid
+  owner           Employee @relation("BasReportOwner", fields: [ownerEmployeeId], references: [id], onDelete: Restrict)
+
+  name        String
+  description String?
+
+  siteId BigInt  @map("site_id")
+  site   BasSite @relation(fields: [siteId], references: [siteId], onDelete: Restrict)
+
+  /// Empty means every station on the building. Prisma lists cannot be NULL, so the empty list is the "all" spelling.
+  stationIds BigInt[] @default([]) @map("station_ids")
+
+  presetKey String? @map("preset_key")
+
+  /// Not `window`: that word is reserved in PostgreSQL.
+  analysisWindow String @default("7d") @map("analysis_window")
+
+  scheduleKind   String @map("schedule_kind")
+  scheduleParams Json   @default("{}") @map("schedule_params")
+  /// Local wall-clock time in the building's zone, as HH:MM.
+  timeOfDay      String @map("time_of_day")
+
+  nextRunAt DateTime? @map("next_run_at") @db.Timestamptz()
+
+  state String @default("draft")
+
+  /// Why the scheduler paused it: set with state paused_owner_disabled, cleared when an admin transfers the owner.
+  pausedReason String? @map("paused_reason")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  questions  BasReportQuestion[]
+  recipients BasReportRecipient[]
+  runs       BasReportRun[]
+
+  /// A person does not get two reports with one name; the service also refuses a case-insensitive clash.
+  @@unique([ownerEmployeeId, name])
+  @@index([siteId])
+  @@index([state, nextRunAt])
+  @@map("bas_report_definitions")
+}
+
+/// One question on a report, in order. Exactly one of the three sources is set, decided by kind.
+model BasReportQuestion {
+  questionId BigInt @id @default(autoincrement()) @map("question_id")
+
+  reportId BigInt              @map("report_id")
+  report   BasReportDefinition @relation(fields: [reportId], references: [reportId], onDelete: Cascade)
+
+  position Int
+  kind     String
+
+  libraryQuestionId BigInt?             @map("library_question_id")
+  libraryQuestion   BasLibraryQuestion? @relation(fields: [libraryQuestionId], references: [libraryQuestionId], onDelete: Restrict)
+
+  personalQuestionId BigInt?              @map("personal_question_id")
+  personalQuestion   BasPersonalQuestion? @relation(fields: [personalQuestionId], references: [personalQuestionId], onDelete: Restrict)
+
+  inlineText String? @map("inline_text")
+
+  @@index([reportId, position])
+  @@index([libraryQuestionId])
+  @@index([personalQuestionId])
+  @@map("bas_report_questions")
+}
+
+/// The shared question library: the twenty computed questions of the build spec, plus planner-kind questions added later.
+model BasLibraryQuestion {
+  libraryQuestionId BigInt @id @default(autoincrement()) @map("library_question_id")
+
+  key      String @unique
+  section  String
+  /// Order within the standard report; the two presets expand in this order.
+  position Int
+  text     String
+  kind     String
+
+  analysisFn String? @map("analysis_fn")
+
+  /// The spec's own "Applies to" wording, e.g. "VAV with reheat" - shown beside the keys below.
+  appliesToLabel     String   @map("applies_to_label")
+  /// Equipment type keys (bas_equipment_types). Empty means every equipment type, or the whole building.
+  appliesToEquipment String[] @default([]) @map("applies_to_equipment")
+  /// Point role keys (bas_point_roles) the question needs, as requirement groups. See lib/modules/bas/reports/library.ts.
+  requiredRoles      Json     @default("[]") @map("required_roles")
+  minCoverage        Decimal  @default(0.8) @map("min_coverage") @db.Decimal(4, 3)
+
+  enabled Boolean @default(true)
+
+  addedById String?   @map("added_by_id") @db.Uuid
+  addedBy   Employee? @relation("BasLibraryQuestionAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  usedBy BasReportQuestion[]
+
+  @@index([section, position])
+  @@map("bas_library_questions")
+}
+
+/// A question an employee wrote and saved for reuse. Theirs alone; nobody else's reports can see it.
+model BasPersonalQuestion {
+  personalQuestionId BigInt @id @default(autoincrement()) @map("personal_question_id")
+
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation("BasPersonalQuestionOwner", fields: [employeeId], references: [id], onDelete: Restrict)
+
+  text String
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  usedBy BasReportQuestion[]
+
+  @@index([employeeId])
+  @@map("bas_personal_questions")
+}
+
+/// An ADDITIONAL recipient of a report. The owner is never a row here: the sender adds the owner's address at send time.
+model BasReportRecipient {
+  recipientId BigInt @id @default(autoincrement()) @map("recipient_id")
+
+  reportId BigInt              @map("report_id")
+  report   BasReportDefinition @relation(fields: [reportId], references: [reportId], onDelete: Cascade)
+
+  /// Stored lower-cased; the unique key below is on this column.
+  email      String
+  /// Anything that is not a company address. An external row must carry a confirmation.
+  isExternal Boolean @map("is_external")
+
+  confirmedById String?   @map("confirmed_by_id") @db.Uuid
+  confirmedBy   Employee? @relation("BasRecipientConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  confirmedAt   DateTime? @map("confirmed_at") @db.Timestamptz()
+
+  addedById String?   @map("added_by_id") @db.Uuid
+  addedBy   Employee? @relation("BasRecipientAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@unique([reportId, email])
+  @@map("bas_report_recipients")
+}
+
+/// Manual occupied hours for a building, one range per weekday (ISO 1 = Monday), in minutes from local midnight.
+/// The occupancy fallback for a station that trends no occupancy point. Nothing writes it in Phase 1.
+model BasSiteOccupancy {
+  siteId BigInt  @map("site_id")
+  site   BasSite @relation(fields: [siteId], references: [siteId], onDelete: Cascade)
+
+  weekday     Int
+  startMinute Int @map("start_minute")
+  endMinute   Int @map("end_minute")
+
+  @@id([siteId, weekday])
+  @@map("bas_site_occupancy")
+}
+
+/// One execution of a report (Reports, Phase 2): the period it covered, what it cost, and the result it produced.
+model BasReportRun {
+  runId BigInt @id @default(autoincrement()) @map("run_id")
+
+  reportId BigInt              @map("report_id")
+  report   BasReportDefinition @relation(fields: [reportId], references: [reportId], onDelete: Restrict)
+
+  status  String @default("queued")
+  trigger String
+
+  periodStart DateTime @map("period_start") @db.Timestamptz()
+  periodEnd   DateTime @map("period_end") @db.Timestamptz()
+  /// The building's zone at run time, so the report's local times are reproducible after a zone change.
+  timezone    String
+
+  startedById String?   @map("started_by_id") @db.Uuid
+  startedBy   Employee? @relation("BasReportRunStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
+
+  /// The module's safety ceiling in dollars as it stood when the run executed (stamped at queue time, re-read when the worker claims it). Not a per-report setting since 2026-11-12.
+  budgetUsd    Decimal @map("budget_usd") @db.Decimal(8, 2)
+  costUsd      Decimal @default(0) @map("cost_usd") @db.Decimal(10, 6)
+  inputTokens  Int     @default(0) @map("input_tokens")
+  outputTokens Int     @default(0) @map("output_tokens")
+
+  /// Planner questions (Reports, Phase 6) sent to the Analyze planner in this run - the ones that cost. Each is then answered or unanswered.
+  plannerAsked      Int     @default(0) @map("planner_asked")
+  /// Planner questions the planner answered from rows.
+  plannerAnswered   Int     @default(0) @map("planner_answered")
+  /// Planner questions with no answer and a reason: no data, declined, a clarification no one could give, not monitored or not applicable, or not configured.
+  plannerUnanswered Int     @default(0) @map("planner_unanswered")
+  /// Planner questions never sent because the run reached a half of the safety ceiling.
+  plannerSkipped    Int     @default(0) @map("planner_skipped")
+  /// What the planner calls cost, part of cost_usd; with planner_asked, the history the next run's per-question estimate is drawn from.
+  plannerCostUsd    Decimal @default(0) @map("planner_cost_usd") @db.Decimal(10, 6)
+
+  startedAt   DateTime? @map("started_at") @db.Timestamptz()
+  heartbeatAt DateTime? @map("heartbeat_at") @db.Timestamptz()
+  finishedAt  DateTime? @map("finished_at") @db.Timestamptz()
+  /// How many times a worker has claimed it (Phase 3): 1 normally, 2 after a stall was reclaimed. A second stall fails it.
+  attempts    Int       @default(0)
+
+  error         String?
+  /// Why a run finished partial: the budget, a missing key, a declined call. Required when status is partial.
+  partialReason String? @map("partial_reason")
+
+  reportJson Json?   @map("report_json")
+  reportHtml String? @map("report_html")
+
+  /// The report as a PDF (Phase 4, 2026-11-13): report_html printed by the worker with headless Chromium, Letter, with the report name and period in the header and page numbers in the footer. Omitted from every read by the client's global `omit` (lib/db/client.ts); a reader selects it by name.
+  pdf           Bytes?
+  /// none (no PDF and none asked for: a run from before this column, or one not finished), queued (a render is waiting for a worker; the scaler counts it), ready (pdf holds it), failed (pdf_error says why; Retry PDF queues it again). A failed render never fails the run.
+  pdfStatus     String    @default("none") @map("pdf_status")
+  /// Why the last render failed, or that one is in progress and has not finished; set exactly when pdf_status is failed.
+  pdfError      String?   @map("pdf_error")
+  /// octet_length(pdf), stored so the list never reads the bytea; set exactly when ready.
+  pdfBytes      Int?      @map("pdf_bytes")
+  /// When the render was asked for; set exactly while queued. The scheduler fails a render queued for more than an hour and never picked up.
+  pdfQueuedAt   DateTime? @map("pdf_queued_at") @db.Timestamptz()
+  /// When the PDF was produced; set exactly when ready.
+  pdfRenderedAt DateTime? @map("pdf_rendered_at") @db.Timestamptz()
+
+  previousRunId BigInt?        @map("previous_run_id")
+  previousRun   BasReportRun?  @relation("BasReportRunPrevious", fields: [previousRunId], references: [runId], onDelete: SetNull)
+  nextRuns      BasReportRun[] @relation("BasReportRunPrevious")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  findings          BasReportFinding[]
+  firstSeenFindings BasReportFinding[]  @relation("BasReportFindingFirstSeen")
+  deliveries        BasReportDelivery[]
+
+  @@index([reportId, createdAt(sort: Desc)])
+  @@index([status])
+  @@index([pdfStatus])
+  @@map("bas_report_runs")
+}
+
+/// One email of one run to one address (Reports, Phase 4, the email half - 2026-11-17). The owner's row is written from the employee record when the run's PDF is ready, never from a recipient row; one row per address per run, so a worker retry cannot send twice from the queue.
+model BasReportDelivery {
+  deliveryId BigInt @id @default(autoincrement()) @map("delivery_id")
+
+  runId BigInt       @map("run_id")
+  run   BasReportRun @relation(fields: [runId], references: [runId], onDelete: Cascade)
+
+  /// Lower-cased, the spelling a recipient row stores.
+  email    String
+  /// owner (from the employee record), recipient (a bas_report_recipients row), requested (Send to me).
+  source   String
+  /// The order the worker sends in: the owner 0, the recipient rows after it in the order they were added.
+  position Int
+
+  /// pending (waiting for the worker, or for its next attempt), sent, failed (attempts used up, or a failure retrying cannot fix; Resend queues it again), not_sent (the send gate was closed: nothing left the platform).
+  status         String    @default("pending")
+  /// Attempts made, at most three. A claim counts as an attempt before the call is made.
+  attempts       Int       @default(0)
+  /// When the worker may next take it: now when queued, later after a failed attempt (the backoff), and a lease while an attempt is in flight.
+  nextAttemptAt  DateTime  @default(now()) @map("next_attempt_at") @db.Timestamptz()
+  /// Why the last attempt failed, or that one started and has not finished, or why nothing was sent. Never the message body.
+  lastError      String?   @map("last_error")
+  /// Graph's request-id for the sendMail call it accepted: sendMail answers 202 with no body, so there is no message id to keep. What Microsoft support asks for.
+  graphRequestId String?   @map("graph_request_id")
+  sentAt         DateTime? @map("sent_at") @db.Timestamptz()
+
+  /// Who asked for this address with Send to me, or who last asked for a Resend of it; null for a delivery the worker queued on its own.
+  requestedById String?   @map("requested_by_id") @db.Uuid
+  requestedBy   Employee? @relation("BasReportDeliveryRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@unique([runId, email])
+  @@index([status, nextAttemptAt])
+  @@map("bas_report_deliveries")
+}
+
+/// The Reports module's one safety ceiling (2026-11-12): the most a single run may spend and the longest it may take. One row, edited by BAS module admins from the Usage page; the engine reads it for every run.
+model BasReportSettings {
+  /// Always 1: the table holds one row, held to it by a CHECK.
+  settingsId Int @id @default(1) @map("settings_id") @db.SmallInt
+
+  /// Dollars per run. A run that would pass it stops asking the model for narrative and finishes partial, saying so.
+  ceilingUsd     Decimal @default(10) @map("ceiling_usd") @db.Decimal(8, 2)
+  /// Minutes per run, 1 to 25. Past it the engine skips what is still waiting and finishes partial, saying so.
+  ceilingMinutes Int     @default(25) @map("ceiling_minutes")
+
+  updatedById String?   @map("updated_by_id") @db.Uuid
+  updatedBy   Employee? @relation("BasReportSettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("bas_report_settings")
+}
+
+/// One structured finding of a run (Reports, Phase 2). The numbers live here; the model only words them.
+model BasReportFinding {
+  findingId BigInt @id @default(autoincrement()) @map("finding_id")
+
+  runId BigInt       @map("run_id")
+  run   BasReportRun @relation(fields: [runId], references: [runId], onDelete: Cascade)
+
+  position    Int
+  questionKey String @map("question_key")
+  section     String
+
+  /// `equipment:<id>` or `point:<id>`: what the finding is about, as the fingerprint keys it.
+  subjectKey  String @map("subject_key")
+  /// The exact name at run time, kept after a rename or a delete.
+  subjectName String @map("subject_name")
+
+  equipmentId BigInt?       @map("equipment_id")
+  equipment   BasEquipment? @relation(fields: [equipmentId], references: [equipmentId], onDelete: SetNull)
+
+  issueCode String @map("issue_code")
+  priority  String
+  evidence  Json
+
+  likelyCause       String? @map("likely_cause")
+  recommendedAction String? @map("recommended_action")
+
+  /// sha256 of question_key | subject_key | issue_code, hex.
+  fingerprint String
+  state       String
+
+  firstSeenRunId BigInt?       @map("first_seen_run_id")
+  firstSeenRun   BasReportRun? @relation("BasReportFindingFirstSeen", fields: [firstSeenRunId], references: [runId], onDelete: SetNull)
+
+  @@index([runId, position])
+  @@index([fingerprint])
+  @@index([equipmentId])
+  @@map("bas_report_findings")
+}
+
 /// A record of all claude skills for the cost intelligence platform
 model CipSkill {
   id           BigInt   @id @default(autoincrement())
@@ -662,30 +1008,30 @@ model CipProjectSync {
 
 /// One execution of a workflow against a project. Also the job queue: the worker claims `queued` runs
 model CipRun {
-  id            BigInt       @id @default(autoincrement())
-  workflowId    BigInt?      @map("workflow_id")
-  workflow      CipWorkflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
-  workflowName  String       @map("workflow_name")
-  projectId     BigInt       @map("project_id")
-  project       CipProject   @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  steps         Json
-  status        String       @default("queued")
-  currentStep   Int          @default(0) @map("current_step")
-  sessionId     String?      @map("session_id")
+  id           BigInt       @id @default(autoincrement())
+  workflowId   BigInt?      @map("workflow_id")
+  workflow     CipWorkflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  workflowName String       @map("workflow_name")
+  projectId    BigInt       @map("project_id")
+  project      CipProject   @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  steps        Json
+  status       String       @default("queued")
+  currentStep  Int          @default(0) @map("current_step")
+  sessionId    String?      @map("session_id")
   /// Set by Continue: what the worker resumes the session with, once
-  resumePrompt  String?      @map("resume_prompt")
-  model         String
-  budgetUsd     Decimal      @map("budget_usd") @db.Decimal(10, 2)
-  costUsd       Decimal      @default(0) @map("cost_usd") @db.Decimal(12, 6)
-  inputTokens   BigInt       @default(0) @map("input_tokens")
-  outputTokens  BigInt       @default(0) @map("output_tokens")
-  error         String?
-  startedById   String?      @map("started_by_id") @db.Uuid
-  startedBy     Employee?    @relation(fields: [startedById], references: [id], onDelete: SetNull)
-  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  startedAt     DateTime?    @map("started_at") @db.Timestamptz(3)
-  heartbeatAt   DateTime?    @map("heartbeat_at") @db.Timestamptz(3)
-  finishedAt    DateTime?    @map("finished_at") @db.Timestamptz(3)
+  resumePrompt String?      @map("resume_prompt")
+  model        String
+  budgetUsd    Decimal      @map("budget_usd") @db.Decimal(10, 2)
+  costUsd      Decimal      @default(0) @map("cost_usd") @db.Decimal(12, 6)
+  inputTokens  BigInt       @default(0) @map("input_tokens")
+  outputTokens BigInt       @default(0) @map("output_tokens")
+  error        String?
+  startedById  String?      @map("started_by_id") @db.Uuid
+  startedBy    Employee?    @relation(fields: [startedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  startedAt    DateTime?    @map("started_at") @db.Timestamptz(3)
+  heartbeatAt  DateTime?    @map("heartbeat_at") @db.Timestamptz(3)
+  finishedAt   DateTime?    @map("finished_at") @db.Timestamptz(3)
 
   events      CipRunEvent[]
   checkpoints CipRunCheckpoint[]
@@ -731,11 +1077,11 @@ model CipRunCheckpoint {
 
 /// The Agent SDK session transcript, mirrored here so a paused run can resume in a fresh container
 model CipRunTranscript {
-  id        BigInt @id @default(autoincrement())
-  runId     BigInt @map("run_id")
-  run       CipRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  sessionId String @map("session_id")
-  subpath   String @default("")
+  id        BigInt  @id @default(autoincrement())
+  runId     BigInt  @map("run_id")
+  run       CipRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  sessionId String  @map("session_id")
+  subpath   String  @default("")
   entryUuid String? @map("entry_uuid")
   entry     Json
 
@@ -810,6 +1156,11 @@ model FpEquipment {
   documentedDate        DateTime? @map("documented_date") @db.Date
   documentedMethod      String?   @map("documented_method")
   notes                 String?
+  /// The schedule import's reading: likely | unlikely. A hint beside step 3, never the answer
+  exposureSuggestion    String?   @map("exposure_suggestion")
+  exposureEvidence      String?   @map("exposure_evidence")
+  /// Where an imported unit came from, e.g. "M-701-R · FAN SCHEDULE". Null when added by hand
+  source                String?
   updatedById           String?   @map("updated_by_id") @db.Uuid
   updatedBy             Employee? @relation("FpEquipmentUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)

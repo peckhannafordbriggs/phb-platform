@@ -7,7 +7,7 @@ import type {
   Recipient,
 } from "@microsoft/microsoft-graph-types";
 import { logger } from "@/lib/logger";
-import { readGraphEnv, readMailboxAddress } from "@/lib/env";
+import { env, readGraphEnv, readMailboxAddress } from "@/lib/env";
 import { createGraphClient, graphClient, type GraphTransport } from "../graph/client";
 import { mapGraphError } from "../graph/errors";
 import { MailError } from "./errors";
@@ -22,6 +22,11 @@ import {
   extractBodySegments,
 } from "./body-text";
 import { sanitizeEmailHtml } from "./sanitize";
+import {
+  deriveInlineImageKey,
+  inlineImageUrl,
+  normaliseContentId,
+} from "./inline-images";
 import { groupConversations, truncationOf } from "./conversations";
 import {
   MAX_ATTACHMENT_BYTES,
@@ -50,6 +55,7 @@ import type {
   MessageDetail,
   MessageMatchCandidate,
   MessagePage,
+  MessageRead,
   MessageSummary,
 } from "./types";
 
@@ -150,10 +156,23 @@ const DRAFT_EDIT_SELECT = [
  * `contentBytes` is NOT selected, and that is the point: GET /attachments
  * returns attachment content by default. Phase 4 does not download attachment
  * bytes, and nothing in this platform ever persists them.
+ *
+ * `contentId` lives on the fileAttachment subtype, not on the base type the
+ * collection is declared over, so it has to be asked for with the type
+ * qualifier: a bare `contentId` fails the whole request with 400 "Could not
+ * find a property named 'contentId' on type 'microsoft.graph.attachment'"
+ * (verified live, 2026-11-12), and so does casting the collection itself. The
+ * qualified form answers for every attachment, with the value on file
+ * attachments and nothing on the rest.
  */
-const ATTACHMENT_SELECT = ["id", "name", "contentType", "size", "isInline"].join(
-  ",",
-);
+const ATTACHMENT_SELECT = [
+  "id",
+  "name",
+  "contentType",
+  "size",
+  "isInline",
+  "microsoft.graph.fileAttachment/contentId",
+].join(",");
 
 /**
  * The three Graph actions that produce a derived draft, keyed by the mode the
@@ -511,6 +530,8 @@ function timeOf(value: string | null): number | null {
 
 function toAttachmentSummary(attachment: Attachment): AttachmentSummary {
   const odataType = (attachment as { "@odata.type"?: string })["@odata.type"];
+  // On the fileAttachment subtype only; the SDK's base type does not declare it.
+  const contentId = (attachment as { contentId?: string | null }).contentId;
 
   return {
     id: attachment.id ?? "",
@@ -518,14 +539,33 @@ function toAttachmentSummary(attachment: Attachment): AttachmentSummary {
     contentType: attachment.contentType ?? null,
     sizeBytes: attachment.size ?? null,
     isInline: attachment.isInline ?? false,
+    contentId:
+      typeof contentId === "string" && contentId.trim().length > 0
+        ? normaliseContentId(contentId)
+        : null,
     isItemAttachment: odataType?.includes("itemAttachment") ?? false,
   };
+}
+
+/**
+ * Whether a body could reference an inline image at all. A cheap textual test
+ * that decides whether the attachments are read alongside the message; the
+ * sanitizer does the real parsing. Deliberately generous: a false positive
+ * costs one metadata read, a false negative costs the images.
+ */
+function referencesInlineImages(body: Message["body"]): boolean {
+  return (
+    body?.contentType === "html" &&
+    typeof body.content === "string" &&
+    /cid:/i.test(body.content)
+  );
 }
 
 export class ChangeOrderMailService {
   private readonly client: Client;
   private readonly mailbox: string;
   private readonly uploadFetch: typeof fetch;
+  private readonly inlineImageKey: Buffer | null;
 
   /**
    * The last folder tree read, and when. Per service instance, in memory only.
@@ -553,10 +593,18 @@ export class ChangeOrderMailService {
      * the only place in the codebase that talks to Graph.
      */
     uploadFetch?: typeof fetch;
+    /**
+     * Signs the links a body's inline images are rendered through - see
+     * ./inline-images.ts. Derived from AUTH_SECRET by createMailService.
+     * Without one, every inline image stays an unresolved placeholder, which
+     * is what the pane showed before the links existed.
+     */
+    inlineImageKey?: Buffer;
   }) {
     this.client = deps.client;
     this.mailbox = deps.mailbox;
     this.uploadFetch = deps.uploadFetch ?? globalThis.fetch;
+    this.inlineImageKey = deps.inlineImageKey ?? null;
   }
 
   /**
@@ -1160,7 +1208,7 @@ export class ChangeOrderMailService {
   }
 
   /**
-   * One message, including its body.
+   * One message, including its body, and its attachment metadata.
    *
    * The HTML body is sanitized here rather than at the render site. A caller
    * cannot obtain the raw vendor markup through this service, because there is
@@ -1170,17 +1218,32 @@ export class ChangeOrderMailService {
    * asked for. Loading a remote image tells the sender the mail was opened, by
    * whom and when, so it is a decision a person makes per message rather than a
    * default.
+   *
+   * The attachments are read in the same call when the message has any, OR
+   * when the body references one by Content-ID - and the second condition is
+   * not implied by the first. Exchange reports `hasAttachments: false` for a
+   * message whose only attachments are inline images (verified live on the
+   * mail filter's banner icons and on internal replies with pasted
+   * screenshots, 2026-11-12), so a read gated on `hasAttachments` alone never
+   * finds the images a body is asking for.
    */
   async getMessage(
     messageId: string,
     options: GetMessageOptions = {},
-  ): Promise<MessageDetail> {
+  ): Promise<MessageRead> {
     const message = await this.call("getMessage", () =>
       this.client
         .api(this.path(`/messages/${encodeURIComponent(messageId)}`))
         .select(MESSAGE_DETAIL_SELECT)
         .get() as Promise<Message>,
     );
+
+    // Names and sizes only - never content. Skipped entirely when the message
+    // has none, which is the common case for an automation draft.
+    const attachments =
+      message.hasAttachments === true || referencesInlineImages(message.body)
+        ? await this.listAttachments(messageId)
+        : [];
 
     return {
       ...toMessageSummary(message),
@@ -1189,29 +1252,93 @@ export class ChangeOrderMailService {
       replyTo: toAddresses(message.replyTo),
       sentDateTime: message.sentDateTime ?? null,
       parentFolderId: message.parentFolderId ?? null,
-      body: this.toBody(message, options.allowRemoteImages ?? false),
+      body: this.toBody(message, {
+        messageId,
+        attachments,
+        allowRemoteImages: options.allowRemoteImages ?? false,
+      }),
+      attachments,
     };
   }
 
   private toBody(
     message: Message,
-    allowRemoteImages: boolean,
+    context: {
+      messageId: string;
+      attachments: AttachmentSummary[];
+      allowRemoteImages: boolean;
+    },
   ): MessageDetail["body"] {
     const content = message.body?.content;
     if (content === undefined || content === null) return null;
 
     if (message.body?.contentType === "html") {
-      const sanitized = sanitizeEmailHtml(content, { allowRemoteImages });
+      const sanitized = sanitizeEmailHtml(content, {
+        allowRemoteImages: context.allowRemoteImages,
+        resolveInlineImage: this.inlineImageResolver(
+          context.messageId,
+          context.attachments,
+        ),
+      });
       return {
         content: sanitized.html,
         format: "html",
         remoteImagesBlocked: sanitized.remoteImagesBlocked,
         inlineImages: sanitized.inlineImages,
+        inlineImagesUnresolved: sanitized.inlineImagesUnresolved,
       };
     }
 
     // Plain text cannot carry an image at all.
-    return { content, format: "text", remoteImagesBlocked: 0, inlineImages: 0 };
+    return {
+      content,
+      format: "text",
+      remoteImagesBlocked: 0,
+      inlineImages: 0,
+      inlineImagesUnresolved: 0,
+    };
+  }
+
+  /**
+   * Maps the Content-IDs a body may reference to signed links for the
+   * attachments that carry them. See ./inline-images.ts for why a link rather
+   * than a cookie-gated route.
+   *
+   * Only a file attachment whose declared type is an image is offered. The
+   * declared type is the vendor's claim and the image route decides from the
+   * bytes; this filter exists so a `cid:` pointing at the message's PDF -
+   * Exchange gives ordinary attachments a Content-ID too - stays an honest
+   * placeholder rather than becoming a link the route then refuses.
+   *
+   * Exact match first, then case-insensitive: Content-IDs are case-sensitive
+   * by RFC 2392, and real mail does not always agree with the RFC.
+   */
+  private inlineImageResolver(
+    messageId: string,
+    attachments: AttachmentSummary[],
+  ): (contentId: string) => string | null {
+    const key = this.inlineImageKey;
+    if (key === null) return () => null;
+
+    const exact = new Map<string, string>();
+    const folded = new Map<string, string>();
+    for (const attachment of attachments) {
+      if (attachment.contentId === null || attachment.isItemAttachment) continue;
+      if (!/^image\//i.test(attachment.contentType ?? "")) continue;
+      if (!exact.has(attachment.contentId)) {
+        exact.set(attachment.contentId, attachment.id);
+      }
+      const lower = attachment.contentId.toLowerCase();
+      if (!folded.has(lower)) folded.set(lower, attachment.id);
+    }
+
+    return (contentId) => {
+      const attachmentId =
+        exact.get(contentId) ?? folded.get(contentId.toLowerCase()) ?? null;
+      return attachmentId === null
+        ? null
+        : inlineImageUrl(key, messageId, attachmentId);
+    };
   }
 
   /**
@@ -1265,6 +1392,13 @@ export class ChangeOrderMailService {
     const body = message.body?.content ?? "";
     const bodyFormat = message.body?.contentType === "html" ? "html" : "text";
 
+    // A reply quotes the original, pictures included, so the preview resolves
+    // inline images the same way the reading pane does. Read only when the
+    // body asks for one: the editor lists the draft's attachments on its own.
+    const attachments = referencesInlineImages(message.body)
+      ? await this.listAttachments(messageId)
+      : [];
+
     return {
       id: message.id ?? messageId,
       subject: message.subject ?? null,
@@ -1276,7 +1410,11 @@ export class ChangeOrderMailService {
       // Only HTML has markup worth protecting. A plain-text body is already
       // readable and is edited whole.
       segments: bodyFormat === "html" ? extractBodySegments(body) : [],
-      preview: this.toBody(message, options.allowRemoteImages ?? false),
+      preview: this.toBody(message, {
+        messageId,
+        attachments,
+        allowRemoteImages: options.allowRemoteImages ?? false,
+      }),
       hasAttachments: message.hasAttachments ?? false,
       changeKey: message.changeKey ?? null,
       lastModifiedDateTime: message.lastModifiedDateTime ?? null,
@@ -1994,7 +2132,21 @@ export function createMailService(
     // constructor - so a test that intercepts the transport has to intercept
     // this too, or the one request that leaves the process is the real one.
     uploadFetch: transport?.fetchImpl,
+    inlineImageKey: inlineImageSigningKey(),
   });
+}
+
+/**
+ * The key behind every inline-image link, derived once per process from
+ * AUTH_SECRET - which the boot schema requires, so the web app always has one.
+ */
+let memoisedInlineImageKey: Buffer | null = null;
+
+export function inlineImageSigningKey(): Buffer {
+  if (memoisedInlineImageKey === null) {
+    memoisedInlineImageKey = deriveInlineImageKey(env.AUTH_SECRET);
+  }
+  return memoisedInlineImageKey;
 }
 
 let memoisedService: ChangeOrderMailService | null = null;

@@ -1,12 +1,2 @@
-/** The platform's `.card` surface. Padding is a prop, not a class, so it can't lose to the default. */
-export function Card({
-  className = "",
-  padding = "p-5",
-  children,
-}: {
-  className?: string;
-  padding?: string;
-  children: React.ReactNode;
-}) {
-  return <div className={`card ${padding} ${className}`}>{children}</div>;
-}
+// The shared kit, re-exported at the path this module has always imported it from (2026-11-10).
+export { Card } from "@/components/ui/Card";

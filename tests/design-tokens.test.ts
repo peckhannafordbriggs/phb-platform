@@ -83,6 +83,58 @@ describe("BUG 1: a font variable that references itself", () => {
   });
 });
 
+describe("the fonts come from the repository, never from Google at build time (2026-10-30)", () => {
+  /**
+   * `next/font/google` fetches Google's CSS while `next build` runs. A CI build
+   * failed when Google answered with something the loader could not parse
+   * (loader.js: "Cannot read properties of null (reading '1')"), and a deploy
+   * must not depend on a third party's servers. The three families are committed
+   * under app/fonts and loaded with next/font/local; this holds the import, the
+   * files and the licences together.
+   */
+  const FONT_FILES = [
+    "archivo-latin-wght.woff2",
+    "figtree-latin-wght.woff2",
+    "jetbrains-mono-latin-wght.woff2",
+  ];
+
+  it("has no import from next/font/google anywhere under app/ (comments may name it)", async () => {
+    for (const file of await sourceFiles("app")) {
+      const source = await readFile(file, "utf8");
+      expect(source, `${file}: fonts are local files, see app/fonts/README.md`).not.toMatch(
+        /from\s+["']next\/font\/google["']/,
+      );
+    }
+  });
+
+  it("loads each family from a committed woff2 with next/font/local", async () => {
+    const layout = await readFile(path.join(process.cwd(), "app/layout.tsx"), "utf8");
+    expect(layout).toMatch(/from "next\/font\/local"/);
+    for (const file of FONT_FILES) {
+      expect(layout).toContain(`./fonts/${file}`);
+      const bytes = await readFile(path.join(process.cwd(), "app/fonts", file));
+      // every WOFF2 starts with the signature 'wOF2'; a text-mode rewrite would break it
+      expect(bytes.subarray(0, 4).toString("latin1"), file).toBe("wOF2");
+    }
+  });
+
+  it("keeps the same CSS variables, weights and swap the Google loader declared", async () => {
+    const layout = await readFile(path.join(process.cwd(), "app/layout.tsx"), "utf8");
+    expect(layout).toMatch(/variable: "--font-archivo",\s*weight: "500 700",\s*display: "swap"/);
+    expect(layout).toMatch(/variable: "--font-figtree",\s*weight: "400 600",\s*display: "swap"/);
+    expect(layout).toMatch(/variable: "--font-jetbrains-mono",\s*weight: "400 500",\s*display: "swap"/);
+  });
+
+  it("carries a licence beside every file, and git treats the files as binary", async () => {
+    for (const name of ["OFL-Archivo.txt", "OFL-Figtree.txt", "OFL-JetBrainsMono.txt"]) {
+      const text = await readFile(path.join(process.cwd(), "app/fonts", name), "utf8");
+      expect(text, name).toMatch(/SIL Open Font License, Version 1\.1/);
+    }
+    const attributes = await readFile(path.join(process.cwd(), ".gitattributes"), "utf8");
+    expect(attributes).toMatch(/^\*\.woff2 binary$/m);
+  });
+});
+
 describe("BUG 2: the arbitrary font syntax generates no rule", () => {
   /**
    * `font-[family-name:var(--font-display)]` produces no CSS at all under this
@@ -133,13 +185,15 @@ describe("the palette keeps its measured values", () => {
     expect(css).toMatch(/--phb-red-btn:/);
   });
 
-  it("keeps a focus gold distinct from the fill gold", async () => {
+  it("keeps the focus ring off the bright gold", async () => {
     const css = await declarations();
 
     // The bright gold is 1.17 on a light surface and fails WCAG 2.2's 3:1 for
-    // focus indicators.
+    // focus indicators. Since 2026-11-05 the ring is purple rather than the
+    // darker gold, which read as a stray yellow box on every clicked field.
     expect(css).toMatch(/--phb-gold-ring:/);
-    expect(css).toMatch(/--focus:\s*var\(--phb-gold-ring\)/);
+    expect(css).toMatch(/--focus:\s*var\(--phb-purple\)/);
+    expect(css).not.toMatch(/--focus:\s*var\(--phb-gold\)/);
   });
 });
 
@@ -165,6 +219,34 @@ describe("the dashboard ground stays readable", () => {
      * edge in one corner of the page and loses it in another.
      */
     expect(css).toMatch(/\.dashboard-ground\s+\.card\s*\{/);
+  });
+
+  it("covers the whole document: the ground on each shell's outermost element, sized by main, never by the first viewport", async () => {
+    const css = await declarations();
+    const ground = /\.dashboard-ground\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
+    // 100% of main, with the ground's own padding on top of it (2026-11-12).
+    expect(ground).toMatch(/box-sizing:\s*content-box/);
+    expect(ground).toMatch(/min-height:\s*100%/);
+    expect(ground).not.toMatch(/100vh|100dvh|100svh/);
+    // main is at least the window tall and grows with the page.
+    const appShell = await readFile("components/app-shell.tsx", "utf8");
+    expect(appShell).toMatch(/<div className="flex min-h-screen">/);
+    expect(appShell).toMatch(/<main className="min-w-0 flex-1 px-8 py-8">/);
+    // Every ground element bleeds into that padding and sets no height of its own.
+    const shells = [
+      "app/(modules)/bas/bas-shell.tsx",
+      "app/(modules)/cost-intelligence/cip-shell.tsx",
+      "app/(modules)/freeze-protection/fp-shell.tsx",
+      "app/(platform)/page.tsx",
+      "components/module-placeholder.tsx",
+    ];
+    for (const file of shells) {
+      const source = await readFile(file, "utf8");
+      const line = /className="dashboard-ground[^"]*"/.exec(source)?.[0] ?? "";
+      expect(line, file).toContain("-mx-8 -my-8");
+      expect(line, file).not.toMatch(/min-h-screen|min-h-\[|\b100vh\b/);
+      expect(source, file).not.toMatch(/minHeight:\s*"100vh"/);
+    }
   });
 
   it("draws the washes from the quadrant colours and nothing else", async () => {

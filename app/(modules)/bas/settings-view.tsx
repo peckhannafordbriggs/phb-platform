@@ -27,6 +27,7 @@ import {
   fetchBasSettings,
   formatTimestamp,
   setStationCredential,
+  setBuildingOccupancy,
   updateBuilding,
   updateProject,
   updateStation,
@@ -40,6 +41,9 @@ import {
   settingsQuery,
   withFilter,
 } from "./filters";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { Button, Dropdown, INPUT, SearchBar } from "@/components/ui";
+import { ToneBadge } from "./collection-health";
 import { TONE_INK, TONE_STYLE } from "./tone";
 import { StationPoints } from "./settings-points";
 // Re-exported so the tests that render the list statically keep one import path.
@@ -184,7 +188,7 @@ export function BasSettings() {
     <div className="space-y-6">
       {error !== null && (
         <p
-          className="rounded-md border p-4 text-sm"
+          className="rounded-[var(--radius-row)] border p-4 text-sm"
           style={TONE_STYLE.bad}
           role="alert"
         >
@@ -199,7 +203,7 @@ export function BasSettings() {
         it drew is everything there is.
       */}
       {mismatch && (
-        <p className="rounded-md border p-4 text-sm" style={TONE_STYLE.bad}>
+        <p className="rounded-[var(--radius-row)] border p-4 text-sm" style={TONE_STYLE.bad}>
           This tree shows {rendered} of the {matched} stations that match, so{" "}
           {matched - rendered} could not be placed in the hierarchy and are not
           on this screen. Report this - a station missing from Settings may
@@ -246,7 +250,7 @@ export function BasSettings() {
       <NewProject orgs={tree.orgs} busy={busy} run={run} />
 
       {tree.projects.length === 0 ? (
-        <p className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-6 text-sm text-[var(--muted)]">
+        <p className="card p-6 text-sm text-[var(--muted)]">
           {filtered
             ? "Nothing matches. Clear the search or the filters."
             : "No projects yet. Create one above to add a building under it."}
@@ -288,10 +292,8 @@ type Run = (action: () => Promise<unknown>) => Promise<boolean>;
 
 // --------------------------------------------------------------------- forms
 
-const FIELD =
-  "mt-1 w-full rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm";
-const BUTTON =
-  "rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50";
+/** The kit's input, with the gap under its label. Buttons are the kit's `Button` (2026-11-10). */
+const FIELD = `${INPUT} mt-1`;
 
 function Field({
   label,
@@ -303,7 +305,7 @@ function Field({
   hint?: string;
 }) {
   return (
-    <label className="block text-xs font-medium text-[var(--muted)]">
+    <label className="block text-[0.75rem] text-[var(--muted)]">
       {label}
       {children}
       {hint !== undefined && (
@@ -331,7 +333,7 @@ function NewProject({
   // form that cannot succeed.
   if (orgs.length === 0) {
     return (
-      <p className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+      <p className="card p-4 text-sm text-[var(--muted)]">
         No organisation exists yet, so a project cannot be created. Organisations
         are not managed here - contact IT.
       </p>
@@ -340,15 +342,15 @@ function NewProject({
 
   if (!open) {
     return (
-      <button type="button" className={BUTTON} onClick={() => setOpen(true)}>
+      <Button size="sm"  onClick={() => setOpen(true)}>
         New project
-      </button>
+      </Button>
     );
   }
 
   return (
     <form
-      className="space-y-3 rounded-md border border-[var(--border)] bg-[var(--surface)] p-4"
+      className="space-y-3 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] p-4"
       onSubmit={async (event) => {
         event.preventDefault();
         const ok = await run(() => createProject({ orgId, name }));
@@ -391,17 +393,15 @@ function NewProject({
       </Field>
 
       <div className="flex gap-2">
-        <button type="submit" className={BUTTON} disabled={busy}>
+        <Button type="submit"  disabled={busy}>
           Create
-        </button>
-        <button
-          type="button"
-          className={BUTTON}
+        </Button>
+        <Button size="sm"
           disabled={busy}
           onClick={() => setOpen(false)}
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -440,7 +440,7 @@ function ProjectCard({
   );
 
   return (
-    <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-5">
+    <div className="card p-5">
       {editing ? (
         <form
           className="flex flex-wrap items-end gap-2"
@@ -461,12 +461,10 @@ function ProjectCard({
               />
             </Field>
           </div>
-          <button type="submit" className={BUTTON} disabled={busy}>
+          <Button type="submit"  disabled={busy}>
             Save
-          </button>
-          <button
-            type="button"
-            className={BUTTON}
+          </Button>
+          <Button size="sm"
             disabled={busy}
             onClick={() => {
               setName(project.name);
@@ -474,7 +472,7 @@ function ProjectCard({
             }}
           >
             Cancel
-          </button>
+          </Button>
         </form>
       ) : (
         <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -495,9 +493,9 @@ function ProjectCard({
               <h2 className="text-sm font-medium text-[var(--foreground)]">
                 <span
                   aria-hidden="true"
-                  className="mr-1.5 inline-block text-[var(--muted)]"
+                  className="mr-1.5 inline-block align-[-2px] text-[var(--muted)]"
                 >
-                  {expanded ? "\u25be" : "\u25b8"}
+                  {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </span>
                 {project.name}
               </h2>
@@ -511,17 +509,13 @@ function ProjectCard({
             </button>
           </div>
           <div className="flex gap-2">
-            <button
-              type="button"
-              className={BUTTON}
+            <Button size="sm"
               disabled={busy}
               onClick={() => setEditing(true)}
             >
               Rename
-            </button>
-            <button
-              type="button"
-              className={BUTTON}
+            </Button>
+            <Button size="sm"
               disabled={busy}
               onClick={() => void run(() => deleteProject(project.projectId))}
               // No confirmation dialog. The server refuses to delete a project
@@ -535,7 +529,7 @@ function ProjectCard({
               }
             >
               Delete
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -578,14 +572,12 @@ function ProjectCard({
             }}
           />
         ) : (
-          <button
-            type="button"
-            className={BUTTON}
+          <Button size="sm"
             disabled={busy}
             onClick={() => setAddingBuilding(true)}
           >
             Add building
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -604,6 +596,7 @@ function BuildingRow({
   run: Run;
 }) {
   const [editing, setEditing] = useState(false);
+  const [editingHours, setEditingHours] = useState(false);
   const [addingStation, setAddingStation] = useState(false);
 
   if (editing) {
@@ -635,26 +628,50 @@ function BuildingRow({
             {building.timezone}
             {building.address !== null && ` · ${building.address}`}
           </p>
+          {/*
+            The occupied hours (Reports, Phase 2): what a report falls back to
+            when no station on the building trends an occupancy point. Said
+            plainly when there are none, because a report of this building
+            then judges comfort and schedules against nothing.
+          */}
+          <p className="mt-0.5 text-xs text-[var(--muted)]">
+            Occupied hours: {describeOccupancyDays(building.occupancy)}
+          </p>
         </div>
         <div className="flex gap-2">
-          <button
-            type="button"
-            className={BUTTON}
+          <Button size="sm"
             disabled={busy}
             onClick={() => setEditing(true)}
           >
             Edit
-          </button>
-          <button
-            type="button"
-            className={BUTTON}
+          </Button>
+          <Button size="sm"
+            disabled={busy}
+            onClick={() => setEditingHours((v) => !v)}
+          >
+            Occupied hours
+          </Button>
+          <Button size="sm"
             disabled={busy}
             onClick={() => void run(() => deleteBuilding(building.siteId))}
           >
             Delete
-          </button>
+          </Button>
         </div>
       </div>
+
+      {editingHours && (
+        <OccupancyForm
+          initial={building.occupancy}
+          busy={busy}
+          onCancel={() => setEditingHours(false)}
+          onSubmit={async (days) => {
+            const ok = await run(() => setBuildingOccupancy(building.siteId, days));
+            if (ok) setEditingHours(false);
+            return ok;
+          }}
+        />
+      )}
 
       {building.stations.length === 0 ? (
         <p className="mt-3 text-sm text-[var(--muted)]">
@@ -704,14 +721,12 @@ function BuildingRow({
             }}
           />
         ) : (
-          <button
-            type="button"
-            className={BUTTON}
+          <Button size="sm"
             disabled={busy}
             onClick={() => setAddingStation(true)}
           >
             Register a station
-          </button>
+          </Button>
         )}
       </div>
     </>
@@ -743,7 +758,7 @@ function BuildingForm({
 
   return (
     <form
-      className="space-y-3 rounded border border-[var(--border)] p-4"
+      className="space-y-3 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] p-4"
       onSubmit={(event) => {
         event.preventDefault();
         void onSubmit(values);
@@ -795,17 +810,90 @@ function BuildingForm({
       </Field>
 
       <div className="flex gap-2">
-        <button type="submit" className={BUTTON} disabled={busy}>
+        <Button type="submit"  disabled={busy}>
           Save
-        </button>
-        <button
-          type="button"
-          className={BUTTON}
+        </Button>
+        <Button
           disabled={busy}
           onClick={onCancel}
         >
           Cancel
-        </button>
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+const WEEKDAYS: Array<{ n: number; label: string }> = [
+  { n: 1, label: "Mon" },
+  { n: 2, label: "Tue" },
+  { n: 3, label: "Wed" },
+  { n: 4, label: "Thu" },
+  { n: 5, label: "Fri" },
+  { n: 6, label: "Sat" },
+  { n: 7, label: "Sun" },
+];
+
+/** "Mon 08:00-18:00, Tue 08:00-18:00", or "none entered". */
+export function describeOccupancyDays(days: ReadonlyArray<{ weekday: number; start: string; end: string }>): string {
+  if (days.length === 0) return "none entered";
+  return [...days]
+    .sort((a, b) => a.weekday - b.weekday)
+    .map((d) => `${WEEKDAYS[d.weekday - 1]?.label ?? d.weekday} ${d.start}-${d.end}`)
+    .join(", ");
+}
+
+/**
+ * The occupied-hours form (Reports, Phase 2): a row per weekday, ticked
+ * when occupied, with the start and end in the building's zone. The whole
+ * week is saved at once.
+ */
+function OccupancyForm({
+  initial,
+  busy,
+  onSubmit,
+  onCancel,
+}: {
+  initial: ReadonlyArray<{ weekday: number; start: string; end: string }>;
+  busy: boolean;
+  onSubmit: (days: Array<{ weekday: number; start: string; end: string }>) => Promise<boolean>;
+  onCancel: () => void;
+}) {
+  const [rows, setRows] = useState(() =>
+    WEEKDAYS.map((d) => {
+      const found = initial.find((i) => i.weekday === d.n);
+      return { weekday: d.n, on: found !== undefined, start: found?.start ?? "08:00", end: found?.end ?? "18:00" };
+    }),
+  );
+  const set = (weekday: number, patch: Partial<{ on: boolean; start: string; end: string }>) =>
+    setRows((current) => current.map((r) => (r.weekday === weekday ? { ...r, ...patch } : r)));
+
+  return (
+    <form
+      className="mt-3 space-y-2 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSubmit(rows.filter((r) => r.on).map((r) => ({ weekday: r.weekday, start: r.start, end: r.end })));
+      }}
+    >
+      <h4 className="text-sm font-medium text-[var(--foreground)]">Occupied hours</h4>
+      <p className="text-xs text-[var(--muted)]">
+        Used by a health report only when no station on this building trends an occupancy point. In the building&apos;s zone; 24:00 is the end of the day.
+      </p>
+      {rows.map((r) => (
+        <div key={r.weekday} className="flex items-center gap-3 text-sm">
+          <label className="flex w-16 items-center gap-1.5">
+            <input type="checkbox" checked={r.on} onChange={(e) => set(r.weekday, { on: e.target.checked })} />
+            {WEEKDAYS[r.weekday - 1]?.label}
+          </label>
+          <input className={`${FIELD} mt-0 w-28`} value={r.start} disabled={!r.on} onChange={(e) => set(r.weekday, { start: e.target.value })} placeholder="08:00" />
+          <span className="text-[var(--muted)]">to</span>
+          <input className={`${FIELD} mt-0 w-28`} value={r.end} disabled={!r.on} onChange={(e) => set(r.weekday, { end: e.target.value })} placeholder="18:00" />
+        </div>
+      ))}
+      <div className="flex gap-2 pt-1">
+        <Button type="submit"  disabled={busy}>Save hours</Button>
+        <Button  disabled={busy} onClick={onCancel}>Cancel</Button>
       </div>
     </form>
   );
@@ -871,7 +959,7 @@ function StationRow({
   }
 
   return (
-    <div className="rounded border border-[var(--border)] p-3">
+    <div className="rounded-[var(--radius-row)] border border-[var(--border)] bg-white p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           {/*
@@ -887,15 +975,14 @@ function StationRow({
               {station.displayName}
             </span>
           )}
-          <span
-            className="rounded px-1.5 py-0.5 text-xs"
-            style={TONE_STYLE[reach.tone]}
-          >
-            {reach.label}
-          </span>
+          <ToneBadge tone={reach.tone}>{reach.label}</ToneBadge>
           {!station.isActive && (
             <span className="text-xs text-[var(--muted)]">inactive</span>
           )}
+          {/* Reports (Phase 2): which occupancy source a report of this building gets. */}
+          <span className="text-xs text-[var(--muted)]">
+            {station.hasOccupancyPoint ? "occupancy point trended" : "no occupancy point"}
+          </span>
         </div>
         <div className="flex gap-2">
           {/*
@@ -903,32 +990,26 @@ function StationRow({
             is the tree's own direct count, so it is right before anything is
             fetched and a station that is never expanded costs nothing.
           */}
-          <button
-            type="button"
-            className={BUTTON}
-            aria-expanded={showPoints}
+          <Button size="sm"
+            ariaExpanded={showPoints}
             onClick={() => setShowPoints((open) => !open)}
           >
             {showPoints
               ? "Hide points"
               : `Points (${station.totalPoints})`}
-          </button>
-          <button
-            type="button"
-            className={BUTTON}
+          </Button>
+          <Button size="sm"
             disabled={busy}
             onClick={() => setEditing(true)}
           >
             Edit
-          </button>
-          <button
-            type="button"
-            className={BUTTON}
+          </Button>
+          <Button size="sm"
             disabled={busy}
             onClick={() => void run(() => deleteStation(station.stationId))}
           >
             Delete
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -953,7 +1034,7 @@ function StationRow({
       */}
       {login !== null && (
         <p
-          className="mt-1 rounded border px-2 py-1 text-xs"
+          className="mt-1 rounded-[var(--radius-control)] border px-3 py-1.5 text-xs"
           style={{ ...TONE_STYLE[login.tone], color: TONE_INK[login.tone] }}
         >
           {login.label}
@@ -1054,7 +1135,7 @@ function StationForm({
 
   return (
     <form
-      className="space-y-3 rounded border border-[var(--border)] p-4"
+      className="space-y-3 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] p-4"
       onSubmit={(event) => {
         event.preventDefault();
         void onSubmit(values);
@@ -1165,12 +1246,12 @@ function StationForm({
         really collecting is shown on the row from the collector's own records.
       */}
       <div className="flex gap-2">
-        <button type="submit" className={BUTTON} disabled={busy}>
+        <Button type="submit"  disabled={busy}>
           Save
-        </button>
-        <button type="button" className={BUTTON} disabled={busy} onClick={onCancel}>
+        </Button>
+        <Button  disabled={busy} onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -1227,23 +1308,19 @@ function CredentialPanel({
             {formatTimestamp(station.credential.passwordUpdatedAt)}
           </span>
         )}
-        <button
-          type="button"
-          className={BUTTON}
+        <Button size="sm"
           disabled={busy}
           onClick={() => setOpen(true)}
         >
           {station.credential === null ? "Set login" : "Replace"}
-        </button>
+        </Button>
         {station.credential !== null && (
-          <button
-            type="button"
-            className={BUTTON}
+          <Button size="sm"
             disabled={busy}
             onClick={() => void run(() => clearStationCredential(station.stationId))}
           >
             Remove
-          </button>
+          </Button>
         )}
       </div>
     );
@@ -1251,7 +1328,7 @@ function CredentialPanel({
 
   return (
     <form
-      className="mt-2 space-y-2 rounded border border-[var(--border)] p-3"
+      className="mt-2 space-y-2 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] p-4"
       onSubmit={async (event) => {
         event.preventDefault();
         const ok = await run(() =>
@@ -1288,12 +1365,10 @@ function CredentialPanel({
         />
       </Field>
       <div className="flex gap-2">
-        <button type="submit" className={BUTTON} disabled={busy}>
+        <Button type="submit"  disabled={busy}>
           Save login
-        </button>
-        <button
-          type="button"
-          className={BUTTON}
+        </Button>
+        <Button size="sm"
           disabled={busy}
           onClick={() => {
             setPassword("");
@@ -1301,7 +1376,7 @@ function CredentialPanel({
           }}
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -1339,20 +1414,19 @@ function SettingsControls({
     filters.cred !== null;
 
   return (
-    <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-4">
+    <div className="card p-5">
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-[18rem] flex-1">
           <Field
             label="Search"
             hint="Project, building, display name, Niagara name, or address."
           >
-            <input
-              className={FIELD}
-              type="search"
-              value={filters.q}
-              disabled={busy}
+            <SearchBar
+              label="Search projects, buildings and stations"
               placeholder="e.g. Spring Grove, SpringGroveLabComputer, 196.1.1"
-              onChange={(e) => setParam(SEARCH_PARAM, e.target.value)}
+              value={filters.q}
+              onChange={(next) => setParam(SEARCH_PARAM, next)}
+              className="mt-1 w-full"
             />
           </Field>
         </div>
@@ -1436,20 +1510,15 @@ function Select({
 }) {
   return (
     <Field label={label}>
-      <select
-        className={FIELD}
+      {/* Absent IS all, so the empty value clears the parameter. */}
+      <Dropdown
+        label={label}
         value={value ?? ""}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
-      >
-        {/* Absent IS all, so the empty value clears the parameter. */}
-        <option value="">Any</option>
-        {options.map(([key, text]) => (
-          <option key={key} value={key}>
-            {text}
-          </option>
-        ))}
-      </select>
+        onChange={(next) => onChange(next === "" ? null : next)}
+        options={[{ value: "", label: "Any" }, ...options.map(([key, text]) => ({ value: key, label: text }))]}
+        className="mt-1 min-w-44"
+      />
     </Field>
   );
 }

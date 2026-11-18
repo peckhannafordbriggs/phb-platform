@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
+import { Button, INPUT, Pill, Segmented } from "@/components/ui";
 import type {
   DerivedDraftMode,
   MessageSummary,
@@ -998,15 +1000,14 @@ export function MailboxWorkspace() {
             aria-expanded={treeOpen}
             className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium text-[var(--foreground)]"
           >
-            <span
+            <ChevronRight
+              size={14}
               aria-hidden="true"
               className={
-                "text-[0.6rem] text-[var(--muted)] transition-transform " +
+                "shrink-0 text-[var(--muted)] transition-transform " +
                 (treeOpen ? "rotate-90" : "")
               }
-            >
-              ▸
-            </span>
+            />
             <span className="truncate">
               {selectedFolder?.displayName ?? "Folders"}
             </span>
@@ -1030,7 +1031,7 @@ export function MailboxWorkspace() {
               className="flex shrink-0 flex-col"
               style={{ width: `${widths.folders}px` }}
             >
-              <PaneHeader>Folders</PaneHeader>
+              <PaneHeader title="Folders" />
               <div className="min-h-0 flex-1 overflow-y-auto">{folderPane}</div>
             </div>
             <ResizeHandle
@@ -1053,25 +1054,24 @@ export function MailboxWorkspace() {
             : { flex: "1 1 0%" }
         }
       >
-        <PaneHeader>
-          <span className="truncate">{selectedFolder?.displayName ?? "Messages"}</span>
+        <PaneHeader title={selectedFolder?.displayName ?? "Messages"}>
           {/*
             Composing is the least-used entry point in this module - most
             change-order mail originates from the automation - so it sits here
             rather than anywhere more prominent. It creates a draft; it does not
             open anything that can send.
           */}
-          <button
-            type="button"
+          <Button
+            size="sm"
             disabled={actionBusy}
             onClick={() => {
               setActionError(null);
               setComposing(true);
             }}
-            className="ml-auto shrink-0 rounded border border-[var(--border)] bg-white px-2 py-0.5 text-[0.7rem] font-medium normal-case tracking-normal hover:bg-[var(--surface)] disabled:opacity-50"
+            className="ml-auto"
           >
             New message
-          </button>
+          </Button>
         </PaneHeader>
 
         <form
@@ -1098,7 +1098,7 @@ export function MailboxWorkspace() {
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search subjects in this folder"
               aria-label="Search subjects in this folder"
-              className="w-full rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 py-2 pr-9 text-sm transition-shadow placeholder:text-[var(--neutral-400)] focus:border-[var(--neutral-300)] focus:shadow-[var(--shadow-row)] focus:outline-none [&::-webkit-search-cancel-button]:hidden"
+              className={INPUT + " pr-9 placeholder:text-[var(--neutral-400)] [&::-webkit-search-cancel-button]:hidden"}
             />
             {(searchInput.length > 0 || activeQuery.length > 0) && (
               <button
@@ -1110,9 +1110,7 @@ export function MailboxWorkspace() {
                 }}
                 className="absolute inset-y-0 right-0 flex w-9 items-center justify-center rounded-r-[var(--radius-control)] text-[var(--muted)] transition-colors hover:text-[var(--foreground)]"
               >
-                <span aria-hidden="true" className="text-base leading-none">
-                  ×
-                </span>
+                <X size={12} aria-hidden="true" />
               </button>
             )}
           </div>
@@ -1131,33 +1129,24 @@ export function MailboxWorkspace() {
             that can show everything, which is also why someone reaches for it.
             "Threads" and "Flat" were both rejected - the first is Slack's word
             and the second is ours.
+
+            The control is the kit's Segmented (2026-11-10), stretched across
+            the pane: the same strip Cost Intelligence uses for live-vs-pinned.
           */}
-          <div
-            role="group"
-            aria-label="How the list is arranged"
-            className="mt-2.5 flex rounded-[var(--radius-control)] bg-[var(--neutral-100)] p-0.5"
-          >
-            {[
-              { label: "Conversations", want: true },
-              { label: "All messages", want: false },
-            ].map(({ label, want }) => (
-              <button
-                key={label}
-                type="button"
-                aria-pressed={grouped === want}
-                onClick={() => {
-                  if (grouped !== want) toggleGrouping();
-                }}
-                className={
-                  "flex-1 rounded-[calc(var(--radius-control)-0.125rem)] px-3 py-1.5 text-xs font-medium transition-colors " +
-                  (grouped === want
-                    ? "bg-white text-[var(--foreground)] shadow-[var(--shadow-row)]"
-                    : "text-[var(--muted)] hover:text-[var(--foreground)]")
-                }
-              >
-                {label}
-              </button>
-            ))}
+          <div className="mt-2.5">
+            <Segmented
+              tone="light"
+              fullWidth
+              label="How the list is arranged"
+              options={[
+                { value: "conversations", label: "Conversations" },
+                { value: "all", label: "All messages" },
+              ]}
+              value={grouped ? "conversations" : "all"}
+              onChange={(next) => {
+                if ((next === "conversations") !== grouped) toggleGrouping();
+              }}
+            />
           </div>
         </form>
 
@@ -1304,18 +1293,13 @@ export function MailboxWorkspace() {
                       {olderError} The messages already loaded are still here.
                     </p>
                   )}
-                  <button
-                    type="button"
-                    disabled={loadingMore}
-                    onClick={() => void loadOlder()}
-                    className="w-full rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 py-2 text-sm transition-colors hover:bg-[var(--neutral-50)] disabled:opacity-50"
-                  >
+                  <Button fullWidth disabled={loadingMore} onClick={() => void loadOlder()}>
                     {loadingMore
                       ? "Loading…"
                       : olderError !== null
                         ? "Try again"
                         : "Load older messages"}
-                  </button>
+                  </Button>
                 </div>
               )}
             </>
@@ -1408,13 +1392,7 @@ export function MailboxWorkspace() {
                 : "")
             }
             action={
-              <button
-                type="button"
-                onClick={() => setMoved(null)}
-                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)]"
-              >
-                Back to the list
-              </button>
+              <Button onClick={() => setMoved(null)}>Back to the list</Button>
             }
           />
         ) : deletedSubject !== null ? (
@@ -1422,13 +1400,7 @@ export function MailboxWorkspace() {
             title="Moved to Deleted Items"
             detail={`“${deletedSubject}” is in Deleted Items in changeorder@phb1899.com. Drag it back in Outlook if that was a mistake.`}
             action={
-              <button
-                type="button"
-                onClick={() => setDeletedSubject(null)}
-                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)]"
-              >
-                Back to the list
-              </button>
+              <Button onClick={() => setDeletedSubject(null)}>Back to the list</Button>
             }
           />
         ) : vanished ? (
@@ -1618,9 +1590,14 @@ function ResizeHandle({
   );
 }
 
-function PaneHeader({ children }: { children: React.ReactNode }) {
+/**
+ * A pane's title row: the platform's eyebrow, at one fixed height so the folder
+ * and list headers align whether or not one of them holds a small button.
+ */
+function PaneHeader({ title, children }: { title: React.ReactNode; children?: React.ReactNode }) {
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-[var(--divider-soft)] bg-[var(--surface)] px-4 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+    <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--divider-soft)] bg-[var(--surface)] px-4">
+      <span className="eyebrow min-w-0 truncate text-[var(--muted)]">{title}</span>
       {children}
     </div>
   );
@@ -1739,17 +1716,7 @@ function MessageRow({
             {formatDate(message.receivedDateTime)}
           </span>
           {message.hasAttachments && <AttachmentGlyph />}
-          {message.isDraft && (
-            <span
-              className="shrink-0 rounded-[2px] px-1 py-px text-[0.5625rem] font-medium uppercase tracking-wide"
-              style={{
-                color: "var(--phb-orange-ink)",
-                background: "color-mix(in srgb, var(--phb-orange) 20%, transparent)",
-              }}
-            >
-              Draft
-            </span>
-          )}
+          {message.isDraft && <Pill tone="warn">Draft</Pill>}
         </p>
       </button>
     </li>
@@ -1850,11 +1817,8 @@ function ConversationHeaderRow({
           </span>
         )}
         <p className="flex items-start gap-1.5">
-          <span
-            aria-hidden="true"
-            className="mt-px shrink-0 text-[0.6875rem] text-[var(--muted)]"
-          >
-            {expanded ? "▾" : "▸"}
+          <span aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--muted)]">
+            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           </span>
           <span
             className={
@@ -1901,15 +1865,7 @@ function ConversationHeaderRow({
             a draft in here" has to survive the row being folded up.
           */}
           {group.draftCount > 0 && (
-            <span
-              className="shrink-0 rounded-[2px] px-1 py-px text-[0.5625rem] font-medium uppercase tracking-wide"
-              style={{
-                color: "var(--phb-orange-ink)",
-                background: "color-mix(in srgb, var(--phb-orange) 20%, transparent)",
-              }}
-            >
-              {group.draftCount === 1 ? "Draft" : `${group.draftCount} drafts`}
-            </span>
+            <Pill tone="warn">{group.draftCount === 1 ? "Draft" : `${group.draftCount} drafts`}</Pill>
           )}
           {/*
             What the collapsed row is holding back, said plainly - so the drafts
@@ -1962,13 +1918,7 @@ function MessageView({
             {message.subject ?? "(no subject)"}
           </h2>
           {onEdit !== undefined && (
-            <button
-              type="button"
-              onClick={onEdit}
-              className="shrink-0 rounded border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-[var(--surface)]"
-            >
-              Review and edit
-            </button>
+            <Button onClick={onEdit}>Review and edit</Button>
           )}
         </div>
 

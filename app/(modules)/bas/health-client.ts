@@ -1587,6 +1587,13 @@ export const deleteBuilding = (siteId: string) =>
     { method: "DELETE" },
   );
 
+/** The building's occupied hours, the whole week at once (Reports, Phase 2). */
+export const setBuildingOccupancy = (siteId: string, days: Array<{ weekday: number; start: string; end: string }>) =>
+  settingsWrite<{ days: Array<{ weekday: number; start: string; end: string }> }>(
+    `/buildings/${encodeURIComponent(siteId)}/occupancy`,
+    { method: "PUT", body: JSON.stringify({ days }) },
+  );
+
 /**
  * Timezones offered in the building form.
  *

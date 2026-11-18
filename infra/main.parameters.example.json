@@ -81,6 +81,9 @@
     "authUrl": {
       "value": ""
     },
+    "appMinReplicas": { "value": 0 },
+    "appMaxReplicas": { "value": 3 },
+    "appHttpConcurrentRequests": { "value": 10 },
     "customDomainName": {
       "value": ""
     },
@@ -107,6 +110,9 @@
       "value": false
     },
     "kbAnthropicApiKeyInKeyVault": {
+      "value": false
+    },
+    "fpAnthropicApiKeyInKeyVault": {
       "value": false
     },
     "basCredentialKeyInKeyVault": {
@@ -164,8 +170,54 @@
       "value": ""
     },
 
+    "enableBasReports": {
+      "value": false
+    },
+    "basReportsSchedulerCron": {
+      "value": "*/15 * * * *"
+    },
+    "basMailClientId": {
+      "value": ""
+    },
+    "basMailTenantId": {
+      "value": ""
+    },
+    "basMailbox": {
+      "value": ""
+    },
+    "basReportsAllowSend": {
+      "value": false
+    },
     "enableDbBackup": {
       "value": false
+    },
+
+    "enableCoShadow": {
+      "value": false
+    },
+    "coEngineImage": {
+      "value": ""
+    },
+    "coEngineAppClientId": {
+      "value": ""
+    },
+    "coReaderAppClientId": {
+      "value": ""
+    },
+    "coGraphTenantId": {
+      "value": ""
+    },
+    "coShadowDriveId": {
+      "value": ""
+    },
+    "coShadowRoot": {
+      "value": ""
+    },
+    "coShadowBidTrackerPath": {
+      "value": ""
+    },
+    "coShadowMasterPath": {
+      "value": ""
     },
 
     "enableBudget": {

@@ -19,8 +19,8 @@
 --
 -- WHAT IT CAN DO
 --
---   SELECT only, on the thirteen bas_* data tables and the six bas_v_* views -
---   nineteen objects, named below. That is every object the planner is shown
+--   SELECT only, on the fourteen bas_* data tables and the six bas_v_* views -
+--   twenty objects, named below. That is every object the planner is shown
 --   (bas_v_data_dictionary lists them) and so every object its SELECT may
 --   legitimately name. It is NOT narrowed to what the platform's own code
 --   reads: the platform's provenance and schema queries touch eleven of the
@@ -33,6 +33,10 @@
 -- WHAT IT CANNOT DO
 --
 --   Read bas_station_credentials (withheld by name - the Niagara logins).
+--   Read the seven report tables (withheld by name - Reports, Phase 1 and 2:
+--   definitions, questions, recipients, the shared library, personal
+--   questions, runs, findings). bas_site_occupancy is building data and IS
+--   readable.
 --   Read any platform table: employees, audit_events, module_grants, modules,
 --   positions, departments, draft_locks, _prisma_migrations (revoked by name).
 --   INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES or TRIGGER anywhere.
@@ -68,15 +72,19 @@
 --   The server's firewall must admit the shell. Add a temporary rule for the
 --   shell's outbound address and remove it afterwards:
 --     IP=$(curl -s https://ifconfig.me)
---     az postgres flexible-server firewall-rule create -g <resource-group> -n <server> \
---        --rule-name cloudshell-temp --start-ip-address $IP --end-ip-address $IP
+--     az postgres flexible-server firewall-rule create -g <resource-group> -s <server> -n cloudshell-temp \
+--        --start-ip-address $IP --end-ip-address $IP
 --     ...run the script...
---     az postgres flexible-server firewall-rule delete -g <resource-group> -n <server> \
---        --rule-name cloudshell-temp --yes
+--     az postgres flexible-server firewall-rule delete -g <resource-group> -s <server> -n cloudshell-temp --yes
+--   (-s is the server and -n the rule - the only spelling az accepts.)
 --
 --   Re-running rotates the password and re-asserts the grants; it never widens
---   them. It proves the boundary before it finishes and fails loudly if the
---   proof fails. Then the URL for Key Vault (BAS-ASK-DATABASE-URL; infra/README.md):
+--   them. AFTER A MIGRATION that adds a bas_* table, re-run it with the
+--   EXISTING password - the one inside the BAS-ASK-DATABASE-URL secret - so the
+--   URL the container app holds stays valid: runbook.md -> *Analyze answers
+--   "permission denied" for every question* -> *Re-run after a migration* has
+--   the PowerShell steps from a laptop. It proves the boundary before it
+--   finishes and fails loudly if the proof fails. On a first run, then the URL for Key Vault (BAS-ASK-DATABASE-URL; infra/README.md):
 --
 --     postgresql://bas_analyze:<the password you chose>@<server>.postgres.database.azure.com:5432/phb_platform?sslmode=require
 --
@@ -128,6 +136,8 @@ INSERT INTO analyze_ro (relname) VALUES
     ('bas_sync_checkpoints'),
     ('bas_ingest_runs'),
     ('bas_data_gaps'),
+    -- Occupied hours a person entered per building (Reports, Phase 1).
+    ('bas_site_occupancy'),
     -- The six views. The data dictionary is the planner's schema source.
     ('bas_v_point'),
     ('bas_v_reading'),
@@ -136,9 +146,25 @@ INSERT INTO analyze_ro (relname) VALUES
     ('bas_v_collection_health'),
     ('bas_v_data_dictionary');
 
+-- No semicolon inside a reason: tests/bas-analyze-role-sql.test.ts reads this
+-- block up to the first one, and a name after it would go unchecked.
 CREATE TEMP TABLE analyze_hold (relname text PRIMARY KEY, reason text);
 INSERT INTO analyze_hold (relname, reason) VALUES
-    ('bas_station_credentials', 'AES-256-GCM ciphertext of the Niagara logins; a read-only role is refused it by being a separate table');
+    ('bas_station_credentials', 'AES-256-GCM ciphertext of the Niagara logins - a read-only role is refused it by being a separate table'),
+    -- Reports, Phase 1 (2026-11-10): platform-side, not building data. The
+    -- dictionary view excludes the same five by name.
+    ('bas_report_definitions',  'report configuration a person typed'),
+    ('bas_report_questions',    'a report''s question list, including typed text'),
+    ('bas_report_recipients',   'email addresses'),
+    ('bas_library_questions',   'the shared question library - platform configuration'),
+    ('bas_personal_questions',  'an employee''s own saved questions'),
+    -- Reports, Phase 2 (2026-11-11): documents the platform wrote.
+    ('bas_report_runs',         'a report run - period, cost, status, the rendered document'),
+    ('bas_report_findings',     'a run''s findings, with the model''s sentences on each'),
+    -- 2026-11-12: the module''s one safety ceiling. A setting, not a reading.
+    ('bas_report_settings',     'the Reports safety ceiling - one row of platform configuration'),
+    -- 2026-11-17: who each run was emailed to, and whether it went.
+    ('bas_report_deliveries',   'the email addresses a run was sent to, and the send state');
 
 CREATE TEMP TABLE analyze_platform (relname text PRIMARY KEY);
 INSERT INTO analyze_platform (relname) VALUES
@@ -285,6 +311,14 @@ BEGIN
 
     IF to_regclass('public.bas_station_credentials') IS NOT NULL
        AND has_table_privilege(role, 'public.bas_station_credentials', 'SELECT')    THEN fail := fail || 'CAN SELECT bas_station_credentials'; END IF;
+    IF NOT has_table_privilege(role, 'public.bas_site_occupancy', 'SELECT')          THEN fail := fail || 'cannot SELECT bas_site_occupancy (building data)'; END IF;
+    IF has_table_privilege(role, 'public.bas_report_recipients', 'SELECT')           THEN fail := fail || 'CAN SELECT bas_report_recipients'; END IF;
+    IF has_table_privilege(role, 'public.bas_report_definitions', 'SELECT')          THEN fail := fail || 'CAN SELECT bas_report_definitions'; END IF;
+    IF has_table_privilege(role, 'public.bas_personal_questions', 'SELECT')          THEN fail := fail || 'CAN SELECT bas_personal_questions'; END IF;
+    IF has_table_privilege(role, 'public.bas_report_runs', 'SELECT')                 THEN fail := fail || 'CAN SELECT bas_report_runs'; END IF;
+    IF has_table_privilege(role, 'public.bas_report_findings', 'SELECT')             THEN fail := fail || 'CAN SELECT bas_report_findings'; END IF;
+    IF has_table_privilege(role, 'public.bas_report_settings', 'SELECT')             THEN fail := fail || 'CAN SELECT bas_report_settings'; END IF;
+    IF has_table_privilege(role, 'public.bas_report_deliveries', 'SELECT')           THEN fail := fail || 'CAN SELECT bas_report_deliveries'; END IF;
     IF has_table_privilege(role, 'public.employees', 'SELECT')                      THEN fail := fail || 'CAN SELECT employees'; END IF;
     IF has_table_privilege(role, 'public.audit_events', 'SELECT')                   THEN fail := fail || 'CAN SELECT audit_events'; END IF;
     IF has_table_privilege(role, 'public.module_grants', 'SELECT')                  THEN fail := fail || 'CAN SELECT module_grants'; END IF;

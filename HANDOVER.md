@@ -1,7 +1,6 @@
 # PHB Internal Platform — Handover
 
-*For whoever owns this after December 2026. Written August 2026 by Mahi Sheth, the
-co-op intern who built it.*
+*For whoever owns this after December 2026. Built by Karthik and Mahi as of December 2026.
 
 Read this first. It is deliberately short and deliberately honest — about what works, what
 doesn't, what will break, and what you can safely ignore.
@@ -151,10 +150,16 @@ each module per person.
 There is **no create-employee function.** Employees appear in the admin list when they
 first sign in. This is intentional.
 
-### The four admins
+### The five admins
+
+The list below is what production's `BOOTSTRAP_ADMIN_EMAIL` held when this was written,
+not a statement of who should be an admin: to change it, edit the variable on the
+container app and redeploy (the seed adds admins, it never removes them), and
+add or remove the admin flag on the Admin screen. Remember the platform refuses
+to leave zero active admins.
 
 Seeded from the `BOOTSTRAP_ADMIN_EMAIL` environment variable:
-
+- `krachamolla@phb1899.com`
 - `msheth@phb1899.com`
 - `jschwarz@phb1899.com`
 - `jschriner@phb1899.com`
@@ -181,7 +186,7 @@ names them):
 |---|---|---|
 | SSO | Employee sign-in | Client ID `220921c1-f23e-4d01-b354-736884ba3d00`. Client secret expires **13 August 2028** |
 | Change Order Mail | Graph access to the mailbox | Client ID `d1795907-d017-4a5e-9da3-033c4bee4ec1`. Scoped by Exchange policy to that one mailbox. **No SharePoint access, by design** |
-| phb-platform-co-review | Read-only Graph access to ONE SharePoint folder, `_needs_review`, for the Needs Review tab | Requested 2026-10-21; client ID goes here when it exists. `Files.SelectedOperations.Selected`, granted Read on that folder only. Production signs in with the managed identity; no secret. `runbook.md` → *What to ask IT for* → Request 5 |
+| phb-platform-co-review | Read-only Graph access to ONE SharePoint folder, `_needs_review`, for the Needs Review tab | Client ID `b9e81eed-5153-4d73-a72a-1f729e37ad21`, created 2026-10-21. `Files.SelectedOperations.Selected` consented, to be granted Read on that folder only. **As of 2026-11-11 it has no federated identity credential**, so production cannot sign in as it, the three template parameters stay blank and the tab says "not connected"; the folder grant is unconfirmed. It will sign in with the managed identity; no secret. `runbook.md` → *What to ask IT for* → *Request 5 status* |
 
 **The mailbox fence is load-bearing.** Graph application permissions reach every mailbox in
 the tenant by default. An Exchange ApplicationAccessPolicy restricts this app to
@@ -199,7 +204,7 @@ This is the section to keep. Everything here is a known future failure with a kn
 |---|---|---|---|
 | SSO client secret expires | **13 August 2028** | Local sign-in fails with `AADSTS7000215`. **Production is not affected**: it carries no secret and authenticates the token exchange with the managed identity, matched by a federated identity credential on the SSO app registration — `runbook.md` → *Production sign-in authenticates with the managed identity*. If production ever fails with a secret-shaped error, the fault is that a secret was deployed at all. | Ask IT for a new secret, for developer machines only. `runbook.md` → *What expires, and when* |
 | BAS database stopped | If anyone applies a cost policy that stops it | Silent data destruction at the controller | Restart immediately; check for gaps on the Collection Health screen |
-| Azure spend alert | If misconfigured, or growth | Email at $150/month | Expected spend is $60–100 |
+| Azure spend alert | If misconfigured, or growth | Email at a forecast of 80 % and at 100 % of the $150/month budget, to `msheth@phb1899.com` and `jschwarz@phb1899.com` (`budgetContactEmails` in the gitignored parameters file, both since 2026-11-02) | Expected spend is $60–100. When either person leaves, put a current address in the parameters file and redeploy - `runbook.md` → *Verify the deployment before migrating*, step 1 |
 | Collector host offline | Laptop closed, machine rebooted, network down | Gaps appear on Collection Health | Restart the collector. Anything past ~42 hours is already gone |
 | Node or dependency EOL | Eventually | Build or deploy failures | Routine maintenance |
 
@@ -339,18 +344,25 @@ app log settles that, and the crons match what `09 Scheduled Task Prompts VERBAT
 recorded — that is a document in the SharePoint `CO Process Handoff` corpus (see § 9),
 not a file in this repository. Moving them into Azure is Phases 12–14.
 
-**Phase 12 Parts A and B are done.** The engine is in version control for the first time
+**Phase 12 Parts A, B and C are done.** The engine is in version control for the first time
 (`phb-co-engine`), the inventory that every later part depends on is written
 (`docs/12-ai-layer-inventory.md`), a dormant `Bid Tracker.xlsx` write was found and
 removed, and one file-access interface has been extracted with two implementations. The
-Graph one has never run. Parts C, D and E are not started.
+Graph one has run against SharePoint as the engine's own identity, from a container in
+Azure, and produced output equivalent to the local store's on all eight fixture COs
+(2026-10-28; `docs/phase-12-part-c-verification.md`). The two before-cutover decisions
+were closed the same day: the intake rule is in the repository, and the sentinel flows'
+trigger was observed firing on files the engine's identity wrote through Graph
+(`docs/phase-12-part-c-plan.md` → *Before cutover*). Parts D and E are not started.
 
 It's the only work in this project that can break a pipeline the business depends on daily,
 so the sequence matters: extract a file-access layer from a ~196 KB Python script,
 containerize it, shadow-run against a copy for weeks, and diff the output before cutover.
 Never run both against the live folders at once — the lock file and duplicate detection
 make that actively dangerous. Keep the laptop path documented as rollback for at least a
-month after cutover.
+month after cutover. **When cutover day comes, work from `docs/PHASE-14.md`**: it is the
+one list of everything the documents say must happen then, each item with its source,
+starting with the ways the laptop's engine and the repository's engine differ.
 
 ---
 

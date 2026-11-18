@@ -1,5 +1,10 @@
 import { GraphClientError, GraphError } from "@microsoft/microsoft-graph-client";
+import { passThroughError } from "@/lib/mail/graph-client";
+import { parseRetryAfter } from "@/lib/mail/retry-after";
 import { MailError, type MailErrorKind } from "../mail/errors";
+
+/** Shared with the BAS report sender since 2026-11-17; re-exported under its old path. */
+export { parseRetryAfter };
 
 /**
  * The one place a Graph failure becomes a MailError.
@@ -16,9 +21,7 @@ import { MailError, type MailErrorKind } from "../mail/errors";
  * through it.
  */
 export function passThroughMailError(error: MailError): never {
-  const wrapper = new GraphClientError(error.message);
-  wrapper.customError = error;
-  throw wrapper;
+  return passThroughError(error);
 }
 
 function unwrap(error: unknown): MailError | null {
@@ -30,28 +33,6 @@ function unwrap(error: unknown): MailError | null {
   }
 
   return null;
-}
-
-/**
- * Graph reports throttling with Retry-After, either as seconds or as an HTTP
- * date. Anything unparseable is treated as absent rather than as zero.
- */
-export function parseRetryAfter(header: string | null): number | null {
-  if (header === null) return null;
-
-  const trimmed = header.trim();
-  if (trimmed.length === 0) return null;
-
-  const seconds = Number(trimmed);
-  if (Number.isFinite(seconds)) {
-    return seconds >= 0 ? Math.ceil(seconds) : null;
-  }
-
-  const asDate = Date.parse(trimmed);
-  if (Number.isNaN(asDate)) return null;
-
-  const delta = Math.ceil((asDate - Date.now()) / 1000);
-  return delta > 0 ? delta : 0;
 }
 
 /**

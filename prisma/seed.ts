@@ -4,6 +4,7 @@ import {
   seedBootstrapAdmins,
 } from "../lib/bootstrap-admins";
 import { seedBasVocabularies } from "./bas-vocabularies";
+import { seedBasReportLibrary } from "./bas-report-library";
 
 /**
  * Production seed. Idempotent - safe to re-run on every deploy.
@@ -151,6 +152,19 @@ async function main(): Promise<void> {
         `bas_point_roles contains ${vocab.undeclared.length} role(s) this repo ` +
           `does not declare: ${vocab.undeclared.join(", ")}. ` +
           `Add them to prisma/bas-vocabularies.ts or remove them by hand.`,
+      );
+    }
+
+    // The shared report-question library (Reports, Phase 1). Same class as
+    // the vocabularies: reference data the seed installs on every fresh
+    // database, and the add_bas_reports migration installs on production.
+    const library = await seedBasReportLibrary(prisma);
+    if (library.undeclared.length > 0) {
+      console.warn(
+        `bas_library_questions contains ${library.undeclared.length} computed ` +
+          `question(s) this repo does not declare: ${library.undeclared.join(", ")}. ` +
+          `A computed question is its analysis function; add it to ` +
+          `lib/modules/bas/reports/library.ts or remove the row by hand.`,
       );
     }
 
