@@ -369,23 +369,100 @@ describe.skipIf(!havePsql)("setup-bas-collector-role.sql", () => {
       return;
     }
     const script = path.resolve(process.cwd(), "scripts/setup-bas-collector-role.sql");
-    const created = runPsql(["-v", "pw=test-only-collector-password", "-f", script], process.cwd());
-    expect(created.status, created.stderr + created.stdout).toBe(0);
-    expect(created.stderr).toContain("refused everywhere else. OK.");
-    // The password must not be echoed.
-    expect(created.stdout).not.toContain("test-only-collector-password");
-    expect(created.stderr).not.toContain("test-only-collector-password");
-
-    const url = new URL(process.env.DATABASE_URL ?? "");
-    url.username = "bas_collector";
-    url.password = "test-only-collector-password";
-    const asCollector = (sql: string) =>
-      spawnSync("psql", [url.toString(), "-X", "-At", "-c", sql], { encoding: "utf8" });
-    expect(asCollector("SELECT count(*) FROM bas_points").status).toBe(0);
-    expect(asCollector("SELECT count(*) FROM employees").stderr).toContain("permission denied");
-    expect(asCollector("CREATE TABLE zz_no (x int)").stderr).toContain("permission denied");
-    expect(asCollector("UPDATE bas_station_credentials SET username = 'x'").stderr).toContain("permission denied");
-
-    await testDb.$executeRawUnsafe(`DROP OWNED BY bas_collector; DROP ROLE bas_collector`);
+    // Whatever happens below, the role goes. A failed run that left it behind
+    // would make the NEXT run skip as "already exists" and report green -
+    // which is what a run against the pre-2026-11-19 script did.
+    const dropRole = async () => {
+      const left = await testDb.$queryRawUnsafe<Array<{ n: bigint }>>(
+        `SELECT count(*) AS n FROM pg_roles WHERE rolname = 'bas_collector'`,
+      );
+      if (left[0]?.n !== 0n) {
+        await testDb.$executeRawUnsafe(`DROP OWNED BY bas_collector; DROP ROLE bas_collector`);
+      }
+    };
+    try {
+      await collectorRoleSequence(script);
+    } finally {
+      await dropRole();
+    }
   });
 });
+
+async function collectorRoleSequence(script: string): Promise<void> {
+  const created = runPsql(["-v", "pw=test-only-collector-password", "-f", script], process.cwd());
+  expect(created.status, created.stderr + created.stdout).toBe(0);
+  expect(created.stderr).toContain("refused everywhere else. OK.");
+  // The password must not be echoed.
+  expect(created.stdout).not.toContain("test-only-collector-password");
+  expect(created.stderr).not.toContain("test-only-collector-password");
+
+  const url = new URL(process.env.DATABASE_URL ?? "");
+  url.username = "bas_collector";
+  url.password = "test-only-collector-password";
+  const asCollector = (sql: string) =>
+    spawnSync("psql", [url.toString(), "-X", "-At", "-c", sql], { encoding: "utf8" });
+  expect(asCollector("SELECT count(*) FROM bas_points").status).toBe(0);
+  expect(asCollector("SELECT count(*) FROM employees").stderr).toContain("permission denied");
+  expect(asCollector("CREATE TABLE zz_no (x int)").stderr).toContain("permission denied");
+  expect(asCollector("UPDATE bas_station_credentials SET username = 'x'").stderr).toContain("permission denied");
+
+  // 2026-11-19. Every sequence an INSERT by the collector draws from - the
+  // gaps sequence above all, which this script withheld until that day and
+  // whose absence stopped collection from 6 November. nextval is exactly
+  // what record_gap's INSERT runs.
+  for (const seq of ["bas_data_gaps_gap_id_seq", "bas_points_point_id_seq", "bas_ingest_runs_run_id_seq"]) {
+    const drawn = asCollector(`SELECT nextval('${seq}') > 0`);
+    expect(drawn.stderr, seq).toBe("");
+    expect(drawn.stdout.trim(), seq).toBe("t");
+  }
+  // ...but not setval, which could move a counter backwards.
+  expect(asCollector("SELECT setval('bas_points_point_id_seq', 1)").stderr).toContain("permission denied");
+
+  // A table a migration drops and recreates gets a NEW sequence. The default
+  // privilege the script set (as the login that runs migrations - here the
+  // same test user) grants it without a re-run; zz_ so the gate never sees it.
+  await testDb.$executeRawUnsafe(`CREATE TABLE zz_recreated (id BIGSERIAL PRIMARY KEY)`);
+  try {
+    expect(asCollector("SELECT nextval('zz_recreated_id_seq') > 0").stdout.trim()).toBe("t");
+  } finally {
+    await testDb.$executeRawUnsafe(`DROP TABLE zz_recreated`);
+  }
+
+  // Re-run after a migration: no password, so the password must not move -
+  // the collector host's .env is the only place it lives.
+  const rerun = runPsql(["-f", script], process.cwd());
+  expect(rerun.status, rerun.stderr + rerun.stdout).toBe(0);
+  expect(rerun.stdout).toContain("Its password was NOT changed");
+  expect(rerun.stderr).toContain("refused everywhere else. OK.");
+  expect(asCollector("SELECT current_user").stdout.trim()).toBe("bas_collector");
+
+  // A serial column on a table the collector writes stops the gate before
+  // anything is granted, naming the sequence: an INSERT there would need it.
+  await testDb.$executeRawUnsafe(`ALTER TABLE bas_point_links ADD COLUMN zz_counter BIGSERIAL`);
+  try {
+    const stopped = runPsql(["-f", script], process.cwd());
+    expect(stopped.status).not.toBe(0);
+    expect(stopped.stderr).toContain("not in collector_seq");
+    expect(stopped.stderr).toContain("bas_point_links_zz_counter_seq");
+  } finally {
+    await testDb.$executeRawUnsafe(`ALTER TABLE bas_point_links DROP COLUMN zz_counter`);
+  }
+
+  // An empty password is refused rather than set.
+  const empty = runPsql(["-v", "pw=", "-f", script], process.cwd());
+  expect(empty.status).not.toBe(0);
+  expect(empty.stderr).toContain("pw is empty");
+
+  await testDb.$executeRawUnsafe(`DROP OWNED BY bas_collector; DROP ROLE bas_collector`);
+
+  // Without a password and without the role, there is nothing to keep: it
+  // refuses, exits non-zero - not psql's \quit, which exits 0 - and creates
+  // nothing.
+  const nothing = runPsql(["-f", script], process.cwd());
+  expect(nothing.status).not.toBe(0);
+  expect(nothing.stderr).toContain("does not exist on this server yet");
+  const after = await testDb.$queryRawUnsafe<Array<{ n: bigint }>>(
+    `SELECT count(*) AS n FROM pg_roles WHERE rolname = 'bas_collector'`,
+  );
+  expect(after[0]?.n).toBe(0n);
+}

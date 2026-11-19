@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { basObjectsFromMigrations, readMigrations, scriptList, type Created } from "./bas-migration-objects";
 
 /**
  * Every bas_* table or view a migration creates must be CLASSIFIED in
@@ -21,78 +22,13 @@ import { describe, expect, it } from "vitest";
  * runs the script through psql; this one holds the lists to the migrations.
  */
 
-const ROOT = process.cwd();
-const MIGRATIONS = path.join(ROOT, "prisma/migrations");
-const SCRIPT = path.join(ROOT, "scripts/setup-bas-analyze-role.sql");
+const SCRIPT = path.join(process.cwd(), "scripts/setup-bas-analyze-role.sql");
 
 /** Report tables are platform configuration and documents, never building data. */
 const REPORT_TABLE = /^bas_(report|library|personal)_/;
 
-function stripComments(sql: string): string {
-  return sql.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
-}
-
-const NAME = String.raw`(?:"?public"?\.)?"?(bas_[a-z0-9_]+)"?`;
-const CREATE = new RegExp(
-  String.raw`\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:UNLOGGED\s+)?(?:MATERIALIZED\s+)?(TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?${NAME}`,
-  "gi",
-);
-const DROP = new RegExp(String.raw`\bDROP\s+(?:MATERIALIZED\s+)?(?:TABLE|VIEW)\s+(?:IF\s+EXISTS\s+)?${NAME}`, "gi");
-const RENAME = new RegExp(
-  String.raw`\bALTER\s+(?:TABLE|VIEW)\s+(?:IF\s+EXISTS\s+)?${NAME}\s+RENAME\s+TO\s+"?(bas_[a-z0-9_]+)"?`,
-  "gi",
-);
-
-interface Created {
-  name: string;
-  kind: "table" | "view";
-  migration: string;
-}
-
-/**
- * The bas_* objects that exist after applying the migrations in order: each
- * CREATE adds, a DROP removes, a RENAME moves. Migration directories sort by
- * their timestamp prefix, which is the order Prisma applies them in.
- */
-function basObjectsFromMigrations(migrations: Array<{ name: string; sql: string }>): Map<string, Created> {
-  const live = new Map<string, Created>();
-  for (const m of [...migrations].sort((a, b) => a.name.localeCompare(b.name))) {
-    const sql = stripComments(m.sql);
-    const events: Array<{ at: number; apply: () => void }> = [];
-    for (const x of sql.matchAll(CREATE)) {
-      const name = x[2]!.toLowerCase();
-      const kind = x[1]!.toLowerCase() as "table" | "view";
-      events.push({ at: x.index!, apply: () => void (live.has(name) ? undefined : live.set(name, { name, kind, migration: m.name })) });
-    }
-    for (const x of sql.matchAll(DROP)) {
-      const name = x[1]!.toLowerCase();
-      events.push({ at: x.index!, apply: () => void live.delete(name) });
-    }
-    for (const x of sql.matchAll(RENAME)) {
-      const from = x[1]!.toLowerCase();
-      const to = x[2]!.toLowerCase();
-      events.push({
-        at: x.index!,
-        apply: () => {
-          const was = live.get(from);
-          live.delete(from);
-          live.set(to, { name: to, kind: was?.kind ?? "table", migration: m.name });
-        },
-      });
-    }
-    for (const e of events.sort((a, b) => a.at - b.at)) e.apply();
-  }
-  return live;
-}
-
-/** The quoted names in one `INSERT INTO <temp table> ... VALUES` block of the script. */
-function scriptList(sql: string, table: "analyze_ro" | "analyze_hold"): string[] {
-  const start = sql.indexOf(`INSERT INTO ${table} `);
-  if (start < 0) throw new Error(`setup-bas-analyze-role.sql has no INSERT INTO ${table}`);
-  const end = sql.indexOf(";", start);
-  const block = stripComments(sql.slice(start, end));
-  return [...block.matchAll(/\(\s*'([a-z0-9_]+)'/g)].map((m) => m[1]!);
-}
+// The migration replay and the script-list reader live in
+// tests/bas-migration-objects.ts, shared with the collector role's guard.
 
 interface GuardResult {
   unclassified: Created[];
@@ -111,12 +47,6 @@ function checkAnalyzeGrants(objects: Map<string, Created>, granted: string[], wi
     reportTablesNotWithheld: all.filter((o) => REPORT_TABLE.test(o.name) && !hold.has(o.name)),
     grantedButNeverCreated: granted.filter((n) => !objects.has(n)),
   };
-}
-
-function readMigrations(): Array<{ name: string; sql: string }> {
-  return readdirSync(MIGRATIONS, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => ({ name: d.name, sql: readFileSync(path.join(MIGRATIONS, d.name, "migration.sql"), "utf8") }));
 }
 
 function explain(r: GuardResult): string {

@@ -861,15 +861,61 @@ export async function getCollectionHealth(
     // days ago produces an empty list, and an empty list reads as "nothing to
     // report" when it means the opposite. This lets the empty state say when it
     // last ran instead of saying nothing.
+    //
+    // Under a filter it counts only runs attributed to a station in the
+    // selection (2026-11-19). A run with no station is estate-wide - listed
+    // under every filter above, rightly - but it is nobody's "most recent
+    // run": counting it made a project whose station had never been
+    // collected say its most recent run was a refused pass from 18 September.
     const newestRun = firstRow(
       await tx.$queryRaw<Array<{ newest_run_at: Date | null }>>`
         SELECT max(ir.started_at) AS newest_run_at
         FROM bas_ingest_runs ir
         LEFT JOIN bas_stations st USING (station_id)
-        WHERE (${stationSites} OR st.site_id IS NULL)
+        WHERE ${
+          selection.filtered
+            ? Prisma.sql`${stationSites} AND st.station_id IS NOT NULL`
+            : Prisma.sql`(${stationSites} OR st.site_id IS NULL)`
+        }
       `,
       "newest run",
     ).newest_run_at;
+
+    // --- is the collector completing passes at all? (2026-11-19) -----------
+
+    // The entitlement only - NEVER the filter. See CollectorPass in types.ts.
+    // A completed pass is a run row the collector closed as ok or partial:
+    // `running` is a pass that never finished (the 6-19 November rows) and
+    // `failed` collected nothing. Both go through bas_stations because every
+    // completed run belongs to a station; only refused passes have none.
+    const collectorPass = firstRow(
+      await tx.$queryRaw<
+        Array<{
+          last_completed_at: Date | null;
+          minutes_since: number | null;
+          collectable_stations: number;
+        }>
+      >`
+        WITH last AS (
+          SELECT max(ir.finished_at) AS at
+          FROM bas_ingest_runs ir
+          JOIN bas_stations st USING (station_id)
+          WHERE ir.finished_at IS NOT NULL
+            AND ir.status IN ('ok', 'partial')
+            AND ${siteFilter(entitled, Prisma.sql`st.site_id`)}
+        )
+        SELECT
+          last.at AS last_completed_at,
+          (EXTRACT(EPOCH FROM (now() - last.at)) / 60.0)::float8 AS minutes_since,
+          (SELECT count(*)::int
+             FROM bas_stations st
+            WHERE st.is_active
+              AND st.connection_mode = 'direct'
+              AND ${siteFilter(entitled, Prisma.sql`st.site_id`)}) AS collectable_stations
+        FROM last
+      `,
+      "collector pass",
+    );
 
     const runRecords = await tx.$queryRaw<RunRecordRow[]>`
       SELECT ir.started_at, ir.records_written
@@ -995,6 +1041,7 @@ export async function getCollectionHealth(
       plausibilityRows,
       runs,
       newestRun,
+      collectorPass,
       runRecords,
       runGap,
       dataGaps,
@@ -1112,6 +1159,11 @@ export async function getCollectionHealth(
     plausibility,
     runs: result.runs.map(toIngestRunRow),
     newestRunAt: iso(result.newestRun),
+    collectorPass: {
+      lastCompletedAt: iso(result.collectorPass.last_completed_at),
+      minutesSinceCompleted: result.collectorPass.minutes_since,
+      collectableStations: result.collectorPass.collectable_stations,
+    },
     runRecords: result.runRecords.map(toRunRecordPoint),
     longestRunGap,
     dataGaps: result.dataGaps.map(toDataGapRow),

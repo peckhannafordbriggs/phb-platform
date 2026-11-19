@@ -13,11 +13,14 @@ vi.mock("next/navigation", () => ({
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  CollectorSilenceBanner,
   FailedChecks,
   PassedChecks,
   evaluateChecks,
   stuckPassedPhrase,
 } from "@/app/(modules)/bas/collection-health";
+import { COLLECTOR_SILENCE_MINUTES } from "@/app/(modules)/bas/health-client";
+import { COLLECTOR_POLL_INTERVAL_MINUTES } from "@/lib/modules/bas/types";
 import {
   emptyNotChecked,
   notCheckedPlausibility,
@@ -116,6 +119,11 @@ function health(over: {
     },
     runs: [],
     newestRunAt: "2026-09-29T11:58:00.000Z",
+    collectorPass: {
+      lastCompletedAt: "2026-09-29T11:58:30.000Z",
+      minutesSinceCompleted: 1.5,
+      collectableStations: 2,
+    },
     runRecords: [],
     longestRunGap: null,
     dataGaps: [],
@@ -588,5 +596,61 @@ describe("every table in the module scrolls, using the one pattern", () => {
     expect(explorer).toContain("count={gaps.length}");
     const analyze = await source("app/(modules)/bas/analyze.tsx");
     expect(analyze).toContain("Rows the database returned (${table.rowCount})");
+  });
+});
+
+describe("the collector-silence banner is quiet while passes complete, loud when they stop (2026-11-19)", () => {
+  // From 6 to 19 November every pass died partway through; the points ahead of
+  // the failing one kept writing, so every tile on the screen stayed calm. The
+  // banner reads only whether a pass COMPLETED, which a dying pass cannot fake.
+  const pass = (over: Partial<CollectionHealth["collectorPass"]>): CollectionHealth["collectorPass"] => ({
+    ...health().collectorPass,
+    ...over,
+  });
+  const banner = (p: CollectionHealth["collectorPass"]) =>
+    renderToStaticMarkup(createElement(CollectorSilenceBanner, { pass: p }));
+
+  it("renders nothing while the newest completed pass is recent", () => {
+    expect(banner(health().collectorPass)).toBe("");
+    // Exactly two polls is still not silence; the line is "older than".
+    expect(banner(pass({ minutesSinceCompleted: COLLECTOR_SILENCE_MINUTES }))).toBe("");
+  });
+
+  it("says when the last completed pass was, as an alert, once it is older than two polls", () => {
+    const html = banner(pass({ lastCompletedAt: "2026-11-06T14:15:00.000Z", minutesSinceCompleted: 31 }));
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("The collector has not reported a completed pass since");
+    expect(html).toContain("31 min ago");
+    expect(html).toContain(`every ${COLLECTOR_POLL_INTERVAL_MINUTES} minutes`);
+  });
+
+  it("reads thirteen days the way the outage lasted", () => {
+    const html = banner(pass({ lastCompletedAt: "2026-11-06T14:15:00.000Z", minutesSinceCompleted: 13 * 24 * 60 }));
+    expect(html).toContain("13.0 days ago");
+  });
+
+  it("says so when there has never been a completed pass", () => {
+    expect(banner(pass({ lastCompletedAt: null, minutesSinceCompleted: null }))).toContain(
+      "The collector has never reported a completed pass",
+    );
+  });
+
+  it("says nothing when there is nothing to collect", () => {
+    expect(banner(pass({ lastCompletedAt: null, minutesSinceCompleted: null, collectableStations: 0 }))).toBe("");
+  });
+
+  it("is two polls of the collector's cadence, from the one constant", () => {
+    expect(COLLECTOR_SILENCE_MINUTES).toBe(COLLECTOR_POLL_INTERVAL_MINUTES * 2);
+    expect(COLLECTOR_POLL_INTERVAL_MINUTES).toBe(15);
+  });
+
+  it("sits above the filtered-view warning and every tile, and is never given the filter", async () => {
+    const text = await source("app/(modules)/bas/collection-health.tsx");
+    const at = text.indexOf("<CollectorSilenceBanner pass={health.collectorPass} />");
+    expect(at).toBeGreaterThan(0);
+    expect(at).toBeLessThan(text.indexOf("{hiddenRisk !== null && ("));
+    expect(at).toBeLessThan(text.indexOf("<HeroTile"));
+    // The cadence badge reads the same constant rather than a second "15".
+    expect(text).not.toContain('badge="every 15 min"');
   });
 });
