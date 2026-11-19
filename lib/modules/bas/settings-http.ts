@@ -23,6 +23,7 @@ type SettingsErrorCode = Extract<
   | "equipment_cycle"
   | "equipment_in_use"
   | "station_unassigned"
+  | "preview_stale"
 >;
 
 /**
@@ -69,6 +70,8 @@ const STATUS: Record<SettingsErrorCode, number> = {
   equipment_cycle: 409,
   equipment_in_use: 409,
   station_unassigned: 409,
+  // 2026-11-19. The request was well-formed; the station moved under it.
+  preview_stale: 409,
 };
 
 function isSettingsError(code: BasErrorCode): code is SettingsErrorCode {

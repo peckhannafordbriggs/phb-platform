@@ -1793,6 +1793,29 @@ other modules were re-captured byte-identical to prove it
 The audit log and the lists pages keep their own chrome. `runbook.md` →
 *Admin panel (Phase 10)*; `tests/admin-employees-ui.test.tsx`.
 
+**Settings -> Points derives equipment and roles from point names, for a
+whole station at once (2026-11-19).** For CEI's JACE (`CEI_JCI_N2`, 334
+points named `V4_22/SpaceTemp`, `AHU_7/DA_T`, `XTM_109/AHU_7_FinalFilter`).
+*Create N pieces of equipment from name prefixes* opens a preview - one row
+per unit, prefix -> name -> type -> points, name and type editable, I/O
+modules and unknown prefixes unticked - and *Confirm* creates and attaches in
+one transaction; *Apply all high-confidence* opens a checklist of the
+suggestions it would apply and does the same. Both routes recompute
+everything from the database and refuse a stale preview (409
+`preview_stale`); neither takes a role or a point id it did not derive
+itself; both write a half only where it is still NULL; each action is one
+summary audit row (`bas.equipment_from_names`, `bas.suggestions_applied`)
+beside the per-point rows, `source` on each. Suggestions now carry a level,
+`high` or `medium`, and only `high` is applied in bulk. Suffix tokens are
+read whole after the prefix, never after the last underscore, and the
+equipment decides discharge air (`discharge_air_temp` on a terminal,
+`supply_air_temp` on an air handler, silence on unknown). The tables -
+`PREFIX_TYPE_RULES` in `lib/modules/bas/name-prefix.ts`, `TAIL_PATTERNS` in
+`lib/modules/bas/suggestions.ts` - were chosen from six CEI names and await
+Nathan's correction against the full list. `WHY-ITS-BUILT-THIS-WAY.md`
+§ 88; `runbook.md` -> *Settings -> Points: "Apply all high-confidence",
+"equipment from name prefixes", and a suggestion that says Medium*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

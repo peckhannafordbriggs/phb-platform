@@ -95,7 +95,18 @@ function runSubject(meta: Record<string, unknown>): string {
 /** " (one of 10 in a bulk change)" - B8.5's bulk rows are one per point. */
 function bulkSuffix(meta: Record<string, unknown>): string {
   const n = meta.selectionSize;
-  return typeof n === "number" && n > 1 ? ` (one of ${n} in a bulk change)` : " (in a bulk change)";
+  const many = typeof n === "number" && n > 1;
+  // The two name-derived actions (2026-11-19) say which one they were.
+  const source = stringField(meta, "source");
+  if (source === "name_prefixes") {
+    return many ? ` (one of ${n} attached from name prefixes)` : " (attached from name prefixes)";
+  }
+  if (source === "suggestions") {
+    return many
+      ? ` (one of ${n} high-confidence suggestions applied together)`
+      : " (a high-confidence suggestion)";
+  }
+  return many ? ` (one of ${n} in a bulk change)` : " (in a bulk change)";
 }
 
 /**
@@ -363,10 +374,39 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
   "bas.equipment_created": ({ actor, meta }) => {
     const type = stringField(meta, "equipType");
     const parent = stringField(meta, "parentName");
+    const source = stringField(meta, "source");
     return (
       `${actor} added the equipment ${stringField(meta, "name") ?? "(unnamed)"}` +
       (type !== null ? ` (${type})` : "") +
-      (parent !== null ? ` under ${parent}` : "")
+      (parent !== null ? ` under ${parent}` : "") +
+      (source === "name_prefixes"
+        ? " from the station's point name prefixes"
+        : source === "suggestions"
+          ? " from a high-confidence suggestion"
+          : "")
+    );
+  },
+
+  // 2026-11-19. One sentence for the whole action; the per-point rows beside
+  // it carry each point's own history.
+  "bas.equipment_from_names": ({ actor, meta }) => {
+    const created = Array.isArray(meta.created) ? meta.created.length : 0;
+    const matched = Array.isArray(meta.matched) ? meta.matched.length : 0;
+    const points = typeof meta.pointsAttached === "number" ? meta.pointsAttached : 0;
+    const station = stringField(meta, "stationId") ?? "?";
+    const parts = [`added ${created} piece${created === 1 ? "" : "s"} of equipment`];
+    if (matched > 0) parts.push(`used ${matched} that already existed`);
+    return `${actor} ${parts.join(" and ")} from the point name prefixes on station ${station}, attaching ${points} point${points === 1 ? "" : "s"}`;
+  },
+
+  "bas.suggestions_applied": ({ actor, meta }) => {
+    const roles = typeof meta.roleChanged === "number" ? meta.roleChanged : 0;
+    const equipment = typeof meta.equipmentChanged === "number" ? meta.equipmentChanged : 0;
+    const station = stringField(meta, "stationId") ?? "?";
+    return (
+      `${actor} applied high-confidence name suggestions on station ${station}: ` +
+      `a role on ${roles} point${roles === 1 ? "" : "s"}` +
+      (equipment > 0 ? `, equipment on ${equipment}` : "")
     );
   },
 
@@ -1027,6 +1067,8 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.point_role_changed": "BAS point role changed",
   "bas.point_equipment_changed": "BAS point equipment changed",
   "bas.equipment_created": "BAS equipment added",
+  "bas.equipment_from_names": "BAS equipment created from point names",
+  "bas.suggestions_applied": "BAS name suggestions applied",
   "bas.equipment_updated": "BAS equipment updated",
   "bas.equipment_deleted": "BAS equipment deleted",
   "bas.question_asked": "BAS question asked",

@@ -9333,7 +9333,7 @@ A suggestion is never applied by the platform. `getStationPoints` computes it
 on every read and writes nothing - `tests/bas-point-classification.test.ts`
 reads and renders the list and proves no row and no audit row changed - so if
 a point carries what the suggestion said, somebody clicked *Apply* or *Apply
-all N*, and the audit rows above say who. The patterns, and what "confident"
+all high-confidence*, and the audit rows above say who. The patterns, and what "confident"
 means for each, are in `lib/modules/bas/suggestions.ts`: a whole measurement
 phrase in the name ("Zone Temperature", "Duct Static Pressure", "Outside Air
 Damper"), never a word that could belong to several; a setpoint word only ever
@@ -9381,6 +9381,103 @@ refusal is unreachable (`docs/testing-blind-spots.md`).
 
 ---
 
+## Settings -> Points: "Apply all high-confidence", "equipment from name prefixes", and a suggestion that says Medium
+
+Built 2026-11-19 for CEI's JACE (`CEI_JCI_N2`), whose 334 points carry their
+equipment in the name: `V4_22/SpaceTemp`, `AHU_7/DA_T`,
+`XTM_109/AHU_7_FinalFilter`, `VAV_10_ZoneTemperature`. Two buttons on a
+station's Points list, both module-admin only, both a preview first and one
+transaction after.
+
+**Symptom: either button answers "N of the M ... no longer match ... Nothing
+was changed; reload the list".** 409 `preview_stale`. Working as designed.
+Neither route trusts the preview: *Apply* recomputes every ticked point's
+suggestion from the database and requires it still to be high-confidence;
+*Confirm* on the equipment preview re-derives each row's points from the
+station's names. Somebody classified points between the list loading and the
+click, the collector rediscovered the station, or the same preview was
+confirmed twice. Reload the list (collapse and expand the station) and review
+again. Nothing was written, so there is nothing to undo.
+
+**Symptom: a suggestion carries *Medium · check first* and *Apply all* does
+not include it.** Also as designed. A suggestion is `high` when the token
+names one role whatever the unit is, or the unit's type settles it; `medium`
+when it most likely means that role and a person should look - a bare
+`Humidity` or `CO2` on a point whose equipment type is unknown, `SAP`, a
+filter point recorded as a number with no unit. Medium is applied from its own
+row's *Apply*, one click per point. There is no `low`: a guess is no
+suggestion at all.
+
+**Symptom: `AHU_7/DA_T` suggests Supply Air Temperature, `V4_22/DaTemp`
+Discharge Air Temperature, and a bare `DaTemp` nothing.** The vocabulary
+defines `discharge_air_temp` as air leaving a *terminal* unit and
+`supply_air_temp` as air leaving an air handler (`reports/library.ts` reads
+the pair the same way), so the token is decided by the equipment: the type of
+the equipment the point is attached to, else the type its name's prefix
+implies (`V` -> VAV, `AHU` -> air handler), else unknown - and unknown is
+silence. Attaching the point to equipment of a known type, or running the
+equipment preview first, makes the suggestion appear. A person's equipment
+type always outranks the name's.
+
+**Symptom: the equipment preview shows `AHU_7 · AHU-7` as one row, or a row
+says "Already exists: the points attach to AHU-7".** Rows are matched by
+`equipmentKey` - upper case, separators collapsed, a separator between a
+letter and a digit dropped - so `AHU_7`, `AHU-7`, `ahu 7` and `AHU7` are one
+unit, and a row whose (edited) name has the key of equipment already on the
+building attaches to that equipment instead of creating a second. Separators
+between digits are kept: `V4_22`, `V42_2` and `V422` are three boxes. If two
+spellings really are two units, untick the row and attach their points with
+the bulk form.
+
+**Symptom: an `XTM_109` row starts unticked with no type, or a row says "The
+name does not say what kind of equipment this is".** An XTM (and an IOM) is a
+Johnson Controls expansion I/O module - terminals, not a unit - and its points
+belong to whatever it is wired to. When the text after the slash starts with a
+unit (`XTM_109/AHU_7_FinalFilter`) the point goes in that unit's row; what is
+left on the module is offered unticked. Any prefix the table does not know -
+a plant name, a floor, a folder - is offered the same way. Tick it and choose
+a type only if it really is one piece of equipment.
+
+**Symptom: a point whose name has a prefix is not in the equipment preview.**
+It already has equipment, or it is not collected. The preview never moves a
+point that has equipment and never offers a retired history; *Confirm* writes
+equipment only where `equipment_id` is still NULL at the moment of the update,
+so a point attached by hand after the preview loaded is left where it is and
+counted in the result's *left as they were*. The same fill-only rule applies
+to roles under *Apply all*.
+
+**Who did it, and how to undo it.** Each action is one summary row -
+`bas.equipment_from_names` or `bas.suggestions_applied` - beside the usual row
+per point per half and per new piece of equipment, all carrying
+`metadata.source` = `name_prefixes` or `suggestions`:
+
+```sql
+SELECT a.occurred_at, e.email, a.action, a.metadata
+  FROM audit_events a LEFT JOIN employees e ON e.id = a.actor_employee_id
+ WHERE a.action IN ('bas.equipment_from_names', 'bas.suggestions_applied')
+    OR a.metadata->>'source' IN ('name_prefixes', 'suggestions')
+ ORDER BY a.occurred_at;
+```
+
+There is no undo button. Roles: select the points with the role filter and
+*Clear the role* with the bulk form. Equipment: detach the points with the
+bulk form, then delete the equipment from the equipment panel (it refuses
+while anything is attached).
+
+**Correcting the tables.** The prefix letters and their types are
+`PREFIX_TYPE_RULES` (and `LEADING_TOKEN_LETTERS`) in
+`lib/modules/bas/name-prefix.ts`; the suffix tokens are `TAIL_PATTERNS` in
+`lib/modules/bas/suggestions.ts`. Every row was chosen from the six CEI names
+in the request and not checked against the full 334, which only production
+holds. A token is matched against the WHOLE text after the prefix with its
+separators removed - never only the text after the last underscore, because
+`DA_T` would then read as `T`. A role must exist in `prisma/bas-vocabularies.ts`
+before a token can name it (`OA_Enth` names none today: there is no enthalpy
+role). `tests/bas-name-prefix.test.ts` holds the tables to the vocabulary and
+the office and lab names to exactly the suggestions they had before.
+
+---
+
 ## Bulk assign refused the whole selection
 
 **Symptom.** *Apply to N points* on the Points list answers with a red banner
@@ -9415,14 +9512,12 @@ and the schema is strict. It answers
 already held every value sent and got no audit row, like a no-op on the
 single-point route.
 
-**It is also how a suggestion is accepted.** *Apply* on a row sends a
-selection of one with both halves, and *Apply all N* sends one request per
-distinct (role, equipment) pair after creating any equipment the suggestions
-name - the plan is `planSuggestionBatches` in
-`lib/modules/bas/suggestions.ts`, and the acceptance test executes the same
-plan through the same routes. If *Apply all* stops halfway, the equipment it
-created stays (it is correct equipment) and the batches that ran stayed; the
-rest were refused whole, and the banner says which.
+**It is also how one suggestion is accepted.** *Apply* on a row sends a
+selection of one with both halves. *Apply all high-confidence* (2026-11-19)
+does not come through here: it is one request to
+`POST .../stations/{id}/suggestions/apply`, which plans with
+`planSuggestionBatches` and applies the whole plan in one transaction, so it
+cannot stop halfway - see the section above.
 
 ---
 

@@ -11,12 +11,12 @@ import { requireModuleAdmin } from "@/lib/authz";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { resetBasAvailabilityCache } from "@/lib/modules/bas/route-helpers";
 import { getCollectionHealth } from "@/lib/modules/bas/service";
-import { planSuggestionBatches } from "@/lib/modules/bas/suggestions";
-import type { SettingsPoint, StationPointsList } from "@/lib/modules/bas/types";
+import type { ApplySuggestionsResult, SettingsPoint, StationPointsList } from "@/lib/modules/bas/types";
 import { NO_POINT_FILTERS, shownPoints } from "@/app/(modules)/bas/settings-points";
 import { seedBasVocabularies } from "../prisma/bas-vocabularies";
 import { PATCH as patchPoint } from "@/app/api/modules/bas/settings/points/[pointId]/route";
 import { POST as bulkRoute } from "@/app/api/modules/bas/settings/points/bulk/route";
+import { POST as applySuggestionsRoute } from "@/app/api/modules/bas/settings/stations/[stationId]/suggestions/apply/route";
 import { GET as pointsRoute } from "@/app/api/modules/bas/settings/stations/[stationId]/points/route";
 import { POST as createEquipmentRoute } from "@/app/api/modules/bas/settings/equipment/route";
 import { PATCH as patchEquipmentRoute } from "@/app/api/modules/bas/settings/equipment/[equipmentId]/route";
@@ -48,9 +48,11 @@ import {
  *
  *   1. read the list, which carries the name-pattern suggestions, and prove
  *      the read wrote nothing;
- *   2. accept every suggestion the way the "Apply all" button does - the same
- *      plan (planSuggestionBatches), executed through the same routes - which
- *      creates the ten VAVs and classifies 17 points;
+ *   2. accept every suggestion the way the "Apply all high-confidence"
+ *      button does - one request to the apply route with every
+ *      high-confidence point, which the server plans and applies in one
+ *      transaction (2026-11-19; before that the browser ran the same plan
+ *      request by request) - creating the ten VAVs and classifying 17 points;
  *   3. create the RTU, then put every VAV under it with its rooms in notes -
  *      the edit-after-creation the prompt said must be possible;
  *   4. select every collected point with no equipment the way the filters
@@ -286,40 +288,20 @@ const SUGGESTED_OFFICE_NAMES = [
 ].sort();
 
 /**
- * What "Apply all N suggestions" does, as the component does it: create each
- * named piece of equipment once, then one bulk request per batch.
+ * What "Apply all high-confidence suggestions" does, as the component does
+ * it: every point whose suggestion is high, in one request, which the
+ * server recomputes and applies in one transaction. Nothing to send when
+ * there is nothing high - the button is disabled then.
  */
 async function applyAllSuggestions(list: StationPointsList) {
-  const plan = planSuggestionBatches(list.points);
-  const created = new Map<string, string>();
-  if (list.siteId !== null) {
-    for (const item of plan.create) {
-      const { equipmentId } = await createEquipment({
-        siteId: list.siteId,
-        name: item.name,
-        equipType: item.equipType,
-      });
-      created.set(item.name.toLowerCase(), equipmentId);
-    }
-  }
-  const totals = { points: 0, roleChanged: 0, equipmentChanged: 0, unchanged: 0 };
-  for (const batch of plan.batches) {
-    const equipmentId =
-      batch.equipmentId ??
-      (batch.equipmentName === null ? null : (created.get(batch.equipmentName.toLowerCase()) ?? null));
-    const body: { pointIds: string[]; role?: string | null; equipmentId?: string | null } = {
-      pointIds: batch.pointIds,
-    };
-    if (batch.role !== null) body.role = batch.role;
-    if (equipmentId !== null) body.equipmentId = equipmentId;
-    if (body.role === undefined && body.equipmentId === undefined) continue;
-    const result = await bulk(body);
-    totals.points += result.points;
-    totals.roleChanged += result.roleChanged;
-    totals.equipmentChanged += result.equipmentChanged;
-    totals.unchanged += result.unchanged;
-  }
-  return { plan, totals };
+  const pointIds = list.points.filter((p) => p.suggestion?.level === "high").map((p) => p.pointId);
+  if (pointIds.length === 0) return { pointIds, totals: null };
+  const totals = await data<ApplySuggestionsResult>(
+    applySuggestionsRoute(json({ pointIds }, "POST"), {
+      params: Promise.resolve({ stationId: list.stationId }),
+    }),
+  );
+  return { pointIds, totals };
 }
 
 describe("the office JACE, classified through the routes the UI calls", () => {
@@ -361,12 +343,17 @@ describe("the office JACE, classified through the routes the UI calls", () => {
       expect(list.points.find((p) => p.niagaraHistoryName === name)!.suggestion, name).toBeNull();
     }
 
-    // 2. Apply all suggestions, as the button does.
-    const { plan, totals } = await applyAllSuggestions(list);
-    expect(plan.create.map((c) => c.name).sort()).toEqual(
-      fixture.office.equipment.filter((e) => e.equipType === "vav").map((e) => e.name).sort(),
-    );
-    expect(totals).toEqual({ points: 17, roleChanged: 17, equipmentChanged: 10, unchanged: 0 });
+    // The name-prefix preview (2026-11-19) derives exactly the ten boxes
+    // live has, from the same names, and nothing else.
+    const vavNames = fixture.office.equipment.filter((e) => e.equipType === "vav").map((e) => e.name).sort();
+    expect((list.equipmentFromNames ?? []).map((g) => g.name).sort()).toEqual(vavNames);
+    expect((list.equipmentFromNames ?? []).every((g) => g.equipType === "vav" && g.pointIds.length === 1)).toBe(true);
+
+    // 2. Apply all suggestions, as the button does. Every one is high.
+    const { pointIds: applied, totals } = await applyAllSuggestions(list);
+    expect(applied).toHaveLength(17);
+    expect(totals).toEqual({ points: 17, roleChanged: 17, equipmentChanged: 10, unchanged: 0, equipmentCreated: 10 });
+    expect((await listEquipment(officeSiteId)).equipment.map((e) => e.name).sort()).toEqual(vavNames);
 
     // 3. The RTU, then every VAV under it with its rooms in notes.
     const rtu = fixture.office.equipment.find((e) => e.parent === null)!;
@@ -460,6 +447,7 @@ describe("the office JACE, classified through the routes the UI calls", () => {
       "bas.point_label_changed": 2,
       "bas.equipment_created": 11,
       "bas.equipment_updated": 10,
+      "bas.suggestions_applied": 1,
     });
     const bulkRows = await testDb.auditEvent.count({
       where: { action: "bas.point_equipment_changed", metadata: { path: ["viaBulk"], equals: true } },
@@ -475,7 +463,7 @@ describe("the office JACE, classified through the routes the UI calls", () => {
 });
 
 describe("the lab station - Temp1 to Temp3 are the canon", () => {
-  it("offers no suggestion for any lab point, and 'Apply all' changes nothing", async () => {
+  it("offers no suggestion and no equipment for any lab point, and 'Apply all' has nothing to send", async () => {
     const before = await classificationOf(labStationId);
     const list = await readPoints(labStationId);
     expect(list.points).toHaveLength(7);
@@ -483,11 +471,11 @@ describe("the lab station - Temp1 to Temp3 are the canon", () => {
       expect(p.suggestion, p.niagaraHistoryName).toBeNull();
       expect(p.pointRole, p.niagaraHistoryName).toBeNull();
     }
+    expect(list.equipmentFromNames).toEqual([]);
 
-    const { plan, totals } = await applyAllSuggestions(list);
-    expect(plan.create).toEqual([]);
-    expect(plan.batches).toEqual([]);
-    expect(totals).toEqual({ points: 0, roleChanged: 0, equipmentChanged: 0, unchanged: 0 });
+    const { pointIds, totals } = await applyAllSuggestions(list);
+    expect(pointIds).toEqual([]);
+    expect(totals).toBeNull();
 
     // Exactly as unclassified as they started. A suggestion engine that
     // guessed at "Temp", or a read that applied what it computed, fails here.

@@ -13,16 +13,26 @@ import {
 import { basSiteScope } from "./service";
 import { resetSchemaContextCache } from "./analyze/schema-context";
 import {
+  planSuggestionBatches,
+  readableName,
   suggestClassification,
   type EquipmentFacts,
   type RoleFacts,
 } from "./suggestions";
+import {
+  equipmentKey,
+  groupEquipmentPrefixes,
+  type NamePrefixGroup,
+  type PrefixEquipmentFacts,
+} from "./name-prefix";
 import type {
+  ApplySuggestionsInput,
   BulkClassifyInput,
   CreateBuildingInput,
   CreateEquipmentInput,
   CreateProjectInput,
   CreateStationInput,
+  EquipmentFromNamesInput,
   SetCredentialInput,
   UpdateBuildingInput,
   UpdateEquipmentInput,
@@ -45,8 +55,10 @@ import type {
   BasSettingsTree,
   OccupancyDay,
   BasVocabularies,
+  ApplySuggestionsResult,
   BuildingEquipmentList,
   BulkClassifyResult,
+  EquipmentFromNamesResult,
   Completeness,
   PointSuggestion,
   SettingsBuilding,
@@ -582,6 +594,8 @@ interface PointListRow extends PlausibilityRow {
   role_name: string | null;
   equipment_id: bigint | null;
   equipment_name: string | null;
+  /** The attached equipment's type: context for a suffix token (2026-11-19). */
+  equipment_type: string | null;
   unit: string | null;
   is_active: boolean;
   inactive_reason: string | null;
@@ -668,24 +682,7 @@ export async function getStationPoints(
   viewer: Viewer,
   stationIdText: string,
 ): Promise<StationPointsList> {
-  // A malformed id is not a station. BigInt() would throw on it and turn a bad
-  // URL into a 500.
-  if (!/^\d{1,18}$/.test(stationIdText)) {
-    throw new BasError("station_not_found", "That station does not exist.");
-  }
-  const stationId = BigInt(stationIdText);
-  const { entitled } = await basSiteScope(viewer);
-
-  const station = await prisma.$queryRaw<Array<{ station_id: bigint; site_id: bigint | null }>>`
-    SELECT st.station_id, st.site_id
-      FROM bas_stations st
-     WHERE st.station_id = ${stationId}
-       AND (${entitlementSql(entitled, Prisma.sql`st.site_id`)} OR st.site_id IS NULL)`;
-  const found = station[0];
-  if (found === undefined) {
-    throw new BasError("station_not_found", "That station does not exist.");
-  }
-  const siteId = found.site_id;
+  const { stationId, siteId } = await loadScopedStation(viewer, stationIdText);
 
   const [rows, total, roleFacts, buildingEquipment] = await Promise.all([
     prisma.$queryRaw<PointListRow[]>`
@@ -698,6 +695,7 @@ export async function getStationPoints(
         pr.display_name AS role_name,
         p.equipment_id,
         e.name          AS equipment_name,
+        e.equip_type    AS equipment_type,
         p.unit,
         p.is_active,
         p.inactive_reason,
@@ -750,50 +748,154 @@ export async function getStationPoints(
     // the building's equipment, so a suggested "VAV-3" is matched to the
     // existing row or offered as new. READ ONLY - nothing in this function
     // writes, and the test proves a read changes no row.
-    prisma.$queryRaw<Array<{ point_role: string; display_name: string; typical_unit: string | null }>>`
-      SELECT point_role, display_name, typical_unit FROM bas_point_roles`,
+    loadRoleFacts(),
     siteId === null
-      ? Promise.resolve([] as Array<{ equipment_id: bigint; name: string }>)
-      : prisma.$queryRaw<Array<{ equipment_id: bigint; name: string }>>`
-          SELECT equipment_id, name FROM bas_equipment WHERE site_id = ${siteId}`,
+      ? Promise.resolve([] as BuildingEquipmentRow[])
+      : loadBuildingEquipment(siteId),
   ]);
 
-  const roles = new Map<string, RoleFacts>(
-    roleFacts.map((r) => [
-      r.point_role,
-      { pointRole: r.point_role, displayName: r.display_name, typicalUnit: r.typical_unit },
-    ]),
-  );
-  const equipmentFacts: EquipmentFacts[] = buildingEquipment.map((e) => ({
-    equipmentId: e.equipment_id.toString(),
-    name: e.name,
-  }));
+  const roles = toRoleFacts(roleFacts);
+  const equipmentFacts = toEquipmentFacts(buildingEquipment);
 
   return {
     stationId: stationId.toString(),
     siteId: siteId?.toString() ?? null,
-    points: rows.map((row) =>
-      toPoint(
-        row,
-        suggestClassification(
-          {
-            niagaraHistoryName: row.niagara_history_name,
-            niagaraDisplayName: row.display_name,
-            unit: row.unit,
-            pointRole: row.point_role,
-            equipmentId: row.equipment_id?.toString() ?? null,
-            collected: row.is_active,
-          },
-          roles,
-          equipmentFacts,
-        ),
-      ),
-    ),
+    points: rows.map((row) => toPoint(row, suggestionFor(row, roles, equipmentFacts))),
     pointsAccountedFor: {
       rendered: rows.length,
       inDatabase: Number(total[0]?.n ?? 0),
     },
+    // Equipment lives on a building, so a station attached to none is offered
+    // no units - the same reason its equipment picker is empty.
+    equipmentFromNames:
+      siteId === null ? [] : prefixGroupsFor(rows, toPrefixEquipmentFacts(buildingEquipment)),
   };
+}
+
+// --- the inputs both suggestion paths read (2026-11-19) -----------------------
+
+/**
+ * A station the viewer may see: in their entitlement, or attached to no
+ * building. Anything else - and a malformed id, which BigInt() would turn
+ * into a 500 - reads as not found.
+ */
+async function loadScopedStation(
+  viewer: Viewer,
+  stationIdText: string,
+): Promise<{ stationId: bigint; siteId: bigint | null }> {
+  if (!/^\d{1,18}$/.test(stationIdText)) {
+    throw new BasError("station_not_found", "That station does not exist.");
+  }
+  const stationId = BigInt(stationIdText);
+  const { entitled } = await basSiteScope(viewer);
+
+  const station = await prisma.$queryRaw<Array<{ station_id: bigint; site_id: bigint | null }>>`
+    SELECT st.station_id, st.site_id
+      FROM bas_stations st
+     WHERE st.station_id = ${stationId}
+       AND (${entitlementSql(entitled, Prisma.sql`st.site_id`)} OR st.site_id IS NULL)`;
+  const found = station[0];
+  if (found === undefined) {
+    throw new BasError("station_not_found", "That station does not exist.");
+  }
+  return { stationId, siteId: found.site_id };
+}
+
+interface RoleFactRow {
+  point_role: string;
+  display_name: string;
+  typical_unit: string | null;
+}
+
+interface BuildingEquipmentRow {
+  equipment_id: bigint;
+  name: string;
+  equip_type: string | null;
+}
+
+/** What one point's suggestion is computed from - the list's row or the apply path's. */
+interface SuggestionRow {
+  point_id: bigint;
+  niagara_history_name: string;
+  display_name: string | null;
+  unit: string | null;
+  data_type: string;
+  point_role: string | null;
+  equipment_id: bigint | null;
+  equipment_type: string | null;
+  is_active: boolean;
+}
+
+function loadRoleFacts(): Promise<RoleFactRow[]> {
+  return prisma.$queryRaw<RoleFactRow[]>`
+    SELECT point_role, display_name, typical_unit FROM bas_point_roles`;
+}
+
+function loadBuildingEquipment(siteId: bigint): Promise<BuildingEquipmentRow[]> {
+  return prisma.$queryRaw<BuildingEquipmentRow[]>`
+    SELECT equipment_id, name, equip_type FROM bas_equipment WHERE site_id = ${siteId}`;
+}
+
+function toRoleFacts(rows: readonly RoleFactRow[]): Map<string, RoleFacts> {
+  return new Map<string, RoleFacts>(
+    rows.map((r) => [
+      r.point_role,
+      { pointRole: r.point_role, displayName: r.display_name, typicalUnit: r.typical_unit },
+    ]),
+  );
+}
+
+function toEquipmentFacts(rows: readonly BuildingEquipmentRow[]): EquipmentFacts[] {
+  return rows.map((e) => ({ equipmentId: e.equipment_id.toString(), name: e.name }));
+}
+
+function toPrefixEquipmentFacts(rows: readonly BuildingEquipmentRow[]): PrefixEquipmentFacts[] {
+  return rows.map((e) => ({
+    equipmentId: e.equipment_id.toString(),
+    name: e.name,
+    equipType: e.equip_type,
+  }));
+}
+
+/** THE one call into the engine, so the list and the apply path cannot disagree. */
+function suggestionFor(
+  row: SuggestionRow,
+  roles: ReadonlyMap<string, RoleFacts>,
+  equipment: readonly EquipmentFacts[],
+): PointSuggestion | null {
+  return suggestClassification(
+    {
+      niagaraHistoryName: row.niagara_history_name,
+      niagaraDisplayName: row.display_name,
+      unit: row.unit,
+      pointRole: row.point_role,
+      equipmentId: row.equipment_id?.toString() ?? null,
+      collected: row.is_active,
+      dataType: row.data_type,
+      equipmentType: row.equipment_type,
+    },
+    roles,
+    equipment,
+  );
+}
+
+/** THE one call into the grouping, for the same reason. */
+function prefixGroupsFor(
+  rows: readonly SuggestionRow[],
+  equipment: readonly PrefixEquipmentFacts[],
+): NamePrefixGroup[] {
+  return groupEquipmentPrefixes(
+    rows.map((row) => ({
+      pointId: row.point_id.toString(),
+      name: readableName({
+        niagaraHistoryName: row.niagara_history_name,
+        niagaraDisplayName: row.display_name,
+      }),
+      collected: row.is_active,
+      equipmentId: row.equipment_id?.toString() ?? null,
+    })),
+    equipment,
+  );
 }
 
 /**
@@ -1077,6 +1179,29 @@ interface ClassificationChange {
   equipment?: AssignableEquipment | null;
 }
 
+interface ClassificationOptions {
+  viaBulk: boolean;
+  /**
+   * The size of the whole action, when one action is several calls - "Apply
+   * all high-confidence suggestions" applies one batch per (role, equipment)
+   * and every row should say how big the action was. Defaults to the points
+   * passed.
+   */
+  selectionSize?: number;
+  /**
+   * FILL, NEVER OVERWRITE (2026-11-19). Each half is written only where the
+   * point holds NULL for it - in the snapshot AND at the moment of the
+   * update, which is a conditional `updateMany` inside the transaction - so
+   * a point somebody classified since the preview is left exactly as they
+   * left it and counted unchanged. The two name-derived actions run with
+   * this on; a person's own picker and bulk form, which may deliberately
+   * change a value, run without it.
+   */
+  fillOnly?: boolean;
+  /** Which action wrote the row, on the audit metadata: "name_prefixes" or "suggestions". */
+  source?: string;
+}
+
 /**
  * THE ONE WRITE PATH for roles and equipment. The single-point functions and
  * the bulk endpoint all come through here, so the audit shape, the
@@ -1098,30 +1223,58 @@ async function applyClassification(
   viewer: Viewer,
   points: readonly ClassifiablePoint[],
   change: ClassificationChange,
-  options: { viaBulk: boolean },
+  options: ClassificationOptions,
+): Promise<BulkClassifyResult> {
+  const result = await prisma.$transaction((tx) =>
+    applyClassificationIn(tx, viewer, points, change, options),
+  );
+  if (result.roleChanged + result.equipmentChanged > 0) resetSchemaContextCache();
+  return result;
+}
+
+/**
+ * The body of applyClassification, inside a transaction the caller owns -
+ * so the two name-derived actions can create equipment and attach points
+ * in ONE transaction and still write through this one path. The caller
+ * drops the Analyze catalogue cache after its commit.
+ */
+async function applyClassificationIn(
+  tx: Prisma.TransactionClient,
+  viewer: Viewer,
+  points: readonly ClassifiablePoint[],
+  change: ClassificationChange,
+  options: ClassificationOptions,
 ): Promise<BulkClassifyResult> {
   let roleChanged = 0;
   let equipmentChanged = 0;
   let unchanged = 0;
 
-  await prisma.$transaction(async (tx) => {
-    for (const point of points) {
-      let touched = false;
-      const identity = {
-        pointId: point.point_id.toString(),
-        stationId: point.station_id.toString(),
-        niagaraHistoryName: point.niagara_history_name,
-        niagaraDisplayName: point.display_name,
-        label: point.label,
-        viaBulk: options.viaBulk,
-        selectionSize: points.length,
-      };
+  for (const point of points) {
+    let touched = false;
+    const identity = {
+      pointId: point.point_id.toString(),
+      stationId: point.station_id.toString(),
+      niagaraHistoryName: point.niagara_history_name,
+      niagaraDisplayName: point.display_name,
+      label: point.label,
+      viaBulk: options.viaBulk,
+      selectionSize: options.selectionSize ?? points.length,
+      ...(options.source !== undefined ? { source: options.source } : {}),
+    };
 
-      if (change.role !== undefined && change.role !== point.point_role) {
-        await tx.basPoint.update({
-          where: { pointId: point.point_id },
-          data: { pointRole: change.role },
-        });
+    const writeRole =
+      change.role !== undefined &&
+      change.role !== point.point_role &&
+      (options.fillOnly !== true || point.point_role === null);
+    if (writeRole) {
+      const moved = await tx.basPoint.updateMany({
+        where:
+          options.fillOnly === true
+            ? { pointId: point.point_id, pointRole: null }
+            : { pointId: point.point_id },
+        data: { pointRole: change.role },
+      });
+      if (moved.count === 1) {
         await writeAuditEvent(tx, {
           action: "bas.point_role_changed",
           actorEmployeeId: viewer.id,
@@ -1131,36 +1284,42 @@ async function applyClassification(
         roleChanged += 1;
         touched = true;
       }
+    }
 
-      if (change.equipment !== undefined) {
-        const nextId = change.equipment === null ? null : change.equipment.equipment_id;
-        if (nextId !== point.equipment_id) {
-          await tx.basPoint.update({
-            where: { pointId: point.point_id },
+    if (change.equipment !== undefined) {
+      const nextId = change.equipment === null ? null : change.equipment.equipment_id;
+      const writeEquipment =
+        nextId !== point.equipment_id &&
+        (options.fillOnly !== true || point.equipment_id === null);
+      const moved = !writeEquipment
+        ? { count: 0 }
+        : await tx.basPoint.updateMany({
+            where:
+              options.fillOnly === true
+                ? { pointId: point.point_id, equipmentId: null }
+                : { pointId: point.point_id },
             data: { equipmentId: nextId },
           });
-          await writeAuditEvent(tx, {
-            action: "bas.point_equipment_changed",
-            actorEmployeeId: viewer.id,
-            moduleKey: BAS_MODULE_KEY,
-            metadata: {
-              ...identity,
-              previousEquipmentId: point.equipment_id?.toString() ?? null,
-              previousEquipmentName: point.equipment_name,
-              equipmentId: nextId?.toString() ?? null,
-              equipmentName: change.equipment?.name ?? null,
-            },
-          });
-          equipmentChanged += 1;
-          touched = true;
-        }
+      if (moved.count === 1) {
+        await writeAuditEvent(tx, {
+          action: "bas.point_equipment_changed",
+          actorEmployeeId: viewer.id,
+          moduleKey: BAS_MODULE_KEY,
+          metadata: {
+            ...identity,
+            previousEquipmentId: point.equipment_id?.toString() ?? null,
+            previousEquipmentName: point.equipment_name,
+            equipmentId: nextId?.toString() ?? null,
+            equipmentName: change.equipment?.name ?? null,
+          },
+        });
+        equipmentChanged += 1;
+        touched = true;
       }
-
-      if (!touched) unchanged += 1;
     }
-  });
 
-  if (roleChanged + equipmentChanged > 0) resetSchemaContextCache();
+    if (!touched) unchanged += 1;
+  }
 
   return { points: points.length, roleChanged, equipmentChanged, unchanged };
 }
@@ -1251,6 +1410,362 @@ export async function bulkClassifyPoints(
   }
 
   return applyClassification(viewer, points, change, { viaBulk: true });
+}
+
+// ---------------------------------------------------------------------------
+// From the names: equipment from prefixes, and every high-confidence
+// suggestion at once (2026-11-19)
+// ---------------------------------------------------------------------------
+
+/**
+ * Both name-derived actions write a few hundred rows on a customer building
+ * (CEI: 334 points, each an update and an audit row, plus the equipment). The
+ * interactive transaction's default of five seconds is tight for that over
+ * the network to Azure; one minute is not a risk to anything else, because
+ * every row it locks is on one station.
+ */
+const NAME_ACTION_TRANSACTION = { timeout: 60_000, maxWait: 10_000 } as const;
+
+type StationNameRow = SuggestionRow & ClassifiablePoint;
+
+/** Every point on one station, as both the engine and the write path read it. */
+function loadStationNameRows(stationId: bigint): Promise<StationNameRow[]> {
+  return prisma.$queryRaw<StationNameRow[]>`
+    SELECT p.point_id, p.station_id, st.site_id, p.niagara_history_name, p.display_name,
+           p.label, p.point_role, p.equipment_id, e.name AS equipment_name,
+           e.equip_type AS equipment_type, p.unit, p.data_type, p.is_active
+      FROM bas_points p
+      JOIN bas_stations st ON st.station_id = p.station_id
+      LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
+     WHERE p.station_id = ${stationId}
+     ORDER BY p.niagara_history_name`;
+}
+
+/**
+ * "Create N pieces of equipment from name prefixes", confirmed (2026-11-19).
+ *
+ * THE PREVIEW IS RECOMPUTED, NOT TRUSTED. The browser sends which rows a
+ * person kept, by key, with the name and type they settled on - never point
+ * ids. The rows and their points are derived again here, from the station's
+ * names as the database holds them now, with the same function the preview
+ * used (groupEquipmentPrefixes). A key that no longer derives a row - the
+ * station was rediscovered, somebody attached the points by hand - refuses
+ * the whole request with `preview_stale` and writes nothing.
+ *
+ * WHAT IS WRITTEN, in one transaction:
+ *   - each row whose name matches existing equipment on the building (by
+ *     equipmentKey, so `AHU-7` matches `AHU_7`) attaches to it, and the type
+ *     sent is not read: the existing equipment keeps its own;
+ *   - each other row creates its equipment, with the type chosen - a row the
+ *     preview asked about must have had one chosen, or the request is
+ *     refused naming the row;
+ *   - then every point in every row is attached, FILL ONLY: a point that has
+ *     equipment by the time the transaction runs is left exactly as it is.
+ *
+ * A piece of equipment is one `bas.equipment_created` row carrying
+ * `source: "name_prefixes"` and the spellings it came from; a point is one
+ * `bas.point_equipment_changed` row as every bulk change writes it; and the
+ * action is one `bas.equipment_from_names` summary row, so the audit log can
+ * say what was done in one sentence and still hold each point's history.
+ */
+export async function createEquipmentFromNames(
+  viewer: Viewer,
+  stationIdText: string,
+  input: EquipmentFromNamesInput,
+): Promise<EquipmentFromNamesResult> {
+  const { stationId, siteId } = await loadScopedStation(viewer, stationIdText);
+  if (siteId === null) {
+    throw new BasError(
+      "station_unassigned",
+      "This station is attached to no building, so it has nowhere to put equipment. " +
+        "Attach the station to a building first.",
+    );
+  }
+
+  const [rows, buildingEquipment] = await Promise.all([
+    loadStationNameRows(stationId),
+    loadBuildingEquipment(siteId),
+  ]);
+  const groups = new Map(
+    prefixGroupsFor(rows, toPrefixEquipmentFacts(buildingEquipment)).map((g) => [g.key, g]),
+  );
+  const existingByKey = new Map<string, BuildingEquipmentRow>();
+  for (const e of buildingEquipment) {
+    if (!existingByKey.has(equipmentKey(e.name))) existingByKey.set(equipmentKey(e.name), e);
+  }
+
+  const stale = input.rows.filter((r) => !groups.has(r.key));
+  if (stale.length > 0) {
+    throw new BasError(
+      "preview_stale",
+      `${stale.length} of the ${input.rows.length} rows no longer match this station's ` +
+        `points - names changed, or the points were given equipment since the preview. ` +
+        `Nothing was changed; reload the list and review it again.`,
+    );
+  }
+
+  // Two rows that would be the same piece of equipment.
+  const seen = new Map<string, string>();
+  for (const row of input.rows) {
+    const key = equipmentKey(row.name);
+    const other = seen.get(key);
+    if (other !== undefined) {
+      throw new BasError(
+        "name_taken",
+        `"${other}" and "${row.name}" would be the same piece of equipment. ` +
+          `Rename one, or leave one out. Nothing was changed.`,
+      );
+    }
+    seen.set(key, row.name);
+  }
+
+  const plan = input.rows.map((row) => {
+    const group = groups.get(row.key)!;
+    const existing = existingByKey.get(equipmentKey(row.name)) ?? null;
+    return { row, group, existing };
+  });
+  for (const { row, existing } of plan) {
+    if (existing === null && (row.equipType === undefined || row.equipType === null)) {
+      throw new BasError(
+        "equipment_type_not_found",
+        `Choose a type for ${row.name}, or leave it out. Nothing was changed.`,
+      );
+    }
+  }
+  const types = new Set(
+    plan.filter((p) => p.existing === null).map((p) => p.row.equipType as string),
+  );
+  for (const type of types) await assertEquipmentTypeExists(type);
+
+  const rowsById = new Map(rows.map((r) => [r.point_id.toString(), r]));
+  const selectionSize = plan.reduce((n, p) => n + p.group.pointIds.length, 0);
+
+  const outcome = await prisma.$transaction(async (tx) => {
+    const created: Array<{ equipmentId: string; name: string; equipType: string; points: number }> = [];
+    const matched: Array<{ equipmentId: string; name: string; points: number }> = [];
+    let attached = 0;
+    let unchanged = 0;
+
+    for (const { row, group, existing } of plan) {
+      let target: AssignableEquipment;
+      if (existing !== null) {
+        target = { equipment_id: existing.equipment_id, site_id: siteId, name: existing.name };
+      } else {
+        const equipmentId = await insertEquipment(tx, viewer, {
+          siteId,
+          name: row.name,
+          equipType: row.equipType as string,
+          parentId: null,
+          parentName: null,
+          notes: null,
+          source: "name_prefixes",
+          spellings: group.spellings,
+        });
+        target = { equipment_id: equipmentId, site_id: siteId, name: row.name };
+      }
+
+      const points = group.pointIds.map((id) => rowsById.get(id)!);
+      const result = await applyClassificationIn(
+        tx,
+        viewer,
+        points,
+        { equipment: target },
+        { viaBulk: true, selectionSize, fillOnly: true, source: "name_prefixes" },
+      );
+      attached += result.equipmentChanged;
+      unchanged += result.unchanged;
+      if (existing !== null) {
+        matched.push({ equipmentId: target.equipment_id.toString(), name: target.name, points: result.equipmentChanged });
+      } else {
+        created.push({
+          equipmentId: target.equipment_id.toString(),
+          name: target.name,
+          equipType: row.equipType as string,
+          points: result.equipmentChanged,
+        });
+      }
+    }
+
+    await writeAuditEvent(tx, {
+      action: "bas.equipment_from_names",
+      actorEmployeeId: viewer.id,
+      moduleKey: BAS_MODULE_KEY,
+      metadata: {
+        stationId: stationId.toString(),
+        siteId: siteId.toString(),
+        created,
+        matched,
+        pointsAttached: attached,
+        pointsUnchanged: unchanged,
+      },
+    });
+
+    return { created: created.length, matched: matched.length, pointsAttached: attached, pointsUnchanged: unchanged };
+  }, NAME_ACTION_TRANSACTION);
+
+  resetSchemaContextCache();
+  return outcome;
+}
+
+/**
+ * "Apply all high-confidence suggestions", confirmed (2026-11-19).
+ *
+ * The browser sends the point ids the preview showed and the person kept.
+ * Each one's suggestion is computed AGAIN here, by the same call the list
+ * makes (suggestionFor), and must still be `high`: a point that is not on
+ * this station is `point_not_found`, and one whose suggestion is gone or is
+ * now `medium` refuses the whole request with `preview_stale`. Nothing is
+ * taken from the browser but the selection - not the role, not the
+ * equipment - so this route cannot be used to write a role the engine did
+ * not suggest.
+ *
+ * Then the B8.5 plan (planSuggestionBatches), in ONE transaction: each
+ * piece of equipment a suggestion names is created once - or matched, by
+ * equipmentKey, if it appeared since - and each (role, equipment) batch is
+ * written FILL ONLY, so no point that has a role or equipment by then is
+ * changed. One audit row per point per half, `source: "suggestions"`, and
+ * one `bas.suggestions_applied` summary.
+ *
+ * A station on no building still takes the role half: equipment needs a
+ * building, so the equipment half of a suggestion is dropped there, as the
+ * row's own Apply button has always done.
+ */
+export async function applyHighConfidenceSuggestions(
+  viewer: Viewer,
+  stationIdText: string,
+  input: ApplySuggestionsInput,
+): Promise<ApplySuggestionsResult> {
+  const { stationId, siteId } = await loadScopedStation(viewer, stationIdText);
+  const [rows, roleFacts, buildingEquipment] = await Promise.all([
+    loadStationNameRows(stationId),
+    loadRoleFacts(),
+    siteId === null ? Promise.resolve([] as BuildingEquipmentRow[]) : loadBuildingEquipment(siteId),
+  ]);
+  const roles = toRoleFacts(roleFacts);
+  const equipmentFacts = toEquipmentFacts(buildingEquipment);
+  const rowsById = new Map(rows.map((r) => [r.point_id.toString(), r]));
+
+  const missing = input.pointIds.filter((id) => !rowsById.has(id));
+  if (missing.length > 0) {
+    throw new BasError(
+      "point_not_found",
+      `${missing.length} of the ${input.pointIds.length} selected points are not on this ` +
+        `station. Nothing was changed.`,
+    );
+  }
+
+  const selected = input.pointIds.map((id) => {
+    const row = rowsById.get(id)!;
+    return { pointId: id, row, suggestion: suggestionFor(row, roles, equipmentFacts) };
+  });
+  const notHigh = selected.filter((s) => s.suggestion === null || s.suggestion.level !== "high");
+  if (notHigh.length > 0) {
+    throw new BasError(
+      "preview_stale",
+      `${notHigh.length} of the ${selected.length} selected points no longer have a ` +
+        `high-confidence suggestion - somebody classified them, or what they are on ` +
+        `changed. Nothing was changed; reload the list and review it again.`,
+    );
+  }
+
+  const plan = planSuggestionBatches(
+    selected.map((s) => ({
+      pointId: s.pointId,
+      // No building, no equipment half.
+      suggestion:
+        siteId === null
+          ? { ...s.suggestion!, equipmentName: null, equipmentId: null, equipType: null }
+          : s.suggestion,
+    })),
+  );
+  for (const item of plan.create) await assertEquipmentTypeExists(item.equipType);
+
+  const existingByKey = new Map<string, BuildingEquipmentRow>();
+  for (const e of buildingEquipment) {
+    if (!existingByKey.has(equipmentKey(e.name))) existingByKey.set(equipmentKey(e.name), e);
+  }
+  const existingById = new Map(buildingEquipment.map((e) => [e.equipment_id.toString(), e]));
+
+  const outcome = await prisma.$transaction(async (tx) => {
+    const created = new Map<string, AssignableEquipment>();
+    for (const item of plan.create) {
+      const key = equipmentKey(item.name);
+      const already = existingByKey.get(key);
+      if (already !== undefined) {
+        created.set(key, { equipment_id: already.equipment_id, site_id: siteId!, name: already.name });
+        continue;
+      }
+      const equipmentId = await insertEquipment(tx, viewer, {
+        siteId: siteId!,
+        name: item.name,
+        equipType: item.equipType,
+        parentId: null,
+        parentName: null,
+        notes: null,
+        source: "suggestions",
+      });
+      created.set(key, { equipment_id: equipmentId, site_id: siteId!, name: item.name });
+    }
+
+    const totals = { points: 0, roleChanged: 0, equipmentChanged: 0, unchanged: 0 };
+    const byRole: Record<string, number> = {};
+    for (const batch of plan.batches) {
+      let equipment: AssignableEquipment | undefined;
+      if (batch.equipmentId !== null) {
+        const row = existingById.get(batch.equipmentId);
+        if (row !== undefined) {
+          equipment = { equipment_id: row.equipment_id, site_id: siteId!, name: row.name };
+        }
+      } else if (batch.equipmentName !== null) {
+        equipment = created.get(equipmentKey(batch.equipmentName));
+      }
+      const change: ClassificationChange = {};
+      if (batch.role !== null) change.role = batch.role;
+      if (equipment !== undefined) change.equipment = equipment;
+      if (change.role === undefined && change.equipment === undefined) continue;
+
+      const points = batch.pointIds.map((id) => rowsById.get(id)!);
+      const result = await applyClassificationIn(tx, viewer, points, change, {
+        viaBulk: true,
+        selectionSize: selected.length,
+        fillOnly: true,
+        source: "suggestions",
+      });
+      totals.points += result.points;
+      totals.roleChanged += result.roleChanged;
+      totals.equipmentChanged += result.equipmentChanged;
+      totals.unchanged += result.unchanged;
+      if (batch.role !== null && result.roleChanged > 0) {
+        byRole[batch.role] = (byRole[batch.role] ?? 0) + result.roleChanged;
+      }
+    }
+
+    const equipmentCreated = [...created.values()]
+      .filter((e) => !existingById.has(e.equipment_id.toString()))
+      .map((e) => e.name);
+
+    await writeAuditEvent(tx, {
+      action: "bas.suggestions_applied",
+      actorEmployeeId: viewer.id,
+      moduleKey: BAS_MODULE_KEY,
+      metadata: {
+        stationId: stationId.toString(),
+        siteId: siteId?.toString() ?? null,
+        level: "high",
+        selected: selected.length,
+        roleChanged: totals.roleChanged,
+        equipmentChanged: totals.equipmentChanged,
+        unchanged: totals.unchanged,
+        byRole,
+        equipmentCreated,
+      },
+    });
+
+    return { ...totals, equipmentCreated: equipmentCreated.length };
+  }, NAME_ACTION_TRANSACTION);
+
+  resetSchemaContextCache();
+  return outcome;
 }
 
 function parsePointId(pointIdText: string): bigint {
@@ -1457,36 +1972,68 @@ export async function createBasEquipment(
       : BigInt(input.parentEquipmentId);
   const parent = parentId === null ? null : await assertEquipmentParent(null, parentId, siteId);
 
-  const equipmentId = await prisma.$transaction(async (tx) => {
-    const created = await tx.basEquipment.create({
-      data: {
-        siteId,
-        name: input.name,
-        equipType: input.equipType,
-        parentEquipmentId: parentId,
-        notes: input.notes ?? null,
-      },
-      select: { equipmentId: true },
-    });
-    await writeAuditEvent(tx, {
-      action: "bas.equipment_created",
-      actorEmployeeId: viewer.id,
-      moduleKey: BAS_MODULE_KEY,
-      metadata: {
-        equipmentId: created.equipmentId.toString(),
-        siteId: input.siteId,
-        name: input.name,
-        equipType: input.equipType,
-        parentEquipmentId: parentId?.toString() ?? null,
-        parentName: parent?.name ?? null,
-        notes: input.notes ?? null,
-      },
-    });
-    return created.equipmentId;
-  });
+  const equipmentId = await prisma.$transaction((tx) =>
+    insertEquipment(tx, viewer, {
+      siteId,
+      name: input.name,
+      equipType: input.equipType,
+      parentId,
+      parentName: parent?.name ?? null,
+      notes: input.notes ?? null,
+    }),
+  );
 
   resetSchemaContextCache();
   return { equipmentId: equipmentId.toString() };
+}
+
+/**
+ * THE one insert of a piece of equipment, and its audit row. The form and
+ * both name-derived actions come through here, so the row says the same
+ * thing whichever way the equipment arrived; `source` says which.
+ */
+async function insertEquipment(
+  tx: Prisma.TransactionClient,
+  viewer: Viewer,
+  input: {
+    siteId: bigint;
+    name: string;
+    equipType: string;
+    parentId: bigint | null;
+    parentName: string | null;
+    notes: string | null;
+    source?: string;
+    /** For a name-derived unit: the prefix spellings it came from. */
+    spellings?: string[];
+  },
+): Promise<bigint> {
+  const created = await tx.basEquipment.create({
+    data: {
+      siteId: input.siteId,
+      name: input.name,
+      equipType: input.equipType,
+      parentEquipmentId: input.parentId,
+      notes: input.notes,
+    },
+    select: { equipmentId: true },
+  });
+  await writeAuditEvent(tx, {
+    action: "bas.equipment_created",
+    actorEmployeeId: viewer.id,
+    moduleKey: BAS_MODULE_KEY,
+    metadata: {
+      equipmentId: created.equipmentId.toString(),
+      siteId: input.siteId.toString(),
+      name: input.name,
+      equipType: input.equipType,
+      parentEquipmentId: input.parentId?.toString() ?? null,
+      parentName: input.parentName,
+      notes: input.notes,
+      ...(input.source !== undefined ? { source: input.source } : {}),
+      ...(input.spellings !== undefined ? { spellings: input.spellings } : {}),
+    },
+  });
+  return created.equipmentId;
 }
 
 /**

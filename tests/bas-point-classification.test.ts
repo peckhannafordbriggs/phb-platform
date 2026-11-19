@@ -744,7 +744,7 @@ describe("the suggestion engine", () => {
 
   it("plans one creation per distinct equipment name and one batch per (role, equipment)", () => {
     const s = (role: string | null, equipmentName: string | null, equipmentId: string | null): PointSuggestion => ({
-      role, roleName: role, equipmentName, equipmentId, equipType: equipmentName !== null && equipmentId === null ? "vav" : null, pattern: "t", confidence: "t",
+      role, roleName: role, equipmentName, equipmentId, equipType: equipmentName !== null && equipmentId === null ? "vav" : null, pattern: "t", confidence: "t", level: "high",
     });
     const plan = planSuggestionBatches([
       { pointId: "1", suggestion: s("zone_temp", "VAV-1", null) },
@@ -919,7 +919,7 @@ describe("the list's rules", () => {
   });
 
   it("words a suggestion, with (new) only for equipment that would be created", () => {
-    const base: PointSuggestion = { role: "zone_temp", roleName: "Zone Temperature", equipmentName: "VAV-3", equipmentId: null, equipType: "vav", pattern: "p", confidence: "c" };
+    const base: PointSuggestion = { role: "zone_temp", roleName: "Zone Temperature", equipmentName: "VAV-3", equipmentId: null, equipType: "vav", pattern: "p", confidence: "c", level: "high" };
     expect(describeSuggestion(base)).toBe("Zone Temperature · VAV-3 (new)");
     expect(describeSuggestion({ ...base, equipmentId: "7", equipType: null })).toBe("Zone Temperature · VAV-3");
     expect(describeSuggestion({ ...base, equipmentName: null, equipmentId: null, equipType: null })).toBe("Zone Temperature");
@@ -930,7 +930,7 @@ describe("the list's rules", () => {
     const list = {
       stationId: "1", siteId: "1",
       points: [
-        point({ pointId: "1", niagaraHistoryName: "VAV$2d3_ZoneTemperature", niagaraDisplayName: "VAV-3_ZoneTemperature", suggestion: { role: "zone_temp", roleName: "Zone Temperature", equipmentName: "VAV-3", equipmentId: null, equipType: "vav", pattern: "vav_zone_temp", confidence: "c" } }),
+        point({ pointId: "1", niagaraHistoryName: "VAV$2d3_ZoneTemperature", niagaraDisplayName: "VAV-3_ZoneTemperature", suggestion: { role: "zone_temp", roleName: "Zone Temperature", equipmentName: "VAV-3", equipmentId: null, equipType: "vav", pattern: "vav_zone_temp", confidence: "c", level: "high" } }),
         point({ pointId: "2", niagaraHistoryName: "Temp1", niagaraDisplayName: null }),
       ],
       pointsAccountedFor: { rendered: 2, inDatabase: 2 },

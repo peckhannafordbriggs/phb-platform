@@ -341,6 +341,54 @@ export const bulkClassifySchema = z
   });
 
 /**
+ * "Create N pieces of equipment from name prefixes", confirmed (2026-11-19).
+ *
+ * Rows by KEY - the equipmentKey the preview derived - with the name and
+ * type a person settled on. No point ids: the service derives each row's
+ * points again from the station's names, so a request cannot attach a point
+ * the preview did not show. `equipType` may be absent only for a row whose
+ * name matches existing equipment; the service decides that, and refuses a
+ * new row without one. Strict, like every settings payload.
+ */
+export const equipmentFromNamesSchema = z
+  .object({
+    rows: z
+      .array(
+        z
+          .object({
+            key: z.string().trim().min(1).max(120),
+            name: displayName,
+            equipType: z.string().trim().min(1).max(64).nullable().optional(),
+          })
+          .strict(),
+      )
+      .min(1, "Choose at least one row.")
+      .max(500, "At most 500 pieces of equipment at a time.")
+      .refine((rows) => new Set(rows.map((r) => r.key)).size === rows.length, {
+        message: "The same row is listed twice.",
+      }),
+  })
+  .strict();
+
+/**
+ * "Apply all high-confidence suggestions", confirmed (2026-11-19). The
+ * selection the preview showed and nothing else: the service recomputes each
+ * point's suggestion and refuses one that is no longer high-confidence. 2,000
+ * is above any station seen (CEI: 334) and keeps one transaction bounded.
+ */
+export const applySuggestionsSchema = z
+  .object({
+    pointIds: z
+      .array(bigintText)
+      .min(1, "Choose at least one suggestion.")
+      .max(2000, "At most 2,000 suggestions at a time.")
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: "The same point is listed twice.",
+      }),
+  })
+  .strict();
+
+/**
  * Equipment (B8.5). A name unique within its building, a type from
  * bas_equipment_types, an optional parent on the same building, optional
  * notes - the office VAVs carry their room numbers there ("Serves 130-132").
@@ -433,6 +481,8 @@ export interface UpdatePointEquipmentInput {
   equipmentId: string | null;
 }
 export type BulkClassifyInput = z.infer<typeof bulkClassifySchema>;
+export type EquipmentFromNamesInput = z.infer<typeof equipmentFromNamesSchema>;
+export type ApplySuggestionsInput = z.infer<typeof applySuggestionsSchema>;
 export type CreateEquipmentInput = z.infer<typeof createEquipmentSchema>;
 export type UpdateEquipmentInput = z.infer<typeof updateEquipmentSchema>;
 export type SetCredentialInput = z.infer<typeof setCredentialSchema>;

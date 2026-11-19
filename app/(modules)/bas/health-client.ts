@@ -11,11 +11,13 @@ import {
   type ReadingValue,
 } from "@/lib/modules/bas/plausibility";
 import type {
+  ApplySuggestionsResult,
   BasDashboard,
   BasSettingsTree,
   BasVocabularies,
   BuildingEquipmentList,
   BulkClassifyResult,
+  EquipmentFromNamesResult,
   CollectionHealth,
   Completeness,
   PointHorizon,
@@ -1705,6 +1707,30 @@ export const bulkClassifyPoints = (body: {
     body: JSON.stringify(body),
   });
 
+/**
+ * "Apply all high-confidence suggestions", confirmed (2026-11-19): the
+ * selection only. The server recomputes every suggestion and applies it in
+ * one transaction, or refuses the whole selection.
+ */
+export const applyHighConfidenceSuggestions = (stationId: string, pointIds: string[]) =>
+  settingsWrite<ApplySuggestionsResult>(
+    `/stations/${encodeURIComponent(stationId)}/suggestions/apply`,
+    { method: "POST", body: JSON.stringify({ pointIds }) },
+  );
+
+/**
+ * "Create N pieces of equipment from name prefixes", confirmed (2026-11-19):
+ * the kept rows by key, with the name and type a person settled on.
+ */
+export const createEquipmentFromNames = (
+  stationId: string,
+  rows: Array<{ key: string; name: string; equipType?: string | null }>,
+) =>
+  settingsWrite<EquipmentFromNamesResult>(
+    `/stations/${encodeURIComponent(stationId)}/equipment-from-names`,
+    { method: "POST", body: JSON.stringify({ rows }) },
+  );
+
 export const createEquipment = (body: {
   siteId: string;
   name: string;
@@ -1846,6 +1872,30 @@ export function describeBulkResult(result: BulkClassifyResult): string {
         }.`
       : "";
   return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.${unchanged}`;
+}
+
+/** What "Apply all high-confidence suggestions" did, from the server's counts. */
+export function describeApplySuggestionsResult(result: ApplySuggestionsResult): string {
+  const base = describeBulkResult(result);
+  if (result.equipmentCreated === 0) return base;
+  return `${base} Created ${result.equipmentCreated} piece${
+    result.equipmentCreated === 1 ? "" : "s"
+  } of equipment.`;
+}
+
+/** What "Create N pieces of equipment from name prefixes" did, from the server's counts. */
+export function describeEquipmentFromNamesResult(result: EquipmentFromNamesResult): string {
+  const noun = (n: number) => (n === 1 ? "point" : "points");
+  const parts = [
+    `Created ${result.created} piece${result.created === 1 ? "" : "s"} of equipment`,
+  ];
+  if (result.matched > 0) parts.push(`used ${result.matched} that already existed`);
+  const sentence = `${parts.join(" and ")}, and attached ${result.pointsAttached} ${noun(result.pointsAttached)}.`;
+  return result.pointsUnchanged > 0
+    ? `${sentence} ${result.pointsUnchanged} ${noun(result.pointsUnchanged)} had been given equipment since the preview and ${
+        result.pointsUnchanged === 1 ? "was" : "were"
+      } left as ${result.pointsUnchanged === 1 ? "it was" : "they were"}.`
+    : sentence;
 }
 
 /**

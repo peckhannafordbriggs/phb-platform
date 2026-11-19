@@ -3692,3 +3692,57 @@ day this merges. Drop the unique key and a repeated worker mails everyone
 twice. Read the owner from a recipient row and a removed row silences the
 owner. Copy the credential instead of sharing it and the next
 prohibition-7 fix lands in one of the two.
+
+## 88 · A point's name proposes; a person confirms a preview; the server recomputes before it writes
+
+CEI's JACE carries the equipment in 334 point names (`V4_22/SpaceTemp`,
+`AHU_7/DA_T`). Settings -> Points now derives a unit per prefix and a role
+per suffix token, and applies either to a whole station in one action
+(2026-11-19). Six decisions hold it together.
+
+**The preview is recomputed, never trusted.** The equipment confirm sends
+rows by key with a name and a type, never point ids; the suggestions confirm
+sends point ids, never roles. The service derives the rows and suggestions
+again from the database with the same functions the list used, and refuses
+the whole request (`preview_stale`) when they no longer match. A route that
+took point ids and roles from the browser would be a second bulk endpoint
+without the bulk endpoint's checks.
+
+**Fill, never overwrite.** Both actions write a half only where it is NULL,
+in a conditional `updateMany` inside the transaction, through the one write
+path (`applyClassificationIn`). A point a person classified after the preview
+loaded is left as they left it. The bulk form and the pickers keep their
+overwrite: a person choosing a value means it.
+
+**The whole tail, not the last underscore.** The request said "the suffix
+after the slash or last underscore". `DA_T`, `OA_T`, `RA_HUM` and `DA_SAP`
+all contain an underscore, and their last segments are `T`, `T`, `HUM` and
+`SAP`. A token is the whole text after the prefix with its separators
+removed, compared exactly, so `RA_CO2` is not `CO2` and `OA_Humidity` is not
+a bare `Humidity`.
+
+**The equipment decides discharge air.** The vocabulary's
+`discharge_air_temp` is a terminal unit's and `supply_air_temp` an air
+handler's, and the reports read them that way. Mapping `DA_T` to discharge
+everywhere, as asked, would have put an AHU's supply air under the terminal
+role. The class comes from attached equipment first, then the name's prefix,
+and unknown is silence.
+
+**Two levels, and only `high` goes in bulk.** Abbreviations are shorter than
+phrases, and some (`SAP`, a bare `CO2` on an unknown unit) are probably
+right and worth a look. `medium` is shown and applied one row at a time; there
+is no `low`. Every B8.5 phrase pattern is `high`, and the office's 17
+suggestions are unchanged.
+
+**An I/O module is not equipment.** `XTM_109/AHU_7_FinalFilter` belongs to
+AHU_7; the module is offered only for points that name nothing else, unticked
+and untyped. Spellings that differ only in separators (`AHU_7`, `AHU-7`) are
+one unit by `equipmentKey`, and so is existing equipment, so the preview
+cannot create a near-duplicate of a unit the building already has.
+
+**What breaks if you undo it.** Trust the preview and a stale tab attaches
+points somebody re-filed a minute ago. Overwrite and the action erases hand
+work. Read the last underscore and every abbreviation in the request reads as
+`T`. Map discharge air without the equipment and the AHU questions in the
+reports find a terminal's role on an air handler. Bulk-apply `medium` and a
+return-air CO2 becomes a space CO2 on every unit at once.
