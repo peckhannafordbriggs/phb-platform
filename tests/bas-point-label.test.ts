@@ -690,6 +690,8 @@ describe("the Points list", () => {
     lastRecordAt: null,
     visible: true,
     plausibility: NOT_CHECKED_FIXTURE,
+    assignmentSource: null,
+    needsDecision: true,
   });
   const list = (p: SettingsPoint): StationPointsList => ({
     stationId: "1",

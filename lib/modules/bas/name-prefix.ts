@@ -4,7 +4,12 @@
  * Pure, and imported by the browser as well as the service: no Prisma, no
  * environment. NOTHING HERE WRITES. The Points list shows what this module
  * derives as a preview; a module admin edits it and confirms it; the service
- * recomputes it from the database at that moment and only then writes.
+ * recomputes it from the database at that moment and only then writes. Since
+ * 2026-11-19 the automatic assignment pass (auto-assign.ts) also creates the
+ * equipment for every row `groupIncludedByDefault` ticks - a unit of a known
+ * type - with no preview, so a row in PREFIX_TYPE_RULES with a type is
+ * equipment the platform creates by itself; I/O modules and unknown prefixes
+ * still wait for a person.
  *
  * WHY THIS EXISTS. The first customer building, CEI's JACE `CEI_JCI_N2`, has
  * 334 points whose names carry their equipment before a slash -

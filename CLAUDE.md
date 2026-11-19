@@ -1824,6 +1824,34 @@ Nathan's correction against the full list. `WHY-ITS-BUILT-THIS-WAY.md`
 § 88; `runbook.md` -> *Settings -> Points: "Apply all high-confidence",
 "equipment from name prefixes", and a suggestion that says Medium*.
 
+**Points are assigned automatically, and a person outranks it for good
+(2026-11-19).** The BAS Reports scheduler job (`*/15`, after the reports)
+ends with an assignment pass over every station, `lib/modules/bas/auto-assign.ts`:
+for each collected point no person has set and missing a half, it creates the
+equipment a high-confidence prefix implies (one per prefix per station, named
+as written; never attached to a unit another station's points are on) and
+applies every **high** suggestion; **medium stays a click**. *Run assignment
+now* on a station's row in Settings -> General runs the same function. New
+column `bas_points.assignment_source` (`'auto'` / `'manual'` / NULL, CHECK,
+backfilled `'manual'` for every point classified before): **every person's
+write through Settings stamps `'manual'` - #133's previews included - and the
+pass never writes a `'manual'` point, not even its empty half**; the rule is in
+the `UPDATE`, so a person's write between read and write wins. Audited per
+point (`bas.point_auto_assigned`, with the pattern and its reason; actor *The
+platform* or the person who pressed the button) and per station
+(`bas.auto_assignment_ran`). *Needs a decision* = collected and no role,
+whoever touched it - one predicate (`pointNeedsDecision`) behind the General
+count, the Points filter and the report's new Point Inventory line, which says
+role-less points' **values** were not judged (Data Health still checks they
+report). This reverses § 61's "never auto-apply" for `high` only. Tokens, second
+round, against CEI's full 334 (`docs/fixtures/cei-point-names.txt`): CEI now
+leaves exactly seven names for a person (three enthalpy points - no vocabulary
+role - and four XTM filters until the station reports their data type); the
+office pass writes exactly the 17 roles applied by hand in September and
+nothing else. Merging puts the pass in production on the next scheduler image.
+`WHY-ITS-BUILT-THIS-WAY.md` § 89; `runbook.md` -> *A point was given a role or
+equipment nobody chose (the automatic assignment)*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

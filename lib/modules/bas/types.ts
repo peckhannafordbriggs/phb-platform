@@ -926,11 +926,62 @@ export interface SettingsStation {
   isActive: boolean;
   activePoints: number;
   totalPoints: number;
+  /**
+   * Collected points whose role and equipment the automatic assignment pass
+   * wrote (assignment_source 'auto', 2026-11-19).
+   */
+  autoAssigned: number;
+  /** Collected points with no role: pointNeedsDecision, counted in SQL. */
+  needDecision: number;
   lastSeenAt: string | null;
   /** True when this station has a credential row. Never the credential itself. */
   hasCredential: boolean;
   credential: SettingsCredential | null;
   activity: StationActivity;
+}
+
+/** Who decided a point's role and equipment (bas_points.assignment_source). Null: nobody yet. */
+export type AssignmentSource = "auto" | "manual";
+
+export function isAssignmentSource(value: string | null): value is AssignmentSource {
+  return value === "auto" || value === "manual";
+}
+
+/**
+ * A point waiting for a person (2026-11-19): collected, and no role -
+ * whoever touched it last. The automatic pass has done what the names allow,
+ * and a role-less point is judged by nothing but whether it reports. A
+ * deliberate "no role" is the vocabulary's own `unclassified` ("reviewed, not
+ * mappable"), which is a role; clearing a role means "nobody has looked".
+ * The SQL counts on Settings -> General and in the report's Point Inventory
+ * use the same predicate: `is_active AND point_role IS NULL`.
+ */
+export function pointNeedsDecision(point: { collected: boolean; pointRole: string | null }): boolean {
+  return point.collected && point.pointRole === null;
+}
+
+/** What one station's automatic assignment did (lib/modules/bas/auto-assign.ts). */
+export type StationAssignmentOutcome =
+  /** No collected point that a person has not classified is missing a half. */
+  | "nothing_to_assign"
+  /** There were candidates, and nothing high-confidence to write for them. */
+  | "no_change"
+  | "assigned";
+
+export interface StationAssignment {
+  stationId: string;
+  stationName: string;
+  outcome: StationAssignmentOutcome;
+  /** Collected points not set by a person and missing a half, before the pass. */
+  candidates: number;
+  /** Points with at least one half written. */
+  pointsAssigned: number;
+  roleAssigned: number;
+  equipmentAttached: number;
+  /** Names of the equipment created, as written. */
+  equipmentCreated: string[];
+  /** Collected points on the station with no role, after the pass. */
+  needDecision: number;
 }
 
 /** One weekday's occupied hours, HH:MM in the building's zone (Reports, Phase 2). */
@@ -1190,11 +1241,13 @@ export interface SettingsPoint {
   unit: string | null;
   /**
    * What a name pattern would classify this point as (B8.5), or null when no
-   * pattern is confident. NEVER applied by the platform: a suggestion is a
-   * sentence on the row until a person clicks it, and `Temp1`-`Temp3` on the
-   * lab station must carry null here forever unless someone says otherwise.
-   * Only the missing half is suggested - a point that already has a role gets
-   * no role suggestion. See lib/modules/bas/suggestions.ts.
+   * pattern is confident. Never applied by READING it. Since 2026-11-19 the
+   * automatic assignment pass (lib/modules/bas/auto-assign.ts) applies a HIGH
+   * one to a point no person has set; a medium one is a sentence on the row
+   * until a person clicks it. `Temp1`-`Temp3` on the lab station carry null
+   * here, so nothing ever applies anything to them. Only the missing half is
+   * suggested - a point that already has a role gets no role suggestion. See
+   * lib/modules/bas/suggestions.ts.
    */
   suggestion: PointSuggestion | null;
   /**
@@ -1226,6 +1279,14 @@ export interface SettingsPoint {
    * fine.
    */
   plausibility: PointPlausibility;
+  /**
+   * Who decided the role and equipment (2026-11-19): 'auto' the assignment
+   * pass, 'manual' a person, null nobody yet. The pass never writes a
+   * 'manual' point.
+   */
+  assignmentSource: AssignmentSource | null;
+  /** pointNeedsDecision: collected and no role. */
+  needsDecision: boolean;
 }
 
 /**

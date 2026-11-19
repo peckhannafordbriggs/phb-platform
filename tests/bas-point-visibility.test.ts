@@ -379,6 +379,8 @@ describe("the Points list renders the checkbox", () => {
     lastRecordAt: null,
     visible,
     plausibility: NOT_CHECKED_FIXTURE,
+    assignmentSource: null,
+    needsDecision: true,
   });
 
   const render = (visible: boolean) =>

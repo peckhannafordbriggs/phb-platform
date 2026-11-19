@@ -9349,11 +9349,14 @@ A bulk change is **one row per point**, never one for the selection, with
 `UPDATE`, and that is the thing to look for.
 
 **Cause, second case: a suggestion was accepted that should not have been.**
-A suggestion is never applied by the platform. `getStationPoints` computes it
+A suggestion is never applied by reading it. `getStationPoints` computes it
 on every read and writes nothing - `tests/bas-point-classification.test.ts`
 reads and renders the list and proves no row and no audit row changed - so if
 a point carries what the suggestion said, somebody clicked *Apply* or *Apply
-all high-confidence*, and the audit rows above say who. The patterns, and what "confident"
+all high-confidence*, and the audit rows above say who - or, since
+2026-11-19, the automatic assignment pass applied a **high** one, which is a
+`bas.point_auto_assigned` row instead (*A point was given a role or equipment
+nobody chose*, below). The patterns, and what "confident"
 means for each, are in `lib/modules/bas/suggestions.ts`: a whole measurement
 phrase in the name ("Zone Temperature", "Duct Static Pressure", "Outside Air
 Damper"), never a word that could belong to several; a setpoint word only ever
@@ -9495,6 +9498,105 @@ separators removed - never only the text after the last underscore, because
 before a token can name it (`OA_Enth` names none today: there is no enthalpy
 role). `tests/bas-name-prefix.test.ts` holds the tables to the vocabulary and
 the office and lab names to exactly the suggestions they had before.
+
+---
+
+## A point was given a role or equipment nobody chose (the automatic assignment)
+
+Built 2026-11-19. Every pass of the BAS Reports scheduler job
+(`phbplat-prod-bas-reports-sched`, every fifteen minutes) ends with an
+*assignment* step, `lib/modules/bas/auto-assign.ts`, run over every station:
+for each collected point that **no person has set** and that is missing its
+role or its equipment, it creates the equipment a high-confidence name prefix
+implies (`V4_22`, `AHU_7`, named as the integrator wrote them) and applies
+every **high**-confidence suggestion. *Run assignment now* on a station's row
+in Settings -> General runs the same code for one station. It never writes a
+point a person set, never overwrites or clears a value, never applies a
+`medium` suggestion, and never touches an uncollected point; each rule is in
+the `UPDATE` itself.
+
+**Symptom: a point has a role or equipment, and the history shows no person
+setting it.** The pass did, and said why. Every point it writes is one
+`bas.point_auto_assigned` row - the pattern and sentence for the role, the
+prefix rule for the equipment, whether the equipment was created, and
+`trigger` (`scheduler`, actor *The platform*; or `run_now`, actor the module
+admin who pressed it) - and every station pass that wrote anything one
+`bas.auto_assignment_ran` row with the counts:
+
+```sql
+SELECT a.occurred_at, e.email, a.action,
+       a.metadata->>'pointName' AS point, a.metadata->'role' AS role,
+       a.metadata->'equipment' AS equipment, a.metadata->>'trigger' AS trigger
+  FROM audit_events a LEFT JOIN employees e ON e.id = a.actor_employee_id
+ WHERE a.action IN ('bas.point_auto_assigned', 'bas.auto_assignment_ran')
+ ORDER BY a.occurred_at DESC
+ LIMIT 50;
+```
+
+The point reads *Auto-assigned* under the Points list's *Assignment* filter,
+and `bas_points.assignment_source` is `'auto'`. **Fix:** change it in the
+picker. Any change a person makes through Settings - picker, bulk form, a
+suggestion's *Apply*, either name preview - stamps the point `'manual'`, and
+the pass never writes a `'manual'` point again, not even its empty half. To
+say "this point has no role on purpose", choose *Unclassified* (*Reviewed, not
+mappable*); clearing the role means "nobody has looked" and puts the point back
+under *Needs a decision*. If a pattern is wrong for a whole building, the
+pattern is the fix: `lib/modules/bas/suggestions.ts` (roles) or
+`PREFIX_TYPE_RULES` in `lib/modules/bas/name-prefix.ts` (equipment types).
+**A pattern marked `high` there is a value the platform writes by itself.**
+
+**Symptom: Settings -> General says "N auto-assigned · M need a decision",
+or the Points list's *Needs a decision* filter is not empty.** *Need a
+decision* is every collected point with no role, whoever touched it last -
+the same count the weekly report prints. They are the points the names cannot
+settle: a `medium` suggestion (shown on the row with *Medium · check first*; its
+*Apply* is the one-click choice), or no suggestion at all (CEI's `OA_Enth` and
+`RA_Enth`: the vocabulary has no enthalpy role; its four XTM filters: the name
+does not say switch or pressure until the station reports the point's data
+type). Decide each one in the picker, *Unclassified* included. Nothing else
+judges these points' values; Data Health still checks that they report.
+
+**Symptom: a new station's points are still unclassified a few minutes after
+discovery.** The next scheduler pass is at most fifteen minutes away. *Run
+assignment now* does it immediately; it is module-admin only, recorded every
+press (even when there was nothing to do), and its answer under the row says
+what it did. Analyze's catalogue caches roles for five minutes per web
+process, so a role the **scheduler** wrote can take up to five more minutes to
+reach a question; the button drops the cache itself.
+
+**Symptom: the pass attached a station's `V1_01` points to nothing, though a
+`V1_01` exists on the building.** By design. Equipment is matched by
+`equipmentKey`, so `AHU-7` and `AHU_7` are one unit, but equipment that
+already carries **another station's** points is never attached to
+automatically: two JACEs in one building can both have a `V1_01` that are not
+the same box. The role is still assigned when the name settles it. Attach by
+hand if they really are one unit.
+
+**Symptom: a scheduler execution reads Failed and its log ends "the point
+assignment failed on N station(s)".** The reports in that execution were
+already queued; the assignment runs after them and a failed station does not
+stop the others. The line before it names the station and the error. The
+likely ones: `Unique constraint failed on (site_id, name)` - somebody created
+equipment of the same name by hand between the pass's read and its write; the
+next pass matches it instead, nothing to do. A transaction timeout on a very
+large first pass (sixty seconds) - press *Run assignment now* for that station
+and read the error it returns. Anything else is a database fault like any
+other; read the execution's console log the way *Reports: a run is stuck or
+failed* describes.
+
+**Symptom: the report's Point Inventory says "M points on <station> have no
+role, so their values were not judged; Data Health still checked that they
+were reporting."** That is the *need a decision* count for the stations in the
+report's scope, at the time of the run. No question reads a point with no
+role; Data Health's offline and stale checks read every point. Resolve them on
+Settings -> Points and the next report's line shrinks or disappears.
+
+**There is no switch.** The step is part of the scheduler job, which carries
+only `DATABASE_URL`. In an emergency, `UPDATE bas_points SET
+assignment_source = 'manual' WHERE station_id = <id> AND assignment_source IS
+NULL` stops the pass touching that station's existing points (new points from
+a later discovery are still candidates); reverting the change is the real off
+switch. `WHY-ITS-BUILT-THIS-WAY.md` § 89.
 
 ---
 

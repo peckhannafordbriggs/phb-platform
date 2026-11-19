@@ -22,10 +22,13 @@ import {
   deleteProject,
   deleteStation,
   describeActivity,
+  describeAssignmentCounts,
+  describeAssignmentResult,
   describeLogin,
   describeReach,
   fetchBasSettings,
   formatTimestamp,
+  runAssignmentNow,
   setStationCredential,
   setBuildingOccupancy,
   updateBuilding,
@@ -912,6 +915,8 @@ function StationRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [showPoints, setShowPoints] = useState(false);
+  // What the last "Run assignment now" did, in words, until the next press.
+  const [assignment, setAssignment] = useState<string | null>(null);
   // The tree's search term, read from the URL like every other filter, so
   // the Points list under a station that matched on a point's name opens
   // narrowed to that term (B8.4).
@@ -998,6 +1003,21 @@ function StationRow({
               ? "Hide points"
               : `Points (${station.totalPoints})`}
           </Button>
+          {/*
+            The scheduler's automatic assignment pass, for this station, now
+            (2026-11-19). Same code as the pass; writes only what it would.
+          */}
+          <Button size="sm"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                setAssignment(null);
+                setAssignment(describeAssignmentResult(await runAssignmentNow(station.stationId)));
+              })
+            }
+          >
+            Run assignment now
+          </Button>
           <Button size="sm"
             disabled={busy}
             onClick={() => setEditing(true)}
@@ -1046,6 +1066,9 @@ function StationRow({
         {station.activePoints === 1 ? "point" : "points"}
         {station.totalPoints !== station.activePoints &&
           ` (${station.totalPoints} total)`}
+        {/* The automatic assignment (2026-11-19): what the pass wrote, what waits for a person. */}
+        {" · "}
+        {describeAssignmentCounts(station)}
         {station.tlsSha256 !== null && (
           <>
             {" · "}
@@ -1073,8 +1096,17 @@ function StationRow({
         run={run}
       />
 
+      {assignment !== null && (
+        <p className="mt-1 rounded-[var(--radius-control)] border px-3 py-1.5 text-xs" style={TONE_STYLE.ok} role="status">
+          {assignment}
+        </p>
+      )}
+
       {showPoints && (
         <StationPoints
+          // Remounted (and so refetched) when a run of the assignment changes
+          // the counts, so the list under the row never shows the old roles.
+          key={`${station.autoAssigned}:${station.needDecision}`}
           stationId={station.stationId}
           expectedTotal={station.totalPoints}
           initialQuery={initialPointQuery}

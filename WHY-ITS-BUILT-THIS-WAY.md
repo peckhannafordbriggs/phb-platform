@@ -1927,6 +1927,11 @@ the office JACE's 26 active points, classified by hand in SQL on 17
 September, reproduced through the routes the UI calls and compared row for
 row with a fixture read from the live database.
 
+*(Amended 2026-11-19: § 89 reverses "never auto-apply" for `high`
+suggestions only. The automatic assignment pass applies them to points no
+person has set; `medium` is still a click, and `Temp1`-`Temp3` still get
+nothing.)*
+
 **Why suggestions never auto-apply.** The standing rule from B7: `Temp1`-
 `Temp3` on the lab are deliberately unclassified because nobody knows what
 they measure, and a made-up role makes the Analyze model answer confidently
@@ -3746,3 +3751,86 @@ work. Read the last underscore and every abbreviation in the request reads as
 `T`. Map discharge air without the equipment and the AHU questions in the
 reports find a terminal's role on an air handler. Bulk-apply `medium` and a
 return-air CO2 becomes a space CO2 on every unit at once.
+
+## 89 · High-confidence names are applied by the platform; a person's choice outranks it for good
+
+**Decision.** From 2026-11-19 the platform assigns roles and equipment by
+itself. Every pass of the BAS Reports scheduler job ends with an assignment
+step (`lib/modules/bas/auto-assign.ts`) that, for each collected point no
+person has set and that is missing a half, creates the equipment a
+high-confidence name prefix implies and applies every high-confidence
+suggestion; *Run assignment now* runs the same function for one station. A
+new column, `bas_points.assignment_source`, records who decided: `'auto'` for
+the pass, `'manual'` for any person's write through Settings, NULL for
+nobody. The pass never writes a `'manual'` point, fills only empty halves,
+and leaves `medium` for a person.
+
+**This reverses § 61, deliberately, and only for `high`.** § 61's reason was
+that a guess written silently makes the Analyze model and the reports answer
+confidently about something untrue. That still holds for a guess. What
+changed is that `high` stopped being one: after two rounds against real
+names, a `high` suggestion is a whole phrase or a token that names one role
+on the equipment it is on, and on CEI's 334 names and the office's 32 the
+pass writes nothing a person disagreed with - the office test runs the pass
+over the September names and requires every value it writes to equal the
+hand classification, and `Temp1`-`Temp3` to stay untouched. What it is NOT
+is silent: one audit row per point with the pattern and its sentence, an
+*Auto-assigned* filter, a count on the station row. And the cost of NOT
+assigning grew: CEI is 334 points, the report judges nothing without a role,
+and a person clicking through 327 obvious ones is how the other seven - the
+ones that need a decision - get missed.
+
+**Why `medium` stays a click.** A medium suggestion is the token's most
+likely meaning with a reason to look (a bare `CFM` on a unit of unknown
+type, a filter recorded as a number). Writing it would be § 61's silent
+guess. It stays on the row under *Needs a decision* as a one-click choice.
+
+**Why one column protects the whole point.** Two NULL halves look the same
+whether nobody has looked or a person cleared them, so the halves alone
+cannot tell the pass what it may fill. One column, not one per half: a
+person who touched a point is the person who finishes it, and the pass not
+filling the other half of a `'manual'` point costs one click, where filling
+it against their intent costs a wrong judgment nobody notices. Every write
+through `applyClassificationIn` - the pickers, the bulk form, a suggestion's
+*Apply*, and #133's two previews - stamps `'manual'`, because each is a
+person's action. The rule lives in the pass's `UPDATE`, not only in its
+plan, so a person's write that lands between the pass's read and its write
+wins.
+
+**Why "needs a decision" ignores who touched it.** The question a person
+asks is "which points does nothing judge?", and the answer is the collected
+points with no role. A deliberate "no role" already exists - the
+vocabulary's `unclassified`, "reviewed, not mappable" - and clearing a role
+means "nobody has looked". So Settings -> General, the Points filter and the
+report's Point Inventory all count `is_active AND point_role IS NULL`, one
+predicate (`pointNeedsDecision`).
+
+**Why another station's equipment is not attached to.** Equipment is
+matched by `equipmentKey`, and two JACEs in one building can each have a
+`V1_01` that is not the same box. Equipment already carrying another
+station's points is left to a person; the role half still applies.
+
+**Why in the scheduler job.** It already runs every fifteen minutes with
+nothing but `DATABASE_URL`, which is all the pass needs; a new job would be
+new infrastructure for a few hundred milliseconds of work. The pass is
+environment-free because the job's import graph must be
+(`tests/bas-reports-jobs-env.test.ts`), so it cannot drop the web app's
+Analyze cache: a scheduler-written role reaches Analyze within five minutes.
+The step runs after the reports and a failing station fails the execution
+without stopping the others.
+
+**Why the missing roles were mapped, not added.** The request named
+`damper_position`, `oa_damper_position`, `airflow` and `airflow_sp`, which
+the vocabulary does not hold. Its own descriptions cover them -
+`vav_damper_cmd` is "commanded terminal box damper position", the rule the
+B8.5 Outside Air Damper pattern already follows; `supply_air_flow` is the
+role the Reports VAV questions read - and a role is added to the vocabulary
+deliberately, not to fit a token.
+
+**What breaks if you undo it.** Drop the `'manual'` check and the pass puts
+back a role a person cleared, every fifteen minutes. Apply `medium` and a
+bare `CFM` on an air handler becomes a box's airflow. Attach to another
+station's unit and a zone on one JACE pairs with a setpoint on another. Run
+it from the web app instead of the job and a building nobody opens in
+Settings is never assigned. Remove the audit row and a role nobody chose is
+untraceable to the name that produced it.

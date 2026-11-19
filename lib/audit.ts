@@ -131,6 +131,25 @@ export type AuditAction =
   | "bas.equipment_from_names"
   | "bas.suggestions_applied"
   /**
+   * The automatic assignment pass (2026-11-19, lib/modules/bas/auto-assign.ts).
+   *
+   * `bas.point_auto_assigned`: one row per point the pass wrote, carrying
+   * the half or halves it filled and WHY - the suggestion's pattern, level
+   * and sentence for a role, the prefix rule's sentence for equipment, and
+   * whether the equipment was created in the same pass. `trigger` is
+   * "scheduler" (actor null: the platform) or "run_now" (actor: the module
+   * admin who pressed "Run assignment now"). Never written for a point a
+   * person classified: the pass does not touch those.
+   *
+   * `bas.auto_assignment_ran`: one row per station per pass that wrote
+   * anything, and one for every "Run assignment now" press whether or not it
+   * did, with the counts and the names of any equipment created. Equipment
+   * the pass creates is also a `bas.equipment_created` row with
+   * `source: "auto"`.
+   */
+  | "bas.point_auto_assigned"
+  | "bas.auto_assignment_ran"
+  /**
    * A question typed into the Analyze tab (B5). One row per question,
    * whatever the outcome, carrying the question, the SQL that ran (or was
    * tried), the row count, the duration and the outcome kind.
@@ -397,20 +416,37 @@ export interface AuditEventInput {
  */
 type AuditWriter = Pick<PrismaClient, "auditEvent">;
 
+function auditRow(event: AuditEventInput) {
+  return {
+    action: event.action,
+    actorEmployeeId: event.actorEmployeeId ?? null,
+    targetEmployeeId: event.targetEmployeeId ?? null,
+    moduleKey: event.moduleKey ?? null,
+    metadata:
+      event.metadata === undefined || event.metadata === null
+        ? undefined
+        : (event.metadata as Prisma.InputJsonValue),
+  };
+}
+
 export async function writeAuditEvent(
   db: AuditWriter,
   event: AuditEventInput,
 ): Promise<void> {
-  await db.auditEvent.create({
-    data: {
-      action: event.action,
-      actorEmployeeId: event.actorEmployeeId ?? null,
-      targetEmployeeId: event.targetEmployeeId ?? null,
-      moduleKey: event.moduleKey ?? null,
-      metadata:
-        event.metadata === undefined || event.metadata === null
-          ? undefined
-          : (event.metadata as Prisma.InputJsonValue),
-    },
-  });
+  await db.auditEvent.create({ data: auditRow(event) });
+}
+
+/**
+ * Several rows in one INSERT, same shape and same rules as writeAuditEvent
+ * (2026-11-19). For an action that writes one row per item over hundreds of
+ * items - the automatic assignment pass on a 334-point station - where a row
+ * per round trip is most of the transaction's time. Same transaction rule:
+ * pass the transaction client, so the rows commit with the change.
+ */
+export async function writeAuditEvents(
+  db: AuditWriter,
+  events: readonly AuditEventInput[],
+): Promise<void> {
+  if (events.length === 0) return;
+  await db.auditEvent.createMany({ data: events.map(auditRow) });
 }

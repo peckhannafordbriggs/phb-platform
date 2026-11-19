@@ -251,6 +251,12 @@ export interface InventoryDocument {
   occupancy: Array<{ stationName: string; kind: OccupancyKind; detail: string }>;
   pointsInScope: number;
   equipmentInScope: number;
+  /**
+   * Collected points with no role, per station, with at least one (2026-11-19).
+   * No question judges their values; Data Health still checks they report.
+   * Absent on documents stored before that day.
+   */
+  unroled?: Array<{ stationName: string; count: number }>;
 }
 
 export interface SummaryDocument {

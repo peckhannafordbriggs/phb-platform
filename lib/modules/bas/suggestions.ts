@@ -6,12 +6,17 @@ import type { PointSuggestion, SuggestionLevel } from "./types";
 /**
  * Name-pattern suggestions for a point's role and equipment (B8.5).
  *
- * NOTHING HERE WRITES. This module returns a sentence for a row; a person
- * clicks it, and the click is what reaches the database. `getStationPoints`
- * calls this on every read and the read is proven not to change a row
- * (tests/bas-point-classification.test.ts). The lab's `Temp1`-`Temp3` are the
- * canon: nobody knows what they measure, no pattern below says anything about
- * a bare "Temp", and they must end B8.5 exactly as unclassified as they began.
+ * NOTHING HERE WRITES. This module returns a sentence for a row. Two things
+ * reach the database from it: a person's click, and - since 2026-11-19 - the
+ * automatic assignment pass (lib/modules/bas/auto-assign.ts), which applies a
+ * HIGH suggestion to a point no person has set and leaves a medium one on the
+ * row. So a pattern marked `high` here is a role the platform WILL write by
+ * itself, every fifteen minutes; add one only with that in mind.
+ * `getStationPoints` calls this on every read and the read is proven not to
+ * change a row (tests/bas-point-classification.test.ts). The lab's
+ * `Temp1`-`Temp3` are the canon: nobody knows what they measure, no pattern
+ * below says anything about a bare "Temp", and they stay as unclassified as
+ * they began - through the pass too (tests/bas-auto-assign.test.ts).
  *
  * WHAT "CONFIDENT" MEANS. A pattern fires only when the decoded name carries a
  * whole measurement PHRASE - "Zone Temperature", "Duct Static Pressure",
