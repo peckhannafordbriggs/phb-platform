@@ -837,6 +837,13 @@ async function produce(
       occupancy: [...scope.occupancyByStation.values()].map((o) => ({ stationName: o.stationName, kind: o.kind, detail: o.detail })),
       pointsInScope: scope.points.length,
       equipmentInScope: scope.units.length,
+      // Points the assignment left for a person: no question reads them.
+      unroled: scope.stations
+        .map((s) => ({
+          stationName: s.name,
+          count: scope.points.filter((p) => p.stationId === s.stationId && p.role === null).length,
+        }))
+        .filter((s) => s.count > 0),
     },
     summary: {
       status: summaryStatus,

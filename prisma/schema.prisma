@@ -437,6 +437,13 @@ model BasPoint {
 
   inactiveReason String? @map("inactive_reason")
 
+  /// Who decided this point's role and equipment: 'auto' (the scheduler's
+  /// assignment pass, or "Run assignment now"), 'manual' (a person, through
+  /// any Settings control), or NULL (nobody yet). The automatic pass never
+  /// writes a 'manual' point. CHECK and backfill in
+  /// 20261119120000_bas_point_assignment_source.
+  assignmentSource String? @map("assignment_source")
+
   firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
   lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz()
 

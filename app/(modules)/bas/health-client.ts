@@ -12,6 +12,7 @@ import {
 } from "@/lib/modules/bas/plausibility";
 import type {
   ApplySuggestionsResult,
+  StationAssignment,
   BasDashboard,
   BasSettingsTree,
   BasVocabularies,
@@ -1731,6 +1732,16 @@ export const createEquipmentFromNames = (
     { method: "POST", body: JSON.stringify({ rows }) },
   );
 
+/**
+ * "Run assignment now" (2026-11-19): the scheduler's automatic assignment
+ * pass for one station. No body - the service decides everything.
+ */
+export const runAssignmentNow = (stationId: string) =>
+  settingsWrite<StationAssignment>(
+    `/stations/${encodeURIComponent(stationId)}/auto-assign`,
+    { method: "POST" },
+  );
+
 export const createEquipment = (body: {
   siteId: string;
   name: string;
@@ -1881,6 +1892,35 @@ export function describeApplySuggestionsResult(result: ApplySuggestionsResult): 
   return `${base} Created ${result.equipmentCreated} piece${
     result.equipmentCreated === 1 ? "" : "s"
   } of equipment.`;
+}
+
+/** What "Run assignment now" did, from the server's counts (2026-11-19). */
+export function describeAssignmentResult(result: StationAssignment): string {
+  const points = (n: number) => `${n} point${n === 1 ? "" : "s"}`;
+  const open =
+    result.needDecision === 0
+      ? "Nothing needs a decision."
+      : `${points(result.needDecision)} ${result.needDecision === 1 ? "needs" : "need"} a decision.`;
+  if (result.outcome !== "assigned") {
+    return result.outcome === "nothing_to_assign"
+      ? `Nothing to assign: every collected point has a role and equipment, or was set by a person. ${open}`
+      : `Nothing new to assign: no high-confidence suggestion for the ${points(result.candidates)} left. ${open}`;
+  }
+  const parts = [`Gave a role to ${points(result.roleAssigned)}`, `attached ${points(result.equipmentAttached)} to equipment`];
+  if (result.equipmentCreated.length > 0) {
+    parts.push(
+      `created ${result.equipmentCreated.length} piece${result.equipmentCreated.length === 1 ? "" : "s"} of equipment`,
+    );
+  }
+  return `${parts.join(", ")}. ${open}`;
+}
+
+/** The station row's line on Settings -> General: "12 auto-assigned · 3 need a decision". */
+export function describeAssignmentCounts(station: { autoAssigned: number; needDecision: number }): string {
+  return (
+    `${station.autoAssigned} auto-assigned · ` +
+    (station.needDecision === 1 ? "1 needs a decision" : `${station.needDecision} need a decision`)
+  );
 }
 
 /** What "Create N pieces of equipment from name prefixes" did, from the server's counts. */

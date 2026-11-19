@@ -49,6 +49,8 @@ const point = (over: Partial<SettingsPoint> = {}): SettingsPoint => ({
   lastRecordAt: null,
   visible: true,
   plausibility: notCheckedPlausibility("no_role"),
+  assignmentSource: null,
+  needsDecision: false,
   ...over,
 });
 

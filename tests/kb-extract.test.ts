@@ -18,6 +18,7 @@ import {
   extractDocument,
   htmlSections,
   markdownSections,
+  standardFontDataUrl,
 } from "@/lib/modules/knowledge-base/extract";
 import { writeDocx, writePdf, writeWorkbook } from "./kb-fixtures";
 
@@ -39,6 +40,17 @@ const file = (name: string) => path.join(dir, name);
 const sentence = (n: number) => `Sentence ${n} about the air handling unit and its supply fan arrangement.`;
 const paragraph = (from: number, count: number) =>
   Array.from({ length: count }, (_, i) => sentence(from + i)).join(" ");
+
+describe("standardFontDataUrl", () => {
+  // pdfjs refuses a value that does not end in "/", and on Windows path.sep is
+  // a backslash: every PDF failed to index on a developer machine (2026-11-19).
+  it("ends in a forward slash and holds no backslash, on any platform", () => {
+    const url = standardFontDataUrl();
+    expect(url.endsWith("/"), url).toBe(true);
+    expect(url.includes("\\"), url).toBe(false);
+    expect(url.endsWith("/standard_fonts/"), url).toBe(true);
+  });
+});
 
 describe("cleanText", () => {
   it("removes NUL, which PostgreSQL text cannot hold, and tidies whitespace", () => {

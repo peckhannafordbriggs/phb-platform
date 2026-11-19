@@ -438,6 +438,8 @@ describe("the screen says so when the list falls short", () => {
     lastRecordAt: null,
     visible: true,
     plausibility: NOT_CHECKED_FIXTURE,
+    assignmentSource: null,
+    needsDecision: true,
   });
 
   function render(list: StationPointsList, expectedTotal: number): string {

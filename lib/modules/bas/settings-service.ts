@@ -47,7 +47,9 @@ import type {
 import {
   COLLECTING_WITHIN_HOURS,
   NO_SETTINGS_FILTERS,
+  isAssignmentSource,
   isInactiveReason,
+  pointNeedsDecision,
   settingsFiltersActive,
 } from "./types";
 import type {
@@ -66,11 +68,13 @@ import type {
   SettingsPoint,
   SettingsProject,
   SettingsStation,
+  StationAssignment,
   StationPointsList,
   StationReach,
 } from "./types";
 import { toHorizonState } from "./types";
 import { judgePlausibility, type PlausibilityRow } from "./plausibility";
+import { autoAssignStation } from "./auto-assign";
 import { plausibilityLateral } from "./plausibility-sql";
 
 /**
@@ -125,6 +129,8 @@ interface StationRow {
   last_seen_at: Date | null;
   active_points: bigint;
   total_points: bigint;
+  auto_assigned: bigint;
+  need_decision: bigint;
   /** Username and timestamp only. The ciphertext column is never selected. */
   cred_username: string | null;
   cred_updated_at: Date | null;
@@ -165,6 +171,8 @@ function toStation(row: StationRow): SettingsStation {
     isActive: row.is_active,
     activePoints: Number(row.active_points),
     totalPoints: Number(row.total_points),
+    autoAssigned: Number(row.auto_assigned),
+    needDecision: Number(row.need_decision),
     lastSeenAt: row.last_seen_at?.toISOString() ?? null,
     hasCredential: row.cred_updated_at !== null,
     // The username and when it was last set. No branch of this function can
@@ -417,6 +425,15 @@ export async function getBasSettingsTree(
           WHERE x.station_id = st.station_id AND x.is_active) AS active_points,
         (SELECT count(*) FROM bas_points x
           WHERE x.station_id = st.station_id)                 AS total_points,
+        -- The automatic assignment (2026-11-19), the same kind of joinless
+        -- count: what the pass wrote, and what waits for a person - collected
+        -- and no role, pointNeedsDecision in lib/modules/bas/types.ts.
+        (SELECT count(*) FROM bas_points x
+          WHERE x.station_id = st.station_id AND x.is_active
+            AND x.assignment_source = 'auto')                 AS auto_assigned,
+        (SELECT count(*) FROM bas_points x
+          WHERE x.station_id = st.station_id AND x.is_active
+            AND x.point_role IS NULL)                         AS need_decision,
         -- The username and when it moved. password_ciphertext and key_version
         -- are NOT in this list and must never be: a column that is never
         -- selected cannot be leaked by a later change to the serialiser.
@@ -600,6 +617,7 @@ interface PointListRow extends PlausibilityRow {
   is_active: boolean;
   inactive_reason: string | null;
   is_visible: boolean;
+  assignment_source: string | null;
   completeness: string | null;
   last_record_ts: Date | null;
   /** From bas_v_collection_health. NULL when the station has no view row. */
@@ -654,6 +672,9 @@ function toPoint(row: PointListRow, suggestion: PointSuggestion | null): Setting
     // The same judge Collection Health uses, over the same facts, so the two
     // screens cannot disagree about whether a value is stuck.
     plausibility: judgePlausibility(row),
+    // The CHECK closes the set; the guard is for the type.
+    assignmentSource: isAssignmentSource(row.assignment_source) ? row.assignment_source : null,
+    needsDecision: pointNeedsDecision({ collected: row.is_active, pointRole: row.point_role }),
   };
 }
 
@@ -700,6 +721,7 @@ export async function getStationPoints(
         p.is_active,
         p.inactive_reason,
         p.is_visible,
+        p.assignment_source,
         c.completeness,
         c.last_record_ts,
         h.horizon_state,
@@ -1272,7 +1294,11 @@ async function applyClassificationIn(
           options.fillOnly === true
             ? { pointId: point.point_id, pointRole: null }
             : { pointId: point.point_id },
-        data: { pointRole: change.role },
+        // Every caller of this path is a person's action - the pickers, the
+        // bulk form, a suggestion's own Apply, the two previews - so the
+        // point becomes theirs and the automatic pass never writes it again
+        // (2026-11-19, lib/modules/bas/auto-assign.ts).
+        data: { pointRole: change.role, assignmentSource: "manual" },
       });
       if (moved.count === 1) {
         await writeAuditEvent(tx, {
@@ -1298,7 +1324,7 @@ async function applyClassificationIn(
               options.fillOnly === true
                 ? { pointId: point.point_id, equipmentId: null }
                 : { pointId: point.point_id },
-            data: { equipmentId: nextId },
+            data: { equipmentId: nextId, assignmentSource: "manual" },
           });
       if (moved.count === 1) {
         await writeAuditEvent(tx, {
@@ -1766,6 +1792,23 @@ export async function applyHighConfidenceSuggestions(
 
   resetSchemaContextCache();
   return outcome;
+}
+
+/**
+ * "Run assignment now" (2026-11-19): the scheduler's automatic assignment
+ * pass, for one station, now - the SAME function the job calls
+ * (lib/modules/bas/auto-assign.ts), so the button cannot do anything the
+ * pass would not. Scoped like every station action here. The press is one
+ * `bas.auto_assignment_ran` row with the viewer as actor whether or not it
+ * found anything, beside a `bas.point_auto_assigned` row per point it wrote.
+ * The points it writes are 'auto', exactly as the scheduler's are: a person
+ * asked for the pass to run, not for these values.
+ */
+export async function runAssignmentNow(viewer: Viewer, stationIdText: string): Promise<StationAssignment> {
+  const { stationId } = await loadScopedStation(viewer, stationIdText);
+  const result = await autoAssignStation(stationId, { kind: "run_now", actorEmployeeId: viewer.id });
+  if (result.pointsAssigned > 0) resetSchemaContextCache();
+  return result;
 }
 
 function parsePointId(pointIdText: string): bigint {

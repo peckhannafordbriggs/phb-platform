@@ -383,8 +383,53 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
         ? " from the station's point name prefixes"
         : source === "suggestions"
           ? " from a high-confidence suggestion"
-          : "")
+          : source === "auto"
+            ? " from the station's point name prefixes, in the automatic assignment pass"
+            : "")
     );
+  },
+
+  // 2026-11-19. The pass's own row per point: what it filled and that it was
+  // the pass, so a role nobody remembers choosing is traceable to its name.
+  "bas.point_auto_assigned": ({ actor, meta }) => {
+    const name =
+      stringField(meta, "label") ??
+      stringField(meta, "pointName") ??
+      stringField(meta, "niagaraHistoryName") ??
+      "a point";
+    const roleMeta = meta.role !== null && typeof meta.role === "object" ? (meta.role as Record<string, unknown>) : null;
+    const equipmentMeta =
+      meta.equipment !== null && typeof meta.equipment === "object" ? (meta.equipment as Record<string, unknown>) : null;
+    const role = roleMeta === null ? null : stringField(roleMeta, "role");
+    const equipment = equipmentMeta === null ? null : stringField(equipmentMeta, "name");
+    const who = meta.trigger === "run_now" ? `${actor}, with Run assignment now,` : actor;
+    const parts: string[] = [];
+    if (role !== null) parts.push(`gave the point ${name} the role ${role}`);
+    if (equipment !== null) parts.push(`${parts.length > 0 ? "attached it" : `attached the point ${name}`} to the equipment ${equipment}`);
+    if (parts.length === 0) parts.push(`assigned the point ${name}`);
+    return `${who} ${parts.join(" and ")}, automatically from its name`;
+  },
+
+  "bas.auto_assignment_ran": ({ actor, meta }) => {
+    const station = stringField(meta, "stationName") ?? stringField(meta, "stationId") ?? "?";
+    const count = (key: string) => (typeof meta[key] === "number" ? (meta[key] as number) : 0);
+    const roles = count("roleAssigned");
+    const equipment = count("equipmentAttached");
+    const created = Array.isArray(meta.equipmentCreated) ? meta.equipmentCreated.length : 0;
+    const open = count("needDecision");
+    const opener =
+      meta.trigger === "run_now"
+        ? `${actor} ran the automatic point assignment on station ${station}`
+        : `${actor} assigned points automatically on station ${station}`;
+    const did =
+      roles + equipment + created === 0
+        ? "nothing new to assign"
+        : [
+            `a role on ${roles} point${roles === 1 ? "" : "s"}`,
+            `equipment on ${equipment}`,
+            ...(created > 0 ? [`${created} piece${created === 1 ? "" : "s"} of equipment created`] : []),
+          ].join(", ");
+    return `${opener}: ${did}; ${open} point${open === 1 ? " needs" : "s need"} a decision`;
   },
 
   // 2026-11-19. One sentence for the whole action; the per-point rows beside
@@ -1069,6 +1114,8 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.equipment_created": "BAS equipment added",
   "bas.equipment_from_names": "BAS equipment created from point names",
   "bas.suggestions_applied": "BAS name suggestions applied",
+  "bas.point_auto_assigned": "BAS point assigned automatically",
+  "bas.auto_assignment_ran": "BAS automatic assignment ran",
   "bas.equipment_updated": "BAS equipment updated",
   "bas.equipment_deleted": "BAS equipment deleted",
   "bas.question_asked": "BAS question asked",

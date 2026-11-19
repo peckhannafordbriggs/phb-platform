@@ -450,6 +450,21 @@ function Section({ section, timezone, index }: { section: SectionDocument; timez
 }
 
 /** "Rooftop Unit × 1, VAV Box × 10"; a document from before 2026-11-12 holds Step 1 words and is printed as it was. */
+/**
+ * The Point Inventory's line for a station's role-less points (2026-11-19).
+ * Worded for what is true: no question judges a point with no role, but
+ * Data Health's offline and stale checks read every point, role or not, so
+ * "were not judged" alone would be false.
+ */
+export function unroledLine(u: { stationName: string; count: number }): string {
+  const one = u.count === 1;
+  return (
+    `${u.count} point${one ? "" : "s"} on ${u.stationName} ${one ? "has" : "have"} no role, so ` +
+    `${one ? "its value was" : "their values were"} not judged; Data Health still checked that ` +
+    `${one ? "it was" : "they were"} reporting.`
+  );
+}
+
 function equipmentTypesText(found: ReadonlyArray<EquipmentTypeFound | string>): string {
   if (found.length === 0) return "none in scope";
   return found.map((t) => (typeof t === "string" ? t : `${t.label} × ${t.count}`)).join(", ");
@@ -709,6 +724,9 @@ export function ReportView({ document: doc, plannerDetails }: { document: Report
         Occupancy source:{" "}
         {inventory.occupancy.map((o) => `${o.stationName}: ${o.detail}`).join("; ") || "no stations in scope"}
       </p>
+      {(inventory.unroled ?? []).map((u) => (
+        <p key={u.stationName}>{unroledLine(u)}</p>
+      ))}
       <p className="muted">
         {inventory.pointsInScope} points on {inventory.equipmentInScope} pieces of equipment were in scope.
       </p>

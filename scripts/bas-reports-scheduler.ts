@@ -2,6 +2,7 @@ import "./load-env";
 import { prisma } from "../lib/db";
 import { readSchedulerJobEnv } from "../lib/modules/bas/reports/job-env";
 import { abandonedCount, runSchedulerPass } from "../lib/modules/bas/reports/scheduler";
+import { runAutoAssignPass } from "../lib/modules/bas/auto-assign";
 
 /**
  * The report scheduler, one pass (Reports, Phase 3).
@@ -20,6 +21,16 @@ import { abandonedCount, runSchedulerPass } from "../lib/modules/bas/reports/sch
  * Needs DATABASE_URL and nothing else; prints what it did and exits 0, or
  * exits 1 if the pass threw, which Container Apps shows as a failed
  * execution.
+ *
+ * THE ASSIGNMENT STEP (2026-11-19). After the reports, the same execution
+ * runs the automatic point assignment over every station
+ * (lib/modules/bas/auto-assign.ts): high-confidence roles and equipment for
+ * collected points nobody has classified, never a point a person set, never
+ * a half that has a value. A station with nothing new costs one aggregate
+ * query; one that fails is printed and the others still run, and then the
+ * execution exits 1 so it reads Failed - the reports above it are already
+ * committed. runbook.md -> "A point was given a role or equipment nobody
+ * chose".
  *
  * Read through lib/modules/bas/reports/job-env.ts and never lib/env.ts,
  * which is the web app's boot schema and fails a job that imports it
@@ -56,6 +67,24 @@ async function main(): Promise<void> {
   console.log(
     `[bas-reports-scheduler] ${pass.enqueued.length} queued, ${pass.paused.length} paused, ${pass.skipped.length} skipped, ${abandonedCount(pass.abandoned)} abandoned`,
   );
+
+  const assignment = await runAutoAssignPass();
+  for (const s of assignment.stations) {
+    if (s.outcome !== "assigned") continue;
+    console.log(
+      `[bas-reports-scheduler] assigned station ${s.stationId} (${s.stationName}): a role on ${s.roleAssigned}, equipment on ${s.equipmentAttached}, ${s.equipmentCreated.length} piece(s) of equipment created; ${s.needDecision} need a decision`,
+    );
+  }
+  for (const f of assignment.failed) {
+    console.error(`[bas-reports-scheduler] assignment failed on station ${f.stationId} (${f.stationName}): ${f.error}`);
+  }
+  const assigned = assignment.stations.filter((s) => s.outcome === "assigned").length;
+  console.log(
+    `[bas-reports-scheduler] assignment: ${assignment.stations.length} station(s), ${assigned} assigned, ${assignment.failed.length} failed`,
+  );
+  if (assignment.failed.length > 0) {
+    throw new Error(`the point assignment failed on ${assignment.failed.length} station(s); see the lines above`);
+  }
 }
 
 main()

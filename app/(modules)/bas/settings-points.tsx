@@ -5,6 +5,7 @@ import {
   groupRoles,
   pointDisplayName,
   pointMatchesSearch,
+  pointNeedsDecision,
   pointsCountState,
 } from "@/lib/modules/bas/types";
 import type {
@@ -94,12 +95,19 @@ export interface PointFilters {
   role: "any" | "none" | string;
   equipment: "any" | "none" | string;
   collected: "any" | "yes" | "no";
+  /**
+   * The automatic assignment (2026-11-19). `needs_decision`: collected and no
+   * role (pointNeedsDecision) - each row's suggestion, when it has one, is the
+   * one-click choice. `auto`: what the pass wrote. `manual`: what a person set.
+   */
+  assignment: "any" | "needs_decision" | "auto" | "manual";
 }
 
 export const NO_POINT_FILTERS: PointFilters = {
   role: "any",
   equipment: "any",
   collected: "any",
+  assignment: "any",
 };
 
 export function pointMatchesFilters(point: SettingsPoint, filters: PointFilters): boolean {
@@ -117,6 +125,9 @@ export function pointMatchesFilters(point: SettingsPoint, filters: PointFilters)
   }
   if (filters.collected === "yes" && !point.collected) return false;
   if (filters.collected === "no" && point.collected) return false;
+  if (filters.assignment === "needs_decision" && !pointNeedsDecision(point)) return false;
+  if (filters.assignment === "auto" && point.assignmentSource !== "auto") return false;
+  if (filters.assignment === "manual" && point.assignmentSource !== "manual") return false;
   return true;
 }
 
@@ -738,6 +749,10 @@ function ClassificationToolbar({
   const groups = useMemo(() => groupRoles(vocabularies.roles), [vocabularies.roles]);
   const hasBuilding = list.siteId !== null;
   const noun = (n: number) => (n === 1 ? "point" : "points");
+  // Counted over the whole list, not the filtered rows, so the option reads
+  // the same whichever filter is on.
+  const needDecision = list.points.filter(pointNeedsDecision).length;
+  const autoAssigned = list.points.filter((p) => p.collected && p.assignmentSource === "auto").length;
 
   return (
     <div className="mt-3 space-y-3 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] p-3">
@@ -777,6 +792,20 @@ function ClassificationToolbar({
             { value: "no", label: "Not collected" },
           ]}
           className="min-w-40"
+        />
+        <Dropdown
+          label="Filter by assignment"
+          value={filters.assignment}
+          onChange={(assignment) =>
+            onFiltersChange({ ...filters, assignment: assignment as PointFilters["assignment"] })
+          }
+          options={[
+            { value: "any", label: "Any assignment" },
+            { value: "needs_decision", label: `Needs a decision (${needDecision})` },
+            { value: "auto", label: `Auto-assigned (${autoAssigned})` },
+            { value: "manual", label: "Set by a person" },
+          ]}
+          className="min-w-48"
         />
         <span className="text-[var(--muted)]">·</span>
         <Button size="sm"

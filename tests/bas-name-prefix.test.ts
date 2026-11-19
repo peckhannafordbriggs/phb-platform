@@ -40,9 +40,9 @@ import { BAS_EQUIPMENT_TYPES, BAS_POINT_ROLES } from "../prisma/bas-vocabularies
  * The name parsers behind "Create N pieces of equipment from name prefixes"
  * and the suffix-token role suggestions (2026-11-19). Pure: no database.
  *
- * The CEI names are the six the request quoted from CEI_JCI_N2's 334. The
- * full list was not readable from this repository - it is only in the
- * production database - so these are the cases, and the office and lab
+ * The CEI names were first the six the request quoted from CEI_JCI_N2's 334;
+ * the full list is now docs/fixtures/cei-point-names.txt, and the block
+ * "the full CEI list" runs every name through the engine. The office and lab
  * fixtures (read from live) are the canon that must not move.
  */
 
@@ -403,6 +403,111 @@ describe("suffix-token role suggestions: the CEI names", () => {
   it("is silent when a phrase pattern and a token disagree", () => {
     // Contrived on purpose: the phrase says outside air, the tail says zone.
     expect(suggest("Outside_Air_Temp/SpaceTemp")).toBeNull();
+  });
+});
+
+describe("the full CEI list, names only (docs/fixtures/cei-point-names.txt)", () => {
+  const names = readFileSync(path.join(process.cwd(), "docs/fixtures/cei-point-names.txt"), "utf8")
+    .split(/\r?\n/)
+    .filter((n) => n.length > 0);
+  // What discovery writes before anyone has looked: no unit read yet, data
+  // type the column default. The fixture is names and nothing else.
+  const results = names.map((name) => ({ name, s: suggest(name, { dataType: "unknown" }) }));
+
+  it("holds 334 names", () => {
+    expect(names).toHaveLength(334);
+    expect(new Set(names).size).toBe(334);
+  });
+
+  it("gives every name with a role in the vocabulary a high-confidence role", () => {
+    const tally: Record<string, number> = {};
+    for (const { s } of results) if (s !== null) tally[`${s.role}/${s.level}`] = (tally[`${s.role}/${s.level}`] ?? 0) + 1;
+    expect(tally).toEqual({
+      "zone_temp/high": 155,
+      "discharge_air_temp/high": 155,
+      "space_humidity/high": 6,
+      "supply_air_temp/high": 1,
+      "duct_static_pressure/high": 1,
+      "mixed_air_temp/high": 1,
+      "outside_air_temp/high": 1,
+      "return_air_temp/high": 1,
+      "return_air_humidity/high": 2,
+      "outside_air_humidity/high": 2,
+      "supply_fan_status/high": 1,
+      "return_fan_status/high": 1,
+    });
+  });
+
+  it("leaves exactly the enthalpy points and the filters, whose role the name cannot settle", () => {
+    expect(results.filter((r) => r.s === null).map((r) => r.name)).toEqual([
+      "AHU_7/OA_Enth",
+      "AHU_7/RA_Enth",
+      "AHU_8/RA_Enth",
+      "XTM_109/AHU_7_FinalFilter",
+      "XTM_109/AHU_7_PreFilter",
+      "XTM_109/AHU_8_FinalFilter",
+      "XTM_109/AHU_8_PreFilter",
+    ]);
+    // A filter is settled by its data type once the station reports one.
+    expect(suggest("XTM_109/AHU_7_FinalFilter", { dataType: "bool" })).toMatchObject({ role: "filter_status", level: "high" });
+  });
+
+  it("derives 157 units, all of a known type: 155 VAVs and the two AHUs, the XTM filters under their AHU", () => {
+    const groups = groupEquipmentPrefixes(names.map((n, i) => subject(String(i), n)), []);
+    expect(groups).toHaveLength(157);
+    expect(groups.every(groupIncludedByDefault)).toBe(true);
+    expect(groups.filter((g) => g.equipType === "vav")).toHaveLength(155);
+    const unit = (name: string) => groups.find((g) => g.name === name)!.pointIds.map((i) => names[Number(i)]);
+    expect(unit("AHU_7")).toEqual(expect.arrayContaining(["XTM_109/AHU_7_FinalFilter", "XTM_109/AHU_7_PreFilter"]));
+    expect(unit("AHU_7")).toHaveLength(13);
+    expect(unit("AHU_8")).toEqual(expect.arrayContaining(["XTM_109/AHU_8_FinalFilter", "XTM_109/AHU_8_PreFilter"]));
+    expect(unit("AHU_8")).toHaveLength(5);
+  });
+});
+
+describe("second-round tokens: fans, dampers, airflow, valves, zone setpoints", () => {
+  // [name, role or null, level]. The prefix decides the class: V is a
+  // terminal, AHU an air handler, Points/ unknown.
+  const CASES: Array<[string, string | null, "high" | "medium" | null]> = [
+    ["AHU_1/SF_S", "supply_fan_status", "high"],
+    ["AHU_1/RF_S", "return_fan_status", "high"],
+    ["AHU_1/OA_H", "outside_air_humidity", "high"],
+    ["AHU_1/SF_C", "supply_fan_cmd", "high"],
+    ["AHU_1/SF_CMD", "supply_fan_cmd", "high"],
+    ["AHU_1/SF_SPD", "supply_fan_speed", "high"],
+    ["AHU_1/RF_CMD", "return_fan_cmd", "high"],
+    ["AHU_1/RF_SPD", "return_fan_speed", "high"],
+    ["V1_1/DMPR", "vav_damper_cmd", "high"],
+    ["V1_1/DA_DMPR", "vav_damper_cmd", "high"],
+    ["AHU_1/DMPR", null, null],
+    ["Points/DMPR", "vav_damper_cmd", "medium"],
+    ["AHU_1/OA_DMPR", "oa_damper_cmd", "high"],
+    ["AHU_1/RA_DMPR", "ra_damper_cmd", "high"],
+    ["V1_1/FLOW", "supply_air_flow", "high"],
+    ["V1_1/CFM", "supply_air_flow", "high"],
+    ["AHU_1/FLOW", null, null],
+    ["Points/CFM", "supply_air_flow", "medium"],
+    ["AHU_1/SA_FLOW", "supply_air_flow", "high"],
+    ["V1_1/FLOW_SP", "supply_air_flow_sp", "high"],
+    ["V1_1/RHV", "reheat_valve_cmd", "high"],
+    ["V1_1/REHEAT", "reheat_valve_cmd", "high"],
+    ["AHU_1/RHV", null, null],
+    ["AHU_1/CLG_V", "cooling_valve_cmd", "high"],
+    ["V1_1/CLG_V", "cooling_valve_cmd", "high"],
+    ["AHU_1/HTG_V", "heating_valve_cmd", "high"],
+    ["V1_1/HTG_V", "reheat_valve_cmd", "high"],
+    ["Points/HTG_V", "heating_valve_cmd", "medium"],
+    ["V1_1/ZN_T_SP", "zone_temp_sp", "high"],
+    ["V1_1/SpaceTempSp", "zone_temp_sp", "high"],
+    ["V1_1/ZoneSetpoint", "zone_temp_sp", "high"],
+    ["AHU_1/OA_Enth", null, null],
+    ["AHU_1/RA_Enth", null, null],
+  ];
+
+  it.each(CASES)("%s -> %s (%s)", (name, role, level) => {
+    const s = suggest(name, { dataType: "unknown" });
+    if (role === null) expect(s).toBeNull();
+    else expect(s).toMatchObject({ role, level });
   });
 });
 

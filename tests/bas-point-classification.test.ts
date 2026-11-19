@@ -57,6 +57,7 @@ import {
   describeBulkPlan,
   pointMatchesFilters,
   shownPoints,
+  type PointFilters,
 } from "@/app/(modules)/bas/settings-points";
 import {
   ROLE_RIPPLE_NOTE,
@@ -94,8 +95,10 @@ import {
  * Roles and equipment through the API (B8.5), and the three things the
  * prompt said must be mutation-checked:
  *
- *   - a suggestion is NEVER written by anything but a click: reading the
- *     list and rendering it changes no row and writes no audit row;
+ *   - a suggestion is never written by READING it: reading the list and
+ *     rendering it changes no row and writes no audit row (the writers are
+ *     a click and, since 2026-11-19, the automatic assignment pass -
+ *     tests/bas-auto-assign.test.ts);
  *   - a bulk change writes inside the selection and nowhere else, and a
  *     selection with one bad id writes nothing at all;
  *   - the role PATCH is as strict as the label PATCH: an unknown key is 422.
@@ -890,7 +893,7 @@ describe("the list's rules", () => {
     equipmentId: null, equipmentName: null, unit: null, suggestion: null,
     horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
     collected: true, inactiveReason: null, completeness: null, lastRecordAt: null, visible: true,
-    plausibility: notCheckedPlausibility("no_role"), ...over,
+    plausibility: notCheckedPlausibility("no_role"), assignmentSource: null, needsDecision: false, ...over,
   });
 
   it("filters by role, equipment and collected, and 'select all shown' is the filtered set", () => {
@@ -903,8 +906,26 @@ describe("the list's rules", () => {
     expect(shownPoints([a, b, c], "", { ...NO_POINT_FILTERS, equipment: "none" }).map((p) => p.pointId)).toEqual(["b", "c"]);
     expect(shownPoints([a, b, c], "", { ...NO_POINT_FILTERS, equipment: "1" }).map((p) => p.pointId)).toEqual(["a"]);
     expect(shownPoints([a, b, c], "", { ...NO_POINT_FILTERS, collected: "no" }).map((p) => p.pointId)).toEqual(["c"]);
-    expect(shownPoints([a, b, c], "", { role: "zone_temp", equipment: "none", collected: "yes" })).toEqual([]);
+    expect(shownPoints([a, b, c], "", { role: "zone_temp", equipment: "none", collected: "yes", assignment: "any" })).toEqual([]);
   });
+
+  it("filters by assignment: a decision is needed by a collected point with no role, whoever touched it last", () => {
+    const auto = point({ pointId: "auto", pointRole: "zone_temp", equipmentId: "1", assignmentSource: "auto" });
+    const fresh = point({ pointId: "fresh", pointRole: null, equipmentId: null, assignmentSource: null });
+    const autoNoRole = point({ pointId: "autoNoRole", pointRole: null, equipmentId: "1", assignmentSource: "auto" });
+    const cleared = point({ pointId: "cleared", pointRole: null, equipmentId: "1", assignmentSource: "manual" });
+    const manual = point({ pointId: "manual", pointRole: "unclassified", equipmentId: null, assignmentSource: "manual" });
+    const off = point({ pointId: "off", pointRole: null, equipmentId: null, collected: false });
+    const all = [auto, fresh, autoNoRole, cleared, manual, off];
+    const by = (assignment: PointFilters["assignment"]) =>
+      shownPoints(all, "", { ...NO_POINT_FILTERS, assignment }).map((p) => p.pointId);
+    // unclassified is a decision; an uncollected point waits for nobody.
+    expect(by("needs_decision")).toEqual(["fresh", "autoNoRole", "cleared"]);
+    expect(by("auto")).toEqual(["auto", "autoNoRole"]);
+    expect(by("manual")).toEqual(["cleared", "manual"]);
+    expect(by("any")).toHaveLength(6);
+  });
+
 
   it("names the count and both halves in the confirmation sentence", () => {
     expect(describeBulkPlan("Zone Temperature", "VAV-3", 10)).toBe("Set the role to Zone Temperature and attach to VAV-3 on 10 points.");
