@@ -2177,6 +2177,24 @@ describe("the BAS Reports jobs: a scheduler and a worker behind one flag, one im
     expect(pkg.scripts["bas:reports:scheduler"]).toBe("tsx scripts/bas-reports-scheduler.ts");
   });
 
+  it("the Cost Intelligence worker image is slimmed the same way: no recursive chown of /app, every COPY owned by node, the install production-only and as node", async () => {
+    const instructions = (await readFile("Dockerfile.cip-worker"))
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    expect(instructions).toMatch(/^FROM node:24-bookworm-slim$/m);
+    expect(instructions).toMatch(/CMD \["npx", "tsx", "scripts\/cip-worker\.ts"\]/);
+    expect(instructions).not.toMatch(/chown\s+-R/);
+    expect(instructions).toMatch(/^RUN mkdir \/app && chown node:node \/app\nWORKDIR \/app$/m);
+    const copies = instructions.match(/^COPY .*$/gm) ?? [];
+    expect(copies.length).toBe(4);
+    for (const copy of copies) expect(copy).toMatch(/^COPY --chown=node:node /);
+    // One USER line, before the install: nothing in /app is root's.
+    expect(instructions.match(/^USER (\S+)$/gm)).toEqual(["USER node"]);
+    expect(instructions.indexOf("USER node")).toBeLessThan(instructions.indexOf("npm ci --omit=dev"));
+    expect(instructions).toMatch(/^ENV NODE_PATH=\/usr\/local\/lib\/node_modules$/m);
+  });
+
   it("ships the flag off and the cron in the example parameters, and is documented in the README and the runbook", async () => {
     const example = JSON.parse(await readFile("infra/main.parameters.example.json")) as { parameters: Record<string, { value: unknown }> };
     expect(example.parameters.enableBasReports?.value).toBe(false);
