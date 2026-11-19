@@ -248,6 +248,31 @@ export type AuditAction =
   | "cip.workflow_steps_changed"
   | "cip.workflow_deleted"
   /**
+   * Knowledge Base syncs (lib/modules/knowledge-base/sync.ts). A completed
+   * sync carries the sync id, trigger, source kind, status and the project
+   * and file counts; a failed one carries the error. A null actor is the
+   * platform (a scheduled sync).
+   */
+  | "kb.synced"
+  | "kb.sync_failed"
+  /**
+   * A module admin emptied the index (lib/modules/knowledge-base/clear.ts).
+   * Metadata carries the project, document and passage counts removed. The
+   * question history is not touched.
+   */
+  | "kb.index_cleared"
+  /**
+   * An employee reported a Knowledge Base answer as wrong, or updated their
+   * open report (lib/modules/knowledge-base/reports.ts). Metadata: reportId,
+   * questionId, reason, citationN, updated.
+   */
+  | "kb.answer_reported"
+  /**
+   * A module admin closed a report as resolved or dismissed. Metadata:
+   * reportId, questionId, status, note.
+   */
+  | "kb.answer_report_closed"
+  /**
    * Freeze Protection. Every write in lib/modules/freeze-protection/ writes one
    * of these in the same transaction. Metadata always carries `projectId` and
    * `jobNumber`, because the job number is what a person searches for. Updates

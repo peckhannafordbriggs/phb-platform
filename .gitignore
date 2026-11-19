@@ -163,3 +163,7 @@ ds-bundle/
 # The BAS migration export (scripts/bas-migrate-to-azure/export.sql): 87,000
 # readings and the credentials ciphertext. Never committed.
 bas-migration-data/
+
+# Knowledge Base search evaluation questions (scripts/kb-eval.ts). They name real
+# project files and facts, so they stay on the machine that runs them.
+.kb-eval/

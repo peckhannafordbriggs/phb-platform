@@ -250,6 +250,9 @@ param coAnthropicApiKeyInKeyVault bool = false
 @description('Set to true once the Freeze Protection module\'s own Anthropic API key exists in Key Vault as FP-ANTHROPIC-API-KEY - a third key, issued separately in the Anthropic Console, placed in the vault by hand, never as a template parameter. Read by the web container app only, as FP_ANTHROPIC_API_KEY (lib/env.ts decides the name); absent it disables the equipment schedule import and nothing else. Same conditional as the Anthropic key above, for the same reason.')
 param fpAnthropicApiKeyInKeyVault bool = false
 
+@description('Set to true once the Knowledge Base\'s own Anthropic API key exists in Key Vault as KB-ANTHROPIC-API-KEY - a THIRD key, issued separately in the Anthropic Console so KB search re-sorting and answers are billed, rate-limited and revoked independently of BAS Analyze and Change Orders, placed in the vault by hand, never as a template parameter. Read by the container app as KB_ANTHROPIC_API_KEY (lib/env.ts decides the name); absent, KB search keeps its own order and writes no answers, and nothing else changes. Same conditional as the Anthropic key above, for the same reason.')
+param kbAnthropicApiKeyInKeyVault bool = false
+
 @description('Set to true once the BAS credential key exists in Key Vault as BAS-CREDENTIAL-KEY - the 32-byte base64 AES key that encrypts Niagara station passwords in bas_station_credentials, placed there by hand, never as a template parameter. It MUST be byte-identical to the BAS_CREDENTIAL_KEY in the .env of the collector on the office PC: every stored credential was encrypted under that key, and a different one turns them all into unreadable ciphertext. Same conditional as the Anthropic key, for the same reason.')
 param basCredentialKeyInKeyVault bool = false
 
@@ -281,6 +284,31 @@ param cipSharePointSkillsFolder string = ''
 @description('SharePoint BID-DOC folder, as ids:<driveId>/<itemId>.')
 param cipSharePointProjectsFolder string = ''
 
+// ---------------------------------------------------------------------------
+// Knowledge Base
+// ---------------------------------------------------------------------------
+
+@description('Create the Knowledge Base sync worker job. Off until a kb-worker image is in the registry - the job cannot be created without one. See runbook.md, "Knowledge Base worker in Azure".')
+param enableKbWorker bool = false
+
+@description('KB worker image. Required when enableKbWorker is true: the image the job runs now (`az containerapp job show`), or on first enable a kb-worker image built with `az acr build`. No placeholder default, so a redeploy cannot reset it.')
+param kbWorkerImage string = ''
+
+@description('Tenant ID of the KB app registration (read on the Knowledge Base library). Not a secret.')
+param kbAppTenantId string = ''
+
+@description('Client ID of the KB app registration. Production signs in as it with the managed identity and a federated credential; no secret.')
+param kbAppClientId string = ''
+
+@description('The folder holding the Knowledge Base project folders, as ids:<driveId>/<itemId>: +++CURATED_FOLDERS in the Knowledge Base site\'s Documents library (ids:<driveId> alone is the whole library). `npm run kb:source:check -- "<folder URL>"` checks the KB app can read it and prints the value.')
+param kbSharePointLibraryUrl string = ''
+
+@description('Azure OpenAI (Foundry) endpoint for Knowledge Base embeddings: the resource URL or the deployment\'s Target URI; only its host is used. Not a secret. Both the app and the KB worker read it; they sign in with the managed identity (role Cognitive Services OpenAI User on the resource), never a key.')
+param kbEmbeddingEndpoint string = ''
+
+@description('Name of the text-embedding-3-small deployment on that resource.')
+param kbEmbeddingDeployment string = ''
+
 // Change Orders → Needs Review (2026-10-21). A third app registration,
 // phb-platform-co-review, read-only on the automation's _needs_review folder
 // through Files.SelectedOperations.Selected - never the mail app, whose
@@ -299,6 +327,139 @@ param coReviewSharePointFolder string = ''
 
 @description('Model the skills run on. Empty means the default in lib/modules/cost-intelligence/runs.ts.')
 param cipRunModel string = ''
+
+// ---------------------------------------------------------------------------
+// Knowledge Base sync worker
+//
+// The same shape as the CIP worker: a Container Apps Job that runs only while
+// there is work. The admin's Index button writes a `queued` kb_sync_runs row;
+// every 15 seconds the scaler counts them and starts an execution, which runs
+// `kb-worker.ts --once` - claims the sync with FOR UPDATE SKIP LOCKED, lists
+// the library, reads every new or changed file, and exits. One at a time: the
+// database allows one queued-or-running sync (kb_sync_runs_one_active_key).
+//
+// The first index of a whole library can take hours; replicaTimeout is four.
+// A sync cut off by it stops sending heartbeats, is closed by the next one,
+// and the files it had not reached stay pending for the next press. No retry.
+//
+// Reads SharePoint as the KB app registration through the managed identity's
+// federated credential (request KB-3). No secret: the job holds only the
+// database URL, by reference.
+// ---------------------------------------------------------------------------
+
+resource kbWorkerJob 'Microsoft.App/jobs@2024-03-01' = if (enableKbWorker) {
+  name: '${baseName}-kb-worker'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: managedEnvironment.id
+    configuration: {
+      triggerType: 'Event'
+      replicaTimeout: 14400
+      replicaRetryLimit: 0
+      eventTriggerConfig: {
+        parallelism: 1
+        replicaCompletionCount: 1
+        scale: {
+          minExecutions: 0
+          maxExecutions: 1
+          pollingInterval: 15
+          rules: [
+            {
+              name: 'kb-syncs-queued'
+              type: 'postgresql'
+              metadata: {
+                query: 'SELECT count(*) FROM kb_sync_runs WHERE status = \'queued\''
+                targetQueryValue: '1'
+              }
+              auth: [
+                {
+                  secretRef: 'database-url'
+                  triggerParameter: 'connection'
+                }
+              ]
+            }
+          ]
+        }
+      }
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${databaseUrlSecret.name}'
+          identity: identity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'kb-worker'
+          image: kbWorkerImage
+          command: [
+            'npx'
+            'tsx'
+            'scripts/kb-worker.ts'
+            '--once'
+          ]
+          resources: {
+            cpu: json('2.0')
+            memory: '4Gi'
+          }
+          env: [
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'database-url'
+            }
+            {
+              name: 'NODE_ENV'
+              value: 'production'
+            }
+            {
+              name: 'GRAPH_MANAGED_IDENTITY_CLIENT_ID'
+              value: identity.properties.clientId
+            }
+            {
+              name: 'PHB_PLATFORM_KB_APP_TENANT_ID'
+              value: kbAppTenantId
+            }
+            {
+              name: 'PHB_PLATFORM_KB_APP_CLIENT_ID'
+              value: kbAppClientId
+            }
+            {
+              name: 'KB_SHAREPOINT_LIBRARY_URL'
+              value: kbSharePointLibraryUrl
+            }
+            {
+              name: 'KB_EMBEDDING_ENDPOINT'
+              value: kbEmbeddingEndpoint
+            }
+            {
+              name: 'KB_EMBEDDING_DEPLOYMENT'
+              value: kbEmbeddingDeployment
+            }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    acrPull
+    keyVaultRead
+  ]
+}
 
 // ---------------------------------------------------------------------------
 // BAS Reports jobs (Reports, Phase 3): a scheduler and a worker
@@ -651,6 +812,26 @@ resource allowAzureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallR
   }
 }
 
+// Extensions a migration may CREATE. Flexible Server refuses CREATE EXTENSION
+// for anything not on this list, and a refused migration stops `migrate
+// deploy` and with it every later deploy of the platform.
+//
+// VECTOR (pgvector) is the Knowledge Base search index -
+// prisma/migrations/20261027120000_add_kb_index. The value REPLACES the whole
+// list: to allow another extension, append to it with a comma, never set it
+// to the new one alone. Deploying this template is not part of CI, so a live
+// server needs the same value set by hand first, and so does any server a
+// backup is restored onto - runbook.md -> *A migration fails with "extension
+// "vector" is not allow-listed"*.
+resource allowedExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
+  parent: postgres
+  name: 'azure.extensions'
+  properties: {
+    value: 'VECTOR'
+    source: 'user-override'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Secrets
 //
@@ -711,6 +892,10 @@ var coAnthropicApiKeySecretName = 'CO-ANTHROPIC-API-KEY'
 // read by the web app's equipment schedule import, nothing else. The template
 // knows the name only.
 var fpAnthropicApiKeySecretName = 'FP-ANTHROPIC-API-KEY'
+
+// The Knowledge Base's Anthropic key (2026-11-10): the same shape, a third
+// key, so KB answers are billed and revoked on their own.
+var kbAnthropicApiKeySecretName = 'KB-ANTHROPIC-API-KEY'
 
 // The BAS credential key is the same shape: issued once (generated on the
 // office PC, where the collector already uses it), pasted into the vault once
@@ -840,6 +1025,15 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               {
                 name: 'fp-anthropic-api-key'
                 keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${fpAnthropicApiKeySecretName}'
+                identity: identity.id
+              }
+            ]
+          : [])
+        ...(kbAnthropicApiKeyInKeyVault
+          ? [
+              {
+                name: 'kb-anthropic-api-key'
+                keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${kbAnthropicApiKeySecretName}'
                 identity: identity.id
               }
             ]
@@ -982,6 +1176,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
                   }
                 ]
               : [])
+            // The Knowledge Base's key, read lazily by readKbAnthropicEnv in
+            // lib/modules/knowledge-base/anthropic.ts. A third key, never a
+            // fallback to either above. Absent: search keeps its own order
+            // and no answers are written. By reference, never a plain value.
+            ...(kbAnthropicApiKeyInKeyVault
+              ? [
+                  {
+                    name: 'KB_ANTHROPIC_API_KEY'
+                    secretRef: 'kb-anthropic-api-key'
+                  }
+                ]
+              : [])
             // Read lazily by credentialKeyState in lib/modules/bas/credentials.ts.
             // Absent disables storing and decrypting station logins and nothing
             // else. By reference, like the key above - never a plain value. The
@@ -1044,6 +1250,31 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'CO_REVIEW_SHAREPOINT_FOLDER'
               value: coReviewSharePointFolder
+            }
+            {
+              name: 'KB_EMBEDDING_ENDPOINT'
+              value: kbEmbeddingEndpoint
+            }
+            {
+              name: 'KB_EMBEDDING_DEPLOYMENT'
+              value: kbEmbeddingDeployment
+            }
+            // The KB source, the same three values the worker job carries.
+            // Index now (queueKbSync) runs HERE and refuses to queue a sync
+            // when the source is not configured, so the job alone is not
+            // enough. Identifiers, not secrets: the app reads SharePoint
+            // through the managed identity's federated credential.
+            {
+              name: 'PHB_PLATFORM_KB_APP_TENANT_ID'
+              value: kbAppTenantId
+            }
+            {
+              name: 'PHB_PLATFORM_KB_APP_CLIENT_ID'
+              value: kbAppClientId
+            }
+            {
+              name: 'KB_SHAREPOINT_LIBRARY_URL'
+              value: kbSharePointLibraryUrl
             }
           ]
           probes: [
@@ -2106,6 +2337,7 @@ output managedIdentityClientId string = identity.properties.clientId
 output managedIdentityPrincipalId string = identity.properties.principalId
 // Set as the AZURE_CIP_WORKER_JOB repository variable so deploys update its image.
 output cipWorkerJobName string = enableCipWorker ? cipWorkerJob.name : ''
+output kbWorkerJobName string = enableKbWorker ? kbWorkerJob.name : ''
 
 // The two BAS Reports jobs (Phase 3), for the deploy workflow's variables.
 output basReportsSchedulerJobName string = enableBasReports ? basReportsSchedulerJob.name : ''

@@ -29,7 +29,12 @@
     "bas:reports:worker": "tsx scripts/bas-reports-worker.ts",
     "db:verify:prod": "tsx scripts/verify-prod-database.ts",
     "db:backup:verify": "tsx scripts/db-backup-verify.ts",
-    "cip:worker": "tsx scripts/cip-worker.ts"
+    "cip:worker": "tsx scripts/cip-worker.ts",
+    "kb:sync": "tsx scripts/kb-sync.ts",
+    "kb:worker": "tsx scripts/kb-worker.ts",
+    "kb:eval": "tsx scripts/kb-eval.ts",
+    "kb:embed:check": "tsx scripts/kb-embed-check.ts",
+    "kb:source:check": "tsx scripts/kb-source-check.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.296",
@@ -41,7 +46,10 @@
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "7.9.1",
     "dotenv": "^17",
+    "exceljs": "4.4.0",
+    "jszip": "3.10.1",
     "lucide-react": "^1.48.0",
+    "mammoth": "1.13.0",
     "next": "15.5.26",
     "next-auth": "5.0.0-beta.32",
     "pdfjs-dist": "^6.5.438",

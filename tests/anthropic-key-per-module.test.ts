@@ -4,9 +4,12 @@ import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_API_KEY_VAR,
   CO_ANTHROPIC_API_KEY_VAR,
+  KB_ANTHROPIC_API_KEY_VAR,
   readAnthropicApiKey,
   readChangeOrderAnthropicApiKey,
+  readKbAnthropicApiKey,
 } from "@/lib/env";
+import { readKbAnthropicEnv } from "@/lib/modules/knowledge-base/anthropic";
 import { readAnalyzeEnv } from "@/lib/modules/bas/analyze/env";
 import { readChangeOrderAnthropicEnv } from "@/lib/modules/change-orders/anthropic-env";
 
@@ -117,6 +120,7 @@ const stripComments = (source: string) =>
   source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 const CHANGE_ORDER_TREES = ["lib/modules/change-orders", "app/(modules)/change-orders"];
+const KB_TREES = ["lib/modules/knowledge-base", "app/(modules)/knowledge-base", "app/api/modules/knowledge-base"];
 const BAS_TREES = ["lib/modules/bas", "app/(modules)/bas"];
 
 async function readTrees(trees: string[]): Promise<Array<{ file: string; code: string }>> {
@@ -163,7 +167,7 @@ describe("nothing under either module reads the other module's key", () => {
     // BAS key; under BAS it is a second, implicit route to the same key. Both
     // modules pass `apiKey` on every construction.
     let clients = 0;
-    for (const { file, code } of await readTrees([...CHANGE_ORDER_TREES, ...BAS_TREES])) {
+    for (const { file, code } of await readTrees([...CHANGE_ORDER_TREES, ...BAS_TREES, ...KB_TREES])) {
       const constructions = code.match(/new Anthropic\s*\(/g) ?? [];
       const explicit = code.match(/new Anthropic\s*\(\s*\{[^}]*\bapiKey\b/g) ?? [];
       expect(explicit.length, `${file}: every new Anthropic(...) must pass apiKey`).toBe(
@@ -173,5 +177,43 @@ describe("nothing under either module reads the other module's key", () => {
     }
     // The BAS planner is one; the walk is not vacuous.
     expect(clients).toBeGreaterThanOrEqual(1);
+  });
+});
+
+/** The third key (2026-11-10): the Knowledge Base's, the same rules. */
+describe("the Knowledge Base reads its own key and no other", () => {
+  it("names it differently from both other keys", () => {
+    expect(KB_ANTHROPIC_API_KEY_VAR).toBe("KB_ANTHROPIC_API_KEY");
+    expect(new Set([ANTHROPIC_API_KEY_VAR, CO_ANTHROPIC_API_KEY_VAR, KB_ANTHROPIC_API_KEY_VAR]).size).toBe(3);
+  });
+
+  it("never falls back to the BAS or Change Orders key", () => {
+    expect(readKbAnthropicEnv({ ANTHROPIC_API_KEY: "bas", CO_ANTHROPIC_API_KEY: "co" })).toEqual({
+      present: false,
+      missing: ["KB_ANTHROPIC_API_KEY"],
+    });
+    expect(readKbAnthropicEnv({ ANTHROPIC_API_KEY: "bas", KB_ANTHROPIC_API_KEY: "  " }).present).toBe(false);
+    const both = readKbAnthropicEnv({ ANTHROPIC_API_KEY: "bas", KB_ANTHROPIC_API_KEY: " kb " });
+    expect(both).toMatchObject({ present: true, values: { apiKey: "kb", rerankModel: "claude-haiku-5-5", answerModel: "claude-sonnet-5-5" } });
+    const saved = process.env.KB_ANTHROPIC_API_KEY;
+    try {
+      delete process.env.KB_ANTHROPIC_API_KEY;
+      expect(readKbAnthropicApiKey()).toBeNull();
+      process.env.KB_ANTHROPIC_API_KEY = "kb";
+      expect(readKbAnthropicApiKey()).toBe("kb");
+    } finally {
+      if (saved === undefined) delete process.env.KB_ANTHROPIC_API_KEY;
+      else process.env.KB_ANTHROPIC_API_KEY = saved;
+    }
+  });
+
+  it("KB code never names another module's key or reader", async () => {
+    const files = await readTrees(KB_TREES);
+    expect(files.length).toBeGreaterThan(10);
+    for (const { file, code } of files) {
+      expect(code, file).not.toMatch(/(?<!(CO|KB)_)ANTHROPIC_API_KEY/);
+      expect(code, file).not.toMatch(/CO_ANTHROPIC_API_KEY/);
+      expect(code, file).not.toMatch(/\breadAnthropicApiKey\b|\breadAnalyzeEnv\b|\breadChangeOrderAnthropic/);
+    }
   });
 });
