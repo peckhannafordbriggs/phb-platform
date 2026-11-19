@@ -28,6 +28,7 @@ import { PUT as buildingOccupancy } from "@/app/api/modules/bas/settings/buildin
 import { POST as createEquipment } from "@/app/api/modules/bas/settings/equipment/route";
 import { POST as equipmentFromNames } from "@/app/api/modules/bas/settings/stations/[stationId]/equipment-from-names/route";
 import { POST as applySuggestions } from "@/app/api/modules/bas/settings/stations/[stationId]/suggestions/apply/route";
+import { POST as runAssignment } from "@/app/api/modules/bas/settings/stations/[stationId]/auto-assign/route";
 import {
   DELETE as deleteEquipment,
   PATCH as patchEquipment,
@@ -330,8 +331,9 @@ describe("no settings route ever returns the password or the ciphertext", () => 
     // B8.5: points/bulk, vocabularies, buildings/[id]/equipment, equipment,
     // equipment/[id], buildings/[id]/occupancy (Reports, Phase 2), and the
     // two name-derived actions (2026-11-19): stations/[id]/equipment-from-names
-    // and stations/[id]/suggestions/apply.
-    expect((await routeFiles()).length).toBe(18);
+    // and stations/[id]/suggestions/apply. 19: "Run assignment now" (the same
+    // day), stations/[id]/auto-assign.
+    expect((await routeFiles()).length).toBe(19);
   });
 
   it("returns neither the plaintext nor the ciphertext from ANY of them", async () => {
@@ -453,6 +455,7 @@ describe("no settings route ever returns the password or the ciphertext", () => 
       await (await equipmentFromNames(json({ rows: [] }), stationParams(id))).text(),
       await (await applySuggestions(json({ pointIds: [pointId] }), stationParams(id))).text(),
       await (await applySuggestions(json({ pointIds: [] }), stationParams(id))).text(),
+      await (await runAssignment(new Request("http://localhost", { method: "POST" }), stationParams(id))).text(),
       // Occupied hours (Reports, Phase 2): a save and a rejected save on the
       // building. Neither joins bas_station_credentials; this keeps that true.
       await (
