@@ -1,4 +1,10 @@
-import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk } from "@/lib/modules/bas/types";
+import {
+  AT_RISK_ROLL_RISKS,
+  COLLECTOR_POLL_INTERVAL_MINUTES,
+  COLLECTOR_SILENCE_POLLS,
+  atRiskCount,
+  isAtRisk,
+} from "@/lib/modules/bas/types";
 import { unitSymbol, withUnit } from "@/lib/modules/bas/units";
 import type { ValueKind } from "@/lib/modules/bas/value-kind";
 import {
@@ -20,6 +26,7 @@ import type {
   BulkClassifyResult,
   EquipmentFromNamesResult,
   CollectionHealth,
+  CollectorPass,
   Completeness,
   PointHorizon,
   InactiveReason,
@@ -314,7 +321,40 @@ export function describeEmptyRuns(
     return `The collector has never recorded a run against ${where}. Either it has not been pointed here yet, or it has never started.`;
   }
 
-  return `No collector runs in the last ${windowLabel(windowDays)}. The most recent one was ${formatTimestamp(newestRunAt)} — outside this window, so widen the range to see it.`;
+  // Named when a selection is given: under a filter `newestRunAt` is that
+  // selection's own newest run, never an estate-wide one (2026-11-19).
+  const forWhere = siteName === null ? "" : ` for ${siteName}`;
+  return `No collector runs in the last ${windowLabel(windowDays)}. The most recent one${forWhere} was ${formatTimestamp(newestRunAt)} — outside this window, so widen the range to see it.`;
+}
+
+/** Thirty minutes: two of the collector's fifteen-minute passes. */
+export const COLLECTOR_SILENCE_MINUTES =
+  COLLECTOR_POLL_INTERVAL_MINUTES * COLLECTOR_SILENCE_POLLS;
+
+/**
+ * The collector-silence banner, or null when there is nothing to say.
+ *
+ * Says something when the collector has stations to collect and its newest
+ * COMPLETED pass - a run row closed as ok or partial - is more than two polls
+ * old, or there has never been one. Silent when there are no collectable
+ * stations: nothing to collect is not an outage.
+ *
+ * Why a completed pass and not the newest reading (2026-11-19): from 6 to 19
+ * November every pass died partway through on one refused write. The points
+ * ahead of it kept writing, so the newest reading stayed minutes old and the
+ * staleness tile stayed green for thirteen days. A pass the collector
+ * finished is the one signal a collector dying mid-pass cannot produce.
+ *
+ * The facts come unfiltered from the service; this is a pure function so the
+ * rule can be tested without rendering anything, like describeHiddenRisk.
+ */
+export function describeCollectorSilence(pass: CollectorPass): string | null {
+  if (pass.collectableStations === 0) return null;
+  if (pass.lastCompletedAt === null || pass.minutesSinceCompleted === null) {
+    return "The collector has never reported a completed pass. Readings may still be arriving from a pass that stops partway; until one finishes, nothing here can say every point was collected.";
+  }
+  if (pass.minutesSinceCompleted <= COLLECTOR_SILENCE_MINUTES) return null;
+  return `The collector has not reported a completed pass since ${formatTimestamp(pass.lastCompletedAt)} (${formatMinutes(pass.minutesSinceCompleted)} ago; it runs every ${COLLECTOR_POLL_INTERVAL_MINUTES} minutes). Readings may still be arriving for some points; that does not mean every point is being collected.`;
 }
 
 // ---------------------------------------------------------------- colour

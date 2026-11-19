@@ -532,12 +532,70 @@ export interface CollectionHealth {
    * what lets the empty state say *when* it last ran instead.
    *
    * `null` means it has genuinely never run against this database.
+   *
+   * Scoped like the run list, with one difference (2026-11-19): under a
+   * filter it counts only runs attributed to a station in the selection.
+   * A run with no station - a pass refused before it reached any - is
+   * estate-wide and is listed under every filter, but it is not "the most
+   * recent run" of any one building. Counting it as one made a project whose
+   * station had never been collected read "The most recent one was 18
+   * September": a refused pass from the office PC's first weeks, copied into
+   * Azure by the migration, standing in for a run that did not exist.
    */
   newestRunAt: string | null;
+
+  /**
+   * Is the collector completing passes at all? NEVER narrowed by the filter.
+   * See CollectorPass and the banner it drives.
+   */
+  collectorPass: CollectorPass;
 
   runRecords: RunRecordPoint[];
   longestRunGap: RunGap | null;
   dataGaps: DataGapRow[];
+}
+
+/**
+ * How often the collector runs a pass: POLL_INTERVAL_S=900 in the collector
+ * host's .env (phb-bas). Not configurable from here, so not read from
+ * anywhere - if the collector's cadence changes, this changes with it.
+ */
+export const COLLECTOR_POLL_INTERVAL_MINUTES = 15;
+
+/**
+ * Missed passes before Collection Health says the collector has stopped
+ * completing them. Two: one late pass is a slow station or a reboot; two is a
+ * pattern, and at 30 minutes it is still far inside the shortest roll horizon
+ * a station has shown, so the banner arrives while nothing is lost yet.
+ */
+export const COLLECTOR_SILENCE_POLLS = 2;
+
+/**
+ * The facts behind the collector-silence banner (2026-11-19).
+ *
+ * From 6 to 19 November 2026 every collector pass died partway through on a
+ * refused database write. Readings kept arriving for the points ahead of the
+ * failing one, so "minutes since newest reading" stayed green, the run rows
+ * the passes opened sat at `running`, and nothing on this screen said the
+ * collector had not finished a pass in thirteen days. A finished pass is the
+ * one thing a dying collector cannot fake.
+ *
+ * Read across everything the viewer is entitled to and NEVER narrowed by the
+ * project, building or JACE filter: the collector is one process for every
+ * building, and a banner that vanished when somebody filtered to a building
+ * whose last run happened to be recent would be the filter-hides-the-outage
+ * trap in a new place.
+ */
+export interface CollectorPass {
+  /** finished_at of the newest run whose status is ok or partial. */
+  lastCompletedAt: string | null;
+  /** Minutes from that to observedAt, by the database's clock. */
+  minutesSinceCompleted: number | null;
+  /**
+   * Active stations the collector connects to directly. Zero means there is
+   * nothing for it to collect, and the banner says nothing.
+   */
+  collectableStations: number;
 }
 
 // ---------------------------------------------------------------- B4

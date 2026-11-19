@@ -560,6 +560,10 @@ filtered by name, so they'd grant access to whatever table Prisma creates next �
 `employees`. The cost is that a new `bas_*` table is invisible until granted, which fails
 loudly rather than silently. That's the right direction for this trade.
 
+**Amended 2026-11-19, for sequences only (§ 90).** Tables are still granted by name. Sequences
+the administrator creates are now granted to `bas_collector` by default, because a withheld
+sequence grant stopped every collector pass for thirteen days and a sequence grant reaches no row.
+
 **Every refusal was tested, not assumed.** A grant that lets the right thing through proves
 nothing on its own.
 
@@ -3834,3 +3838,63 @@ station's unit and a zone on one JACE pairs with a setpoint on another. Run
 it from the web app instead of the job and a building nobody opens in
 Settings is never assigned. Remove the audit row and a role nobody chose is
 untraceable to the name that produced it.
+
+## 90 · The collector's role: tables by name, sequences by default, and a pass that a refused write cannot end
+
+**Decision.** From 2026-11-19 `scripts/setup-bas-collector-role.sql` grants
+USAGE and SELECT on every sequence the collector's tables own - including
+`bas_data_gaps_gap_id_seq`, which it had withheld - and sets `ALTER DEFAULT
+PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO
+bas_collector`, so a sequence the administrator creates later is granted
+without a re-run. Tables are still granted by name and never by default. The
+script lists the six tables the collector writes with the migration that
+created each, and `tests/bas-collector-grant-guard.test.ts` fails the build
+when a migration recreates one. Run without a password, the script re-asserts
+grants and leaves the password alone. In phb-bas the same day: the collector
+checks its grants before contacting any station, a refused write fails one
+point and never the pass, every run row it opens is closed, and the task
+exits 3 when the database refused anything. Collection Health warns when no
+pass has completed in two poll intervals, whatever the filter.
+
+**Why.** From 6 to 19 November 2026 every collector pass died on
+`permission denied for sequence bas_data_gaps_gap_id_seq`. The script had
+withheld that grant on the belief that the collector never inserts a gap; it
+does, whenever a station has overwritten records past a checkpoint. Because
+the belief was written into the script's proof - which failed if the grant
+existed - every run of the script removed it. Nothing failed until the first
+new loss, and then the collector's error handling turned one point's refused
+INSERT into thirteen days of skipped points and stations, with run rows left
+`running` and nothing on Collection Health saying so. No migration was
+involved; `runbook.md` → *The collector stops on "permission denied" for a
+bas_\* table or sequence* has the account.
+
+**Why the default privilege is for sequences only.** § 31's reason for naming
+every table still holds: a default table grant would hand the collector the
+next table Prisma creates, credentials or report recipients included. A sequence grant reaches no row: USAGE and SELECT
+let the role draw a number and read the last one. The exposure is that the
+collector could burn an id or learn a counter; the protection is that a
+migration which recreates a table the collector writes cannot strip the
+sequence its INSERTs need. Default privileges apply only to objects created by
+the role that set them, so the script must run as the login migrations run as
+- the administrator, in production - and its proof checks the entry exists.
+
+**Why the proof now checks what the collector does.** The old proof checked
+one INSERT and one sequence and asserted the gaps sequence was absent: it
+proved a boundary the collector could not work inside. Now it checks INSERT and
+UPDATE on all six written tables and USAGE on every sequence they own, read
+from the catalog, so the script cannot pass while the collector would fail.
+
+**Why the collector exits 3 rather than 0 on a `partial` pass with a refused
+write.** A refusal does not heal itself - a grant, a constraint, a dropped
+connection - and the scheduled task's last result is the one signal on the
+office PC a person might glance at. `partial` for an incomplete point or a
+short horizon still exits 0, as before; only refused writes change the code.
+
+**What breaks if you undo it.** Withhold a sequence the collector's INSERTs use
+and the first time it needs it every pass stops at that point. Drop the default
+privilege and a migration that recreates `bas_data_gaps` does the same until
+someone re-runs the script. Turn the proof back into a single spot check and a
+missing grant passes it. Let a database error escape `sync_point` again and one
+point ends the pass for every station behind it, leaving `running` rows and
+no record. Narrow the Collection Health banner by the filter and an outage
+disappears from the building someone happens to be looking at.

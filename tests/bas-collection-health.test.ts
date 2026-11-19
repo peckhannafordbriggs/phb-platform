@@ -21,7 +21,7 @@ import {
 } from "@/lib/modules/bas/service";
 import type { CollectionHealth } from "@/lib/modules/bas/types";
 import { describeHiddenRisk } from "@/lib/modules/bas/types";
-import { atRiskTone, splitHiddenPoints } from "@/app/(modules)/bas/health-client";
+import { atRiskTone, describeCollectorSilence, splitHiddenPoints } from "@/app/(modules)/bas/health-client";
 import { testDb } from "./db";
 import { GET as collectionHealthRoute } from "@/app/api/modules/bas/collection-health/route";
 import {
@@ -1075,6 +1075,130 @@ describe("a point the station stopped reporting is surfaced, never dropped", () 
       fixture.fanStatus.toString(),
     ]);
     expect(result.vanished[2]!.lastReadingAt).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Is the collector completing passes? (2026-11-19)
+// ---------------------------------------------------------------------------
+
+describe("whether the collector is completing passes - never narrowed by the filter", () => {
+  // From 6 to 19 November 2026 every collector pass died partway through on a
+  // refused write. The points ahead of the failing one kept writing, so the
+  // tiles stayed calm; the passes' run rows sat at `running`. These assert the
+  // facts the banner is built from, against real rows.
+  const MIN = 60_000;
+  const ago = (ms: number) => new Date(Date.now() - ms);
+  const makeDirect = () =>
+    testDb.basStation.updateMany({
+      where: { stationId: { in: [fixture.stationId, fixture.stationBId] } },
+      data: { connectionMode: "direct" },
+    });
+  const extraRuns: bigint[] = [];
+  const run = async (stationId: bigint | null, status: string, finishedAgoMs: number | null) => {
+    const row = await testDb.basIngestRun.create({
+      data: {
+        stationId,
+        startedAt: ago((finishedAgoMs ?? 0) + 30_000),
+        finishedAt: finishedAgoMs === null ? null : ago(finishedAgoMs),
+        status,
+        collectorHost: "ZZTEST-HOST",
+      },
+    });
+    extraRuns.push(row.runId);
+  };
+  afterEach(async () => {
+    await testDb.basIngestRun.deleteMany({ where: { runId: { in: extraRuns.splice(0) } } });
+  });
+
+  it("counts only active stations the collector connects to directly", async () => {
+    // The fixture's stations take the column default, via_parent: reached
+    // through a parent, never connected to, so nothing for the collector to do.
+    expect((await allSites()).collectorPass.collectableStations).toBe(0);
+    await makeDirect();
+    expect((await allSites()).collectorPass.collectableStations).toBe(2);
+  });
+
+  it("is the newest completed run anywhere, and the SAME under a filter that excludes it", async () => {
+    await makeDirect();
+    const all = await allSites();
+    // Station B's run started 2 h ago and finished 20 s later: the newest
+    // completed run in the fixture.
+    expect(all.collectorPass.minutesSinceCompleted).toBeCloseTo(120 - 20 / 60, 0);
+    // Building A's own newest run is 19.75 h old; filtering to it must not
+    // make the collector look as stale as building A, or as fresh, or vanish.
+    const siteA = await health();
+    expect(siteA.collectorPass.lastCompletedAt).toBe(all.collectorPass.lastCompletedAt);
+    expect(siteA.collectorPass.collectableStations).toBe(2);
+    const stationA = await getCollectionHealth(viewer, { siteId: fixture.siteId, stationId: fixture.stationId });
+    expect(stationA.collectorPass.lastCompletedAt).toBe(all.collectorPass.lastCompletedAt);
+  });
+
+  it("does not count a `running` row - the pass that never finished - or a `failed` one", async () => {
+    await makeDirect();
+    const before = (await allSites()).collectorPass.lastCompletedAt;
+    await run(fixture.stationId, "running", null);
+    await run(fixture.stationId, "failed", 1 * MIN);
+    await run(null, "failed", 1 * MIN);
+    expect((await allSites()).collectorPass.lastCompletedAt).toBe(before);
+
+    await run(fixture.stationId, "partial", 1 * MIN);
+    const after = (await allSites()).collectorPass;
+    expect(after.lastCompletedAt).not.toBe(before);
+    expect(after.minutesSinceCompleted).toBeCloseTo(1, 0);
+  });
+
+  it("drives the banner: loud at two hours under any filter, quiet a minute after a pass", async () => {
+    await makeDirect();
+    for (const view of [await allSites(), await health(), await getCollectionHealth(viewer, { siteId: fixture.siteBId })]) {
+      expect(describeCollectorSilence(view.collectorPass)).toContain(
+        "The collector has not reported a completed pass since",
+      );
+    }
+    await run(fixture.stationBId, "ok", 1 * MIN);
+    expect(describeCollectorSilence((await allSites()).collectorPass)).toBeNull();
+    expect(describeCollectorSilence((await health()).collectorPass)).toBeNull();
+  });
+
+  it("says never when there are stations to collect and no completed pass at all", async () => {
+    await makeDirect();
+    await testDb.basIngestRun.updateMany({
+      where: { runId: { in: fixture.runIds } },
+      data: { status: "running", finishedAt: null },
+    });
+    const pass = (await allSites()).collectorPass;
+    expect(pass.lastCompletedAt).toBeNull();
+    expect(describeCollectorSilence(pass)).toContain("never reported a completed pass");
+  });
+});
+
+describe("the empty run list's 'most recent run' belongs to the selection (2026-11-19)", () => {
+  it("is null for a building whose station has never been collected - not a run that has no station", async () => {
+    const site = await testDb.basSite.create({
+      data: {
+        orgId: fixture.orgId,
+        projectId: fixture.projectId,
+        name: "ZZTEST Never Collected",
+        timezone: "America/New_York",
+      },
+    });
+    const station = await testDb.basStation.create({
+      data: { siteId: site.siteId, niagaraStationName: "ZZTestNeverCollected", connectionMode: "direct" },
+    });
+    try {
+      // Unfiltered, the station-less refusal is still part of the estate's
+      // record, and the newest run overall is station B's.
+      expect((await allSites()).newestRunAt).not.toBeNull();
+      // Filtered to the new building: its own newest run, which does not
+      // exist. The old query returned the fixture's station-less run here -
+      // the shape of production's "most recent one was 18 September".
+      const filtered = await getCollectionHealth(viewer, { siteId: site.siteId, windowDays: 90 });
+      expect(filtered.runs.map((r) => r.runId)).toContain(String(fixture.unattributedRunId));
+      expect(filtered.newestRunAt).toBeNull();
+    } finally {
+      await testDb.basStation.delete({ where: { stationId: station.stationId } });
+      await testDb.basSite.delete({ where: { siteId: site.siteId } });
+    }
   });
 });
 

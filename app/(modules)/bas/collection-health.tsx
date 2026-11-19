@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import type {
   CollectionHealth as CollectionHealthData,
+  CollectorPass,
   Completeness,
   DataGapRow,
   IngestRunRow,
@@ -36,6 +37,7 @@ import {
   activePointsTone,
   atRiskTone,
   basRiskTone,
+  describeCollectorSilence,
   describeEmptyRuns,
   describeRunGap,
   describeScope,
@@ -79,7 +81,11 @@ import {
   withCascade,
   withFilter,
 } from "./filters";
-import { describeHiddenRisk, scopeSuffix } from "@/lib/modules/bas/types";
+import {
+  COLLECTOR_POLL_INTERVAL_MINUTES,
+  describeHiddenRisk,
+  scopeSuffix,
+} from "@/lib/modules/bas/types";
 import { unitSymbol } from "@/lib/modules/bas/units";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 import { Dropdown, Segmented } from "@/components/ui";
@@ -387,6 +393,18 @@ export function CollectionHealth() {
       </p>
 
       {/*
+        THE COLLECTOR ITSELF (2026-11-19), first, and never filtered.
+
+        From 6 to 19 November every pass died partway on one refused write.
+        The points ahead of it kept writing, so every tile below - the
+        newest-reading age included - looked healthy for thirteen days. A
+        completed pass is the one thing a collector dying mid-pass cannot
+        produce, so its absence is said here, above everything, whatever the
+        project, building or JACE filter.
+      */}
+      <CollectorSilenceBanner pass={health.collectorPass} />
+
+      {/*
         THE TRAP.
 
         Every tile below counts only the filtered set. That is correct, and it
@@ -504,7 +522,7 @@ export function CollectionHealth() {
           value={formatMinutes(totals.minutesSinceNewestReading)}
           tone={stalenessTone(totals.minutesSinceNewestReading)}
           // Not a delta - a reference value, so the number above is judgeable.
-          badge="every 15 min"
+          badge={`every ${COLLECTOR_POLL_INTERVAL_MINUTES} min`}
           // The dash above is not a zero, and the one sentence says which.
           detail={
             totals.minutesSinceNewestReading === null
@@ -555,6 +573,24 @@ export function CollectionHealth() {
 }
 
 // ------------------------------------------------------------------ pieces
+
+/**
+ * The collector-silence banner: nothing when the collector is completing
+ * passes, the bad tone when it is not. The rule is describeCollectorSilence's.
+ */
+export function CollectorSilenceBanner({ pass }: { pass: CollectorPass }) {
+  const sentence = describeCollectorSilence(pass);
+  if (sentence === null) return null;
+  return (
+    <p
+      className="rounded-[var(--radius-row)] border px-4 py-2.5 text-sm"
+      style={{ ...TONE_STYLE.bad, color: TONE_INK.bad }}
+      role="alert"
+    >
+      {sentence}
+    </p>
+  );
+}
 
 /**
  * A badge in the corner of a tile.
@@ -1320,7 +1356,9 @@ function RunChart({ health }: { health: CollectionHealthData }) {
           {describeEmptyRuns(
             health.newestRunAt,
             health.windowDays,
-            health.selectedSiteName,
+            // The selection's own name, whichever level is set: under a
+            // filter newestRunAt is that selection's newest run.
+            health.scope.filtered ? health.scope.label : null,
           )}
         </Empty>
       ) : (
@@ -1420,7 +1458,9 @@ function RunTable({ health }: { health: CollectionHealthData }) {
           {describeEmptyRuns(
             health.newestRunAt,
             health.windowDays,
-            health.selectedSiteName,
+            // The selection's own name, whichever level is set: under a
+            // filter newestRunAt is that selection's newest run.
+            health.scope.filtered ? health.scope.label : null,
           )}
         </Empty>
       ) : (

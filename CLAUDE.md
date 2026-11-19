@@ -86,6 +86,8 @@ seed, never by a migration. Migrations contain no email addresses. See
 
 **A new `bas_*` table needs a line in `setup-bas-analyze-role.sql` and a production re-run of it** — CI enforces the line (`tests/bas-analyze-grant-guard.test.ts`), nothing can enforce the re-run (`runbook.md` → *Re-run after a migration*).
 
+**So does a migration that recreates a table the collector writes, in `setup-bas-collector-role.sql`** — CI enforces the line (`tests/bas-collector-grant-guard.test.ts`), the re-run is a person's (`runbook.md` → *The collector stops on "permission denied" for a bas_\* table or sequence* → *Re-run after a migration*; no password needed).
+
 ---
 
 ## Hard prohibitions
@@ -1851,6 +1853,28 @@ office pass writes exactly the 17 roles applied by hand in September and
 nothing else. Merging puts the pass in production on the next scheduler image.
 `WHY-ITS-BUILT-THIS-WAY.md` § 89; `runbook.md` -> *A point was given a role or
 equipment nobody chose (the automatic assignment)*.
+
+**The collector stopped for thirteen days on a grant this repository withheld
+(6-19 November 2026), and three things now stop it recurring silently.**
+Every pass died on `permission denied for sequence bas_data_gaps_gap_id_seq`:
+`setup-bas-collector-role.sql` withheld that grant on the false belief that
+the collector never inserts a gap, revoked it on every run and failed its
+proof if it existed; `record_gap` inserts on the first new loss. **No
+migration was involved** (`add_bas_data_gaps_unique` only adds an index). The
+script now grants every sequence its tables own, sets a default privilege on
+sequences (tables stay by name, § 31 amended), proves what the collector
+actually does, and re-runs without touching the password, which lives only in
+the office PC's `.env`; the guard test holds it to the migrations. In phb-bas
+the collector checks its grants before contacting a station, a refused write
+fails one point and never the pass, every run row is closed, and the task
+exits 3. Collection Health warns, above everything and whatever the filter,
+when no pass has completed in two poll intervals (`CollectorPass`,
+`describeCollectorSilence`), and an empty run list under a filter no longer
+reports a station-less run as the selection's most recent one - the source of
+*"no runs since 18 September"*. **Production needs the script re-run once,
+then the collector updated** (`runbook.md` → *The collector stops on
+"permission denied" for a bas_\* table or sequence*). `WHY-ITS-BUILT-THIS-WAY.md`
+§ 90.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

@@ -4598,22 +4598,37 @@ records - the live grants, read from `pg_catalog` on 2026-09-29, are the
 specification, and `scripts/setup-bas-collector-role.sql` is that
 specification written down: SELECT, INSERT, UPDATE, DELETE on the thirteen
 `bas_*` data tables; SELECT only on `bas_station_credentials` and the six
-`bas_v_*` views; USAGE on seven sequences; no CREATE, nothing on any platform
-table. One deliberate oddity kept as found: the live role has no USAGE on
-`bas_data_gaps_gap_id_seq`, and the collector never inserts a gap, so the
-script does not grant it either and its proof fails if something does.
+`bas_v_*` views; USAGE and SELECT on the eight sequences those tables own, and
+by default on every sequence the administrator creates later; no CREATE,
+nothing on any platform table.
+
+**Corrected 2026-11-19.** Until then this section and the script said the live
+role had no USAGE on `bas_data_gaps_gap_id_seq` "and the collector never
+inserts a gap", so the script withheld the grant, revoked it on every run and
+failed its proof if it was there. The collector does insert gaps - `record_gap`,
+whenever a station has overwritten records past a checkpoint - and the
+withheld grant stopped every collector pass from 6 to 19 November: *The
+collector stops on "permission denied" for a bas_\* table or sequence*, next
+section. (The office PC's role, checked the same day, does hold the grant, and
+that database holds 36 gap rows the collector wrote. The 29 September reading
+was wrong or the grant was added after it; either way the premise was false.)
 
 ```powershell
 psql "<production admin URL>" -v pw=<a new password> -f C:\Users\<you>\phb-platform\scripts\setup-bas-collector-role.sql
 ```
 
 It gates on unclassified `bas_*` objects the way the read-only role scripts do,
-creates or alters the role, grants the allowlist, revokes the platform tables
-by name, and **proves the boundary** with `has_table_privilege` before it
-finishes; a failed proof exits non-zero and says not to hand out the password.
-Re-running rotates the password. Unlike the phb-bas role scripts it does not
-echo the `CREATE ROLE` statement - `\gexec` prints the generated statement,
-password included, and this one uses `\gset` instead.
+and on any sequence owned by a granted table that it does not list; creates or
+alters the role, grants the allowlist, revokes the platform tables by name,
+and **proves the boundary** with `has_table_privilege` and
+`has_sequence_privilege` before it finishes - INSERT and UPDATE on all six
+tables the collector writes and USAGE on every sequence they own. A failed
+proof exits non-zero and says not to hand out the password. Run **with** `-v
+pw=` it sets the password; run **without**, it leaves the password exactly as
+it is and only re-asserts the grants, which is the form for a re-run after a
+migration (*Re-run after a migration*, next section). Unlike the phb-bas role
+scripts it does not echo the `CREATE ROLE` statement - `\gexec` prints the
+generated statement, password included, and this one uses `\gset` instead.
 
 Then on the collector host, in `C:\dev\bas-collector\.env`:
 
@@ -4633,6 +4648,326 @@ Roles are cluster-wide but passwords are per server: rotating in Azure does not
 touch the office PC and vice versa. The host also needs a firewall rule on the
 Flexible Server for its egress IP (`-s` is the server, `-n` the rule - see *A
 deploy fails*), and the same `BAS_CREDENTIAL_KEY` as the platform, next section.
+
+---
+
+## The collector stops on "permission denied" for a bas_* table or sequence
+
+**Symptom.** Any of these, depending on which collector the office PC runs:
+
+- **A collector from before 2026-11-19:** the scheduled task's output, or
+  `python -m collector sync` by hand, ends in a Python traceback:
+  `psycopg.errors.InsufficientPrivilege: permission denied for sequence
+  bas_data_gaps_gap_id_seq`, from `db.py`, `record_gap()`. Some readings keep
+  arriving; Collection Health shows that station's newest runs as `running` with
+  no finish time, and later stations with no runs at all.
+- **The 2026-11-19 collector:** `sync` refuses before contacting any station -
+  `FAILED: The database role 'bas_collector' is missing 1 privilege(s) this
+  collector needs: USAGE on sequence public.bas_data_gaps_gap_id_seq.` - and
+  `check` lists the same; the run table shows a `failed` run with no station at
+  stage `privileges`. Or a pass finishes with `WRITE FAILED … [42501]
+  permission denied …` and exit code 3.
+- **On Collection Health, either way:** the banner *The collector has not
+  reported a completed pass since …* (next section but one).
+
+**What happened, 6-19 November 2026.** Observed facts first, then what is
+inferred.
+
+- The collector writes six tables (phb-bas `collector/db.py`): `bas_stations`
+  (UPDATE), `bas_points`, `bas_sync_checkpoints`, `bas_readings`,
+  `bas_data_gaps` and `bas_ingest_runs`. Three of its INSERTs draw from a
+  sequence: `bas_points_point_id_seq`, `bas_data_gaps_gap_id_seq`,
+  `bas_ingest_runs_run_id_seq`.
+- `scripts/setup-bas-collector-role.sql`, as written on 29 September, granted
+  every sequence **except** `bas_data_gaps_gap_id_seq`, on the stated belief
+  that the collector never inserts a gap. It also **revoked** that grant on
+  every run and its proof **failed** if the grant existed. The belief was
+  false: `record_gap` inserts a row whenever a station has overwritten records
+  past a checkpoint. (The office PC's own database, checked on 19 November,
+  shows `bas_collector` holding the grant and 36 gap rows the collector wrote,
+  the newest detected 28 September.)
+- `record_gap` needs the sequence only for a **new** loss; seeing the same
+  loss again is an UPDATE. So a role without the grant works until the first
+  pass that finds a station has rolled past a checkpoint - and then fails on
+  that point every pass, because the checkpoint cannot move past a loss that
+  could not be recorded.
+- From 6 November every pass failed that way. The collector caught only
+  station errors per point and only its own errors per station, so the
+  database error **ended the pass**: every point after the failing one on that
+  station and every later station was skipped for thirteen days; the run row
+  the station had opened stayed `running` with nothing in `errors`; later
+  stations got no row at all.
+- Nothing on Collection Health said so. The points ahead of the failing one
+  kept writing, so *Since newest reading* stayed green.
+- On 19 November the owner granted `USAGE, SELECT` on the one sequence by hand.
+
+Inferred, not checked from here (production was not queried for this
+write-up): that the production role was made with this script - it is the
+procedure *The collector's role on the Azure database* prescribes - and that 6
+November was the first new loss on Azure. The queries under *Confirming it on
+production* settle both.
+
+**Was it a migration?** No. Four migrations touch `bas_data_gaps`:
+`20260821150733_add_bas_tables` creates it, `20260821151125_add_bas_comments`
+and `20260917235000_restate_bas_comments` set column comments, and
+`20260922140000_add_bas_data_gaps_unique` - the last one on or before 6
+November - adds a unique index. None drops or recreates the table, and neither
+an index nor a comment can change a grant. The only migration merged between
+25 October and 6 November is Freeze Protection's (`ab7672b`, 4 November),
+which touches no `bas_*` table. A migration that **did** drop and recreate a
+table the collector writes would cause the same outage a different way - the
+new table and its new sequence carry none of the role's grants - which is why
+the guard and the default privilege below exist.
+
+**What changed so it cannot happen this way again (2026-11-19).**
+
+- The script grants USAGE and SELECT on every sequence its tables own, gaps
+  included; refuses to run if a granted table owns a sequence it does not list;
+  sets a **default privilege** so a sequence the administrator creates later -
+  a recreated table's - is granted without a re-run; and proves INSERT and
+  UPDATE on all six written tables and USAGE on all their sequences. Run
+  without a password it re-asserts grants and leaves the password alone.
+- `tests/bas-collector-grant-guard.test.ts` fails the build when a migration
+  recreates a table the collector writes until the script names that migration,
+  and the failure message says to re-run the script on production.
+- The collector checks its grants before contacting any station and names
+  what is missing; a refused write fails one point, never the pass; every run
+  row it opens is closed; a refused write makes the task exit 3 (phb-bas).
+- Collection Health warns when no pass has completed in two poll intervals,
+  whatever the filter.
+
+**Fix.** In this order:
+
+1. **Re-run the script on production, without a password** - *Re-run after a
+   migration*, below. It keeps the hand grant of 19 November, adds the default
+   privilege, and proves everything the collector needs.
+2. **Update the collector on the office PC** - phb-bas `RUNBOOK.md` →
+   *Updating the collector on the collector host*. Its first `check` says
+   whether step 1 took.
+3. **Watch the next pass close.** Collection Health's banner clears within a
+   pass; the newest run rows read `ok` or `partial`, not `running`.
+
+What the outage cost is in `bas_data_gaps`: the first pass after the grant
+recorded every loss as a `roll_overwrite` gap.
+
+```sql
+SELECT st.niagara_station_name, p.niagara_history_name, g.gap_start, g.gap_end,
+       round((EXTRACT(EPOCH FROM (g.gap_end - g.gap_start)) / 3600)::numeric, 1) AS hours
+  FROM bas_data_gaps g
+  JOIN bas_points p USING (point_id)
+  JOIN bas_stations st USING (station_id)
+ WHERE g.detected_at >= '2026-11-19'
+ ORDER BY hours DESC;
+```
+
+**Confirming it on production** (read-only, as the administrator - steps 2-4
+of the re-run below get you a connection):
+
+```sql
+-- The grant now (true since the hand grant on 19 November).
+SELECT has_sequence_privilege('bas_collector', 'public.bas_data_gaps_gap_id_seq', 'USAGE');
+-- The passes that died: rows left `running`, by station, first and last.
+SELECT station_id, count(*), min(started_at), max(started_at)
+  FROM bas_ingest_runs WHERE status = 'running' GROUP BY station_id;
+-- Gaps the collector inserted on Azure. None between the move and 19 November
+-- if the grant was never there.
+SELECT min(detected_at), max(detected_at), count(*)
+  FROM bas_data_gaps WHERE detected_at > '2026-09-29';
+```
+
+The `running` rows from those thirteen days stay `running` until somebody
+closes them; Collection Health lists them as they are, which is the truth. To
+close them, a data change on production and the owner's call:
+
+```sql
+UPDATE bas_ingest_runs
+   SET status = 'failed', finished_at = started_at,
+       errors = '[{"stage": "pass", "error": "the pass died on a refused write (permission denied for sequence bas_data_gaps_gap_id_seq), 2026-11-06 to 2026-11-19; closed by hand"}]'
+ WHERE status = 'running' AND started_at < '2026-11-19 12:00-05';
+```
+
+### Re-run after a migration
+
+**When.** Any of: a migration that recreates a table the collector writes has
+deployed (the guard test's message sent you here); the script gained a grant
+and production has not had it yet (this change, 2026-11-19); the collector
+refuses with `PrivilegesMissing`. One missing grant can stop every pass, as 6-19
+November showed.
+
+**What the re-run does.** Re-asserts the allowlist, refuses an unclassified
+`bas_*` object or an unlisted sequence on a granted table before touching
+anything, never widens a table grant, and proves the boundary before it
+finishes. **Without `-v pw` it does not touch the password** - which is the
+point: the collector's password lives only in the office PC's
+`C:\dev\bas-collector\.env`, not in Key Vault, so a re-run that rotated it
+would stop collection until somebody edited that file. Nothing restarts.
+
+**Which machine.** A Windows laptop with this repository on an up-to-date
+`main`; `az` signed in as a person who can create firewall rules on the server
+and read secrets in the vault (the platform owner can); PostgreSQL's own
+`psql` 15 or newer at `C:\Program Files\PostgreSQL\17\bin\psql.exe`. The same
+route as *Analyze answers "permission denied" for every question* → *Re-run
+after a migration*, with one URL instead of two.
+
+**The firewall.** Yes, a rule is needed: the server takes connections only
+from addresses its firewall rules name. Add a temporary rule and delete it at
+the end, even if a step fails.
+
+Every step runs in **one** Windows PowerShell window, in order. Nothing below
+prints a password or a URL. Do not run it under `Start-Transcript`.
+
+1. **The repository, up to date.**
+
+   ```
+   cd C:\Users\<you>\phb-platform
+   git checkout main
+   git pull --ff-only
+   Select-String -Path .\scripts\setup-bas-collector-role.sql -SimpleMatch -Pattern "('bas_data_gaps_gap_id_seq')"
+   ```
+
+   One line printed. Nothing printed means this checkout predates the fix:
+   pull again, or merge it first.
+
+2. **Names.**
+
+   ```
+   $psqlExe = "C:\Program Files\PostgreSQL\17\bin\psql.exe"
+   $server  = "phbplat-prod-pg-ovwzv7"
+   $vault   = "phbplat-prod-kv-ovwzv7"
+   $rule    = "laptop-collector-grant"
+   $rg      = az postgres flexible-server list --query "[?name=='$server'].resourceGroup" -o tsv --only-show-errors
+   "resource group: $rg"
+   & $psqlExe --version
+   ```
+
+   The production resource group's name, and `psql (PostgreSQL) 17.x`. An empty
+   resource group: `az login` to the right account, then again.
+
+3. **A temporary firewall rule for this laptop.**
+
+   ```
+   $ip = (Invoke-RestMethod -Uri "https://api.ipify.org").Trim()
+   az postgres flexible-server firewall-rule create -g $rg -s $server -n $rule --start-ip-address $ip --end-ip-address $ip -o none
+   az postgres flexible-server firewall-rule list -g $rg -s $server --query "[?name=='$rule']" -o table
+   ```
+
+   One row, your address at both ends. `-s` is the server and `-n` the rule.
+
+4. **The administrator's URL, into a variable, not onto the screen.**
+
+   ```
+   $adminUrl = az keyvault secret show --vault-name $vault --name DATABASE-URL --query value -o tsv --only-show-errors
+   "admin URL read: $($adminUrl -like 'postgresql://phbplatadmin:*')"
+   ```
+
+   `True`. `DATABASE-URL` is the administrator's URL the template writes - the
+   same login the deploy runs migrations as, which matters: the default
+   privilege the script sets covers sequences created by the login that runs
+   it. `False` or `ForbiddenByRbac`: your account cannot read the vault.
+
+5. **Before changing anything: what the role holds.**
+
+   ```
+   & $psqlExe $adminUrl -X -At -c "SELECT has_sequence_privilege('bas_collector','public.bas_data_gaps_gap_id_seq','USAGE'), has_table_privilege('bas_collector','public.bas_data_gaps','INSERT')"
+   ```
+
+   `t|t` since the hand grant of 19 November; `f|t` is the outage. A timeout is
+   the firewall: give step 3 a minute, or your address changed.
+
+6. **Re-run the script, without a password.**
+
+   ```
+   & $psqlExe $adminUrl -X -f .\scripts\setup-bas-collector-role.sql
+   "psql exit code: $LASTEXITCODE"
+   ```
+
+   Among the output, three `NOTICE` lines - `Gate passed: 30 bas_* object(s)
+   present, 13 read-write (6 written by the collector), 7 read-only, 10
+   withheld, 8 sequences.` (the first number grows with later migrations),
+   `Granted: read-write on 13 tables, read-only on 7 objects, usage on 8
+   sequences; withheld 10 by name.` and `bas_collector: writes bas_* data,
+   reads credentials and views, refused everywhere else. OK.` - then *Re-asserted
+   role bas_collector on this database. Its password was NOT changed*, and
+   `psql exit code: 0`.
+
+   If the gate refuses, nothing was granted or changed: *Unclassified bas_\*
+   object(s)* means this checkout is older than production's migrations (step
+   1); *Listed object(s) not found* or *Migration(s) … are not applied* means
+   production has not applied a migration yet (let the deploy finish);
+   *Sequence(s) owned by a collector table but not in collector_seq* means a
+   migration added a serial column - add it to `collector_seq`, merge, come
+   back. *bas_collector does not exist on this server yet* means this is the
+   wrong server or database.
+
+7. **Prove it.**
+
+   ```
+   & $psqlExe $adminUrl -X -At -c "SELECT has_sequence_privilege('bas_collector','public.bas_data_gaps_gap_id_seq','USAGE'), has_table_privilege('bas_collector','public.bas_data_gaps','INSERT'), (SELECT count(*) FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a WHERE d.defaclobjtype = 'S' AND a.grantee = 'bas_collector'::regrole AND a.privilege_type = 'USAGE')"
+   ```
+
+   `t|t|1`: the grant, the table grant, and the default privilege. Then, on the
+   office PC, `python -m collector check` (a 2026-11-19 collector) reads
+   *role 'bas_collector' holds every privilege a pass needs*. The collector's
+   own URL is never needed here; its password did not move.
+
+8. **Clean up - always, even if a step above failed.**
+
+   ```
+   az postgres flexible-server firewall-rule delete -g $rg -s $server -n $rule --yes
+   az postgres flexible-server firewall-rule list -g $rg -s $server --query "[?name=='$rule']" -o tsv
+   Remove-Variable adminUrl
+   ```
+
+   The list prints nothing. Close the window.
+
+---
+
+## Collection Health says the collector has not reported a completed pass since …
+
+**Symptom.** A maroon banner at the top of Collection Health, above the tiles
+and under every project, building and JACE filter: *The collector has not
+reported a completed pass since 6 Nov, 9:15 AM (13.0 days ago; it runs every 15
+minutes). Readings may still be arriving for some points; that does not mean
+every point is being collected.* Or: *The collector has never reported a
+completed pass.*
+
+**Cause.** The newest run row the collector closed as `ok` or `partial` is more
+than two polls (30 minutes) old, across every station you may see, whatever is
+filtered; or there has never been one. Shown only while at least one active
+station has `connection_mode = 'direct'` - with nothing to collect it says
+nothing. A `running` row is a pass that never finished and does not count; a
+`failed` row collected nothing and does not count.
+
+It reads completed passes, not the newest reading, because of 6-19 November
+2026: every pass died partway on one refused write, the points ahead of it kept
+writing, and *Since newest reading* stayed green for thirteen days. The run
+table beside it says which kind of silence it is:
+
+- **No new rows at all** - the collector host is off, asleep, or the scheduled
+  task is disabled, or the host cannot reach the database (its own log has it).
+- **`failed` rows with no station** - every pass is refused at the start: stage
+  `schema` (*the platform database is behind*), `privileges` (*The collector
+  stops on "permission denied"*, above) or `targets`.
+- **`running` rows** - every pass is dying partway: a collector from before
+  2026-11-19 hitting a database error. Update it; then the error shows as
+  `WRITE FAILED` and the pass finishes.
+
+**Fix.** On the collector host: `Get-ScheduledTaskInfo 'BAS Collector Sync'`,
+then `python -m collector check`, then phb-bas `RUNBOOK.md` → *Collection has
+stopped*. The banner clears on the screen's next refresh after the collector
+completes a pass - within fifteen minutes of the fix.
+
+**Related: an empty run list under a filter.** *No collector runs in the last 7
+days. The most recent one for <selection> was …* counts only runs of that
+selection's own stations (2026-11-19). A run with no station - a pass refused
+before it reached any - is still listed under every filter, but it no longer
+stands in as a building's most recent run: before the fix a project whose
+station had never been collected read *The most recent one was 18 September*,
+which was a refused pass from the office PC's first weeks, copied into Azure by
+the migration. *The collector has never recorded a run against <selection>*
+for a station that should be collected means the collector is not reaching it:
+check it is `direct`, has a login (Settings), and that passes are not dying
+before they get to it - stations are collected in `station_id` order.
 
 ---
 
