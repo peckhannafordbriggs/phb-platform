@@ -290,18 +290,36 @@ const zoneSensor = (role: string): TailPattern["byClass"] => ({
 
 const STATE_TYPES = new Set(STATE_DATA_TYPES);
 
+/** A token that means one thing on a terminal unit and is a guess with no equipment. */
+const terminalToken = (role: string): TailPattern["byClass"] => ({
+  terminal: { role, level: "high" },
+  unknown: { role, level: "medium" },
+});
+
 /**
  * The suffix tokens, CHOSEN 2026-11-19 from the CEI names given in the
  * request (`SpaceTemp`, `DaTemp`, `DA_T`, `OA_Enth`, `FinalFilter`,
  * `ZoneTemperature`) and the abbreviations the request listed beside them,
- * with their spelled-out forms and setpoints. Not one has been checked
- * against CEI's full list of 334 names, which is not in any database this
- * repository can read; Nathan's corrections land here.
+ * with their spelled-out forms and setpoints. Nathan's corrections land here.
+ *
+ * SECOND ROUND, the same day, against CEI's full list of 334 names
+ * (docs/fixtures/cei-point-names.txt): `OA_H`, `SF_S` and `RF_S` were the
+ * three names with a role in the vocabulary and no token. Added beside them,
+ * so the next building does not need another round, the fan, damper,
+ * airflow, valve and zone setpoint abbreviations the office's names and the
+ * Reports library's roles imply. Where a word asked for has no role of its
+ * own, the role the vocabulary DOES define for it is used, and its own
+ * description is the reason: a damper history is its commanded position
+ * (`vav_damper_cmd` is "Commanded terminal box damper position", the rule the
+ * B8.5 Outside Air Damper pattern already follows), and a box's airflow is
+ * `supply_air_flow`, the role the Reports library's VAV questions read.
  *
  * Deliberately absent: `DSP` and `DA_SP` (ending in SP, they read as a
  * setpoint under rule 1 - "duct static pressure" and "discharge setpoint"
- * are both real); `OA_Enth` (the vocabulary has no enthalpy role - add the
- * role first); a bare `SP`, `T`, `Temp` or `RoomT` (the lab's canon).
+ * are both real); `OA_Enth` and `RA_Enth` (the vocabulary has no enthalpy
+ * role - add the role first, and CEI's three enthalpy points stay a
+ * person's decision until then); a bare `SP`, `T`, `Temp` or `RoomT` (the
+ * lab's canon).
  */
 export const TAIL_PATTERNS: readonly TailPattern[] = [
   {
@@ -314,7 +332,20 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   },
   {
     id: "tail_zone_temp_sp",
-    tokens: ["SPACETEMPSP", "SPACETEMPSETPOINT", "ZONETEMPSP", "ZONETEMPSETPOINT", "ZNTSP"],
+    tokens: [
+      "SPACETEMPSP",
+      "SPACETEMPSETPOINT",
+      "ZONETEMPSP",
+      "ZONETEMPSETPOINT",
+      "ZNTSP",
+      // Second round: `ZN_T_SP` is ZNTSP above; `ZoneSetpoint` and its kin
+      // name the zone and a setpoint with no other quantity a zone has one of.
+      "ZNTEMPSP",
+      "ZONESETPOINT",
+      "ZONESP",
+      "SPACESETPOINT",
+      "SPACESP",
+    ],
     setpoint: true,
     byClass: everywhere("zone_temp_sp", "high"),
     confidence: "The suffix is a zone or space temperature token followed by a setpoint word.",
@@ -386,7 +417,8 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   },
   {
     id: "tail_outside_air_humidity",
-    tokens: ["OAHUM", "OARH", "OAHUMIDITY", "OUTSIDEAIRHUMIDITY"],
+    // OAH: CEI's `AHU_7/OA_H` and `AHU_8/OA_H` (second round).
+    tokens: ["OAHUM", "OARH", "OAH", "OAHUMIDITY", "OUTSIDEAIRHUMIDITY"],
     setpoint: false,
     byClass: everywhere("outside_air_humidity", "high"),
     confidence: "The suffix names outside air humidity outright.",
@@ -479,6 +511,135 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
     setpoint: false,
     byClass: everywhere("filter_status", "high"),
     confidence: "The suffix names a dirty-filter status outright.",
+  },
+
+  // --- Second round (2026-11-19): fans, dampers, airflow, valves -------------
+
+  {
+    // CEI's `AHU_7/SF_S`.
+    id: "tail_supply_fan_status",
+    tokens: ["SFS", "SFSTS", "SFSTATUS", "SUPPLYFANSTATUS"],
+    setpoint: false,
+    byClass: everywhere("supply_fan_status", "high"),
+    confidence: "SF is supply fan and S its status: the proven-running feedback, on any unit with a supply fan.",
+  },
+  {
+    // CEI's `AHU_7/RF_S`.
+    id: "tail_return_fan_status",
+    tokens: ["RFS", "RFSTS", "RFSTATUS", "RETURNFANSTATUS"],
+    setpoint: false,
+    byClass: everywhere("return_fan_status", "high"),
+    confidence: "RF is return fan and S its status: the proven-running feedback.",
+  },
+  {
+    id: "tail_supply_fan_cmd",
+    tokens: ["SFC", "SFCMD", "SUPPLYFANCMD", "SUPPLYFANCOMMAND"],
+    setpoint: false,
+    byClass: everywhere("supply_fan_cmd", "high"),
+    confidence: "SF is supply fan and C or CMD its start/stop command.",
+  },
+  {
+    id: "tail_return_fan_cmd",
+    tokens: ["RFC", "RFCMD", "RETURNFANCMD", "RETURNFANCOMMAND"],
+    setpoint: false,
+    byClass: everywhere("return_fan_cmd", "high"),
+    confidence: "RF is return fan and C or CMD its start/stop command.",
+  },
+  {
+    id: "tail_supply_fan_speed",
+    tokens: ["SFSPD", "SFSPEED", "SUPPLYFANSPEED"],
+    setpoint: false,
+    byClass: everywhere("supply_fan_speed", "high"),
+    confidence: "SF is supply fan and SPD its VFD speed.",
+  },
+  {
+    id: "tail_return_fan_speed",
+    tokens: ["RFSPD", "RFSPEED", "RETURNFANSPEED"],
+    setpoint: false,
+    byClass: everywhere("return_fan_speed", "high"),
+    confidence: "RF is return fan and SPD its VFD speed.",
+  },
+  {
+    id: "tail_box_damper",
+    tokens: ["DMPR", "DAMPER", "DADMPR", "DADAMPER", "DMPRPOS", "DAMPERPOS"],
+    setpoint: false,
+    byClass: terminalToken("vav_damper_cmd"),
+    confidence:
+      "A damper on a terminal unit is its box damper, and the vocabulary records a damper's history as its commanded position (vav_damper_cmd). On an air handler it could be the outside, return or exhaust damper, so nothing is suggested there; with no equipment type, look first.",
+  },
+  {
+    id: "tail_oa_damper",
+    tokens: ["OADMPR", "OADAMPER", "OADMPRPOS", "OUTSIDEAIRDAMPER"],
+    setpoint: false,
+    byClass: everywhere("oa_damper_cmd", "high"),
+    confidence:
+      "OA is outside air: the economizer damper, recorded as its commanded position (oa_damper_cmd), as the Outside Air Damper phrase already is.",
+  },
+  {
+    id: "tail_ra_damper",
+    tokens: ["RADMPR", "RADAMPER", "RETURNAIRDAMPER"],
+    setpoint: false,
+    byClass: everywhere("ra_damper_cmd", "high"),
+    confidence: "RA is return air: the return damper, recorded as its commanded position.",
+  },
+  {
+    id: "tail_ea_damper",
+    tokens: ["EADMPR", "EADAMPER", "EXHAUSTAIRDAMPER"],
+    setpoint: false,
+    byClass: everywhere("ea_damper_cmd", "high"),
+    confidence: "EA is exhaust air: the exhaust damper, recorded as its commanded position.",
+  },
+  {
+    id: "tail_box_airflow",
+    tokens: ["FLOW", "CFM", "AIRFLOW", "DAFLOW", "DACFM"],
+    setpoint: false,
+    byClass: terminalToken("supply_air_flow"),
+    confidence:
+      "The airflow a terminal unit measures is what it supplies to its zone (supply_air_flow, the role the Reports VAV questions read). On an air handler a bare flow could be supply or outside air, so nothing is suggested there; with no equipment type, look first.",
+  },
+  {
+    id: "tail_supply_air_flow",
+    tokens: ["SAFLOW", "SACFM", "SUPPLYAIRFLOW"],
+    setpoint: false,
+    byClass: everywhere("supply_air_flow", "high"),
+    confidence: "SA is supply air: the supply airflow, on any unit.",
+  },
+  {
+    id: "tail_box_airflow_sp",
+    tokens: ["FLOWSP", "CFMSP", "AIRFLOWSP", "FLOWSETPOINT", "AIRFLOWSETPOINT", "DAFLOWSP"],
+    setpoint: true,
+    byClass: terminalToken("supply_air_flow_sp"),
+    confidence: "The airflow setpoint of a terminal unit is its supply airflow target; as for the airflow, the equipment decides.",
+  },
+  {
+    id: "tail_reheat_valve",
+    tokens: ["RHV", "RHVLV", "REHEAT", "REHEATV", "REHEATVLV", "REHEATVALVE"],
+    setpoint: false,
+    byClass: terminalToken("reheat_valve_cmd"),
+    confidence:
+      "Reheat is a terminal unit's coil (reheat_valve_cmd is \"a terminal reheat valve\"). An air handler's reheat coil is not that role, so nothing is suggested there; with no equipment type, look first.",
+  },
+  {
+    id: "tail_cooling_valve",
+    tokens: ["CLGV", "CLGVLV", "CLGVALVE", "COOLINGVALVE"],
+    setpoint: false,
+    byClass: everywhere("cooling_valve_cmd", "high"),
+    confidence: "CLG V is the cooling valve: its commanded position, chilled water or DX, on any unit.",
+  },
+  {
+    id: "tail_heating_valve",
+    tokens: ["HTGV", "HTGVLV", "HTGVALVE", "HEATINGVALVE"],
+    setpoint: false,
+    byClass: {
+      // On a box the heating valve IS the reheat valve; the vocabulary keeps
+      // the two roles apart, the way it keeps discharge and supply air apart.
+      terminal: { role: "reheat_valve_cmd", level: "high" },
+      air_handler: { role: "heating_valve_cmd", level: "high" },
+      other: { role: "heating_valve_cmd", level: "high" },
+      unknown: { role: "heating_valve_cmd", level: "medium" },
+    },
+    confidence:
+      "HTG V is the heating valve. On a terminal unit that valve is its reheat valve (reheat_valve_cmd); on any other unit it is heating_valve_cmd; with no equipment type, look first.",
   },
 ];
 
