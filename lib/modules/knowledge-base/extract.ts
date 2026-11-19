@@ -73,10 +73,19 @@ type TextItem = { str: string; hasEOL?: boolean };
 /**
  * pdfjs's metrics for the 14 standard PDF fonts, for files that use one
  * without embedding it. Resolved from the installed package, not a URL.
+ *
+ * Forward slashes, always (2026-11-19). pdfjs refuses a value that does not
+ * END in "/" ("Invalid factory url ... must include trailing slash"), and on
+ * Windows `path.sep` is a backslash, so every PDF failed to index on a
+ * developer's machine while Linux was fine. It must stay a filesystem path,
+ * not a `file://` URL: in Node pdfjs reads the font with `fs.readFile(this +
+ * filename)`, and readFile takes a string as a path. Windows accepts forward
+ * slashes in a path, so one spelling works on both.
  */
-function standardFontDataUrl(): string {
+export function standardFontDataUrl(): string {
   const require = createRequire(path.join(process.cwd(), "package.json"));
-  return path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") + path.sep;
+  const dir = path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts");
+  return `${dir.split(path.sep).join("/")}/`;
 }
 
 /**
