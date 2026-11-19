@@ -17,6 +17,7 @@
 
 import type { PlausibilitySummary, PointPlausibility } from "./plausibility";
 import type { BooleanStates, ValueKind } from "./value-kind";
+import type { NamePrefixGroup } from "./name-prefix";
 
 /**
  * `roll_risk` from `bas_v_collection_health`, unchanged. The view is the only
@@ -1258,6 +1259,16 @@ export interface StationPointsList {
   siteId: string | null;
   points: SettingsPoint[];
   pointsAccountedFor: PointCounts;
+  /**
+   * The units the station's point names imply, for "Create N pieces of
+   * equipment from name prefixes" (2026-11-19). Each row holds only points
+   * that are collected and have no equipment; a station attached to no
+   * building gets none, because equipment lives on a building. Computed on
+   * the read, written by nothing until a person confirms the preview.
+   * Optional in the type so a list built by hand in a test can leave it out;
+   * the service always sends it.
+   */
+  equipmentFromNames?: NamePrefixGroup[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1374,11 +1385,35 @@ export interface BulkClassifyResult {
 }
 
 /**
+ * What "Create N pieces of equipment from name prefixes" did (2026-11-19).
+ * `pointsUnchanged`: points that had equipment by the time the transaction
+ * ran, and were left as they were.
+ */
+export interface EquipmentFromNamesResult {
+  created: number;
+  matched: number;
+  pointsAttached: number;
+  pointsUnchanged: number;
+}
+
+/** What "Apply all high-confidence suggestions" did (2026-11-19). */
+export interface ApplySuggestionsResult extends BulkClassifyResult {
+  equipmentCreated: number;
+}
+
+/**
  * What a name pattern proposes for one point (B8.5). Either half may be null
  * when the point already has that half, or the pattern only speaks to one.
  * `equipmentId` is set when equipment of that name already exists on the
  * building; null with a name means accepting it creates the equipment first.
  */
+/**
+ * How sure a suggestion is (2026-11-19). `high`: eligible for "Apply all
+ * high-confidence suggestions". `medium`: shown on its row, applied by that
+ * row's button only. There is no `low` - a guess is no suggestion at all.
+ */
+export type SuggestionLevel = "high" | "medium";
+
 export interface PointSuggestion {
   role: string | null;
   roleName: string | null;
@@ -1390,6 +1425,7 @@ export interface PointSuggestion {
   pattern: string;
   /** What "confident" means for this pattern, in one sentence. */
   confidence: string;
+  level: SuggestionLevel;
 }
 
 /** RED is the list holding fewer points than the database says the station has. */

@@ -1,5 +1,7 @@
-import { unitKind } from "./units";
-import type { PointSuggestion } from "./types";
+import { equipmentKey, parsePointName, prefixType } from "./name-prefix";
+import { STATE_DATA_TYPES } from "./plausibility";
+import { unitKind, type UnitKind } from "./units";
+import type { PointSuggestion, SuggestionLevel } from "./types";
 
 /**
  * Name-pattern suggestions for a point's role and equipment (B8.5).
@@ -29,6 +31,9 @@ import type { PointSuggestion } from "./types";
  *   3. The point's recorded unit, when there is one and it is of a kind the
  *      platform knows, must agree with the role's typical unit. A
  *      "ZoneTemperature" recorded in percent is not a zone temperature.
+ *      (2026-11-19) And a point the station declares a state - `bool`, `str`
+ *      or `enum`, STATE_DATA_TYPES - is never given a role with a physical
+ *      unit: a boolean called SpaceTemp is not a temperature.
  *   4. The role must be in bas_point_roles as this database holds it. A
  *      suggestion for a role that cannot be assigned is noise.
  *   5. Only the missing half is suggested. A point that already has a role
@@ -41,10 +46,37 @@ import type { PointSuggestion } from "./types";
  * names its box at the start, so the suggestion is equipment `VAV-3` of type
  * `vav`, matched to existing equipment of that name on the building or
  * offered as "new". Nothing here suggests a parent: the RTU a VAV sits under
- * is not in the name.
+ * is not in the name. Every other unit a name implies is the job of
+ * "Equipment from name prefixes" (name-prefix.ts), which shows a preview a
+ * person edits, because only there can a wrong type be corrected before it
+ * is written.
  *
- * The next integrator will write `VAV1_ZN_T` or `AHU1_SAT` and none of this
- * will catch it. That is the intended failure: no suggestion, a person
+ * SUFFIX TOKENS (2026-11-19). The CEI JACE names its points `V4_22/SpaceTemp`,
+ * `AHU_7/DA_T`, `XTM_109/AHU_7_FinalFilter`: a unit, then an abbreviation.
+ * TAIL_PATTERNS read the abbreviation - the text after the prefix
+ * name-prefix.ts finds, compared WHOLE with its separators removed, so
+ * `DA_T`, `DA-T` and `DAT` are one token and `122-125_ZoneTemperature` is
+ * none (the phrase patterns above already read that one). Two things are
+ * different about them:
+ *
+ *   - THE EQUIPMENT DECIDES SOME ROLES. The vocabulary says discharge air is
+ *     what leaves a TERMINAL unit and supply air what leaves an air handler
+ *     (`discharge_air_temp` / `supply_air_temp`; reports/library.ts reads
+ *     the two that way), so `V4_22/DaTemp` is a discharge air temperature
+ *     and `AHU_7/DA_T` a supply air temperature. The class comes from the
+ *     equipment the point is attached to, when it is; else from the type
+ *     the name's prefix implies; else it is unknown. A class a token does
+ *     not name is silence.
+ *   - EVERY SUGGESTION HAS A LEVEL. `high`: the token names one role and the
+ *     equipment does not change it, or the equipment settles it. `medium`:
+ *     the token most likely means that role, and a person should look first -
+ *     a bare `Humidity` or `CO2` on a unit whose type is unknown. Only `high`
+ *     goes through "Apply all high-confidence suggestions"; a medium one is
+ *     applied by its own row's button, one click per point. Every B8.5
+ *     phrase pattern is `high`.
+ *
+ * The next integrator will write `VAV1_ZN_T` or `AHU1_SAT` and some of this
+ * will not catch it. That is the intended failure: no suggestion, a person
  * classifies by hand, and the vocabulary (not this file) is what makes the
  * result queryable. Patterns are added here when a real building's names
  * justify them, with a line in the PR saying what each one means.
@@ -63,7 +95,8 @@ interface NamePattern {
   confidence: string;
 }
 
-const SETPOINT_WORD = /(setpoint|stpt|_sp\b|sp$)/i;
+/** Rule 1. Exported so the token table can be held to it. */
+export const SETPOINT_WORD = /(setpoint|stpt|_sp\b|sp$)/i;
 
 /**
  * The patterns, as they stand. Each one earned its place from a real name on
@@ -75,10 +108,14 @@ export const SUGGESTION_PATTERNS: readonly NamePattern[] = [
     id: "vav_zone_temp",
     // (?!\d) rather than \b: "VAV-3_ZoneTemperature" has no word boundary
     // after the 3, and it names its box as plainly as "VAV-3 120-121_...".
-    test: /^VAV[-_ ]?(\d{1,3})(?!\d).*Zone[_ ]?Temp(erature)?$/i,
+    test: /^(VAV[-_ ]?(\d{1,3}))(?!\d).*Zone[_ ]?Temp(erature)?$/i,
     role: "zone_temp",
     setpoint: false,
-    equipment: (m) => ({ name: `VAV-${m[1]}`, equipType: "vav" }),
+    // As the name writes it (2026-11-19), the same rule name-prefix.ts uses:
+    // the office's "VAV-3" is unchanged, and CEI's "VAV_10" stays "VAV_10".
+    // Matching existing equipment is by equipmentKey, so the two spellings
+    // of one box are one box.
+    equipment: (m) => ({ name: m[1]!, equipType: "vav" }),
     confidence:
       "The name starts with a VAV box number and ends with the phrase Zone Temperature, so both the role and the box are stated outright.",
   },
@@ -180,6 +217,276 @@ export const SUGGESTION_PATTERNS: readonly NamePattern[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Suffix tokens (2026-11-19)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a point is on, as far as a token's meaning goes. `terminal`: a box
+ * that delivers air into a zone. `air_handler`: a unit that supplies a duct.
+ * `other`: a type that is neither. `unknown`: no equipment, and a name whose
+ * prefix implies no type.
+ */
+export type EquipmentClass = "terminal" | "air_handler" | "other" | "unknown";
+
+export const TERMINAL_TYPES: readonly string[] = ["vav", "cav", "fcu"];
+export const AIR_HANDLER_TYPES: readonly string[] = ["ahu", "rtu", "doas"];
+
+export function equipmentClass(equipType: string | null): EquipmentClass {
+  if (equipType === null) return "unknown";
+  if (TERMINAL_TYPES.includes(equipType)) return "terminal";
+  if (AIR_HANDLER_TYPES.includes(equipType)) return "air_handler";
+  return "other";
+}
+
+interface Outcome {
+  role: string;
+  level: SuggestionLevel;
+}
+
+export interface TailPattern {
+  id: string;
+  /**
+   * The whole tail, upper case with `-`, `_`, space and `.` removed. Exact
+   * match only: `RA_CO2` is not `CO2`, and `OA_Humidity` is not `Humidity`.
+   */
+  tokens: readonly string[];
+  /** Rule 1: whether the role is a setpoint. */
+  setpoint: boolean;
+  /** By the class of equipment the point is on. A class left out is silence. */
+  byClass: Partial<Record<EquipmentClass, Outcome>>;
+  /**
+   * For a token that names a thing and not a quantity - a filter - the
+   * role is decided by the value instead, and `byClass` is not read.
+   */
+  byValue?: (value: { dataType: string | null; unitKind: UnitKind }) => Outcome | null;
+  confidence: string;
+}
+
+const everywhere = (role: string, level: SuggestionLevel): TailPattern["byClass"] => ({
+  terminal: { role, level },
+  air_handler: { role, level },
+  other: { role, level },
+  unknown: { role, level },
+});
+
+/** A discharge air token: the vocabulary's terminal/air-handler split. */
+const dischargeAir = (terminal: string, airHandler: string): TailPattern["byClass"] => ({
+  terminal: { role: terminal, level: "high" },
+  air_handler: { role: airHandler, level: "high" },
+});
+
+/** A duct static token: an air handler's, never a terminal's. */
+const ductStatic = (role: string, unknown: SuggestionLevel, airHandler: SuggestionLevel): TailPattern["byClass"] => ({
+  air_handler: { role, level: airHandler },
+  unknown: { role, level: unknown },
+});
+
+/** A zone sensor token: a terminal's for certain, an air handler's never said. */
+const zoneSensor = (role: string): TailPattern["byClass"] => ({
+  terminal: { role, level: "high" },
+  unknown: { role, level: "medium" },
+});
+
+const STATE_TYPES = new Set(STATE_DATA_TYPES);
+
+/**
+ * The suffix tokens, CHOSEN 2026-11-19 from the CEI names given in the
+ * request (`SpaceTemp`, `DaTemp`, `DA_T`, `OA_Enth`, `FinalFilter`,
+ * `ZoneTemperature`) and the abbreviations the request listed beside them,
+ * with their spelled-out forms and setpoints. Not one has been checked
+ * against CEI's full list of 334 names, which is not in any database this
+ * repository can read; Nathan's corrections land here.
+ *
+ * Deliberately absent: `DSP` and `DA_SP` (ending in SP, they read as a
+ * setpoint under rule 1 - "duct static pressure" and "discharge setpoint"
+ * are both real); `OA_Enth` (the vocabulary has no enthalpy role - add the
+ * role first); a bare `SP`, `T`, `Temp` or `RoomT` (the lab's canon).
+ */
+export const TAIL_PATTERNS: readonly TailPattern[] = [
+  {
+    id: "tail_zone_temp",
+    tokens: ["SPACETEMP", "SPACETEMPERATURE", "ZONETEMP", "ZONETEMPERATURE", "ZNT", "ZNTEMP"],
+    setpoint: false,
+    byClass: everywhere("zone_temp", "high"),
+    confidence:
+      "The suffix is a zone or space temperature token; it means that on any unit (a single-zone air handler's space sensor is a zone temperature too).",
+  },
+  {
+    id: "tail_zone_temp_sp",
+    tokens: ["SPACETEMPSP", "SPACETEMPSETPOINT", "ZONETEMPSP", "ZONETEMPSETPOINT", "ZNTSP"],
+    setpoint: true,
+    byClass: everywhere("zone_temp_sp", "high"),
+    confidence: "The suffix is a zone or space temperature token followed by a setpoint word.",
+  },
+  {
+    id: "tail_discharge_air_temp",
+    tokens: ["DATEMP", "DAT", "DATEMPERATURE", "DISCHARGEAIRTEMP", "DISCHARGEAIRTEMPERATURE"],
+    setpoint: false,
+    byClass: dischargeAir("discharge_air_temp", "supply_air_temp"),
+    confidence:
+      "The suffix is discharge air temperature. The vocabulary calls a terminal unit's discharge air discharge_air_temp and an air handler's supply_air_temp, so the equipment decides; with no equipment type known, nothing is suggested.",
+  },
+  {
+    id: "tail_discharge_air_temp_sp",
+    tokens: ["DATEMPSP", "DATSP", "DATEMPSETPOINT", "DATSETPOINT", "DISCHARGEAIRTEMPSP"],
+    setpoint: true,
+    byClass: dischargeAir("discharge_air_temp_sp", "supply_air_temp_sp"),
+    confidence:
+      "The suffix is a discharge air temperature setpoint; as for the temperature, the equipment decides which setpoint role.",
+  },
+  {
+    id: "tail_supply_air_temp",
+    tokens: ["SAT", "SATEMP", "SATEMPERATURE"],
+    setpoint: false,
+    byClass: {
+      air_handler: { role: "supply_air_temp", level: "high" },
+      unknown: { role: "supply_air_temp", level: "high" },
+    },
+    confidence:
+      "SA is supply AIR, so this is not a water temperature. On a terminal unit it could be the air arriving at the box, so nothing is suggested there.",
+  },
+  {
+    id: "tail_supply_air_temp_sp",
+    tokens: ["SATSP", "SATEMPSP", "SATSETPOINT"],
+    setpoint: true,
+    byClass: {
+      air_handler: { role: "supply_air_temp_sp", level: "high" },
+      unknown: { role: "supply_air_temp_sp", level: "high" },
+    },
+    confidence: "The suffix is a supply air temperature setpoint.",
+  },
+  {
+    id: "tail_outside_air_temp",
+    tokens: ["OAT", "OATEMP", "OATEMPERATURE", "OUTSIDEAIRTEMP", "OUTDOORAIRTEMP"],
+    setpoint: false,
+    byClass: everywhere("outside_air_temp", "high"),
+    confidence: "OA is outside air; an outside air temperature means that on any unit.",
+  },
+  {
+    id: "tail_return_air_temp",
+    tokens: ["RAT", "RATEMP", "RATEMPERATURE", "RETURNAIRTEMP"],
+    setpoint: false,
+    byClass: everywhere("return_air_temp", "high"),
+    confidence: "RA is return air; a return air temperature means that on any unit.",
+  },
+  {
+    id: "tail_mixed_air_temp",
+    tokens: ["MAT", "MATEMP", "MATEMPERATURE", "MIXEDAIRTEMP"],
+    setpoint: false,
+    byClass: everywhere("mixed_air_temp", "high"),
+    confidence: "MA is mixed air; a mixed air temperature means that on any unit.",
+  },
+  {
+    id: "tail_return_air_humidity",
+    tokens: ["RAHUM", "RARH", "RAHUMIDITY", "RETURNAIRHUMIDITY"],
+    setpoint: false,
+    byClass: everywhere("return_air_humidity", "high"),
+    confidence: "The suffix names return air humidity outright.",
+  },
+  {
+    id: "tail_outside_air_humidity",
+    tokens: ["OAHUM", "OARH", "OAHUMIDITY", "OUTSIDEAIRHUMIDITY"],
+    setpoint: false,
+    byClass: everywhere("outside_air_humidity", "high"),
+    confidence: "The suffix names outside air humidity outright.",
+  },
+  {
+    id: "tail_space_humidity",
+    tokens: ["SPACEHUMIDITY", "SPACEHUM", "SPACERH", "ZONEHUMIDITY", "ZNHUM", "ZNRH"],
+    setpoint: false,
+    byClass: everywhere("space_humidity", "high"),
+    confidence: "The suffix names space or zone humidity outright.",
+  },
+  {
+    id: "tail_humidity",
+    tokens: ["HUMIDITY", "HUM", "RH"],
+    setpoint: false,
+    byClass: zoneSensor("space_humidity"),
+    confidence:
+      "A bare humidity on a terminal unit is its room sensor. With no equipment type it is probably the space and worth a look; on an air handler it could be return, outside or space air, so nothing is suggested.",
+  },
+  {
+    id: "tail_space_co2",
+    tokens: ["SPACECO2", "ZONECO2", "ZNCO2"],
+    setpoint: false,
+    byClass: everywhere("space_co2", "high"),
+    confidence: "The suffix names space or zone CO2 outright.",
+  },
+  {
+    id: "tail_co2",
+    tokens: ["CO2"],
+    setpoint: false,
+    byClass: zoneSensor("space_co2"),
+    confidence:
+      "A bare CO2 on a terminal unit is its room sensor. With no equipment type it is probably the space; on an air handler it is usually return air CO2, which the vocabulary has no role for, so nothing is suggested.",
+  },
+  {
+    id: "tail_space_co2_sp",
+    tokens: ["SPACECO2SP", "ZNCO2SP", "CO2SP", "CO2SETPOINT"],
+    setpoint: true,
+    byClass: zoneSensor("space_co2_sp"),
+    confidence: "The suffix is a CO2 setpoint; on a terminal unit that is the space's.",
+  },
+  {
+    id: "tail_duct_static",
+    tokens: ["DASAP", "DUCTSTATIC", "DUCTSTATICPRESSURE", "DASTATIC", "SASTATIC"],
+    setpoint: false,
+    byClass: ductStatic("duct_static_pressure", "high", "high"),
+    confidence:
+      "The suffix is discharge or duct static pressure: the duct static an air handler's fan controls to. A terminal unit does not own one, so nothing is suggested there.",
+  },
+  {
+    id: "tail_sap",
+    tokens: ["SAP"],
+    setpoint: false,
+    byClass: ductStatic("duct_static_pressure", "medium", "medium"),
+    confidence:
+      "SAP is most often supply air (duct) static pressure, but it is short enough to be building static on some jobs; look before applying.",
+  },
+  {
+    id: "tail_duct_static_sp",
+    tokens: ["DASAPSP", "SAPSP", "DUCTSTATICSP", "DUCTSTATICSETPOINT", "DASTATICSP"],
+    setpoint: true,
+    byClass: ductStatic("duct_static_pressure_sp", "high", "high"),
+    confidence: "The suffix is a duct static pressure setpoint.",
+  },
+  {
+    id: "tail_filter",
+    tokens: ["FINALFILTER", "PREFILTER", "FILTER", "FLTR"],
+    setpoint: false,
+    byClass: {},
+    byValue: ({ dataType, unitKind: kind }) => {
+      if (dataType === "bool") return { role: "filter_status", level: "high" };
+      if (kind === "pressure") return { role: "filter_dp", level: "high" };
+      if (dataType === "enum" || dataType === "str") return { role: "filter_status", level: "medium" };
+      if (dataType === "real" || dataType === "int") return { role: "filter_dp", level: "medium" };
+      return null;
+    },
+    confidence:
+      "A filter point is a dirty-filter switch or a differential pressure, and the name does not say which: a boolean is the switch (filter_status), a pressure unit is the pressure (filter_dp). A number with no unit is probably the pressure; look first.",
+  },
+  {
+    id: "tail_filter_dp",
+    tokens: ["FILTERDP", "FINALFILTERDP", "PREFILTERDP", "FILTERDIFFPRESSURE"],
+    setpoint: false,
+    byClass: everywhere("filter_dp", "high"),
+    confidence: "The suffix names a filter differential pressure outright.",
+  },
+  {
+    id: "tail_filter_status",
+    tokens: ["FILTERSTATUS", "FILTERALARM", "DIRTYFILTER"],
+    setpoint: false,
+    byClass: everywhere("filter_status", "high"),
+    confidence: "The suffix names a dirty-filter status outright.",
+  },
+];
+
+/** `DA_T` -> `DAT`; `Space Temp` -> `SPACETEMP`. */
+export function compactToken(text: string): string {
+  return text.toUpperCase().replace(/[-_ .]+/g, "");
+}
+
 /**
  * What "Apply all N suggestions" will send, as data (B8.5).
  *
@@ -193,6 +500,11 @@ export const SUGGESTION_PATTERNS: readonly NamePattern[] = [
  *
  * Nothing in the plan is applied here. A plan is a list of requests a person
  * has been shown the count of and has confirmed.
+ *
+ * (2026-11-19) The SERVICE now executes this plan, in one transaction, for
+ * "Apply all high-confidence suggestions" (applyHighConfidenceSuggestions);
+ * the browser no longer runs it request by request. Distinct names are by
+ * equipmentKey, so `VAV-3` and `VAV_3` are one creation.
  */
 export interface SuggestionBatch {
   pointIds: string[];
@@ -218,12 +530,13 @@ export function planSuggestionBatches(
     const s = point.suggestion;
     if (s === null) continue;
     let equipmentName: string | null = null;
+    let createKey = "";
     if (s.equipmentName !== null && s.equipmentId === null && s.equipType !== null) {
-      const key = s.equipmentName.toLowerCase();
-      if (!create.has(key)) create.set(key, { name: s.equipmentName, equipType: s.equipType });
-      equipmentName = create.get(key)!.name;
+      createKey = equipmentKey(s.equipmentName);
+      if (!create.has(createKey)) create.set(createKey, { name: s.equipmentName, equipType: s.equipType });
+      equipmentName = create.get(createKey)!.name;
     }
-    const batchKey = `${s.role ?? ""}|${s.equipmentId ?? ""}|${equipmentName?.toLowerCase() ?? ""}`;
+    const batchKey = `${s.role ?? ""}|${s.equipmentId ?? ""}|${createKey}`;
     const batch = batches.get(batchKey) ?? {
       pointIds: [],
       role: s.role,
@@ -244,6 +557,14 @@ export function decodeNiagaraName(historyName: string): string {
   );
 }
 
+/** The name the patterns read: Niagara's display name, else the decoded key. */
+export function readableName(point: {
+  niagaraHistoryName: string;
+  niagaraDisplayName: string | null;
+}): string {
+  return point.niagaraDisplayName ?? decodeNiagaraName(point.niagaraHistoryName);
+}
+
 /** What the engine needs to know about one point. */
 export interface SuggestionSubject {
   niagaraHistoryName: string;
@@ -252,6 +573,16 @@ export interface SuggestionSubject {
   pointRole: string | null;
   equipmentId: string | null;
   collected: boolean;
+  /**
+   * bas_points.data_type (2026-11-19): rule 3's state half, and the filter
+   * token's tie-break. Absent reads as unknown.
+   */
+  dataType?: string | null;
+  /**
+   * The type of the equipment the point is attached to, when it is (2026-11-19).
+   * A person's assignment outranks what the name implies.
+   */
+  equipmentType?: string | null;
 }
 
 /** The vocabulary as this database holds it, for rules 3 and 4. */
@@ -267,6 +598,61 @@ export interface EquipmentFacts {
   name: string;
 }
 
+interface Hit {
+  id: string;
+  role: string;
+  level: SuggestionLevel;
+  confidence: string;
+  equipment: { name: string; equipType: string } | null;
+}
+
+/** The B8.5 phrase patterns that fire on a name. */
+function phraseHits(name: string, hasSetpointWord: boolean): Hit[] {
+  const hits: Hit[] = [];
+  for (const pattern of SUGGESTION_PATTERNS) {
+    // Rule 1.
+    if (pattern.setpoint !== hasSetpointWord) continue;
+    const match = name.match(pattern.test);
+    if (match === null) continue;
+    hits.push({
+      id: pattern.id,
+      role: pattern.role,
+      level: "high",
+      confidence: pattern.confidence,
+      equipment: pattern.equipment === undefined ? null : pattern.equipment(match),
+    });
+  }
+  return hits;
+}
+
+/** The suffix token that fires on a name's tail, decided for this point. */
+function tailHit(point: SuggestionSubject, name: string, hasSetpointWord: boolean): Hit | null {
+  const parsed = parsePointName(name);
+  const token = compactToken(parsed.tail);
+  if (token.length === 0) return null;
+  const pattern = TAIL_PATTERNS.find((p) => p.tokens.includes(token));
+  // Rule 1, again: the whole name decides whether it is a setpoint.
+  if (pattern === undefined || pattern.setpoint !== hasSetpointWord) return null;
+
+  let outcome: Outcome | null | undefined;
+  if (pattern.byValue !== undefined) {
+    outcome = pattern.byValue({ dataType: point.dataType ?? null, unitKind: unitKind(point.unit) });
+  } else {
+    // The equipment the point is on, when it is; else what the name implies.
+    const impliedType = parsed.prefix === null ? null : prefixType(parsed.prefix).equipType;
+    const type = point.equipmentId !== null ? (point.equipmentType ?? null) : impliedType;
+    outcome = pattern.byClass[equipmentClass(type)];
+  }
+  if (outcome === null || outcome === undefined) return null;
+  return {
+    id: pattern.id,
+    role: outcome.role,
+    level: outcome.level,
+    confidence: pattern.confidence,
+    equipment: null,
+  };
+}
+
 export function suggestClassification(
   point: SuggestionSubject,
   roles: ReadonlyMap<string, RoleFacts>,
@@ -277,23 +663,19 @@ export function suggestClassification(
   // Rule 5: nothing left to suggest.
   if (point.pointRole !== null && point.equipmentId !== null) return null;
 
-  const name = point.niagaraDisplayName ?? decodeNiagaraName(point.niagaraHistoryName);
+  const name = readableName(point);
   const hasSetpointWord = SETPOINT_WORD.test(name);
 
-  const hits: Array<{ pattern: NamePattern; match: RegExpMatchArray }> = [];
-  for (const pattern of SUGGESTION_PATTERNS) {
-    // Rule 1.
-    if (pattern.setpoint !== hasSetpointWord) continue;
-    const match = name.match(pattern.test);
-    if (match !== null) hits.push({ pattern, match });
-  }
+  const hits = phraseHits(name, hasSetpointWord);
+  const tail = tailHit(point, name, hasSetpointWord);
+  if (tail !== null) hits.push(tail);
   const first = hits[0];
   if (first === undefined) return null;
 
   // Rule 2: agreement or silence.
-  const roleKeys = new Set(hits.map((h) => h.pattern.role));
+  const roleKeys = new Set(hits.map((h) => h.role));
   if (roleKeys.size !== 1) return null;
-  const roleKey = first.pattern.role;
+  const roleKey = first.role;
 
   // Rule 4.
   const role = roles.get(roleKey);
@@ -307,13 +689,18 @@ export function suggestClassification(
       return null;
     }
   }
+  // Rule 3, the state half: a state point never takes a role with a unit.
+  if (role.typicalUnit !== null && point.dataType != null && STATE_TYPES.has(point.dataType)) {
+    return null;
+  }
 
   // The most specific hit - the one that names equipment - speaks for the
-  // group. Patterns agree on the role (rule 2), so only the equipment half
-  // can differ, and at most one pattern names any.
-  const lead = hits.find((h) => h.pattern.equipment !== undefined) ?? first;
-  const named =
-    lead.pattern.equipment !== undefined ? lead.pattern.equipment(lead.match) : null;
+  // group. Hits agree on the role (rule 2), so only the equipment half
+  // can differ, and at most one pattern names any. Agreement is as sure as
+  // its surest hit.
+  const lead = hits.find((h) => h.equipment !== null) ?? first;
+  const named = lead.equipment;
+  const level: SuggestionLevel = hits.some((h) => h.level === "high") ? "high" : "medium";
 
   const suggestRole = point.pointRole === null;
   const suggestEquipment = point.equipmentId === null && named !== null;
@@ -322,15 +709,16 @@ export function suggestClassification(
   const existing =
     named === null
       ? undefined
-      : equipment.find((e) => e.name.toLowerCase() === named.name.toLowerCase());
+      : equipment.find((e) => equipmentKey(e.name) === equipmentKey(named.name));
 
   return {
     role: suggestRole ? roleKey : null,
     roleName: suggestRole ? role.displayName : null,
-    equipmentName: suggestEquipment ? named!.name : null,
+    equipmentName: suggestEquipment ? (existing?.name ?? named!.name) : null,
     equipmentId: suggestEquipment ? (existing?.equipmentId ?? null) : null,
     equipType: suggestEquipment && existing === undefined ? named!.equipType : null,
-    pattern: lead.pattern.id,
-    confidence: lead.pattern.confidence,
+    pattern: lead.id,
+    confidence: lead.confidence,
+    level,
   };
 }

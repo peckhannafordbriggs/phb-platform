@@ -26,6 +26,8 @@ import { GET as vocabularies } from "@/app/api/modules/bas/settings/vocabularies
 import { GET as buildingEquipment } from "@/app/api/modules/bas/settings/buildings/[siteId]/equipment/route";
 import { PUT as buildingOccupancy } from "@/app/api/modules/bas/settings/buildings/[siteId]/occupancy/route";
 import { POST as createEquipment } from "@/app/api/modules/bas/settings/equipment/route";
+import { POST as equipmentFromNames } from "@/app/api/modules/bas/settings/stations/[stationId]/equipment-from-names/route";
+import { POST as applySuggestions } from "@/app/api/modules/bas/settings/stations/[stationId]/suggestions/apply/route";
 import {
   DELETE as deleteEquipment,
   PATCH as patchEquipment,
@@ -322,12 +324,14 @@ describe("no settings route ever returns the password or the ciphertext", () => 
   }
 
   it("exercises every route file that exists", async () => {
-    // 16: settings, projects, projects/[id], buildings, buildings/[id],
+    // 18: settings, projects, projects/[id], buildings, buildings/[id],
     // stations, stations/[id], stations/[id]/credential,
     // stations/[id]/points (B8.2), points/[id] (B8.3), the five from
     // B8.5: points/bulk, vocabularies, buildings/[id]/equipment, equipment,
-    // equipment/[id], and buildings/[id]/occupancy (Reports, Phase 2).
-    expect((await routeFiles()).length).toBe(16);
+    // equipment/[id], buildings/[id]/occupancy (Reports, Phase 2), and the
+    // two name-derived actions (2026-11-19): stations/[id]/equipment-from-names
+    // and stations/[id]/suggestions/apply.
+    expect((await routeFiles()).length).toBe(18);
   });
 
   it("returns neither the plaintext nor the ciphertext from ANY of them", async () => {
@@ -439,6 +443,16 @@ describe("no settings route ever returns the password or the ciphertext", () => 
           params: Promise.resolve({ siteId: siteId.toString() }),
         })
       ).text(),
+      // The two name-derived actions (2026-11-19): a refusal from the
+      // service and a rejected body for each. Both read bas_points,
+      // bas_stations and bas_equipment and join nothing that could carry a
+      // credential; this keeps that true.
+      await (
+        await equipmentFromNames(json({ rows: [{ key: "NOPE1", name: "Nope", equipType: "vav" }] }), stationParams(id))
+      ).text(),
+      await (await equipmentFromNames(json({ rows: [] }), stationParams(id))).text(),
+      await (await applySuggestions(json({ pointIds: [pointId] }), stationParams(id))).text(),
+      await (await applySuggestions(json({ pointIds: [] }), stationParams(id))).text(),
       // Occupied hours (Reports, Phase 2): a save and a rejected save on the
       // building. Neither joins bas_station_credentials; this keeps that true.
       await (

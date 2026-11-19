@@ -114,6 +114,23 @@ export type AuditAction =
   | "bas.equipment_updated"
   | "bas.equipment_deleted"
   /**
+   * The two name-derived actions on Settings -> Points (2026-11-19), one
+   * summary row each beside the per-item rows, like `fp.schedule_imported`.
+   *
+   * `bas.equipment_from_names`: "Create N pieces of equipment from name
+   * prefixes", confirmed. Carries the station, `created` and `matched` (name,
+   * id, points attached each), and the point totals. Each new piece of
+   * equipment is also a `bas.equipment_created` row with
+   * `source: "name_prefixes"`, and each point a `bas.point_equipment_changed`.
+   *
+   * `bas.suggestions_applied`: "Apply all high-confidence suggestions",
+   * confirmed. Carries the station, the level, the selection size, the
+   * counts, `byRole` and the names of any equipment created. Each point's
+   * change is its own row with `source: "suggestions"`.
+   */
+  | "bas.equipment_from_names"
+  | "bas.suggestions_applied"
+  /**
    * A question typed into the Analyze tab (B5). One row per question,
    * whatever the outcome, carrying the question, the SQL that ran (or was
    * tried), the row count, the duration and the outcome kind.

@@ -18,10 +18,14 @@ import type {
 import {
   ApiError,
   ROLE_RIPPLE_NOTE,
+  applyHighConfidenceSuggestions,
   bulkClassifyPoints,
   createEquipment,
+  createEquipmentFromNames,
   deleteEquipment,
+  describeApplySuggestionsResult,
   describeBulkResult,
+  describeEquipmentFromNamesResult,
   describeCollected,
   describePlausibility,
   describePointCompleteness,
@@ -35,7 +39,18 @@ import {
   updatePointRole,
   updatePointVisibility,
 } from "./health-client";
-import { planSuggestionBatches } from "@/lib/modules/bas/suggestions";
+import {
+  LevelPill,
+  PrefixPreview,
+  SuggestionsPreview,
+  highConfidencePoints,
+  initialPrefixDrafts,
+  newEquipmentOffered,
+  prefixRequestRows,
+  prefixRowStates,
+  suggestionLevels,
+  type PrefixDraft,
+} from "./settings-points-names";
 import { Pencil } from "lucide-react";
 import { Button, Dropdown, FieldLabel, INPUT, SearchBar, Segmented } from "@/components/ui";
 import { TONE_INK, TONE_STYLE } from "./tone";
@@ -52,8 +67,10 @@ import { HorizonCell } from "./collection-health";
  * THE RULE THAT THIS FILE IS BUILT AROUND: nothing is written until a person
  * clicks. A suggestion is a sentence on the row and a button; the service
  * that computed it never wrote it, and the click is what sends the request.
- * "Apply all N suggestions" is still one click by one person, on a count
- * they were shown first.
+ * "Apply all high-confidence suggestions" and "Create N pieces of equipment
+ * from name prefixes" (2026-11-19) each open a preview first - every row it
+ * would change, with a box, and for the equipment an editable name and type -
+ * and one confirm is one request, applied by the server in one transaction.
  *
  * Every classification write refetches the list rather than patching local
  * state, as the settings tree does: the suggestions are computed
@@ -178,7 +195,10 @@ export function StationPoints({
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [bulk, setBulk] = useState<BulkDraft>(EMPTY_BULK);
   const [pending, setPending] = useState<PendingBulk | null>(null);
-  const [pendingSuggestions, setPendingSuggestions] = useState<number | null>(null);
+  /** The open "Apply all high-confidence suggestions" preview: its ticked points. */
+  const [suggestionSelection, setSuggestionSelection] = useState<ReadonlySet<string> | null>(null);
+  /** The open "Equipment from name prefixes" preview, as edited. */
+  const [prefixDrafts, setPrefixDrafts] = useState<PrefixDraft[] | null>(null);
   const [equipmentForm, setEquipmentForm] = useState<EquipmentFormState | null>(null);
   const [showEquipment, setShowEquipment] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -347,54 +367,37 @@ export function StationPoints({
   );
 
   /**
-   * Accept every suggestion on the list, after a confirmation naming the
-   * count. Each missing piece of equipment is created once; then one bulk
-   * request per distinct (role, equipment) pair.
+   * "Apply all high-confidence suggestions", confirmed: the ticked points,
+   * one request. The server recomputes each suggestion and applies the plan
+   * in one transaction - equipment created once, every half filled only
+   * where it is still empty - or refuses the whole selection as stale.
    */
-  const applyAllSuggestions = useCallback(() => {
-    if (list === null) return;
-    setPendingSuggestions(null);
+  const confirmSuggestions = useCallback(() => {
+    if (suggestionSelection === null) return;
+    const pointIds = [...suggestionSelection];
+    setSuggestionSelection(null);
     void run(async () => {
-      // The plan is pure data (planSuggestionBatches) and the acceptance test
-      // executes the same plan through the same routes, so what this does is
-      // exactly what the test holds the UI to.
-      const plan = planSuggestionBatches(list.points);
-      const created = new Map<string, string>();
-      if (list.siteId !== null) {
-        for (const item of plan.create) {
-          const { equipmentId } = await createEquipment({
-            siteId: list.siteId,
-            name: item.name,
-            equipType: item.equipType,
-          });
-          created.set(item.name.toLowerCase(), equipmentId);
-        }
-      }
-      let points = 0;
-      let roleChanged = 0;
-      let equipmentChanged = 0;
-      let unchanged = 0;
-      for (const batch of plan.batches) {
-        const equipmentId =
-          batch.equipmentId ??
-          (batch.equipmentName === null
-            ? null
-            : (created.get(batch.equipmentName.toLowerCase()) ?? null));
-        const body: { pointIds: string[]; role?: string | null; equipmentId?: string | null } = {
-          pointIds: batch.pointIds,
-        };
-        if (batch.role !== null) body.role = batch.role;
-        if (equipmentId !== null) body.equipmentId = equipmentId;
-        if (body.role === undefined && body.equipmentId === undefined) continue;
-        const result = await bulkClassifyPoints(body);
-        points += result.points;
-        roleChanged += result.roleChanged;
-        equipmentChanged += result.equipmentChanged;
-        unchanged += result.unchanged;
-      }
-      return describeBulkResult({ points, roleChanged, equipmentChanged, unchanged });
+      const result = await applyHighConfidenceSuggestions(stationId, pointIds);
+      return describeApplySuggestionsResult(result);
     }, true);
-  }, [list, run]);
+  }, [suggestionSelection, run, stationId]);
+
+  /**
+   * "Create N pieces of equipment from name prefixes", confirmed: the ticked
+   * rows by key with their edited names and types, one request.
+   */
+  const confirmPrefixes = useCallback(() => {
+    if (prefixDrafts === null) return;
+    const states = prefixRowStates(prefixDrafts, equipment?.equipment ?? []);
+    if (states.some((state) => state.problem !== null)) return;
+    const rows = prefixRequestRows(prefixDrafts, states);
+    if (rows.length === 0) return;
+    setPrefixDrafts(null);
+    void run(async () => {
+      const result = await createEquipmentFromNames(stationId, rows);
+      return describeEquipmentFromNamesResult(result);
+    }, true);
+  }, [prefixDrafts, equipment, run, stationId]);
 
   /** Stage the bulk form as a sentence with its count, for confirmation. */
   const stageBulk = useCallback(() => {
@@ -500,7 +503,9 @@ export function StationPoints({
   }
 
   const shown = shownPoints(list.points, query, filters);
-  const suggestionCount = list.points.filter((p) => p.suggestion !== null).length;
+  const levels = suggestionLevels(list.points);
+  const highPoints = highConfidencePoints(list.points);
+  const prefixGroups = list.equipmentFromNames ?? [];
   const canClassify = vocabularies !== null;
 
   return (
@@ -533,13 +538,44 @@ export function StationPoints({
           pending={pending}
           onConfirmBulk={confirmBulk}
           onCancelBulk={() => setPending(null)}
-          suggestionCount={suggestionCount}
-          pendingSuggestions={pendingSuggestions}
-          onStageSuggestions={() => setPendingSuggestions(suggestionCount)}
-          onConfirmSuggestions={applyAllSuggestions}
-          onCancelSuggestions={() => setPendingSuggestions(null)}
+          levels={levels}
+          suggestionsOpen={suggestionSelection !== null}
+          onStageSuggestions={() =>
+            setSuggestionSelection(new Set(highPoints.map((p) => p.pointId)))
+          }
+          prefixGroups={prefixGroups.length}
+          newFromPrefixes={newEquipmentOffered(prefixGroups)}
+          prefixesOpen={prefixDrafts !== null}
+          onStagePrefixes={() => setPrefixDrafts(initialPrefixDrafts(prefixGroups))}
           busy={busy}
         />
+      )}
+
+      {suggestionSelection !== null && (
+        <div className="mt-3">
+          <SuggestionsPreview
+            points={highPoints}
+            selected={suggestionSelection}
+            onSelectionChange={setSuggestionSelection}
+            onConfirm={confirmSuggestions}
+            onCancel={() => setSuggestionSelection(null)}
+            busy={busy}
+          />
+        </div>
+      )}
+
+      {prefixDrafts !== null && vocabularies !== null && (
+        <div className="mt-3">
+          <PrefixPreview
+            drafts={prefixDrafts}
+            onDraftsChange={setPrefixDrafts}
+            equipment={equipment?.equipment ?? []}
+            equipmentTypes={vocabularies.equipmentTypes}
+            onConfirm={confirmPrefixes}
+            onCancel={() => setPrefixDrafts(null)}
+            busy={busy}
+          />
+        </div>
       )}
 
       {equipmentForm !== null && vocabularies !== null && (
@@ -649,11 +685,13 @@ function ClassificationToolbar({
   pending,
   onConfirmBulk,
   onCancelBulk,
-  suggestionCount,
-  pendingSuggestions,
+  levels,
+  suggestionsOpen,
   onStageSuggestions,
-  onConfirmSuggestions,
-  onCancelSuggestions,
+  prefixGroups,
+  newFromPrefixes,
+  prefixesOpen,
+  onStagePrefixes,
   busy,
 }: {
   list: StationPointsList;
@@ -670,11 +708,15 @@ function ClassificationToolbar({
   pending: PendingBulk | null;
   onConfirmBulk: () => void;
   onCancelBulk: () => void;
-  suggestionCount: number;
-  pendingSuggestions: number | null;
+  levels: { high: number; medium: number };
+  suggestionsOpen: boolean;
   onStageSuggestions: () => void;
-  onConfirmSuggestions: () => void;
-  onCancelSuggestions: () => void;
+  /** Rows the name-prefix preview would show. */
+  prefixGroups: number;
+  /** Of those, new equipment a type is proposed for. */
+  newFromPrefixes: number;
+  prefixesOpen: boolean;
+  onStagePrefixes: () => void;
   busy: boolean;
 }) {
   // Filter options come from what the list holds, so a filter can never
@@ -818,36 +860,48 @@ function ClassificationToolbar({
       )}
 
       {/*
-        Suggestions. The count and a button - never applied on their own.
-        The button is disabled, not hidden, at zero, so the absence of
-        suggestions on a station reads as "none" rather than as a feature
-        that is not there.
+        Suggestions. The counts and a button that opens a preview - never
+        applied on their own. Disabled, not hidden, at zero, so the absence
+        of suggestions on a station reads as "none" rather than as a feature
+        that is not there. Medium suggestions are applied from their own row
+        only, one click each.
       */}
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-[var(--muted)]">
-          {suggestionCount} {suggestionCount === 1 ? "suggestion" : "suggestions"} from name
-          patterns, applied only when clicked.
+          {levels.high + levels.medium}{" "}
+          {levels.high + levels.medium === 1 ? "suggestion" : "suggestions"} from point names
+          ({levels.high} high-confidence, {levels.medium} medium), applied only when clicked.
+          Medium ones are applied from their own row.
         </span>
         <Button size="sm"
-          disabled={busy || suggestionCount === 0}
+          disabled={busy || levels.high === 0 || suggestionsOpen}
           onClick={onStageSuggestions}
         >
-          Apply all {suggestionCount}
+          Apply all {levels.high} high-confidence…
         </Button>
-        {pendingSuggestions !== null && (
-          <span className="flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border px-2 py-1" style={TONE_STYLE.warn} role="alertdialog">
-            <span>
-              Apply {pendingSuggestions} {pendingSuggestions === 1 ? "suggestion" : "suggestions"}
-              , creating any equipment they name?
-            </span>
-            <Button size="sm"  disabled={busy} onClick={onConfirmSuggestions}>
-              Confirm
-            </Button>
-            <Button size="sm"  disabled={busy} onClick={onCancelSuggestions}>
-              Cancel
-            </Button>
-          </span>
-        )}
+      </div>
+
+      {/*
+        Equipment from name prefixes (2026-11-19). A station on no building
+        has nowhere to put equipment; the button says so rather than hiding.
+      */}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-[var(--muted)]">
+          {prefixGroups === 0
+            ? "No point name on this station starts with a unit that still needs equipment."
+            : `${prefixGroups} ${prefixGroups === 1 ? "unit" : "units"} in the point names still ${
+                prefixGroups === 1 ? "has" : "have"
+              } points with no equipment.`}
+        </span>
+        <Button size="sm"
+          disabled={busy || !hasBuilding || prefixGroups === 0 || prefixesOpen}
+          title={hasBuilding ? undefined : "This station is attached to no building, so it has no equipment."}
+          onClick={onStagePrefixes}
+        >
+          {newFromPrefixes > 0
+            ? `Create ${newFromPrefixes} ${newFromPrefixes === 1 ? "piece" : "pieces"} of equipment from name prefixes…`
+            : `Review ${prefixGroups} ${prefixGroups === 1 ? "unit" : "units"} from name prefixes…`}
+        </Button>
       </div>
 
       <p className="text-xs text-[var(--muted)]">{ROLE_RIPPLE_NOTE}</p>
@@ -1422,6 +1476,7 @@ function SuggestionCell({
   return (
     <span className="inline-flex flex-wrap items-center gap-1" title={point.suggestion.confidence}>
       <span>{text}</span>
+      <LevelPill level={point.suggestion.level} />
       {onApply !== undefined && (
         <Button size="sm"
           disabled={busy}

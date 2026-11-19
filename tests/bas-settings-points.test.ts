@@ -720,15 +720,33 @@ describe("the points route is a settings route", () => {
       path.join(process.cwd(), "lib/modules/bas/settings-service.ts"),
       "utf8",
     );
-    const start = source.indexOf("export async function getStationPoints(");
-    const end = source.indexOf("// Mutations (B7.3)", start);
-    expect(start).toBeGreaterThan(-1);
-    const body = source.slice(start, end);
+    const fn = (name: string) => {
+      const start = source.indexOf(`async function ${name}(`);
+      expect(start, name).toBeGreaterThan(-1);
+      const next = source.indexOf("\nexport async function ", start + 1);
+      const nextPrivate = source.indexOf("\nasync function ", start + 1);
+      const ends = [next, nextPrivate].filter((i) => i > -1);
+      return source.slice(start, ends.length > 0 ? Math.min(...ends) : undefined);
+    };
 
-    expect(body).toContain("basSiteScope(viewer)");
-    expect(body).toContain("entitlementSql(entitled, Prisma.sql`st.site_id`)");
-    // And the scope is applied BEFORE any point is read.
-    expect(body.indexOf("entitlementSql(")).toBeLessThan(body.indexOf("FROM bas_points p"));
+    // The station lookup lives in ONE place (2026-11-19), so the list and
+    // the two name-derived actions cannot scope it differently.
+    const scoped = fn("loadScopedStation");
+    expect(scoped).toContain("basSiteScope(viewer)");
+    expect(scoped).toContain("entitlementSql(entitled, Prisma.sql`st.site_id`)");
+    expect(scoped).not.toContain("FROM bas_points");
+
+    // And every reader of a station's points goes through it BEFORE any
+    // point is read.
+    for (const name of ["getStationPoints", "createEquipmentFromNames", "applyHighConfidenceSuggestions"]) {
+      const body = fn(name);
+      const scope = body.indexOf("await loadScopedStation(viewer, stationIdText)");
+      expect(scope, name).toBeGreaterThan(-1);
+      const firstRead = Math.min(
+        ...["FROM bas_points p", "loadStationNameRows("].map((m) => body.indexOf(m)).filter((i) => i > -1),
+      );
+      expect(scope, name).toBeLessThan(firstRead);
+    }
   });
 });
 

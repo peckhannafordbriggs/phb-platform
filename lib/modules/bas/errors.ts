@@ -118,6 +118,13 @@ export type BasErrorCode =
    * station first. 409.
    */
   | "station_unassigned"
+  /**
+   * A name-derived action confirmed against a preview the database no
+   * longer matches (2026-11-19): a row whose points were attached since, a
+   * suggestion that is no longer high-confidence. Refused whole, nothing
+   * written, and the message says to reload. 409.
+   */
+  | "preview_stale"
   // --- Reports (Phase 1) ---
   /**
    * No such report, or one this employee may not see. Owner or module admin
