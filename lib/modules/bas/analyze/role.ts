@@ -119,6 +119,12 @@ export const ANALYZE_WITHHELD: ReadonlyArray<{ name: string; reason: string }> =
     name: "bas_report_deliveries",
     reason: "The addresses a report run was emailed to, and whether each went. Platform-side.",
   },
+  // 2026-11-20. Trend summaries the model wrote from Point Explorer, with what
+  // each cost. The model's own prose about a point, not building data.
+  {
+    name: "bas_trend_summaries",
+    reason: "Trend summaries the model wrote on demand, and what each cost. Platform-side.",
+  },
 ];
 
 /**

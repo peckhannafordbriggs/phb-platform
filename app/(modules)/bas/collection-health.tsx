@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -54,6 +55,8 @@ import {
   unclassifiedTone,
   atRiskShape,
   describeAtRisk,
+  describeHistoryUnknown,
+  HISTORY_UNKNOWN_SETTINGS_HREF,
   computeHeadroom,
   describeHeadroom,
   describeHiddenFromTable,
@@ -136,7 +139,7 @@ const GAP_CAUSE_LABEL: Record<string, string> = {
   unknown: "Unknown",
 };
 
-export function CollectionHealth() {
+export function CollectionHealth({ canAdminister = false }: { canAdminister?: boolean } = {}) {
   const [health, setHealth] = useState<CollectionHealthData | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -462,7 +465,7 @@ export function CollectionHealth() {
         }
         badge={describeHeadroom(computeHeadroom(health.points))}
         detail={
-          totals.pointsAtRisk > 0 && atRiskShape(totals.riskCounts) === "unknown"
+          totals.pointsAtRisk > 0 && atRiskShape(totals.riskCounts) === "behind"
             ? "Nothing is lost yet."
             : undefined
         }
@@ -477,6 +480,12 @@ export function CollectionHealth() {
             ))}
           </ul>
         )}
+        {/*
+          The muted line (2026-11-20): points whose history size cannot be
+          worked out, beside the figure and never in it. A link to Settings
+          for the people who can open Settings; words for everyone else.
+        */}
+        <HistoryUnknownLine count={totals.pointsHistoryUnknown} canAdminister={canAdminister} />
       </HeroTile>
 
       {/* ------------------------------------------- runs: the wide chart */}
@@ -700,6 +709,26 @@ function Tile({
  * is a different composition, not a bigger tile, and collapsing them would mean
  * every size change to one silently moved the other.
  */
+/**
+ * "334 points: history size unknown", muted, under the at-risk figure. Null at
+ * zero. Exported for tests/bas-history-split.test.tsx.
+ */
+export function HistoryUnknownLine({ count, canAdminister }: { count: number; canAdminister: boolean }) {
+  const words = describeHistoryUnknown(count);
+  if (words === null) return null;
+  return (
+    <p className="mt-3 text-sm text-[var(--muted)]" data-testid="bas-history-unknown" title={RISK_EXPLANATION.roll_horizon_unknown}>
+      {canAdminister ? (
+        <Link href={HISTORY_UNKNOWN_SETTINGS_HREF} className="underline decoration-dotted underline-offset-2 hover:text-[var(--foreground)]">
+          {words}
+        </Link>
+      ) : (
+        words
+      )}
+    </p>
+  );
+}
+
 function HeroTile({
   label,
   value,

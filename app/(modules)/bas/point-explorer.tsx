@@ -21,26 +21,34 @@ import {
   axisLabel,
   describeCappedExport,
   describeClockOffset,
-  describeDistinctValues,
   describeExtentNotices,
   describeNoReadings,
-  describeNullRecords,
   describeRange,
   describeSampling,
-  distinctValuesTone,
   downloadPointReadingsCsv,
   fetchPointExplorer,
   formatChartTick,
   formatCount,
-  formatHours,
   formatTimestamp,
   formatValue,
   type Tone,
 } from "./health-client";
+import {
+  BreaksList,
+  COMPARE_STROKE,
+  CompareLegend,
+  ComparePicker,
+  DataHealthTile,
+  PRIMARY_STROKE,
+  TrendSummaryCard,
+  comparisonValueAt,
+} from "./point-explorer-parts";
+import { breakThresholdS, describeBreaks } from "@/lib/modules/bas/interval";
 import { RangePicker } from "./range-picker";
 import { ReadingsTable } from "./readings-table";
 import {
   ALL_SITES,
+  COMPARE_PARAM,
   POINT_PARAM,
   PROJECT_PARAM,
   SITE_PARAM,
@@ -73,12 +81,18 @@ import { Button, Dropdown, Segmented } from "@/components/ui";
  * live database. Where they disagree the screen is wrong; `npm run bas:oracle`
  * checks that panel by panel.
  *
- * ONE POINT AT A TIME, and that is a correctness decision rather than a scoping
- * one. `points_RoomT` is in fahrenheit; `Temp1` to `Temp3` carry no unit at all.
- * Two of those on one axis would put a temperature in F and a bare number on the
- * same line with nothing saying they are different quantities - which is how
- * 55 degF and 12.8 degC end up looking like the same reading. A single-point
- * chart cannot express that mistake, so it does not need to guard against it.
+ * ONE POINT AT A TIME by default, and that was a correctness decision rather
+ * than a scoping one. `points_RoomT` is in fahrenheit; `Temp1` to `Temp3` carry
+ * no unit at all. Two of those on one axis would put a temperature in F and a
+ * bare number on the same line with nothing saying they are different
+ * quantities - which is how 55 degF and 12.8 degC end up looking like the same
+ * reading.
+ *
+ * COMPARE MODE (2026-11-20) keeps that rule rather than dropping it: a second
+ * point shares the axis ONLY when both have a unit and it is the same unit;
+ * otherwise it gets its own axis on the right, labelled with its own unit (or
+ * "no unit recorded"), and the legend says which line is on which axis. Off
+ * by default, in the URL (`compare=`), limited to the same JACE.
  */
 
 const POLL_INTERVAL_MS = 60_000;
@@ -103,7 +117,7 @@ export function PointExplorer() {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const { siteId, windowDays, range, pointId, projectId, stationId } = filters;
+  const { siteId, windowDays, range, pointId, projectId, stationId, compareId } = filters;
   // The trend panel as the chart (default) or the raw readings behind it.
   // In the URL like every other choice here; read by nothing on the server.
   const view: TrendView = searchParams.get(VIEW_PARAM) === TABLE_VIEW ? "table" : "chart";
@@ -117,6 +131,7 @@ export function PointExplorer() {
         pointId: string | null;
         projectId: string | null;
         stationId: string | null;
+        compareId: string | null;
       },
       options: { quiet?: boolean } = {},
     ) => {
@@ -148,16 +163,16 @@ export function PointExplorer() {
   const rangeKey = range === null ? null : `${range.from}..${range.to}`;
 
   useEffect(() => {
-    void load({ days: windowDays, range, siteId, pointId, projectId, stationId });
+    void load({ days: windowDays, range, siteId, pointId, projectId, stationId, compareId });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- range is keyed by rangeKey
-  }, [load, windowDays, rangeKey, siteId, pointId, projectId, stationId]);
+  }, [load, windowDays, rangeKey, siteId, pointId, projectId, stationId, compareId]);
 
   // The ref carries the CURRENT selection, so a poll cannot revert the screen to
   // whatever was selected when the timer was installed.
   const pollRef = useRef<() => void>(() => {});
   pollRef.current = () => {
     void load(
-      { days: windowDays, range, siteId, pointId, projectId, stationId },
+      { days: windowDays, range, siteId, pointId, projectId, stationId, compareId },
       { quiet: true },
     );
   };
@@ -248,7 +263,7 @@ export function PointExplorer() {
           <button
             type="button"
             onClick={() =>
-              void load({ days: windowDays, range, siteId, pointId, projectId, stationId })
+              void load({ days: windowDays, range, siteId, pointId, projectId, stationId, compareId })
             }
             className="mt-4 inline-flex h-9 items-center rounded-[var(--radius-control)] border border-red-300 bg-white px-4 text-[0.8125rem] font-medium hover:bg-red-100"
           >
@@ -313,7 +328,7 @@ export function PointExplorer() {
           <Dropdown
             label="Point"
             value={selectedPoint?.pointId ?? ""}
-            onChange={(next) => setParam(POINT_PARAM, next)}
+            onChange={(next) => setCascade(POINT_PARAM, next)}
             disabled={data.points.length === 0}
             placeholder={data.points.length === 0 ? "No points" : "Choose a point"}
             options={data.points.map((point) => ({
@@ -402,7 +417,7 @@ export function PointExplorer() {
 
           <section
             aria-label="Point summary"
-            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
           >
             <Tile
               label="Latest"
@@ -434,28 +449,20 @@ export function PointExplorer() {
               }
               tone="neutral"
             />
-            {/* Boolean: 1 or 2 is the healthy count, so the numeric thresholds do not apply (see the function). */}
-            <Tile
-              label="Readings / null records"
-              value={`${formatCount(stats.readings)} / ${formatCount(stats.nullRecords)}`}
-              tone={stats.nullRecords > 0 ? "warn" : "neutral"}
-              detail={describeNullRecords(stats.readings, stats.nullRecords)}
-            />
-            <Tile
-              label="Distinct values"
-              value={formatCount(stats.distinctValues)}
-              tone={distinctValuesTone(
-                stats.distinctValues,
-                stats.readings,
-                selectedPoint.valueKind,
-              )}
-              detail={describeDistinctValues(
-                stats.distinctValues,
-                stats.readings,
-                selectedPoint.valueKind,
-              )}
-            />
+            {/*
+              Data health (2026-11-20), in place of "Readings / null records"
+              and "Distinct values": the expected interval and where it came
+              from, the share of the period missing, the station's history
+              with "assumed" or "measured" beside an assumed or measured
+              number, and the stuck-sensor and physical-range warnings in the
+              stuck-sensor colour. Null records stay, as a line.
+            */}
+            <DataHealthTile data={data} />
           </section>
+
+          {/* -------------------------------------------- trend summary */}
+
+          <TrendSummaryCard data={data} />
 
           {/* ---------------------------------------------------- trend */}
 
@@ -464,6 +471,7 @@ export function PointExplorer() {
             unit={unit}
             view={view}
             onViewChange={(next) => setParam(VIEW_PARAM, next === "table" ? TABLE_VIEW : null)}
+            onCompare={(next) => setParam(COMPARE_PARAM, next)}
           />
 
           {/* ----------------------------------------------------- gaps */}
@@ -625,22 +633,24 @@ export function TrendPanel({
   unit,
   view = "chart",
   onViewChange,
+  onCompare,
 }: {
   data: PointExplorerData;
   unit: string | null;
   /** Chart (default) or the raw readings behind it. */
   view?: TrendView;
   onViewChange?: (view: TrendView) => void;
+  /** Compare mode: a point id to draw beside this one, or null to clear it. */
+  onCompare?: (pointId: string | null) => void;
 }) {
   /**
-   * The count and the longest are invisible from the chart; that the line stops
-   * at a break is not - it is the thing you are looking at. No breaks needs no
-   * sentence at all, and nothing here describes the shading.
+   * The count, the longest and the share missing are invisible from the
+   * chart; that the line stops at a break is not. The definition of a break
+   * is interval.ts's, and the same sentence heads the list under the chart.
    */
   const gapSummary =
-    data.trendGaps.length === 0
-      ? undefined
-      : `${formatCount(data.trendGaps.length)} break${data.trendGaps.length === 1 ? "" : "s"} · longest ${formatHours(Math.max(...data.trendGaps.map((g) => g.hours)))}`;
+    data.breaks.count === 0 ? undefined : describeBreaks(data.breaks, data.expectedInterval);
+  const [picking, setPicking] = useState(false);
 
   /**
    * Drag across the plot to zoom into a range; Reset goes back.
@@ -712,6 +722,17 @@ export function TrendPanel({
   const panelActions =
     data.selectedPoint === null ? undefined : (
       <>
+        {/* Compare mode (2026-11-20): off by default; the URL carries it. */}
+        {view === "chart" && onCompare !== undefined &&
+          (data.comparison === null ? (
+            <Button size="sm" onClick={() => setPicking((open) => !open)} ariaExpanded={picking} testId="bas-compare-button">
+              Compare points
+            </Button>
+          ) : (
+            <Button size="sm" onClick={() => onCompare(null)} testId="bas-compare-clear">
+              Clear comparison
+            </Button>
+          ))}
         <ViewToggle view={view} onChange={(next) => onViewChange?.(next)} />
         <Button size="sm" onClick={() => void downloadCsv()} disabled={downloading} testId="bas-download-csv">
           {downloading ? "Downloading…" : "Download CSV"}
@@ -744,7 +765,7 @@ export function TrendPanel({
     data.pointExtent,
     data.stats.readings,
     // The same slack the line breaks on, so the notice and the break agree.
-    Math.max((data.collectionIntervalS ?? 0) * 3, 900) * 1000,
+    data.expectedInterval.breakThresholdS * 1000,
   );
   const recordedGaps = data.dataGaps
     .map((gap) => ({
@@ -778,6 +799,22 @@ export function TrendPanel({
           data-testid="bas-download-note"
         >
           {downloadNote.text}
+        </p>
+      )}
+      {picking && data.comparison === null && data.selectedPoint !== null && onCompare !== undefined && view === "chart" && (
+        <ComparePicker
+          points={data.points}
+          selected={data.selectedPoint}
+          onPick={(id) => {
+            setPicking(false);
+            onCompare(id);
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
+      {data.comparisonNote !== null && view === "chart" && (
+        <p className="border-b px-4 py-2 text-xs" style={noticeStyle} role="note" data-testid="bas-compare-note">
+          {data.comparisonNote}
         </p>
       )}
       {view === "table" && data.selectedPoint !== null ? (
@@ -842,6 +879,9 @@ export function TrendPanel({
             </div>
           )}
 
+          {data.comparison !== null && data.selectedPoint !== null && (
+            <CompareLegend primary={data.selectedPoint} comparison={data.comparison} />
+          )}
           <div className="h-[22rem] select-none px-3 pb-3 pt-1">
             {/*
               ResponsiveContainer hands its measured size to the chart through
@@ -859,6 +899,19 @@ export function TrendPanel({
                 range={rangeMs}
                 timeZone={timeZone}
                 sampled={data.sampling.kind === "bucketed"}
+                comparison={
+                  data.comparison === null || data.selectedPoint === null
+                    ? null
+                    : {
+                        trend: data.comparison.trend,
+                        unit: data.comparison.point.unit,
+                        states: data.comparison.point.states,
+                        name: data.comparison.point.pointName,
+                        sharedAxis: data.comparison.sharedAxis,
+                        withinMs: breakThresholdS(data.comparison.expectedInterval.seconds) * 1000,
+                        primaryName: data.selectedPoint.pointName,
+                      }
+                }
                 selection={selection}
                 onDragStart={setDragFrom}
                 onDragMove={(at) => {
@@ -870,23 +923,15 @@ export function TrendPanel({
           </div>
 
           {/*
-            The written list of breaks: both timestamps and a duration, which
-            is the one form that survives being read out over the phone. The
-            recorded gaps get no sentence here - their outline on the chart
-            carries the cause and a tooltip, and the table below lists them.
+            The breaks, written down: the summary line, the five longest with
+            both timestamps and a duration - the form that survives being read
+            out over the phone - and the rest behind "Show all" (2026-11-20).
+            One line per break was 280 lines a week on a point nobody had
+            entered an interval for. The recorded gaps get no sentence here -
+            their outline on the chart carries the cause, and the table below
+            lists them.
           */}
-          {data.trendGaps.length > 0 && (
-            <ul className="border-t border-[var(--divider-soft)] px-4 py-2.5 text-xs text-[var(--muted)]">
-              {data.trendGaps.map((gap) => (
-                <li key={gap.fromMs}>
-                  No readings from{" "}
-                  {formatTimestamp(new Date(gap.fromMs).toISOString(), undefined, timeZone ?? undefined)}{" "}
-                  to {formatTimestamp(new Date(gap.toMs).toISOString(), undefined, timeZone ?? undefined)} —{" "}
-                  {formatHours(gap.hours)}
-                </li>
-              ))}
-            </ul>
-          )}
+          <BreaksList breaks={data.breaks} expected={data.expectedInterval} timeZone={timeZone} />
         </>
       )}
     </Panel>
@@ -919,6 +964,7 @@ export function TrendChart({
   range = null,
   timeZone = null,
   sampled = false,
+  comparison = null,
   selection,
   onDragStart,
   onDragMove,
@@ -955,6 +1001,13 @@ export function TrendChart({
   timeZone?: string | null;
   /** Whether `value` is an average with `min`/`max` beside it. Names the tooltip rows. */
   sampled?: boolean;
+  /**
+   * Compare mode (2026-11-20): a second point's series over the same range,
+   * drawn on the left axis when it shares the unit and on its own right axis
+   * when it does not. Its samples keep their own timestamps and their own
+   * breaks; the tooltip reads its value at the cursor from them.
+   */
+  comparison?: ChartComparison | null;
   /** The drag in progress, or null when the pointer is up. */
   selection: TrendZoom | null;
   onDragStart: (atMs: number) => void;
@@ -1012,13 +1065,21 @@ export function TrendChart({
    * shows the -40. Drop `min`/`max` here and
    * tests/bas-range-chart.test.tsx fails.
    */
+  const inView = (point: { tsMs: number }) =>
+    zoom === null || (point.tsMs >= zoom.from && point.tsMs <= zoom.to);
+  const comparisonValues =
+    comparison === null
+      ? []
+      : comparison.trend
+          .filter(inView)
+          .map((point) => point.value)
+          .filter((value): value is number => value !== null);
   const visibleValues = trend
-    .filter(
-      (point) =>
-        zoom === null || (point.tsMs >= zoom.from && point.tsMs <= zoom.to),
-    )
+    .filter(inView)
     .flatMap((point) => [point.value, point.min ?? null, point.max ?? null])
-    .filter((value): value is number => value !== null);
+    .filter((value): value is number => value !== null)
+    // One axis for both lines only when they share a unit: then both must fit on it.
+    .concat(comparison !== null && comparison.sharedAxis ? comparisonValues : []);
   /**
    * A boolean point gets the state axis: two ticks at 0 and 1, labelled with
    * its words, whatever is on screen - a day that was "On" throughout still
@@ -1036,6 +1097,13 @@ export function TrendChart({
    * value it cannot have. Numeric points keep `monotone` - see the Area below.
    */
   const lineType = states !== null ? "stepAfter" : "monotone";
+  // The comparison's own axis, on the right, when it does not share the unit.
+  const rightAxis =
+    comparison === null || comparison.sharedAxis
+      ? null
+      : comparison.states !== null
+        ? stateAxis(comparison.states, { fontSize: CHART_FONT_SIZE })
+        : valueAxis(comparisonValues, comparison.unit, { fontSize: CHART_FONT_SIZE });
 
   return (
     <AreaChart
@@ -1120,6 +1188,49 @@ export function TrendChart({
               }
         }
       />
+      {comparison !== null && rightAxis !== null && (
+        <YAxis
+          yAxisId="compare"
+          orientation="right"
+          stroke={COMPARE_STROKE}
+          tick={{ fontSize: CHART_FONT_SIZE }}
+          width={rightAxis.width}
+          domain={rightAxis.domain}
+          ticks={rightAxis.ticks}
+          interval={0}
+          tickFormatter={(value: number) =>
+            comparison.states !== null
+              ? formatStateTick(value, comparison.states)
+              : formatAxisTick(value, rightAxis.decimals)
+          }
+          label={
+            comparison.states !== null
+              ? undefined
+              : {
+                  value: axisLabel(comparison.unit),
+                  angle: 90,
+                  position: "insideRight",
+                  style: { fontSize: CHART_FONT_SIZE, fill: "var(--muted)" },
+                }
+          }
+        />
+      )}
+      {comparison !== null ? (
+        <Tooltip
+          defaultIndex={tooltipIndex}
+          content={(props: { active?: boolean; label?: unknown }) => (
+            <CompareTooltip
+              active={props.active === true}
+              label={typeof props.label === "number" ? props.label : null}
+              trend={trend}
+              comparison={comparison}
+              unit={unit}
+              states={states}
+              zone={zone}
+            />
+          )}
+        />
+      ) : (
       <Tooltip
         defaultIndex={tooltipIndex}
         labelFormatter={(ms) =>
@@ -1170,6 +1281,7 @@ export function TrendChart({
           borderRadius: "0.625rem",
         }}
       />
+      )}
       {/*
         Drawn before the Line so the shading sits underneath it. Each
         band covers a stretch with no readings at all.
@@ -1292,7 +1404,86 @@ export function TrendChart({
         connectNulls={false}
         isAnimationActive={false}
       />
+      {/*
+        The comparison: a line in its own colour, no fill, on its own data so
+        its timestamps and its breaks are its own - an explicit null breaks
+        it exactly as it breaks the first line.
+      */}
+      {comparison !== null && (
+        <Area
+          data={comparison.trend}
+          yAxisId={comparison.sharedAxis ? 0 : "compare"}
+          type={comparison.states !== null ? "stepAfter" : "monotone"}
+          dataKey="value"
+          name="compare"
+          stroke={COMPARE_STROKE}
+          strokeWidth={1.75}
+          fill="none"
+          fillOpacity={0}
+          dot={false}
+          activeDot={false}
+          connectNulls={false}
+          isAnimationActive={false}
+        />
+      )}
     </AreaChart>
+  );
+}
+
+/** What TrendChart needs to draw a comparison. */
+export interface ChartComparison {
+  trend: PointExplorerData["trend"];
+  unit: string | null;
+  states: BooleanStates | null;
+  name: string;
+  /** True when both points have the same recorded unit: one axis. */
+  sharedAxis: boolean;
+  /** How far from the cursor a comparison sample may be and still be "its value then". */
+  withinMs: number;
+  primaryName: string;
+}
+
+/**
+ * The shared cursor's readout in compare mode: one time, both values, each
+ * in its own unit or state words. The comparison's value is its nearest
+ * sample to the cursor within its own break rule - never one from the far
+ * side of a hole. Exported for tests.
+ */
+export function CompareTooltip({
+  active,
+  label,
+  trend,
+  comparison,
+  unit,
+  states,
+  zone,
+}: {
+  active: boolean;
+  label: number | null;
+  trend: PointExplorerData["trend"];
+  comparison: ChartComparison;
+  unit: string | null;
+  states: BooleanStates | null;
+  zone: string | undefined;
+}) {
+  if (!active || label === null) return null;
+  const primary = comparisonValueAt(trend, label, Number.POSITIVE_INFINITY);
+  const second = comparisonValueAt(comparison.trend, label, comparison.withinMs);
+  const word = (value: number | null, u: string | null, s: BooleanStates | null) =>
+    value === null ? "no reading" : s !== null ? formatStateTooltip(value, s) : formatTooltipValue(value, u);
+  return (
+    <div
+      className="rounded-[0.625rem] border border-[var(--border)] bg-white px-3 py-2 text-xs shadow-sm"
+      data-testid="bas-compare-tooltip"
+    >
+      <p className="font-medium">{formatTimestamp(new Date(label).toISOString(), undefined, zone)}</p>
+      <p style={{ color: PRIMARY_STROKE }}>
+        {comparison.primaryName}: {word(primary, unit, states)}
+      </p>
+      <p style={{ color: COMPARE_STROKE }}>
+        {comparison.name}: {word(second, comparison.unit, comparison.states)}
+      </p>
+    </div>
   );
 }
 
@@ -1383,8 +1574,8 @@ function GapTable({
 function ExplorerSkeleton() {
   return (
     <div className="space-y-6" aria-hidden="true">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        {Array.from({ length: 5 }, (_, i) => (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
           <div
             key={i}
             className="card p-4"

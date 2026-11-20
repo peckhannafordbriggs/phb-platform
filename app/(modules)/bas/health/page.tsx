@@ -28,7 +28,7 @@ export default async function BasHealthPage() {
 
   return (
     <BasShell blurb={basTab("/bas/health").blurb} canAdminister={canAdminister}>
-      <CollectionHealth />
+      <CollectionHealth canAdminister={canAdminister} />
     </BasShell>
   );
 }

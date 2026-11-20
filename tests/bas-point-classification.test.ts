@@ -891,7 +891,8 @@ describe("the list's rules", () => {
   const point = (over: Partial<SettingsPoint>): SettingsPoint => ({
     pointId: "1", label: null, niagaraHistoryName: "P", niagaraDisplayName: "P", pointRole: null, roleName: null,
     equipmentId: null, equipmentName: null, unit: null, suggestion: null,
-    horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
+    horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null, capacitySource: "entered", intervalS: null, intervalSource: null },
+    rollRisk: null,
     collected: true, inactiveReason: null, completeness: null, lastRecordAt: null, visible: true,
     plausibility: notCheckedPlausibility("no_role"), assignmentSource: null, needsDecision: false, ...over,
   });
@@ -906,7 +907,7 @@ describe("the list's rules", () => {
     expect(shownPoints([a, b, c], "", { ...NO_POINT_FILTERS, equipment: "none" }).map((p) => p.pointId)).toEqual(["b", "c"]);
     expect(shownPoints([a, b, c], "", { ...NO_POINT_FILTERS, equipment: "1" }).map((p) => p.pointId)).toEqual(["a"]);
     expect(shownPoints([a, b, c], "", { ...NO_POINT_FILTERS, collected: "no" }).map((p) => p.pointId)).toEqual(["c"]);
-    expect(shownPoints([a, b, c], "", { role: "zone_temp", equipment: "none", collected: "yes", assignment: "any" })).toEqual([]);
+    expect(shownPoints([a, b, c], "", { role: "zone_temp", equipment: "none", collected: "yes", assignment: "any", history: "any" })).toEqual([]);
   });
 
   it("filters by assignment: a decision is needed by a collected point with no role, whoever touched it last", () => {

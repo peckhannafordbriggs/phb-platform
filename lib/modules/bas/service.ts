@@ -34,7 +34,27 @@ import {
   isCalendarDate,
   yearsBetween,
 } from "./range";
-import { AT_RISK_ROLL_RISKS, atRiskCount, isAtRisk, toHorizonState } from "./types";
+import {
+  AT_RISK_ROLL_RISKS,
+  atRiskCount,
+  historyUnknownCount,
+  isAtRisk,
+  toHorizonState,
+  type CapacitySource,
+  type HorizonIntervalSource,
+  type OutOfRange,
+  type PointComparison,
+  type PointHistory,
+} from "./types";
+import {
+  SPACING_TOLERANCE,
+  breakThresholdS,
+  expectedInterval as resolveExpectedInterval,
+  summariseBreaks,
+  type ExpectedInterval,
+  type SpacingSummary,
+} from "./interval";
+import { physicalRangeFor } from "./reports/engine/analysis/data-health";
 import {
   emptyNotChecked,
   judgePlausibility,
@@ -445,6 +465,7 @@ const RISK_VALUES: readonly RollRisk[] = [
   "ok",
   "at_risk",
   "data_lost",
+  "short_horizon",
   "buffer_not_full",
   "roll_horizon_unknown",
   "never_collected",
@@ -457,7 +478,7 @@ const RISK_VALUES: readonly RollRisk[] = [
  * someone adds a sixth risk state to the view and forgets this list, the screen
  * must say "we cannot tell", never "fine".
  */
-function toRollRisk(value: string): RollRisk {
+export function toRollRisk(value: string): RollRisk {
   return (RISK_VALUES as readonly string[]).includes(value)
     ? (value as RollRisk)
     : "roll_horizon_unknown";
@@ -521,6 +542,7 @@ interface TotalsRow {
   risk_ok: number;
   risk_at_risk: number;
   risk_data_lost: number;
+  risk_short_horizon: number;
   risk_buffer_not_full: number;
   risk_roll_horizon_unknown: number;
   risk_never_collected: number;
@@ -556,6 +578,9 @@ interface PointRow {
   station_count: number | null;
   held_count: number | null;
   visible: boolean;
+  capacity_source: string | null;
+  effective_interval_s: number | null;
+  interval_source: string | null;
 }
 
 interface VanishedRow {
@@ -687,6 +712,9 @@ export async function getCollectionHealth(
             AS risk_at_risk,
           count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'data_lost')::int
             AS risk_data_lost,
+          -- The horizon itself is under four collector polls (2026-11-20).
+          count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'short_horizon')::int
+            AS risk_short_horizon,
           -- Counted so the screen can name it; NOT added to pointsAtRisk below.
           -- A buffer below capacity has overwritten nothing.
           count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'buffer_not_full')::int
@@ -778,7 +806,10 @@ export async function getCollectionHealth(
         h.horizon_source,
         h.horizon_state,
         (h.current_full_span_s / 3600.0)::float8 AS current_horizon_hours,
-        h.capacity,
+        h.effective_capacity AS capacity,
+        h.capacity_source,
+        h.effective_interval_s,
+        h.interval_source,
         h.completeness,
         h.station_count,
         h.held_count,
@@ -1052,6 +1083,7 @@ export async function getCollectionHealth(
     ok: result.totals.risk_ok,
     at_risk: result.totals.risk_at_risk,
     data_lost: result.totals.risk_data_lost,
+    short_horizon: result.totals.risk_short_horizon,
     buffer_not_full: result.totals.risk_buffer_not_full,
     roll_horizon_unknown: result.totals.risk_roll_horizon_unknown,
     never_collected: result.totals.risk_never_collected,
@@ -1145,6 +1177,7 @@ export async function getCollectionHealth(
       totalReadings: Number(result.readingTotals.total_readings),
       unclassifiedPoints: result.totals.unclassified_points,
       pointsAtRisk,
+      pointsHistoryUnknown: historyUnknownCount(riskCounts),
       riskCounts,
       hiddenPoints: result.totals.hidden_points,
       hiddenPointsAtRisk,
@@ -1194,6 +1227,7 @@ interface DashboardRow {
   risk_ok: number;
   risk_at_risk: number;
   risk_data_lost: number;
+  risk_short_horizon: number;
   risk_buffer_not_full: number;
   risk_roll_horizon_unknown: number;
   risk_never_collected: number;
@@ -1270,6 +1304,7 @@ export async function getDashboard(viewer: Viewer): Promise<BasDashboard> {
         count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'ok')::int AS risk_ok,
         count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'at_risk')::int AS risk_at_risk,
         count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'data_lost')::int AS risk_data_lost,
+        count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'short_horizon')::int AS risk_short_horizon,
         count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'buffer_not_full')::int
           AS risk_buffer_not_full,
         count(*) FILTER (WHERE h.is_active AND h.roll_risk = 'roll_horizon_unknown')::int
@@ -1315,6 +1350,7 @@ export async function getDashboard(viewer: Viewer): Promise<BasDashboard> {
         ok: row.risk_ok,
         at_risk: row.risk_at_risk,
         data_lost: row.risk_data_lost,
+        short_horizon: row.risk_short_horizon,
         buffer_not_full: row.risk_buffer_not_full,
         roll_horizon_unknown: row.risk_roll_horizon_unknown,
         never_collected: row.risk_never_collected,
@@ -1332,6 +1368,8 @@ export async function getDashboard(viewer: Viewer): Promise<BasDashboard> {
                 activePoints: row.active_points,
                 // By the one list. See AT_RISK_ROLL_RISKS.
                 pointsAtRisk: atRiskCount(riskCounts),
+                // The muted line beside it, never added to it (2026-11-20).
+                pointsHistoryUnknown: historyUnknownCount(riskCounts),
                 riskCounts,
                 minutesSinceNewestReading: row.minutes_since,
               },
@@ -1377,6 +1415,9 @@ function toPointHealthRow(row: PointRow): PointHealthRow {
     currentHours: row.current_horizon_hours,
     stationCount: row.station_count,
     capacity: row.capacity,
+    capacitySource: toCapacitySource(row.capacity_source),
+    intervalS: row.effective_interval_s,
+    intervalSource: toIntervalSource(row.interval_source),
   };
   return {
     pointId: row.point_id.toString(),
@@ -1598,24 +1639,265 @@ export async function resolveValueKind(
 }
 
 /**
- * How far apart two readings have to be before the trend line breaks.
- *
- * A multiple of the point's own collection interval, so it scales with how
- * often the point is actually logged rather than assuming five minutes. Three
- * intervals is wide enough that one late poll does not fragment the line and
- * narrow enough that a real outage is unmistakable.
- *
- * The floor exists for points whose interval is not known - capacity has not
- * been filled in from Workbench - where the alternative is either never breaking
- * or breaking constantly.
+ * What a break is moved to lib/modules/bas/interval.ts (2026-11-20): a gap
+ * longer than twice the EXPECTED interval - Workbench's, else the spacing
+ * measured over the range, else the scheduler's stored measurement - and four
+ * hours when there is none. It used to be three times the entered interval
+ * with a 15-minute floor, so a point reporting every 30 minutes with nothing
+ * entered broke its line at every reading.
  */
-const BREAK_INTERVAL_MULTIPLE = 3;
-const MIN_BREAK_SECONDS = 900;
 
-function breakThresholdMs(collectionIntervalS: number | null): number {
-  const fromInterval =
-    collectionIntervalS === null ? 0 : collectionIntervalS * BREAK_INTERVAL_MULTIPLE;
-  return Math.max(fromInterval, MIN_BREAK_SECONDS) * 1000;
+/** One point's readings over a range, loaded the same way for the point and for its comparison. */
+interface SeriesLoad {
+  valueKind: ValueKind;
+  stats: PointStatsRow;
+  latest: LatestRow | null;
+  trend: TrendRow[];
+  buckets: BucketRow[] | null;
+  bucketSeconds: number | null;
+  /** The gaps between the readings in the range, summarised. interval.ts classifies them. */
+  spacing: SpacingSummary;
+}
+
+/**
+ * The gaps between one point's consecutive readings over `[from, to)`: how
+ * many, the median (lower, as percentile_disc), and how many sit within the
+ * collector's tolerance of it. interval.ts decides what that means.
+ */
+async function spacingOver(
+  tx: Prisma.TransactionClient,
+  pointId: bigint,
+  from: Date,
+  to: Date,
+): Promise<SpacingSummary> {
+  const row = firstRow(
+    await tx.$queryRaw<Array<{ gaps: number; median_s: number | null; within: number }>>`
+      WITH d AS (
+        SELECT EXTRACT(EPOCH FROM (ts - lag(ts) OVER (ORDER BY ts)))::float8 AS gap
+        FROM bas_readings
+        WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
+      ), g AS (
+        SELECT gap FROM d WHERE gap > 0
+      ), m AS (
+        SELECT count(*)::int AS n,
+               percentile_disc(0.5) WITHIN GROUP (ORDER BY gap)::float8 AS median
+        FROM g
+      )
+      SELECT m.n AS gaps,
+             m.median AS median_s,
+             (SELECT count(*)::int FROM g
+               WHERE abs(g.gap - m.median) <= ${SPACING_TOLERANCE}::float8 * m.median) AS within
+      FROM m
+    `,
+    "spacing",
+  );
+  return { gaps: row.gaps, medianS: row.median_s, withinTolerance: row.within };
+}
+
+/**
+ * Every break that touches `[from, to)`: consecutive readings further apart
+ * than `thresholdS`. The last reading before the range and the first after it
+ * are included, so a hole that straddles either end is found and not cut in
+ * two; the screen clips it to the range. A trailing hole with nothing after
+ * it at all is the caller's (it is ongoing, and has no second reading).
+ */
+async function breaksOver(
+  tx: Prisma.TransactionClient,
+  pointId: bigint,
+  from: Date,
+  to: Date,
+  thresholdS: number,
+): Promise<Array<{ from_ts: Date; to_ts: Date }>> {
+  return tx.$queryRaw<Array<{ from_ts: Date; to_ts: Date }>>`
+    WITH seq AS (
+      (SELECT ts FROM bas_readings WHERE point_id = ${pointId} AND ts < ${from} ORDER BY ts DESC LIMIT 1)
+      UNION ALL
+      (SELECT ts FROM bas_readings WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to})
+      UNION ALL
+      (SELECT ts FROM bas_readings WHERE point_id = ${pointId} AND ts >= ${to} ORDER BY ts LIMIT 1)
+    ), l AS (
+      SELECT lag(ts) OVER (ORDER BY ts) AS prev, ts FROM seq
+    )
+    SELECT prev AS from_ts, ts AS to_ts
+    FROM l
+    WHERE prev IS NOT NULL
+      AND EXTRACT(EPOCH FROM (ts - prev)) > ${thresholdS}::float8
+      AND prev < ${to} AND ts > ${from}
+    ORDER BY prev
+  `;
+}
+
+/**
+ * Stats, the newest value, the trend (raw or bucketed) and the spacing for
+ * one point over one range. The selected point and the compared one go
+ * through this same function, so the two lines on a compare chart cannot be
+ * drawn by two different rules.
+ */
+async function loadSeries(
+  tx: Prisma.TransactionClient,
+  args: {
+    pointId: bigint;
+    dataType: string;
+    zone: string;
+    from: Date;
+    to: Date;
+    maxRaw: number;
+    maxBuckets: number;
+  },
+): Promise<SeriesLoad> {
+  const { pointId, zone, from, to } = args;
+
+  // --- which value column this point's readings live in -------------------
+  //
+  // `data_type` is the collector's declaration from the record prototype and
+  // decides it outright. Only an undeclared type (`unknown`, the column's
+  // default) costs a query: a count of which columns the window populates,
+  // so the chart draws what is there rather than the numeric column it has
+  // always read. On live every point is declared, so this branch runs for
+  // none of them. See value-kind.ts.
+  const valueKind = await resolveValueKind(tx, args.dataType, pointId, from, to);
+
+  // The reading, as a number, whatever column it lives in. A boolean travels
+  // as 1 or 0 - NULL stays NULL through the cast - so the break logic, the
+  // bucketing and the series shape are the same for every kind, and the
+  // chart alone turns it back into a state word. A string point reads the
+  // numeric column as it always has: nothing is built for it yet, by
+  // decision, and its readings stay null on the chart.
+  const valueExpr =
+    valueKind === "boolean"
+      ? Prisma.sql`(value_bool::int)::float8`
+      : Prisma.sql`value_num`;
+
+  // Grafana runs panels 2, 3, 4 and 5 as four queries over the same rows.
+  // One pass, the same five numbers - and the count decides below whether
+  // the trend is drawn raw or bucketed.
+  const stats = firstRow(
+    await tx.$queryRaw<PointStatsRow[]>`
+      SELECT
+        count(*)::int AS readings,
+        count(*) FILTER (
+          WHERE value_num IS NULL AND value_bool IS NULL AND value_str IS NULL
+        )::int AS null_records,
+        count(DISTINCT ${valueExpr})::int AS distinct_values,
+        round(avg(${valueExpr})::numeric, 2)::float8 AS average,
+        round(min(${valueExpr})::numeric, 2)::float8 AS minimum,
+        round(max(${valueExpr})::numeric, 2)::float8 AS maximum
+      FROM bas_readings
+      WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
+    `,
+    "point stats",
+  );
+
+  // Grafana's panel 1. Deliberately NOT windowed and deliberately NOT null:
+  // "latest" answers "what is it reading now", and a window with no data in it
+  // does not make the last known value untrue.
+  const latest =
+    (
+      await tx.$queryRaw<LatestRow[]>`
+        SELECT ${valueExpr} AS value_num, ts
+        FROM bas_readings
+        WHERE point_id = ${pointId} AND ${valueExpr} IS NOT NULL
+        ORDER BY ts DESC
+        LIMIT 1
+      `
+    )[0] ?? null;
+
+  // --- the trend: raw, or bucketed and SAID SO --------------------------------
+  //
+  // Raw up to the measured cap. Past it, one row per bucket carrying the
+  // average AND the minimum and maximum, because an average alone erases the
+  // one thing an investigator is looking for. The width comes from the
+  // ladder in range.ts; the notice on the chart is written from it.
+  let trend: TrendRow[] = [];
+  let buckets: BucketRow[] | null = null;
+  let bucketSeconds: number | null = null;
+
+  if (stats.readings <= args.maxRaw) {
+    trend = await tx.$queryRaw<TrendRow[]>`
+      SELECT ts, ${valueExpr} AS value_num
+      FROM bas_readings
+      WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
+      ORDER BY ts
+    `;
+  } else {
+    bucketSeconds = chooseBucketSeconds(to.getTime() - from.getTime(), args.maxBuckets);
+
+    // Two ways to cut a bucket, and the difference is the clock change.
+    // Sub-day widths are fixed intervals counted from the range start with
+    // date_bin - a 6-hour bucket is six hours long on every day of the year.
+    // A day bucket is a LOCAL calendar day: date_trunc on the local time,
+    // converted back, so the bucket for 8 March 2026 in New York starts at
+    // 05:00Z and the one for 9 March starts at 04:00Z, 23 hours later.
+    // date_bin(86400 s) would put the first hour of every day after the
+    // change into the day before, and never notice.
+    const bucketExpr = isCalendarBucket(bucketSeconds)
+      ? Prisma.sql`(date_trunc('day', ts AT TIME ZONE ${zone}) AT TIME ZONE ${zone})`
+      : Prisma.sql`date_bin(make_interval(secs => ${bucketSeconds}::int), ts, ${from})`;
+
+    buckets = await tx.$queryRaw<BucketRow[]>`
+      SELECT
+        ${bucketExpr} AS ts,
+        avg(${valueExpr})::float8 AS average,
+        min(${valueExpr})::float8 AS minimum,
+        max(${valueExpr})::float8 AS maximum,
+        count(*)::int AS readings
+      FROM bas_readings
+      WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
+      GROUP BY 1
+      ORDER BY 1
+    `;
+  }
+
+  const spacing = await spacingOver(tx, pointId, from, to);
+
+  return { valueKind, stats, latest, trend, buckets, bucketSeconds, spacing };
+}
+
+/** One point's row in bas_v_collection_health, for the Data health tile. */
+interface HistoryRow {
+  roll_risk: string;
+  horizon_state: string | null;
+  roll_horizon_hours: number | null;
+  current_horizon_hours: number | null;
+  station_count: number | null;
+  effective_capacity: number | null;
+  capacity_source: string | null;
+  effective_interval_s: number | null;
+  interval_source: string | null;
+}
+
+function toCapacitySource(value: string | null): CapacitySource {
+  return value === "entered" ? "entered" : "assumed";
+}
+
+function toIntervalSource(value: string | null): HorizonIntervalSource {
+  return value === "entered" || value === "measured" ? value : null;
+}
+
+/** The view row as the tile reads it. Shared with Collection Health's per-point horizon. */
+function toPointHistory(row: HistoryRow): PointHistory {
+  return {
+    risk: toRollRisk(row.roll_risk),
+    horizon: {
+      state: toHorizonState(row.horizon_state),
+      hours: row.roll_horizon_hours,
+      currentHours: row.current_horizon_hours,
+      stationCount: row.station_count,
+      capacity: row.effective_capacity,
+      capacitySource: toCapacitySource(row.capacity_source),
+      intervalS: row.effective_interval_s,
+      intervalSource: toIntervalSource(row.interval_source),
+    },
+  };
+}
+
+/** The message when compare mode names a point it cannot draw. */
+export const COMPARISON_NOT_AVAILABLE_MESSAGE =
+  "The point to compare with is not available: it is hidden, no longer collected, or on another JACE.";
+
+/** Two units share one axis only when both are recorded and they are the same unit. */
+export function unitsShareAxis(a: string | null, b: string | null): boolean {
+  return a !== null && b !== null && a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 export interface PointOptionRow {
@@ -1639,6 +1921,12 @@ export interface PointOptionRow {
   is_status: boolean;
   is_command: boolean;
   niagara_history_name: string;
+  /** For compare mode's picker: the station and the equipment the point is on. */
+  station_id: bigint;
+  equipment_id: bigint | null;
+  equipment_name: string | null;
+  /** The scheduler's measured interval (2026-11-20); interval.ts decides when it is used. */
+  measured_interval_s: number | null;
 }
 
 /** How many rows in the window populate each value column. */
@@ -1730,6 +2018,13 @@ export interface PointExplorerOptions extends BasSelectionRequest {
    */
   maxRawTrendPoints?: number;
   maxTrendBuckets?: number;
+  /**
+   * Compare mode (2026-11-20): a second point, drawn over the same range on
+   * the same chart. It must be a shown, collected point on the selected
+   * point's JACE; anything else comes back as `comparisonNote` rather than
+   * failing the page.
+   */
+  comparePointId?: bigint | null;
 }
 
 /**
@@ -1740,9 +2035,12 @@ export interface PointExplorerOptions extends BasSelectionRequest {
  * `points_RoomT` is in fahrenheit and `Temp1`..`Temp3` carry no unit at all, so
  * plotting two of them on one axis would put 55 degF and 12.8 degC on the same
  * line with nothing on screen saying they are different quantities. A
- * single-point chart cannot express that mistake. If this ever grows a compare
- * mode, it needs one axis per unit and an explicit refusal for unitless points -
- * see runbook.md, *Two points on one axis*.
+ * single-point chart cannot express that mistake. Compare mode (2026-11-20)
+ * keeps it: the second point shares the axis only when both carry the SAME
+ * recorded unit (`unitsShareAxis`), and gets its own otherwise - two unitless
+ * points included, since nothing says they are one quantity. It must be on
+ * the same JACE and goes through the same loader. runbook.md -> *Compare
+ * points says the point to compare with is not available*.
  *
  * Same transaction discipline as `getCollectionHealth`: one `now()` for the
  * window, the stats and the trend, so the tiles cannot disagree with the chart
@@ -1819,7 +2117,9 @@ export async function getPointExplorer(
              v.collection_interval_s,
              s.timezone AS site_timezone,
              st.clock_offset_s, st.clock_measured_at,
-             v.data_type, v.is_status, v.is_command, v.niagara_history_name
+             v.data_type, v.is_status, v.is_command, v.niagara_history_name,
+             p.station_id, p.equipment_id, e.name AS equipment_name,
+             p.measured_interval_s
       FROM bas_v_point v
       -- B8.3: a hidden point leaves this picker, and only this. It is still
       -- collected, still in every Collection Health figure, and still in the
@@ -1830,6 +2130,7 @@ export async function getPointExplorer(
       JOIN bas_points p USING (point_id)
       JOIN bas_stations st ON st.station_id = p.station_id
       JOIN bas_sites s ON s.site_id = st.site_id
+      LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
       WHERE v.is_active AND p.is_visible AND ${healthSitesV}
       -- By the name on screen, so the picker reads alphabetically to the
       -- person using it; point_id breaks ties, as before.
@@ -1881,6 +2182,11 @@ export async function getPointExplorer(
         buckets: null as BucketRow[] | null,
         bucketSeconds: null as number | null,
         dataGaps: [] as GapRow[],
+        expected: null as ExpectedInterval | null,
+        breakRows: [] as Array<{ from_ts: Date; to_ts: Date }>,
+        history: null as HistoryRow | null,
+        comparison: null as { row: PointOptionRow; series: SeriesLoad; expected: ExpectedInterval } | null,
+        comparisonNote: null as string | null,
       };
     }
 
@@ -1953,60 +2259,16 @@ export async function getPointExplorer(
       "calendar",
     );
 
-    // --- which value column this point's readings live in -------------------
-    //
-    // `data_type` is the collector's declaration from the record prototype and
-    // decides it outright. Only an undeclared type (`unknown`, the column's
-    // default) costs a query: a count of which columns the window populates,
-    // so the chart draws what is there rather than the numeric column it has
-    // always read. On live every point is declared, so this branch runs for
-    // none of them. See value-kind.ts.
-    const valueKind = await resolveValueKind(tx, selectedPoint.data_type, pointId, from, to);
-
-    // The reading, as a number, whatever column it lives in. A boolean travels
-    // as 1 or 0 - NULL stays NULL through the cast - so the break logic, the
-    // bucketing and the series shape are the same for every kind, and the
-    // chart alone turns it back into a state word. A string point reads the
-    // numeric column as it always has: nothing is built for it yet, by
-    // decision, and its readings stay null on the chart.
-    const valueExpr =
-      valueKind === "boolean"
-        ? Prisma.sql`(value_bool::int)::float8`
-        : Prisma.sql`value_num`;
-
-    // Grafana runs panels 2, 3, 4 and 5 as four queries over the same rows.
-    // One pass, the same five numbers - and the count decides below whether
-    // the trend is drawn raw or bucketed.
-    const stats = firstRow(
-      await tx.$queryRaw<PointStatsRow[]>`
-        SELECT
-          count(*)::int AS readings,
-          count(*) FILTER (
-            WHERE value_num IS NULL AND value_bool IS NULL AND value_str IS NULL
-          )::int AS null_records,
-          count(DISTINCT ${valueExpr})::int AS distinct_values,
-          round(avg(${valueExpr})::numeric, 2)::float8 AS average,
-          round(min(${valueExpr})::numeric, 2)::float8 AS minimum,
-          round(max(${valueExpr})::numeric, 2)::float8 AS maximum
-        FROM bas_readings
-        WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
-      `,
-      "point stats",
-    );
-
-    // Grafana's panel 1. Deliberately NOT windowed and deliberately NOT null:
-    // "latest" answers "what is it reading now", and a window with no data in it
-    // does not make the last known value untrue.
-    const latest =
-      (
-        await tx.$queryRaw<LatestRow[]>`
-          SELECT ${valueExpr} AS value_num, ts
-          FROM bas_readings
-          WHERE point_id = ${pointId} AND ${valueExpr} IS NOT NULL
-          ORDER BY ts DESC
-          LIMIT 1
-        `
-      )[0] ?? null;
+    const series = await loadSeries(tx, {
+      pointId,
+      dataType: selectedPoint.data_type,
+      zone,
+      from,
+      to,
+      maxRaw,
+      maxBuckets,
+    });
+    const { valueKind, stats, latest, trend, buckets, bucketSeconds } = series;
 
     // The first and last reading held for this point, ever. What the screen
     // says when the range starts before the data does, or holds none of it.
@@ -2019,51 +2281,32 @@ export async function getPointExplorer(
       "point extent",
     );
 
-    // --- the trend: raw, or bucketed and SAID SO --------------------------------
+    // --- what this point is expected to do, and where it did not ----------
     //
-    // Raw up to the measured cap. Past it, one row per bucket carrying the
-    // average AND the minimum and maximum, because an average alone erases the
-    // one thing an investigator is looking for. The width comes from the
-    // ladder in range.ts; the notice on the chart is written from it.
-    let trend: TrendRow[] = [];
-    let buckets: BucketRow[] | null = null;
-    let bucketSeconds: number | null = null;
+    // interval.ts: Workbench's interval, else the range's own even spacing,
+    // else the scheduler's stored measurement, else none; a break is a gap
+    // over twice that, or over four hours with none.
+    const expected = resolveExpectedInterval({
+      enteredS: selectedPoint.collection_interval_s,
+      range: series.spacing,
+      storedMeasuredS: selectedPoint.measured_interval_s,
+    });
+    const breakRows = await breaksOver(tx, pointId, from, to, expected.breakThresholdS);
 
-    if (stats.readings <= maxRaw) {
-      trend = await tx.$queryRaw<TrendRow[]>`
-        SELECT ts, ${valueExpr} AS value_num
-        FROM bas_readings
-        WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
-        ORDER BY ts
-      `;
-    } else {
-      bucketSeconds = chooseBucketSeconds(to.getTime() - from.getTime(), maxBuckets);
-
-      // Two ways to cut a bucket, and the difference is the clock change.
-      // Sub-day widths are fixed intervals counted from the range start with
-      // date_bin - a 6-hour bucket is six hours long on every day of the year.
-      // A day bucket is a LOCAL calendar day: date_trunc on the local time,
-      // converted back, so the bucket for 8 March 2026 in New York starts at
-      // 05:00Z and the one for 9 March starts at 04:00Z, 23 hours later.
-      // date_bin(86400 s) would put the first hour of every day after the
-      // change into the day before, and never notice.
-      const bucketExpr = isCalendarBucket(bucketSeconds)
-        ? Prisma.sql`(date_trunc('day', ts AT TIME ZONE ${zone}) AT TIME ZONE ${zone})`
-        : Prisma.sql`date_bin(make_interval(secs => ${bucketSeconds}::int), ts, ${from})`;
-
-      buckets = await tx.$queryRaw<BucketRow[]>`
-        SELECT
-          ${bucketExpr} AS ts,
-          avg(${valueExpr})::float8 AS average,
-          min(${valueExpr})::float8 AS minimum,
-          max(${valueExpr})::float8 AS maximum,
-          count(*)::int AS readings
-        FROM bas_readings
-        WHERE point_id = ${pointId} AND ts >= ${from} AND ts < ${to}
-        GROUP BY 1
-        ORDER BY 1
-      `;
-    }
+    // The same row Collection Health shows for this point: its horizon, with
+    // where the capacity and the interval behind it came from.
+    const history =
+      (
+        await tx.$queryRaw<HistoryRow[]>`
+          SELECT roll_risk, horizon_state,
+                 (horizon_s / 3600.0)::float8 AS roll_horizon_hours,
+                 (current_full_span_s / 3600.0)::float8 AS current_horizon_hours,
+                 station_count, effective_capacity, capacity_source,
+                 effective_interval_s, interval_source
+          FROM bas_v_collection_health
+          WHERE point_id = ${pointId}
+        `
+      )[0] ?? null;
 
     const dataGaps = await tx.$queryRaw<GapRow[]>`
       SELECT
@@ -2085,6 +2328,63 @@ export async function getPointExplorer(
       LIMIT ${DATA_GAPS_LIMIT}
     `;
 
+    // --- compare mode -----------------------------------------------------
+    //
+    // A shown, collected point on the same JACE, over the same two instants,
+    // through the same loader. A point that is not that - hidden since the
+    // link was shared, or never on this station - is said in a note and the
+    // page still draws the selected point; a dead comparison must not cost
+    // the person the chart they came for.
+    let comparison: { row: PointOptionRow; series: SeriesLoad; expected: ExpectedInterval } | null = null;
+    let comparisonNote: string | null = null;
+    const compareId = options.comparePointId ?? null;
+    if (compareId !== null && compareId !== pointId) {
+      const candidate = (
+        await tx.$queryRaw<PointOptionRow[]>`
+          SELECT v.point_id,
+                 ${shownPointName(Prisma.sql`v`)} AS point_name,
+                 v.point_role, v.unit, v.site_name,
+                 v.collection_interval_s,
+                 s.timezone AS site_timezone,
+                 st.clock_offset_s, st.clock_measured_at,
+                 v.data_type, v.is_status, v.is_command, v.niagara_history_name,
+                 p.station_id, p.equipment_id, e.name AS equipment_name,
+                 p.measured_interval_s
+          FROM bas_v_point v
+          JOIN bas_points p USING (point_id)
+          JOIN bas_stations st ON st.station_id = p.station_id
+          JOIN bas_sites s ON s.site_id = st.site_id
+          LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
+          WHERE v.point_id = ${compareId}
+            AND v.is_active AND p.is_visible
+            AND p.station_id = ${selectedPoint.station_id}
+            AND ${siteFilter(entitled, Prisma.sql`st.site_id`)}
+        `
+      )[0];
+      if (candidate === undefined) {
+        comparisonNote = COMPARISON_NOT_AVAILABLE_MESSAGE;
+      } else {
+        const compared = await loadSeries(tx, {
+          pointId: candidate.point_id,
+          dataType: candidate.data_type,
+          zone,
+          from,
+          to,
+          maxRaw,
+          maxBuckets,
+        });
+        comparison = {
+          row: candidate,
+          series: compared,
+          expected: resolveExpectedInterval({
+            enteredS: candidate.collection_interval_s,
+            range: compared.spacing,
+            storedMeasuredS: candidate.measured_interval_s,
+          }),
+        };
+      }
+    }
+
     return {
       observedAt,
       selection,
@@ -2100,14 +2400,106 @@ export async function getPointExplorer(
       buckets,
       bucketSeconds,
       dataGaps,
+      expected: expected as ExpectedInterval | null,
+      breakRows,
+      history: history as HistoryRow | null,
+      comparison,
+      comparisonNote,
     };
   });
 
   const intervalS = result.selectedPoint?.collection_interval_s ?? null;
-  const { trend, gaps } =
+  const expected: ExpectedInterval = result.expected ?? {
+    seconds: null,
+    source: null,
+    spacing: "insufficient",
+    breakThresholdS: breakThresholdS(null),
+  };
+  // The line breaks: raw, by the expected interval's rule, so a band and a
+  // break in the line are the same hole; bucketed, at an empty bucket, which
+  // at the density that forces bucketing is always wider than the rule.
+  const { trend } =
     result.buckets !== null && result.bucketSeconds !== null
       ? buildBucketedTrend(result.buckets, result.bucketSeconds)
-      : buildTrend(result.trend, intervalS);
+      : buildTrend(result.trend, expected.seconds);
+
+  // Every break that touches the range, plus the open one at its end when
+  // nothing has arrived since: the band on the chart, the count, the share.
+  const rangeFromMs = result.range?.from_ts.getTime() ?? 0;
+  const rangeToMs = result.range?.to_ts.getTime() ?? 0;
+  const lastEverMs = result.extent?.latest?.getTime() ?? null;
+  const breakList: Array<{ fromMs: number; toMs: number; ongoing?: boolean }> = result.breakRows.map((b) => ({
+    fromMs: b.from_ts.getTime(),
+    toMs: b.to_ts.getTime(),
+  }));
+  if (
+    lastEverMs !== null &&
+    lastEverMs < rangeToMs &&
+    rangeToMs - lastEverMs > expected.breakThresholdS * 1000
+  ) {
+    breakList.push({ fromMs: lastEverMs, toMs: rangeToMs, ongoing: true });
+  }
+  const breaks = summariseBreaks({
+    breaks: breakList,
+    rangeFromMs,
+    rangeToMs,
+    earliestMs: result.extent?.earliest?.getTime() ?? null,
+    expectedS: expected.seconds,
+  });
+
+  // Out of what the quantity can physically read: the reports' own table
+  // (data-health.ts), judged on the range's lowest and highest reading.
+  const physical =
+    result.selectedPoint === null || result.valueKind !== "numeric"
+      ? null
+      : physicalRangeFor(result.selectedPoint.point_role, result.selectedPoint.unit);
+  const lowest = result.stats?.minimum ?? null;
+  const highest = result.stats?.maximum ?? null;
+  const outOfRange: OutOfRange | null =
+    physical !== null &&
+    ((lowest !== null && lowest < physical.min) || (highest !== null && highest > physical.max))
+      ? { label: physical.label, min: physical.min, max: physical.max, lowest, highest }
+      : null;
+
+  const comparison: PointComparison | null =
+    result.comparison === null
+      ? null
+      : (() => {
+          const c = result.comparison;
+          const drawn =
+            c.series.buckets !== null && c.series.bucketSeconds !== null
+              ? buildBucketedTrend(c.series.buckets, c.series.bucketSeconds)
+              : buildTrend(c.series.trend, c.expected.seconds);
+          const point = toPointOption(c.row, c.series.valueKind);
+          return {
+            point,
+            trend: drawn.trend,
+            sampling:
+              c.series.buckets !== null && c.series.bucketSeconds !== null
+                ? {
+                    kind: "bucketed" as const,
+                    bucketSeconds: c.series.bucketSeconds,
+                    bucketLabel: bucketLabel(c.series.bucketSeconds),
+                    buckets: c.series.buckets.length,
+                    readings: c.series.stats.readings,
+                    maxRaw,
+                  }
+                : { kind: "raw" as const, readings: c.series.stats.readings },
+            stats: {
+              readings: c.series.stats.readings,
+              average: c.series.stats.average,
+              minimum: c.series.stats.minimum,
+              maximum: c.series.stats.maximum,
+              latest: c.series.latest?.value_num ?? null,
+              latestAt: iso(c.series.latest?.ts ?? null),
+            },
+            expectedInterval: c.expected,
+            sharedAxis:
+              result.selectedPoint !== null &&
+              unitsShareAxis(result.selectedPoint.unit, c.row.unit) &&
+              (result.valueKind ?? "numeric") === c.series.valueKind,
+          };
+        })();
 
   const sampling: TrendSampling =
     result.buckets !== null && result.bucketSeconds !== null
@@ -2205,9 +2597,15 @@ export async function getPointExplorer(
       latestAt: iso(result.extent?.latest ?? null),
     },
     trend,
-    trendGaps: gaps,
+    trendGaps: breaks.breaks,
     sampling,
     dataGaps: result.dataGaps.map(toDataGapRow),
+    expectedInterval: expected,
+    breaks,
+    history: result.history === null ? null : toPointHistory(result.history),
+    outOfRange,
+    comparison,
+    comparisonNote: result.comparisonNote,
   };
 
   logger.info("bas.point_explorer", {
@@ -2221,7 +2619,9 @@ export async function getPointExplorer(
       `site=${explorer.selectedSiteId ?? "all"} ` +
       `point=${explorer.selectedPoint?.pointId ?? "none"} ` +
       `sampling=${sampling.kind === "raw" ? "raw" : `${sampling.bucketSeconds}s`} ` +
-      `gaps=${gaps.length}`,
+      `interval=${expected.seconds ?? "none"}${expected.source === null ? "" : `/${expected.source}`} ` +
+      `breaks=${breaks.count}` +
+      (comparison === null ? "" : ` compare=${comparison.point.pointId}`),
   });
 
   return explorer;
@@ -2241,9 +2641,10 @@ export async function getPointExplorer(
  */
 export function buildTrend(
   rows: Array<{ ts: Date; value_num: number | null }>,
-  collectionIntervalS: number | null,
+  /** The EXPECTED interval (interval.ts), not necessarily the entered one; null for none. */
+  expectedIntervalS: number | null,
 ): { trend: TrendPoint[]; gaps: TrendGap[] } {
-  const threshold = breakThresholdMs(collectionIntervalS);
+  const threshold = breakThresholdS(expectedIntervalS) * 1000;
   const trend: TrendPoint[] = [];
   const gaps: TrendGap[] = [];
 
@@ -2366,5 +2767,8 @@ export function toPointOption(
             names: [row.point_name, row.niagara_history_name],
           })
         : null,
+    stationId: row.station_id.toString(),
+    equipmentId: row.equipment_id?.toString() ?? null,
+    equipmentName: row.equipment_name,
   };
 }

@@ -3,6 +3,7 @@ import { prisma } from "../lib/db";
 import { readSchedulerJobEnv } from "../lib/modules/bas/reports/job-env";
 import { abandonedCount, runSchedulerPass } from "../lib/modules/bas/reports/scheduler";
 import { runAutoAssignPass } from "../lib/modules/bas/auto-assign";
+import { refreshMeasuredIntervals } from "../lib/modules/bas/measured-interval";
 
 /**
  * The report scheduler, one pass (Reports, Phase 3).
@@ -31,6 +32,13 @@ import { runAutoAssignPass } from "../lib/modules/bas/auto-assign";
  * execution exits 1 so it reads Failed - the reports above it are already
  * committed. runbook.md -> "A point was given a role or equipment nobody
  * chose".
+ *
+ * THE INTERVAL STEP (2026-11-20). Last, the same execution measures how often
+ * every collected point reports over the last seven days and stores it on
+ * the point (bas_points.measured_interval_s, lib/modules/bas/measured-interval.ts)
+ * - the number Point Explorer, Collection Health, the roll horizon and the
+ * collector's guard use where no interval is entered. A failure is printed
+ * and the execution exits 1, after everything above has committed.
  *
  * Read through lib/modules/bas/reports/job-env.ts and never lib/env.ts,
  * which is the web app's boot schema and fails a job that imports it
@@ -82,8 +90,22 @@ async function main(): Promise<void> {
   console.log(
     `[bas-reports-scheduler] assignment: ${assignment.stations.length} station(s), ${assigned} assigned, ${assignment.failed.length} failed`,
   );
+  let intervalError: unknown = null;
+  try {
+    const intervals = await refreshMeasuredIntervals();
+    console.log(
+      `[bas-reports-scheduler] intervals: ${intervals.measured} point(s) measured, ${intervals.changed} stored value(s) changed, ${intervals.cleared} cleared as change-of-value`,
+    );
+  } catch (error) {
+    intervalError = error;
+    console.error("[bas-reports-scheduler] the interval step failed:", error instanceof Error ? error.message : error);
+  }
+
   if (assignment.failed.length > 0) {
     throw new Error(`the point assignment failed on ${assignment.failed.length} station(s); see the lines above`);
+  }
+  if (intervalError !== null) {
+    throw new Error("the interval step failed; see the line above");
   }
 }
 

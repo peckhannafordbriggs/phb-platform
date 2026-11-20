@@ -73,6 +73,7 @@ import type {
   StationReach,
 } from "./types";
 import { toHorizonState } from "./types";
+import { toRollRisk } from "./service";
 import { judgePlausibility, type PlausibilityRow } from "./plausibility";
 import { autoAssignStation } from "./auto-assign";
 import { plausibilityLateral } from "./plausibility-sql";
@@ -131,6 +132,8 @@ interface StationRow {
   total_points: bigint;
   auto_assigned: bigint;
   need_decision: bigint;
+  assumed_capacity: number;
+  history_unknown: bigint;
   /** Username and timestamp only. The ciphertext column is never selected. */
   cred_username: string | null;
   cred_updated_at: Date | null;
@@ -173,6 +176,8 @@ function toStation(row: StationRow): SettingsStation {
     totalPoints: Number(row.total_points),
     autoAssigned: Number(row.auto_assigned),
     needDecision: Number(row.need_decision),
+    assumedCapacity: row.assumed_capacity,
+    historyUnknown: Number(row.history_unknown),
     lastSeenAt: row.last_seen_at?.toISOString() ?? null,
     hasCredential: row.cred_updated_at !== null,
     // The username and when it was last set. No branch of this function can
@@ -434,6 +439,13 @@ export async function getBasSettingsTree(
         (SELECT count(*) FROM bas_points x
           WHERE x.station_id = st.station_id AND x.is_active
             AND x.point_role IS NULL)                         AS need_decision,
+        -- The capacity assumed where none is entered, and the points whose
+        -- history size still cannot be worked out (2026-11-20): the Projects
+        -- card's muted count, by the card's own predicate, per station.
+        st.assumed_capacity,
+        (SELECT count(*) FROM bas_v_collection_health hx
+          WHERE hx.station_id = st.station_id AND hx.is_active
+            AND hx.roll_risk = 'roll_horizon_unknown')        AS history_unknown,
         -- The username and when it moved. password_ciphertext and key_version
         -- are NOT in this list and must never be: a column that is never
         -- selected cannot be leaked by a later change to the serialiser.
@@ -625,7 +637,12 @@ interface PointListRow extends PlausibilityRow {
   horizon_hours: number | null;
   current_horizon_hours: number | null;
   station_count: number | null;
+  /** The effective capacity: entered, else the station's assumed one. */
   capacity: number | null;
+  capacity_source: string | null;
+  effective_interval_s: number | null;
+  interval_source: string | null;
+  roll_risk: string | null;
 }
 
 const COMPLETENESS_VALUES: readonly Completeness[] = [
@@ -666,7 +683,12 @@ function toPoint(row: PointListRow, suggestion: PointSuggestion | null): Setting
       currentHours: row.current_horizon_hours,
       stationCount: row.station_count,
       capacity: row.capacity,
+      capacitySource: row.capacity_source === "entered" ? "entered" : "assumed",
+      intervalS: row.effective_interval_s,
+      intervalSource:
+        row.interval_source === "entered" || row.interval_source === "measured" ? row.interval_source : null,
     },
+    rollRisk: row.roll_risk === null ? null : toRollRisk(row.roll_risk),
     lastRecordAt: row.last_record_ts?.toISOString() ?? null,
     visible: row.is_visible,
     // The same judge Collection Health uses, over the same facts, so the two
@@ -728,7 +750,11 @@ export async function getStationPoints(
         (h.horizon_s / 3600.0)::float8          AS horizon_hours,
         (h.current_full_span_s / 3600.0)::float8 AS current_horizon_hours,
         c.station_count,
-        p.capacity,
+        COALESCE(h.effective_capacity, p.capacity) AS capacity,
+        h.capacity_source,
+        h.effective_interval_s,
+        h.interval_source,
+        h.roll_risk,
         -- For the value-plausibility judge (lib/modules/bas/plausibility.ts):
         -- the role's kind and setpoint flag word the not-checked reason, the
         -- interval decides interval-versus-change-of-value, and the last
@@ -2861,6 +2887,7 @@ export async function updateBasStation(
       tlsSha256: true,
       notes: true,
       isActive: true,
+      assumedCapacity: true,
     },
   });
   if (station === null) {
@@ -2868,6 +2895,7 @@ export async function updateBasStation(
   }
 
   const name = input.niagaraStationName ?? station.niagaraStationName;
+  const assumedCapacity = input.assumedCapacity ?? station.assumedCapacity;
   const mode = input.connectionMode ?? station.connectionMode;
   const displayName =
     input.displayName === undefined ? station.displayName : input.displayName;
@@ -2897,7 +2925,8 @@ export async function updateBasStation(
     parentId === station.parentStationId &&
     tls === station.tlsSha256 &&
     notes === station.notes &&
-    isActive === station.isActive;
+    isActive === station.isActive &&
+    assumedCapacity === station.assumedCapacity;
 
   if (unchanged) return { changed: false };
 
@@ -2913,6 +2942,7 @@ export async function updateBasStation(
         tlsSha256: tls,
         notes,
         isActive,
+        assumedCapacity,
       },
     });
 
@@ -2928,6 +2958,11 @@ export async function updateBasStation(
         previousNiagaraStationName: station.niagaraStationName,
         connectionMode: mode,
         previousConnectionMode: station.connectionMode,
+        // Every point without an entered capacity is judged against it, so
+        // a change moves horizons and risk figures; the old value is kept.
+        ...(assumedCapacity !== station.assumedCapacity
+          ? { assumedCapacity, previousAssumedCapacity: station.assumedCapacity }
+          : {}),
       },
     });
   });

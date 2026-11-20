@@ -161,7 +161,11 @@ export async function resolveScope(def: DefinitionForRun, range: Interval): Prom
   const pointRows = await prisma.$queryRaw<PointRow[]>`
     SELECT p.point_id, p.station_id, p.equipment_id,
            COALESCE(p.label, p.display_name, p.niagara_history_name) AS name,
-           p.point_role, p.unit, p.data_type, p.collection_interval_s,
+           p.point_role, p.unit, p.data_type,
+           -- Workbench's interval, else the one the platform measured
+           -- (2026-11-20): the same number Point Explorer and Collection
+           -- Health use. NULL for a change-of-value trend either way.
+           COALESCE(p.collection_interval_s, p.measured_interval_s) AS collection_interval_s,
            e.name AS equipment_name,
            r.measurement, r.is_setpoint, r.is_status, r.is_command
       FROM bas_points p
@@ -367,9 +371,10 @@ export async function computeCoverage(ids: bigint[], range: Interval, covLikeIds
 
   const interval = await prisma.$queryRaw<Array<{ point_id: bigint; coverage: number }>>`
     WITH pts AS (
-      SELECT p.point_id, GREATEST(3 * p.collection_interval_s, 900)::float8 AS hold_s
+      SELECT p.point_id, GREATEST(3 * COALESCE(p.collection_interval_s, p.measured_interval_s), 900)::float8 AS hold_s
         FROM bas_points p
-       WHERE p.point_id IN (${Prisma.join(ids)}) AND p.collection_interval_s IS NOT NULL
+       WHERE p.point_id IN (${Prisma.join(ids)})
+         AND COALESCE(p.collection_interval_s, p.measured_interval_s) IS NOT NULL
          AND p.point_id NOT IN (${Prisma.join(covLike)})
     ), r AS (
       SELECT x.point_id, x.ts,
@@ -401,7 +406,8 @@ export async function computeCoverage(ids: bigint[], range: Interval, covLikeIds
     WITH pts AS (
       SELECT p.point_id FROM bas_points p
        WHERE p.point_id IN (${Prisma.join(ids)})
-         AND (p.collection_interval_s IS NULL OR p.point_id IN (${Prisma.join(covLike)}))
+         AND (COALESCE(p.collection_interval_s, p.measured_interval_s) IS NULL
+              OR p.point_id IN (${Prisma.join(covLike)}))
     ), gaps AS (
       SELECT g.point_id,
              sum(EXTRACT(EPOCH FROM (LEAST(g.gap_end, ${end}::timestamptz) - GREATEST(g.gap_start, ${start}::timestamptz))))::float8 AS gap_s

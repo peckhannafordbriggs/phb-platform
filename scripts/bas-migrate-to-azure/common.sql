@@ -97,7 +97,8 @@ INSERT INTO mig_excluded (table_name, reason) VALUES
     ('bas_report_runs',        'Reports, Phase 2: run records, created after the move'),
     ('bas_report_findings',    'Reports, Phase 2: run findings, created after the move'),
     ('bas_report_settings',    'Reports, 2026-11-12: the safety ceiling, one row the migration inserts on every database'),
-    ('bas_report_deliveries',  'Reports, 2026-11-17: report email deliveries, created after the move');
+    ('bas_report_deliveries',  'Reports, 2026-11-17: report email deliveries, created after the move'),
+    ('bas_trend_summaries',    'Point Explorer, 2026-11-20: model-written trend summaries, created after the move');
 
 
 -- --- the gate ---------------------------------------------------------------

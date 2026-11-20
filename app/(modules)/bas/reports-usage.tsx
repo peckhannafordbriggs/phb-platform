@@ -67,6 +67,7 @@ export function ReportsUsageView({ usage, canAdminister }: { usage: ReportsUsage
       </div>
 
       <PlannerQuestionsLine planner={usage.planner} />
+      <TrendSummariesLine trendSummaries={usage.trendSummaries} />
 
       <SpendPerDayChart days={days} />
 
@@ -185,6 +186,24 @@ export function SafetyCeilingCard({
         </p>
       )}
     </Card>
+  );
+}
+
+/**
+ * Point Explorer's trend summaries over the range (2026-11-20): written,
+ * withheld, tokens and dollars. Not in the tiles above, which count report
+ * runs. Not rendered when nobody asked for one in the range. Exported for
+ * tests.
+ */
+export function TrendSummariesLine({ trendSummaries }: { trendSummaries: ReportsUsage["trendSummaries"] }) {
+  const total = trendSummaries.written + trendSummaries.withheld;
+  if (total === 0) return null;
+  return (
+    <p className="text-sm text-[var(--muted)]" data-testid="trend-summaries-line">
+      <span className="font-medium text-[var(--foreground)]">Trend summaries:</span> {trendSummaries.written.toLocaleString("en-US")} written
+      {trendSummaries.withheld > 0 ? ` · ${trendSummaries.withheld.toLocaleString("en-US")} withheld or failed` : ""} ·{" "}
+      {formatTokens(trendSummaries.tokens)} tokens · {formatMoney(trendSummaries.spend)}, not in the run figures above
+    </p>
   );
 }
 

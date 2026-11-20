@@ -357,15 +357,19 @@ describe("downsampling", () => {
     }
   });
 
-  it("breaks the bucketed line at an empty bucket, where the readings stop", async () => {
+  it("breaks the bucketed line at an empty bucket, and bands the exact hole in the readings", async () => {
     const result = await roomT(RANGE[0], RANGE[1], { maxRawTrendPoints: 2000 });
     // The 11-12 September hole is 22.7 hours, which is 45 empty half-hours.
+    // Since 2026-11-20 the band is the break itself, from the readings - the
+    // last one before the hole to the first after it - whatever the buckets.
     const hole = result.trendGaps.find((g) => g.hours > 20 && g.hours < 24 && g.fromMs > at("2026-09-11T00:00:00Z"));
     expect(hole).toBeDefined();
-    // From the END of the last populated bucket (16:00 + 30 min) to the start
-    // of the next populated one (14:30).
-    expect(new Date(hole!.fromMs).toISOString()).toBe("2026-09-11T20:30:00.000Z");
-    expect(new Date(hole!.toMs).toISOString()).toBe("2026-09-12T18:30:00.000Z");
+    expect(new Date(hole!.fromMs).toISOString()).toBe("2026-09-11T20:05:00.011Z");
+    expect(new Date(hole!.toMs).toISOString()).toBe("2026-09-12T18:45:00.009Z");
+    // And the averaged line still breaks inside it, at the empty buckets.
+    expect(result.sampling.kind).toBe("bucketed");
+    const inside = result.trend.filter((p) => p.isBreak && p.tsMs > hole!.fromMs && p.tsMs < hole!.toMs);
+    expect(inside.length).toBeGreaterThan(0);
   });
 });
 

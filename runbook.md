@@ -10164,8 +10164,11 @@ Collection Health.
 
 **Cause.** The count is `totals.pointsAtRisk` from the same service call
 Collection Health makes, decided by the one at-risk predicate
-(`lib/modules/bas/types.ts`), so the card and the hero tile cannot disagree. A
-point with an unknown horizon is in it — unknown is not safe. The maroon is a
+(`lib/modules/bas/types.ts`), so the card and the hero tile cannot disagree.
+Since 2026-11-20 the words are *N points at risk of data loss* and a point
+whose history size is unknown is **not** in it - it is the muted line beside
+it (*A Projects card or Collection Health says "N points: history size
+unknown"*); a horizon under four polls is (*Short history*). The maroon is a
 mark *on* the identity-cyan fill, never a change to the fill; see *The red
 Change Orders card looks like an alarm*. The small line is the age of the
 newest reading, the same number as the *Since newest reading* tile; *No
@@ -10462,14 +10465,17 @@ Three mechanisms, because one is not enough to be noticed:
 
 ### The threshold
 
-`max(3 × collection_interval_s, 15 minutes)`. A multiple of the point's own
-interval so it scales with how often the point is actually logged, and a floor
-for points whose interval has not been filled in from Workbench — where the
-alternative is either never breaking or breaking constantly.
+**Since 2026-11-20: twice the point's expected interval, or four hours when it
+has none** (`lib/modules/bas/interval.ts`). The expected interval is the one
+entered from Workbench, else the median gap measured over the range, else the
+scheduler's stored measurement; a change-of-value trend has none. See *Point
+Explorer says "Reports about every 30 min (measured)"* below.
 
-At the lab station's 300 s interval that is 15 minutes. Measured cadence there is
-a 300 s median against a 357 s mean, so ordinary late polls do not fragment the
-line.
+It used to be `max(3 × collection_interval_s, 15 minutes)`, and the floor was
+the problem: a point reporting every 30 minutes with no interval entered broke
+at every reading. At the lab station's 300 s interval the line now breaks past
+10 minutes; measured cadence there is a 300 s median against a 357 s mean, so
+ordinary late polls still do not fragment the line.
 
 ### Verifying it, which means against the real gap
 
@@ -10485,7 +10491,180 @@ Grove Lab. Every active point there shows exactly one gap of 22.7 hours. A
 
 `tests/bas-point-explorer.test.ts` drives `buildTrend` directly with synthetic
 series, and then writes a reading 30 hours old into the fixture and asserts the
-gap appears end to end through the database.
+gap appears end to end through the database. `tests/bas-interval.test.ts` holds
+the expected interval and the break rule to real readings (`points_RoomT`
+measures 300 s; `OpState` is change-of-value), and
+`tests/bas-point-page-service.test.ts` to a CEI-shaped station.
+
+---
+
+## Point Explorer says "Reports about every 30 min (measured)", and what counts as a break
+
+**Symptom.** The Data health tile on Point Explorer reads *Reports about every
+30 min (measured)*, *(from Workbench)*, *Logs on change — no fixed interval*,
+or *Too few readings to measure an interval*. Under the chart: *12 breaks,
+longest 3.2 h, 4% of the period missing*, the five longest, and *Show all*.
+
+**Cause.** Since 2026-11-20 the page judges a point against how often it is
+**expected** to report (`lib/modules/bas/interval.ts`), in this order:
+
+1. `collection_interval_s`, entered from Workbench — *(from Workbench)*;
+2. the spacing of the readings in the range on screen, when it is even — the
+   median gap, at least 10 gaps with four in five within a tenth of it (the
+   collector's own `spacing_kind` rule) — *(measured)*;
+3. the scheduler's stored measurement, `bas_points.measured_interval_s`, when
+   the range holds too few gaps — *(measured)*;
+4. none: the gaps are uneven (a change-of-value trend) or there are none.
+
+A **break** is a gap longer than twice that interval, or longer than **four
+hours** when there is none. The pink bands, the line breaks and the list are
+all the same breaks; a break still open at the end of the range says *now
+(nothing since)*. The percentage is of the part of the range the point
+existed in.
+
+**Why this changed.** CEI_JCI_N2's 334 histories report every 30 minutes and
+nobody had entered an interval, so the old rule (three entered intervals, a
+15-minute floor) made every reading a break: about 280 lines a week per point.
+
+**If the expectation is wrong.** An interval entered from Workbench always
+wins — check `collection_interval_s` on the point (Settings → Points shows the
+point; the value itself is set in the database, as before). A point the page
+calls *Logs on change* but that is an interval trend has uneven readings in
+this range: look for outages and late polls in the readings table; with more
+regular data it is measured again. Nothing here ever writes
+`collection_interval_s`.
+
+---
+
+## The scheduler's interval step: `bas_points.measured_interval_s`
+
+**What it is.** The last step of the BAS Reports scheduler job (every 15
+minutes, after the reports and the assignment pass) measures the last seven
+days of every collected point and stores the median gap on
+`bas_points.measured_interval_s` — NULL for an uneven (change-of-value)
+spacing, unchanged when the week holds fewer than ten gaps. Collection Health,
+the roll horizon in `bas_v_collection_health`, the reports and the collector's
+roll guard read it where no interval is entered. Its log line:
+
+```
+[bas-reports-scheduler] intervals: 412 point(s) measured, 3 stored value(s) changed, 0 cleared as change-of-value
+```
+
+**Symptom: the execution reads Failed with `the interval step failed`.** The
+line before it names the database error. The reports and the assignment above
+it have already committed. Nothing else depends on the step finishing: the
+page measures over its own range and falls back to the stored value only for
+a thin range. Fix the error and the next pass catches up.
+
+**To run it by hand**, the scheduler is the one command:
+`npm run bas:reports:scheduler` with `DATABASE_URL` set. There is no separate
+trigger.
+
+---
+
+## A Projects card or Collection Health says "N points: history size unknown"
+
+**Symptom.** Under the at-risk figure, in muted text: *334 points: history size
+unknown*. For a module admin it is a link to **Settings → Points**, filtered.
+
+**Cause.** These points' roll horizon cannot be worked out: no full buffer has
+been seen, no interval is entered or measured to multiply a capacity by, and
+the station reports no record count (`roll_risk = 'roll_horizon_unknown'`).
+**It is not counted as at risk of data loss** (since 2026-11-20) and it is
+never green either — it is its own line. Before, it was in the at-risk figure,
+which is how CEI read *334 points at risk* with nothing at risk.
+
+**What to do.** The link opens every station that has such points with its
+Points list filtered to them (*History size unknown* in the filter row). For
+each: an interval trend gets measured by the scheduler within a pass or two
+once it has ten readings in a week; a change-of-value trend becomes measured
+once the station reports a record count for it; entering the history's
+capacity and interval from Workbench settles it outright.
+
+---
+
+## A history reads "assumed" or "measured", or a point reads "Short history" in red
+
+**Symptom.** The Data health tile says *Station keeps about 10.4 days of
+history (assumed 500 records × measured 30 min)*; Collection Health's horizon
+column reads *≈ 10.4 days* over *assumed 500 records × measured 30 min*, or
+*Not full yet · 320 of 500 (assumed)*, or *shortest seen · full by an assumed
+capacity*. A point reads **Short history** in red and is in the at-risk figure.
+
+**Cause.** Where nobody has entered a capacity, every horizon is judged
+against the station's **assumed history capacity** — 500, Niagara's standard,
+which fits nearly every point — and where nobody has entered an interval,
+against the measured one. Every number judged that way says so. A horizon
+shorter than **four collector polls** (an hour at the 15-minute poll; the
+collector's `ROLL_SAFETY_FACTOR`) is `short_horizon`: one missed run and
+records are overwritten, so it is red and it is in *at risk of data loss*.
+
+**What to do.**
+
+- *The assumed capacity is wrong for a station*: **Settings → the station's
+  row → Assumed history capacity → Change**. Module admins only, audited as
+  `bas.station_updated` with the old and new value. Every point on the station
+  without an entered capacity is re-judged at once.
+- *One point's capacity differs*: enter its real capacity on the point; an
+  entered capacity always wins, so a 100-record history is judged at 100, not
+  500.
+- *Short history*: raise the history's capacity on the station, or lower the
+  collector's poll interval. The collector logs the same verdict with the word
+  *assumed* in it when either half was assumed, and **never refuses** a
+  station for an assumed horizon (phb-bas) — only a configured one, as before.
+
+**Deploy order.** The platform migration
+`20261120120000_bas_assumed_capacity_and_measured_interval` before the
+collector update that reads the two new columns; the collector refuses to run
+on a schema without them.
+
+---
+
+## "Explain this trend" says not configured, withheld, over the ceiling, or six a minute
+
+**What it is.** The *Trend summary* card between the tiles and the chart on
+Point Explorer. Collapsed until pressed; then 3-5 sentences the model wrote
+from numbers the page computed (the extremes, the daily pattern by hour,
+occupied against unoccupied where occupancy is known, the breaks, the flags,
+the largest rise and fall). Any module user can ask. Every call is a row in
+`bas_trend_summaries` with its tokens and cost, summed on **Reports → Usage**
+(and Settings → Usage) under *Trend summaries*. The same point, range and
+newest reading are served from that table for nothing; **Refresh** writes a
+new one.
+
+| The card says | Cause | Fix |
+|---|---|---|
+| *not configured* | `ANTHROPIC_API_KEY` (the BAS module's key, the Analyze tab's) is not set in the container | As for Analyze: *Secrets set by hand in Key Vault*. |
+| *withheld: it used numbers that are not in the data (…)* | The model wrote a number twice that is not in the stats it was given. The reply is refused, never shown; both calls are metered | Refresh once. If it keeps happening on one point, the stats are probably too thin to describe - read the chart. |
+| *could cost about $…, over the module's safety ceiling* | The estimate (two calls at most) is over the dollars of the Reports safety ceiling | Reports → Usage → Safety ceiling (module admins). |
+| *Six summaries a minute is the limit* | Per person, in memory, like Analyze. A cached summary does not count | Wait the seconds it names. |
+| *A text point has no trend to summarise* | The point's readings are strings | — |
+| *The model service …* | Rate limited, unreachable, key rejected | As for Analyze. |
+
+**The number check.** The model may use only numbers that appear in the stats
+(or the same numbers rounded); `inventedNumbers` in
+`lib/modules/bas/trend-summary/narrator.ts` checks every reply. A reply that
+fails is sent back once naming the numbers, then withheld.
+
+---
+
+## Compare points says the point to compare with is not available
+
+**Symptom.** With `compare=` in the URL, the chart draws one point and an amber
+line says *The point to compare with is not available: it is hidden, no
+longer collected, or on another JACE.*
+
+**Cause.** Compare mode offers only shown, collected points on the selected
+point's JACE. A shared link whose comparison has since been hidden, turned
+off, or that was edited to another station's point lands here. The page
+never fails for it; *Clear comparison* or choosing again fixes the URL.
+
+**Two units.** Two points share the left axis only when both have a unit and
+it is the same one. Otherwise the second gets its own axis on the right,
+labelled with its unit (or *no unit recorded*), and the legend says which line
+is on which axis - a temperature in °F and a bare number are never drawn
+against one scale.
+
 
 ---
 

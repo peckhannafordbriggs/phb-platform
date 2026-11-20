@@ -101,6 +101,12 @@ export interface PointFilters {
    * one-click choice. `auto`: what the pass wrote. `manual`: what a person set.
    */
   assignment: "any" | "needs_decision" | "auto" | "manual";
+  /**
+   * `unknown` (2026-11-20): collected points whose history size cannot be
+   * worked out - roll_risk `roll_horizon_unknown`, the Projects card's own
+   * predicate, so the list and the card's count agree.
+   */
+  history: "any" | "unknown";
 }
 
 export const NO_POINT_FILTERS: PointFilters = {
@@ -108,7 +114,13 @@ export const NO_POINT_FILTERS: PointFilters = {
   equipment: "any",
   collected: "any",
   assignment: "any",
+  history: "any",
 };
+
+/** The card's predicate, for one row. */
+export function pointHistoryUnknown(point: Pick<SettingsPoint, "collected" | "rollRisk">): boolean {
+  return point.collected && point.rollRisk === "roll_horizon_unknown";
+}
 
 export function pointMatchesFilters(point: SettingsPoint, filters: PointFilters): boolean {
   if (filters.role === "none" && point.pointRole !== null) return false;
@@ -128,6 +140,7 @@ export function pointMatchesFilters(point: SettingsPoint, filters: PointFilters)
   if (filters.assignment === "needs_decision" && !pointNeedsDecision(point)) return false;
   if (filters.assignment === "auto" && point.assignmentSource !== "auto") return false;
   if (filters.assignment === "manual" && point.assignmentSource !== "manual") return false;
+  if (filters.history === "unknown" && !pointHistoryUnknown(point)) return false;
   return true;
 }
 
@@ -185,6 +198,7 @@ export function StationPoints({
   stationId,
   expectedTotal,
   initialQuery,
+  initialFilters = NO_POINT_FILTERS,
 }: {
   stationId: string;
   expectedTotal: number;
@@ -194,6 +208,8 @@ export function StationPoints({
    * person to find the match by eye.
    */
   initialQuery: string;
+  /** The filters the list opens with: `history: "unknown"` from the Projects card's link. */
+  initialFilters?: PointFilters;
 }) {
   const [list, setList] = useState<StationPointsList | null>(null);
   const [vocabularies, setVocabularies] = useState<BasVocabularies | null>(null);
@@ -202,7 +218,7 @@ export function StationPoints({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [query, setQuery] = useState(initialQuery);
-  const [filters, setFilters] = useState<PointFilters>(NO_POINT_FILTERS);
+  const [filters, setFilters] = useState<PointFilters>(initialFilters);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [bulk, setBulk] = useState<BulkDraft>(EMPTY_BULK);
   const [pending, setPending] = useState<PendingBulk | null>(null);
@@ -804,6 +820,16 @@ function ClassificationToolbar({
             { value: "needs_decision", label: `Needs a decision (${needDecision})` },
             { value: "auto", label: `Auto-assigned (${autoAssigned})` },
             { value: "manual", label: "Set by a person" },
+          ]}
+          className="min-w-48"
+        />
+        <Dropdown
+          label="Filter by history size"
+          value={filters.history}
+          onChange={(history) => onFiltersChange({ ...filters, history: history as PointFilters["history"] })}
+          options={[
+            { value: "any", label: "Any history size" },
+            { value: "unknown", label: `History size unknown (${list.points.filter(pointHistoryUnknown).length})` },
           ]}
           className="min-w-48"
         />

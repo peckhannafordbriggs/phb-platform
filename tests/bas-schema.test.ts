@@ -94,6 +94,8 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
     "bas_report_settings",
     // 2026-11-17: who each run was emailed to.
     "bas_report_deliveries",
+    // 2026-11-20: the model's trend summaries from Point Explorer, with their cost.
+    "bas_trend_summaries",
   ];
 
   const BAS_VIEWS = [

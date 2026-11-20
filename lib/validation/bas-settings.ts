@@ -234,6 +234,17 @@ export const updateStationSchema = z
     tlsSha256,
     notes: optionalText(2000),
     isActive: z.boolean().optional(),
+    /**
+     * The history capacity assumed for this station's points whose own
+     * capacity is not entered (2026-11-20). Niagara's default is 500; the
+     * CHECK on the column holds the same bounds.
+     */
+    assumedCapacity: z
+      .number({ message: "Enter the assumed capacity as a whole number of records." })
+      .int("Enter the assumed capacity as a whole number of records.")
+      .min(1, "The assumed capacity must be at least 1 record.")
+      .max(1_000_000, "The assumed capacity can be at most 1,000,000 records.")
+      .optional(),
   });
 
 /**

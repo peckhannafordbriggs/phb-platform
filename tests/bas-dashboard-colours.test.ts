@@ -108,6 +108,7 @@ const risks = (over: Partial<Record<RollRisk, number>> = {}): Record<RollRisk, n
   data_lost: 0,
   buffer_not_full: 0,
   roll_horizon_unknown: 0,
+  short_horizon: 0,
   never_collected: 0,
   ...over,
 });
@@ -118,7 +119,7 @@ const project = (over: Partial<DashboardProject>): DashboardProject => ({
   orgName: "PH+B",
   buildings: 2,
   stations: 2,
-  health: { activePoints: 26, pointsAtRisk: 0, riskCounts: risks({ ok: 26 }), minutesSinceNewestReading: 4 },
+  health: { activePoints: 26, pointsAtRisk: 0, pointsHistoryUnknown: 0, riskCounts: risks({ ok: 26 }), minutesSinceNewestReading: 4 },
   ...over,
 });
 
@@ -259,7 +260,7 @@ describe("a project's colour", () => {
     const calm = project({ projectId: "3" });
     const alarmed = project({
       projectId: "3",
-      health: { activePoints: 26, pointsAtRisk: 9, riskCounts: risks({ ok: 17, data_lost: 9 }), minutesSinceNewestReading: 4 },
+      health: { activePoints: 26, pointsAtRisk: 9, pointsHistoryUnknown: 0, riskCounts: risks({ ok: 17, data_lost: 9 }), minutesSinceNewestReading: 4 },
     });
     const empty = project({ projectId: "3", buildings: 0, stations: 0, health: null });
 

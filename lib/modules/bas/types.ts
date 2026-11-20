@@ -16,6 +16,7 @@
  */
 
 import type { PlausibilitySummary, PointPlausibility } from "./plausibility";
+import type { BreaksSummary, ExpectedInterval } from "./interval";
 import type { BooleanStates, ValueKind } from "./value-kind";
 import type { NamePrefixGroup } from "./name-prefix";
 
@@ -41,6 +42,7 @@ export type RollRisk =
   | "ok"
   | "at_risk"
   | "data_lost"
+  | "short_horizon"
   | "buffer_not_full"
   | "roll_horizon_unknown"
   | "never_collected";
@@ -69,19 +71,44 @@ export type RollRisk =
  */
 export const AT_RISK_ROLL_RISKS: readonly RollRisk[] = [
   "data_lost",
+  "short_horizon",
   "at_risk",
-  "roll_horizon_unknown",
   "never_collected",
 ];
+
+/**
+ * `roll_horizon_unknown` is NOT in the list above (2026-11-20). It was, from
+ * the start, under "unknown is not safe" - and on CEI_JCI_N2 that put "334
+ * points at risk" on the Projects card for 334 histories nobody had entered a
+ * capacity for, none of them at risk. Unknown is still not safe and is still
+ * never green: it is its own count, "history size unknown", in the muted
+ * style beside the at-risk figure, and the at-risk figure is a real roll risk
+ * the horizon shows - the collector behind half of it or all of it, the
+ * horizon shorter than four polls, or a point never collected at all.
+ * With the assumed capacity and the measured interval (the
+ * 20261120120000 migration) the unknown state is now rare: no full buffer
+ * seen, no interval entered or measured, and no count from the station.
+ */
+export const HISTORY_UNKNOWN_RISK: RollRisk = "roll_horizon_unknown";
 
 /** Is this point at risk of data loss? The one predicate; see AT_RISK_ROLL_RISKS. */
 export function isAtRisk(risk: RollRisk): boolean {
   return AT_RISK_ROLL_RISKS.includes(risk);
 }
 
+/** Is this point's history size unknown? Not a risk figure; its own muted count. */
+export function isHistoryUnknown(risk: RollRisk): boolean {
+  return risk === HISTORY_UNKNOWN_RISK;
+}
+
 /** The tile's total, from per-state counts, by the same list. */
 export function atRiskCount(counts: Record<RollRisk, number>): number {
   return AT_RISK_ROLL_RISKS.reduce((sum, risk) => sum + counts[risk], 0);
+}
+
+/** The muted count beside it. */
+export function historyUnknownCount(counts: Record<RollRisk, number>): number {
+  return counts[HISTORY_UNKNOWN_RISK];
 }
 
 /**
@@ -140,7 +167,7 @@ export const NOT_COMPLETE: readonly Completeness[] = [
  * buffer has been seen to hold (measured), capacity x interval (configured),
  * or none.
  */
-export type HorizonSource = "measured" | "configured" | null;
+export type HorizonSource = "measured" | "configured" | "estimated" | null;
 
 /**
  * `horizon_state` from `bas_v_collection_health`: the four-way word every
@@ -160,14 +187,24 @@ export type HorizonSource = "measured" | "configured" | null;
  *   unknown      capacity not recorded, or the station reports no count.
  *                Amber, never green.
  */
-export type HorizonState = "measured" | "configured" | "not_full" | "unknown";
+export type HorizonState = "measured" | "configured" | "estimated" | "not_full" | "unknown";
 
 /** The view constrains this; a row is data. An unrecognised word is unknown, never measured. */
 export function toHorizonState(value: string | null): HorizonState {
-  return value === "measured" || value === "configured" || value === "not_full"
+  return value === "measured" || value === "configured" || value === "estimated" || value === "not_full"
     ? value
     : "unknown";
 }
+
+/**
+ * Where the capacity behind a horizon came from (2026-11-20): `entered` is
+ * bas_points.capacity, from Workbench; `assumed` is the station's assumed
+ * capacity (Niagara's default of 500 unless changed in Settings).
+ */
+export type CapacitySource = "entered" | "assumed";
+
+/** Where the interval behind a horizon came from: Workbench, or measured from the readings. */
+export type HorizonIntervalSource = "entered" | "measured" | null;
 
 /**
  * One point's horizon, as both screens render it. Built by the service from
@@ -189,8 +226,15 @@ export interface PointHorizon {
   currentHours: number | null;
   /** The station's reported record count at the last check, or null. */
   stationCount: number | null;
-  /** bas_points.capacity, or null when nobody has recorded it. */
+  /**
+   * The capacity the horizon was judged against: bas_points.capacity when
+   * entered, else the station's assumed capacity. `capacitySource` says which.
+   */
   capacity: number | null;
+  capacitySource: CapacitySource;
+  /** The interval an `estimated` (or `configured`) horizon multiplied by, in seconds. */
+  intervalS: number | null;
+  intervalSource: HorizonIntervalSource;
 }
 
 export interface CollectionHealthTotals {
@@ -200,8 +244,14 @@ export interface CollectionHealthTotals {
   totalReadings: number;
   /** Active points with no `point_role`. A backlog, not an error. */
   unclassifiedPoints: number;
-  /** Active points in any risk state other than `ok`. */
+  /** Active points at risk of data loss, by AT_RISK_ROLL_RISKS. */
   pointsAtRisk: number;
+  /**
+   * Active points whose history size cannot be worked out
+   * (`roll_horizon_unknown`). Shown beside `pointsAtRisk` in the muted style
+   * and never added to it (2026-11-20).
+   */
+  pointsHistoryUnknown: number;
   /** The composition of `pointsAtRisk`, so a total of 3 is never ambiguous. */
   riskCounts: Record<RollRisk, number>;
   /**
@@ -265,6 +315,8 @@ export interface CollectionHealthTotals {
 export interface DashboardProjectHealth {
   activePoints: number;
   pointsAtRisk: number;
+  /** `roll_horizon_unknown` points: the card's muted line, never in `pointsAtRisk`. */
+  pointsHistoryUnknown: number;
   riskCounts: Record<RollRisk, number>;
   /** Minutes since the project's newest reading; `null` when it has none. */
   minutesSinceNewestReading: number | null;
@@ -571,6 +623,17 @@ export const COLLECTOR_POLL_INTERVAL_MINUTES = 15;
 export const COLLECTOR_SILENCE_POLLS = 2;
 
 /**
+ * The collector's ROLL_SAFETY_FACTOR (phb-bas, collector/config.py, default
+ * 4): the history a point must hold, in polls, before one missed run can
+ * lose records. A horizon under this many polls is `short_horizon` in
+ * bas_v_collection_health (2026-11-20), whose SQL carries the product as a
+ * literal; tests/bas-views.test.ts holds the two to each other.
+ */
+export const ROLL_SAFETY_FACTOR = 4;
+/** Four 15-minute polls: 3,600 s. Below it a horizon is short. */
+export const SHORT_HORIZON_S = COLLECTOR_POLL_INTERVAL_MINUTES * 60 * ROLL_SAFETY_FACTOR;
+
+/**
  * The facts behind the collector-silence banner (2026-11-19).
  *
  * From 6 to 19 November 2026 every collector pass died partway through on a
@@ -623,6 +686,14 @@ export interface PointOption {
    * kind.
    */
   states: BooleanStates | null;
+  /**
+   * The station and the equipment the point is on (2026-11-20). Compare mode
+   * offers the other points on the same equipment first and searches the
+   * rest of the station.
+   */
+  stationId: string;
+  equipmentId: string | null;
+  equipmentName: string | null;
 }
 
 /**
@@ -757,6 +828,8 @@ export interface TrendGap {
   fromMs: number;
   toMs: number;
   hours: number;
+  /** Nothing has arrived since `fromMs`: the break runs to the end of the range and is still open. */
+  ongoing?: boolean;
 }
 
 export interface PointStats {
@@ -830,6 +903,11 @@ export interface PointExplorer {
   stats: PointStats;
   pointExtent: PointExtent;
   trend: TrendPoint[];
+  /**
+   * The breaks drawn as bands on the chart: `breaks.breaks`, by the
+   * definition in interval.ts. Kept under its old name because the chart
+   * and its tests read it.
+   */
   trendGaps: TrendGap[];
   /**
    * Whether `trend` is every reading or one point per bucket. Said out loud on
@@ -837,6 +915,63 @@ export interface PointExplorer {
    */
   sampling: TrendSampling;
   dataGaps: DataGapRow[];
+
+  /**
+   * How often this point is expected to report, and where that came from
+   * (2026-11-20): Workbench's interval, else the spacing measured over the
+   * range, else the scheduler's stored measurement, else none. Decides what a
+   * break is. lib/modules/bas/interval.ts.
+   */
+  expectedInterval: ExpectedInterval;
+  /** Every break in the range by that rule: the count, the longest, the share missing, the list. */
+  breaks: BreaksSummary;
+  /**
+   * The point's history horizon from bas_v_collection_health - the same row
+   * Collection Health shows - for the Data health tile. Null when no point is
+   * selected.
+   */
+  history: PointHistory | null;
+  /**
+   * The lowest or highest reading in the range is outside what the point's
+   * kind of quantity can physically read (the reports' Data Health table).
+   * Null when it is inside, or when the role and unit have no range.
+   */
+  outOfRange: OutOfRange | null;
+  /** The second point drawn on the same chart, when compare mode is on. */
+  comparison: PointComparison | null;
+  /** Why the comparison asked for is not drawn, when it is not. */
+  comparisonNote: string | null;
+}
+
+/** One point's history horizon, as the Data health tile shows it. */
+export interface PointHistory {
+  risk: RollRisk;
+  horizon: PointHorizon;
+}
+
+export interface OutOfRange {
+  /** "a room or return air temperature" */
+  label: string;
+  min: number;
+  max: number;
+  lowest: number | null;
+  highest: number | null;
+}
+
+/**
+ * Compare mode (2026-11-20): a second point over the same range on the same
+ * chart. Its own axis when the units differ - and when either has no unit,
+ * because two unitless numbers are not known to be the same quantity
+ * (runbook.md, *Two points on one axis*).
+ */
+export interface PointComparison {
+  point: PointOption;
+  trend: TrendPoint[];
+  sampling: TrendSampling;
+  stats: Pick<PointStats, "readings" | "average" | "minimum" | "maximum" | "latest" | "latestAt">;
+  expectedInterval: ExpectedInterval;
+  /** True when the two points share one axis: both have a unit and it is the same one. */
+  sharedAxis: boolean;
 }
 
 // ------------------------------------------------- the readings table (B4)
@@ -991,6 +1126,14 @@ export interface SettingsStation {
   autoAssigned: number;
   /** Collected points with no role: pointNeedsDecision, counted in SQL. */
   needDecision: number;
+  /**
+   * The history capacity assumed for this station's points whose own
+   * capacity is not entered (2026-11-20). 500, Niagara's default, unless a
+   * person changed it here.
+   */
+  assumedCapacity: number;
+  /** Collected points whose history size cannot be worked out (roll_horizon_unknown). */
+  historyUnknown: number;
   lastSeenAt: string | null;
   /** True when this station has a credential row. Never the credential itself. */
   hasCredential: boolean;
@@ -1327,6 +1470,12 @@ export interface SettingsPoint {
    * no building has no view row and reads unknown.
    */
   horizon: PointHorizon;
+  /**
+   * roll_risk from the same view row (2026-11-20), null with no row. The
+   * Projects card's "history size unknown" link lands on this list filtered
+   * to `roll_horizon_unknown`, the card's own predicate.
+   */
+  rollRisk: RollRisk | null;
   lastRecordAt: string | null;
   /** is_visible. Editable since B8.3, and NEVER filtered on here. */
   visible: boolean;

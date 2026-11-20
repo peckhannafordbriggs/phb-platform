@@ -20,3 +20,10 @@ export const BAS_MODULE_KEY = "bas";
  * id can never collide with it - ids are digits.
  */
 export const NO_POINT = "none";
+
+/**
+ * Niagara's standard history capacity (2026-11-20): the default of
+ * bas_stations.assumed_capacity, which every point without an entered
+ * capacity is judged against. Nathan confirms it fits nearly every point.
+ */
+export const NIAGARA_DEFAULT_CAPACITY = 500;

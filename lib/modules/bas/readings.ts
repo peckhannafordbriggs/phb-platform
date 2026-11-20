@@ -229,11 +229,13 @@ async function loadPoint(
            v.data_type, v.is_status, v.is_command, v.niagara_history_name,
            p.is_visible,
            st.station_id,
-           COALESCE(st.display_name, st.niagara_station_name) AS station_name
+           COALESCE(st.display_name, st.niagara_station_name) AS station_name,
+           p.equipment_id, e.name AS equipment_name, p.measured_interval_s
     FROM bas_v_point v
     JOIN bas_points p USING (point_id)
     JOIN bas_stations st ON st.station_id = p.station_id
     JOIN bas_sites s ON s.site_id = st.site_id
+    LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
     WHERE v.point_id = ${pointId}
       AND v.is_active
       AND ${siteFilter(entitled, Prisma.sql`st.site_id`)}

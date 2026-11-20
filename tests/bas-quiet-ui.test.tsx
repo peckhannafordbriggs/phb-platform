@@ -56,6 +56,7 @@ const risks = (over: Partial<Record<RollRisk, number>> = {}): Record<RollRisk, n
   data_lost: 0,
   buffer_not_full: 0,
   roll_horizon_unknown: 0,
+  short_horizon: 0,
   never_collected: 0,
   ...over,
 });
@@ -98,6 +99,7 @@ function health(over: {
       totalReadings: 87_100,
       unclassifiedPoints: 0,
       pointsAtRisk: 0,
+      pointsHistoryUnknown: 0,
       riskCounts: risks({ ok: 26 }),
       hiddenPoints: 0,
       hiddenPointsAtRisk: 0,
@@ -141,7 +143,7 @@ const shortPoint: CollectionHealth["points"][number] = {
   minutesAgo: 5,
   rollHorizonHours: 2,
   horizonSource: "measured",
-  horizon: { state: "measured", hours: 2, currentHours: 2, stationCount: 500, capacity: 500 },
+  horizon: { state: "measured", hours: 2, currentHours: 2, stationCount: 500, capacity: 500, capacitySource: "entered", intervalS: null, intervalSource: null },
   completeness: "incomplete",
   stationCount: 500,
   heldCount: 430,
@@ -451,24 +453,24 @@ describe("the Home tile leads with the state", () => {
     expect(html).not.toContain("--phb-maroon");
   });
 
-  it("at one: the headline is '1 point at risk', marked red", () => {
+  it("at one: the headline is '1 point at risk of data loss', marked red", () => {
     const figure = basFigure({ pointsAtRisk: 1, minutesSinceNewestReading: 2 });
-    expect(figure).toMatchObject({ state: "ok", value: "1 point at risk", alarm: true });
+    expect(figure).toMatchObject({ state: "ok", value: "1 point at risk of data loss", alarm: true });
 
     const html = renderToStaticMarkup(createElement(FigureBlock, { figure }));
     expect(html).toContain('data-testid="home-figure-alarm"');
-    expect(html).toContain(">1 point at risk<");
+    expect(html).toContain(">1 point at risk of data loss<");
     expect(html).toContain("background:var(--phb-maroon)");
     expect(html).toContain("newest reading 2 min ago");
   });
 
-  it("at three: '3 points at risk', and the same mark", () => {
+  it("at three: '3 points at risk of data loss', and the same mark", () => {
     const html = renderToStaticMarkup(
       createElement(FigureBlock, {
         figure: basFigure({ pointsAtRisk: 3, minutesSinceNewestReading: 190 }),
       }),
     );
-    expect(html).toContain(">3 points at risk<");
+    expect(html).toContain(">3 points at risk of data loss<");
     expect(html).toContain('data-testid="home-figure-alarm"');
     expect(html).toContain("newest reading 3 h 10 min ago");
   });

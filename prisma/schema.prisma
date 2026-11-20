@@ -91,6 +91,7 @@ model Employee {
   basReportRunsStarted     BasReportRun[]        @relation("BasReportRunStartedBy")
   basReportSettingsUpdated BasReportSettings[]   @relation("BasReportSettingsUpdatedBy")
   basReportDeliveriesAsked BasReportDelivery[]   @relation("BasReportDeliveryRequestedBy")
+  basTrendSummariesAsked   BasTrendSummary[]     @relation("BasTrendSummaryRequestedBy")
 
   @@index([status])
   @@index([departmentId])
@@ -334,6 +335,14 @@ model BasStation {
   firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
   lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz()
 
+  /// The history capacity assumed for any point on this station whose own
+  /// capacity nobody has entered (2026-11-20). 500 is Niagara's default and
+  /// fits nearly every point (Nathan). Used by the roll horizon in
+  /// bas_v_collection_health and by the collector's roll guard, always
+  /// labelled "assumed"; an entered bas_points.capacity always wins. CHECK in
+  /// 20261120120000_bas_assumed_capacity_and_measured_interval.
+  assumedCapacity Int @default(500) @map("assumed_capacity")
+
   points     BasPoint[]
   ingestRuns BasIngestRun[]
   credential BasStationCredential?
@@ -424,6 +433,14 @@ model BasPoint {
 
   collectionIntervalS Int? @map("collection_interval_s")
 
+  /// The typical spacing between this point's readings, measured by the
+  /// platform from the last seven days (the median gap), written by the
+  /// scheduler pass. NULL when the spacing is uneven - a change-of-value
+  /// trend has no interval - or nothing has been measured yet. Never written
+  /// to collection_interval_s: that column is what Workbench says, this is
+  /// what the readings show. 2026-11-20.
+  measuredIntervalS Int? @map("measured_interval_s")
+
   capacity Int?
 
   fullPolicy String? @map("full_policy")
@@ -447,9 +464,10 @@ model BasPoint {
   firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
   lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz()
 
-  readings   BasReading[]
-  checkpoint BasSyncCheckpoint?
-  gaps       BasDataGap[]
+  readings       BasReading[]
+  checkpoint     BasSyncCheckpoint?
+  gaps           BasDataGap[]
+  trendSummaries BasTrendSummary[]
   linksFrom  BasPointLink[]     @relation("BasLinkFrom")
   linksTo    BasPointLink[]     @relation("BasLinkTo")
 
@@ -853,6 +871,50 @@ model BasReportDelivery {
   @@unique([runId, email])
   @@index([status, nextAttemptAt])
   @@map("bas_report_deliveries")
+}
+
+/// One trend summary written on demand from Point Explorer (2026-11-20):
+/// the numbers code computed for one point over one range, the 3-5
+/// sentences the model wrote from them, and what the call cost. Every call
+/// is a row - the cache reads the newest row for (point, range, newest
+/// reading) and the Usage page sums them all. Platform-side, like the
+/// report tables: withheld from the model, the collector and the data
+/// dictionary.
+model BasTrendSummary {
+  summaryId BigInt @id @default(autoincrement()) @map("summary_id")
+
+  pointId BigInt   @map("point_id")
+  point   BasPoint @relation(fields: [pointId], references: [pointId], onDelete: Cascade)
+
+  /// "days:7" for a preset, "dates:2026-11-01..2026-11-07" for a custom range.
+  rangeKey   String   @map("range_key")
+  rangeFrom  DateTime @map("range_from") @db.Timestamptz()
+  rangeTo    DateTime @map("range_to") @db.Timestamptz()
+  /// The newest reading in the range when the stats were computed; null when the range held none.
+  newestReadingAt DateTime? @map("newest_reading_at") @db.Timestamptz()
+
+  /// The model's sentences; null when the call failed or the reply was withheld.
+  summary String?
+  /// Why there is no summary, in words, when there is none.
+  declined String?
+  /// The numbers the model was given, as sent.
+  stats Json
+
+  model            String
+  inputTokens      Int     @default(0) @map("input_tokens")
+  outputTokens     Int     @default(0) @map("output_tokens")
+  cacheReadTokens  Int     @default(0) @map("cache_read_tokens")
+  cacheWriteTokens Int     @default(0) @map("cache_write_tokens")
+  costUsd          Decimal @default(0) @map("cost_usd") @db.Decimal(10, 4)
+
+  requestedById String?   @map("requested_by_id") @db.Uuid
+  requestedBy   Employee? @relation("BasTrendSummaryRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([pointId, rangeKey, newestReadingAt])
+  @@index([createdAt])
+  @@map("bas_trend_summaries")
 }
 
 /// The Reports module's one safety ceiling (2026-11-12): the most a single run may spend and the longest it may take. One row, edited by BAS module admins from the Usage page; the engine reads it for every run.
