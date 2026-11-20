@@ -204,6 +204,7 @@ describe("the service: cache, refresh, metering and the gates", () => {
     await testDb.basReportSettings.deleteMany({});
     await fx.cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   const ask = (narrator: ReturnType<typeof createFixedTrendNarrator>, extra: Partial<Parameters<typeof summariseTrend>[1]> = {}, limiter?: QuestionRateLimiter) =>
@@ -337,9 +338,15 @@ describe("the service: cache, refresh, metering and the gates", () => {
     expect(page.totals.spend).toBe(0);
   });
 
+  const post = (body: unknown) =>
+    summaryRoute(new Request("http://localhost/api/modules/bas/point-explorer/summary", { method: "POST", body: JSON.stringify(body) }));
+
   it("answers through the route for anyone with the module, and 404 for anyone without", async () => {
-    const post = (body: unknown) =>
-      summaryRoute(new Request("http://localhost/api/modules/bas/point-explorer/summary", { method: "POST", body: JSON.stringify(body) }));
+    // The route reads the BAS key from the environment, as in production.
+    // A stand-in, never a real one: the narrator module is mocked above, so
+    // nothing leaves the process whatever this holds, and the test does not
+    // depend on a developer's .env.local (CI has no key at all).
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test-not-a-real-key");
 
     const ok = await post({ point: fx.spaceTemp.toString(), days: 7 });
     expect(ok.status).toBe(200);
@@ -351,6 +358,15 @@ describe("the service: cache, refresh, metering and the gates", () => {
 
     await testDb.moduleGrant.deleteMany({ where: { employeeId } });
     expect((await post({ point: fx.spaceTemp.toString(), days: 7 })).status).toBe(404);
+  });
+
+  it("says not configured through the route when the BAS key is not set, and writes nothing", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const response = await post({ point: fx.spaceTemp.toString(), days: 7 });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: { state: string; summary: string | null } };
+    expect(body.data).toMatchObject({ state: "not_configured", summary: null });
+    expect(await testDb.basTrendSummary.count()).toBe(0);
   });
 });
 
