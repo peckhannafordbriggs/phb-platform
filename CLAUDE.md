@@ -682,7 +682,8 @@ checkbox on the Points list is editable: `PATCH /settings/points/{id}` with
 `{ visible }`, one field, no `isActive`, audited as
 `bas.point_visibility_changed` with `collected` recorded beside it. A hidden
 point leaves the Point Explorer picker and the Collection Health table and
-**nothing else** - it stays in every risk figure and completeness count, the
+**nothing else** (until 2026-11-20, when it also left reports, Analyze and the
+stuck-value check - see that entry) - it stays in every risk figure and completeness count, the
 totals never see `is_visible`, and `describeHiddenRisk` was extended rather
 than duplicated: *"No points at risk are listed in the table below, but 1
 hidden point is at risk."* Tested by hiding the only at-risk point in a
@@ -1903,6 +1904,34 @@ is phb-bas's own PR (deploy the platform migration first).
 `WHY-ITS-BUILT-THIS-WAY.md` § 91; `runbook.md` -> *Point Explorer says
 "Reports about every 30 min (measured)"*, *A Projects card or Collection
 Health says "N points: history size unknown"*, *"Explain this trend" says ...*.
+
+**Via-parent stations are collected through their parent, and Hidden means
+"not building data" (2026-11-20).** The collector (phb-bas PR #12) reads a
+station set to *via parent* from its parent's history space,
+`/obix/histories/<its Niagara name>/`, on the direct ancestor's connection
+(address, login, pin; `parent_station_id` walked to the first `direct`
+station), with its own points, runs, checkpoints and gaps; a chain that never
+reaches an active direct station is MISCONFIGURED - named and a failed run
+against its own row every pass. For CEI_JCI_N2's CEI_AHU_7, CEI_AHU_8 and
+CEI_PLANT; **`discover` must be run once after the collector is pulled**. The
+platform: one tree (`lib/modules/bas/station-tree.ts`) orders every JACE list -
+Collection Health and Point Explorer pickers (indented, each station's OWN last
+pass beside it), a new *Stations* panel on Collection Health, the Reports
+station picker; the runs table names each run's station; a via-parent card in
+Settings says *Collected through <parent>* where the login block was, with no
+fingerprint, and its Edit form is names and parent only. **Hidden
+(`is_visible = false`) now also leaves reports, the Analyze catalogue and the
+stuck-value check** - B8.3's "nothing else" no longer holds for those three;
+a hidden point is still collected and still in every data-loss figure, the
+`bas_v_*` views are unchanged, and leaving is said (*N hidden in Settings* on
+the Not judged line, the report's Point Inventory, Analyze's evidence panel).
+*Hide N points…* / *Show N points…* on a selection, all or nothing, audited per
+point. Built for CEI_JCI_N2's `AHU_7/*` local copies, which log 0; the stuck
+card suggests hiding a copy and says hiding a real sensor drops it from
+reports. Migration `20261120140000_bas_hidden_points_leave_analysis` re-states
+the two column comments only. `WHY-ITS-BUILT-THIS-WAY.md` § 92; `runbook.md` ->
+*A point is missing from a report or from Analyze...*, *A via-parent station:
+"Collected through ..."...*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

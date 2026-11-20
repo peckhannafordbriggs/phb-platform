@@ -26,6 +26,7 @@ import {
   describeAssignmentResult,
   describeLogin,
   describeReach,
+  describeThroughParent,
   fetchBasSettings,
   formatTimestamp,
   runAssignmentNow,
@@ -718,7 +719,9 @@ function BuildingRow({
                     values.connectionMode === "via_parent"
                       ? values.parentStationId
                       : null,
-                  tlsSha256: values.tlsSha256 || null,
+                  // Never for a via-parent station: the parent's pin covers it.
+                  tlsSha256:
+                    values.connectionMode === "direct" ? values.tlsSha256 || null : null,
                 }),
               );
               if (ok) setAddingStation(false);
@@ -930,6 +933,46 @@ function StationRow({
   const reach = describeReach(station);
   const activity = describeActivity(station.activity);
   const login = describeLogin(station);
+  // A via-parent station has no login, address or certificate of its own: the
+  // collector reads it on its parent's connection (2026-11-20). An unassigned
+  // one is a via-parent row with no parent yet - nothing of its own either.
+  const throughParent = station.reach !== "direct";
+
+  // An UNASSIGNED row keeps the full form: nobody has said yet how it is
+  // reached, and "direct" is one of the answers.
+  if (editing && station.reach === "via_parent") {
+    // Only the names and the parent. Everything else a via-parent station
+    // could carry - an address, a fingerprint, a login - is its parent's.
+    return (
+      <StationForm
+        title={`Edit ${station.niagaraStationName}`}
+        stations={tree.allStations}
+        excludeStationId={station.stationId}
+        busy={busy}
+        viaParentOnly
+        initial={{
+          niagaraStationName: station.niagaraStationName,
+          displayName: station.displayName ?? "",
+          connectionMode: "via_parent",
+          baseUrl: "",
+          parentStationId: station.parentStationId ?? "",
+          tlsSha256: "",
+        }}
+        onCancel={() => setEditing(false)}
+        onSubmit={async (values) => {
+          const ok = await run(() =>
+            updateStation(station.stationId, {
+              niagaraStationName: values.niagaraStationName,
+              displayName: values.displayName || null,
+              parentStationId: values.parentStationId,
+            }),
+          );
+          if (ok) setEditing(false);
+          return ok;
+        }}
+      />
+    );
+  }
 
   if (editing) {
     return (
@@ -959,7 +1002,10 @@ function StationRow({
                 values.connectionMode === "via_parent"
                   ? values.parentStationId
                   : null,
-              tlsSha256: values.tlsSha256 || null,
+              // A fingerprint typed and then hidden by switching to via parent
+              // is not sent: the parent's pin covers a via-parent station.
+              tlsSha256:
+                values.connectionMode === "direct" ? values.tlsSha256 || null : null,
             }),
           );
           if (ok) setEditing(false);
@@ -1083,7 +1129,7 @@ function StationRow({
             </span>
           </>
         )}
-        {station.tlsSha256 !== null && (
+        {!throughParent && station.tlsSha256 !== null && (
           <>
             {" · "}
             <span title={station.tlsSha256}>
@@ -1100,17 +1146,21 @@ function StationRow({
 
       <AssumedCapacityControl station={station} busy={busy} run={run} />
 
-      <CredentialPanel
-        station={station}
-        available={tree.credentialStorage.available}
-        unavailableMessage={tree.credentialStorage.message}
-        // The banner above already says there is no login, in the words
-        // that matter. Saying it a second time here in different words is
-        // how one state starts to look like two.
-        quiet={login !== null}
-        busy={busy}
-        run={run}
-      />
+      {throughParent ? (
+        <ThroughParentLine station={station} />
+      ) : (
+        <CredentialPanel
+          station={station}
+          available={tree.credentialStorage.available}
+          unavailableMessage={tree.credentialStorage.message}
+          // The banner above already says there is no login, in the words
+          // that matter. Saying it a second time here in different words is
+          // how one state starts to look like two.
+          quiet={login !== null}
+          busy={busy}
+          run={run}
+        />
+      )}
 
       {assignment !== null && (
         <p className="mt-1 rounded-[var(--radius-control)] border px-3 py-1.5 text-xs" style={TONE_STYLE.ok} role="status">
@@ -1243,6 +1293,7 @@ function StationForm({
   initial,
   stations,
   excludeStationId,
+  viaParentOnly = false,
   busy,
   onSubmit,
   onCancel,
@@ -1252,6 +1303,12 @@ function StationForm({
   stations: BasSettingsTree["allStations"];
   /** The station being edited, which may not be offered as its own parent. */
   excludeStationId?: string;
+  /**
+   * Editing a via-parent station (2026-11-20): the names and the parent, and
+   * nothing else - no mode, no address, no fingerprint, because all three
+   * are the parent's.
+   */
+  viaParentOnly?: boolean;
   busy: boolean;
   onSubmit: (values: StationValues) => Promise<boolean>;
   onCancel: () => void;
@@ -1302,22 +1359,24 @@ function StationForm({
         />
       </Field>
 
-      <Field label="How its history reaches us">
-        <select
-          className={FIELD}
-          value={values.connectionMode}
-          onChange={(e) =>
-            set({ connectionMode: e.target.value as StationValues["connectionMode"] })
-          }
-        >
-          <option value="via_parent">
-            Imported by another station (via parent)
-          </option>
-          <option value="direct">The collector connects to it (direct)</option>
-        </select>
-      </Field>
+      {!viaParentOnly && (
+        <Field label="How its history reaches us">
+          <select
+            className={FIELD}
+            value={values.connectionMode}
+            onChange={(e) =>
+              set({ connectionMode: e.target.value as StationValues["connectionMode"] })
+            }
+          >
+            <option value="via_parent">
+              Imported by another station (via parent)
+            </option>
+            <option value="direct">The collector connects to it (direct)</option>
+          </select>
+        </Field>
+      )}
 
-      {values.connectionMode === "direct" ? (
+      {values.connectionMode === "direct" && !viaParentOnly ? (
         <>
           <Field
             label="Address"
@@ -1383,6 +1442,26 @@ function StationForm({
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * Where the login block would be, for a station read through its parent
+ * (2026-11-20). No "Set login": the collector never connects to a via-parent
+ * station, it reads the station's folder in the parent's history space on
+ * the parent's connection, so a login stored here would be used by nothing.
+ * Exported for tests.
+ */
+export function ThroughParentLine({ station }: { station: SettingsStation }) {
+  const line = describeThroughParent(station);
+  return (
+    <p
+      className="mt-2 text-xs"
+      style={{ color: line.tone === "ok" ? "var(--muted)" : TONE_INK[line.tone] }}
+      data-testid="bas-station-through-parent"
+    >
+      {line.label}
+    </p>
   );
 }
 

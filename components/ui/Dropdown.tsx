@@ -3,7 +3,18 @@
 import { ChevronDown } from "lucide-react";
 import { useId, useState } from "react";
 
-export type DropdownOption = { value: string; label: string };
+export type DropdownOption = {
+  value: string;
+  label: string;
+  /**
+   * Levels to indent this option in the open list, under the one above it
+   * (2026-11-20: a via-parent JACE under the JACE whose import carries it).
+   * The closed control shows the label alone. Absent or 0: as before.
+   */
+  indent?: number;
+  /** Muted text after the label in the open list only - a status, never the value. */
+  hint?: string;
+};
 
 /**
  * A select with the kit's own list. Click or Enter / Space / ArrowDown opens
@@ -133,7 +144,17 @@ export function Dropdown({
                 (i === active ? "bg-[var(--neutral-50)]" : "")
               }
             >
-              {o.label}
+              {o.indent ? (
+                <span style={{ paddingLeft: `${o.indent * 1.25}rem` }}>
+                  <span aria-hidden="true" className="mr-1 text-[var(--muted)]">↳</span>
+                  {o.label}
+                </span>
+              ) : (
+                o.label
+              )}
+              {o.hint ? (
+                <span className="ml-2 text-[0.6875rem] text-[var(--muted)]">{o.hint}</span>
+              ) : null}
             </li>
           ))}
         </ul>

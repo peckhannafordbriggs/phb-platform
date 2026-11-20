@@ -1585,6 +1585,79 @@ export function describeReach(station: {
   }
 }
 
+/**
+ * A station's own last collector pass, in a few words (2026-11-20).
+ *
+ * Its OWN: a via-parent station has run rows of its own since the collector
+ * reads it through its parent, and the parent's "ok" says nothing about
+ * whether this station's folder was there. `running` is a pass still open -
+ * or one that died open, which is how 6-19 November looked; the time beside
+ * it is when it started.
+ */
+export function describeStationPass(
+  lastPass: { status: string; at: string } | null,
+): { label: string; tone: Tone } {
+  if (lastPass === null) return { label: "no pass recorded", tone: "warn" };
+  const tone: Tone =
+    lastPass.status === "ok"
+      ? "ok"
+      : lastPass.status === "partial" || lastPass.status === "running"
+        ? "warn"
+        : "bad";
+  return { label: `last pass ${lastPass.status} ${formatTimestamp(lastPass.at)}`, tone };
+}
+
+/**
+ * The JACE picker's options: tree order as the service sent it, each
+ * via-parent station indented under its parent, its own last pass beside it
+ * in the open list (2026-11-20). One builder for Collection Health and Point
+ * Explorer, so the two pickers cannot disagree about the tree.
+ */
+export function stationPickerOptions(
+  stations: ReadonlyArray<{
+    stationId: string;
+    name: string;
+    depth: number;
+    lastPass: { status: string; at: string } | null;
+  }>,
+): Array<{ value: string; label: string; indent: number; hint: string }> {
+  return stations.map((row) => ({
+    value: row.stationId,
+    label: row.name,
+    indent: row.depth,
+    hint: describeStationPass(row.lastPass).label,
+  }));
+}
+
+/**
+ * What stands where the login block would be on a station that is not
+ * connected to directly (2026-11-20).
+ *
+ * A via-parent station is collected by reading its folder in its parent's
+ * oBIX history space, on the PARENT's connection - its address, login and
+ * certificate pin (phb-bas, collector/targets.py). It has no login of its
+ * own to set, and "No Niagara login stored / Set login" on its card told
+ * people to go and find one. An unassigned station - via parent with no
+ * parent chosen - is not collected at all; the collector reports it as
+ * MISCONFIGURED on every pass, and this says what fixes it.
+ */
+export function describeThroughParent(station: {
+  reach: string;
+  parentStationName: string | null;
+}): { label: string; tone: Tone } {
+  if (station.reach === "via_parent" && station.parentStationName !== null) {
+    return {
+      label: `Collected through ${station.parentStationName} - its login and certificate are used; this station has none of its own.`,
+      tone: "ok",
+    };
+  }
+  return {
+    label:
+      "Not collected - no parent chosen. Edit it and choose the station that imports its history.",
+    tone: "warn",
+  };
+}
+
 
 /**
  * The Settings write API (B7.3).
@@ -1755,6 +1828,35 @@ export const updatePointVisibility = (pointId: string, visible: boolean) =>
     `/points/${encodeURIComponent(pointId)}`,
     { method: "PATCH", body: JSON.stringify({ visible }) },
   );
+
+/**
+ * Hide or show a selection (2026-11-20). All or nothing; never collection.
+ * Hidden: still collected and in every data-loss figure, out of the browsing
+ * screens, reports, Analyze and the stuck-value check.
+ */
+export const bulkSetPointVisibility = (pointIds: string[], visible: boolean) =>
+  settingsWrite<{ points: number; changed: number; unchanged: number }>(
+    "/points/bulk-visibility",
+    { method: "POST", body: JSON.stringify({ pointIds, visible }) },
+  );
+
+/** What Hide / Show on a selection means, for its confirmation. */
+export function describeBulkVisibilityPlan(count: number, visible: boolean): string {
+  const noun = count === 1 ? "point" : "points";
+  return visible
+    ? `Show ${count} ${noun}? ${count === 1 ? "It returns" : "They return"} to the browsing screens, reports, Analyze and the stuck-value check.`
+    : `Hide ${count} ${noun}? ${count === 1 ? "It keeps" : "They keep"} being collected and still ${count === 1 ? "counts" : "count"} in every data-loss figure, but ${count === 1 ? "leaves" : "leave"} the browsing screens, reports, Analyze and the stuck-value check. For copies that log one value, such as a JACE's local copy of a station collected on its own.`;
+}
+
+/** What Hide / Show did. */
+export function describeBulkVisibilityResult(
+  result: { points: number; changed: number; unchanged: number },
+  visible: boolean,
+): string {
+  const verb = visible ? "Shown" : "Hidden";
+  const already = result.unchanged > 0 ? ` (${result.unchanged} already ${visible ? "shown" : "hidden"})` : "";
+  return `${verb}: ${result.changed} of ${result.points} ${result.points === 1 ? "point" : "points"}${already}.`;
+}
 
 /**
  * Set, change or clear what a person calls a point (B8.4). `null` clears it
@@ -2232,6 +2334,7 @@ export function stuckTone(count: number): Tone {
  */
 export const NOT_CHECKED_WORDS: Record<NotCheckedReason, string> = {
   not_collected: "not collected",
+  hidden: "hidden in Settings",
   no_role: "role not set",
   setpoint: "setpoint",
   state: "status or command point",
@@ -2266,10 +2369,30 @@ export function describeStuck(summary: PlausibilitySummary, suffix: string): str
   );
 }
 
+/**
+ * What a stuck-value finding suggests when the value is a COPY (2026-11-20).
+ *
+ * On CEI_JCI_N2 the AHU_7/* histories are the JACE's local copies of
+ * CEI_AHU_7's points and log 0 for ever; the real data is collected on
+ * CEI_AHU_7 itself. Such a point is flat by construction, and hiding it is
+ * the fix - it keeps being collected and leaves reports, Analyze and this
+ * check. A real sensor that has stopped is not fixed by hiding it, and the
+ * sentence says so, because hiding is the easy way to make the card go away.
+ */
+export const STUCK_HIDE_SUGGESTION =
+  "If this is a copy that only ever logs one value - a JACE's local copy of a history " +
+  "collected on its own station - hide it in Settings → Points: it keeps being collected and " +
+  "leaves reports, Analyze and this check. If it is a real sensor, go and look at it; hiding " +
+  "it takes it out of every report.";
+
 /** "Not checked: 4 with no role, 2 setpoints, 3 status or command points." Null when everything was. */
 export function describeNotChecked(summary: PlausibilitySummary): string | null {
   const parts: string[] = [];
   const n = summary.notChecked;
+  // Said, never folded away: hiding a point takes it out of this check
+  // (2026-11-20), and a check that quietly judged fewer points would read
+  // as more reassurance than it is.
+  if (n.hidden > 0) parts.push(`${n.hidden} hidden in Settings`);
   if (n.no_role > 0) parts.push(`${n.no_role} with no role`);
   if (n.setpoint > 0) parts.push(`${n.setpoint} ${n.setpoint === 1 ? "setpoint" : "setpoints"}`);
   if (n.state > 0) {
@@ -2306,7 +2429,7 @@ export function describeThresholds(): string {
     .map(([hours, kinds]) => `${kinds.join(", ")}: ${formatHours(hours)}`);
   return (
     `Flat for at least - ${groups.join(" · ")} - with at least ${MIN_READINGS} readings. ` +
-    `Setpoints, status and command points, and points with no role are not judged.`
+    `Setpoints, status and command points, points with no role, and hidden points are not judged.`
   );
 }
 

@@ -98,8 +98,12 @@ is in neither repository, because it is a fact about a building rather than a
 file. A third station row, `Side`, exists as a `via_parent` placeholder under
 PHBoffice in a project called Liberty; it was created through the Settings tab
 on 17 September at 10:02 by the module's administrator, has no points and no
-login, and is skipped by the collector. Whether it is staging for a real
-building is not recorded.
+login, and was skipped by the collector. **Since 2026-11-20 it is not skipped**:
+the collector reads every active via-parent station through its parent, so
+`Side` would be looked for as a folder in PHBoffice's history space and fail on
+every pass. If it is still registered and is not a real station, mark it
+inactive in Settings (or delete it - it has no points). Whether it is staging
+for a real building is not recorded.
 
 ---
 
@@ -1767,10 +1771,11 @@ that host, and whether the office PC is it for good is not decided here.
 **Multiple buildings, the way they were planned.** The 20 August plan was one
 central station importing other JACEs' histories over the NiagaraNetwork, so
 that no production JACE needed a firmware upgrade. **The office was connected
-directly instead** — on 4.10 it needed no upgrade — and `via_parent` stations
-have never been exercised; whether imported histories keep their source
-station's name under `/obix/histories/` is still unobserved. The schema and the
-filters support both routes.
+directly instead** — on 4.10 it needed no upgrade. The other route is now in
+use (2026-11-20): CEI_JCI_N2's history space holds `CEI_AHU_7`, `CEI_AHU_8`
+and `CEI_PLANT` as folders named after their source stations, and the
+collector reads each through CEI_JCI_N2's connection as a station of its own
+(phb-bas `collector/targets.py`; `WHY-ITS-BUILT-THIS-WAY.md` § 92).
 
 **Fixing the office JACE's clock, and decoding its six state codes.** Both are
 station-side or engineering work, both open, and the second is what stands

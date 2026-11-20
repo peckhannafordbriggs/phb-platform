@@ -96,9 +96,21 @@ export interface RecipientView {
   createdAt: string;
 }
 
-export interface ReportStationOption {
+/**
+ * One station in the station-subset picker, in tree order (2026-11-20): a
+ * via-parent station under the station whose import carries it.
+ */
+export interface StationPickerEntry {
   stationId: string;
   name: string;
+  /** Read through its parent by the collector; never connected to. */
+  viaParent: boolean;
+  depth: number;
+  /** The station above it in this building's list, or null. */
+  parentName: string | null;
+}
+
+export interface ReportStationOption extends StationPickerEntry {
   selected: boolean;
 }
 
@@ -166,7 +178,8 @@ export interface ReportSiteOption {
   name: string;
   timezone: string;
   projectName: string;
-  stations: Array<{ stationId: string; name: string }>;
+  /** Every station on the building, in tree order. None ticked means all of them. */
+  stations: StationPickerEntry[];
 }
 
 /** An employee a module admin may transfer a report to (Phase 3). */

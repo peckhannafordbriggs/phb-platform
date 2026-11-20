@@ -47,7 +47,9 @@ import {
   type ReportStateChange,
   type ReportSummary,
   type ReportsList,
+  type StationPickerEntry,
 } from "./types";
+import { orderStationTree } from "../station-tree";
 import type {
   AddRecipientInput,
   CreateReportInput,
@@ -117,6 +119,15 @@ function parseId(text: string): bigint | null {
 const notFound = () =>
   new BasError("report_not_found", "That report does not exist, or you do not have access to it.");
 
+/** What the station-subset picker needs of a station (2026-11-20: its parent and mode too). */
+const STATION_OPTION_SELECT = {
+  stationId: true,
+  displayName: true,
+  niagaraStationName: true,
+  parentStationId: true,
+  connectionMode: true,
+} as const;
+
 const DETAIL_INCLUDE = {
   owner: { select: { id: true, email: true, firstName: true, lastName: true } },
   site: {
@@ -125,7 +136,7 @@ const DETAIL_INCLUDE = {
       name: true,
       timezone: true,
       stations: {
-        select: { stationId: true, displayName: true, niagaraStationName: true },
+        select: STATION_OPTION_SELECT,
         orderBy: { stationId: "asc" },
       },
     },
@@ -199,6 +210,38 @@ function personName(p: { firstName: string; lastName: string; email: string }): 
 
 function stationName(s: { displayName: string | null; niagaraStationName: string }): string {
   return s.displayName ?? s.niagaraStationName;
+}
+
+/**
+ * A building's stations for the station-subset picker, as a tree
+ * (2026-11-20): a via-parent station - collected through its parent, with
+ * points of its own - listed under the station whose import carries it. Every
+ * one of them is in a report's scope when none is ticked.
+ */
+function stationTree(
+  rows: ReadonlyArray<{
+    stationId: bigint;
+    displayName: string | null;
+    niagaraStationName: string;
+    parentStationId: bigint | null;
+    connectionMode: string;
+  }>,
+): StationPickerEntry[] {
+  return orderStationTree(
+    rows.map((s) => ({
+      stationId: s.stationId.toString(),
+      parentStationId: s.parentStationId?.toString() ?? null,
+      name: stationName(s),
+      siteName: "",
+      viaParent: s.connectionMode === "via_parent",
+    })),
+  ).map((s) => ({
+    stationId: s.stationId,
+    name: s.name,
+    viaParent: s.viaParent,
+    depth: s.depth,
+    parentName: s.parentName,
+  }));
 }
 
 function toWindow(value: string): AnalysisWindow {
@@ -299,10 +342,9 @@ function toDetail(row: DetailRow, viewer: Viewer): ReportDetail {
   return {
     ...toSummary(row, viewer, row.site.stations.length),
     stationIds: [...selected],
-    stations: row.site.stations.map((s) => ({
-      stationId: s.stationId.toString(),
-      name: stationName(s),
-      selected: selected.has(s.stationId.toString()),
+    stations: stationTree(row.site.stations).map((s) => ({
+      ...s,
+      selected: selected.has(s.stationId),
     })),
     questions: row.questions.map(toQuestionView),
     recipients: row.recipients.map(toRecipientView),
@@ -381,7 +423,7 @@ export async function listReportOptions(viewer: Viewer): Promise<ReportOptions> 
       timezone: true,
       project: { select: { name: true } },
       stations: {
-        select: { stationId: true, displayName: true, niagaraStationName: true },
+        select: STATION_OPTION_SELECT,
         orderBy: { stationId: "asc" },
       },
     },
@@ -393,7 +435,7 @@ export async function listReportOptions(viewer: Viewer): Promise<ReportOptions> 
     name: s.name,
     timezone: s.timezone,
     projectName: s.project.name,
-    stations: s.stations.map((st) => ({ stationId: st.stationId.toString(), name: stationName(st) })),
+    stations: stationTree(s.stations),
   }));
 
   const owners: OwnerOption[] = admin

@@ -257,6 +257,12 @@ export interface InventoryDocument {
    * Absent on documents stored before that day.
    */
   unroled?: Array<{ stationName: string; count: number }>;
+  /**
+   * Collected points hidden in Settings, per station, with at least one
+   * (2026-11-20). Left out of the report entirely. Absent on documents stored
+   * before that day.
+   */
+  hidden?: Array<{ stationName: string; count: number }>;
 }
 
 export interface SummaryDocument {

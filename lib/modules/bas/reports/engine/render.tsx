@@ -465,6 +465,19 @@ export function unroledLine(u: { stationName: string; count: number }): string {
   );
 }
 
+/**
+ * The Point Inventory's line for a station's hidden points (2026-11-20): a
+ * person hid them in Settings - typically a JACE's local copies of a station
+ * collected on its own - and the report leaves them out entirely.
+ */
+export function hiddenLine(u: { stationName: string; count: number }): string {
+  const one = u.count === 1;
+  return (
+    `${u.count} point${one ? "" : "s"} on ${u.stationName} ${one ? "is" : "are"} hidden in Settings ` +
+    `and ${one ? "was" : "were"} left out of this report; ${one ? "it is" : "they are"} still collected.`
+  );
+}
+
 function equipmentTypesText(found: ReadonlyArray<EquipmentTypeFound | string>): string {
   if (found.length === 0) return "none in scope";
   return found.map((t) => (typeof t === "string" ? t : `${t.label} × ${t.count}`)).join(", ");
@@ -726,6 +739,9 @@ export function ReportView({ document: doc, plannerDetails }: { document: Report
       </p>
       {(inventory.unroled ?? []).map((u) => (
         <p key={u.stationName}>{unroledLine(u)}</p>
+      ))}
+      {(inventory.hidden ?? []).map((u) => (
+        <p key={`hidden-${u.stationName}`}>{hiddenLine(u)}</p>
       ))}
       <p className="muted">
         {inventory.pointsInScope} points on {inventory.equipmentInScope} pieces of equipment were in scope.

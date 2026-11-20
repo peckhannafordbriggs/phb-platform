@@ -72,6 +72,9 @@ import {
   formatReadingValue,
   stuckTone,
   type Tone,
+  describeStationPass,
+  stationPickerOptions,
+  STUCK_HIDE_SUGGESTION,
 } from "./health-client";
 import type { PlausibilitySummary } from "@/lib/modules/bas/plausibility";
 import {
@@ -91,7 +94,7 @@ import {
 } from "@/lib/modules/bas/types";
 import { unitSymbol } from "@/lib/modules/bas/units";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
-import { Dropdown, Segmented } from "@/components/ui";
+import { Dropdown, Segmented, type DropdownOption } from "@/components/ui";
 
 /**
  * Collection Health - is data arriving, and is any of it about to be lost.
@@ -341,19 +344,21 @@ export function CollectionHealth({ canAdminister = false }: { canAdminister?: bo
             label="Project"
             value={health.selectedProjectId}
             onChange={(v) => setCascade(PROJECT_PARAM, v)}
-            options={health.projects.map((row) => [row.projectId, row.name])}
+            options={health.projects.map((row) => ({ value: row.projectId, label: row.name }))}
           />
           <Picker
             label="Building"
             value={health.selectedSiteId}
             onChange={(v) => setCascade(SITE_PARAM, v)}
-            options={health.sites.map((row) => [row.siteId, row.name])}
+            options={health.sites.map((row) => ({ value: row.siteId, label: row.name }))}
           />
           <Picker
             label="JACE"
             value={health.selectedStationId}
             onChange={(v) => setCascade(STATION_PARAM, v)}
-            options={health.stations.map((row) => [row.stationId, row.name])}
+            // Tree order: a via-parent JACE indented under the JACE whose
+          // import carries it, its own last pass beside it (2026-11-20).
+          options={stationPickerOptions(health.stations)}
           />
 
           <div className="flex items-center gap-2 text-sm">
@@ -571,6 +576,14 @@ export function CollectionHealth({ canAdminister = false }: { canAdminister?: bo
       <PointTable points={health.points} siteName={health.selectedSiteName} />
 
       {/* ------------------------------------------- runs: chart and history */}
+
+      {/*
+        Each JACE in the selection with ITS OWN last pass, a via-parent station
+        indented under the station whose import carries it (2026-11-20). The
+        runs table below is every pass in the window; this answers "and is
+        each station being collected?" without reading it.
+      */}
+      <StationPassTable stations={health.stations} />
 
       <RunTable health={health} />
 
@@ -1047,6 +1060,9 @@ export function StuckCard({
                     {p.trendKind === "cov" && " (change-of-value trend: no new record since)"}
                   </span>
                 </div>
+                <p className="mt-0.5 text-xs opacity-80" data-testid="bas-stuck-hide-suggestion">
+                  {STUCK_HIDE_SUGGESTION}
+                </p>
               </li>
             );
           })}
@@ -1471,6 +1487,68 @@ function RunChart({ health }: { health: CollectionHealthData }) {
   );
 }
 
+/**
+ * The stations in the selection, as a tree, each with its own last collector
+ * pass (2026-11-20). A via-parent station is collected through its parent's
+ * connection and has run rows of its own; it sits under the parent here so
+ * "CEI_AHU_7 failed while CEI_JCI_N2 is ok" reads as what it is - the child's
+ * folder, not the JACE. Exported for tests.
+ */
+export function StationPassTable({ stations }: { stations: CollectionHealthData["stations"] }) {
+  return (
+    <Panel title="Stations" count={stations.length}>
+      {stations.length === 0 ? (
+        <Empty>No station is registered for this selection.</Empty>
+      ) : (
+        <div className="max-h-72 overflow-auto">
+          <table className="w-full min-w-[34rem] border-collapse text-[0.8125rem]">
+            <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
+              <tr>
+                <Th>Station</Th>
+                <Th>Building</Th>
+                <Th>Last pass</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {stations.map((row) => {
+                const pass = describeStationPass(row.lastPass);
+                return (
+                  <tr
+                    key={row.stationId}
+                    className="border-t border-[var(--divider-soft)]"
+                    data-testid="bas-station-pass-row"
+                    data-depth={row.depth}
+                  >
+                    <td className="px-3 py-2">
+                      <span style={{ paddingLeft: `${row.depth * 1.25}rem` }}>
+                        {row.depth > 0 && (
+                          <span aria-hidden="true" className="mr-1 text-[var(--muted)]">↳</span>
+                        )}
+                        {row.name}
+                      </span>
+                      {row.viaParent && (
+                        <span className="ml-2 text-xs text-[var(--muted)]">
+                          {row.parentName !== null
+                            ? `through ${row.parentName}`
+                            : "via parent"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-[var(--muted)]">{row.siteName}</td>
+                    <td className="px-3 py-2">
+                      <ToneBadge tone={pass.tone}>{pass.label}</ToneBadge>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function RunTable({ health }: { health: CollectionHealthData }) {
   const runs = health.runs;
 
@@ -1500,6 +1578,7 @@ function RunTable({ health }: { health: CollectionHealthData }) {
             <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left">
               <tr>
                 <Th>Started</Th>
+                <Th>Station</Th>
                 <Th>Status</Th>
                 <Th align="right">Points</Th>
                 <Th align="right">Records</Th>
@@ -1511,6 +1590,9 @@ function RunTable({ health }: { health: CollectionHealthData }) {
                 <tr key={run.runId} className="border-t border-[var(--divider-soft)]">
                   <td className="px-3 py-2 text-[var(--muted)]">
                     {formatTimestamp(run.startedAt)}
+                  </td>
+                  <td className="px-3 py-2">
+                    {run.stationName ?? <span className="text-[var(--muted)]">no station</span>}
                   </td>
                   <td className="px-3 py-2">
                     <span
@@ -1699,7 +1781,7 @@ function Picker({
 }: {
   label: string;
   value: string | null;
-  options: Array<[string, string]>;
+  options: DropdownOption[];
   onChange: (value: string | null) => void;
 }) {
   return (
@@ -1712,7 +1794,7 @@ function Picker({
         disabled={options.length === 0}
         options={[
           { value: ALL_SITES, label: "All" },
-          ...options.map(([key, text]) => ({ value: key, label: text })),
+          ...options,
         ]}
         className="min-w-44"
       />

@@ -28,6 +28,7 @@ import {
   describeSourceRows,
   describeTimeRange,
   describeUnclassified,
+  describeHiddenInScope,
   describeUnknownHorizon,
   fetchAnalyzeStatus,
   gapsTone,
@@ -811,6 +812,7 @@ function ProvenancePanel({
   const gTone = gapsTone(provenance);
   const horizon = describeUnknownHorizon(provenance);
   const unclassified = describeUnclassified(provenance);
+  const hiddenInScope = describeHiddenInScope(provenance);
 
   return (
     <div>
@@ -889,6 +891,11 @@ function ProvenancePanel({
           {unclassified.length > 0 && (
             <p className="mt-1.5 text-xs" style={{ color: TONE_INK.warn }}>
               {unclassified}
+            </p>
+          )}
+          {hiddenInScope.length > 0 && (
+            <p className="mt-1.5 text-xs" style={{ color: TONE_INK.warn }} data-testid="bas-analyze-hidden-in-scope">
+              {hiddenInScope}
             </p>
           )}
         </Row>

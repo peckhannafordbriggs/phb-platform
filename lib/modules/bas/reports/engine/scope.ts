@@ -125,6 +125,13 @@ export interface Scope {
   stationOfUnit: Map<string, string>;
   occupancyByStation: Map<string, OccupancySource>;
   outdoor: { avgF: number; highF: number; lowF: number; pointName: string } | null;
+  /**
+   * Collected points a person HID in Settings, per station (2026-11-20). Not in
+   * `points`: a hidden point is left out of the report - typically a JACE's
+   * local copy of a station collected on its own, logging 0 - and the Point
+   * Inventory says how many, so leaving them out is never silent.
+   */
+  hiddenByStation: Map<string, number>;
 }
 
 interface PointRow {
@@ -155,7 +162,7 @@ export async function resolveScope(def: DefinitionForRun, range: Interval): Prom
   const stations = stationRows.map((s) => ({ stationId: s.stationId.toString(), name: s.displayName ?? s.niagaraStationName }));
   const stationIds = stationRows.map((s) => s.stationId);
   if (stationIds.length === 0) {
-    return { stations, points: [], pointsByStation: new Map(), units: [], stationOfUnit: new Map(), occupancyByStation: new Map(), outdoor: null };
+    return { stations, points: [], pointsByStation: new Map(), units: [], stationOfUnit: new Map(), occupancyByStation: new Map(), outdoor: null, hiddenByStation: new Map() };
   }
 
   const pointRows = await prisma.$queryRaw<PointRow[]>`
@@ -173,7 +180,17 @@ export async function resolveScope(def: DefinitionForRun, range: Interval): Prom
       LEFT JOIN bas_point_roles r ON r.point_role = p.point_role
      WHERE p.station_id IN (${Prisma.join(stationIds)})
        AND p.is_active
+       -- Hidden in Settings (2026-11-20): still collected, never in a report.
+       AND p.is_visible
      ORDER BY p.point_id`;
+
+  const hiddenRows = await prisma.$queryRaw<Array<{ station_id: bigint; n: number }>>`
+    SELECT p.station_id, count(*)::int AS n
+      FROM bas_points p
+     WHERE p.station_id IN (${Prisma.join(stationIds)})
+       AND p.is_active AND NOT p.is_visible
+     GROUP BY p.station_id`;
+  const hiddenByStation = new Map(hiddenRows.map((r) => [r.station_id.toString(), r.n]));
 
   const ids = pointRows.map((p) => p.point_id);
   const [series, gaps] = await Promise.all([loadSeries(ids, range), loadGaps(ids, range)]);
@@ -263,7 +280,7 @@ export async function resolveScope(def: DefinitionForRun, range: Interval): Prom
           pointName: oat.name,
         };
 
-  return { stations, points, pointsByStation, units, stationOfUnit, occupancyByStation, outdoor };
+  return { stations, points, pointsByStation, units, stationOfUnit, occupancyByStation, outdoor, hiddenByStation };
 }
 
 function round1(n: number): number {

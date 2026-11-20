@@ -84,7 +84,8 @@ export function plausibilityLateral(p: Prisma.Sql, pr: Prisma.Sql): Prisma.Sql {
         run.first_ts        AS pl_flat_since,
         hist.first_ts       AS pl_history_start,
         win.n               AS pl_window_readings
-      FROM (SELECT 1 WHERE ${p}.is_active AND ${checkedRoleSql(pr)} AND ${checkedTypeSql(p)}) AS checked
+      -- A hidden point is never judged (2026-11-20); the judge says "hidden".
+      FROM (SELECT 1 WHERE ${p}.is_active AND ${p}.is_visible AND ${checkedRoleSql(pr)} AND ${checkedTypeSql(p)}) AS checked
       LEFT JOIN LATERAL (
         SELECT r.ts, r.value_num, r.value_bool, r.value_str
           FROM bas_readings r

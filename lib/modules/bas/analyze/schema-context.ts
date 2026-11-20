@@ -204,7 +204,15 @@ export async function buildSchemaContext(pool: Pool): Promise<SchemaContext> {
         ORDER BY s.name, station`,
       [],
     ),
-    queryAsAnalyzeRole<{ n: string }>(pool, `SELECT count(*)::text AS n FROM bas_points`, []),
+    // Hidden points (2026-11-20) are counted apart and never listed: a person
+    // hid them in Settings because they are not building data.
+    queryAsAnalyzeRole<{ n: string; hidden: string }>(
+      pool,
+      `SELECT count(*) FILTER (WHERE is_visible)::text AS n,
+              count(*) FILTER (WHERE NOT is_visible)::text AS hidden
+         FROM bas_points`,
+      [],
+    ),
     queryAsAnalyzeRole<GapSummaryRow>(
       pool,
       `SELECT count(*)::text AS n,
@@ -216,6 +224,7 @@ export async function buildSchemaContext(pool: Pool): Promise<SchemaContext> {
   ]);
 
   const pointCount = Number(pointTotal[0]?.n ?? 0);
+  const hiddenCount = Number(pointTotal[0]?.hidden ?? 0);
   const points =
     pointCount <= LIST_POINTS_UP_TO
       ? await queryAsAnalyzeRole<PointRow>(
@@ -232,6 +241,7 @@ export async function buildSchemaContext(pool: Pool): Promise<SchemaContext> {
              JOIN bas_stations st ON st.station_id = p.station_id
              JOIN bas_sites s ON s.site_id = st.site_id
              LEFT JOIN bas_sync_checkpoints c ON c.point_id = p.point_id
+            WHERE p.is_visible
             ORDER BY s.name, station, name, p.point_id`,
           [],
         )
@@ -295,6 +305,15 @@ export async function buildSchemaContext(pool: Pool): Promise<SchemaContext> {
   );
   lines.push("A gap means the platform was not watching; it never means the equipment was off.");
   lines.push("");
+
+  if (hiddenCount > 0) {
+    lines.push(
+      `## Hidden points: ${hiddenCount}, not listed below. A person hid them in Settings - they are ` +
+        `collected but are not building data (typically a controller's local copy of another ` +
+        `station's history, logging 0). Leave them out: add p.is_visible to every query over points.`,
+    );
+    lines.push("");
+  }
 
   if (points.length > 0) {
     lines.push(`## Points (${points.length}; point_id, name, Niagara history name, station, site, role, unit, type, collected, readings held, last record)`);

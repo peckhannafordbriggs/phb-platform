@@ -317,13 +317,24 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
           />
         </Field>
         {site !== null && site.stations.length > 1 && (
-          <Field label="Stations" hint="None ticked means every station on the building.">
-            <ul className="mt-1 flex flex-wrap gap-3 text-sm">
+          <Field
+            label="Stations"
+            hint="None ticked means every station on the building, including those collected through another station."
+          >
+            {/*
+              A tree (2026-11-20): a via-parent station under the station whose
+              import carries it. Ticking a parent does not tick its children -
+              each is a station of its own, with points of its own.
+            */}
+            <ul className="mt-1 space-y-1 text-sm" data-testid="bas-report-station-picker">
               {site.stations.map((st) => {
                 const checked = form.stationIds.includes(st.stationId);
                 return (
-                  <li key={st.stationId}>
+                  <li key={st.stationId} style={{ paddingLeft: `${st.depth * 1.25}rem` }}>
                     <label className="flex items-center gap-1.5">
+                      {st.depth > 0 && (
+                        <span aria-hidden="true" className="text-[var(--muted)]">↳</span>
+                      )}
                       <input
                         type="checkbox"
                         checked={checked}
@@ -336,6 +347,11 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
                         }
                       />
                       {st.name}
+                      {st.viaParent && (
+                        <span className="text-xs text-[var(--muted)]">
+                          {st.parentName !== null ? `through ${st.parentName}` : "via parent"}
+                        </span>
+                      )}
                     </label>
                   </li>
                 );
