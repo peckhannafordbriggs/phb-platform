@@ -37,6 +37,7 @@ import {
 } from "./health-client";
 import {
   CRED_PARAM,
+  HISTORY_UNKNOWN,
   MODE_PARAM,
   SEARCH_PARAM,
   STATE_PARAM,
@@ -48,7 +49,8 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button, Dropdown, INPUT, SearchBar } from "@/components/ui";
 import { ToneBadge } from "./collection-health";
 import { TONE_INK, TONE_STYLE } from "./tone";
-import { StationPoints } from "./settings-points";
+import { NO_POINT_FILTERS, StationPoints } from "./settings-points";
+import { NIAGARA_DEFAULT_CAPACITY } from "@/lib/modules/bas/constants";
 // Re-exported so the tests that render the list statically keep one import path.
 export { PointsTable } from "./settings-points";
 
@@ -914,13 +916,17 @@ function StationRow({
   run: Run;
 }) {
   const [editing, setEditing] = useState(false);
-  const [showPoints, setShowPoints] = useState(false);
   // What the last "Run assignment now" did, in words, until the next press.
   const [assignment, setAssignment] = useState<string | null>(null);
   // The tree's search term, read from the URL like every other filter, so
   // the Points list under a station that matched on a point's name opens
   // narrowed to that term (B8.4).
-  const initialPointQuery = readSettingsFilters(useSearchParams()).q;
+  const urlFilters = readSettingsFilters(useSearchParams());
+  const initialPointQuery = urlFilters.q;
+  // Arrived from a "history size unknown" link (2026-11-20): a station with
+  // such points opens its list on them, and one without stays closed.
+  const historyLink = urlFilters.history === HISTORY_UNKNOWN && station.historyUnknown > 0;
+  const [showPoints, setShowPoints] = useState(historyLink);
   const reach = describeReach(station);
   const activity = describeActivity(station.activity);
   const login = describeLogin(station);
@@ -1069,6 +1075,14 @@ function StationRow({
         {/* The automatic assignment (2026-11-19): what the pass wrote, what waits for a person. */}
         {" · "}
         {describeAssignmentCounts(station)}
+        {station.historyUnknown > 0 && (
+          <>
+            {" · "}
+            <span data-testid="bas-station-history-unknown">
+              {station.historyUnknown} history size unknown
+            </span>
+          </>
+        )}
         {station.tlsSha256 !== null && (
           <>
             {" · "}
@@ -1083,6 +1097,8 @@ function StationRow({
           </>
         )}
       </p>
+
+      <AssumedCapacityControl station={station} busy={busy} run={run} />
 
       <CredentialPanel
         station={station}
@@ -1110,9 +1126,90 @@ function StationRow({
           stationId={station.stationId}
           expectedTotal={station.totalPoints}
           initialQuery={initialPointQuery}
+          initialFilters={historyLink ? { ...NO_POINT_FILTERS, history: "unknown" } : NO_POINT_FILTERS}
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The station's assumed history capacity (2026-11-20): what every point on it
+ * whose own capacity is not entered is judged against, by the horizon in
+ * bas_v_collection_health and by the collector's roll guard. One number per
+ * station, Niagara's default unless somebody knows better; each screen that
+ * uses it says "assumed" beside the result. Exported for tests.
+ */
+export function AssumedCapacityControl({
+  station,
+  busy,
+  run,
+}: {
+  station: SettingsStation;
+  busy: boolean;
+  run: Run;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(station.assumedCapacity));
+  const isDefault = station.assumedCapacity === NIAGARA_DEFAULT_CAPACITY;
+
+  if (!editing) {
+    return (
+      <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-[var(--muted)]" data-testid="bas-assumed-capacity">
+        <span>
+          Assumed history capacity:{" "}
+          <span className="font-medium text-[var(--foreground)]">{station.assumedCapacity.toLocaleString("en-US")} records</span>
+          {isDefault ? " (Niagara's default)" : ` (Niagara's default is ${NIAGARA_DEFAULT_CAPACITY})`} — used for any point here
+          whose capacity is not entered.
+        </span>
+        <button
+          type="button"
+          className="underline decoration-dotted underline-offset-2 hover:text-[var(--foreground)] disabled:opacity-50"
+          disabled={busy}
+          onClick={() => {
+            setValue(String(station.assumedCapacity));
+            setEditing(true);
+          }}
+        >
+          Change
+        </button>
+      </p>
+    );
+  }
+
+  const parsed = Number(value);
+  const valid = Number.isInteger(parsed) && parsed >= 1 && parsed <= 1_000_000;
+  return (
+    <form
+      className="mt-1 flex flex-wrap items-center gap-2 text-xs"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!valid) return;
+        void run(async () => {
+          await updateStation(station.stationId, { assumedCapacity: parsed });
+          setEditing(false);
+        });
+      }}
+    >
+      <label className="text-[var(--muted)]" htmlFor={`assumed-${station.stationId}`}>
+        Assumed history capacity
+      </label>
+      <input
+        id={`assumed-${station.stationId}`}
+        className={INPUT + " h-8 w-28"}
+        inputMode="numeric"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        aria-invalid={!valid}
+      />
+      <span className="text-[var(--muted)]">records. Niagara&apos;s default is {NIAGARA_DEFAULT_CAPACITY}.</span>
+      <Button size="sm" type="submit" disabled={busy || !valid}>
+        Save
+      </Button>
+      <Button size="sm" onClick={() => setEditing(false)}>
+        Cancel
+      </Button>
+    </form>
   );
 }
 

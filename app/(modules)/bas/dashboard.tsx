@@ -4,7 +4,13 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BasDashboard, DashboardProject } from "@/lib/modules/bas/types";
 import { basFigure } from "@/lib/home/bas-figure";
-import { ApiError, fetchDashboard } from "./health-client";
+import {
+  ApiError,
+  HISTORY_UNKNOWN_SETTINGS_HREF,
+  RISK_EXPLANATION,
+  describeHistoryUnknown,
+  fetchDashboard,
+} from "./health-client";
 import { dashboardCardHref } from "./filters";
 import { projectFills } from "./project-colours";
 
@@ -164,6 +170,7 @@ export function DashboardCards({
             <ProjectCard
               project={project}
               fill={fills.get(project.projectId) ?? DEFAULT_FILL}
+              canAdminister={canAdminister}
             />
           </li>
         ))}
@@ -192,7 +199,15 @@ const DEFAULT_FILL = "var(--phb-cyan-ink)";
  * is full white - measured at 4.82 or better on every fill; Home's 85% white
  * would not clear AA on the inks.
  */
-function ProjectCard({ project, fill }: { project: DashboardProject; fill: string }) {
+function ProjectCard({
+  project,
+  fill,
+  canAdminister,
+}: {
+  project: DashboardProject;
+  fill: string;
+  canAdminister: boolean;
+}) {
   // Only when there is something to have health. A project with no active
   // point shows its counts and stops: "No points at risk" over zero points
   // would be a verdict about nothing.
@@ -239,6 +254,33 @@ function ProjectCard({ project, fill }: { project: DashboardProject; fill: strin
         </div>
       )}
 
+      {/*
+        The muted line (2026-11-20): points whose history size cannot be
+        worked out. Never in the figure above and never marked - full white
+        like every word on the fill (four-fifths white does not clear AA on
+        the inks), set apart by weight and size, not by colour. A module
+        admin gets a link to Settings -> Points filtered to them; everyone
+        else gets the words, because Settings would answer them 404.
+      */}
+      {project.health !== null && describeHistoryUnknown(project.health.pointsHistoryUnknown) !== null && (
+        <p
+          className="mt-3 text-xs font-normal text-white"
+          data-testid="bas-dashboard-history-unknown"
+          title={RISK_EXPLANATION.roll_horizon_unknown}
+        >
+          {canAdminister ? (
+            <Link
+              href={HISTORY_UNKNOWN_SETTINGS_HREF}
+              className="relative z-30 underline decoration-dotted underline-offset-2"
+            >
+              {describeHistoryUnknown(project.health.pointsHistoryUnknown)}
+            </Link>
+          ) : (
+            describeHistoryUnknown(project.health.pointsHistoryUnknown)
+          )}
+        </p>
+      )}
+
       <p className="mt-4 text-xs text-white" data-testid="bas-dashboard-counts">
         {describeCounts(project)}
       </p>
@@ -258,16 +300,29 @@ function ProjectCard({ project, fill }: { project: DashboardProject; fill: strin
     );
   }
 
+  /*
+    The whole card is still the link to the project (2026-11-20), now as a
+    link laid OVER the card rather than the card itself, because the card
+    can carry a second link - the history-unknown line to Settings - and a
+    link inside a link is invalid HTML that browsers repair by splitting
+    the card. The overlay is labelled with the project's name, so the card
+    reads the same to a screen reader; the Settings link sits above it.
+  */
   return (
-    <Link
-      href={href}
+    <div
       data-testid="bas-dashboard-card"
       data-fill={fill}
       style={style}
-      className="card--filled group block h-full overflow-hidden p-6 transition-transform hover:-translate-y-0.5 focus-visible:-translate-y-0.5"
+      className="card--filled group relative block h-full overflow-hidden p-6 transition-transform hover:-translate-y-0.5 focus-within:-translate-y-0.5"
     >
+      <Link
+        href={href}
+        aria-label={project.name}
+        data-testid="bas-dashboard-card-link"
+        className="absolute inset-0 z-20 rounded-[inherit]"
+      />
       {body}
-    </Link>
+    </div>
   );
 }
 

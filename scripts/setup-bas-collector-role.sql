@@ -231,7 +231,9 @@ INSERT INTO collector_none (relname, reason) VALUES
     -- 2026-11-12: the Reports safety ceiling, a module setting.
     ('bas_report_settings',     'the Reports safety ceiling'),
     -- 2026-11-17: report email addresses and send state.
-    ('bas_report_deliveries',   'report email deliveries');
+    ('bas_report_deliveries',   'report email deliveries'),
+    -- 2026-11-20: trend summaries the model wrote, with their cost.
+    ('bas_trend_summaries',     'Point Explorer trend summaries');
 
 -- Every sequence owned by a collector_rw table. The gate below derives that set
 -- from the catalog and refuses if this list differs from it, so a new serial
@@ -514,6 +516,7 @@ BEGIN
     IF has_table_privilege('bas_collector', 'public.bas_report_recipients', 'SELECT')        THEN fail := fail || 'CAN SELECT bas_report_recipients'; END IF;
     IF has_table_privilege('bas_collector', 'public.bas_report_definitions', 'SELECT')       THEN fail := fail || 'CAN SELECT bas_report_definitions'; END IF;
     IF has_table_privilege('bas_collector', 'public.bas_report_settings', 'SELECT')          THEN fail := fail || 'CAN SELECT bas_report_settings'; END IF;
+    IF has_table_privilege('bas_collector', 'public.bas_trend_summaries', 'SELECT')          THEN fail := fail || 'CAN SELECT bas_trend_summaries'; END IF;
     IF has_table_privilege('bas_collector', 'public.bas_site_occupancy', 'SELECT')           THEN fail := fail || 'CAN SELECT bas_site_occupancy'; END IF;
     IF has_table_privilege('bas_collector', 'public.audit_events', 'SELECT')                 THEN fail := fail || 'CAN SELECT audit_events'; END IF;
     IF has_table_privilege('bas_collector', 'public._prisma_migrations', 'SELECT')           THEN fail := fail || 'CAN SELECT _prisma_migrations'; END IF;

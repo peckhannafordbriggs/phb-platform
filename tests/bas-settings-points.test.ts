@@ -431,7 +431,8 @@ describe("the screen says so when the list falls short", () => {
     equipmentName: null,
     unit: null,
     suggestion: null,
-    horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
+    horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null, capacitySource: "entered", intervalS: null, intervalSource: null },
+    rollRisk: null,
     collected: true,
     inactiveReason: null,
     completeness: "complete",
@@ -614,10 +615,15 @@ describe("every point is shown with its real state", () => {
       currentHours: null,
       stationCount: 320,
       capacity: 500,
+      capacitySource: "entered",
+      intervalS: null,
+      intervalSource: null,
     });
-    // No capacity, no checkpoint: unknown, and it says so.
+    // No capacity, no checkpoint: unknown, and it says so - judged against
+    // the station's assumed capacity, which it names as assumed.
     expect(byName(NAMES.bare)?.horizon.state).toBe("unknown");
-    expect(byName(NAMES.bare)?.horizon.capacity).toBeNull();
+    expect(byName(NAMES.bare)?.horizon.capacity).toBe(500);
+    expect(byName(NAMES.bare)?.horizon.capacitySource).toBe("assumed");
     // An uncollected point still carries the station's answer about its
     // buffer - the list filters nothing.
     expect(byName(NAMES.inactive)?.horizon.state).toBe("unknown");

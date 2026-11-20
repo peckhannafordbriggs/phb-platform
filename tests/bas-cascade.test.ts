@@ -14,6 +14,7 @@ import { requireModuleAccess } from "@/lib/authz";
 import { describeHiddenRisk, scopeSuffix } from "@/lib/modules/bas/types";
 import {
   CASCADE_CLEARS,
+  COMPARE_PARAM,
   PROJECT_PARAM,
   SITE_PARAM,
   STATION_PARAM,
@@ -572,9 +573,12 @@ describe("all four live in the URL and higher levels clear lower ones", () => {
       SITE_PARAM,
       STATION_PARAM,
       POINT_PARAM,
+      COMPARE_PARAM,
     ]);
-    expect(CASCADE_CLEARS[SITE_PARAM]).toEqual([STATION_PARAM, POINT_PARAM]);
-    expect(CASCADE_CLEARS[STATION_PARAM]).toEqual([POINT_PARAM]);
+    expect(CASCADE_CLEARS[SITE_PARAM]).toEqual([STATION_PARAM, POINT_PARAM, COMPARE_PARAM]);
+    expect(CASCADE_CLEARS[STATION_PARAM]).toEqual([POINT_PARAM, COMPARE_PARAM]);
+    // Compare mode (2026-11-20): the comparison goes with the point it compares against.
+    expect(CASCADE_CLEARS[POINT_PARAM]).toEqual([COMPARE_PARAM]);
   });
 
   it("survives a round trip through the route", async () => {

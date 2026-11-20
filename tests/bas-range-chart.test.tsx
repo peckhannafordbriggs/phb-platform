@@ -229,6 +229,9 @@ function payload(overrides: Partial<PointExplorer>): PointExplorer {
       siteName: "PHB Spring Grove",
       valueKind: "numeric",
       states: null,
+      stationId: "1",
+      equipmentId: null,
+      equipmentName: null,
     },
     collectionIntervalS: 300,
     stationClockOffsetS: 0,
@@ -258,6 +261,12 @@ function payload(overrides: Partial<PointExplorer>): PointExplorer {
       maxRaw: 10_000,
     },
     dataGaps: [],
+    expectedInterval: { seconds: null, source: null, spacing: "insufficient", breakThresholdS: 14_400 },
+    breaks: { count: 0, longestHours: null, missingShare: 0, periodHours: 0, breaks: [] },
+    history: null,
+    outOfRange: null,
+    comparison: null,
+    comparisonNote: null,
     ...overrides,
   };
 }

@@ -129,20 +129,23 @@ describe("the five tiles", () => {
     expect(result.totals.unclassifiedPoints).toBe(1);
   });
 
-  it("counts every risk state except ok as at risk", async () => {
+  it("counts a real roll risk as at risk, and an unknown history size beside it", async () => {
     const result = await health();
 
-    // Grafana counts data_lost, at_risk, roll_horizon_unknown and
-    // never_collected in one tile. One point of the fixture is in each.
+    // One point of the fixture in each state. Grafana counted
+    // roll_horizon_unknown in the at-risk tile; since 2026-11-20 it is the
+    // muted "history size unknown" count beside the figure, never in it.
     expect(result.totals.riskCounts).toEqual({
       ok: 1,
       at_risk: 1,
       data_lost: 1,
+      short_horizon: 0,
       buffer_not_full: 0,
       roll_horizon_unknown: 1,
       never_collected: 1,
     });
-    expect(result.totals.pointsAtRisk).toBe(4);
+    expect(result.totals.pointsAtRisk).toBe(3);
+    expect(result.totals.pointsHistoryUnknown).toBe(1);
   });
 
   it("does not let an unknown roll horizon count as ok", async () => {
@@ -235,11 +238,16 @@ describe("the per-point table", () => {
       currentHours: null,
       stationCount: 500,
       capacity: 500,
+      capacitySource: "entered",
+      intervalS: 900,
+      intervalSource: "entered",
     });
     expect(byName(result, "Unknown")?.rollHorizonHours).toBeNull();
     expect(byName(result, "Unknown")?.horizonSource).toBeNull();
     expect(byName(result, "Unknown")?.horizon.state).toBe("unknown");
-    expect(byName(result, "Unknown")?.horizon.capacity).toBeNull();
+    // No capacity entered: the station's assumed one stands in, and says so.
+    expect(byName(result, "Unknown")?.horizon.capacity).toBe(500);
+    expect(byName(result, "Unknown")?.horizon.capacitySource).toBe("assumed");
   });
 
   /**
@@ -269,11 +277,15 @@ describe("the per-point table", () => {
         currentHours: null,
         stationCount: 320,
         capacity: 500,
+        capacitySource: "entered",
+        intervalS: null,
+        intervalSource: null,
       });
       expect(result.totals.riskCounts.buffer_not_full).toBe(1);
       expect(result.totals.riskCounts.roll_horizon_unknown).toBe(0);
-      // Was 4 with this point counted as unknown.
+      // Not at risk either way; and no longer an unknown history size.
       expect(result.totals.pointsAtRisk).toBe(3);
+      expect(result.totals.pointsHistoryUnknown).toBe(0);
     });
 
     it("lets a building whose only non-ok point is not full read as none at risk", async () => {
@@ -679,7 +691,12 @@ describe("the building filter", () => {
       all.totals.pointsAtRisk,
       a.totals.pointsAtRisk,
       b.totals.pointsAtRisk,
-    ]).toEqual([5, 4, 1]);
+    ]).toEqual([3, 3, 0]);
+    expect([
+      all.totals.pointsHistoryUnknown,
+      a.totals.pointsHistoryUnknown,
+      b.totals.pointsHistoryUnknown,
+    ]).toEqual([2, 1, 1]);
 
     // A tile that silently ignored the filter is worse than no filter, so the
     // point is the inequality: every one of these must differ per building.
@@ -695,6 +712,7 @@ describe("the building filter", () => {
       ok: 1,
       at_risk: 0,
       data_lost: 0,
+      short_horizon: 0,
       buffer_not_full: 0,
       roll_horizon_unknown: 1,
       never_collected: 0,
@@ -891,12 +909,25 @@ describe("the per-point table has a stable order", () => {
 // ---------------------------------------------------------------------------
 
 /**
- * Site B holds exactly two active points, one of them at risk
- * (roll_horizon_unknown). That is why it is the scope here: "hide the ONLY
- * at-risk point" has to be literal, and in site A there are four.
+ * Site B holds exactly two active points, one of them at risk. That is why it
+ * is the scope here: "hide the ONLY at-risk point" has to be literal, and in
+ * site A there are three. B_Unknown used to be that point as
+ * roll_horizon_unknown; since 2026-11-20 an unknown history size is not in
+ * the at-risk figure, so this block gives it a configured horizon and a
+ * collector 100 hours behind it - at_risk - first.
  */
 describe("hiding a point leaves the table and never a total (B8.3)", () => {
   const siteB = () => getCollectionHealth(viewer, { siteId: fixture.siteBId });
+  beforeEach(async () => {
+    await testDb.basPoint.update({
+      where: { pointId: fixture.bUnknown },
+      data: { capacity: 500, collectionIntervalS: 900 },
+    });
+    await testDb.basSyncCheckpoint.update({
+      where: { pointId: fixture.bUnknown },
+      data: { lastRecordTs: new Date(Date.now() - 100 * 3_600_000) },
+    });
+  });
   const hide = (pointId: bigint) =>
     testDb.basPoint.update({ where: { pointId }, data: { isVisible: false } });
 
@@ -923,7 +954,7 @@ describe("hiding a point leaves the table and never a total (B8.3)", () => {
     // Not one total moved.
     expect(result.totals.pointsAtRisk).toBe(1);
     expect(result.totals.activePoints).toBe(2);
-    expect(result.totals.riskCounts.roll_horizon_unknown).toBe(1);
+    expect(result.totals.riskCounts.at_risk).toBe(1);
     expect(result.totals.unclassifiedPoints).toBe(1);
     expect(result.totals.completenessCounts.unknown).toBe(2);
     // And the hero keeps its warning tone.
@@ -957,9 +988,9 @@ describe("hiding a point leaves the table and never a total (B8.3)", () => {
   });
 
   it("phrases a partial hide as more, like the filter sentence", async () => {
-    await hide(fixture.fanCmd); // data_lost, one of four at risk in site A
+    await hide(fixture.fanCmd); // data_lost, one of three at risk in site A
     const result = await health();
-    expect(result.totals.pointsAtRisk).toBe(4);
+    expect(result.totals.pointsAtRisk).toBe(3);
     expect(result.totals.hiddenPointsAtRisk).toBe(1);
     // Composed with the filter sentence, because health() is scoped to site A.
     expect(describeHiddenRisk(result)).toContain(
@@ -970,7 +1001,7 @@ describe("hiding a point leaves the table and never a total (B8.3)", () => {
   it("does not change the unfiltered comparison either", async () => {
     await hide(fixture.bUnknown);
     const scoped = await health(); // site A, so the comparison is computed
-    expect(scoped.unfiltered?.pointsAtRisk).toBe(5);
+    expect(scoped.unfiltered?.pointsAtRisk).toBe(4);
     expect(scoped.unfiltered?.activePoints).toBe(7);
   });
 
@@ -1023,8 +1054,8 @@ describe("a point the station stopped reporting is surfaced, never dropped", () 
     const result = await health();
 
     // Deliberately NOT in the at-risk figure - it is not lagging a horizon,
-    // it is gone - so that figure drops from 4 to 3...
-    expect(result.totals.pointsAtRisk).toBe(3);
+    // it is gone - so that figure drops from 3 to 2...
+    expect(result.totals.pointsAtRisk).toBe(2);
     expect(result.totals.riskCounts.data_lost).toBe(0);
     // ...and the drop is accounted for here, by name.
     expect(result.totals.pointsNoLongerReported).toBe(1);
@@ -1047,7 +1078,7 @@ describe("a point the station stopped reporting is surfaced, never dropped", () 
       expect(result.totals.pointsNoLongerReported).toBe(0);
       expect(result.vanished).toEqual([]);
       // Still out of the at-risk figure: we chose this, it cannot surprise us.
-      expect(result.totals.pointsAtRisk).toBe(3);
+      expect(result.totals.pointsAtRisk).toBe(2);
     },
   );
 

@@ -4,7 +4,10 @@ import {
   COLLECTOR_SILENCE_POLLS,
   atRiskCount,
   isAtRisk,
+  isHistoryUnknown,
 } from "@/lib/modules/bas/types";
+import { formatInterval } from "@/lib/modules/bas/interval";
+import type { TrendSummaryResult } from "@/lib/modules/bas/trend-summary/types";
 import { unitSymbol, withUnit } from "@/lib/modules/bas/units";
 import type { ValueKind } from "@/lib/modules/bas/value-kind";
 import {
@@ -387,11 +390,19 @@ export function basRiskTone(risk: RollRisk): Tone {
     case "ok":
       return "ok";
     case "data_lost":
+    case "short_horizon":
+      // A horizon under four polls is red (2026-11-20): one missed run and
+      // records are overwritten, which is a loss waiting for a hiccup.
       return "bad";
     case "at_risk":
-    case "roll_horizon_unknown":
     case "never_collected":
       return "warn";
+    case "roll_horizon_unknown":
+      // Muted, never green (2026-11-20). A gap in what we know about the
+      // station's history, not a measured risk - the at-risk figure no longer
+      // counts it, and an amber chip beside a figure that does not would say
+      // the opposite of the figure.
+      return "neutral";
     case "buffer_not_full":
       // Informational. Not amber - there is nothing to act on - and not
       // green either, because green here means "collected inside half a
@@ -404,8 +415,9 @@ export const RISK_LABEL: Record<RollRisk, string> = {
   ok: "OK",
   at_risk: "At risk",
   data_lost: "Data lost",
+  short_horizon: "Short history",
   buffer_not_full: "Not full yet",
-  roll_horizon_unknown: "Horizon unknown",
+  roll_horizon_unknown: "History size unknown",
   never_collected: "Never collected",
 };
 
@@ -415,10 +427,12 @@ export const RISK_EXPLANATION: Record<RollRisk, string> = {
     "More than half the roll horizon has passed since the last record we collected. Nothing is lost yet.",
   data_lost:
     "More time has passed than the station retains, so it has overwritten records we never collected. They are gone permanently.",
+  short_horizon:
+    "The station keeps less history than four collector polls - under an hour at the 15-minute poll - so one missed run and records are overwritten. Raise the history's capacity on the station, or poll faster.",
   buffer_not_full:
     "The station holds fewer records than the history's capacity, so nothing has been overwritten. There is no horizon to measure until the buffer fills, and nothing to fill in.",
   roll_horizon_unknown:
-    "No horizon is known: the history's capacity is not recorded, or the station reports no record count, so we cannot tell whether records are being lost. Fill in capacity from Workbench (History Ext Manager). Add the collection interval only for an interval trend - a change-of-value trend has none, and its horizon is measured once the buffer fills.",
+    "How much history the station keeps cannot be worked out: no full buffer has been seen, no interval is entered or measured to multiply the capacity by, and the station reports no record count. Not a measured risk, and not safe either. Check the history in Workbench; enter its capacity, and its interval if it is an interval trend - a change-of-value trend has none.",
   never_collected: "No record has ever been collected for this point.",
 };
 
@@ -447,6 +461,10 @@ export function describeHorizon(horizon: PointHorizon): {
   tone: Tone;
   title: string;
 } {
+  // "assumed" beside a capacity that was not entered (2026-11-20): every
+  // number judged from the station's assumed capacity or a measured interval
+  // says so where it is shown.
+  const assumedCapacity = horizon.capacitySource === "assumed";
   switch (horizon.state) {
     case "measured": {
       const current =
@@ -455,15 +473,21 @@ export function describeHorizon(horizon: PointHorizon): {
           : formatHours(horizon.currentHours) === formatHours(horizon.hours)
             ? null
             : `now ${formatHours(horizon.currentHours)}`;
+      const parts = ["shortest seen", current, assumedCapacity ? "full by an assumed capacity" : null].filter(
+        (part): part is string => part !== null,
+      );
       return {
         label: formatHours(horizon.hours),
-        detail: current === null ? "shortest seen" : `shortest seen · ${current}`,
+        detail: parts.join(" · "),
         tone: "neutral",
         title:
           "Measured: the shortest span the station's full buffer has ever been seen to hold. " +
           "The guard and every risk figure use this, not today's span, because a change-of-value " +
           "point's span moves with how hard the equipment cycles - a point whose buffer has ever " +
-          "spanned two hours is a two-hour point. The span the station reports today is shown beside it.",
+          "spanned two hours is a two-hour point. The span the station reports today is shown beside it." +
+          (assumedCapacity
+            ? ` "Full" was judged against the station's assumed capacity of ${horizon.capacity ?? "?"} records, Niagara's default; enter the real capacity from Workbench to replace it.`
+            : ""),
       };
     }
     case "configured":
@@ -473,12 +497,21 @@ export function describeHorizon(horizon: PointHorizon): {
         tone: "neutral",
         title: "Configured: capacity x collection interval, from Workbench.",
       };
+    case "estimated":
+      return {
+        label: `≈ ${formatHours(horizon.hours)}`,
+        detail: describeEstimate(horizon),
+        tone: "neutral",
+        title:
+          "Estimated: capacity x interval where the capacity is the station's assumed one (Niagara's default of 500 unless changed in Settings) and/or the interval is measured from the readings. " +
+          "Entered values from Workbench replace either half.",
+      };
     case "not_full":
       return {
         label: "Not full yet",
         detail:
           horizon.stationCount !== null && horizon.capacity !== null
-            ? `${formatCount(horizon.stationCount)} of ${formatCount(horizon.capacity)}`
+            ? `${formatCount(horizon.stationCount)} of ${formatCount(horizon.capacity)}${assumedCapacity ? " (assumed)" : ""}`
             : null,
         tone: "neutral",
         title: RISK_EXPLANATION.buffer_not_full,
@@ -487,13 +520,24 @@ export function describeHorizon(horizon: PointHorizon): {
       return {
         label: "Unknown",
         detail: null,
-        tone: "warn",
-        title:
-          horizon.capacity === null
-            ? RISK_EXPLANATION.roll_horizon_unknown
-            : "The station reports no record count for this history, so the buffer cannot be known to be full or not, and no horizon can be measured. Unknown is not safe.",
+        // Muted, never green: see basRiskTone.
+        tone: "neutral",
+        title: RISK_EXPLANATION.roll_horizon_unknown,
       };
   }
+}
+
+/** "assumed 500 records × measured 30 min" - each half named for where it came from. */
+export function describeEstimate(horizon: Pick<PointHorizon, "capacity" | "capacitySource" | "intervalS" | "intervalSource">): string {
+  const capacity =
+    horizon.capacity === null
+      ? "capacity"
+      : `${horizon.capacitySource === "assumed" ? "assumed " : ""}${formatCount(horizon.capacity)} records`;
+  const interval =
+    horizon.intervalS === null
+      ? "interval"
+      : `${horizon.intervalSource === "measured" ? "measured " : ""}${formatInterval(horizon.intervalS)}`;
+  return `${capacity} × ${interval}`;
 }
 
 /**
@@ -516,42 +560,40 @@ export function unclassifiedTone(count: number): Tone {
 
 /**
  * What kind of problem the at-risk total is, which is not the same question as
- * how big it is.
- *
- *   losing   at least one point has data_lost - the station has already
- *            overwritten records nobody collected, and they are gone
- *   unknown  nothing is lost yet: the total is at_risk, roll_horizon_unknown
- *            and never_collected, which are "we cannot tell" and "not yet"
+ * how big it is. The distinction is the difference between "the collector is
+ * behind" and "data is being destroyed right now", and a single count cannot
+ * carry it.
+ */
+export type AtRiskShape = "none" | "losing" | "behind";
+
+/**
+ *   losing   data_lost or short_horizon: records are gone, or one missed
+ *            poll from going. Red.
+ *   behind   at_risk or never_collected only: the collector is behind half
+ *            a horizon, or has never read the point. Nothing is lost yet.
+ *            Amber.
  *   none     zero
  *
- * The distinction is the difference between "go fill in capacity in Workbench"
- * and "data is being destroyed right now", and a single count cannot carry it.
+ * `roll_horizon_unknown` is in none of them (2026-11-20): it is the muted
+ * "history size unknown" count beside the figure, never inside it.
  */
-export type AtRiskShape = "none" | "losing" | "unknown";
-
 export function atRiskShape(counts: Record<RollRisk, number>): AtRiskShape {
   const total = atRiskCount(counts);
   if (total === 0) return "none";
-  return counts.data_lost > 0 ? "losing" : "unknown";
+  return counts.data_lost > 0 || counts.short_horizon > 0 ? "losing" : "behind";
 }
 
 /**
- * Grafana had one step here: green at 0, red from 1. This is deliberately
- * stronger than the panel it mirrors.
- *
- * Red from one treats "capacity has not been filled in from Workbench" and "the
- * station has destroyed records we never read" as the same severity. The first
- * is a gap in what we know, the second is a permanent loss - and a screen that
- * shouts equally at both trains somebody to stop reading it.
- *
- * What has NOT changed is the rule this file exists for: above zero is never
- * `ok`. Unknown is not safe, and amber is its floor rather than its ceiling.
+ * Red for a loss or a horizon under four polls, amber for a collector that is
+ * behind, green for none - and NEUTRAL, not green, for none at risk with
+ * points whose history size is unknown. Unknown is not safe; it is also not a
+ * measured risk, and the muted line under the figure says how many.
  */
 export function atRiskTone(counts: Record<RollRisk, number>): Tone {
   switch (atRiskShape(counts)) {
     case "none":
-      return "ok";
-    case "unknown":
+      return counts.roll_horizon_unknown > 0 ? "neutral" : "ok";
+    case "behind":
       return "warn";
     case "losing":
       return "bad";
@@ -561,10 +603,6 @@ export function atRiskTone(counts: Record<RollRisk, number>): Tone {
 /**
  * The tile's headline, which has to say WHICH problem it is without anybody
  * decoding a stripe or a hue.
- *
- * "3 points, capacity unknown" and "3 points losing data" are different
- * sentences about the same number, and the number alone is the least useful part
- * of either.
  */
 export function describeAtRisk(counts: Record<RollRisk, number>): string {
   const total = atRiskCount(counts);
@@ -574,13 +612,25 @@ export function describeAtRisk(counts: Record<RollRisk, number>): string {
     case "none":
       return "None at risk";
     case "losing":
-      return counts.data_lost === total
-        ? `${points} losing data`
-        : `${formatCount(counts.data_lost)} of ${points} losing data`;
-    case "unknown":
-      return `${points}, capacity unknown`;
+      if (counts.data_lost === total) return `${points} losing data`;
+      if (counts.data_lost > 0) return `${formatCount(counts.data_lost)} of ${points} losing data`;
+      return `${points} at risk of data loss`;
+    case "behind":
+      return `${points} at risk of data loss`;
   }
 }
+
+/**
+ * The muted line beside the at-risk figure: "334 points: history size unknown".
+ * Null at zero, so a screen with nothing unknown says nothing about it.
+ */
+export function describeHistoryUnknown(count: number): string | null {
+  if (count <= 0) return null;
+  return `${formatCount(count)} point${count === 1 ? "" : "s"}: history size unknown`;
+}
+
+/** Settings → Points, filtered to the points whose history size is unknown. */
+export const HISTORY_UNKNOWN_SETTINGS_HREF = "/bas/settings?history=unknown";
 
 /**
  * Grafana: green under 30, orange from 30, red from 60.
@@ -934,7 +984,10 @@ export function computeHeadroom(points: PointHealthRow[]): Headroom {
      * the tile above it.
      */
     if (point.rollHorizonHours === null || point.minutesAgo === null) {
-      if (isAtRisk(point.risk)) unknown += 1;
+      // An unknown history size is unknown here too, though it is no longer
+      // in the at-risk figure (2026-11-20): it has no number to count down,
+      // and folding it into "not full yet" would call it safe.
+      if (isAtRisk(point.risk) || isHistoryUnknown(point.risk)) unknown += 1;
       else notFull += 1;
       continue;
     }
@@ -1018,6 +1071,8 @@ export async function fetchPointExplorer(
     pointId?: string | null;
     projectId?: string | null;
     stationId?: string | null;
+    /** Compare mode: the second point's id. */
+    compareId?: string | null;
   } = {},
   signal?: AbortSignal,
 ): Promise<PointExplorer> {
@@ -1032,6 +1087,7 @@ export async function fetchPointExplorer(
   if (options.pointId != null) params.set("point", options.pointId);
   if (options.projectId != null) params.set("project", options.projectId);
   if (options.stationId != null) params.set("station", options.stationId);
+  if (options.compareId != null) params.set("compare", options.compareId);
   const suffix = params.toString();
 
   let response: Response;
@@ -1668,6 +1724,8 @@ export interface StationPayload {
   parentStationId?: string | null;
   tlsSha256?: string | null;
   isActive?: boolean;
+  /** Update only. */
+  assumedCapacity?: number;
 }
 
 export const createStation = (body: StationPayload) =>
@@ -2317,4 +2375,41 @@ export function describePlausibility(
         tone: "neutral",
       };
   }
+}
+
+// ------------------------------------------------- trend summary (2026-11-20)
+
+/**
+ * "Explain this trend": the point and range on screen. A cache hit costs
+ * nothing; `refresh` writes a new one whatever the cache holds. The answer's
+ * `state` says what happened - written, withheld, or why nothing was asked.
+ */
+export async function requestTrendSummary(body: {
+  point: string;
+  days?: number;
+  from?: string;
+  to?: string;
+  refresh?: boolean;
+}): Promise<TrendSummaryResult> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/point-explorer/summary`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError("network", "Could not reach the server.");
+  }
+  const payload = (await response.json().catch(() => null)) as
+    | { data?: TrendSummaryResult; error?: { code?: string; message?: string } }
+    | null;
+  if (!response.ok || payload?.error !== undefined || payload?.data === undefined) {
+    throw new ApiError(
+      payload?.error?.code ?? "unexpected",
+      payload?.error?.message ?? "The summary could not be written.",
+    );
+  }
+  return payload.data;
 }

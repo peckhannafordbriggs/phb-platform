@@ -173,17 +173,19 @@ describe("reading filters out of a URL", () => {
       // All, so nobody has to drill three levels to see everything.
       projectId: null,
       stationId: null,
+      compareId: null,
     });
   });
 
   it("reads a full selection", () => {
-    expect(read("project=2&site=5&station=9&days=30&point=41")).toEqual({
+    expect(read("project=2&site=5&station=9&days=30&point=41&compare=44")).toEqual({
       projectId: "2",
       siteId: "5",
       stationId: "9",
       windowDays: 30,
       range: null,
       pointId: "41",
+      compareId: "44",
     });
   });
 

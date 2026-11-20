@@ -296,15 +296,28 @@ describe("the trend breaks across gaps rather than crossing them", () => {
     expect(buildTrend(rows, 60).gaps).toHaveLength(1);
   });
 
-  it("still breaks when the interval is unknown", () => {
-    // capacity and collection_interval_s not filled in from Workbench. The
-    // floor applies rather than never breaking.
-    const rows = [
-      { ts: at(120), value_num: 1 },
+  it("still breaks when no interval is expected, past four hours and not before", () => {
+    // Nothing entered and nothing measured - a change-of-value trend, or too
+    // few readings. Since 2026-11-20 a break is then a gap over four hours,
+    // not the old 15-minute floor that broke a 30-minute point at every reading.
+    const under = [
+      { ts: at(235), value_num: 1 },
       { ts: at(5), value_num: 2 },
     ];
+    const over = [
+      { ts: at(250), value_num: 1 },
+      { ts: at(5), value_num: 2 },
+    ];
+    expect(buildTrend(under, null).gaps).toHaveLength(0);
+    expect(buildTrend(over, null).gaps).toHaveLength(1);
+  });
 
-    expect(buildTrend(rows, null).gaps).toHaveLength(1);
+  it("breaks at twice the expected interval, so a 30-minute point is not broken at every reading", () => {
+    const every30 = [150, 120, 90, 60, 30, 0].map((m) => ({ ts: at(m), value_num: 70 }));
+    expect(buildTrend(every30, 1800).gaps).toHaveLength(0);
+    // The old rule, for the record: 15 minutes, three intervals of nothing.
+    const missedTwo = [180, 150, 60, 30].map((m) => ({ ts: at(m), value_num: 70 }));
+    expect(buildTrend(missedTwo, 1800).gaps).toHaveLength(1);
   });
 
   it("has nothing to break on an empty or single-sample series", () => {

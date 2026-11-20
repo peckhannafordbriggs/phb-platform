@@ -51,6 +51,8 @@ const QuerySchema = z
     project: z.string().trim().max(32).optional(),
     station: z.string().trim().max(32).optional(),
     point: z.string().trim().max(32).optional(),
+    // Compare mode (2026-11-20): a second point's id. Absent is off.
+    compare: z.string().trim().max(32).optional(),
   })
   // Both or neither. A start with no end is not a range, and guessing the
   // missing half ("until today"?) would be a decision the person did not make.
@@ -78,6 +80,7 @@ export async function GET(request: Request) {
         point?: string;
         project?: string;
         station?: string;
+        compare?: string;
       },
     ) => {
       try {
@@ -95,6 +98,7 @@ export async function GET(request: Request) {
             // Anything else is a point id, or absent for the picker's first.
             pointId: input.point === NO_POINT ? null : parsePointId(input.point),
             selectPoint: input.point !== NO_POINT,
+            comparePointId: parsePointId(input.compare),
           }),
         );
       } catch (error) {
@@ -124,6 +128,7 @@ export async function GET(request: Request) {
         project: search.get("project") ?? undefined,
         station: search.get("station") ?? undefined,
         point: search.get("point") ?? undefined,
+        compare: search.get("compare") ?? undefined,
       });
 
       if (!parsed.success) {

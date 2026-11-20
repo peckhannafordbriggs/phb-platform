@@ -127,8 +127,10 @@ describe("the count beside the heading", () => {
   });
 
   it("counts the rows listed, and names the hidden ones beside it, while the totals hold", async () => {
+    // fanCmd: data_lost, so hiding it hides an at-risk row. (The fixture's
+    // unknown point is no longer at risk since 2026-11-20.)
     await testDb.basPoint.update({
-      where: { pointId: fixture.unknown },
+      where: { pointId: fixture.fanCmd },
       data: { isVisible: false },
     });
     const health = await getCollectionHealth(viewer, {});
@@ -150,7 +152,7 @@ describe("the figures do not follow the viewport", () => {
     // The service's numbers, over every active point in the view.
     expect(health.totals.activePoints).toBe(7 + EXTRA);
     const atRiskInDatabase = await viewCount(
-      "is_active AND roll_risk IN ('at_risk','data_lost','never_collected','roll_horizon_unknown')",
+      "is_active AND roll_risk IN ('at_risk','data_lost','short_horizon','never_collected')",
     );
     expect(atRiskInDatabase).toBeGreaterThan(7); // the nineteen extras, plus the fixture's
     expect(health.totals.pointsAtRisk).toBe(atRiskInDatabase);

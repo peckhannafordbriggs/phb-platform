@@ -52,6 +52,14 @@ export const VIEW_PARAM = "view";
 export const TABLE_VIEW = "table";
 
 /**
+ * Compare mode (2026-11-20): `compare=<pointId>` draws a second point over the
+ * same range on the same chart. Absent is off, so a shared link carries the
+ * comparison and a plain one does not. Cleared with the point it compares
+ * against: at every cascade level, and whenever the point itself changes.
+ */
+export const COMPARE_PARAM = "compare";
+
+/**
  * Where a Projects card goes: Point Explorer with the project set and no
  * point loaded.
  *
@@ -87,9 +95,10 @@ export function dashboardCardHref(projectId: string): string {
  * a building, so narrowing above it can strand it just as easily.
  */
 export const CASCADE_CLEARS: Readonly<Record<string, readonly string[]>> = {
-  [PROJECT_PARAM]: [SITE_PARAM, STATION_PARAM, POINT_PARAM],
-  [SITE_PARAM]: [STATION_PARAM, POINT_PARAM],
-  [STATION_PARAM]: [POINT_PARAM],
+  [PROJECT_PARAM]: [SITE_PARAM, STATION_PARAM, POINT_PARAM, COMPARE_PARAM],
+  [SITE_PARAM]: [STATION_PARAM, POINT_PARAM, COMPARE_PARAM],
+  [STATION_PARAM]: [POINT_PARAM, COMPARE_PARAM],
+  [POINT_PARAM]: [COMPARE_PARAM],
 };
 
 /**
@@ -107,6 +116,14 @@ export const SEARCH_PARAM = "q";
 export const MODE_PARAM = "mode";
 export const STATE_PARAM = "state";
 export const CRED_PARAM = "cred";
+/**
+ * `history=unknown` (2026-11-20): where the Projects card's and Collection
+ * Health's "history size unknown" line lands. Every station with such a point
+ * opens its Points list filtered to them. Read by the screen only; the
+ * settings API never sees it.
+ */
+export const HISTORY_PARAM = "history";
+export const HISTORY_UNKNOWN = "unknown";
 
 /** The dropdown's "All" value. Never sent - absent IS all. */
 export const ALL_SITES = "__all__";
@@ -126,6 +143,8 @@ export interface BasFilters {
   /** `null` at either level means All (B7.6). */
   projectId: string | null;
   stationId: string | null;
+  /** Compare mode's second point, or `null` when it is off. */
+  compareId: string | null;
 }
 
 interface ParamsLike {
@@ -162,6 +181,7 @@ export function readFilters(params: ParamsLike): BasFilters {
     pointId: point === null || point.length === 0 ? null : point,
     projectId: clean(params.get(PROJECT_PARAM)),
     stationId: clean(params.get(STATION_PARAM)),
+    compareId: clean(params.get(COMPARE_PARAM)),
   };
 }
 
@@ -236,6 +256,8 @@ export interface SettingsUrlFilters {
   mode: string | null;
   state: string | null;
   cred: string | null;
+  /** `unknown`: open each station's Points list on its history-unknown points. Screen only. */
+  history: string | null;
 }
 
 /**
@@ -254,6 +276,7 @@ export function readSettingsFilters(params: ParamsLike): SettingsUrlFilters {
     mode: value(MODE_PARAM),
     state: value(STATE_PARAM),
     cred: value(CRED_PARAM),
+    history: value(HISTORY_PARAM),
   };
 }
 

@@ -37,6 +37,9 @@ function point(over: Partial<PointHealthRow> = {}): PointHealthRow {
       currentHours: null,
       stationCount: null,
       capacity: 500,
+      capacitySource: "entered",
+      intervalS: null,
+      intervalSource: null,
     },
     completeness: "complete",
     stationCount: null,
@@ -173,7 +176,7 @@ function notFull(id: string, over: Partial<PointHealthRow> = {}): PointHealthRow
     risk: "buffer_not_full",
     rollHorizonHours: null,
     horizonSource: null,
-    horizon: { state: "not_full", hours: null, currentHours: null, stationCount: 320, capacity: 500 },
+    horizon: { state: "not_full", hours: null, currentHours: null, stationCount: 320, capacity: 500, capacitySource: "entered", intervalS: null, intervalSource: null },
     ...over,
   });
 }

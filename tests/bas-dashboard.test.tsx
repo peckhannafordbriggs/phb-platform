@@ -327,7 +327,7 @@ describe("the health line", () => {
     // Worded by the Home tile's function, so the card says what Home says.
     expect(basFigure(card.health!)).toEqual({
       state: "ok",
-      value: "2 points at risk",
+      value: "2 points at risk of data loss",
       status: "newest reading 5 min ago",
       alarm: true,
     });
@@ -561,6 +561,7 @@ describe("the cards as rendered", () => {
     data_lost: 0,
     buffer_not_full: 0,
     roll_horizon_unknown: 0,
+    short_horizon: 0,
     never_collected: 0,
     ...over,
   });
@@ -588,7 +589,7 @@ describe("the cards as rendered", () => {
     const html = render(
       payload([
         project({
-          health: { activePoints: 26, pointsAtRisk: 0, riskCounts: risks({ ok: 26 }), minutesSinceNewestReading: 4 },
+          health: { activePoints: 26, pointsAtRisk: 0, pointsHistoryUnknown: 0, riskCounts: risks({ ok: 26 }), minutesSinceNewestReading: 4 },
         }),
       ]),
     );
@@ -597,13 +598,14 @@ describe("the cards as rendered", () => {
     expect(html).not.toContain("bas-dashboard-alarm");
   });
 
-  it("at N: 'N points at risk' inside the maroon mark", () => {
+  it("at N: 'N points at risk of data loss' inside the maroon mark", () => {
     const html = render(
       payload([
         project({
           health: {
             activePoints: 26,
             pointsAtRisk: 2,
+            pointsHistoryUnknown: 0,
             riskCounts: risks({ ok: 24, at_risk: 1, data_lost: 1 }),
             minutesSinceNewestReading: 4,
           },
@@ -612,7 +614,7 @@ describe("the cards as rendered", () => {
     );
     const mark = /<span[^>]*data-testid="bas-dashboard-alarm"[^>]*>([^<]*)<\/span>/.exec(html);
     expect(mark).not.toBeNull();
-    expect(mark![1]).toBe("2 points at risk");
+    expect(mark![1]).toBe("2 points at risk of data loss");
     // The mark's colours live in one stylesheet rule, .card-mark - maroon,
     // white words, white edge. tests/bas-dashboard-colours.test.ts reads it.
     expect(mark![0]).toContain('class="card-mark"');
@@ -623,7 +625,7 @@ describe("the cards as rendered", () => {
     const html = render(
       payload([
         project({
-          health: { activePoints: 1, pointsAtRisk: 1, riskCounts: risks({ at_risk: 1 }), minutesSinceNewestReading: null },
+          health: { activePoints: 1, pointsAtRisk: 1, pointsHistoryUnknown: 0, riskCounts: risks({ at_risk: 1 }), minutesSinceNewestReading: null },
         }),
       ]),
     );

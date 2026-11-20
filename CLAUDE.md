@@ -1876,6 +1876,34 @@ then the collector updated** (`runbook.md` → *The collector stops on
 "permission denied" for a bas_\* table or sequence*). `WHY-ITS-BUILT-THIS-WAY.md`
 § 90.
 
+**Points are judged against how often they actually report, and an unknown
+history is its own line (2026-11-20).** For CEI_JCI_N2 (334 histories every 30
+minutes, nothing entered), which drew ~280 breaks a week per point and read
+*334 points at risk*. **Expected interval** (`lib/modules/bas/interval.ts`):
+entered `collection_interval_s`, else the median gap when the spacing is even
+(the collector's `spacing_kind` rule), over the range and stored by the
+scheduler's new last step as `bas_points.measured_interval_s`, else none
+(change-of-value); a **break** is a gap over twice it, or over four hours with
+none. Point Explorer: one *Data health* tile (interval and source, % missing,
+the station's history with *assumed*/*measured* beside it, stuck and
+physical-range warnings) in place of Readings/Null and Distinct values; the
+breaks as one line, the five longest and *Show all*; a *Trend summary* card
+(on demand, `claude-opus-5-5`, numbers from code, every number in the reply
+checked against them, cached by point + range + newest reading in
+`bas_trend_summaries`, metered on the Usage page, under the Reports safety
+ceiling); *Compare points* (same JACE, a right axis unless both share a
+recorded unit, `compare=` in the URL). **Assumed capacity**:
+`bas_stations.assumed_capacity`, 500 by default, edited in Settings; the view's
+horizon is the measured span, else capacity x interval configured, else
+*estimated*, with `capacity_source`/`interval_source`. **The at-risk list lost
+`roll_horizon_unknown`** (now the muted *N points: history size unknown*,
+linked to Settings -> Points filtered, admins only) **and gained
+`short_horizon`** (a horizon under four 900 s polls, red). The collector side
+is phb-bas's own PR (deploy the platform migration first).
+`WHY-ITS-BUILT-THIS-WAY.md` § 91; `runbook.md` -> *Point Explorer says
+"Reports about every 30 min (measured)"*, *A Projects card or Collection
+Health says "N points: history size unknown"*, *"Explain this trend" says ...*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

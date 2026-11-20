@@ -209,7 +209,7 @@ describe("the per-point table on Collection Health", () => {
     minutesAgo: 5,
     rollHorizonHours: 41.7,
     horizonSource: "configured",
-    horizon: { state: "configured", hours: 41.7, currentHours: null, stationCount: 500, capacity: 500 },
+    horizon: { state: "configured", hours: 41.7, currentHours: null, stationCount: 500, capacity: 500, capacitySource: "entered", intervalS: null, intervalSource: null },
     completeness: "complete",
     stationCount: 500,
     heldCount: 500,

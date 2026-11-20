@@ -612,6 +612,7 @@ describe("the filters live in the URL and survive a round trip", () => {
       mode: "direct",
       state: "stale",
       cred: "unset",
+      history: null,
     });
   });
 

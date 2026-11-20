@@ -21,6 +21,7 @@ import { readSafetyCeiling } from "./ceiling-read";
 import type { RunStatus } from "./engine/types";
 import { visibilityWhere } from "./runs-service";
 import { zonedDateTimeToUtc } from "./schedule";
+import { trendSummaryUsage, type TrendSummaryUsage } from "../trend-summary/usage";
 
 /**
  * Usage & cost for the Reports tab (2026-11-12), on the Cost Intelligence
@@ -74,6 +75,13 @@ export interface ReportsUsage {
    * the planner's calls cost - its share of `totals.spend`.
    */
   planner: { answered: number; unanswered: number; skipped: number; spend: number };
+  /**
+   * Point Explorer's trend summaries (2026-11-20) over the same days: how
+   * many were written and withheld, and their tokens and dollars. Module-
+   * wide - a summary is shared by everyone who opens the point - and NOT in
+   * the run figures above, which are report runs.
+   */
+  trendSummaries: TrendSummaryUsage;
 }
 
 const FINISHED: RunStatus[] = ["succeeded", "partial", "failed"];
@@ -101,7 +109,7 @@ export async function getReportsUsage(viewer: Viewer, range: UsageRange, now = n
   // can be summed from the same rows; the day keys do the exact cut.
   const since = new Date(Math.min(rangeStart.getTime(), dayStart(`${month}-01`).getTime()) - DAY_MS);
 
-  const [rows, runsInDatabase, ceiling] = await Promise.all([
+  const [rows, runsInDatabase, ceiling, trendSummaries] = await Promise.all([
     prisma.basReportRun.findMany({
       where: { ...visible, status: { in: FINISHED }, finishedAt: { gte: since } },
       select: {
@@ -125,6 +133,7 @@ export async function getReportsUsage(viewer: Viewer, range: UsageRange, now = n
       where: { ...visible, status: { in: FINISHED }, finishedAt: { gte: rangeStart, lte: now } },
     }),
     readSafetyCeiling(prisma),
+    trendSummaryUsage(rangeStart, now),
   ]);
 
   const perDay = new Map<string, number>();
@@ -178,5 +187,6 @@ export async function getReportsUsage(viewer: Viewer, range: UsageRange, now = n
     runsInDatabase,
     ceiling,
     planner,
+    trendSummaries,
   };
 }

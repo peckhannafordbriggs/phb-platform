@@ -1,5 +1,10 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { disconnectDb } from "./db";
+import { disconnectDb, testDb } from "./db";
+import {
+  COLLECTOR_POLL_INTERVAL_MINUTES,
+  ROLL_SAFETY_FACTOR,
+  SHORT_HORIZON_S,
+} from "@/lib/modules/bas/types";
 import {
   EQUIPMENT_NAME,
   ROLES,
@@ -775,19 +780,176 @@ describe("bas_v_collection_health classifies roll risk", () => {
     });
   });
 
-  it("cannot know a buffer is full when nobody has filled in its capacity", async () => {
+  /**
+   * THE PRECEDENCE (2026-11-20). Capacity: entered, else the station's
+   * assumed capacity (500 by default). Interval: entered, else the measured
+   * one. Horizon: the measured full-buffer span, else capacity x interval as
+   * configured (both entered), else as estimated (either half not entered).
+   * Every row says where each half came from.
+   *
+   * This replaced "cannot know a buffer is full when nobody has filled in its
+   * capacity". A count of 500 against an assumed 500 is now judged full; if
+   * the real buffer is 1,000, that span is half the real horizon - the error
+   * is towards warning, and an entered capacity always wins.
+   */
+  async function horizonOf(
+    tx: Tx,
+    pointId: bigint,
+    opts: {
+      capacity: number | null;
+      intervalS: number | null;
+      measuredS: number | null;
+      /** null: the station reported no count. */
+      count: number | null;
+      spanS?: number | null;
+      ago?: string;
+    },
+  ) {
+    await tx.$executeRawUnsafe(
+      `UPDATE bas_points SET capacity = $1, collection_interval_s = $2, measured_interval_s = $3 WHERE point_id = $4`,
+      opts.capacity,
+      opts.intervalS,
+      opts.measuredS,
+      pointId,
+    );
+    await tx.$executeRawUnsafe(
+      `INSERT INTO bas_sync_checkpoints (point_id, last_record_ts, last_status, station_count, observed_span_s)
+       VALUES ($1, now() - interval '${opts.ago ?? "10 minutes"}', 'ok', $2, $3)
+       ON CONFLICT (point_id) DO UPDATE
+         SET last_record_ts = EXCLUDED.last_record_ts,
+             station_count = EXCLUDED.station_count,
+             observed_span_s = EXCLUDED.observed_span_s,
+             shortest_full_span_s = NULL`,
+      pointId,
+      opts.count,
+      opts.spanS ?? null,
+    );
+    const rows = await tx.$queryRaw<
+      Array<{
+        roll_risk: string;
+        horizon_s: number | null;
+        horizon_source: string | null;
+        horizon_state: string;
+        effective_capacity: number;
+        capacity_source: string;
+        effective_interval_s: number | null;
+        interval_source: string | null;
+        estimated_horizon_s: number | null;
+      }>
+    >`SELECT roll_risk, horizon_s, horizon_source, horizon_state, effective_capacity,
+             capacity_source, effective_interval_s, interval_source, estimated_horizon_s
+        FROM bas_v_collection_health WHERE point_id = ${pointId}`;
+    return rows[0];
+  }
+
+  it("judges a buffer full against the station's assumed capacity when none is entered, and says it was assumed", async () => {
     await inRollback(async (tx) => {
       const f = await withData(tx);
-
-      // count 500 looks like Niagara's default capacity, and the view does not
-      // guess: a 1000-record buffer at 500 is half full.
-      const row = await measured(tx, f.unknown, {
-        capacity: null, count: 500, spanS: 7200, ago: "10 minutes",
+      const row = await horizonOf(tx, f.unknown, { capacity: null, intervalS: null, measuredS: null, count: 500, spanS: 7200 });
+      expect(row).toMatchObject({
+        horizon_state: "measured",
+        horizon_s: 7200,
+        effective_capacity: 500,
+        capacity_source: "assumed",
+        roll_risk: "ok",
       });
-
-      expect(row?.horizon_source).toBeNull();
-      expect(row?.roll_risk).toBe("roll_horizon_unknown");
     });
+  });
+
+  it("lets an entered capacity beat the assumed one, so a 1,000-record buffer at 500 is not full", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+      const row = await horizonOf(tx, f.unknown, { capacity: 1000, intervalS: null, measuredS: null, count: 500, spanS: 7200 });
+      expect(row).toMatchObject({
+        horizon_state: "not_full",
+        horizon_s: null,
+        effective_capacity: 1000,
+        capacity_source: "entered",
+        roll_risk: "buffer_not_full",
+      });
+    });
+  });
+
+  it("reads the assumed capacity from the point's own station, and a change there moves it", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+      await tx.$executeRaw`UPDATE bas_stations SET assumed_capacity = 400 WHERE station_id = ${f.stationId}`;
+      const row = await horizonOf(tx, f.unknown, { capacity: null, intervalS: null, measuredS: null, count: 450, spanS: 7200 });
+      expect(row).toMatchObject({ horizon_state: "measured", effective_capacity: 400, capacity_source: "assumed" });
+    });
+  });
+
+  it("estimates assumed capacity x measured interval when the station reports no count (CEI's shape)", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+      // Nothing entered, a 30-minute measured spacing, no count: 500 x 1800 s.
+      const row = await horizonOf(tx, f.unknown, { capacity: null, intervalS: null, measuredS: 1800, count: null });
+      expect(row).toMatchObject({
+        horizon_state: "estimated",
+        horizon_source: "estimated",
+        horizon_s: 900_000,
+        estimated_horizon_s: 900_000,
+        effective_capacity: 500,
+        capacity_source: "assumed",
+        effective_interval_s: 1800,
+        interval_source: "measured",
+        roll_risk: "ok",
+      });
+    });
+  });
+
+  it("lets an entered interval beat the measured one", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+      const row = await horizonOf(tx, f.unknown, { capacity: null, intervalS: 60, measuredS: 1800, count: null });
+      expect(row).toMatchObject({ effective_interval_s: 60, interval_source: "entered", horizon_s: 30_000, horizon_state: "estimated" });
+    });
+  });
+
+  it("judges an entered capacity of 100 at a measured 1-minute spacing from its 100, not the assumed 500", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+      // 100 x 60 s = 6,000 s (100 minutes), where 500 x 60 s would be 30,000 s.
+      const hundred = await horizonOf(tx, f.unknown, { capacity: 100, intervalS: null, measuredS: 60, count: null });
+      expect(hundred).toMatchObject({ horizon_s: 6000, capacity_source: "entered", interval_source: "measured" });
+      // 100 minutes is more than four 15-minute polls, so it is not red at
+      // today's poll. Half of it is: 50 records at a minute is 50 minutes.
+      expect(hundred?.roll_risk).toBe("ok");
+      const fifty = await horizonOf(tx, f.unknown, { capacity: 50, intervalS: null, measuredS: 60, count: null });
+      expect(fifty).toMatchObject({ horizon_s: 3000, roll_risk: "short_horizon" });
+      // So is 100 records at a 30-second spacing.
+      const fast = await horizonOf(tx, f.unknown, { capacity: 100, intervalS: null, measuredS: 30, count: null });
+      expect(fast).toMatchObject({ horizon_s: 3000, roll_risk: "short_horizon" });
+    });
+  });
+
+  it("calls a horizon short below four collector polls exactly", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+      // Both entered: configured, 60 x 60 = 3,600 s - exactly four polls of 900 s.
+      const atLine = await horizonOf(tx, f.unknown, { capacity: 60, intervalS: 60, measuredS: null, count: null });
+      expect(atLine).toMatchObject({ horizon_state: "configured", horizon_s: SHORT_HORIZON_S, roll_risk: "ok" });
+      const under = await horizonOf(tx, f.unknown, { capacity: 59, intervalS: 61, measuredS: null, count: null });
+      expect(under).toMatchObject({ horizon_s: 3599, roll_risk: "short_horizon" });
+      // And a collector behind half of it is at_risk, which outranks short.
+      const behind = await horizonOf(tx, f.unknown, { capacity: 50, intervalS: 60, measuredS: null, count: null, ago: "30 minutes" });
+      expect(behind?.roll_risk).toBe("at_risk");
+    });
+  });
+
+  it("still says unknown when there is no count and no interval, assumed capacity or not", async () => {
+    await inRollback(async (tx) => {
+      const f = await withData(tx);
+      const row = await horizonOf(tx, f.unknown, { capacity: null, intervalS: null, measuredS: null, count: null });
+      expect(row).toMatchObject({ horizon_state: "unknown", horizon_s: null, roll_risk: "roll_horizon_unknown", capacity_source: "assumed" });
+    });
+  });
+
+  it("holds the view's four-poll literal to the collector's constants", async () => {
+    const rows = await testDb.$queryRaw<Array<{ def: string }>>`
+      SELECT pg_get_viewdef('bas_v_collection_health'::regclass, true) AS def`;
+    expect(SHORT_HORIZON_S).toBe(COLLECTOR_POLL_INTERVAL_MINUTES * 60 * ROLL_SAFETY_FACTOR);
+    expect(rows[0]?.def).toMatch(new RegExp(`horizon_s < ${SHORT_HORIZON_S}\\b`));
   });
 
   it("prefers the measured horizon to the configured one when both exist", async () => {

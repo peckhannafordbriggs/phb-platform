@@ -18,6 +18,7 @@ import {
   atRiskCount,
   describeHiddenRisk,
   isAtRisk,
+  isHistoryUnknown,
   type CollectionHealth,
   type PointHealthRow,
   type RollRisk,
@@ -59,7 +60,12 @@ import {
  * than the system is, and the failure that matters is the other way round.
  *
  * Every surface that answers the question now answers it from
- * AT_RISK_ROLL_RISKS through `isAtRisk` / `atRiskCount`. This file drives all
+ * AT_RISK_ROLL_RISKS through `isAtRisk` / `atRiskCount`.
+ *
+ * 2026-11-20: the list no longer holds `roll_horizon_unknown` - it is the
+ * muted "history size unknown" count beside the figure - and gains
+ * `short_horizon`, a horizon under four collector polls. The fixture has a
+ * point in each, and every surface below is held to both. This file drives all
  * of them from ONE fixture holding a point in every horizon state - configured,
  * measured, not full, unknown, plus never collected - with some hidden, and
  * asserts that:
@@ -121,9 +127,16 @@ const SHAPES: Shape[] = [
     checkpoint: { agoMs: 400 * 24 * HOUR, stationCount: 320, observedSpanS: 78_000_000 } },
   { name: "NotFullShown", expectRisk: "buffer_not_full", hidden: false, capacity: 500, intervalS: null,
     checkpoint: { agoMs: 207 * 24 * HOUR, stationCount: 71, observedSpanS: 17_000_000 } },
-  // unknown: no capacity, so the count cannot be judged
+  // unknown: nothing entered, nothing measured, and NO count from the station.
+  // (With a count of 500 the station's assumed capacity of 500 would judge it
+  // full and measure its span - the 2026-11-20 change.) Not at risk: its own
+  // muted count.
   { name: "Unknown", expectRisk: "roll_horizon_unknown", hidden: true, capacity: null, intervalS: null,
-    checkpoint: { agoMs: 5 * 60_000, stationCount: 500, observedSpanS: 7200 } },
+    checkpoint: { agoMs: 5 * 60_000 } },
+  // short horizon: 50 records x 60 s = 50 min, under four 15-minute polls, and
+  // collected 5 minutes ago - inside half of it, so not at_risk, still red.
+  { name: "Short", expectRisk: "short_horizon", hidden: false, capacity: 50, intervalS: 60,
+    checkpoint: { agoMs: 5 * 60_000 } },
   // never collected: no checkpoint row
   { name: "Never", expectRisk: "never_collected", hidden: false, capacity: 500, intervalS: 900,
     checkpoint: null },
@@ -242,11 +255,17 @@ describe("the one predicate", () => {
     // These are the answers. Every surface below is held to them, so a change
     // to the list fails here AND on every surface, together.
     expect(isAtRisk("data_lost")).toBe(true);
+    expect(isAtRisk("short_horizon")).toBe(true);
     expect(isAtRisk("at_risk")).toBe(true);
-    expect(isAtRisk("roll_horizon_unknown")).toBe(true);
     expect(isAtRisk("never_collected")).toBe(true);
+    expect(isAtRisk("roll_horizon_unknown")).toBe(false);
     expect(isAtRisk("ok")).toBe(false);
     expect(isAtRisk("buffer_not_full")).toBe(false);
+    // Unknown is its own count, and nothing else is in it.
+    expect(isHistoryUnknown("roll_horizon_unknown")).toBe(true);
+    for (const risk of ["ok", "at_risk", "data_lost", "short_horizon", "buffer_not_full", "never_collected"] as const) {
+      expect(isHistoryUnknown(risk)).toBe(false);
+    }
   });
 
   it("is defined exactly once in the application source", async () => {
@@ -268,7 +287,7 @@ describe("the one predicate", () => {
     const sources = await Promise.all(
       files.map(async (f) => [f, await readFile(path.join(process.cwd(), f), "utf8")] as const),
     );
-    const listLiteral = /"data_lost",\s*"at_risk",\s*"roll_horizon_unknown",\s*"never_collected"/g;
+    const listLiteral = /"data_lost",\s*"short_horizon",\s*"at_risk",\s*"never_collected"/g;
     const definitions = sources.flatMap(([f, s]) => (s.match(listLiteral) ?? []).map(() => f));
     expect(definitions).toEqual(["lib/modules/bas/types.ts"]);
 
@@ -290,6 +309,9 @@ describe("every surface answers from the one predicate, and they agree", () => {
     // Two not-full points are active, hidden or not, and neither is counted.
     expect(result.totals.riskCounts.buffer_not_full).toBe(2);
     expect(result.totals.pointsAtRisk).toBe(4);
+    // The unknown point is not in the figure; it is the muted count beside it.
+    expect(result.totals.pointsHistoryUnknown).toBe(1);
+    expect(result.totals.pointsHistoryUnknown).toBe(result.points.filter((p) => isHistoryUnknown(p.risk)).length);
   });
 
   it("the breakdown: sums to the tile and names only states the list names", async () => {
@@ -309,14 +331,14 @@ describe("every surface answers from the one predicate, and they agree", () => {
     const result = await health();
     const fromRows = result.points.filter((p) => !p.visible && isAtRisk(p.risk)).length;
 
-    // Three points are hidden: one lost, one unknown, one not full. Two are at risk.
+    // Three points are hidden: one lost, one unknown, one not full. One is at risk.
     expect(result.totals.hiddenPoints).toBe(3);
     expect(result.totals.hiddenPointsAtRisk).toBe(EXPECTED_HIDDEN_AT_RISK.length);
-    expect(result.totals.hiddenPointsAtRisk).toBe(2);
+    expect(result.totals.hiddenPointsAtRisk).toBe(1);
     expect(result.totals.hiddenPointsAtRisk).toBe(fromRows);
     expect(result.totals.hiddenPointsAtRisk).toBeLessThanOrEqual(result.totals.pointsAtRisk);
     expect(describeHiddenRisk(result)).toBe(
-      "2 more points are at risk but hidden from the table below.",
+      "1 more point is at risk but hidden from the table below.",
     );
   });
 
@@ -325,19 +347,21 @@ describe("every surface answers from the one predicate, and they agree", () => {
     const headroom = computeHeadroom(result.points);
     const noNumber = (p: PointHealthRow) => p.rollHorizonHours === null || p.minutesAgo === null;
 
-    expect(headroom.unknown).toBe(result.points.filter((p) => noNumber(p) && isAtRisk(p.risk)).length);
-    expect(headroom.notFull).toBe(result.points.filter((p) => noNumber(p) && !isAtRisk(p.risk)).length);
-    // Absolutely: unknown + never collected are the unknown share; the two
-    // not-full points are named as not full, never as unknown.
-    expect(headroom).toMatchObject({ known: 4, unknown: 2, notFull: 2, total: 8 });
-    expect(describeHeadroom(headroom)).toMatch(/across 4 of 8 points, 2 unknown, 2 not full yet$/);
+    const unknownShare = (p: PointHealthRow) => isAtRisk(p.risk) || isHistoryUnknown(p.risk);
+    expect(headroom.unknown).toBe(result.points.filter((p) => noNumber(p) && unknownShare(p)).length);
+    expect(headroom.notFull).toBe(result.points.filter((p) => noNumber(p) && !unknownShare(p)).length);
+    // Absolutely: unknown + never collected are the unknown share - an
+    // unknown history size is still unknown here, though it left the figure;
+    // the two not-full points are named as not full, never as unknown.
+    expect(headroom).toMatchObject({ known: 5, unknown: 2, notFull: 2, total: 9 });
+    expect(describeHeadroom(headroom)).toMatch(/across 5 of 9 points, 2 unknown, 2 not full yet$/);
   });
 
   it("the reporting ratio: reporting is not-at-risk, the tile inverted", async () => {
     const result = await health();
 
     expect(reportingPoints(result.points)).toBe(result.totals.activePoints - result.totals.pointsAtRisk);
-    expect(reportingPoints(result.points)).toBe(4);
+    expect(reportingPoints(result.points)).toBe(5);
   });
 
   it("the Projects card: the project's figure is Collection Health filtered to that project", async () => {
@@ -367,9 +391,12 @@ describe("every surface answers from the one predicate, and they agree", () => {
     expect(card!.health!.pointsAtRisk).toBe(atRiskCount(card!.health!.riskCounts));
     expect(card!.health!.pointsAtRisk).toBe(EXPECTED_AT_RISK.length);
     expect(card!.health!.pointsAtRisk).toBe(4);
+    // The muted line's count is Collection Health's too, and never in the figure.
+    expect(card!.health!.pointsHistoryUnknown).toBe(filtered.totals.pointsHistoryUnknown);
+    expect(card!.health!.pointsHistoryUnknown).toBe(1);
     // And the words on the card are the Home tile's words for the same number.
     expect(basFigure(card!.health!)).toMatchObject({
-      value: "4 points at risk",
+      value: "4 points at risk of data loss",
       alarm: true,
     });
   });
@@ -394,7 +421,7 @@ describe("the headroom badge asks the predicate, not the horizon", () => {
     minutesAgo: 60,
     rollHorizonHours: null,
     horizonSource: null,
-    horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null },
+    horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null, capacitySource: "entered", intervalS: null, intervalSource: null },
     completeness: "unknown",
     stationCount: null,
     heldCount: null,
@@ -404,8 +431,14 @@ describe("the headroom badge asks the predicate, not the horizon", () => {
 
   it("files a numberless AT-RISK point as unknown even if its horizon state says not full", () => {
     const h = computeHeadroom([
-      row({ risk: "roll_horizon_unknown", horizon: { state: "not_full", hours: null, currentHours: null, stationCount: 320, capacity: 500 } }),
+      row({ risk: "roll_horizon_unknown", horizon: { state: "not_full", hours: null, currentHours: null, stationCount: 320, capacity: 500, capacitySource: "entered", intervalS: null, intervalSource: null } }),
     ]);
+    expect(h.unknown).toBe(1);
+    expect(h.notFull).toBe(0);
+  });
+
+  it("files a numberless NEVER-COLLECTED point as unknown too", () => {
+    const h = computeHeadroom([row({ risk: "never_collected" })]);
     expect(h.unknown).toBe(1);
     expect(h.notFull).toBe(0);
   });
@@ -427,7 +460,9 @@ describe("the live shape of 2026-09-18: only not-full points hidden, nothing at 
   beforeEach(async () => {
     // Take the at-risk points out of collection, so the only non-ok states
     // left are the two not-full ones - and hide both, like the live screen.
-    for (const shape of EXPECTED_AT_RISK) {
+    // The unknown point goes too: this is the shape of 18 September, when
+    // nothing on the office read unknown.
+    for (const shape of [...EXPECTED_AT_RISK, SHAPES.find((s) => s.name === "Unknown")!]) {
       await testDb.basPoint.update({
         where: { pointId: pointIds.get(shape.name)! },
         data: { isActive: false, inactiveReason: "manual" },
@@ -488,7 +523,8 @@ describe("a hidden point that IS at risk is never silent", () => {
    * sentence and the tile move together.
    */
   it("keeps the count and the sentence when the only at-risk point is hidden", async () => {
-    for (const shape of EXPECTED_AT_RISK.filter((s) => s.name !== "Unknown")) {
+    // CfgLost - hidden, and losing data - is the one left at risk.
+    for (const shape of EXPECTED_AT_RISK.filter((s) => s.name !== "CfgLost")) {
       await testDb.basPoint.update({
         where: { pointId: pointIds.get(shape.name)! },
         data: { isActive: false, inactiveReason: "manual" },
@@ -498,12 +534,13 @@ describe("a hidden point that IS at risk is never silent", () => {
 
     expect(result.totals.pointsAtRisk).toBe(1);
     expect(result.totals.hiddenPointsAtRisk).toBe(1);
-    expect(atRiskTone(result.totals.riskCounts)).toBe("warn");
+    expect(atRiskTone(result.totals.riskCounts)).toBe("bad");
     expect(describeHiddenRisk(result)).toContain(
       "No points at risk are listed in the table below, but 1 hidden point is at risk.",
     );
-    // And the not-full hidden point beside it adds nothing to either number.
-    expect(result.totals.hiddenPoints).toBe(2);
+    // And the not-full and unknown hidden points beside it add nothing to either number.
+    expect(result.totals.hiddenPoints).toBe(3);
+    expect(result.totals.pointsHistoryUnknown).toBe(1);
 
     // The Projects card counts the hidden at-risk point too: hiding is a
     // preference of the browsing screens and changes nothing about collection.
@@ -511,7 +548,7 @@ describe("a hidden point that IS at risk is never silent", () => {
       (p) => p.name === `${PREFIX}PROJECT`,
     );
     expect(card?.health?.pointsAtRisk).toBe(1);
-    expect(basFigure(card!.health!)).toMatchObject({ value: "1 point at risk", alarm: true });
+    expect(basFigure(card!.health!)).toMatchObject({ value: "1 point at risk of data loss", alarm: true });
   });
 
   it("refuses to build prose over numbers that disagree", () => {

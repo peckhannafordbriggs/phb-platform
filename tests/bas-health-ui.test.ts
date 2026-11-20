@@ -29,6 +29,7 @@ import {
   describeCompleteness,
   describeShortfall,
   describeAtRisk,
+  describeHistoryUnknown,
   basRiskTone,
   describeEmptyRuns,
   describeRunGap,
@@ -58,17 +59,25 @@ const EVERY_RISK: RollRisk[] = [
   "ok",
   "at_risk",
   "data_lost",
+  "short_horizon",
   "buffer_not_full",
   "roll_horizon_unknown",
   "never_collected",
 ];
 
 describe("unknown is never rendered as safe", () => {
-  it("gives roll_horizon_unknown a warning tone, not the ok tone", () => {
+  it("gives roll_horizon_unknown the muted tone, never the ok tone", () => {
     // The single assertion this screen exists to protect. docs/08: "Unknown is
-    // not the same as safe and must never render green."
+    // not the same as safe and must never render green." Since 2026-11-20 it
+    // is not a measured risk either - muted, beside the at-risk figure - and
+    // still never green.
     expect(basRiskTone("roll_horizon_unknown")).not.toBe("ok");
-    expect(basRiskTone("roll_horizon_unknown")).toBe("warn");
+    expect(basRiskTone("roll_horizon_unknown")).toBe("neutral");
+  });
+
+  it("gives a horizon shorter than four polls the worst tone", () => {
+    expect(basRiskTone("short_horizon")).toBe("bad");
+    expect(RISK_EXPLANATION.short_horizon).toMatch(/four collector polls/);
   });
 
   it("gives the ok tone to exactly one risk state", () => {
@@ -100,6 +109,7 @@ const atRisk = (partial: Partial<Record<RollRisk, number>>): Record<RollRisk, nu
   data_lost: 0,
   buffer_not_full: 0,
   roll_horizon_unknown: 0,
+  short_horizon: 0,
   never_collected: 0,
   ...partial,
 });
@@ -163,6 +173,9 @@ describe("describeHorizon names three distinct states", () => {
     hours: 125,
     currentHours: null,
     stationCount: 500,
+    capacitySource: "entered",
+    intervalS: null,
+    intervalSource: null,
     capacity: 500,
     ...over,
   });
@@ -222,20 +235,40 @@ describe("describeHorizon names three distinct states", () => {
     expect(words.title).toMatch(/Workbench/);
   });
 
-  it("is amber for unknown, and asks for an interval ONLY for an interval trend", () => {
-    const missingCapacity = describeHorizon(horizon({ state: "unknown", hours: null, capacity: null, stationCount: 500 }));
-    expect(missingCapacity.label).toBe("Unknown");
-    expect(missingCapacity.tone).toBe("warn");
-    expect(missingCapacity.title).toMatch(/capacity/);
-    expect(missingCapacity.title).toMatch(/only for an interval trend/);
-    expect(missingCapacity.title).toMatch(/change-of-value trend has none/);
+  it("is muted for unknown, names what is missing, and asks for an interval ONLY for an interval trend", () => {
+    // Since 2026-11-20 a point with no capacity entered is judged against the
+    // station's assumed one, so unknown means all three are missing: no full
+    // buffer seen, no interval entered or measured, no count from the station.
+    const unknown = describeHorizon(horizon({ state: "unknown", hours: null, capacity: 500, capacitySource: "assumed", stationCount: null }));
+    expect(unknown.label).toBe("Unknown");
+    expect(unknown.tone).toBe("neutral");
+    expect(unknown.tone).not.toBe("ok");
+    expect(unknown.title).toMatch(/no record count/);
+    expect(unknown.title).toMatch(/capacity/);
+    expect(unknown.title).toMatch(/its interval if it is an interval trend/);
+    expect(unknown.title).toMatch(/change-of-value trend has none/);
+  });
 
-    // Capacity known, but the station reports no count: nothing to fill in
-    // either - the buffer simply cannot be known to be full or not.
-    const noCount = describeHorizon(horizon({ state: "unknown", hours: null, capacity: 500, stationCount: null }));
-    expect(noCount.tone).toBe("warn");
-    expect(noCount.title).toMatch(/no record count/);
-    expect(noCount.title).not.toMatch(/interval/i);
+  it("labels an estimate as one, with each half named for where it came from", () => {
+    const words = describeHorizon(
+      horizon({ state: "estimated", hours: 250, capacity: 500, capacitySource: "assumed", intervalS: 1800, intervalSource: "measured" }),
+    );
+    expect(words.label).toBe("≈ 10.4 days");
+    expect(words.detail).toBe("assumed 500 records × measured 30 min");
+    expect(words.tone).toBe("neutral");
+    // An entered capacity with a measured interval says only the interval was measured.
+    expect(
+      describeHorizon(horizon({ state: "estimated", hours: 100 / 60, capacity: 100, capacitySource: "entered", intervalS: 60, intervalSource: "measured" })).detail,
+    ).toBe("100 records × measured 1 min");
+  });
+
+  it("says when a full buffer or a not-full one was judged against an assumed capacity", () => {
+    expect(describeHorizon(horizon({ state: "measured", hours: 250, currentHours: 250, capacitySource: "assumed" })).detail).toBe(
+      "shortest seen · full by an assumed capacity",
+    );
+    expect(
+      describeHorizon(horizon({ state: "not_full", hours: null, stationCount: 320, capacity: 500, capacitySource: "assumed" })).detail,
+    ).toBe("320 of 500 (assumed)");
   });
 });
 
@@ -383,13 +416,23 @@ describe("the tile thresholds mirror the Grafana panels", () => {
   });
 
   it("warns rather than alarms when nothing is lost yet", () => {
-    expect(atRiskTone(atRisk({ roll_horizon_unknown: 3 }))).toBe("warn");
     expect(atRiskTone(atRisk({ at_risk: 2, never_collected: 1 }))).toBe("warn");
+  });
+
+  it("is red for a horizon shorter than four polls, as for a loss", () => {
+    expect(atRiskTone(atRisk({ short_horizon: 2 }))).toBe("bad");
+    expect(atRiskShape(atRisk({ short_horizon: 2, at_risk: 1 }))).toBe("losing");
+  });
+
+  it("is muted, never green, with nothing at risk and history sizes unknown", () => {
+    // Not a measured risk, so not amber or red; not safe, so not green.
+    expect(atRiskTone(atRisk({ ok: 3, roll_horizon_unknown: 334 }))).toBe("neutral");
+    expect(atRiskShape(atRisk({ roll_horizon_unknown: 334 }))).toBe("none");
   });
 
   it("classifies the shape behind the count", () => {
     expect(atRiskShape(atRisk({}))).toBe("none");
-    expect(atRiskShape(atRisk({ roll_horizon_unknown: 3 }))).toBe("unknown");
+    expect(atRiskShape(atRisk({ at_risk: 3 }))).toBe("behind");
     expect(atRiskShape(atRisk({ data_lost: 1 }))).toBe("losing");
   });
 });
@@ -401,10 +444,16 @@ describe("the tile says which problem it has, not just how many", () => {
    * number, and somebody glancing at the screen should not have to decode a
    * stripe or a hue to tell them apart.
    */
-  it("names capacity when nothing is lost", () => {
-    expect(describeAtRisk(atRisk({ roll_horizon_unknown: 3 }))).toBe(
-      "3 points, capacity unknown",
-    );
+  it("says at risk of data loss when nothing is lost yet", () => {
+    expect(describeAtRisk(atRisk({ at_risk: 3 }))).toBe("3 points at risk of data loss");
+    expect(describeAtRisk(atRisk({ short_horizon: 3 }))).toBe("3 points at risk of data loss");
+  });
+
+  it("does not count an unknown history size, and says it on a line of its own", () => {
+    expect(describeAtRisk(atRisk({ roll_horizon_unknown: 334 }))).toBe("None at risk");
+    expect(describeHistoryUnknown(334)).toBe("334 points: history size unknown");
+    expect(describeHistoryUnknown(1)).toBe("1 point: history size unknown");
+    expect(describeHistoryUnknown(0)).toBeNull();
   });
 
   it("names loss when data is gone", () => {
@@ -414,16 +463,14 @@ describe("the tile says which problem it has, not just how many", () => {
   it("says how many of the total are actually losing, when it is mixed", () => {
     // "1 of 4 points losing data" is more use than either "4 at risk" or
     // "1 losing" on its own.
-    expect(describeAtRisk(atRisk({ data_lost: 1, roll_horizon_unknown: 3 }))).toBe(
+    expect(describeAtRisk(atRisk({ data_lost: 1, at_risk: 3 }))).toBe(
       "1 of 4 points losing data",
     );
   });
 
   it("uses the singular for one point", () => {
     expect(describeAtRisk(atRisk({ data_lost: 1 }))).toBe("1 point losing data");
-    expect(describeAtRisk(atRisk({ roll_horizon_unknown: 1 }))).toBe(
-      "1 point, capacity unknown",
-    );
+    expect(describeAtRisk(atRisk({ at_risk: 1 }))).toBe("1 point at risk of data loss");
   });
 
   it("says nothing alarming at zero", () => {
@@ -460,18 +507,20 @@ describe("the risk breakdown says which states make up the total", () => {
     data_lost: 0,
     buffer_not_full: 0,
     roll_horizon_unknown: 0,
+    short_horizon: 0,
     never_collected: 0,
     ...partial,
   });
 
   it("drops zeroes and orders worst first", () => {
     const breakdown = riskBreakdown(
-      counts({ never_collected: 1, data_lost: 2, roll_horizon_unknown: 3 }),
+      counts({ never_collected: 1, data_lost: 2, short_horizon: 4, roll_horizon_unknown: 3 }),
     );
 
+    // The unknown three are not in the breakdown: they are not in the total.
     expect(breakdown).toEqual([
       { risk: "data_lost", count: 2 },
-      { risk: "roll_horizon_unknown", count: 3 },
+      { risk: "short_horizon", count: 4 },
       { risk: "never_collected", count: 1 },
     ]);
   });
@@ -487,6 +536,7 @@ describe("the risk breakdown says which states make up the total", () => {
     const all = counts({
       at_risk: 1,
       data_lost: 1,
+      short_horizon: 1,
       roll_horizon_unknown: 1,
       never_collected: 1,
     });

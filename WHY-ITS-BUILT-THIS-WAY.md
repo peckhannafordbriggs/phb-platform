@@ -3898,3 +3898,82 @@ missing grant passes it. Let a database error escape `sync_point` again and one
 point ends the pass for every station behind it, leaving `running` rows and
 no record. Narrow the Collection Health banner by the filter and an outage
 disappears from the building someone happens to be looking at.
+
+## 91 · A point is judged against how often it actually reports, and an unknown history is a line of its own, never a risk figure
+
+**Decision (2026-11-20).** Point Explorer, Collection Health, the Projects card,
+the reports and the collector's roll guard judge every point against two
+numbers where nobody has entered them from Workbench, each labelled where it is
+used:
+
+- **The expected interval**: `collection_interval_s` when entered; else the
+  median gap between the readings, when the gaps are even (the collector's own
+  `spacing_kind` rule: ten gaps, four in five within a tenth of the median) -
+  over the range on screen, and stored nightly-ish by the scheduler's pass as
+  `bas_points.measured_interval_s`; else none. A **break** is a gap over twice
+  the expected interval, or over four hours with none. One summary line, the
+  five longest, *Show all*.
+- **The assumed capacity**: `bas_points.capacity` when entered; else
+  `bas_stations.assumed_capacity`, 500 by default (Niagara's standard), editable
+  per station in Settings. The horizon in `bas_v_collection_health` is the
+  measured full-buffer span, else capacity × interval as configured, else as
+  *estimated* (either half not entered); `capacity_source` and
+  `interval_source` say which.
+
+And the at-risk figure changes membership: `roll_horizon_unknown` leaves
+`AT_RISK_ROLL_RISKS` for a muted line of its own, *history size unknown*, and
+`short_horizon` - a horizon under four collector polls - joins it, red.
+
+**Why.** CEI_JCI_N2: 334 interval histories reporting every 30 minutes, nothing
+entered. The 15-minute break floor drew about 280 breaks a week per point, one
+line each; the absent capacity made every point `roll_horizon_unknown`, which
+the one predicate counted: *334 points at risk*, of which none was. A warning
+that is always on teaches people to stop reading it, which is how a real one is
+missed - the reason § 48 split `buffer_not_full` out of unknown in September.
+
+**Why the measured interval is its own column and never
+`collection_interval_s`.** The 2026-09-18 rule (`add_bas_shortest_full_span`):
+a derived guess must not look like a fact read from Workbench. The measurement
+is NULL for exactly the change-of-value trends that rule protects, and the
+page says *measured* beside it.
+
+**Why an assumed capacity may call a buffer full.** A count of 500 against an
+assumed 500 might be half of a real 1,000-record buffer; its span is then
+half the real horizon. The error runs towards warning, never towards calm, and
+an entered capacity always wins. What must NOT hold an assumption is the
+stored minimum: the collector writes `shortest_full_span_s` only from an
+entered capacity, and infers a `roll_overwrite` gap only from the configured
+`roll_horizon_s`, so nothing permanent rests on 500. The view computes the
+assumed-capacity span live, every read.
+
+**Why the at-risk figure keeps `at_risk`, `data_lost` and `never_collected`
+beside `short_horizon`.** The request said short horizons should be "the only
+case" in the figure. Taken literally that drops the states that say the
+collector has fallen behind or never read a point - the 6-19 November outage
+would have read *0 at risk of data loss* on every card. The figure is "a real
+roll risk the horizon or the collector shows"; only the unknown left it.
+
+**Why the trend summary may not invent a number.** It is the report rule
+(§ 78, *code computes, the model narrates*) applied to prose that has to carry
+numbers: the stats are computed and rounded in code, and every number in the
+reply is checked against them; a reply that fails twice is withheld and the
+card says so. Every call is a row with its cost, so the Usage page and the
+safety ceiling see all of them; the cache is keyed by point, range and newest
+reading so the same data is never paid for twice.
+
+**Why compare mode shares an axis only for one recorded unit.** The reason the
+explorer was one point at a time (B4): 55 °F and a bare 12.8 on one scale look
+like the same quantity. Two points with the same recorded unit share the left
+axis; anything else - including two unitless points - gets a right axis
+labelled with its own unit, and the legend says which line is which. The
+comparison is limited to the same JACE and loads through the same function as
+the point, so the two lines cannot be drawn by two rules.
+
+**What breaks if you undo it.** Fall back to a fixed break floor and an
+interval trend nobody configured becomes a wall of breaks again. Put the
+unknown state back in the at-risk list and a station nobody has documented
+reads as hundreds of points at risk, over the one predicate's own test. Let the
+collector persist a span judged against an assumed capacity and a 1,000-record
+buffer is stuck at half its horizon forever. Let the summary through without
+the number check and the one sentence a person quotes is the one the data does
+not contain.

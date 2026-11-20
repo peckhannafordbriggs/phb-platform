@@ -40,7 +40,10 @@ export function basFigure(totals: {
   }
   return {
     state: "ok",
-    value: atRisk === 1 ? "1 point at risk" : `${atRisk} points at risk`,
+    // "of data loss" (2026-11-20): the figure counts a real roll risk only,
+    // since the history-size-unknown points left it for a muted line of
+    // their own, and the words say which question the number answers.
+    value: atRisk === 1 ? "1 point at risk of data loss" : `${atRisk} points at risk of data loss`,
     status,
     alarm: true,
   };
