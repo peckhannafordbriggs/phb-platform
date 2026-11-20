@@ -22,6 +22,7 @@ import { POST as createStation } from "@/app/api/modules/bas/settings/stations/r
 import { GET as stationPoints } from "@/app/api/modules/bas/settings/stations/[stationId]/points/route";
 import { PATCH as patchPoint } from "@/app/api/modules/bas/settings/points/[pointId]/route";
 import { POST as bulkPoints } from "@/app/api/modules/bas/settings/points/bulk/route";
+import { POST as bulkVisibility } from "@/app/api/modules/bas/settings/points/bulk-visibility/route";
 import { GET as vocabularies } from "@/app/api/modules/bas/settings/vocabularies/route";
 import { GET as buildingEquipment } from "@/app/api/modules/bas/settings/buildings/[siteId]/equipment/route";
 import { PUT as buildingOccupancy } from "@/app/api/modules/bas/settings/buildings/[siteId]/occupancy/route";
@@ -332,8 +333,9 @@ describe("no settings route ever returns the password or the ciphertext", () => 
     // equipment/[id], buildings/[id]/occupancy (Reports, Phase 2), and the
     // two name-derived actions (2026-11-19): stations/[id]/equipment-from-names
     // and stations/[id]/suggestions/apply. 19: "Run assignment now" (the same
-    // day), stations/[id]/auto-assign.
-    expect((await routeFiles()).length).toBe(19);
+    // day), stations/[id]/auto-assign. 20: Hide / Show on a selection
+    // (2026-11-20), points/bulk-visibility.
+    expect((await routeFiles()).length).toBe(20);
   });
 
   it("returns neither the plaintext nor the ciphertext from ANY of them", async () => {
@@ -508,6 +510,9 @@ describe("no settings route ever returns the password or the ciphertext", () => 
           ).text(),
           await (await bulkPoints(json({ pointIds: [pointId], role: "no_such_role" }))).text(),
           await (await bulkPoints(json({ pointIds: [] }))).text(),
+          await (await bulkVisibility(json({ pointIds: [pointId], visible: false }))).text(),
+          await (await bulkVisibility(json({ pointIds: [pointId], visible: true }))).text(),
+          await (await bulkVisibility(json({ pointIds: [pointId], visible: true, isActive: false }))).text(),
           await (
             await deleteEquipment(json({}, "DELETE"), { params: Promise.resolve({ equipmentId }) })
           ).text(),

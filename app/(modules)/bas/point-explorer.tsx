@@ -32,6 +32,8 @@ import {
   formatTimestamp,
   formatValue,
   type Tone,
+  describeStationPass,
+  stationPickerOptions,
 } from "./health-client";
 import {
   BreaksList,
@@ -72,7 +74,7 @@ import {
 } from "./value-axis";
 import { unitSymbol } from "@/lib/modules/bas/units";
 import { stateWord, type BooleanStates } from "@/lib/modules/bas/value-kind";
-import { Button, Dropdown, Segmented } from "@/components/ui";
+import { Button, Dropdown, Segmented, type DropdownOption } from "@/components/ui";
 
 /**
  * Point Explorer - what one point has been doing.
@@ -302,19 +304,21 @@ export function PointExplorer() {
           label="Project"
           value={data.selectedProjectId}
           onChange={(v) => setCascade(PROJECT_PARAM, v)}
-          options={data.projects.map((row) => [row.projectId, row.name])}
+          options={data.projects.map((row) => ({ value: row.projectId, label: row.name }))}
         />
         <Picker
           label="Building"
           value={data.selectedSiteId}
           onChange={(v) => setCascade(SITE_PARAM, v)}
-          options={data.sites.map((row) => [row.siteId, row.name])}
+          options={data.sites.map((row) => ({ value: row.siteId, label: row.name }))}
         />
         <Picker
           label="JACE"
           value={data.selectedStationId}
           onChange={(v) => setCascade(STATION_PARAM, v)}
-          options={data.stations.map((row) => [row.stationId, row.name])}
+          // Tree order: a via-parent JACE indented under the JACE whose
+          // import carries it, its own last pass beside it (2026-11-20).
+          options={stationPickerOptions(data.stations)}
         />
 
         <div className="flex items-center gap-2 text-sm">
@@ -386,6 +390,7 @@ export function PointExplorer() {
           {describeClockOffset(data.stationClockOffsetS, data.stationClockMeasuredAt)}
         </p>
       )}
+      <ViaParentStationNote stations={data.stations} selectedStationId={data.selectedStationId} />
 
       {selectedPoint === null ? (
         data.points.length > 0 ? (
@@ -1595,6 +1600,37 @@ function ExplorerSkeleton() {
 
 
 /**
+ * When the chosen JACE is a via-parent station (2026-11-20): that it is read
+ * through its parent, and ITS OWN last pass - the parent's pass being ok says
+ * nothing about whether this station's folder was there. Nothing for a direct
+ * station or no selection. Exported for tests.
+ */
+export function ViaParentStationNote({
+  stations,
+  selectedStationId,
+}: {
+  stations: ReadonlyArray<{
+    stationId: string;
+    name: string;
+    viaParent: boolean;
+    parentName: string | null;
+    lastPass: { status: string; at: string } | null;
+  }>;
+  selectedStationId: string | null;
+}) {
+  const station = stations.find((row) => row.stationId === selectedStationId);
+  if (station === undefined || !station.viaParent) return null;
+  const pass = describeStationPass(station.lastPass);
+  return (
+    <p className="-mt-4 text-xs text-[var(--muted)]" data-testid="bas-via-parent-note">
+      {station.name} is collected through {station.parentName ?? "its parent station"}
+      {" · "}
+      <span style={{ color: pass.tone === "ok" ? undefined : TONE_INK[pass.tone] }}>{pass.label}</span>
+    </p>
+  );
+}
+
+/**
  * One level of the Project -> Building -> JACE cascade.
  *
  * The same control as Collection Health's. Duplicated rather than shared
@@ -1610,7 +1646,7 @@ function Picker({
 }: {
   label: string;
   value: string | null;
-  options: Array<[string, string]>;
+  options: DropdownOption[];
   onChange: (value: string | null) => void;
 }) {
   return (
@@ -1623,7 +1659,7 @@ function Picker({
         disabled={options.length === 0}
         options={[
           { value: ALL_SITES, label: "All" },
-          ...options.map(([key, text]) => ({ value: key, label: text })),
+          ...options,
         ]}
         className="min-w-44"
       />

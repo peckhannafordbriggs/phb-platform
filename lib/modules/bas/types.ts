@@ -418,6 +418,11 @@ export interface IngestRunRow {
   collectorHost: string | null;
   /** How many errors the run recorded. The payloads themselves stay in the row. */
   errorCount: number;
+  /**
+   * The station the run was for (2026-11-20: a via-parent station has runs of
+   * its own), or null for a pass refused before it reached any station.
+   */
+  stationName: string | null;
 }
 
 /** One bar of the "records written per collector run" chart. */
@@ -485,6 +490,22 @@ export interface StationOption {
   /** display_name falling back to the Niagara name, as the pickers show it. */
   name: string;
   siteName: string;
+  /**
+   * Tree order (2026-11-20). The list arrives ordered by orderStationTree:
+   * each station, then the stations whose history it imports. `depth` is the
+   * indent; `parentName` the station above it in this list, or null.
+   */
+  parentStationId: string | null;
+  /** connection_mode = 'via_parent': read through its parent, never connected to. */
+  viaParent: boolean;
+  depth: number;
+  parentName: string | null;
+  /**
+   * This station's OWN newest collector run - a via-parent station has run
+   * rows of its own since the collector reads it through its parent. Null
+   * when the collector has never recorded one for it.
+   */
+  lastPass: { status: string; at: string } | null;
 }
 
 /**
@@ -655,8 +676,10 @@ export interface CollectorPass {
   /** Minutes from that to observedAt, by the database's clock. */
   minutesSinceCompleted: number | null;
   /**
-   * Active stations the collector connects to directly. Zero means there is
-   * nothing for it to collect, and the banner says nothing.
+   * Active stations the collector collects: those it connects to directly,
+   * and since 2026-11-20 those it reads through a parent (via_parent with a
+   * parent chosen). Zero means there is nothing for it to collect, and the
+   * banner says nothing.
    */
   collectableStations: number;
 }

@@ -48,6 +48,11 @@ export interface ProvenancePoint {
   timezone?: string;
   /** False when the collector is not fetching this point. */
   collected: boolean;
+  /**
+   * Hidden in Settings (bas_points.is_visible false, 2026-11-20): collected,
+   * but not building data for questions. Optional so older fixtures type-check.
+   */
+  hidden?: boolean;
 }
 
 export interface GapOverlap {

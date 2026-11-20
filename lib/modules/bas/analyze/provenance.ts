@@ -176,6 +176,7 @@ interface PointRow {
   station: string;
   timezone: string;
   is_active: boolean;
+  hidden: boolean;
 }
 
 async function lookupPoints(
@@ -189,7 +190,8 @@ async function lookupPoints(
             s.name AS site,
             s.timezone AS timezone,
             COALESCE(st.display_name, st.niagara_station_name) AS station,
-            p.is_active
+            p.is_active,
+            NOT p.is_visible AS hidden
        FROM bas_points p
        JOIN bas_stations st ON st.station_id = p.station_id
        JOIN bas_sites s ON s.site_id = st.site_id
@@ -205,6 +207,7 @@ async function lookupPoints(
     station: row.station,
     timezone: row.timezone,
     collected: row.is_active,
+    hidden: row.hidden,
   }));
 }
 

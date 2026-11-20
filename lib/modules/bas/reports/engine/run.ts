@@ -844,6 +844,10 @@ async function produce(
           count: scope.points.filter((p) => p.stationId === s.stationId && p.role === null).length,
         }))
         .filter((s) => s.count > 0),
+      // Points a person hid in Settings: still collected, left out of every question.
+      hidden: scope.stations
+        .map((s) => ({ stationName: s.name, count: scope.hiddenByStation.get(s.stationId) ?? 0 }))
+        .filter((s) => s.count > 0),
     },
     summary: {
       status: summaryStatus,

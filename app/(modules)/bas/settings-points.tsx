@@ -21,11 +21,14 @@ import {
   ROLE_RIPPLE_NOTE,
   applyHighConfidenceSuggestions,
   bulkClassifyPoints,
+  bulkSetPointVisibility,
   createEquipment,
   createEquipmentFromNames,
   deleteEquipment,
   describeApplySuggestionsResult,
   describeBulkResult,
+  describeBulkVisibilityPlan,
+  describeBulkVisibilityResult,
   describeEquipmentFromNamesResult,
   describeCollected,
   describePlausibility,
@@ -39,6 +42,7 @@ import {
   updatePointLabel,
   updatePointRole,
   updatePointVisibility,
+  STUCK_HIDE_SUGGESTION,
 } from "./health-client";
 import {
   LevelPill,
@@ -180,6 +184,13 @@ interface BulkDraft {
 const EMPTY_BULK: BulkDraft = { role: "", equipment: "" };
 
 /** A write about to happen, shown for confirmation with its count. */
+/** Hide or Show on a selection, waiting for Confirm (2026-11-20). */
+interface VisibilityPlan {
+  pointIds: string[];
+  visible: boolean;
+  sentence: string;
+}
+
 interface PendingBulk {
   pointIds: string[];
   role?: string | null;
@@ -222,6 +233,8 @@ export function StationPoints({
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [bulk, setBulk] = useState<BulkDraft>(EMPTY_BULK);
   const [pending, setPending] = useState<PendingBulk | null>(null);
+  /** Hide or Show on the selection, staged for confirmation (2026-11-20). */
+  const [visibilityPlan, setVisibilityPlan] = useState<VisibilityPlan | null>(null);
   /** The open "Apply all high-confidence suggestions" preview: its ticked points. */
   const [suggestionSelection, setSuggestionSelection] = useState<ReadonlySet<string> | null>(null);
   /** The open "Equipment from name prefixes" preview, as edited. */
@@ -330,7 +343,9 @@ export function StationPoints({
 
   /**
    * The Shown checkbox (B8.3). Optimistic: flip the row, call the API, flip
-   * it back if that fails. Hiding is cosmetic and reversible.
+   * it back if that fails. Hiding is reversible and never stops collection;
+   * since 2026-11-20 a hidden point is also left out of reports, Analyze and
+   * the stuck-value check.
    */
   const toggleVisible = useCallback((point: SettingsPoint, visible: boolean) => {
     const flip = (to: boolean) =>
@@ -473,6 +488,30 @@ export function StationPoints({
     });
   }, [pending, run]);
 
+  const stageVisibility = useCallback(
+    (visible: boolean) => {
+      if (selected.size === 0) return;
+      setPending(null);
+      setVisibilityPlan({
+        pointIds: [...selected],
+        visible,
+        sentence: describeBulkVisibilityPlan(selected.size, visible),
+      });
+    },
+    [selected],
+  );
+
+  const confirmVisibility = useCallback(() => {
+    if (visibilityPlan === null) return;
+    const plan = visibilityPlan;
+    setVisibilityPlan(null);
+    void run(async () => {
+      const result = await bulkSetPointVisibility(plan.pointIds, plan.visible);
+      setSelected(new Set());
+      return describeBulkVisibilityResult(result, plan.visible);
+    });
+  }, [visibilityPlan, run]);
+
   const submitEquipment = useCallback(
     (values: EquipmentValues) => {
       if (equipmentForm === null || list === null) return Promise.resolve(false);
@@ -565,6 +604,10 @@ export function StationPoints({
           pending={pending}
           onConfirmBulk={confirmBulk}
           onCancelBulk={() => setPending(null)}
+          visibilityPlan={visibilityPlan}
+          onStageVisibility={stageVisibility}
+          onConfirmVisibility={confirmVisibility}
+          onCancelVisibility={() => setVisibilityPlan(null)}
           levels={levels}
           suggestionsOpen={suggestionSelection !== null}
           onStageSuggestions={() =>
@@ -712,6 +755,10 @@ function ClassificationToolbar({
   pending,
   onConfirmBulk,
   onCancelBulk,
+  visibilityPlan = null,
+  onStageVisibility,
+  onConfirmVisibility,
+  onCancelVisibility,
   levels,
   suggestionsOpen,
   onStageSuggestions,
@@ -735,6 +782,11 @@ function ClassificationToolbar({
   pending: PendingBulk | null;
   onConfirmBulk: () => void;
   onCancelBulk: () => void;
+  /** Hide / Show on the selection (2026-11-20). Absent: the two buttons are not drawn. */
+  visibilityPlan?: VisibilityPlan | null;
+  onStageVisibility?: (visible: boolean) => void;
+  onConfirmVisibility?: () => void;
+  onCancelVisibility?: () => void;
   levels: { high: number; medium: number };
   suggestionsOpen: boolean;
   onStageSuggestions: () => void;
@@ -909,6 +961,52 @@ function ClassificationToolbar({
             Confirm
           </Button>
           <Button size="sm"  disabled={busy} onClick={onCancelBulk}>
+            Cancel
+          </Button>
+        </p>
+      )}
+
+      {/*
+        Hidden, on a selection (2026-11-20). A hidden point keeps being
+        collected and stays in every data-loss figure; it leaves the browsing
+        screens, reports, Analyze and the stuck-value check. Built for a JACE's
+        local copies of a station collected on its own (CEI_JCI_N2's AHU_7/*,
+        which log 0). Confirmed with the count, audited per point.
+      */}
+      {onStageVisibility !== undefined && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-[var(--muted)]">On the selection</span>
+          <Button size="sm"
+            disabled={busy || selected.size === 0}
+            onClick={() => onStageVisibility(false)}
+          >
+            Hide {selected.size} {noun(selected.size)}…
+          </Button>
+          <Button size="sm"
+            disabled={busy || selected.size === 0}
+            onClick={() => onStageVisibility(true)}
+          >
+            Show {selected.size} {noun(selected.size)}…
+          </Button>
+          <span className="text-[var(--muted)]">
+            Hidden points keep being collected; they are left out of reports, Analyze and the
+            stuck-value check.
+          </span>
+        </div>
+      )}
+
+      {visibilityPlan !== null && (
+        <p
+          className="flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border px-3 py-2 text-xs"
+          style={TONE_STYLE.warn}
+          role="alertdialog"
+          data-testid="bas-visibility-confirm"
+        >
+          <span>{visibilityPlan.sentence}</span>
+          <Button size="sm" disabled={busy} onClick={onConfirmVisibility}>
+            Confirm
+          </Button>
+          <Button size="sm" disabled={busy} onClick={onCancelVisibility}>
             Cancel
           </Button>
         </p>
@@ -1324,15 +1422,24 @@ function PointRow({
           ) : (
             <span className="text-[var(--muted)]"> · {plausibility.detail}</span>
           ))}
+        {/* The stuck-value warning suggests Hide for a copy (2026-11-20). */}
+        {point.plausibility.state === "flat" && (
+          <span className="text-[var(--muted)]" title={STUCK_HIDE_SUGGESTION} data-testid="bas-flat-hide-hint">
+            {" "}· a copy? hide it
+          </span>
+        )}
       </td>
       <td className="py-2">
-        <label className="inline-flex items-center gap-1.5">
+        <label
+          className="inline-flex items-center gap-1.5"
+          title="Hidden: still collected and counted in every data-loss figure; left out of the browsing screens, reports, Analyze and the stuck-value check."
+        >
           <input
             type="checkbox"
             checked={point.visible}
             readOnly={onToggleVisible === undefined}
             onChange={(event) => onToggleVisible?.(point, event.target.checked)}
-            aria-label={`Show ${name} on the browsing screens`}
+            aria-label={`Show ${name} on the browsing screens, in reports and in Analyze`}
           />
           {point.visible ? "Shown" : "Hidden"}
         </label>

@@ -241,6 +241,25 @@ export function describeScope(provenance: Provenance): string {
   }
 }
 
+/**
+ * The plan named a point a person hid in Settings (2026-11-20). Hidden points
+ * are left out of the catalogue and the planner is told to leave them out, so
+ * this is a question that named one - or a plan that ignored the rule - and
+ * either way the answer rests on a point that is not building data. Only for
+ * a declared scope: a widened one holds every point by construction.
+ */
+export function describeHiddenInScope(provenance: Provenance): string {
+  if (provenance.scope !== "declared") return "";
+  const hidden = provenance.points.filter((p) => p.hidden === true);
+  if (hidden.length === 0) return "";
+  const one = hidden.length === 1;
+  const names = hidden.slice(0, 5).map((p) => p.name).join(", ");
+  return (
+    `This answer read ${hidden.length} point${one ? "" : "s"} hidden in Settings (${names}${hidden.length > 5 ? ", ..." : ""}). ` +
+    `Hidden points are collected but are not building data - usually a controller's copy of a history kept on another station.`
+  );
+}
+
 export function describeUnclassified(provenance: Provenance): string {
   if (provenance.unclassifiedExcluded === 0) return "";
   return `${provenance.unclassifiedExcluded} collected point${provenance.unclassifiedExcluded === 1 ? " has" : "s have"} no role and ${provenance.unclassifiedExcluded === 1 ? "was" : "were"} outside this search, which selected by what a point measures.`;

@@ -181,7 +181,7 @@ async function adminViewer(): Promise<Viewer> {
  *   cov_stalled       as cov_temp, but the checkpoint's last status is error.
  *                                                                    -> changing (0 h known)
  *   cov_few           temperature, no interval, 3 readings.          -> too few
- *   hidden_temp       as whole_temp, is_visible false.               -> FLAT, listed, says hidden
+ *   hidden_temp       as whole_temp, is_visible false.               -> not checked, hidden (2026-11-20)
  *   lookback_temp     temperature. A different value 100 days ago, then 15
  *                     identical readings every 6 days inside the lookback.
  *                                                                    -> FLAT, lookback exhausted
@@ -395,7 +395,6 @@ const FLAGGED = [
   "flat_pressure",
   "pos_8d",
   "cov_temp",
-  "hidden_temp",
   "lookback_temp",
   "empty_temp",
   "b_temp",
@@ -611,7 +610,7 @@ describe("thresholds are per kind of measurement", () => {
     const line = describeThresholds();
     for (const t of PLAUSIBILITY_THRESHOLDS) expect(line).toContain(t.measurement);
     expect(line).toContain(`at least ${MIN_READINGS} readings`);
-    expect(line).toContain("Setpoints, status and command points, and points with no role are not judged");
+    expect(line).toContain("Setpoints, status and command points, points with no role, and hidden points are not judged");
     for (const t of PLAUSIBILITY_THRESHOLDS) expect(t.why.length).toBeGreaterThan(20);
   });
 });
@@ -729,16 +728,35 @@ describe("what the check must not do", () => {
     expect(result.points.length).toBe(inDatabase[0]!.n);
   });
 
-  it("a hidden flagged point is listed, counted, and says it is hidden", async () => {
+  it("a hidden point is not judged, and the card says how many were left out (2026-11-20)", async () => {
+    // hidden_temp is flat exactly like whole_temp. Hidden in Settings - a
+    // JACE's local copy logging one value is the case - it is not judged: not
+    // in the flagged list, not in the count, and said on the Not judged line.
     const result = await health();
-    const hidden = result.plausibility.flat.find((p) => p.pointName === name("hidden_temp"));
-    expect(hidden).toBeDefined();
-    expect(hidden!.visible).toBe(false);
+    expect(result.plausibility.flat.find((p) => p.pointName === name("hidden_temp"))).toBeUndefined();
+    expect(result.plausibility.notChecked.hidden).toBe(1);
     expect(result.totals.pointsFlat).toBe(FLAGGED.length);
 
     const html = renderToStaticMarkup(createElement(StuckCard, { health: result, suffix: "" }));
-    expect(html).toContain(name("hidden_temp"));
-    expect(html).toContain("hidden from the browsing screens, still collected");
+    expect(html).not.toContain(name("hidden_temp"));
+    expect(html).toContain("1 hidden in Settings");
+  });
+
+  it("every flagged point suggests hiding it if it is a copy, and says hiding a real sensor drops it from reports", async () => {
+    const result = await health();
+    const html = renderToStaticMarkup(createElement(StuckCard, { health: result, suffix: "" }));
+    const suggestions = html.match(/data-testid="bas-stuck-hide-suggestion"/g) ?? [];
+    expect(suggestions).toHaveLength(result.plausibility.flat.length);
+    expect(html).toContain("hide it in Settings → Points");
+    expect(html).toContain("If it is a real sensor, go and look at it");
+  });
+
+  it("the SQL and the judge agree on a hidden point: no facts computed, reason hidden", async () => {
+    const id = seeded.ids["hidden_temp"]!;
+    const list = await getStationPoints(viewer, seeded.fixture.stationId.toString());
+    const row = list.points.find((p) => p.pointId === id.toString());
+    expect(row?.plausibility.state).toBe("not_checked");
+    expect(row?.plausibility.notCheckedReason).toBe("hidden");
   });
 
   it("presents a flag as something to look at, never as a confirmed fault", async () => {
@@ -981,7 +999,7 @@ describe("the Collection Health card", () => {
       checked: 5,
       moving: 5,
       tooFewReadings: 0,
-      notChecked: { not_collected: 0, no_role: 3, setpoint: 0, state: 0, state_type: 0, no_threshold: 0 },
+      notChecked: { not_collected: 0, hidden: 0, no_role: 3, setpoint: 0, state: 0, state_type: 0, no_threshold: 0 },
       flat: [],
     };
     expect(describeStuck(zero, "")).toBe("Every checked point is still changing value - 5 points judged.");

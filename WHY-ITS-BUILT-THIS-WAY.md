@@ -3977,3 +3977,78 @@ collector persist a span judged against an assumed capacity and a 1,000-record
 buffer is stuck at half its horizon forever. Let the summary through without
 the number check and the one sentence a person quotes is the one the data does
 not contain.
+
+## 92 · A via-parent station is collected through its parent and shown under it; Hidden means "not building data"
+
+**Decision (2026-11-20).** Two halves, one cause.
+
+1. **Via-parent stations are collected** (phb-bas, `collector/targets.py`). A
+   station set to *via parent* is read from its parent's oBIX history space,
+   `/obix/histories/<its Niagara name>/`, on its DIRECT ANCESTOR's connection -
+   address, login, certificate pin - found by walking `parent_station_id`
+   until a `direct` station. Its points, runs, checkpoints, gaps and
+   roll-guard verdicts are its own row's. A chain that never reaches an active
+   direct station is MISCONFIGURED: named, a failed run against its own row
+   every pass, never a silent skip. On the platform every JACE list orders
+   such a station under its parent with its own last pass
+   (`orderStationTree`, one function for Collection Health, Point Explorer
+   and the Reports station picker); its Settings card says *Collected through
+   <parent>* where the login block was, and its Edit form offers the names
+   and the parent only.
+2. **Hidden leaves analysis.** `bas_points.is_visible = false` now also
+   leaves reports, the Analyze catalogue and the stuck-value check, as well as
+   the browsing screens; it stays collected and stays in every data-loss
+   figure. Set per point (the *Shown* box) or on a selection (*Hide N
+   points…*), audited per point as `bas.point_visibility_changed`.
+
+**Why.** Production registered CEI_AHU_7, CEI_AHU_8 and CEI_PLANT under
+CEI_JCI_N2, and the collector read only direct stations - three registered
+stations, never collected, and each card asking for a login it would never
+use. Collecting them exposed the second problem: CEI_JCI_N2 keeps its own
+local copies of CEI_AHU_7's histories (`AHU_7/*`), which log 0. Flat by
+construction, every one of them is a stuck sensor to the plausibility check
+and a zero to every report and question - while the real values sit on
+CEI_AHU_7.
+
+**Why the parent's pin, login and address, and never the child's.** The
+collector never opens a connection to a via-parent station (D12: that needs
+obixDriver-rt and a commissioning upgrade on each JACE). The bytes on the wire
+are the parent's certificate, so the parent's pin is the only one that can
+mean anything; a fingerprint or login stored on the child would be a claim
+that something checks it.
+
+**Why the parent's clock and version are not written onto the child.** The
+connection's `/obix/about` answers for the parent. Imported records keep the
+source station's timestamps, so the parent's offset says nothing about them,
+and a Niagara version recorded on the child would be the parent's. Nothing is
+written rather than the wrong machine's numbers.
+
+**Why MISCONFIGURED is red and never "awaiting".** A via-parent row is created
+through a form that requires a parent; a broken chain means somebody changed
+something - deactivated the JACE, pointed two stations at each other. The one
+amber case is inherited: a child whose direct ancestor has no login yet and
+that has never collected waits with its parent, in a sentence that names the
+parent's missing login.
+
+**Why Hidden and not a second flag.** The Points list already calls
+`is_visible = false` *Hidden*. A second, different "hidden" for "not building
+data" would have put two meanings on one word on one row. The cost is that a
+point hidden before 2026-11-20 for display reasons now also leaves reports and
+Analyze; hiding was audited from B8.3 on, so who hid what is answerable
+(`runbook.md` → *A point is missing from a report or from Analyze*).
+
+**Why a hidden point stays in the data-loss figures.** B8.3's rule: hiding
+must never make the dashboard look better about losing history. A zero copy
+that stops being collected is still a collector problem worth seeing. What it
+leaves is everything that treats its VALUES as building data. And it leaves
+the stuck-value check out loud: the *Not judged* line counts *N hidden in
+Settings*, and a report's Point Inventory says how many were left out.
+
+**What breaks if you undo it.** Read only direct stations and every station
+behind a JACE is registered and never collected, with nothing saying so. Use
+the child's own connection fields and a stale address or pin from before the
+station was re-parented is used. Write the parent's clock onto the child and
+Point Explorer reports a skew the child does not have. Let hidden points back
+into the stuck check and reports and CEI's local copies are a permanent amber
+card and a page of zeros; drop them from the risk figures as well and hiding
+becomes a way to make an outage disappear.

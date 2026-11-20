@@ -18,6 +18,7 @@ import type {
   RunGap,
   RunRecordPoint,
   SiteOption,
+  StationOption,
   TrendGap,
   TrendPoint,
   TrendRange,
@@ -63,6 +64,7 @@ import {
   type PlausibilitySummary,
 } from "./plausibility";
 import { plausibilityLateral } from "./plausibility-sql";
+import { orderStationTree } from "./station-tree";
 import {
   booleanStates,
   valueKindFromDataType,
@@ -235,6 +237,16 @@ interface StationRow {
   station_id: bigint;
   name: string;
   site_name: string;
+  /** The station whose history import carries this one (via_parent), else null. */
+  parent_station_id: bigint | null;
+  connection_mode: string;
+  /** This station's own most recent collector run (2026-11-20). */
+  last_run_status: string | null;
+  last_run_at: Date | null;
+  /** Levels below its root in the picker's tree; see orderStationTree. */
+  depth: number;
+  /** The parent's name when the parent is in the same list. */
+  parent_name: string | null;
 }
 
 export interface ResolvedSelection {
@@ -338,15 +350,51 @@ async function resolveSelection(
   // --- JACEs: narrowed by both levels above.
   const stationSiteScope = siteFilter(siteIds, Prisma.sql`st.site_id`);
 
-  const stations = await tx.$queryRaw<StationRow[]>`
+  // Each with its parent and its own newest run (2026-11-20): a via-parent
+  // station is collected through its parent and listed under it, with the
+  // status of ITS pass - not the parent's - beside it. The newest run is a
+  // LATERAL probe per station on the started_at index, the same shape as the
+  // Settings tree's.
+  const flatStations = await tx.$queryRaw<
+    Array<Omit<StationRow, "depth" | "parent_name">>
+  >`
     SELECT st.station_id,
            COALESCE(st.display_name, st.niagara_station_name) AS name,
-           s.name AS site_name
+           s.name AS site_name,
+           st.parent_station_id,
+           st.connection_mode,
+           run.status AS last_run_status,
+           COALESCE(run.finished_at, run.started_at) AS last_run_at
     FROM bas_stations st
     JOIN bas_sites s ON s.site_id = st.site_id
+    LEFT JOIN LATERAL (
+      SELECT r.status, r.started_at, r.finished_at
+        FROM bas_ingest_runs r
+       WHERE r.station_id = st.station_id
+       ORDER BY r.started_at DESC
+       LIMIT 1
+    ) run ON TRUE
     WHERE ${stationSiteScope} AND st.is_active
     ORDER BY s.name, name
   `;
+  const stations: StationRow[] = orderStationTree(
+    flatStations.map((row) => ({
+      ...row,
+      stationId: row.station_id.toString(),
+      parentStationId: row.parent_station_id?.toString() ?? null,
+      siteName: row.site_name,
+    })),
+  ).map((row) => ({
+    station_id: row.station_id,
+    name: row.name,
+    site_name: row.site_name,
+    parent_station_id: row.parent_station_id,
+    connection_mode: row.connection_mode,
+    last_run_status: row.last_run_status,
+    last_run_at: row.last_run_at,
+    depth: row.depth,
+    parent_name: row.parentName,
+  }));
 
   const selectedStation =
     requestedStation === null
@@ -611,6 +659,8 @@ interface RunRow {
   records_written: number;
   collector_host: string | null;
   error_count: number;
+  /** Which station the run was for; null for a refused pass that reached none. */
+  station_name: string | null;
 }
 
 interface RunRecordRow {
@@ -875,6 +925,7 @@ export async function getCollectionHealth(
         ir.points_attempted,
         ir.records_written,
         ir.collector_host,
+        COALESCE(st.display_name, st.niagara_station_name) AS station_name,
         jsonb_array_length(
           CASE WHEN jsonb_typeof(ir.errors) = 'array'
                THEN ir.errors ELSE '[]'::jsonb END
@@ -941,7 +992,10 @@ export async function getCollectionHealth(
           (SELECT count(*)::int
              FROM bas_stations st
             WHERE st.is_active
-              AND st.connection_mode = 'direct'
+              -- Direct, or read through a parent (2026-11-20). A via-parent
+              -- row with no parent is not collected - the collector reports
+              -- it as MISCONFIGURED - and is not counted.
+              AND (st.connection_mode = 'direct' OR st.parent_station_id IS NOT NULL)
               AND ${siteFilter(entitled, Prisma.sql`st.site_id`)}) AS collectable_stations
         FROM last
       `,
@@ -1144,11 +1198,7 @@ export async function getCollectionHealth(
       orgName: row.org_name,
     })),
     sites: selection.sites.map(toSiteOption),
-    stations: selection.stations.map((row) => ({
-      stationId: row.station_id.toString(),
-      name: row.name,
-      siteName: row.site_name,
-    })),
+    stations: selection.stations.map(toStationOption),
 
     selectedProjectId: selection.selectedProject?.project_id.toString() ?? null,
     selectedProjectName: selection.selectedProject?.name ?? null,
@@ -1400,6 +1450,28 @@ export function clampWindowDays(requested: number | undefined): number {
   return whole;
 }
 
+/**
+ * One JACE in a picker, in tree order (2026-11-20): its depth under the
+ * station whose import carries it, that station's name, and its own newest
+ * run - so a via-parent station reads as itself, under its parent, with its
+ * own pass status.
+ */
+function toStationOption(row: StationRow): StationOption {
+  return {
+    stationId: row.station_id.toString(),
+    name: row.name,
+    siteName: row.site_name,
+    parentStationId: row.parent_station_id?.toString() ?? null,
+    viaParent: row.connection_mode === "via_parent",
+    depth: row.depth,
+    parentName: row.parent_name,
+    lastPass:
+      row.last_run_status === null || row.last_run_at === null
+        ? null
+        : { status: row.last_run_status, at: row.last_run_at.toISOString() },
+  };
+}
+
 function toSiteOption(row: SiteRow): SiteOption {
   return {
     siteId: row.site_id.toString(),
@@ -1441,8 +1513,8 @@ function toPointHealthRow(row: PointRow): PointHealthRow {
 /**
  * Every ACTIVE point matching `where` (a filter over the view aliased `h`),
  * with the plausibility facts computed for the ones the role says to check.
- * Hidden points included: a flagged point is listed whether or not somebody
- * hid it from the browsing screens.
+ * A hidden point is returned and judged `hidden` - not checked, and counted
+ * as such (2026-11-20).
  */
 async function loadPlausibilityRows(
   tx: Prisma.TransactionClient,
@@ -1456,6 +1528,7 @@ async function loadPlausibilityRows(
       COALESCE(st.display_name, st.niagara_station_name) AS station_name,
       h.unit,
       p.is_visible AS visible,
+      p.is_visible,
       p.is_active,
       p.data_type,
       p.point_role,
@@ -1556,6 +1629,7 @@ function toIngestRunRow(row: RunRow): IngestRunRow {
     recordsWritten: row.records_written,
     collectorHost: row.collector_host,
     errorCount: row.error_count,
+    stationName: row.station_name,
   };
 }
 
@@ -2557,11 +2631,7 @@ export async function getPointExplorer(
       orgName: row.org_name,
     })),
     sites: result.selection.sites.map(toSiteOption),
-    stations: result.selection.stations.map((row) => ({
-      stationId: row.station_id.toString(),
-      name: row.name,
-      siteName: row.site_name,
-    })),
+    stations: result.selection.stations.map(toStationOption),
     selectedProjectId:
       result.selection.selectedProject?.project_id.toString() ?? null,
     selectedProjectName: result.selection.selectedProject?.name ?? null,

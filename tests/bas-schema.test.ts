@@ -308,7 +308,11 @@ describe("bas_v_data_dictionary is scoped to bas_ objects", () => {
         ?.column_description ?? "";
     expect(described("bas_points", "is_active")).toContain("PERMANENT");
     expect(described("bas_points", "is_active")).toContain("is_visible");
-    expect(described("bas_points", "is_visible")).toContain("COSMETIC");
+    // Since 2026-11-20 hiding also leaves reports, Analyze and the stuck-value
+    // check; what it never does is stop collection or leave a risk figure.
+    expect(described("bas_points", "is_visible")).toContain("REVERSIBLE");
+    expect(described("bas_points", "is_visible")).toContain("reports");
+    expect(described("bas_points", "is_visible")).toContain("still collected");
     expect(described("bas_points", "is_visible")).toContain("is_active");
     expect(described("bas_points", "is_visible")).toContain("risk");
     // Each display_name names the other table and says it means the opposite.

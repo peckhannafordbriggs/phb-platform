@@ -352,6 +352,25 @@ export const bulkClassifySchema = z
   });
 
 /**
+ * Hide or show a selection of points (2026-11-20). One boolean, the same
+ * `visible` the single-point PATCH takes, on up to 500 points at once. Strict:
+ * no `isActive` - hiding never stops collection, and a bulk path that could
+ * reach `is_active` would be the fastest way a station stops being collected.
+ */
+export const bulkVisibilitySchema = z
+  .object({
+    pointIds: z
+      .array(bigintText)
+      .min(1, "Select at least one point.")
+      .max(500, "Bulk changes are limited to 500 points at a time.")
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: "The same point is listed twice.",
+      }),
+    visible: z.boolean({ message: "Say whether to show or hide the points." }),
+  })
+  .strict();
+
+/**
  * "Create N pieces of equipment from name prefixes", confirmed (2026-11-19).
  *
  * Rows by KEY - the equipmentKey the preview derived - with the name and
@@ -492,6 +511,7 @@ export interface UpdatePointEquipmentInput {
   equipmentId: string | null;
 }
 export type BulkClassifyInput = z.infer<typeof bulkClassifySchema>;
+export type BulkVisibilityInput = z.infer<typeof bulkVisibilitySchema>;
 export type EquipmentFromNamesInput = z.infer<typeof equipmentFromNamesSchema>;
 export type ApplySuggestionsInput = z.infer<typeof applySuggestionsSchema>;
 export type CreateEquipmentInput = z.infer<typeof createEquipmentSchema>;

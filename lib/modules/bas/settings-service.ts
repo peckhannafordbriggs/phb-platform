@@ -28,6 +28,7 @@ import {
 import type {
   ApplySuggestionsInput,
   BulkClassifyInput,
+  BulkVisibilityInput,
   CreateBuildingInput,
   CreateEquipmentInput,
   CreateProjectInput,
@@ -993,6 +994,88 @@ export async function setBasPointVisibility(
   });
 
   return { changed: true };
+}
+
+/**
+ * Hide or show a whole selection of points, in one transaction (2026-11-20).
+ *
+ * WHAT HIDING MEANS since that date. A hidden point is still COLLECTED and is
+ * still counted in every data-loss figure - roll risk, completeness, vanished
+ * points - exactly as B8.3 decided. What it leaves: the browsing screens (as
+ * before), and now also reports, the Analyze catalogue and the stuck-value
+ * check. The case it was built for is CEI_JCI_N2's AHU_7/* histories, the
+ * JACE's local copies of CEI_AHU_7's points, which log a constant 0 while the
+ * real data is collected on CEI_AHU_7 through the parent.
+ *
+ * ALL OR NOTHING, like bulkClassifyPoints: every point is loaded and scoped
+ * before the transaction opens, and one that is missing or out of scope
+ * refuses the whole selection with nothing written. `is_active` is never
+ * named. One `bas.point_visibility_changed` audit row per point that changed,
+ * the same action the single-point checkbox writes, with `viaBulk` and the
+ * selection size; a point that already held the value writes nothing.
+ */
+export async function bulkSetPointVisibility(
+  viewer: Viewer,
+  input: BulkVisibilityInput,
+): Promise<{ points: number; changed: number; unchanged: number }> {
+  const pointIds = input.pointIds.map((id) => BigInt(id));
+  const { entitled } = await basSiteScope(viewer);
+  const rows = await prisma.$queryRaw<
+    Array<{
+      point_id: bigint;
+      station_id: bigint;
+      niagara_history_name: string;
+      label: string | null;
+      is_visible: boolean;
+      is_active: boolean;
+    }>
+  >`
+    SELECT p.point_id, p.station_id, p.niagara_history_name, p.label, p.is_visible, p.is_active
+      FROM bas_points p
+      JOIN bas_stations st ON st.station_id = p.station_id
+     WHERE p.point_id IN (${Prisma.join(pointIds)})
+       AND (${entitlementSql(entitled, Prisma.sql`st.site_id`)} OR st.site_id IS NULL)
+     ORDER BY p.point_id`;
+  if (rows.length !== pointIds.length) {
+    throw new BasError(
+      "point_not_found",
+      `${pointIds.length - rows.length} of the ${pointIds.length} selected points ` +
+        `do not exist or are not available to you. Nothing was changed.`,
+    );
+  }
+
+  const toChange = rows.filter((row) => row.is_visible !== input.visible);
+  if (toChange.length > 0) {
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.basPoint.updateMany({
+          where: { pointId: { in: toChange.map((row) => row.point_id) } },
+          // isVisible alone. Never isActive: hiding does not stop collection.
+          data: { isVisible: input.visible },
+        });
+        for (const row of toChange) {
+          await writeAuditEvent(tx, {
+            action: "bas.point_visibility_changed",
+            actorEmployeeId: viewer.id,
+            moduleKey: BAS_MODULE_KEY,
+            metadata: {
+              pointId: row.point_id.toString(),
+              stationId: row.station_id.toString(),
+              niagaraHistoryName: row.niagara_history_name,
+              label: row.label,
+              visible: input.visible,
+              collected: row.is_active,
+              viaBulk: true,
+              selectionSize: rows.length,
+            },
+          });
+        }
+      },
+      { timeout: 60_000, maxWait: 10_000 },
+    );
+  }
+
+  return { points: rows.length, changed: toChange.length, unchanged: rows.length - toChange.length };
 }
 
 /**

@@ -243,6 +243,11 @@ export type PlausibilityState = "flat" | "moving" | "too_few_readings" | "not_ch
 
 /**
  *   not_collected   is_active is false: the collector does not fetch it.
+ *   hidden          is_visible is false (2026-11-20): a person hid it - typically
+ *                   a JACE's local copy of a history that is collected on its
+ *                   own station and logs a constant 0 here. Still collected and
+ *                   still in every data-loss figure; never judged, and counted
+ *                   on the Checks line so leaving the check is not silent.
  *   no_role         point_role is NULL. "Not checked, role not set."
  *   setpoint        the role is a setpoint (bas_point_roles.is_setpoint).
  *   state           the role's measurement is status or mode: a status,
@@ -261,6 +266,7 @@ export type PlausibilityState = "flat" | "moving" | "too_few_readings" | "not_ch
  */
 export type NotCheckedReason =
   | "not_collected"
+  | "hidden"
   | "no_role"
   | "setpoint"
   | "state"
@@ -269,6 +275,7 @@ export type NotCheckedReason =
 
 export const NOT_CHECKED_REASONS: readonly NotCheckedReason[] = [
   "not_collected",
+  "hidden",
   "no_role",
   "setpoint",
   "state",
@@ -371,6 +378,12 @@ export interface PlausibilityFacts {
 /** What the judge needs from the point, its role and its checkpoint, beside the facts. */
 export interface PlausibilityRow extends PlausibilityFacts {
   is_active: boolean;
+  /**
+   * bas_points.is_visible. A hidden point is not judged (2026-11-20); the SQL
+   * half (plausibilityLateral) skips it too. Absent means visible - a row
+   * built by hand for a unit test.
+   */
+  is_visible?: boolean;
   /** bas_points.data_type: the type gate reads it after the role gates. */
   data_type: string;
   point_role: string | null;
@@ -427,6 +440,7 @@ export function judgePlausibility(row: PlausibilityRow): PointPlausibility {
   };
 
   if (!row.is_active) return notChecked("not_collected");
+  if (row.is_visible === false) return notChecked("hidden");
   if (row.point_role === null) return notChecked("no_role");
   if (row.role_is_setpoint === true) return notChecked("setpoint");
   if (row.role_measurement !== null && STATE_MEASUREMENTS.includes(row.role_measurement)) {
@@ -534,9 +548,10 @@ export interface FlatPoint {
   stationName: string;
   unit: string | null;
   /**
-   * bas_points.is_visible. Carried so the card can SAY a flagged point is
-   * hidden from the browsing screens; it is listed either way. Hiding never
-   * removes a point from a figure (B8.3), and this card is a figure.
+   * bas_points.is_visible. Always true since 2026-11-20: a hidden point is
+   * not judged at all (`hidden` in notChecked), so it is never flagged. Kept
+   * on the shape so a row that somehow carries false says so rather than
+   * reading as an ordinary point.
    */
   visible: boolean;
   plausibility: PointPlausibility;
@@ -549,12 +564,12 @@ export interface PlausibilitySummary {
   tooFewReadings: number;
   /** Active points in scope NOT evaluated, by reason. `not_collected` is always 0 here: inactive points are outside every active figure. */
   notChecked: Record<NotCheckedReason, number>;
-  /** Every flagged point in scope, hidden ones included, worst (longest flat) first. */
+  /** Every flagged point in scope, worst (longest flat) first. Hidden points are not judged. */
   flat: FlatPoint[];
 }
 
 export function emptyNotChecked(): Record<NotCheckedReason, number> {
-  return { not_collected: 0, no_role: 0, setpoint: 0, state: 0, state_type: 0, no_threshold: 0 };
+  return { not_collected: 0, hidden: 0, no_role: 0, setpoint: 0, state: 0, state_type: 0, no_threshold: 0 };
 }
 
 /** A not-checked verdict with every fact null. For fixtures that build a SettingsPoint by hand. */

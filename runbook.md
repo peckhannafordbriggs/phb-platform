@@ -9200,14 +9200,22 @@ exactly like a visible one, and the same test proves it.
 | Column | Controls | Turning it off costs |
 |---|---|---|
 | `is_active` | whether the collector **fetches** the point | **Permanent.** The station overwrites its own history — the office JACE holds about five days, one status point about two hours. A point not collected on Tuesday cannot be recovered on Friday |
-| `is_visible` | whether the point **appears** on the browsing screens | Nothing. Reversible at any moment |
+| `is_visible` | whether the point is **shown**: on the browsing screens and, since 2026-11-20, in reports, the Analyze catalogue and the stuck-value check | No data. Reversible at any moment. A hidden point is still collected and still counted in every data-loss figure |
 
-To shorten a list, hide. Never deactivate for a cosmetic reason. The four
+To take a point out of view, hide. Never deactivate for that. Hidden is for a
+point that is not building data - a JACE's local copy of a history collected
+on its own station (CEI_JCI_N2's `AHU_7/*`, which log 0) - and hiding a real
+sensor takes it out of every report, so hide only what is not data. See *A
+point is missing from a report or from Analyze, or the stuck-value card
+stopped listing it*. The four
 Niagara system logs and the dead half of a reconfigured `_cfg0` pair are the
 genuine exclusions; `is_active = false` is for those.
 
 **Fix.** Hiding and showing is the *Shown* checkbox on the Points list under
-each station in Settings (B8.3). It writes `is_visible` and nothing else -
+each station in Settings (B8.3), or, for a selection, *Hide N points…* and
+*Show N points…* in the selection bar (2026-11-20; all or nothing, confirmed
+with the count, `POST /api/modules/bas/settings/points/bulk-visibility`). Both
+write `is_visible` and nothing else -
 `tests/bas-point-visibility.test.ts` reads `is_active` before and after to
 prove it - and every change is an audit row, `bas.point_visibility_changed`,
 whose sentence says *still collected*. Labels are the *Label* cell on the
@@ -9384,6 +9392,93 @@ sentence says it.
 Do not delete the row. Its readings exist nowhere else.
 
 ---
+
+## A point is missing from a report or from Analyze, or the stuck-value card stopped listing it
+
+**Symptom.** A report's Point Inventory says *N points on X are hidden in
+Settings and were left out of this report; they are still collected*. Analyze
+does not know a point by name, or its evidence panel says *This answer read 1
+point hidden in Settings*. The *Values that have stopped changing* card no
+longer lists a point it used to, and its *Not judged* line says *N hidden in
+Settings*.
+
+**Cause.** Somebody hid the point. Since 2026-11-20 a hidden point
+(`bas_points.is_visible = false`) is left out of reports (the scope query),
+of the Analyze catalogue and the planner's rules (*keep only visible points*),
+and of the stuck-value check (`hidden` is a not-checked reason, in the SQL
+half and the judge). It is **still collected** and **still counted** in roll
+risk, completeness and vanished points - B8.3's rule for data-loss figures
+stands - and the `bas_v_*` views, Grafana and `healthcheck.py` see it as
+before. Before that date hiding was display-only; a point hidden then is now
+out of reports and Analyze too.
+
+It was built for **zero copies**: on CEI_JCI_N2 the `AHU_7/*` histories are
+the JACE's local copies of CEI_AHU_7's points and log a constant 0, while the
+real data is collected on CEI_AHU_7 itself through the parent (*A via-parent
+station*, below). Flat by construction, they would be flagged as stuck sensors
+on every pass and answer questions with zeros. The stuck card and the Points
+list's *Value* cell suggest hiding a flat point *if it is a copy*, and say
+that hiding a real sensor takes it out of every report.
+
+**Fix.** If it should be in: Settings → the station → *Points* → select it →
+*Show 1 point…* → *Confirm*, or tick its *Shown* box. If you are deciding
+whether to hide a flat point: a copy (same name under the parent's folder as a
+history collected on its own station, logging one value) - hide it; a real
+sensor - go and look at it. Who hid what, and when:
+
+```sql
+SELECT a.occurred_at, e.email, a.metadata->>'niagaraHistoryName' AS point,
+       a.metadata->>'visible' AS now_visible, a.metadata->>'viaBulk' AS bulk
+  FROM audit_events a LEFT JOIN employees e ON e.id = a.actor_employee_id
+ WHERE a.action = 'bas.point_visibility_changed'
+ ORDER BY a.occurred_at DESC;
+```
+
+`WHY-ITS-BUILT-THIS-WAY.md` § 92; `tests/bas-hidden-points.test.ts`,
+`tests/bas-plausibility.test.ts`.
+
+## A via-parent station: "Collected through …", indented under its JACE, or red with "Run discover"
+
+**Symptom.** In Settings a station's card says *Collected through CEI_JCI_N2 -
+its login and certificate are used; this station has none of its own*, with no
+*Set login* button and no fingerprint; its *Edit* form has only the names and
+*Imported by*. On Collection Health and Point Explorer the JACE picker lists it
+indented under its parent with its own last pass beside it, and the *Stations*
+panel shows it under the parent, *through CEI_JCI_N2*. Or: the station shows a
+failed run, *No active points registered for this station. Run discover.*, or
+*MISCONFIGURED - X is set to 'via parent' but no parent station is chosen.*
+
+**Cause.** A station set to *Imported by another station (via parent)* is
+never connected to. Since 2026-11-20 the collector (phb-bas, PR
+`feat/collector-via-parent-stations`) reads its histories from its parent's
+oBIX history space, `/obix/histories/<its Niagara name>/`, on the parent's
+connection - address, login, certificate pin - and keeps its points, runs,
+checkpoints and gaps on its own row. So a login or a pin on the via-parent
+station would be used by nothing, and its status is its own: the parent's
+pass can be ok while the child's fails (its folder is missing, or its name in
+Settings does not match the folder exactly).
+
+- *Run discover*: the station has no points yet. `python -m collector
+  discover` on the office PC registers them; the next pass collects.
+- A **placeholder** - a via-parent row registered with no real station
+  behind it, like `Side` under PHBoffice (`docs/09-bas-what-is-built.md`) - was
+  skipped before 2026-11-20 and now fails every pass (*no folder named 'Side'*,
+  then *Run discover*). Mark it inactive in Settings, or delete it if it has no
+  points.
+- *MISCONFIGURED*: its chain of parents never reaches an active direct
+  station - no parent chosen, a parent marked inactive, or a loop. Recorded as
+  a failed run against the station every pass, and never stops the others.
+  Fix the parent in Settings, or mark the station inactive.
+- *no folder named 'X'* in the parent's history space: the Niagara station
+  name in Settings must match the folder exactly, case included; or the parent
+  does not import that station's histories (Workbench, on the parent:
+  NiagaraNetwork → the station → Histories).
+
+**Fix.** On the office PC, `python -m collector check` lists every via-parent
+station under its parent with `folder present` or `FOLDER 'X' MISSING`, and
+the misconfigured last. The phb-bas `RUNBOOK.md` → *Via-parent stations* has
+every message. A report's scope includes a via-parent station's points when
+no station subset is ticked; ticking only the parent leaves the child out.
 
 ## Collection Health says a value has stopped changing
 
