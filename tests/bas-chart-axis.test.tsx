@@ -336,13 +336,14 @@ describe("the tooltip shows one more decimal than the axis", () => {
       path.resolve(process.cwd(), "app/(modules)/bas/point-explorer.tsx"),
       "utf8",
     );
-    // The single-point Tooltip: the one with a labelFormatter. Compare mode
-    // (2026-11-20) has a Tooltip of its own, whose body is CompareTooltip.
+    // The single-point Tooltip: the one with a labelFormatter. A chart of
+    // several lines (2026-11-20) has a Tooltip of its own, whose body is
+    // LinesTooltip.
     const tooltip = /<Tooltip\s+defaultIndex=\{tooltipIndex\}\s+labelFormatter[\s\S]*?\/>/.exec(source)?.[0];
     expect(tooltip).toBeDefined();
     expect(tooltip).toMatch(/formatTooltipValue\(value, unit\)/);
     expect(tooltip).not.toMatch(/formatValue\(/);
-    const compare = /export function CompareTooltip[\s\S]*?\r?\n\}\r?\n/.exec(source)?.[0];
+    const compare = /export function LinesTooltip[\s\S]*?\r?\n\}\r?\n/.exec(source)?.[0];
     expect(compare).toBeDefined();
     expect(compare).toMatch(/formatTooltipValue\(value, u\)/);
     expect(compare).not.toMatch(/formatValue\(/);

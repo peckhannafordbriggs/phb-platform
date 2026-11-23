@@ -1933,6 +1933,29 @@ the two column comments only. `WHY-ITS-BUILT-THIS-WAY.md` § 92; `runbook.md` ->
 *A point is missing from a report or from Analyze...*, *A via-parent station:
 "Collected through ..."...*.
 
+**Point Explorer picks by equipment and draws up to six lines (2026-11-20).**
+The Point dropdown (334 points in one column on CEI_JCI_N2) is an **Equipment**
+multi-select after the JACE - type and point count each, plus *Unclassified
+(no equipment)* - and a **Point list** grouped by equipment, role beside each
+name, searched by any part of a name or role; none chosen is every point. The
+multi-select is the kit's new `MultiSelect`. One chart draws **up to six
+lines** from any building the viewer may see, by *Add point* (the whole picker
+with its own cascade) or *Tick several* → *Plot selected*; the URL carries the
+set as slots (`point=` then `compare=44,,46`, an empty entry a removed line so
+the others keep their colours; old `point=`/`compare=<id>` links unchanged).
+**Two axes, never three**: a line shares the left axis only with the first
+line's quantity (same recorded unit, or same state words; a unitless number
+shares with nothing), a second quantity takes the right, a third is not drawn
+and named (`lib/modules/bas/chart-lines.ts`, run by the service and the
+picker). **The raw draw cap is the chart's, shared** - 10,000 / lines - because
+it was measured for one line. Lines 3-6 are dashed as well as coloured: no
+brand inks clear the colour-blind floor beside cyan and purple. Tiles, breaks
+and gaps are the first line's and say so; the trend summary is off with more
+than one line; *Download CSV* is a column per point on the exact timestamp
+(`X-PHB-Readings-Unit: timestamps`). `WHY-ITS-BUILT-THIS-WAY.md` § 93;
+`runbook.md` → *Finding a point on a big JACE*, *A line asked for is not drawn
+on Point Explorer's chart*.
+
 **Report runs can be deleted, to a 15-day Recently deleted, and a report can
 keep its runs for a set time (2026-11-20).** On Reports → Reports a box on
 each finished row, a header box for every finished row shown, *Delete* per

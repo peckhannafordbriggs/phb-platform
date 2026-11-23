@@ -51,8 +51,16 @@ const QuerySchema = z
     project: z.string().trim().max(32).optional(),
     station: z.string().trim().max(32).optional(),
     point: z.string().trim().max(32).optional(),
-    // Compare mode (2026-11-20): a second point's id. Absent is off.
-    compare: z.string().trim().max(32).optional(),
+    // The chart's other lines (2026-11-20): point ids, comma-separated, in
+    // slot order. An empty entry is a free slot (a removed line) and is
+    // skipped here; the browser keeps it so the other lines keep their
+    // colours. Absent is one line.
+    compare: z
+      .string()
+      .trim()
+      .max(400)
+      .regex(/^[0-9,\s]*$/)
+      .optional(),
   })
   // Both or neither. A start with no end is not a range, and guessing the
   // missing half ("until today"?) would be a decision the person did not make.
@@ -98,7 +106,10 @@ export async function GET(request: Request) {
             // Anything else is a point id, or absent for the picker's first.
             pointId: input.point === NO_POINT ? null : parsePointId(input.point),
             selectPoint: input.point !== NO_POINT,
-            comparePointId: parsePointId(input.compare),
+            comparePointIds: (input.compare ?? "")
+              .split(",")
+              .map((id) => parsePointId(id))
+              .filter((id): id is bigint => id !== null),
           }),
         );
       } catch (error) {
@@ -138,9 +149,11 @@ export async function GET(request: Request) {
         const aboutRange = paths.has("from") || paths.has("to") || paths.size === 0;
         return {
           ok: false,
-          message: aboutRange
-            ? "from and to must both be given, as YYYY-MM-DD."
-            : `days must be a whole number between ${MIN_WINDOW_DAYS} and ${MAX_WINDOW_DAYS}.`,
+          message: paths.has("compare")
+            ? "compare must be point ids separated by commas."
+            : aboutRange
+              ? "from and to must both be given, as YYYY-MM-DD."
+              : `days must be a whole number between ${MIN_WINDOW_DAYS} and ${MAX_WINDOW_DAYS}.`,
         };
       }
 

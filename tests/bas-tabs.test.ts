@@ -173,7 +173,7 @@ describe("reading filters out of a URL", () => {
       // All, so nobody has to drill three levels to see everything.
       projectId: null,
       stationId: null,
-      compareId: null,
+      compareSlots: [],
     });
   });
 
@@ -185,7 +185,7 @@ describe("reading filters out of a URL", () => {
       windowDays: 30,
       range: null,
       pointId: "41",
-      compareId: "44",
+      compareSlots: ["44"],
     });
   });
 

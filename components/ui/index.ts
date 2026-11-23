@@ -33,6 +33,7 @@ export {
 export { FilterMenu } from "./FilterMenu";
 export { Label } from "./Label";
 export { LinkPending } from "./LinkPending";
+export { MultiSelect, type MultiSelectOption } from "./MultiSelect";
 export { Pill, type PillTone, type Tone } from "./Pill";
 export { SearchBar, type SearchResult } from "./SearchBar";
 export { Segmented } from "./Segmented";

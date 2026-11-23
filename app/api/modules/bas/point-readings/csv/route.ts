@@ -5,6 +5,7 @@ import {
   CAP_HEADER,
   EXPORTED_HEADER,
   TOTAL_HEADER,
+  UNIT_HEADER,
   exportPointReadings,
   parseReadingsQuery,
   type ReadingsRequest,
@@ -21,7 +22,8 @@ const ROUTE = "/api/modules/bas/point-readings/csv";
  * Every raw reading in the chart's range, as CSV, streamed.
  *
  * The same `point` / `from` / `to` as the JSON route and no `page`: the file
- * is every page. The body is produced as it is read, one keyset chunk per
+ * is every page. With `compare` - the chart's other lines - it is the
+ * multi-point file, a column per point aligned on timestamp (csv.ts). The body is produced as it is read, one keyset chunk per
  * query (lib/modules/bas/readings.ts), so a 500,000-row export is never held
  * on the server at once. Once the headers have gone a failure mid-stream can
  * only abort the download; the count, the point and the entitlement are all
@@ -70,9 +72,10 @@ export async function GET(request: Request) {
           [TOTAL_HEADER]: String(exportJob.total),
           [EXPORTED_HEADER]: String(exportJob.exported),
           [CAP_HEADER]: String(exportJob.cap),
+          [UNIT_HEADER]: exportJob.unit,
         },
       });
     },
-    async () => parseReadingsQuery(new URL(request.url).searchParams, { page: false }),
+    async () => parseReadingsQuery(new URL(request.url).searchParams, { page: false, compare: true }),
   );
 }

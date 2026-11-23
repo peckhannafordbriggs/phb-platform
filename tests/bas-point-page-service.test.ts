@@ -7,13 +7,21 @@ import { auth } from "@/auth";
 import type { Viewer } from "@/lib/authz";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { resetBasAvailabilityCache } from "@/lib/modules/bas/route-helpers";
-import { COMPARISON_NOT_AVAILABLE_MESSAGE, getCollectionHealth, getDashboard, getPointExplorer } from "@/lib/modules/bas/service";
+import {
+  TOO_MANY_LINES_MESSAGE,
+  describeUnavailableLines,
+  getCollectionHealth,
+  getDashboard,
+  getPointExplorer,
+} from "@/lib/modules/bas/service";
+import { exportPointReadings } from "@/lib/modules/bas/readings";
 import { refreshMeasuredIntervals } from "@/lib/modules/bas/measured-interval";
 import { basFigure } from "@/lib/home/bas-figure";
 import { describeHistoryLine } from "@/app/(modules)/bas/point-explorer-parts";
 import { GET as explorerRoute } from "@/app/api/modules/bas/point-explorer/route";
+import { GET as csvRoute } from "@/app/api/modules/bas/point-readings/csv/route";
 import { createEmployee, disconnectDb, grantModule, resetDb, seedBasModule, seedChangeOrdersModule, testDb } from "./db";
-import { createCeiFixture, type CeiFixture } from "./bas-cei-fixture";
+import { HALF_HOUR_MS, createCeiFixture, spaceTempAt, type CeiFixture } from "./bas-cei-fixture";
 
 /**
  * Point Explorer, Collection Health and the Projects card on a station shaped
@@ -201,41 +209,189 @@ describe("the history size, and the split on the card and the hero", () => {
   });
 });
 
-describe("compare mode", () => {
-  it("draws a point of another unit on its own axis, over the same range, through the same loader", async () => {
-    const page = await explore(fx.spaceTemp, { comparePointId: fx.damper });
-    expect(page.comparisonNote).toBeNull();
-    expect(page.comparison).toMatchObject({
+describe("the chart's other lines", () => {
+  const lines = (ids: bigint[], extra: Record<string, unknown> = {}) =>
+    explore(fx.spaceTemp, { comparePointIds: ids, ...extra });
+
+  /** A point with the fixture's 30-minute readings, on either station. */
+  const addPoint = async (stationId: bigint, name: string, unit: string, value: number) => {
+    const { pointId } = await testDb.basPoint.create({
+      data: { stationId, niagaraHistoryName: name, unit, dataType: "real", fullPolicy: "roll" },
+    });
+    const stamps = Array.from({ length: 7 * 48 }, (_, i) => fx.newestMs - i * HALF_HOUR_MS);
+    await testDb.basReading.createMany({ data: stamps.map((ms) => ({ pointId, ts: new Date(ms), valueNum: value })) });
+    return pointId;
+  };
+
+  it("draws a point of another unit on the right axis, over the same range, through the same loader", async () => {
+    const page = await lines([fx.damper]);
+    expect(page.comparisonNotes).toEqual([]);
+    expect(page.comparisons).toHaveLength(1);
+    expect(page.comparisons[0]).toMatchObject({
       point: { pointId: fx.damper.toString(), unit: "percent", stationId: fx.stationId.toString(), equipmentName: "V4_22" },
-      sharedAxis: false,
+      axis: "right",
       expectedInterval: { seconds: 1800, source: "measured" },
     });
-    expect(page.comparison!.trend.length).toBeGreaterThan(300);
-    expect(page.comparison!.trend.every((s) => s.tsMs >= Date.parse(page.range.from) && s.tsMs < Date.parse(page.range.to))).toBe(true);
+    expect(page.comparisons[0]!.trend.length).toBeGreaterThan(300);
+    expect(page.comparisons[0]!.trend.every((s) => s.tsMs >= Date.parse(page.range.from) && s.tsMs < Date.parse(page.range.to))).toBe(true);
   });
 
-  it("shares the axis only when both points carry the same unit", async () => {
-    const page = await explore(fx.spaceTemp, { comparePointId: fx.spaceTempSp });
-    expect(page.comparison?.sharedAxis).toBe(true);
+  it("shares the left axis only with the same unit", async () => {
+    const page = await lines([fx.spaceTempSp, fx.damper]);
+    expect(page.comparisons.map((c) => c.axis)).toEqual(["left", "right"]);
   });
 
-  it("says why, and still draws the point, when the comparison is on another JACE or hidden", async () => {
-    const other = await explore(fx.spaceTemp, { comparePointId: fx.otherOat });
-    expect(other.comparison).toBeNull();
-    expect(other.comparisonNote).toBe(COMPARISON_NOT_AVAILABLE_MESSAGE);
-    expect(other.trend.length).toBeGreaterThan(300);
+  it("takes a line from another JACE, and names its station", async () => {
+    const page = await lines([fx.otherOat]);
+    expect(page.comparisonNotes).toEqual([]);
+    expect(page.comparisons[0]).toMatchObject({
+      point: { pointId: fx.otherOat.toString(), stationId: fx.otherStationId.toString(), stationName: "ZZTEST_CEI_OTHER" },
+      axis: "left",
+    });
+  });
 
+  it("leaves off a line that would need a third axis, by name, and draws the rest", async () => {
+    const page = await lines([fx.damper, fx.occ, fx.spaceTempSp]);
+    expect(page.comparisons.map((c) => c.point.pointId)).toEqual([fx.damper.toString(), fx.spaceTempSp.toString()]);
+    expect(page.comparisonNotes).toEqual([
+      "V4_22/Occ is not drawn: the chart already has two axes (°F and %) and it reads True / False. Remove a line to make room for it.",
+    ]);
+  });
+
+  it("says why, and still draws the point, when a line is hidden, gone, or not one the viewer may see", async () => {
     await testDb.basPoint.update({ where: { pointId: fx.damper }, data: { isVisible: false } });
-    const hidden = await explore(fx.spaceTemp, { comparePointId: fx.damper });
-    expect(hidden.comparisonNote).toBe(COMPARISON_NOT_AVAILABLE_MESSAGE);
+    const page = await lines([fx.damper, 999_999_999n, fx.otherOat]);
+    expect(page.comparisonNotes).toEqual([describeUnavailableLines(2)]);
+    expect(page.comparisons.map((c) => c.point.pointId)).toEqual([fx.otherOat.toString()]);
+    expect(page.trend.length).toBeGreaterThan(300);
   });
 
-  it("carries the comparison in the URL the route reads", async () => {
+  it("draws six lines on one chart, each on its share of the draw budget, and leaves a seventh off", async () => {
+    const supply = await addPoint(fx.otherStationId, "Other/SAT", "fahrenheit", 55);
+    const valve = await addPoint(fx.otherStationId, "Other/Valve", "percent", 40);
+    const extra = await addPoint(fx.stationId, "V4_22/Extra", "fahrenheit", 70);
+    // 330-odd readings a line: raw alone under a cap of 1,000, bucketed as one of six.
+    const alone = await explore(fx.spaceTemp, { maxRawTrendPoints: 1000 });
+    expect(alone.sampling.kind).toBe("raw");
+
+    const page = await lines([fx.spaceTempSp, fx.damper, fx.otherOat, supply, valve, extra], { maxRawTrendPoints: 1000 });
+    expect(page.comparisons).toHaveLength(5);
+    expect(page.comparisonNotes).toEqual([TOO_MANY_LINES_MESSAGE]);
+    expect(page.comparisons.map((c) => c.axis)).toEqual(["left", "right", "left", "left", "right"]);
+    expect(page.sampling).toMatchObject({ kind: "bucketed", maxRaw: 166 });
+    for (const line of page.comparisons) expect(line.sampling).toMatchObject({ kind: "bucketed", maxRaw: 166 });
+  });
+
+  it("carries the set in the URL the route reads, free slots and all", async () => {
     const response = await explorerRoute(
-      new Request(`http://localhost/api/modules/bas/point-explorer?point=${fx.spaceTemp}&compare=${fx.damper}&days=7`),
+      new Request(`http://localhost/api/modules/bas/point-explorer?point=${fx.spaceTemp}&compare=${fx.damper},,${fx.otherOat}&days=7`),
     );
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { data: { comparison: { point: { pointId: string } } | null } };
-    expect(body.data.comparison?.point.pointId).toBe(fx.damper.toString());
+    const body = (await response.json()) as { data: { comparisons: Array<{ point: { pointId: string } }> } };
+    expect(body.data.comparisons.map((c) => c.point.pointId)).toEqual([fx.damper.toString(), fx.otherOat.toString()]);
+
+    const bad = await explorerRoute(new Request(`http://localhost/api/modules/bas/point-explorer?point=${fx.spaceTemp}&compare=abc`));
+    expect(bad.status).toBe(422);
+    expect(((await bad.json()) as { error: { message: string } }).error.message).toBe(
+      "compare must be point ids separated by commas.",
+    );
+  });
+
+  it("gives the picker each point's station and equipment type", async () => {
+    await testDb.basEquipmentType.upsert({
+      where: { equipType: "zztest_vav" },
+      create: { equipType: "zztest_vav", displayName: "ZZTEST VAV Box", description: "Fixture type.", category: "terminal" },
+      update: {},
+    });
+    try {
+      await testDb.basEquipment.update({ where: { equipmentId: fx.equipmentId }, data: { equipType: "zztest_vav" } });
+      const page = await explore(fx.spaceTemp);
+      expect(page.points.find((p) => p.pointId === fx.spaceTemp.toString())).toMatchObject({
+        stationName: "ZZTEST_CEI_JCI_N2",
+        equipmentName: "V4_22",
+        equipmentType: "ZZTEST VAV Box",
+      });
+      expect(page.points.find((p) => p.pointId === fx.otherOat.toString())).toMatchObject({ equipmentId: null, equipmentType: null });
+    } finally {
+      await testDb.basEquipment.update({ where: { equipmentId: fx.equipmentId }, data: { equipType: null } });
+      await testDb.basEquipmentType.deleteMany({ where: { equipType: "zztest_vav" } });
+    }
+  });
+});
+
+describe("the CSV of several lines", () => {
+  const range = () => ({
+    from: new Date(fx.newestMs - 3 * 86_400_000).toISOString(),
+    to: new Date(fx.newestMs + 60_000).toISOString(),
+  });
+  const read = async (job: { chunks: () => AsyncGenerator<string, void, undefined> }) => {
+    let text = "";
+    for await (const chunk of job.chunks()) text += chunk;
+    return text.split("\r\n").filter((line) => line.length > 0);
+  };
+
+  it("is a column per plotted point, aligned on the exact timestamp, newest first", async () => {
+    const job = await exportPointReadings(viewer, { pointId: fx.spaceTemp, ...range(), comparePointIds: [fx.damper, fx.otherOat] });
+    expect(job.unit).toBe("timestamps");
+    const rows = await read(job);
+    expect(rows[0]).toBe(
+      `timestamp,V4_22/SpaceTemp (fahrenheit; ZZTEST_CEI_JCI_N2; point ${fx.spaceTemp}),` +
+        `V4_22/DamperPos (percent; ZZTEST_CEI_JCI_N2; point ${fx.damper}),` +
+        `Other/OAT (fahrenheit; ZZTEST_CEI_OTHER; point ${fx.otherOat})`,
+    );
+    // Three days of half hours, one row each: all three points log on the same instants.
+    expect(job.total).toBe(3 * 48 + 1);
+    expect(rows).toHaveLength(1 + job.total);
+    const newest = rows[1]!.split(",");
+    expect(newest[0]).toBe(`${new Date(fx.newestMs).toISOString().replace(/\.\d+Z$/, "")}.000000Z`);
+    expect(Number(newest[1])).toBe(spaceTempAt(fx.newestMs));
+    expect(newest[3]).toBe("40");
+    // Inside the hole: the space temperature has no reading and its cell is empty; the others are not.
+    const inHole = new Date(fx.hole.fromMs + HALF_HOUR_MS).toISOString().replace(/\.\d+Z$/, ".000000Z");
+    const holeRow = rows.find((row) => row.startsWith(inHole))!.split(",");
+    expect(holeRow[1]).toBe("");
+    expect(holeRow[2]).not.toBe("");
+    expect(holeRow[3]).toBe("40");
+    expect(job.filename).toMatch(/^readings-V4_22_SpaceTemp-and-2-more-\d{8}T\d{4}Z-\d{8}T\d{4}Z\.csv$/);
+  });
+
+  it("gives a point logged at other instants rows of its own, never moved onto a neighbour's", async () => {
+    // The occupancy point's change-of-value readings sit three to seven days back.
+    const week = { from: new Date(fx.newestMs - 7.5 * 86_400_000).toISOString(), to: range().to };
+    const job = await exportPointReadings(viewer, { pointId: fx.spaceTemp, ...week, comparePointIds: [fx.occ] });
+    const rows = (await read(job)).slice(1).map((row) => row.split(","));
+    const occRows = rows.filter((row) => row[2] === "true" || row[2] === "false");
+    expect(occRows.length).toBeGreaterThan(0);
+    expect(occRows.every((row) => row[1] === "")).toBe(true);
+    expect(rows.filter((row) => row[1] !== "").every((row) => row[2] === "")).toBe(true);
+    expect(job.total).toBe(rows.length);
+  });
+
+  it("keeps the newest rows when the cap bites, and says rows, not readings", async () => {
+    const job = await exportPointReadings(viewer, { pointId: fx.spaceTemp, ...range(), comparePointIds: [fx.damper], maxRows: 10, chunkRows: 4 });
+    const rows = await read(job);
+    expect(job).toMatchObject({ exported: 10, cap: 10 });
+    expect(rows).toHaveLength(11);
+    expect(rows[1]!.startsWith(new Date(fx.newestMs).toISOString().slice(0, 19))).toBe(true);
+    const stamps = rows.slice(1).map((row) => row.split(",")[0]!);
+    expect([...stamps].sort().reverse()).toEqual(stamps);
+    expect(new Set(stamps).size).toBe(10);
+  });
+
+  it("is what the route sends for compare=, with the unit in a header; one point is the file it always was", async () => {
+    const q = new URLSearchParams({ point: fx.spaceTemp.toString(), ...range(), compare: `${fx.damper}` });
+    const response = await csvRoute(new Request(`http://localhost/api/modules/bas/point-readings/csv?${q}`));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("X-PHB-Readings-Unit")).toBe("timestamps");
+    expect((await response.text()).split("\r\n")[0]).toContain("V4_22/DamperPos (percent;");
+
+    const single = new URLSearchParams({ point: fx.spaceTemp.toString(), ...range() });
+    const one = await csvRoute(new Request(`http://localhost/api/modules/bas/point-readings/csv?${single}`));
+    expect(one.headers.get("X-PHB-Readings-Unit")).toBe("readings");
+    expect((await one.text()).split("\r\n")[0]).toBe("timestamp,value,unit,point_name,niagara_history_name,point_id,station,station_id,status");
+
+    await testDb.basPoint.update({ where: { pointId: fx.damper }, data: { isVisible: false } });
+    const hidden = await csvRoute(new Request(`http://localhost/api/modules/bas/point-readings/csv?${q}`));
+    expect(hidden.status).toBe(404);
   });
 });

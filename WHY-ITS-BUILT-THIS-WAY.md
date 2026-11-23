@@ -4053,6 +4053,68 @@ into the stuck check and reports and CEI's local copies are a permanent amber
 card and a page of zeros; drop them from the risk figures as well and hiding
 becomes a way to make an outage disappear.
 
+## 93 · Point Explorer finds a point by its equipment, and one chart draws up to six lines on two axes
+
+**Decision (2026-11-20).** The Point dropdown is replaced by an **Equipment**
+multi-select after the JACE (each equipment with its type and point count,
+plus *Unclassified (no equipment)*) and a **Point list** grouped by
+equipment, the role beside each name, searched by any part of a name or role.
+The chart draws **up to six lines** from anywhere the viewer may see, reached
+by *Add point* (the whole picker, its own cascade) or *Tick several* → *Plot
+selected*; the URL carries the set (`point=` and `compare=` in slot order).
+The tiles, breaks and gaps describe the first line and say so; the trend
+summary is per point and is off with more than one line; *Download CSV* is a
+column per point aligned on the exact timestamp. Compare mode's same-JACE
+limit (§ 91) is gone.
+
+**Why a list and not a better dropdown.** CEI_JCI_N2 has 334 points named
+`V4_22/SpaceTemp`; a dropdown that jumps by first letter puts 300 of them
+under *V*. Equipment is the unit a person thinks in, and the assignment work
+(§§ 88-89) has already put most points on one. None chosen is every point,
+so a four-point lab station is no worse off.
+
+**Why two axes and never three.** § 91's rule, carried to six lines: lines
+share an axis only when they are the same quantity - the same recorded unit,
+or the same two state words - and a number with no unit shares with nothing.
+A third quantity would need a third scale, and a third scale on one chart is
+where a reader stops checking which line belongs to which; the line is not
+drawn and the note names it and the two axes in use. The picker greys such a
+point out before it is asked for. The rule is one pure function
+(`lib/modules/bas/chart-lines.ts`) that both the service and the browser run;
+the service's verdict wins.
+
+**Why the draw budget is shared.** `MAX_RAW_TREND_POINTS` (10,000) was measured
+for ONE line: under 400 ms to draw and zoom at 10,000, a 2.7 s hang at
+70,000 (§ 53). Six lines each held to it would draw 60,000 points. The cap is
+now the chart's: each line is raw up to its share and bucketed past it, and
+the sampling notice says so.
+
+**Why a colour follows its line, not its position.** Removing the third of
+five lines must not repaint the fourth and fifth - people track a line by its
+colour. The URL holds slots, and a removed line leaves its slot empty
+(`compare=44,,46`); adding fills the first empty one. Slot 0 is the module's
+accent and is always the line the tiles describe, so removing the first line
+moves the next into slot 0 and recolours that one line only. Slots 0 and 1
+keep compare mode's cyan and purple; 2-5 are the remaining decorative inks
+and the neutral ink, never red or maroon. No four brand inks clear the
+colour-blind separation floor beside cyan and purple (best ΔE 7.8; 12.9 for
+cyan against teal under normal vision), so every line past the second also
+has its own dash, and the legend and the cursor's readout name every line.
+
+**Why the CSV aligns on the exact timestamp.** Rounding to a minute, or
+carrying a value forward, would be a resampling the file's reader cannot see.
+Exact alignment puts one station's points on shared rows and leaves two
+stations' clocks visibly apart. The one thing it loses - an empty cell is
+either no reading or a null record - is kept by the one-point file, which is
+unchanged.
+
+**What breaks if you undo it.** Give each line the full raw cap and a
+six-line week of five-minute points hangs the tab. Let a third quantity onto
+an axis and 55 °F and 12.8 % share a scale. Colour lines by position and
+every removal repaints the survivors. Put the equipment selection in the URL
+and a shared chart carries someone's half-finished filter; leave the lines out
+of it and a chart cannot be shared at all.
+
 ## 94 · A report run is deleted to a recycle period, never at once; retention deletes the same way, and a restore outranks it; deleting a report touches none of its runs
 
 **Decision (2026-11-20).** Report runs are no longer kept for ever.

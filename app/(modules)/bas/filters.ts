@@ -1,4 +1,5 @@
 import { NO_POINT } from "@/lib/modules/bas/constants";
+import { MAX_CHART_LINES, type LineSlots } from "@/lib/modules/bas/chart-lines";
 import { DEFAULT_WINDOW_DAYS } from "./health-client";
 
 /**
@@ -52,10 +53,14 @@ export const VIEW_PARAM = "view";
 export const TABLE_VIEW = "table";
 
 /**
- * Compare mode (2026-11-20): `compare=<pointId>` draws a second point over the
- * same range on the same chart. Absent is off, so a shared link carries the
- * comparison and a plain one does not. Cleared with the point it compares
- * against: at every cascade level, and whenever the point itself changes.
+ * The chart's other lines (2026-11-20): `compare=13,14,15` draws up to five
+ * more points over the same range on the same chart, `point` being the first.
+ * Each entry is a SLOT and its position is the line's colour: an empty entry
+ * (`compare=13,,15`) is a line that was removed, kept empty so the lines
+ * after it keep their colours (lib/modules/bas/chart-lines.ts, *the slots*).
+ * A link from before multi-line - `compare=13`, one id - reads as one more
+ * line, unchanged. Absent is one line. Cleared with the point: at every
+ * cascade level, and whenever a single point is chosen.
  */
 export const COMPARE_PARAM = "compare";
 
@@ -143,8 +148,11 @@ export interface BasFilters {
   /** `null` at either level means All (B7.6). */
   projectId: string | null;
   stationId: string | null;
-  /** Compare mode's second point, or `null` when it is off. */
-  compareId: string | null;
+  /**
+   * The chart's other lines as slots 1-5 (`null` a free slot), duplicates and
+   * the point itself removed, trailing free slots dropped. Empty is one line.
+   */
+  compareSlots: Array<string | null>;
 }
 
 interface ParamsLike {
@@ -181,8 +189,61 @@ export function readFilters(params: ParamsLike): BasFilters {
     pointId: point === null || point.length === 0 ? null : point,
     projectId: clean(params.get(PROJECT_PARAM)),
     stationId: clean(params.get(STATION_PARAM)),
-    compareId: clean(params.get(COMPARE_PARAM)),
+    compareSlots:
+      point === NO_POINT ? [] : readCompareSlots(params.get(COMPARE_PARAM), point),
   };
+}
+
+/**
+ * `compare` as slots. Tolerant like the rest: an entry that is not a point id,
+ * repeats one already drawn, or names the point itself is a free slot rather
+ * than an error, and anything past five is dropped - the server would refuse
+ * to draw it anyway, with a sentence.
+ */
+export function readCompareSlots(raw: string | null, pointId: string | null): Array<string | null> {
+  if (raw === null) return [];
+  const seen = new Set(pointId === null ? [] : [pointId]);
+  const slots = raw
+    .split(",")
+    .slice(0, MAX_CHART_LINES - 1)
+    .map((entry) => {
+      const id = entry.trim();
+      if (!/^[0-9]{1,32}$/.test(id) || seen.has(id)) return null;
+      seen.add(id);
+      return id;
+    });
+  while (slots.length > 0 && slots[slots.length - 1] === null) slots.pop();
+  return slots;
+}
+
+/**
+ * Every line on the chart as slots: slot 0 the point on screen - the URL's,
+ * or the one the server chose when the URL named none - then `compare`.
+ * Empty when no point is shown.
+ */
+export function chartSlots(filters: BasFilters, shownPointId: string | null): Array<string | null> {
+  const first = filters.pointId ?? shownPointId;
+  if (first === null || first === NO_POINT) return [];
+  return [first, ...filters.compareSlots.filter((id) => id !== first)];
+}
+
+/**
+ * A new query string with the chart's lines set: `point` to slot 0 and
+ * `compare` to the rest, free slots as empty entries, trailing ones dropped.
+ * Everything else - the cascade, the range, the view - is kept. The one
+ * writer of both parameters for a set of lines, so "plot these" and "add
+ * one" and "remove one" cannot spell the URL two ways.
+ */
+export function withLines(params: ParamsLike & { toString(): string }, slots: LineSlots): string {
+  const [first, ...rest] = slots;
+  const others = [...rest];
+  while (others.length > 0 && others[others.length - 1] === null) others.pop();
+  const query = withFilter(params, POINT_PARAM, first ?? null);
+  return withFilter(
+    new URLSearchParams(query.replace(/^\?/, "")),
+    COMPARE_PARAM,
+    others.length === 0 ? null : others.map((id) => id ?? "").join(","),
+  );
 }
 
 /**

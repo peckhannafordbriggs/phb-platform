@@ -17,6 +17,7 @@
 
 import type { PlausibilitySummary, PointPlausibility } from "./plausibility";
 import type { BreaksSummary, ExpectedInterval } from "./interval";
+import type { AxisSide } from "./chart-lines";
 import type { BooleanStates, ValueKind } from "./value-kind";
 import type { NamePrefixGroup } from "./name-prefix";
 
@@ -710,13 +711,17 @@ export interface PointOption {
    */
   states: BooleanStates | null;
   /**
-   * The station and the equipment the point is on (2026-11-20). Compare mode
-   * offers the other points on the same equipment first and searches the
-   * rest of the station.
+   * The station and the equipment the point is on (2026-11-20). The picker
+   * groups the Point list by equipment and offers the equipment as a
+   * multi-select with its type; a line's legend names the station when the
+   * chart's lines come from more than one.
    */
   stationId: string;
+  stationName: string;
   equipmentId: string | null;
   equipmentName: string | null;
+  /** The equipment's type as the vocabulary names it ("VAV Box"), or its key; null with no type or no equipment. */
+  equipmentType: string | null;
 }
 
 /**
@@ -960,10 +965,14 @@ export interface PointExplorer {
    * Null when it is inside, or when the role and unit have no range.
    */
   outOfRange: OutOfRange | null;
-  /** The second point drawn on the same chart, when compare mode is on. */
-  comparison: PointComparison | null;
-  /** Why the comparison asked for is not drawn, when it is not. */
-  comparisonNote: string | null;
+  /**
+   * The other lines on the chart (2026-11-20, multi-line), in the order asked
+   * for: up to five beside the point, from any building the viewer may see.
+   * The point itself is the first line and is everything above.
+   */
+  comparisons: PointComparison[];
+  /** Why a line asked for is not drawn - unavailable, or needing a third axis. One sentence each. */
+  comparisonNotes: string[];
 }
 
 /** One point's history horizon, as the Data health tile shows it. */
@@ -982,10 +991,11 @@ export interface OutOfRange {
 }
 
 /**
- * Compare mode (2026-11-20): a second point over the same range on the same
- * chart. Its own axis when the units differ - and when either has no unit,
- * because two unitless numbers are not known to be the same quantity
- * (runbook.md, *Two points on one axis*).
+ * Another line on the chart (2026-11-20): a point over the same range, loaded
+ * through the same function as the first. It shares the left axis only with
+ * the same quantity - the same recorded unit, or the same two state words -
+ * and is on the right axis otherwise; a line that would need a third axis is
+ * not drawn (lib/modules/bas/chart-lines.ts).
  */
 export interface PointComparison {
   point: PointOption;
@@ -993,8 +1003,8 @@ export interface PointComparison {
   sampling: TrendSampling;
   stats: Pick<PointStats, "readings" | "average" | "minimum" | "maximum" | "latest" | "latestAt">;
   expectedInterval: ExpectedInterval;
-  /** True when the two points share one axis: both have a unit and it is the same one. */
-  sharedAxis: boolean;
+  /** Which axis it is drawn against. `left` is the first point's. */
+  axis: AxisSide;
 }
 
 // ------------------------------------------------- the readings table (B4)

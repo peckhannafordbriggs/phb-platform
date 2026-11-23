@@ -110,8 +110,10 @@ function payload(overrides: Partial<PointExplorer> = {}): PointExplorer {
       valueKind: "boolean",
       states: { on: "On", off: "Off" },
       stationId: "7",
+      stationName: "ZZTEST_STATION",
       equipmentId: null,
       equipmentName: null,
+      equipmentType: null,
     },
     collectionIntervalS: 300,
     stationClockOffsetS: 0,
@@ -135,8 +137,8 @@ function payload(overrides: Partial<PointExplorer> = {}): PointExplorer {
     breaks: { count: 0, longestHours: null, missingShare: 0, periodHours: 0, breaks: [] },
     history: null,
     outOfRange: null,
-    comparison: null,
-    comparisonNote: null,
+    comparisons: [],
+    comparisonNotes: [],
     ...overrides,
   };
 }
