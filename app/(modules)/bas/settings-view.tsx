@@ -1195,6 +1195,7 @@ function StationRow({
           // the counts, so the list under the row never shows the old roles.
           key={`${station.autoAssigned}:${station.needDecision}:${station.hiddenDuplicates}:${copiesLink}`}
           stationId={station.stationId}
+          stationName={station.niagaraStationName}
           expectedTotal={station.totalPoints}
           initialQuery={initialPointQuery}
           initialFilters={

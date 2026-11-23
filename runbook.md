@@ -10033,6 +10033,66 @@ switch. `WHY-ITS-BUILT-THIS-WAY.md` § 89.
 
 ---
 
+## A controller's points were attached to the unit its station is named for (CEI_AHU_7 → AHU_7, CEI_PLANT → PLANT)
+
+Built 2026-11-23, step 0 of the automatic assignment above
+(`lib/modules/bas/station-equipment.ts`). A station whose Niagara name
+**ends** with an equipment token is that equipment:
+
+- a unit: `AHU_7` → ahu, `RTU_3` → rtu;
+- a plant word: `CHILLER`, `BOILER`, `CHW`, `HW`, or `PLANT` (its points
+  decide: all chilled-water names → plant_chw, all hot-water → plant_hw,
+  both → split into `PLANT_CHW` and `PLANT_HW`).
+
+Its points that name no unit, or name the same one (`AHU_07_Oa_Temp` on
+CEI_AHU_7: leading zeros are not another unit), are attached to it. The
+equipment is named after the token. If the building already has equipment of
+that name it is reused **even when another station's points are on it**: the
+station's own name says that the JACE's `AHU_7/...` and CEI_AHU_7's points are
+one air handler. The role rules then run with that equipment's type, so
+`AHU_7_Da_Temp` is a supply air temperature and `Clg_Plant_Chws_Temp` a chilled
+water supply temperature. A JACE (`CEI_JCI_N2`) is never equipment. The
+no-overwrite rules are the assignment's: never a `'manual'` point, never a
+half that has a value.
+
+**Symptom: Settings → Points on CEI_AHU_7 shows `AHU_07_...` points on
+equipment called `AHU_07`.** Those eight were attached by the assignment pass
+before this rule existed, when a leading `AHU_07` read as a unit of its own, and the pass never moves a point that already has equipment.
+**Fix:** select them and set their equipment to `AHU_7` with the bulk form,
+then delete the empty `AHU_07` in the equipment panel.
+
+**Symptom: a plant station's points have no equipment.** Its names name
+neither side (no `CHW…`, `CH`, `CLG`, `HW…`, `BLR…`, `HTG`), so the pass
+cannot tell a chilled-water plant from a hot-water one. Create the equipment
+by hand and attach them. On a split plant, the points that name neither side
+are left without equipment on purpose.
+
+**Symptom: most of a controller's points still read *Needs a decision*.**
+Expected, and listed in the PR that built this. CEI_AHU_7 had 70 of 95 left
+on the fixture run, CEI_AHU_8 60 of 85, CEI_PLANT 53 of 59. Three reasons:
+
+- the vocabulary has no role for the point (feedbacks, setpoint limits,
+  zone averages, trim-and-respond, safeties);
+- it is a numbered member of an array: `Sa_Fan_1_Sts` … `Sa_Fan_6_Sts`,
+  `Ch_1_*`, `Sec_Chwp_1_*`. The report engine reads the best-covered point
+  with a role, so six fans all called `supply_fan_status` would let one fan
+  speak for the unit;
+- the suggestion is medium (`Sched_Mode`: which value means occupied is the
+  station's convention).
+
+Settings → Points → *Needs a decision* → **Download names** saves the list,
+one Niagara name per line, for the integrator.
+
+## Settings → Points: "Download names"
+
+Shown when the *Needs a decision* filter is on. It saves the names of the rows
+that filter (and the search) shows that still need a decision, one Niagara
+name per line, with Niagara's `$2f`-style escapes decoded: the shape of
+`docs/fixtures/*.txt`. It reads nothing beyond the list already on the screen.
+The file is named after the station, `<station>-needs-a-decision.txt`.
+
+---
+
 ## A point was hidden automatically as a duplicate copy
 
 Built 2026-11-23. The same scheduler step as the assignment above (every
@@ -10105,6 +10165,16 @@ Settings*, not *hidden as duplicate copies*. To hand one to the platform:
 `UPDATE bas_points SET hidden_source = NULL, is_visible = true WHERE point_id
 = <id>` and the next pass decides it - or leave it as it is, which is equally
 correct.
+
+**Symptom: CEI_JCI_N2's `AHU_7/*` copies are not hidden, though CEI_AHU_7
+is collected.** Known, found 2026-11-23 when CEI's real names were read: the
+copies are `AHU_7/DA_SAP`, `AHU_7/MA_T`, `AHU_7/OA_H`, and the live points are
+`AHU_7_Da_Press`, `AHU_7_Ma_Temp`, `AHU_7_Oa_Rh` - different words, so no
+name rule pairs them. Until the step also pairs by equipment and role (both
+halves are on `AHU_7` with the same role since the station rule above), hide
+them by hand: Settings → CEI_JCI_N2 → Points → search `AHU_7/` → select the
+copies → *Hide N points…*. A copy hidden by hand stays hidden; the step
+never writes a `'manual'` point.
 
 **Symptom: a flat point that pairs with a live one is NOT hidden.** One of:
 a person set it (`hidden_source = 'manual'`); it has fewer than 10 readings in

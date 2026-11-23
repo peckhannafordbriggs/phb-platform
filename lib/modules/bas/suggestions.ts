@@ -100,8 +100,12 @@ interface NamePattern {
   confidence: string;
 }
 
-/** Rule 1. Exported so the token table can be held to it. */
-export const SETPOINT_WORD = /(setpoint|stpt|_sp\b|sp$)/i;
+/**
+ * Rule 1. Exported so the token table can be held to it. `Spt` (2026-11-23):
+ * every CEI controller setpoint is written `..._Spt` (`AHU_7_Da_Temp_Spt`,
+ * `Clg_Plant_Chws_Temp_Spt`), and until then none of them read as one.
+ */
+export const SETPOINT_WORD = /(setpoint|stpt|_sp\b|_spt(?![a-z])|spt$|sp$)/i;
 
 /**
  * The patterns, as they stand. Each one earned its place from a real name on
@@ -365,7 +369,7 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   },
   {
     id: "tail_discharge_air_temp_sp",
-    tokens: ["DATEMPSP", "DATSP", "DATEMPSETPOINT", "DATSETPOINT", "DISCHARGEAIRTEMPSP"],
+    tokens: ["DATEMPSP", "DATSP", "DATEMPSETPOINT", "DATSETPOINT", "DISCHARGEAIRTEMPSP", "DATEMPSPT", "DATSPT"],
     setpoint: true,
     byClass: dischargeAir("discharge_air_temp_sp", "supply_air_temp_sp"),
     confidence:
@@ -384,7 +388,7 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   },
   {
     id: "tail_supply_air_temp_sp",
-    tokens: ["SATSP", "SATEMPSP", "SATSETPOINT"],
+    tokens: ["SATSP", "SATEMPSP", "SATSETPOINT", "SATEMPSPT", "SATSPT"],
     setpoint: true,
     byClass: {
       air_handler: { role: "supply_air_temp_sp", level: "high" },
@@ -467,7 +471,7 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   },
   {
     id: "tail_duct_static",
-    tokens: ["DASAP", "DUCTSTATIC", "DUCTSTATICPRESSURE", "DASTATIC", "SASTATIC"],
+    tokens: ["DASAP", "DUCTSTATIC", "DUCTSTATICPRESSURE", "DASTATIC", "SASTATIC", "DAPRESS", "DAPRESSURE", "SAPRESS", "SAPRESSURE", "DUCTPRESS"],
     setpoint: false,
     byClass: ductStatic("duct_static_pressure", "high", "high"),
     confidence:
@@ -483,7 +487,7 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   },
   {
     id: "tail_duct_static_sp",
-    tokens: ["DASAPSP", "SAPSP", "DUCTSTATICSP", "DUCTSTATICSETPOINT", "DASTATICSP"],
+    tokens: ["DASAPSP", "SAPSP", "DUCTSTATICSP", "DUCTSTATICSETPOINT", "DASTATICSP", "DAPRESSSPT", "DAPRESSSP", "SAPRESSSPT", "DUCTSTATICSPT"],
     setpoint: true,
     byClass: ductStatic("duct_static_pressure_sp", "high", "high"),
     confidence: "The suffix is a duct static pressure setpoint.",
@@ -523,7 +527,7 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   {
     // CEI's `AHU_7/SF_S`.
     id: "tail_supply_fan_status",
-    tokens: ["SFS", "SFSTS", "SFSTATUS", "SUPPLYFANSTATUS"],
+    tokens: ["SFS", "SFSTS", "SFSTATUS", "SUPPLYFANSTATUS", "SAFANSTS", "SAFANSTATUS", "SUPPLYFANSTS"],
     setpoint: false,
     byClass: everywhere("supply_fan_status", "high"),
     confidence: "SF is supply fan and S its status: the proven-running feedback, on any unit with a supply fan.",
@@ -531,35 +535,35 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   {
     // CEI's `AHU_7/RF_S`.
     id: "tail_return_fan_status",
-    tokens: ["RFS", "RFSTS", "RFSTATUS", "RETURNFANSTATUS"],
+    tokens: ["RFS", "RFSTS", "RFSTATUS", "RETURNFANSTATUS", "RAFANSTS", "RAFANSTATUS", "RETURNFANSTS"],
     setpoint: false,
     byClass: everywhere("return_fan_status", "high"),
     confidence: "RF is return fan and S its status: the proven-running feedback.",
   },
   {
     id: "tail_supply_fan_cmd",
-    tokens: ["SFC", "SFCMD", "SUPPLYFANCMD", "SUPPLYFANCOMMAND"],
+    tokens: ["SFC", "SFCMD", "SUPPLYFANCMD", "SUPPLYFANCOMMAND", "SAFANCMD", "SAFANCOMMAND"],
     setpoint: false,
     byClass: everywhere("supply_fan_cmd", "high"),
     confidence: "SF is supply fan and C or CMD its start/stop command.",
   },
   {
     id: "tail_return_fan_cmd",
-    tokens: ["RFC", "RFCMD", "RETURNFANCMD", "RETURNFANCOMMAND"],
+    tokens: ["RFC", "RFCMD", "RETURNFANCMD", "RETURNFANCOMMAND", "RAFANCMD", "RAFANCOMMAND"],
     setpoint: false,
     byClass: everywhere("return_fan_cmd", "high"),
     confidence: "RF is return fan and C or CMD its start/stop command.",
   },
   {
     id: "tail_supply_fan_speed",
-    tokens: ["SFSPD", "SFSPEED", "SUPPLYFANSPEED"],
+    tokens: ["SFSPD", "SFSPEED", "SUPPLYFANSPEED", "SAFANSIG", "SAFANSPD", "SAFANSPEED", "SFSIG"],
     setpoint: false,
     byClass: everywhere("supply_fan_speed", "high"),
     confidence: "SF is supply fan and SPD its VFD speed.",
   },
   {
     id: "tail_return_fan_speed",
-    tokens: ["RFSPD", "RFSPEED", "RETURNFANSPEED"],
+    tokens: ["RFSPD", "RFSPEED", "RETURNFANSPEED", "RAFANSIG", "RAFANSPD", "RAFANSPEED", "RFSIG"],
     setpoint: false,
     byClass: everywhere("return_fan_speed", "high"),
     confidence: "RF is return fan and SPD its VFD speed.",
@@ -574,7 +578,7 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   },
   {
     id: "tail_oa_damper",
-    tokens: ["OADMPR", "OADAMPER", "OADMPRPOS", "OUTSIDEAIRDAMPER"],
+    tokens: ["OADMPR", "OADAMPER", "OADMPRPOS", "OUTSIDEAIRDAMPER", "OADMPRSIG", "OADAMPERSIG", "OADMPRCMD"],
     setpoint: false,
     byClass: everywhere("oa_damper_cmd", "high"),
     confidence:
@@ -582,14 +586,14 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   },
   {
     id: "tail_ra_damper",
-    tokens: ["RADMPR", "RADAMPER", "RETURNAIRDAMPER"],
+    tokens: ["RADMPR", "RADAMPER", "RETURNAIRDAMPER", "RADMPRSIG", "RADAMPERSIG"],
     setpoint: false,
     byClass: everywhere("ra_damper_cmd", "high"),
     confidence: "RA is return air: the return damper, recorded as its commanded position.",
   },
   {
     id: "tail_ea_damper",
-    tokens: ["EADMPR", "EADAMPER", "EXHAUSTAIRDAMPER"],
+    tokens: ["EADMPR", "EADAMPER", "EXHAUSTAIRDAMPER", "EADMPRSIG", "EADAMPERSIG"],
     setpoint: false,
     byClass: everywhere("ea_damper_cmd", "high"),
     confidence: "EA is exhaust air: the exhaust damper, recorded as its commanded position.",
@@ -626,14 +630,14 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
   },
   {
     id: "tail_cooling_valve",
-    tokens: ["CLGV", "CLGVLV", "CLGVALVE", "COOLINGVALVE"],
+    tokens: ["CLGV", "CLGVLV", "CLGVALVE", "COOLINGVALVE", "CLGVLVSIG", "CLGVLVCMD", "CLGVALVECMD"],
     setpoint: false,
     byClass: everywhere("cooling_valve_cmd", "high"),
     confidence: "CLG V is the cooling valve: its commanded position, chilled water or DX, on any unit.",
   },
   {
     id: "tail_heating_valve",
-    tokens: ["HTGV", "HTGVLV", "HTGVALVE", "HEATINGVALVE"],
+    tokens: ["HTGV", "HTGVLV", "HTGVALVE", "HEATINGVALVE", "HTGVLVSIG", "HTGVLVCMD", "HTGVALVECMD"],
     setpoint: false,
     byClass: {
       // On a box the heating valve IS the reheat valve; the vocabulary keeps
@@ -646,7 +650,225 @@ export const TAIL_PATTERNS: readonly TailPattern[] = [
     confidence:
       "HTG V is the heating valve. On a terminal unit that valve is its reheat valve (reheat_valve_cmd); on any other unit it is heating_valve_cmd; with no equipment type, look first.",
   },
+
+  // --- Third round (2026-11-23): CEI's controllers, read from production ----
+  //
+  // docs/fixtures/cei-controller-point-names.txt: CEI_AHU_7, CEI_AHU_8 and
+  // CEI_PLANT, the via-parent stations under CEI_JCI_N2. Every token below
+  // is in those names, or is the HW twin of a CHW one the request asked for.
+  // Tokens the vocabulary has no role for are listed in the PR and stay a
+  // person's: setpoint limits (`Da_Temp_Spt_Max`), feedbacks (`Oa_Dmpr_Fbk`,
+  // `Htg_Vlv_Fbk`), aggregates (`Zn_Temp_Avg`), the economizer and
+  // dehumidification states, trim-and-respond requests, plant enables and
+  // modes. NUMBERED MEMBERS ARE DELIBERATELY SILENT: `Sa_Fan_1_Sts` ...
+  // `Sa_Fan_6_Sts`, `Ch_1_Sts`, `Sec_Chwp_1_Sts`. The vocabulary has one
+  // supply fan status per unit and the report engine reads the best-covered
+  // point with a role (analysis/common.ts `pick`): six fans of an array, all
+  // supply_fan_status, would let one fan speak for the unit.
+
+  {
+    // `AHU_7_Clg_Sig`: the cooling loop's output, which on an air handler is
+    // its valve command. Split coils (`Clg_Sig_Lower`/`_Upper`) are silent.
+    id: "tail_cooling_signal",
+    tokens: ["CLGSIG", "COOLINGSIG", "CLGCMD"],
+    setpoint: false,
+    byClass: {
+      air_handler: { role: "cooling_valve_cmd", level: "high" },
+      unknown: { role: "cooling_valve_cmd", level: "medium" },
+    },
+    confidence:
+      "CLG SIG is the cooling signal: on an air handler, the command its cooling valve follows (cooling_valve_cmd, chilled water or DX). With no equipment type, look first; on a terminal or a plant it is something else.",
+  },
+  {
+    // `AHU_7_Htg_Sig`.
+    id: "tail_heating_signal",
+    tokens: ["HTGSIG", "HEATINGSIG", "HTGCMD"],
+    setpoint: false,
+    byClass: {
+      air_handler: { role: "heating_valve_cmd", level: "high" },
+      terminal: { role: "reheat_valve_cmd", level: "medium" },
+      unknown: { role: "heating_valve_cmd", level: "medium" },
+    },
+    confidence:
+      "HTG SIG is the heating signal: on an air handler, the command its heating valve follows (heating_valve_cmd). On a terminal unit it is probably the reheat valve; with no equipment type, look first.",
+  },
+  {
+    // `AHU_7_Zn_Press`: the space's static pressure against outside.
+    id: "tail_building_static",
+    tokens: ["ZNPRESS", "ZNPRESSURE", "BLDGPRESS", "BLDGSTATIC", "BUILDINGSTATIC", "BUILDINGPRESSURE", "SPACEPRESS"],
+    setpoint: false,
+    byClass: {
+      air_handler: { role: "building_static_pressure", level: "high" },
+      other: { role: "building_static_pressure", level: "medium" },
+      unknown: { role: "building_static_pressure", level: "medium" },
+    },
+    confidence:
+      "ZN PRESS is the zone's (building's) static pressure, which an air handler's return or relief fan controls to. On a terminal unit it is not that, so nothing is suggested there.",
+  },
+  {
+    // `AHU_7_Oa_Flow`.
+    id: "tail_outside_air_flow",
+    tokens: ["OAFLOW", "OACFM", "OAAIRFLOW", "OUTSIDEAIRFLOW"],
+    setpoint: false,
+    byClass: everywhere("outside_air_flow", "high"),
+    confidence: "OA FLOW names the outside airflow outright.",
+  },
+  {
+    id: "tail_exhaust_fan_status",
+    tokens: ["EFS", "EFSTS", "EAFANSTS", "EXFANSTS", "EXHAUSTFANSTATUS"],
+    setpoint: false,
+    byClass: everywhere("exhaust_fan_status", "high"),
+    confidence: "EF is exhaust fan and S its status: the proven-running feedback.",
+  },
+  {
+    id: "tail_exhaust_fan_cmd",
+    tokens: ["EFC", "EFCMD", "EAFANCMD", "EXFANCMD", "EXHAUSTFANCMD"],
+    setpoint: false,
+    byClass: everywhere("exhaust_fan_cmd", "high"),
+    confidence: "EF is exhaust fan and C or CMD its start/stop command.",
+  },
+  {
+    // `AHU_7_Frz_Alm`: the freezestat. `Software_Frz_Alm`, a second freeze
+    // point on the same unit, is silent - one freeze status per unit.
+    id: "tail_freeze",
+    tokens: ["FRZALM", "FREEZEALM", "FREEZEALARM", "FRZSTAT", "FREEZESTAT"],
+    setpoint: false,
+    byClass: everywhere("freeze_status", "high"),
+    confidence: "FRZ ALM is the freezestat: the low-limit trip that protects the coil.",
+  },
+  {
+    // `AHU_7_Sched_Mode` (an enum) and `Clg_Plant_Sched_Mode` (a boolean).
+    id: "tail_schedule_mode",
+    tokens: ["SCHEDMODE", "SCHEDULEMODE", "OCCSCHED"],
+    setpoint: false,
+    byClass: everywhere("occupancy_status", "medium"),
+    confidence:
+      "SCHED MODE is the schedule's occupied/unoccupied state, which the reports read as occupancy. Medium: which value means occupied is the station's convention, so confirm before applying.",
+  },
+  {
+    id: "tail_chw_supply_temp",
+    tokens: ["CHWSTEMP", "CHWST", "CHWSUPTEMP", "CHWSUPPLYTEMP"],
+    setpoint: false,
+    byClass: everywhere("chw_supply_temp", "high"),
+    confidence: "CHWS is chilled water supply: the loop's supply temperature.",
+  },
+  {
+    id: "tail_chw_return_temp",
+    tokens: ["CHWRTEMP", "CHWRT", "CHWRETTEMP", "CHWRETURNTEMP"],
+    setpoint: false,
+    byClass: everywhere("chw_return_temp", "high"),
+    confidence: "CHWR is chilled water return: the loop's return temperature.",
+  },
+  {
+    id: "tail_chw_supply_temp_sp",
+    tokens: ["CHWSTEMPSPT", "CHWSTEMPSP", "CHWSTSPT", "CHWSTSP", "CHWSTEMPSETPOINT"],
+    setpoint: true,
+    byClass: everywhere("chw_supply_temp_sp", "high"),
+    confidence: "The chilled water supply temperature setpoint.",
+  },
+  {
+    id: "tail_hw_supply_temp",
+    tokens: ["HWSTEMP", "HWST", "HWSUPTEMP", "HWSUPPLYTEMP"],
+    setpoint: false,
+    byClass: everywhere("hw_supply_temp", "high"),
+    confidence: "HWS is hot water supply: the loop's supply temperature.",
+  },
+  {
+    id: "tail_hw_return_temp",
+    tokens: ["HWRTEMP", "HWRT", "HWRETTEMP", "HWRETURNTEMP"],
+    setpoint: false,
+    byClass: everywhere("hw_return_temp", "high"),
+    confidence: "HWR is hot water return: the loop's return temperature.",
+  },
+  {
+    id: "tail_hw_supply_temp_sp",
+    tokens: ["HWSTEMPSPT", "HWSTEMPSP", "HWSTSPT", "HWSTSP", "HWSTEMPSETPOINT"],
+    setpoint: true,
+    byClass: everywhere("hw_supply_temp_sp", "high"),
+    confidence: "The hot water supply temperature setpoint.",
+  },
+  {
+    // A plant's (or a pump's own) un-numbered pump points. `Sec_Chwp_1_Sts`
+    // is a numbered member and is silent, as the fans are.
+    id: "tail_pump_status",
+    tokens: ["PUMPSTS", "PUMPSTATUS", "PMPSTS", "CHWPSTS", "HWPSTS"],
+    setpoint: false,
+    byClass: everywhere("pump_status", "high"),
+    confidence: "The pump's proven-running status.",
+  },
+  {
+    id: "tail_pump_cmd",
+    tokens: ["PUMPCMD", "PMPCMD", "CHWPCMD", "HWPCMD"],
+    setpoint: false,
+    byClass: everywhere("pump_cmd", "high"),
+    confidence: "The pump's start/stop command.",
+  },
+  {
+    id: "tail_pump_speed",
+    tokens: ["PUMPSPD", "PUMPSPEED", "PUMPSIG", "CHWPSIG", "HWPSIG"],
+    setpoint: false,
+    byClass: everywhere("pump_speed", "high"),
+    confidence: "The pump's VFD speed signal.",
+  },
+  {
+    // `Clg_Plant_Ch_Cmd`: the plant's chiller enable, not one machine's
+    // (`Ch_1_Cmd` is a numbered member and silent).
+    id: "tail_chiller_cmd",
+    tokens: ["CHCMD", "CHILLERCMD", "CHLRCMD"],
+    setpoint: false,
+    byClass: {
+      other: { role: "chiller_cmd", level: "high" },
+      unknown: { role: "chiller_cmd", level: "medium" },
+    },
+    confidence: "CH CMD is the chiller command, on a plant or a chiller.",
+  },
+  {
+    id: "tail_chiller_status",
+    tokens: ["CHSTS", "CHILLERSTS", "CHILLERSTATUS", "CHLRSTS"],
+    setpoint: false,
+    byClass: {
+      other: { role: "chiller_status", level: "high" },
+      unknown: { role: "chiller_status", level: "medium" },
+    },
+    confidence: "CH STS is the chiller's proven-running status.",
+  },
+  {
+    id: "tail_boiler_cmd",
+    tokens: ["BLRCMD", "BOILERCMD"],
+    setpoint: false,
+    byClass: {
+      other: { role: "boiler_cmd", level: "high" },
+      unknown: { role: "boiler_cmd", level: "medium" },
+    },
+    confidence: "BLR CMD is the boiler command.",
+  },
+  {
+    id: "tail_boiler_status",
+    tokens: ["BLRSTS", "BOILERSTS", "BOILERSTATUS"],
+    setpoint: false,
+    byClass: {
+      other: { role: "boiler_status", level: "high" },
+      unknown: { role: "boiler_status", level: "medium" },
+    },
+    confidence: "BLR STS is the boiler's proven-running status.",
+  },
 ];
+
+/**
+ * A plant's own name in front of a point's measurement (2026-11-23):
+ * CEI_PLANT writes `Clg_Plant_Chws_Temp`, and the measurement is `Chws_Temp`.
+ * `PLANT` within the first three words, with only plant qualifiers before it
+ * (`CLG`, `HTG`, `CHW`, `HW`, `COOLING`, `HEATING`), is stripped. Nothing
+ * else is: a tail that does not start with a plant's name is read whole.
+ */
+const PLANT_QUALIFIER_WORDS = new Set(["CLG", "HTG", "CHW", "HW", "COOLING", "HEATING"]);
+export function stripPlantQualifier(tail: string): string | null {
+  const words = tail.split(/[-_ .]+/).filter((w) => w.length > 0);
+  const at = words.findIndex((w) => w.toUpperCase() === "PLANT");
+  if (at < 0 || at > 2 || at === words.length - 1) return null;
+  if (!words.slice(0, at).every((w) => PLANT_QUALIFIER_WORDS.has(w.toUpperCase()))) return null;
+  return words.slice(at + 1).join("_");
+}
 
 /** `DA_T` -> `DAT`; `Space Temp` -> `SPACETEMP`. */
 export function compactToken(text: string): string {
@@ -794,9 +1016,14 @@ function phraseHits(name: string, hasSetpointWord: boolean): Hit[] {
 /** The suffix token that fires on a name's tail, decided for this point. */
 function tailHit(point: SuggestionSubject, name: string, hasSetpointWord: boolean): Hit | null {
   const parsed = parsePointName(name);
-  const token = compactToken(parsed.tail);
-  if (token.length === 0) return null;
-  const pattern = TAIL_PATTERNS.find((p) => p.tokens.includes(token));
+  const tokens = [compactToken(parsed.tail)];
+  // A plant writes its own name first (`Clg_Plant_Chws_Temp`).
+  const stripped = parsed.prefix === null ? stripPlantQualifier(parsed.tail) : null;
+  if (stripped !== null) tokens.push(compactToken(stripped));
+  if (tokens[0]!.length === 0) return null;
+  const pattern = tokens
+    .map((token) => TAIL_PATTERNS.find((p) => p.tokens.includes(token)))
+    .find((p) => p !== undefined);
   // Rule 1, again: the whole name decides whether it is a setpoint.
   if (pattern === undefined || pattern.setpoint !== hasSetpointWord) return null;
 

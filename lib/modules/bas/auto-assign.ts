@@ -4,6 +4,7 @@ import { writeAuditEvent, writeAuditEvents, type AuditEventInput } from "@/lib/a
 import { BAS_MODULE_KEY } from "./constants";
 import { equipmentKey, groupEquipmentPrefixes, groupIncludedByDefault } from "./name-prefix";
 import { readableName, suggestClassification, type EquipmentFacts, type RoleFacts } from "./suggestions";
+import { planStationPieces, stationUnit } from "./station-equipment";
 import { countChangesByStation, hideDuplicateCopies, runDuplicatePass, type DuplicatePass } from "./auto-hide";
 import type { StationAssignment, StationAssignmentOutcome } from "./types";
 
@@ -17,6 +18,14 @@ export type { StationAssignment, StationAssignmentOutcome } from "./types";
  * THIS code, station by station: for each collected point that a person has not
  * classified and that is missing its role or its equipment, it
  *
+ *   0. (2026-11-23) when the STATION is named for a unit or a plant -
+ *      CEI_AHU_7, CEI_PLANT - attaches the station's points to that
+ *      equipment (lib/modules/bas/station-equipment.ts): created once, named
+ *      after the token (`AHU_7`, `PLANT`), or the building's existing
+ *      equipment of that name, EVEN IF another station's points are on it -
+ *      the station's own name is the evidence that the JACE's `AHU_7/...`
+ *      and CEI_AHU_7's points are one air handler. Points this claims skip
+ *      step 1;
  *   1. creates the equipment a HIGH-confidence name prefix implies, one per
  *      prefix per station, named as the integrator wrote it (`V4_22`,
  *      `AHU_7`) - or attaches to equipment of that name already on the
@@ -105,6 +114,10 @@ interface BuildingEquipmentRow {
 interface StationFacts {
   stationId: bigint;
   stationName: string;
+  /** Niagara's name for the station: what step 0 reads. */
+  niagaraStationName: string;
+  /** Every collected point's readable name on the station: a bare PLANT's type is decided over all of them. */
+  collectedNames: string[];
   siteId: bigint | null;
   candidates: CandidateRow[];
   roles: Map<string, RoleFacts>;
@@ -124,11 +137,19 @@ const CANDIDATE = (p: Prisma.Sql) => Prisma.sql`
   AND (${p}.point_role IS NULL OR ${p}.equipment_id IS NULL)`;
 
 async function loadFacts(db: Db, stationId: bigint): Promise<StationFacts | null> {
-  const station = await db.$queryRaw<Array<{ site_id: bigint | null; name: string }>>`
-    SELECT site_id, COALESCE(display_name, niagara_station_name) AS name
+  const station = await db.$queryRaw<Array<{ site_id: bigint | null; name: string; niagara_station_name: string }>>`
+    SELECT site_id, COALESCE(display_name, niagara_station_name) AS name, niagara_station_name
       FROM bas_stations WHERE station_id = ${stationId}`;
   const found = station[0];
   if (found === undefined) return null;
+  // Only a plant whose type its points decide needs every name on the station.
+  const unit = stationUnit(found.niagara_station_name);
+  const collected =
+    unit !== null && unit.kind === "plant" && unit.equipType === null
+      ? await db.$queryRaw<Array<{ niagara_history_name: string; display_name: string | null }>>`
+          SELECT niagara_history_name, display_name FROM bas_points
+           WHERE station_id = ${stationId} AND is_active`
+      : [];
 
   const [candidates, roles, types, building, shared] = await Promise.all([
     db.$queryRaw<CandidateRow[]>`
@@ -159,6 +180,10 @@ async function loadFacts(db: Db, stationId: bigint): Promise<StationFacts | null
   return {
     stationId,
     stationName: found.name,
+    niagaraStationName: found.niagara_station_name,
+    collectedNames: collected.map((c) =>
+      readableName({ niagaraHistoryName: c.niagara_history_name, niagaraDisplayName: c.display_name }),
+    ),
     siteId: found.site_id,
     candidates,
     roles: new Map(
@@ -211,19 +236,22 @@ function planStation(facts: StationFacts): StationPlan {
   for (const e of facts.building) if (!byKey.has(equipmentKey(e.name))) byKey.set(equipmentKey(e.name), e);
 
   // A planned piece of equipment, or null when it must be left to a person.
+  // `fromStation`: the station is named for this unit, which settles that
+  // equipment of that name elsewhere on the building is the same unit.
   const target = (
     key: string,
     name: string,
     equipType: string | null,
     reason: string,
     spellings: string[],
+    fromStation = false,
   ): PlannedEquipment | null => {
     const planned = equipment.get(key);
     if (planned !== undefined) return planned;
     const existing = byKey.get(key);
     let next: PlannedEquipment;
     if (existing !== undefined) {
-      if (facts.sharedElsewhere.has(existing.equipment_id.toString())) return null;
+      if (!fromStation && facts.sharedElsewhere.has(existing.equipment_id.toString())) return null;
       next = {
         key,
         name: existing.name,
@@ -240,11 +268,33 @@ function planStation(facts: StationFacts): StationPlan {
     return next;
   };
 
+  // 0. The station is the equipment (2026-11-23): CEI_AHU_7, CEI_PLANT.
+  // Only points with no equipment, and only on a building.
+  const claimed = new Set<string>();
+  const unit = facts.siteId === null ? null : stationUnit(facts.niagaraStationName);
+  if (unit !== null) {
+    const pieces = planStationPieces(
+      unit,
+      facts.collectedNames.map((name) => ({ name })),
+      facts.candidates
+        .filter((r) => r.equipment_id === null)
+        .map((r) => ({ pointId: r.point_id.toString(), name: pointName(r) })),
+    );
+    for (const piece of pieces) {
+      const planned = target(equipmentKey(piece.name), piece.name, piece.equipType, piece.reason, [piece.name], true);
+      if (planned === null) continue;
+      for (const id of piece.pointIds) {
+        attach.set(id, planned.key);
+        claimed.add(id);
+      }
+    }
+  }
+
   // 1. Equipment from high-confidence prefixes. Equipment lives on a
   // building, so a station on none takes the role half only.
   if (facts.siteId !== null) {
     const groups = groupEquipmentPrefixes(
-      facts.candidates.map((r) => ({
+      facts.candidates.filter((r) => !claimed.has(r.point_id.toString())).map((r) => ({
         pointId: r.point_id.toString(),
         name: pointName(r),
         collected: true,

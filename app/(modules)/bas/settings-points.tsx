@@ -58,6 +58,7 @@ import {
   type PrefixDraft,
 } from "./settings-points-names";
 import { Pencil } from "lucide-react";
+import { decodeNiagaraName } from "@/lib/modules/bas/suggestions";
 import { Button, Dropdown, FieldLabel, INPUT, SearchBar, Segmented } from "@/components/ui";
 import { TONE_INK, TONE_STYLE } from "./tone";
 import { HorizonCell } from "./collection-health";
@@ -164,6 +165,35 @@ export function pointMatchesFilters(point: SettingsPoint, filters: PointFilters)
   return true;
 }
 
+/**
+ * "Download names" on the Needs a decision filter (2026-11-23): the names of
+ * the rows that need a decision, one per line, as Niagara spells them with
+ * its `$2f`-style escapes decoded - the shape of docs/fixtures/*.txt, so the
+ * next building's list arrives as a file instead of a database session.
+ * Only points that need a decision, whatever else is passed.
+ */
+export function needsDecisionNamesText(points: readonly SettingsPoint[]): string {
+  const names = points.filter(pointNeedsDecision).map((p) => decodeNiagaraName(p.niagaraHistoryName));
+  return names.length === 0 ? "" : `${names.join("\n")}\n`;
+}
+
+/** The file's name: the station's, so two downloads never overwrite each other unnoticed. */
+export function needsDecisionFileName(stationName: string | null, stationId: string): string {
+  const base = (stationName ?? `station-${stationId}`).replace(/[^A-Za-z0-9_-]+/g, "_");
+  return `${base}-needs-a-decision.txt`;
+}
+
+function downloadText(fileName: string, text: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 /** The rows the search AND the filters leave: what "select all shown" selects. */
 /**
  * The Points list's search (2026-11-10): the three names, as everywhere else
@@ -223,11 +253,14 @@ interface EquipmentFormState {
 
 export function StationPoints({
   stationId,
+  stationName = null,
   expectedTotal,
   initialQuery,
   initialFilters = NO_POINT_FILTERS,
 }: {
   stationId: string;
+  /** Niagara's name for the station, for the downloaded file's name. */
+  stationName?: string | null;
   expectedTotal: number;
   /**
    * The tree's search term, if any (B8.4). A station that surfaced because
@@ -648,6 +681,9 @@ export function StationPoints({
           newFromPrefixes={newEquipmentOffered(prefixGroups)}
           prefixesOpen={prefixDrafts !== null}
           onStagePrefixes={() => setPrefixDrafts(initialPrefixDrafts(prefixGroups))}
+          onDownloadNames={(rows) =>
+            downloadText(needsDecisionFileName(stationName, stationId), needsDecisionNamesText(rows))
+          }
           busy={busy}
         />
       )}
@@ -798,6 +834,7 @@ function ClassificationToolbar({
   newFromPrefixes,
   prefixesOpen,
   onStagePrefixes,
+  onDownloadNames,
   busy,
 }: {
   list: StationPointsList;
@@ -828,6 +865,8 @@ function ClassificationToolbar({
   newFromPrefixes: number;
   prefixesOpen: boolean;
   onStagePrefixes: () => void;
+  /** "Download names" on the Needs a decision filter (2026-11-23). Absent: no button. */
+  onDownloadNames?: (rows: SettingsPoint[]) => void;
   busy: boolean;
 }) {
   // Filter options come from what the list holds, so a filter can never
@@ -907,6 +946,20 @@ function ClassificationToolbar({
           ]}
           className="min-w-48"
         />
+        {/*
+          The names that need a decision, as a file (2026-11-23): what is
+          shown under this filter, one Niagara name per line.
+        */}
+        {filters.assignment === "needs_decision" && onDownloadNames !== undefined && (
+          <Button
+            size="sm"
+            disabled={shown.filter(pointNeedsDecision).length === 0}
+            onClick={() => onDownloadNames(shown)}
+            title="One Niagara name per line, the rows this filter shows, so a list for the integrator needs no database access."
+          >
+            Download names ({shown.filter(pointNeedsDecision).length})
+          </Button>
+        )}
         <Dropdown
           label="Filter by history size"
           value={filters.history}
