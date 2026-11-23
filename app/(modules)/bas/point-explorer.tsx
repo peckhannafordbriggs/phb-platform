@@ -81,7 +81,9 @@ import {
   stateAxis,
   valueAxis,
 } from "./value-axis";
+import { maxTicksFor, timeAxisTicks } from "@/lib/modules/bas/time-axis";
 import { unitSymbol } from "@/lib/modules/bas/units";
+import { useMeasuredWidth } from "./use-measured-width";
 import { stateWord, type BooleanStates } from "@/lib/modules/bas/value-kind";
 import { Button, Dropdown, Segmented, type DropdownOption } from "@/components/ui";
 import type { PointOption } from "@/lib/modules/bas/types";
@@ -782,6 +784,8 @@ export function TrendPanel({
       ? undefined
       : `${describeBreaks(data.breaks, data.expectedInterval)}${showingName === null ? "" : ` · showing ${showingName}`}`;
   const [adding, setAdding] = useState(false);
+  // The chart's own width, for how many x-axis ticks fit (2026-11-23).
+  const [chartBox, chartWidth] = useMeasuredWidth<HTMLDivElement>();
 
   /**
    * Drag across the plot to zoom into a range; Reset goes back.
@@ -1041,7 +1045,7 @@ export function TrendPanel({
               onRemove={onRemove}
             />
           )}
-          <div className="h-[22rem] select-none px-3 pb-3 pt-1">
+          <div ref={chartBox} className="h-[22rem] select-none px-3 pb-3 pt-1">
             {/*
               ResponsiveContainer hands its measured size to the chart through
               context, so the chart component in between needs no width or
@@ -1057,6 +1061,7 @@ export function TrendPanel({
                 zoom={zoom}
                 range={rangeMs}
                 timeZone={timeZone}
+                boxWidth={chartWidth}
                 sampled={data.sampling.kind === "bucketed"}
                 primaryName={data.selectedPoint?.pointName ?? ""}
                 primaryWithinMs={data.expectedInterval.breakThresholdS * 1000}
@@ -1122,6 +1127,7 @@ export function TrendChart({
   range = null,
   timeZone = null,
   sampled = false,
+  boxWidth = null,
   others = [],
   primaryName = "",
   primaryWithinMs = Number.POSITIVE_INFINITY,
@@ -1180,6 +1186,11 @@ export function TrendChart({
   /** Only a test sets these. In the page the ResponsiveContainer supplies both. */
   width?: number;
   height?: number;
+  /**
+   * The measured width of the box the chart fills (2026-11-23), for how many
+   * x-axis ticks fit. A test passes `width` instead; with neither, 900px.
+   */
+  boxWidth?: number | null;
   /**
    * Opens the tooltip on one sample without a pointer. Only a test sets it:
    * jsdom lays nothing out, so no synthetic mouse event can land on the plot,
@@ -1270,6 +1281,19 @@ export function TrendChart({
       : rightOwner.states !== null
         ? stateAxis(rightOwner.states, { fontSize: CHART_FONT_SIZE })
         : valueAxis(rightLines.flatMap(valuesOf), rightOwner.unit, { fontSize: CHART_FONT_SIZE });
+  /**
+   * The x-axis ticks (2026-11-23), chosen on the building's clock by
+   * `timeAxisTicks` and handed to Recharts whole: a date once per day, on
+   * its midnight, and times between where the width allows. Recharts placed
+   * them itself before, and printed each as a bare date - two on one day read
+   * "Nov 17 Nov 17". Null (a span of a minute or two, or no data) leaves
+   * Recharts to place them with the old formatter.
+   */
+  const xFrom = typeof domain[0] === "number" ? domain[0] : trend[0]?.tsMs;
+  const xTo = typeof domain[1] === "number" ? domain[1] : trend[trend.length - 1]?.tsMs;
+  const plotWidth = (width ?? boxWidth ?? 900) - axis.width - (rightAxis?.width ?? 0) - 16;
+  const xTicks = xFrom !== undefined && xTo !== undefined ? timeAxisTicks(xFrom, xTo, { maxTicks: maxTicksFor(plotWidth), timeZone: zone }) : null;
+  const xLabels = new Map((xTicks ?? []).map((t) => [t.ms, t.label]));
   // What the cursor walks: the first line's samples, or - when it has none in
   // the range - the busiest other line's, so the readout still works.
   const track =
@@ -1327,10 +1351,13 @@ export function TrendChart({
         // than a suggestion.
         allowDataOverflow
         domain={domain}
-        tickFormatter={(ms: number) => formatChartTick(ms, undefined, zone, spanMs)}
+        ticks={xTicks === null ? undefined : xTicks.map((t) => t.ms)}
+        // Every chosen tick is drawn: the density was decided from the width.
+        interval={xTicks === null ? "preserveEnd" : 0}
+        tickFormatter={(ms: number) => xLabels.get(ms) ?? formatChartTick(ms, undefined, zone, spanMs)}
         stroke="var(--muted)"
         tick={{ fontSize: CHART_FONT_SIZE }}
-        minTickGap={48}
+        minTickGap={xTicks === null ? 48 : 0}
       />
       <YAxis
         stroke="var(--muted)"

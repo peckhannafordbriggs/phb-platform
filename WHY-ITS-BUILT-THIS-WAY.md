@@ -4108,6 +4108,20 @@ stations' clocks visibly apart. The one thing it loses - an empty cell is
 either no reading or a null record - is kept by the one-point file, which is
 unchanged.
 
+**Why the x-axis ticks are chosen, not left to Recharts (2026-11-23).**
+Recharts places time ticks where its arithmetic lands, and the formatter
+printed every one as a bare date: over seven days two ticks fell on one day
+and the axis read "Nov 17 Nov 17" - a date printed twice and nothing to say
+what the second meant. A formatter cannot fix that, because it never sees the
+other ticks. `timeAxisTicks` chooses them on the building's clock: local
+midnights carry the date, once; ticks between carry only the time; the first
+tick of a partial first day carries both; month starts past a year. The
+density comes from the chart's measured width (a ResizeObserver - the
+ResponsiveContainer hands its size to the chart through context, out of the
+planner's reach) and Recharts is told to draw every tick, so it never drops
+the one that carried a date. Collection Health's run chart takes the same
+planner in the reader's zone.
+
 **What breaks if you undo it.** Give each line the full raw cap and a
 six-line week of five-minute points hangs the tab. Let a third quantity onto
 an axis and 55 °F and 12.8 % share a scale. Colour lines by position and

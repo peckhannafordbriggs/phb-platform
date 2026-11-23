@@ -95,6 +95,8 @@ import {
 import { unitSymbol } from "@/lib/modules/bas/units";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 import { Dropdown, Segmented, type DropdownOption } from "@/components/ui";
+import { maxTicksFor, timeAxisTicks } from "@/lib/modules/bas/time-axis";
+import { useMeasuredWidth } from "./use-measured-width";
 
 /**
  * Collection Health - is data arriving, and is any of it about to be lost.
@@ -1392,6 +1394,16 @@ export function PointTable({
 }
 
 function RunChart({ health }: { health: CollectionHealthData }) {
+  // The x-axis ticks (2026-11-23): chosen by `timeAxisTicks` for the chart's
+  // measured width, in the reader's own zone as the rest of this screen - a
+  // date once per day, times between where there is room. Recharts printed
+  // every tick it placed as a bare date before, and two on one day read
+  // "Nov 17 Nov 17".
+  const [box, boxWidth] = useMeasuredWidth<HTMLDivElement>();
+  const times = health.runRecords.map((r) => r.startedAtMs);
+  const xTicks =
+    times.length > 1 ? timeAxisTicks(Math.min(...times), Math.max(...times), { maxTicks: maxTicksFor((boxWidth ?? 900) - 48 - 12) }) : null;
+  const xLabels = new Map((xTicks ?? []).map((t) => [t.ms, t.label]));
   return (
     <Panel
       title="Records written per collector run"
@@ -1409,7 +1421,7 @@ function RunChart({ health }: { health: CollectionHealthData }) {
       ) : (
         // Taller than anything beside it: it is the one time series on the
         // screen, and everything else here is a single number.
-        <div className="h-[22rem] px-3 pb-3 pt-1">
+        <div ref={box} className="h-[22rem] px-3 pb-3 pt-1">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={health.runRecords}
@@ -1428,10 +1440,12 @@ function RunChart({ health }: { health: CollectionHealthData }) {
                 type="number"
                 scale="time"
                 domain={["dataMin", "dataMax"]}
-                tickFormatter={(ms: number) => formatChartTick(ms)}
+                ticks={xTicks === null ? undefined : xTicks.map((t) => t.ms)}
+                interval={xTicks === null ? "preserveEnd" : 0}
+                tickFormatter={(ms: number) => xLabels.get(ms) ?? formatChartTick(ms)}
                 stroke="var(--muted)"
                 tick={{ fontSize: 11 }}
-                minTickGap={40}
+                minTickGap={xTicks === null ? 40 : 0}
               />
               <YAxis
                 stroke="var(--muted)"

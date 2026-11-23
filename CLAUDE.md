@@ -1952,8 +1952,14 @@ it was measured for one line. Lines 3-6 are dashed as well as coloured: no
 brand inks clear the colour-blind floor beside cyan and purple. Tiles, breaks
 and gaps are the first line's and say so; the trend summary is off with more
 than one line; *Download CSV* is a column per point on the exact timestamp
-(`X-PHB-Readings-Unit: timestamps`). `WHY-ITS-BUILT-THIS-WAY.md` § 93;
-`runbook.md` → *Finding a point on a big JACE*, *A line asked for is not drawn
+(`X-PHB-Readings-Unit: timestamps`). `WHY-ITS-BUILT-THIS-WAY.md` § 93.
+**The time axis (same PR, 2026-11-23):** Point Explorer's and Collection
+Health's x-axes choose their ticks (`lib/modules/bas/time-axis.ts`) - a date
+once per day on its midnight, times between where the measured width allows,
+month starts past a year - so a date never prints twice ("Nov 17 Nov 17" on 7
+days before). `tests/bas-time-axis.test.tsx` holds it as rules and as rendered.
+`runbook.md` → *Finding a point on a big JACE*, *A chart's time axis: a date
+once per day, times between*, *A line asked for is not drawn
 on Point Explorer's chart*.
 
 **Report runs can be deleted, to a 15-day Recently deleted, and a report can

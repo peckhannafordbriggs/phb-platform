@@ -11008,6 +11008,39 @@ axis; `tests/bas-value-kinds-service.test.ts` fails through the database if
 
 ---
 
+## A chart's time axis: a date once per day, times between
+
+Since 2026-11-23 the x-axis of Point Explorer's trend chart and of Collection
+Health's *Records written per collector run* chooses its own ticks
+(`lib/modules/bas/time-axis.ts`). Before, Recharts placed them and every one
+was printed as a bare date, so over seven days two ticks on one day read
+**"Nov 17 Nov 17"**.
+
+**What the axis says now.**
+- A tick at **local midnight** shows the **date** ("Nov 17"), and it is the
+  only tick that day that does.
+- Ticks between midnights show the **time** ("12:00"), and appear only where
+  the chart is wide enough.
+- If the range starts part-way through a day, that day's first tick shows
+  **both** ("Nov 16 16:00"), so the first day is dated too.
+- Over about a year or more, the ticks are **month starts** ("Aug 2026").
+
+The clock is the building's zone on Point Explorer and the reader's own zone
+on Collection Health, as the rest of each screen.
+
+**"A time such as 12:00 appears several times."** Once per day - that is what
+marks it as a time of the day before it. A **date** appearing twice is the
+bug this replaced; if you see one, note the range and the window width.
+
+**"On a narrow window the 7-day chart shows only every other date."** The
+number of ticks is the chart's measured width divided by 64 px; the step
+widens (12 h, a day, 2 days, a week on Mondays, ...) until the labels fit, and
+times drop out first. Widen the window for more.
+
+**"Across the clock change the hours look uneven."** The ticks are wall-clock
+times: on the November change 01:00 happens twice and is ticked once, so that
+gap is two real hours; in March 02:00 does not exist and is skipped.
+
 ## The trend chart says "Averaged to one point per …"
 
 **This is working correctly, and the sentence is the point.** The Point
