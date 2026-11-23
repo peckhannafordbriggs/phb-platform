@@ -355,3 +355,122 @@ export async function createCeiDuplicateFixture(names: readonly string[]): Promi
     cleanup,
   };
 }
+
+// ---------------------------------------------------------------------------
+// CEI with its REAL controllers (2026-11-23)
+// ---------------------------------------------------------------------------
+
+/**
+ * CEI as production holds it: CEI_JCI_N2's 334 names
+ * (docs/fixtures/cei-point-names.txt) and its three via-parent controllers
+ * with their real names, units and data types
+ * (docs/fixtures/cei-controller-point-names.txt, read from production on
+ * 2026-11-23).
+ *
+ * Readings, every 30 minutes for eight days:
+ *   - the JACE's `AHU_7/*` and `AHU_8/*` copies: 0, a number, with NO unit
+ *     and data type `real` - what the three JACE points read from production
+ *     carry, and the case a "both unitless" unit rule would refuse;
+ *   - every controller point: live - a number that moves every reading, or
+ *     for a boolean, on and off every two hours;
+ *   - nothing else (the VAVs are names only).
+ *
+ * The roles and equipment are NOT written here: the test runs the
+ * assignment pass first (vocabularies seeded), as production did, so the
+ * copies and the controllers' points meet on AHU_7 and AHU_8 by the station
+ * rule. `cleanup()` removes what it made; readings cascade.
+ */
+export interface CeiControllerFixture {
+  siteId: bigint;
+  jaceId: bigint;
+  stationIds: Map<string, bigint>;
+  /** "CEI_JCI_N2:AHU_7/MA_T", "CEI_AHU_7:AHU_7_Ma_Temp" -> point id. Names decoded. */
+  ids: Map<string, bigint>;
+  setSeries: (pointId: bigint, kind: SeriesKind) => Promise<void>;
+  cleanup: () => Promise<void>;
+}
+
+export async function createCeiControllerFixture(
+  jaceNames: readonly string[],
+  controllers: ReadonlyArray<{ station: string; name: string; unit: string | null; dataType: string }>,
+): Promise<CeiControllerFixture> {
+  await expectBasTablesEmpty();
+  const org = await testDb.basOrg.create({ data: { name: "ZZTEST_ORG_CEI_REAL" } });
+  const project = await testDb.basProject.create({ data: { orgId: org.orgId, name: "ZZTEST_PROJECT_CEI_REAL" } });
+  const site = await testDb.basSite.create({
+    data: { orgId: org.orgId, projectId: project.projectId, name: "ZZTEST CEI", timezone: "America/New_York" },
+  });
+  const jace = await testDb.basStation.create({
+    data: { siteId: site.siteId, niagaraStationName: "CEI_JCI_N2", connectionMode: "direct", baseUrl: "https://198.51.100.40" },
+  });
+  const stationIds = new Map<string, bigint>([["CEI_JCI_N2", jace.stationId]]);
+  for (const name of [...new Set(controllers.map((c) => c.station))].filter((n) => n !== "CEI_JCI_N2").sort()) {
+    const child = await testDb.basStation.create({
+      data: { siteId: site.siteId, niagaraStationName: name, connectionMode: "via_parent", parentStationId: jace.stationId },
+    });
+    stationIds.set(name, child.stationId);
+  }
+
+  const now = Date.now();
+  const newestMs = Math.floor((now - 10 * 60_000) / HALF_HOUR_MS) * HALF_HOUR_MS;
+  const count = (CEI_DAYS * 86_400_000) / HALF_HOUR_MS;
+  const stamps = Array.from({ length: count }, (_, i) => newestMs - (count - 1 - i) * HALF_HOUR_MS);
+  const setSeries = async (pointId: bigint, kind: SeriesKind) => {
+    await testDb.$executeRaw`DELETE FROM bas_readings WHERE point_id = ${pointId}`;
+    const rows = stamps.map((ms, i): [number, number | null, boolean | null] => {
+      switch (kind) {
+        case "flat":
+          return [ms, 0, null];
+        case "live":
+          return [ms, Math.round((50 + 10 * Math.sin((ms / 86_400_000) * 2 * Math.PI) + (i % 7) * 0.1 + Number(pointId % 13n)) * 100) / 100, null];
+        case "bool_flat":
+          return [ms, null, false];
+        case "bool_cycle":
+          return [ms, null, Math.floor(i / 4) % 2 === 0];
+      }
+    });
+    await testDb.$executeRaw`
+      INSERT INTO bas_readings (point_id, ts, value_num, value_bool)
+      VALUES ${Prisma.join(rows.map(([ms, n, b]) => Prisma.sql`(${pointId}, ${new Date(ms)}, ${n}, ${b})`))}`;
+  };
+
+  const ids = new Map<string, bigint>();
+  await testDb.basPoint.createMany({
+    data: jaceNames.map((name) => ({ stationId: jace.stationId, niagaraHistoryName: ceiEscape(name), dataType: "real" })),
+  });
+  for (const c of controllers) {
+    const stationId = stationIds.get(c.station)!;
+    const existing = c.station === "CEI_JCI_N2";
+    if (existing) continue; // the JACE's own rows came from its 334 names
+    await testDb.basPoint.create({
+      data: { stationId, niagaraHistoryName: ceiEscape(c.name), unit: c.unit, dataType: c.dataType },
+    });
+  }
+  const nameOf = new Map([...stationIds.entries()].map(([name, id]) => [id.toString(), name]));
+  for (const p of await testDb.basPoint.findMany({
+    where: { stationId: { in: [...stationIds.values()] } },
+    select: { pointId: true, stationId: true, niagaraHistoryName: true, dataType: true },
+  })) {
+    const name = p.niagaraHistoryName.replace(/\$2f/g, "/").replace(/\$2d/g, "-");
+    const station = nameOf.get(p.stationId.toString())!;
+    ids.set(`${station}:${name}`, p.pointId);
+    if (station === "CEI_JCI_N2") {
+      if (/^AHU_[78]\//.test(name)) await setSeries(p.pointId, "flat");
+    } else {
+      await setSeries(p.pointId, p.dataType === "bool" ? "bool_cycle" : "live");
+    }
+  }
+
+  const cleanup = async () => {
+    const all = [...stationIds.values()];
+    await testDb.basPoint.deleteMany({ where: { stationId: { in: all } } });
+    await testDb.basEquipment.deleteMany({ where: { siteId: site.siteId } });
+    await testDb.basStation.deleteMany({ where: { stationId: { in: all.filter((id) => id !== jace.stationId) } } });
+    await testDb.basStation.deleteMany({ where: { stationId: jace.stationId } });
+    await testDb.basSite.deleteMany({ where: { siteId: site.siteId } });
+    await testDb.basProject.deleteMany({ where: { projectId: project.projectId } });
+    await testDb.basOrg.deleteMany({ where: { orgId: org.orgId } });
+  };
+
+  return { siteId: site.siteId, jaceId: jace.stationId, stationIds, ids, setSeries, cleanup };
+}

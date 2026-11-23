@@ -8,6 +8,7 @@ import {
   NO_READINGS,
   findCandidatePairs,
   isAutoCopy,
+  isTwoStatePoint,
   planDuplicateActions,
   type CandidatePair,
   type DuplicateAction,
@@ -30,9 +31,10 @@ import type { AutoAssignTrigger } from "./auto-assign";
  * a station runs it for that station's pairs (hideDuplicateCopies with a
  * station). Same function, same rules.
  *
- * CHEAP. Per building: one query for the stations, one for the points' names
- * and state, and - only when some name pairs - ONE aggregate over the pairs'
- * readings for the last seven days. Never a query per point. A building where
+ * CHEAP. Per building: one query for the stations, one for the points' names,
+ * equipment, roles and state, and - only when something pairs - ONE aggregate
+ * over the pairs' readings for the last seven days (its count, values, range
+ * and, for the on/off rule, how often it changed). Never a query per point. A building where
  * nothing changes writes nothing: no transaction, no lock, no audit row.
  *
  * WHAT IT NEVER DOES, enforced in the UPDATE and not only in the plan, so a
@@ -93,6 +95,13 @@ interface PointRow {
   hidden_source: string | null;
   hidden_reason: string | null;
   duplicate_of: bigint | null;
+  /** For the equipment/role rule and the on/off rule (2026-11-23). */
+  equipment_id: bigint | null;
+  equipment_name: string | null;
+  point_role: string | null;
+  role_measurement: string | null;
+  unit: string | null;
+  data_type: string;
 }
 
 interface BuildingFacts {
@@ -114,20 +123,29 @@ async function loadBuilding(db: Db, siteId: bigint): Promise<BuildingFacts> {
        ORDER BY station_id`,
     db.$queryRaw<PointRow[]>`
       SELECT p.point_id, p.station_id, p.niagara_history_name, p.label, p.is_active,
-             p.is_visible, p.hidden_source, p.hidden_reason, p.duplicate_of
+             p.is_visible, p.hidden_source, p.hidden_reason, p.duplicate_of,
+             p.equipment_id, e.name AS equipment_name, p.point_role,
+             r.measurement AS role_measurement, p.unit, p.data_type
         FROM bas_points p
         JOIN bas_stations st ON st.station_id = p.station_id
+        LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
+        LEFT JOIN bas_point_roles r ON r.point_role = p.point_role
        WHERE st.site_id = ${siteId}
        ORDER BY p.point_id`,
   ]);
 
   const collected = points.filter((p) => p.is_active);
+  const twoState = (p: PointRow) => isTwoStatePoint({ dataType: p.data_type, roleMeasurement: p.role_measurement });
   const pairs = findCandidatePairs(
     stations.map((s) => ({ stationId: s.station_id.toString(), niagaraStationName: s.niagara_station_name })),
     collected.map((p) => ({
       pointId: p.point_id.toString(),
       stationId: p.station_id.toString(),
       niagaraHistoryName: p.niagara_history_name,
+      equipmentId: p.equipment_id?.toString() ?? null,
+      role: p.point_role,
+      unit: p.unit,
+      twoState: twoState(p),
     })),
   );
   const state = new Map<string, PointVisibility>(
@@ -140,6 +158,7 @@ async function loadBuilding(db: Db, siteId: bigint): Promise<BuildingFacts> {
         hiddenSource: toHiddenSource(p.hidden_source),
         hiddenReason: p.hidden_reason === "duplicate_copy" ? "duplicate_copy" : null,
         duplicateOf: p.duplicate_of?.toString() ?? null,
+        twoState: twoState(p),
       },
     ]),
   );
@@ -160,6 +179,7 @@ interface StatsRow {
   mode_value: string | null;
   min_value: number | null;
   max_value: number | null;
+  changes: number;
 }
 
 /**
@@ -172,28 +192,36 @@ interface StatsRow {
 export async function loadSeriesStats(db: Db, pointIds: readonly bigint[], now: Date): Promise<Map<string, SeriesStats>> {
   if (pointIds.length === 0) return new Map();
   const since = new Date(now.getTime() - DUPLICATE_WINDOW_DAYS * DAY_MS);
+  // Still ONE statement: the change count is a window over the same rows.
   const rows = await db.$queryRaw<StatsRow[]>`
     WITH v AS (
-      SELECT r.point_id,
+      SELECT r.point_id, r.ts,
              COALESCE(r.value_num::text, r.value_bool::text, r.value_str) AS k,
              COALESCE(r.value_num, CASE WHEN r.value_bool THEN 1 WHEN NOT r.value_bool THEN 0 END)::float8 AS x
         FROM bas_readings r
        WHERE r.point_id IN (${Prisma.join(pointIds)})
          AND r.ts > ${since}
+    ), o AS (
+      SELECT point_id, k, x, lag(k) OVER (PARTITION BY point_id ORDER BY ts) AS prev
+        FROM v WHERE k IS NOT NULL
+    ), ch AS (
+      SELECT point_id, count(*) FILTER (WHERE prev IS NOT NULL AND k <> prev)::int AS changes
+        FROM o GROUP BY point_id
     ), c AS (
       SELECT point_id, k, count(*)::int AS n, min(x) AS x
-        FROM v WHERE k IS NOT NULL
+        FROM o
        GROUP BY point_id, k
     )
-    SELECT point_id,
-           sum(n)::int                           AS readings,
-           count(*)::int                         AS distinct_values,
-           max(n)::int                           AS mode_count,
-           (array_agg(k ORDER BY n DESC, k))[1]  AS mode_value,
-           min(x)::float8                        AS min_value,
-           max(x)::float8                        AS max_value
-      FROM c
-     GROUP BY point_id`;
+    SELECT c.point_id,
+           sum(c.n)::int                             AS readings,
+           count(*)::int                             AS distinct_values,
+           max(c.n)::int                             AS mode_count,
+           (array_agg(c.k ORDER BY c.n DESC, c.k))[1] AS mode_value,
+           min(c.x)::float8                          AS min_value,
+           max(c.x)::float8                          AS max_value,
+           ch.changes
+      FROM c JOIN ch USING (point_id)
+     GROUP BY c.point_id, ch.changes`;
   return new Map(
     rows.map((r) => [
       r.point_id.toString(),
@@ -204,6 +232,7 @@ export async function loadSeriesStats(db: Db, pointIds: readonly bigint[], now: 
         modeValue: r.mode_value,
         min: r.min_value,
         max: r.max_value,
+        changes: r.changes,
       },
     ]),
   );
@@ -261,6 +290,8 @@ function describePoint(facts: BuildingFacts, id: string) {
     niagaraHistoryName: row.niagara_history_name,
     pointName: decodeNiagaraName(row.niagara_history_name),
     label: row.label,
+    role: row.point_role,
+    equipmentName: row.equipment_name,
   };
 }
 
@@ -273,6 +304,7 @@ function evidence(stats: Map<string, SeriesStats>, id: string) {
     modeShare: s.readings === 0 ? null : Math.round((s.modeCount / s.readings) * 10_000) / 10_000,
     min: s.min,
     max: s.max,
+    changes: s.changes,
   };
 }
 
@@ -358,6 +390,7 @@ async function write(
         trigger: trigger.kind,
         reason: "duplicate_copy",
         rule: action.rule,
+        test: action.test,
         swap,
         windowDays: DUPLICATE_WINDOW_DAYS,
         readings: evidence(stats, action.pointId),
