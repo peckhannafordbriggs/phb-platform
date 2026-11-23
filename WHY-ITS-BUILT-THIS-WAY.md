@@ -4395,3 +4395,54 @@ equipment, so the hydronic questions read Not Applicable. CEI_AHU_7's points
 are then never attached to AHU_7, and the eight `AHU_07_` points get a unit of
 their own. Give numbered members the unit's role and a report judges an air
 handler by whichever fan of six was best trended.
+
+## 97 · Dead copies also pair by equipment and role, one partner each; a two-state copy is judged by whether it ever changes
+
+**Decision (2026-11-23).** § 95's name rules pair nothing on CEI as it really
+is: the JACE's copy is `AHU_7/MA_T`, the controller's live point
+`AHU_7_Ma_Temp`. Since § 96 both sit on the equipment `AHU_7` with the role
+`mixed_air_temp`. So (`lib/modules/bas/duplicate-copies.ts`):
+
+1. **A third pairing rule, equipment and role.** Two points on different
+   stations of one building, on the same equipment, with the same role and
+   units that do not disagree, are a candidate pair. Then the same dead-copy
+   test, action, audit, swap and no-overwrite rules as § 95.
+2. **One partner each.** A name match first; else the equipment/role match
+   with the most readings between the two; then by id. Pairs are taken in
+   that order, and one whose point already has a partner is dropped.
+3. **The on/off rule.** A two-state pair - a boolean, or a status role - is
+   never judged by variation. The copy changes state zero times in seven
+   days, over at least 10 readings; its partner changes state at least twice.
+   The change count comes from the same single aggregate, as a window over
+   the same rows.
+
+**Why units may be missing on one side - wider than asked.** The request
+said "same unit, or both unitless". The three CEI_JCI_N2 points read from
+production on 2026-11-23 carry no unit. If the `AHU_7/*` copies don't either,
+"both unitless" pairs only the two fan statuses and the step again hides
+almost nothing. The same equipment and the same role already say which
+quantity it is; two units that are both there and differ still refuse.
+
+**Why some roles never pair by equipment.** `alarm_status` and
+`fault_status` are one general flag per unit; a unit's quiet alarm beside a
+busy one is not a copy of it. A unit has a pre-filter and a final filter.
+`unclassified` is a person saying "no role".
+
+**Why one partner.** CEI_AHU_7 has two outside air temperatures
+(`AHU_7_Oa_Temp`, `AHU_07_Oa_Temp`). Without the rule a copy could be
+recorded against either, varying pass to pass, and a live point could be
+"the original" of two copies at once. The best-trended partner is the
+stable choice; the other stays shown.
+
+**Why the on/off rule asks for two changes.** One change could be a single
+start or stop in the week. Two is a unit seen going both ways, against a
+copy that never moved. A unit that ran all week without stopping gives no
+evidence, and the copy waits for a week that does.
+
+**What breaks if you undo it.** Drop the equipment/role rule and CEI's
+copies stay visible, judged as stuck sensors and averaged into nothing. Pair
+alarms by role and a unit's quiet alarm hides as a "copy" of its busy one.
+Drop one-partner and a copy's recorded original flips between two points.
+Judge two-state points by variation and no fan status is ever hidden;
+judge them by one change and a unit that started once on Monday hides its
+real status.

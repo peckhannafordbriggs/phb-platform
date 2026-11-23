@@ -64,8 +64,13 @@ const NAMES = readFileSync(path.join(process.cwd(), "docs/fixtures/cei-point-nam
   .filter((n) => n.length > 0);
 
 /** The numeric copies: what the numbers call dead copies of a live point. */
-const NUMERIC_COPIES = (Object.entries(CEI_COPY_TAILS) as Array<["AHU_7" | "AHU_8", readonly string[]]>).flatMap(
-  ([unit, tails]) => tails.filter((t) => t !== "RF_S" && t !== "SF_S").map((t) => ({ unit, tail: t, copy: `${unit}/${t}` })),
+/**
+ * Every copy in this fixture: the numeric ones by the numbers, and since
+ * 2026-11-23 the two fan statuses by the on/off rule (the JACE's never
+ * change state; the child's cycle).
+ */
+const COPIES = (Object.entries(CEI_COPY_TAILS) as Array<["AHU_7" | "AHU_8", readonly string[]]>).flatMap(
+  ([unit, tails]) => tails.map((t) => ({ unit, tail: t, copy: `${unit}/${t}` })),
 );
 
 const authMock = vi.mocked(auth);
@@ -176,7 +181,7 @@ describe("CEI through one scheduler pass", () => {
     expect(pass.duplicates.failed).toEqual([]);
     expect(pass.duplicates.buildings).toBe(1);
 
-    for (const { unit, tail, copy } of NUMERIC_COPIES) {
+    for (const { unit, tail, copy } of COPIES) {
       expect(await stateOf(copyId(copy)), copy).toEqual({
         visible: false,
         active: true, // still collected
@@ -195,24 +200,30 @@ describe("CEI through one scheduler pass", () => {
     }
 
     const hidden = await hiddenNow();
-    expect(hidden).toEqual(NUMERIC_COPIES.map((c) => `CEI_JCI_N2:${c.copy}`).sort());
-    // The fan statuses log false on the JACE and cycle on the child, but a
-    // cycling boolean has two values and the test asks for more than three:
-    // they are left for a person, by the numbers.
-    expect(hidden).not.toContain("CEI_JCI_N2:AHU_7/SF_S");
-    expect(hidden).not.toContain("CEI_JCI_N2:AHU_7/RF_S");
+    expect(hidden).toEqual(COPIES.map((c) => `CEI_JCI_N2:${c.copy}`).sort());
+    // The fan statuses log false on the JACE and cycle on the child: never
+    // by variation (two values), but by the on/off rule (2026-11-23).
+    expect(hidden).toContain("CEI_JCI_N2:AHU_7/SF_S");
+    expect(hidden).toContain("CEI_JCI_N2:AHU_7/RF_S");
+    const fan = pass.duplicates.changes.find((c) => c.pointName === "AHU_7/SF_S")!;
+    expect(fan.partner?.pointName).toBe("SF_S");
+    const fanRow = (await audits("bas.point_auto_hidden")).find((r) => (r.metadata as { pointName: string }).pointName === "AHU_7/SF_S")!;
+    expect(fanRow.metadata).toMatchObject({ rule: "prefix", test: "on_off", readings: { changes: 0 }, duplicateOf: { readings: { changes: expect.any(Number) } } });
+    expect(sentence(fanRow)).toBe(
+      "The platform hid the point AHU_7/SF_S on CEI_JCI_N2 as a dead copy of SF_S on CEI_AHU_7: it did not change state for 7 days while that point did (still collected)",
+    );
     console.info(`CEI parent points hidden as dead copies (${hidden.length}):\n  ${hidden.join("\n  ")}`);
 
     // The station result says so, on the JACE's row.
     const jace = pass.stations.find((s) => s.stationId === cei.jaceId.toString())!;
-    expect(jace).toMatchObject({ duplicatesHidden: NUMERIC_COPIES.length, duplicatesShown: 0 });
+    expect(jace).toMatchObject({ duplicatesHidden: COPIES.length, duplicatesShown: 0 });
     expect(pass.duplicates.changes.every((c) => c.kind === "hidden" && !c.swap)).toBe(true);
   }, 180_000);
 
   it("audits each with both names and the numbers, with the platform as actor", async () => {
     await runDuplicatePass();
     const rows = await audits("bas.point_auto_hidden");
-    expect(rows).toHaveLength(NUMERIC_COPIES.length);
+    expect(rows).toHaveLength(COPIES.length);
     expect(rows.every((r) => r.actorEmployeeId === null)).toBe(true);
     const sap = rows.find((r) => (r.metadata as { pointName: string }).pointName === "AHU_7/DA_SAP")!;
     expect(sap.metadata).toMatchObject({
@@ -277,7 +288,7 @@ describe("a person outranks the platform, hidden or shown", () => {
     const named = rows.map((r) => (r.metadata as { pointName: string }).pointName);
     expect(named).not.toContain("AHU_7/MA_T");
     expect(named).not.toContain("AHU_7/OA_T");
-    expect(rows).toHaveLength(NUMERIC_COPIES.length - 2);
+    expect(rows).toHaveLength(COPIES.length - 2);
   }, 120_000);
 
   it("Unhide makes a copy the person's, and the next pass leaves it shown", async () => {
@@ -344,13 +355,13 @@ describe("Run assignment now", () => {
     // Pressed on CEI_AHU_7: only AHU_7's copies, which pair with its points.
     // They sit on the JACE, and the press says what it did all the same.
     const result = await runNow(cei.ahu7Id);
-    expect(result).toMatchObject({ duplicatesHidden: 9, duplicatesShown: 0 });
-    expect(describeAssignmentResult(result)).toContain("Hid 9 dead duplicate copies.");
-    const ahu7Copies = NUMERIC_COPIES.filter((c) => c.unit === "AHU_7").map((c) => `CEI_JCI_N2:${c.copy}`);
+    expect(result).toMatchObject({ duplicatesHidden: 11, duplicatesShown: 0 });
+    expect(describeAssignmentResult(result)).toContain("Hid 11 dead duplicate copies.");
+    const ahu7Copies = COPIES.filter((c) => c.unit === "AHU_7").map((c) => `CEI_JCI_N2:${c.copy}`);
     expect(await hiddenNow()).toEqual(ahu7Copies.sort());
 
     const onJace = await runNow(cei.jaceId);
-    expect(onJace.duplicatesHidden).toBe(NUMERIC_COPIES.filter((c) => c.unit === "AHU_8").length);
+    expect(onJace.duplicatesHidden).toBe(COPIES.filter((c) => c.unit === "AHU_8").length);
     expect(describeAssignmentResult(onJace)).toContain("Hid 3 dead duplicate copies.");
     const summary = (await audits("bas.auto_assignment_ran")).at(-1)!;
     expect(summary.actorEmployeeId).toBe(employeeId);
@@ -358,7 +369,7 @@ describe("Run assignment now", () => {
     expect(sentence(summary)).toContain("3 dead duplicate copies hidden");
 
     const rows = await audits("bas.point_auto_hidden");
-    expect(rows).toHaveLength(NUMERIC_COPIES.length);
+    expect(rows).toHaveLength(COPIES.length);
     expect(rows.every((r) => r.actorEmployeeId === employeeId && (r.metadata as { trigger: string }).trigger === "run_now")).toBe(true);
   }, 180_000);
 });
@@ -371,17 +382,17 @@ describe("where a person sees them", () => {
     const tree = await data<BasSettingsTree>(settingsRoute(new Request("http://localhost/api/modules/bas/settings")));
     const stations = tree.projects.flatMap((p) => p.buildings.flatMap((b) => b.stations));
     const jace = stations.find((s) => s.stationId === cei.jaceId.toString())!;
-    expect(jace.hiddenDuplicates).toBe(NUMERIC_COPIES.length);
+    expect(jace.hiddenDuplicates).toBe(COPIES.length);
     expect(stations.find((s) => s.stationId === cei.ahu7Id.toString())!.hiddenDuplicates).toBe(0);
-    expect(describeHiddenDuplicates(jace.hiddenDuplicates)).toBe("12 hidden as duplicate copies");
+    expect(describeHiddenDuplicates(jace.hiddenDuplicates)).toBe("14 hidden as duplicate copies");
     expect(describeHiddenDuplicates(1)).toBe("1 hidden as a duplicate copy");
 
     // A person's own hide is not counted as a duplicate copy.
     await setVisible(id("CEI_JCI_N2:V4_22/SpaceTemp"), false);
     const list = await data<StationPointsList>(pointsRoute(new Request("http://localhost"), stationParams(cei.jaceId)));
     const copies = shownPoints(list.points, "", { ...NO_POINT_FILTERS, visibility: "duplicate_copy" });
-    expect(copies.map((p) => p.niagaraHistoryName).sort()).toEqual(NUMERIC_COPIES.map((c) => c.copy.replace("/", "$2f")).sort());
-    expect(shownPoints(list.points, "", { ...NO_POINT_FILTERS, visibility: "hidden" })).toHaveLength(NUMERIC_COPIES.length + 1);
+    expect(copies.map((p) => p.niagaraHistoryName).sort()).toEqual(COPIES.map((c) => c.copy.replace("/", "$2f")).sort());
+    expect(shownPoints(list.points, "", { ...NO_POINT_FILTERS, visibility: "hidden" })).toHaveLength(COPIES.length + 1);
     const sap = copies.find((p) => p.niagaraHistoryName === "AHU_7$2fDA_SAP")!;
     expect(sap).toMatchObject({ hiddenSource: "auto", hiddenReason: "duplicate_copy", duplicateOf: { name: "DA_SAP", stationName: "CEI_AHU_7" } });
     expect(describeCopyOf(sap.duplicateOf!)).toBe("copy of CEI_AHU_7/DA_SAP");
@@ -439,8 +450,8 @@ describe("where a person sees them", () => {
       { start: now - 86_400_000, end: now },
     );
     const inScope = new Set(scope.points.map((p) => p.pointId));
-    for (const { copy } of NUMERIC_COPIES) expect(inScope.has(copyId(copy).toString()), copy).toBe(false);
-    expect(scope.duplicateCopiesByStation.get(cei.jaceId.toString())).toBe(NUMERIC_COPIES.length);
+    for (const { copy } of COPIES) expect(inScope.has(copyId(copy).toString()), copy).toBe(false);
+    expect(scope.duplicateCopiesByStation.get(cei.jaceId.toString())).toBe(COPIES.length);
     expect(scope.hiddenByStation.get(cei.jaceId.toString())).toBe(1);
 
     expect(duplicateCopiesLine([{ stationName: "CEI_JCI_N2", count: 12 }])).toBe(

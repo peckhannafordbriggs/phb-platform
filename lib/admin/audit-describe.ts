@@ -454,7 +454,13 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     const who = meta.trigger === "run_now" ? `${actor}, with Run assignment now,` : actor;
     const copy = `${name}${station === null ? "" : ` on ${station}`}`;
     const of = liveName === null ? "a live point" : `${liveName}${liveStation === null ? "" : ` on ${liveStation}`}`;
-    const why = value === null ? "" : `: it read ${value} for ${days} days while that point varied`;
+    // The on/off rule (2026-11-23) says what it measured: state changes.
+    const why =
+      meta.test === "on_off"
+        ? `: it did not change state for ${days} days while that point did`
+        : value === null
+          ? ""
+          : `: it read ${value} for ${days} days while that point varied`;
     return `${who} hid the point ${copy} as a dead copy of ${of}${meta.swap === true ? ", in place of the other way round" : ""}${why} (still collected)`;
   },
 

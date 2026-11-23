@@ -2036,7 +2036,7 @@ names query and ONE readings aggregate per building. **New
 and clears the reason (a CHECK), and the step never writes a `'manual'`
 point**; the migration marked `'manual'` every point hidden before and every
 point the audit log says a person showed or hid. Booleans are never "live"
-by these numbers, so CEI's fan-status copies stay for a person. *Run
+by these numbers (since § 97 they have the on/off rule instead). *Run
 assignment now* runs it for its station's pairs. Settings -> General: *N
 hidden as duplicate copies*, opening the Points list on its new *Hidden:
 duplicate copies* filter with *copy of <station>/<point>* and *Unhide*; Point
@@ -2063,10 +2063,27 @@ measurement, and `Spt` a setpoint word. **Numbered array members
 (`Sa_Fan_1_Sts`, `Ch_1_*`, `Sec_Chwp_1_*`) are silent by design**: the report
 engine reads the best-covered point with a role. *Download names* on Settings
 → Points' *Needs a decision* filter saves the list as a file. Found on the
-way: **PR #140's duplicate step cannot pair CEI's real names**
-(`AHU_7/MA_T` vs `AHU_7_Ma_Temp`); until it pairs by equipment and role, the
-copies are hidden by hand. `WHY-ITS-BUILT-THIS-WAY.md` § 96; `runbook.md` → *A
+way: PR #140's name rules cannot pair CEI's real names (`AHU_7/MA_T` vs
+`AHU_7_Ma_Temp`) - the equipment/role rule below does. `WHY-ITS-BUILT-THIS-WAY.md` § 96; `runbook.md` → *A
 controller's points were attached to the unit its station is named for*.
+
+**Dead copies also pair by equipment and role, and two-state copies by
+the on/off rule (2026-11-23).** `lib/modules/bas/duplicate-copies.ts`: a third
+pairing rule - two points on different stations, same equipment, same role,
+units that do not disagree (the same, or one side unitless: wider than the
+request's "both unitless", because the JACE's points read from production
+carry none) - never for `alarm_status`, `fault_status`, `filter_status`,
+`filter_dp`, `unclassified`. **One partner per point**: a name match, else the
+equipment/role match with the most readings. A two-state pair (boolean or a
+status role) is never judged by variation: the copy changes state zero times
+in seven days over ≥10 readings while its partner changes ≥2 times. The change
+count rides in the same single aggregate (a `lag` window). On CEI's real names
+(`createCeiControllerFixture`) one pass hides `AHU_7/DA_SAP`, `DA_T`, `MA_T`,
+`OA_T`, `RA_HUM`, `RA_T`, `RF_S`, `SF_S` and `AHU_8/OA_H`, `RA_HUM`; `AHU_7/OA_H`
+has no AHU_7 partner and the enthalpies no role. An AHU_8 sensor sitting flat
+is never a copy of AHU_7's: equipment must match. Audit rows carry `rule` and
+`test`. `WHY-ITS-BUILT-THIS-WAY.md` § 97; `runbook.md` → *A point was hidden
+automatically as a duplicate copy*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

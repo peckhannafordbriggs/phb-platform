@@ -1,5 +1,6 @@
 import { parsePointName } from "./name-prefix";
 import { decodeNiagaraName } from "./suggestions";
+import { unitSymbol } from "./units";
 import type { HiddenSource } from "./types";
 
 /**
@@ -28,7 +29,17 @@ import type { HiddenSource } from "./types";
  *                 for a week would otherwise have its real, flat points
  *                 hidden as "copies" of the other one's. CHOSEN, narrower
  *                 than the request; the prefix rule covers the CEI case.
+ *        equipment_role (2026-11-23) - two points on different stations
+ *                 attached to the SAME equipment with the SAME role, and units
+ *                 that do not disagree. CEI's real names defeat both name
+ *                 rules - the JACE's copy is `AHU_7/MA_T`, the controller's
+ *                 live point `AHU_7_Ma_Temp` - but since the station rule
+ *                 (station-equipment.ts) both sit on AHU_7 as mixed_air_temp.
+ *                 Not for the roles a unit legitimately has several of
+ *                 (EQUIPMENT_ROLE_EXCLUDED).
  *      A pair is unordered: which half is the copy is decided by the numbers.
+ *      A point pairs with AT MOST ONE partner (`selectPartners`): a name match
+ *      first, then the equipment/role match with the most readings.
  *
  *   2. THE DEAD-COPY TEST, numbers only, over the last seven days (`judgePair`):
  *      one half is FLAT - one distinct value, or 99% of its readings one
@@ -37,6 +48,11 @@ import type { HiddenSource } from "./types";
  *      the live one. Both flat, both varying, or either half short of
  *      readings: nothing. Two live trends with one name are a question for a
  *      person (Nathan), not a duplicate.
+ *      A TWO-STATE pair (a boolean, or a status role - a fan status) is never
+ *      judged by variation: it has two values at most. It has its own test,
+ *      ON/OFF (2026-11-23): the copy changes state zero times in the window,
+ *      over at least 10 readings, while its partner changes state at least
+ *      twice.
  *
  *   3. THE PLAN (`planDuplicateActions`): hide a flat half as a copy of its
  *      live partner; show a copy again when it varies (and, if its partner is
@@ -71,6 +87,30 @@ export const FLAT_MIN_READINGS = 10;
 export const LIVE_MIN_READINGS = 10;
 /** ...more than this many distinct values (so at least 4), and a range above zero (isLive). */
 export const LIVE_MORE_THAN_DISTINCT = 3;
+
+/**
+ * The on/off rule (2026-11-23): a two-state copy changes state ZERO times
+ * over at least FLAT_MIN_READINGS readings; its partner changes at least this
+ * many times. Two, as asked: one change could be a single start or stop in
+ * the week, and twice is a unit that was seen going both ways.
+ */
+export const ONOFF_MIN_CHANGES = 2;
+
+/**
+ * Roles a unit can legitimately carry more than once, or that say too little
+ * for two points to be one measurement: never paired by equipment and role.
+ * CHOSEN. `alarm_status` and `fault_status` are one general flag per unit in
+ * the vocabulary, and a unit's quiet alarm beside a busy one is not a copy of
+ * it; a unit has a pre-filter and a final filter; `unclassified` is "a person
+ * looked and found no role".
+ */
+export const EQUIPMENT_ROLE_EXCLUDED: readonly string[] = [
+  "unclassified",
+  "alarm_status",
+  "fault_status",
+  "filter_status",
+  "filter_dp",
+];
 
 // ---------------------------------------------------------------------------
 // Names
@@ -124,15 +164,42 @@ export interface DuplicatePoint {
   stationId: string;
   /** bas_points.niagara_history_name, as stored (oBIX-escaped). */
   niagaraHistoryName: string;
+  /** For the equipment/role rule (2026-11-23). Absent or null: the rule does not apply. */
+  equipmentId?: string | null;
+  role?: string | null;
+  unit?: string | null;
+  /** A boolean, or a status role: judged by the on/off rule. */
+  twoState?: boolean;
 }
 
-export type PairRule = "prefix" | "exact";
+export type PairRule = "prefix" | "exact" | "equipment_role";
 
 /** Two points on two stations of one building that name the same measurement. `a.pointId < b.pointId`. */
 export interface CandidatePair {
   a: string;
   b: string;
   rule: PairRule;
+  /** Either half is two-state: the pair is judged by the on/off rule, never by variation. */
+  twoState?: boolean;
+}
+
+/** A point the on/off rule judges: the station says boolean, or the role is a status. */
+export function isTwoStatePoint(point: { dataType: string | null; roleMeasurement: string | null }): boolean {
+  return point.dataType === "bool" || point.roleMeasurement === "status";
+}
+
+/**
+ * Units that do not disagree: the same unit (`fahrenheit` and `degrees
+ * fahrenheit` are one, through the symbol), or at least one side with none.
+ * The request said "both unitless"; one side is allowed too, because a JACE's
+ * history of a dead link may carry no unit at all (the three CEI_JCI_N2
+ * points read on 2026-11-23 had none), and the same equipment and the same
+ * role already say which quantity it is. Two units that differ refuse.
+ */
+export function unitsAgree(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = unitSymbol(a ?? null);
+  const y = unitSymbol(b ?? null);
+  return x === null || y === null || x === y;
 }
 
 const byId = (x: string, y: string) => {
@@ -141,26 +208,29 @@ const byId = (x: string, y: string) => {
   return dx < dy ? -1 : dx > dy ? 1 : 0;
 };
 
-function ordered(x: string, y: string, rule: PairRule): CandidatePair {
-  return byId(x, y) <= 0 ? { a: x, b: y, rule } : { a: y, b: x, rule };
+function ordered(x: string, y: string, rule: PairRule, twoState: boolean): CandidatePair {
+  return byId(x, y) <= 0 ? { a: x, b: y, rule, twoState } : { a: y, b: x, rule, twoState };
 }
+
+const RULE_RANK: Readonly<Record<PairRule, number>> = { prefix: 0, exact: 1, equipment_role: 2 };
 
 /**
  * Every candidate pair among the points of ONE building's stations. A pair
- * found by both rules is reported once, as `prefix` - the stronger evidence,
- * because the station is named for the unit. Deterministic: sorted by the
- * lower point id, then the higher.
+ * found by more than one rule is reported once, by the strongest: `prefix`
+ * (the station is named for the unit), then `exact`, then `equipment_role`.
+ * Deterministic: sorted by the lower point id, then the higher.
  */
 export function findCandidatePairs(
   stations: readonly DuplicateStation[],
   points: readonly DuplicatePoint[],
 ): CandidatePair[] {
   const pairs = new Map<string, CandidatePair>();
+  const twoState = new Map(points.map((p) => [p.pointId, p.twoState === true]));
   const add = (x: string, y: string, rule: PairRule) => {
-    const pair = ordered(x, y, rule);
+    const pair = ordered(x, y, rule, twoState.get(x) === true || twoState.get(y) === true);
     const key = `${pair.a}:${pair.b}`;
     const existing = pairs.get(key);
-    if (existing === undefined || (existing.rule === "exact" && rule === "prefix")) pairs.set(key, pair);
+    if (existing === undefined || RULE_RANK[rule] < RULE_RANK[existing.rule]) pairs.set(key, pair);
   };
 
   // Each point's whole name, by key, per station; and, for the exact rule,
@@ -199,7 +269,57 @@ export function findCandidatePairs(
     }
   }
 
+  // Equipment and role: the same equipment, the same role, two stations,
+  // units that do not disagree.
+  const byEquipmentRole = new Map<string, DuplicatePoint[]>();
+  for (const point of points) {
+    if (point.equipmentId == null || point.role == null) continue;
+    if (EQUIPMENT_ROLE_EXCLUDED.includes(point.role)) continue;
+    const key = `${point.equipmentId}|${point.role}`;
+    byEquipmentRole.set(key, [...(byEquipmentRole.get(key) ?? []), point]);
+  }
+  for (const group of byEquipmentRole.values()) {
+    for (let i = 0; i < group.length; i += 1) {
+      for (let j = i + 1; j < group.length; j += 1) {
+        const [x, y] = [group[i]!, group[j]!];
+        if (x.stationId !== y.stationId && unitsAgree(x.unit, y.unit)) add(x.pointId, y.pointId, "equipment_role");
+      }
+    }
+  }
+
   return [...pairs.values()].sort((x, y) => byId(x.a, y.a) || byId(x.b, y.b));
+}
+
+/**
+ * At most one partner per point (2026-11-23). Pairs are taken strongest
+ * first - a name match before an equipment/role match - and, within a rule,
+ * the pair with the most readings between its halves, then by id; a pair is
+ * kept only while neither half has a partner yet. So a JACE copy with two
+ * live outside air temperatures on its controller (CEI_AHU_7 has
+ * `AHU_7_Oa_Temp` and `AHU_07_Oa_Temp`) pairs with the better-trended one,
+ * and a live point is never the partner of two copies at once.
+ */
+export function selectPartners(
+  pairs: readonly CandidatePair[],
+  stats: ReadonlyMap<string, SeriesStats>,
+): CandidatePair[] {
+  const readings = (id: string) => (stats.get(id) ?? NO_READINGS).readings;
+  const ordered_ = [...pairs].sort(
+    (x, y) =>
+      RULE_RANK[x.rule] - RULE_RANK[y.rule] ||
+      readings(y.a) + readings(y.b) - (readings(x.a) + readings(x.b)) ||
+      byId(x.a, y.a) ||
+      byId(x.b, y.b),
+  );
+  const taken = new Set<string>();
+  const kept: CandidatePair[] = [];
+  for (const pair of ordered_) {
+    if (taken.has(pair.a) || taken.has(pair.b)) continue;
+    taken.add(pair.a);
+    taken.add(pair.b);
+    kept.push(pair);
+  }
+  return kept.sort((x, y) => byId(x.a, y.a) || byId(x.b, y.b));
 }
 
 // ---------------------------------------------------------------------------
@@ -221,9 +341,19 @@ export interface SeriesStats {
   modeValue: string | null;
   min: number | null;
   max: number | null;
+  /** How many times the value changed from one reading to the next, in time order (2026-11-23). */
+  changes: number;
 }
 
-export const NO_READINGS: SeriesStats = { readings: 0, distinct: 0, modeCount: 0, modeValue: null, min: null, max: null };
+export const NO_READINGS: SeriesStats = {
+  readings: 0,
+  distinct: 0,
+  modeCount: 0,
+  modeValue: null,
+  min: null,
+  max: null,
+  changes: 0,
+};
 
 /** One value, or 99% one value, over at least FLAT_MIN_READINGS readings. */
 export function isFlat(s: SeriesStats): boolean {
@@ -242,15 +372,32 @@ export function isLive(s: SeriesStats): boolean {
   );
 }
 
+/** The on/off rule's copy: never changed state, over at least FLAT_MIN_READINGS readings. */
+export function isQuiet(s: SeriesStats): boolean {
+  return s.readings >= FLAT_MIN_READINGS && s.changes === 0;
+}
+
+/** The on/off rule's live half: changed state at least ONOFF_MIN_CHANGES times. */
+export function isSwitching(s: SeriesStats): boolean {
+  return s.changes >= ONOFF_MIN_CHANGES;
+}
+
 export type PairVerdict =
   | { kind: "copy"; copy: string; live: string }
   | { kind: "none"; why: "both_flat" | "both_vary" | "not_clear" };
 
-/** The numbers decide which half is the copy, or that neither is. */
+/**
+ * The numbers decide which half is the copy, or that neither is. A two-state
+ * pair is judged by the on/off rule and nothing else: variation can never
+ * call a two-state point live.
+ */
 export function judgePair(pair: CandidatePair, stats: ReadonlyMap<string, SeriesStats>): PairVerdict {
   const a = stats.get(pair.a) ?? NO_READINGS;
   const b = stats.get(pair.b) ?? NO_READINGS;
-  const [flatA, flatB, liveA, liveB] = [isFlat(a), isFlat(b), isLive(a), isLive(b)];
+  const [flatA, flatB, liveA, liveB] =
+    pair.twoState === true
+      ? [isQuiet(a), isQuiet(b), isSwitching(a), isSwitching(b)]
+      : [isFlat(a), isFlat(b), isLive(a), isLive(b)];
   if (flatA && liveB) return { kind: "copy", copy: pair.a, live: pair.b };
   if (flatB && liveA) return { kind: "copy", copy: pair.b, live: pair.a };
   if (flatA && flatB) return { kind: "none", why: "both_flat" };
@@ -272,6 +419,8 @@ export interface PointVisibility {
   hiddenSource: HiddenSource | null;
   hiddenReason: "duplicate_copy" | null;
   duplicateOf: string | null;
+  /** Judged by the on/off rule when it varies again (2026-11-23). */
+  twoState?: boolean;
 }
 
 export type DuplicateAction =
@@ -282,6 +431,8 @@ export type DuplicateAction =
       rule: PairRule;
       /** True when the live partner is a former copy shown again in the same plan. */
       swap: boolean;
+      /** Which dead-copy test decided it. */
+      test: "numbers" | "on_off";
     }
   | {
       kind: "show";
@@ -308,9 +459,9 @@ const mayHide = (p: PointVisibility | undefined): p is PointVisibility =>
  *     If its partner is now flat and may be hidden, that partner is hidden as
  *     a copy of it in the same plan: the swap.
  *   - A flat half is hidden as a copy of its live partner when the copy may
- *     be hidden and the partner is shown (or is being shown by this plan). A
- *     flat point with several live partners takes the first by rule (prefix
- *     before exact), then by point id.
+ *     be hidden and the partner is shown (or is being shown by this plan).
+ *     Every point has at most one partner (selectPartners), chosen before
+ *     the numbers are read.
  *   - A point already hidden as a copy, still flat, stays as it is - even if
  *     a different live partner turns up. One decision, kept.
  *
@@ -325,10 +476,11 @@ export function planDuplicateActions(
   const shows = new Map<string, DuplicateAction & { kind: "show" }>();
   const hides = new Map<string, DuplicateAction & { kind: "hide" }>();
 
-  // 1. Former copies whose own readings vary again.
+  // 1. Former copies whose own readings vary again (or, two-state, switch again).
   for (const point of state.values()) {
     if (!isAutoCopy(point) || !point.collected) continue;
-    if (!isLive(stats.get(point.pointId) ?? NO_READINGS)) continue;
+    const own = stats.get(point.pointId) ?? NO_READINGS;
+    if (!(point.twoState === true ? isSwitching(own) : isLive(own))) continue;
     shows.set(point.pointId, {
       kind: "show",
       pointId: point.pointId,
@@ -337,17 +489,11 @@ export function planDuplicateActions(
     });
   }
 
-  // 2. Each flat half, against its live partners, strongest first.
-  const rank = (rule: PairRule) => (rule === "prefix" ? 0 : 1);
-  const verdicts = pairs
+  // 2. Each flat half, against its one partner.
+  const verdicts = selectPartners(pairs, stats)
     .map((pair) => ({ pair, verdict: judgePair(pair, stats) }))
     .filter((v): v is { pair: CandidatePair; verdict: PairVerdict & { kind: "copy" } } => v.verdict.kind === "copy")
-    .sort(
-      (x, y) =>
-        byId(x.verdict.copy, y.verdict.copy) ||
-        rank(x.pair.rule) - rank(y.pair.rule) ||
-        byId(x.verdict.live, y.verdict.live),
-    );
+    .sort((x, y) => byId(x.verdict.copy, y.verdict.copy));
 
   for (const { pair, verdict } of verdicts) {
     if (hides.has(verdict.copy) || shows.has(verdict.copy)) continue;
@@ -359,7 +505,14 @@ export function planDuplicateActions(
     if (!liveShown || hides.has(live.pointId)) continue;
     const swap = shows.has(live.pointId);
     if (swap) shows.get(live.pointId)!.reason = "swap";
-    hides.set(verdict.copy, { kind: "hide", pointId: verdict.copy, duplicateOf: verdict.live, rule: pair.rule, swap });
+    hides.set(verdict.copy, {
+      kind: "hide",
+      pointId: verdict.copy,
+      duplicateOf: verdict.live,
+      rule: pair.rule,
+      swap,
+      test: pair.twoState === true ? "on_off" : "numbers",
+    });
   }
 
   return [

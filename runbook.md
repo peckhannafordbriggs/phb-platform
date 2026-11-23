@@ -10122,6 +10122,26 @@ again is shown; if its partner is now the flat one, that partner is hidden in
 its place (the **swap**). *Run assignment now* runs the step for its station's
 pairs.
 
+**The third rule, equipment and role (2026-11-23).** CEI's real names defeat
+both name rules: the JACE's copy is `AHU_7/MA_T`, the controller's live point
+`AHU_7_Ma_Temp`. Since the station rule both sit on the equipment `AHU_7` with
+the role `mixed_air_temp`, so two points on different stations, on the same
+equipment, with the same role and units that do not disagree (the same unit,
+or one side with none) also pair - except for roles a unit has several of
+(`alarm_status`, `fault_status`, `filter_status`, `filter_dp`,
+`unclassified`). **A point pairs with one partner at most**: a name match
+first, else the equipment/role match with the most readings. CEI_AHU_7 has two
+outside air temperatures (`AHU_7_Oa_Temp`, `AHU_07_Oa_Temp`); the JACE's
+`AHU_7/OA_T` takes one and the other is left shown.
+
+**Two-state points (a boolean, or a status role) are judged by the on/off
+rule, never by variation:** the copy changes state zero times in seven days,
+over at least 10 readings, while its partner changes state at least twice.
+That is how `AHU_7/SF_S` and `AHU_7/RF_S` are hidden as copies of
+`AHU_7_Sa_Fan_Sts` and `AHU_7_Ra_Fan_Sts`. The audit row's `rule`
+(`prefix`, `exact`, `equipment_role`) and `test` (`numbers`, `on_off`) say
+which applied.
+
 **Symptom: a point is hidden and nobody hid it.** The audit log says who and
 why - each change is one row with both names and the seven days' numbers:
 
@@ -10131,6 +10151,7 @@ SELECT a.occurred_at, e.email, a.action,
        a.metadata->'duplicateOf'->>'stationName' AS live_station,
        a.metadata->'duplicateOf'->>'pointName' AS live_point,
        a.metadata->'readings' AS copy_readings, a.metadata->>'reason' AS reason,
+       a.metadata->>'rule' AS rule, a.metadata->>'test' AS test,
        a.metadata->>'trigger' AS trigger
   FROM audit_events a LEFT JOIN employees e ON e.id = a.actor_employee_id
  WHERE a.action IN ('bas.point_auto_hidden', 'bas.point_auto_shown')
@@ -10152,10 +10173,11 @@ wrong for a building, the rule is the fix, in `duplicate-copies.ts`; every
 number there is named, with its reason, and `tests/bas-duplicate-copies.test.ts`
 says what moved.
 
-**Symptom: CEI_JCI_N2's `AHU_7/SF_S` and `AHU_7/RF_S` (the fan statuses) are
-still shown, flat at off.** By the numbers. A live half needs more than three
-distinct values, and a cycling boolean has two, so a status copy is never
-called dead by this step. Hide it by hand if it is a copy (*Hide 1 point…*).
+**Symptom: a fan status copy is still shown, flat at off.** The on/off rule
+needs its partner to have changed state at least twice in the seven days: a
+unit that ran all week without stopping, or stayed off, gives no evidence
+which half is dead. It is decided on the first week the unit starts and stops.
+Hide it by hand meanwhile if it is a copy (*Hide 1 point…*).
 
 **Symptom: a copy somebody hid by hand before 2026-11-23 is not counted as a
 duplicate copy.** By design. The migration marked every point hidden before
@@ -10166,23 +10188,32 @@ Settings*, not *hidden as duplicate copies*. To hand one to the platform:
 = <id>` and the next pass decides it - or leave it as it is, which is equally
 correct.
 
-**Symptom: CEI_JCI_N2's `AHU_7/*` copies are not hidden, though CEI_AHU_7
-is collected.** Known, found 2026-11-23 when CEI's real names were read: the
-copies are `AHU_7/DA_SAP`, `AHU_7/MA_T`, `AHU_7/OA_H`, and the live points are
-`AHU_7_Da_Press`, `AHU_7_Ma_Temp`, `AHU_7_Oa_Rh` - different words, so no
-name rule pairs them. Until the step also pairs by equipment and role (both
-halves are on `AHU_7` with the same role since the station rule above), hide
-them by hand: Settings → CEI_JCI_N2 → Points → search `AHU_7/` → select the
-copies → *Hide N points…*. A copy hidden by hand stays hidden; the step
-never writes a `'manual'` point.
+**Symptom: CEI_JCI_N2's `AHU_7/OA_H` is still shown, flat.** No partner:
+CEI_AHU_7 has no outside air humidity point (CEI_AHU_8's `AHU_8_Oa_Rh` is on
+AHU_8, and equipment must match). If it is a copy of AHU_8's sensor, hide it
+by hand; if it is AHU_7's own sensor, the stuck-value card is right to show
+it. The three enthalpy copies (`AHU_7/OA_Enth`, `AHU_7/RA_Enth`,
+`AHU_8/RA_Enth`) have no role, so no partner either.
+
+**Symptom: CEI_JCI_N2's other `AHU_7/*` copies are not hidden, though
+CEI_AHU_7 is collected.** The equipment/role rule needs both halves on
+`AHU_7` with the same role. Check the copy and its partner in Settings →
+Points: a copy with no equipment or no role, or a controller point the
+assignment has not reached yet (*Run assignment now* on CEI_AHU_7), pairs
+with nothing. A partner on another unit (`AHU_07`, from before the station
+rule) does not pair: move it to `AHU_7` (*A controller's points were
+attached to the unit its station is named for*).
 
 **Symptom: a flat point that pairs with a live one is NOT hidden.** One of:
 a person set it (`hidden_source = 'manual'`); it has fewer than 10 readings in
 the last seven days (a change-of-value copy that never changes logs almost
-nothing); the live half is hidden or not collected; or the names do not pair
+nothing); the live half is hidden or not collected; the names do not pair
 (a bare name on two sibling stations, or a station whose name does not end
-with the prefix on a token boundary - `CEI_AHU_17` is not `AHU_7`). The audit
-log has no row for it because nothing was written.
+with the prefix on a token boundary - `CEI_AHU_17` is not `AHU_7`) and the two
+are not on the same equipment with the same role (or their units differ, or
+the role is one a unit has several of); or its partner was taken by another
+copy with more readings - one partner each. The audit log has no row for it
+because nothing was written.
 
 **Symptom: a scheduler execution reads Failed and its log ends "the
 duplicate-copy step failed on N building(s)".** The line before it names the
