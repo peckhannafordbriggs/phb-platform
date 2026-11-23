@@ -85,8 +85,9 @@ export async function runSchedulerPass(now = new Date()): Promise<SchedulerPass>
   const abandoned = await failAbandonedWork(now);
   const pass: SchedulerPass = { at: now.toISOString(), enqueued: [], paused: [], skipped: [], abandoned };
 
+  // A deleted report never runs again (2026-11-20), whatever its state says.
   const active = await prisma.basReportDefinition.findMany({
-    where: { state: "active" },
+    where: { state: "active", deletedAt: null },
     select: {
       reportId: true,
       name: true,
@@ -105,7 +106,7 @@ export async function runSchedulerPass(now = new Date()): Promise<SchedulerPass>
       const reason = `Paused on ${now.toISOString().slice(0, 10)}: the owner's account (${def.owner.email}) is disabled. A module admin can transfer the report to another owner, which resumes it.`;
       await prisma.$transaction(async (tx) => {
         const updated = await tx.basReportDefinition.updateMany({
-          where: { reportId: def.reportId, state: "active" },
+          where: { reportId: def.reportId, state: "active", deletedAt: null },
           data: { state: "paused_owner_disabled", nextRunAt: null, pausedReason: reason },
         });
         if (updated.count === 0) return;
@@ -133,9 +134,13 @@ export async function runSchedulerPass(now = new Date()): Promise<SchedulerPass>
     await prisma.$transaction(async (tx) => {
       // The row, locked: a second pass in the same instant waits here and
       // then sees the advanced next_run_at.
-      const locked = await tx.$queryRaw<{ state: string; next_run_at: Date | null }[]>`
-        SELECT state, next_run_at FROM bas_report_definitions WHERE report_id = ${def.reportId} FOR UPDATE`;
+      const locked = await tx.$queryRaw<{ state: string; next_run_at: Date | null; deleted_at: Date | null }[]>`
+        SELECT state, next_run_at, deleted_at FROM bas_report_definitions WHERE report_id = ${def.reportId} FOR UPDATE`;
       const row = locked[0];
+      if (row !== undefined && row.deleted_at !== null) {
+        pass.skipped.push({ reportId: def.reportId.toString(), name: def.name, reason: "deleted while this pass ran" });
+        return;
+      }
       if (row === undefined || row.state !== "active" || row.next_run_at === null || row.next_run_at.getTime() > now.getTime()) {
         pass.skipped.push({ reportId: def.reportId.toString(), name: def.name, reason: "already advanced by another pass" });
         return;

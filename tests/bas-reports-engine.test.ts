@@ -498,13 +498,18 @@ describe("who sees a run", () => {
     expect(await denied.text()).not.toContain("ZZTEST_ENGINE_SITE");
   });
 
-  it("refuses to delete a report that has runs, with the count", async () => {
+  // Until 2026-11-20 this was refused as report_has_runs. A report with runs
+  // is now deleted - marked, so its runs keep their name - and every run stays.
+  it("deletes a report that has runs, and every run stays on the list, labelled schedule deleted", async () => {
     signedInAs(owner.entraOid!);
     const response = await deleteReportRoute(new Request("http://localhost", { method: "DELETE" }), { params: Promise.resolve({ reportId }) });
-    expect(response.status).toBe(409);
-    const body = (await response.json()) as { error: { code: string; message: string } };
-    expect(body.error.code).toBe("report_has_runs");
-    expect(body.error.message).toMatch(/has \d+ runs and its history is kept/);
-    expect(await testDb.basReportDefinition.count({ where: { reportId: BigInt(reportId) } })).toBe(1);
+    expect(response.status).toBe(200);
+    expect(await data<{ deleted: boolean; runsKept: number }>(response)).toEqual({ deleted: true, runsKept: runsMade });
+    const row = await testDb.basReportDefinition.findUniqueOrThrow({ where: { reportId: BigInt(reportId) }, select: { deletedAt: true } });
+    expect(row.deletedAt).not.toBeNull();
+    const after = await data<{ runs: Array<{ reportName: string; reportDeleted: boolean }>; runsInDatabase: number }>(await listRunsRoute(bare()));
+    expect(after.runsInDatabase).toBe(runsMade);
+    expect(after.runs.every((r) => r.reportName === "ZZTEST engine weekly" && r.reportDeleted)).toBe(true);
+    expect((await getRunRoute(bare(), { params: Promise.resolve({ runId: firstRunId }) })).status).toBe(200);
   });
 });

@@ -774,8 +774,11 @@ period, duration, cost) for the reports the viewer owns or, as a module
 admin, all, and
 opens one at `/bas/reports/generated/<runId>`. Visibility is the
 definition's (owner or module admin, everyone else 404), decided in
-`runs-service.ts`. A report with runs cannot be deleted
-(`report_has_runs`, 409). The dev script `npm run bas:report:run --
+`runs-service.ts`. A report with runs could not be deleted
+(`report_has_runs`, 409) until 2026-11-20; since then deleting a report
+stops its future runs and leaves its runs on the list, labelled *(schedule
+deleted)*, and a run goes only by its own Delete, to Recently deleted
+(`WHY-ITS-BUILT-THIS-WAY.md` § 94). The dev script `npm run bas:report:run --
 --definition <id> --period-end <iso>` is the only trigger; `--as`,
 `--no-narrative` and `--fixed-narrative` are its options.
 

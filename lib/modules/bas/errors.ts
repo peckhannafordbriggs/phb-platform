@@ -175,15 +175,13 @@ export type BasErrorCode =
    */
   | "external_unconfirmed"
   /**
-   * The report has runs (Phase 2), which are kept indefinitely. Pause it
-   * instead; deleting would take its history with it. 409.
-   */
-  | "report_has_runs"
-  /**
    * Run now was asked for while a run of the same report is queued or
    * running (Phase 3). One in flight per report: the worker would otherwise
    * produce two reports for the same period, and the second would mark the
-   * first's findings still open an hour after they were new.
+   * first's findings still open an hour after they were new. Also the
+   * answer to deleting a report while one of its runs is queued or running
+   * (2026-11-20; `report_has_runs` before, when a report with runs could not
+   * be deleted at all).
    */
   | "run_in_flight"
   /** A module-admin action asked for by a plain owner: transferring a report, or the safety ceiling (2026-11-12). */
@@ -206,7 +204,9 @@ export type BasErrorCode =
   /** Send to me on a run that has not finished, or finished failed: there is no report to send. 409. */
   | "run_not_sendable"
   /** Send to me while a copy to the same address is already waiting for the worker. 409. */
-  | "delivery_pending";
+  | "delivery_pending"
+  /** Delete asked for on a run that is still queued or running (2026-11-20): only a finished run is deleted. 409. */
+  | "run_not_finished";
 
 export class BasError extends Error {
   constructor(

@@ -8,6 +8,7 @@ import {
   recordDeliverySent,
   type ClaimedDelivery,
 } from "../deliveries";
+import { DELIVERY_DELETED_SENTENCE } from "../deletion-words";
 import type { ReportDocument } from "../engine/types";
 import { pdfFileName } from "../pdf/naming";
 import { buildReportEmail, type EmailPdf, type ReportEmail } from "./message";
@@ -55,6 +56,7 @@ export async function loadRunEmail(runId: bigint, platformUrl: string | null): P
     where: { runId },
     select: {
       status: true,
+      deletedAt: true,
       partialReason: true,
       periodStart: true,
       periodEnd: true,
@@ -67,6 +69,7 @@ export async function loadRunEmail(runId: bigint, platformUrl: string | null): P
     },
   });
   if (run === null) throw new ReportMailError("run_unavailable", `Run ${runId} no longer exists.`, false);
+  if (run.deletedAt !== null) throw new ReportMailError("run_unavailable", DELIVERY_DELETED_SENTENCE, false);
   if (run.status !== "succeeded" && run.status !== "partial") {
     throw new ReportMailError("run_unavailable", `Run ${runId} finished ${run.status}; there is no report to send.`, false);
   }
@@ -125,6 +128,13 @@ async function sendOne(claim: ClaimedDelivery, options: DeliveryOptions, cache: 
       cache.set(claim.runId, built);
     }
     if (built instanceof ReportMailError) throw built;
+    // A run deleted after its message was built - by a person, or by
+    // retention - is never sent (2026-11-20). Read fresh, immediately
+    // before the call: the message cache lives for the whole drain.
+    const current = await prisma.basReportRun.findUnique({ where: { runId: claim.runId }, select: { deletedAt: true } });
+    if (current === null || current.deletedAt !== null) {
+      throw new ReportMailError("run_unavailable", DELIVERY_DELETED_SENTENCE, false);
+    }
     const sent = await options.mailer.send({
       to: claim.email,
       subject: built.email.subject,

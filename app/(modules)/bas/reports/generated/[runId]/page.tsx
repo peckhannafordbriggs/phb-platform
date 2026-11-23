@@ -4,6 +4,7 @@ import { hasModuleAdmin, requireModuleAccess } from "@/lib/authz";
 import { BAS_MODULE_KEY } from "@/lib/modules/bas/constants";
 import { BasError } from "@/lib/modules/bas/errors";
 import { REPORT_CSS, ReportView } from "@/lib/modules/bas/reports/engine/render";
+import { SCHEDULE_DELETED_LABEL } from "@/lib/modules/bas/reports/deletion-words";
 import { getRun } from "@/lib/modules/bas/reports/runs-service";
 import { BasShell } from "../../../bas-shell";
 import { PRINT_PAGE_CSS, REPORT_PRINT_ID, RunActions } from "../../../reports-run-actions";
@@ -59,6 +60,11 @@ export default async function BasReportRunPage({ params }: { params: Promise<{ r
         <Link href="/bas/reports" className="text-sm text-[var(--muted)] hover:underline">
           ← All reports
         </Link>
+        {run.reportDeleted && (
+          <p className="text-sm text-[var(--muted)]" data-testid="run-page-schedule-deleted">
+            {run.reportName} {SCHEDULE_DELETED_LABEL}: no more runs of it will come. This one stays until it is deleted from the Reports list.
+          </p>
+        )}
         <RunDeliveries runId={run.runId} status={run.status} timezone={run.timezone} deliveries={run.deliveries} summary={run.delivery} />
         {run.document === null ? (
           <section className="card p-8 text-center">

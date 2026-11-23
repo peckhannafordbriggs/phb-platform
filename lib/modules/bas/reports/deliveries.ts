@@ -44,8 +44,11 @@ export const DELIVERY_LEASE_MS = 5 * 60_000;
 /** A delivery due this long and never taken is a worker that is not starting (queue-guards.ts). */
 export const DELIVERY_UNCLAIMED_AFTER_MS = 60 * 60_000;
 
+/** How a delivery an attempt is holding begins its last_error; run-deletion.ts leaves such a row to its attempt. */
+export const DELIVERY_IN_PROGRESS_PREFIX = "An attempt started at ";
+
 export const deliveryInProgressSentence = (now: Date) =>
-  `An attempt started at ${now.toISOString()} and has not finished.`;
+  `${DELIVERY_IN_PROGRESS_PREFIX}${now.toISOString()} and has not finished.`;
 
 export function deliveryBackoffMs(attempts: number): number {
   return DELIVERY_BACKOFF_MS[Math.min(Math.max(attempts, 1), DELIVERY_BACKOFF_MS.length) - 1]!;
@@ -71,14 +74,17 @@ export function deliveryAddresses(ownerEmail: string, recipients: ReadonlyArray<
 
 /**
  * Write a finished run's delivery rows, owner first. A run that did not
- * succeed or finish partial gets none. Idempotent on (run, email). Returns
- * how many rows were new.
+ * succeed or finish partial gets none, and neither does a DELETED run
+ * (2026-11-20): a render that was already in progress when the run was
+ * deleted still stores its PDF, but no email follows it. Idempotent on
+ * (run, email). Returns how many rows were new.
  */
 export async function enqueueRunDeliveries(db: Db, runId: bigint, now = new Date()): Promise<number> {
   const run = await db.basReportRun.findUnique({
     where: { runId },
     select: {
       status: true,
+      deletedAt: true,
       report: {
         select: {
           owner: { select: { email: true } },
@@ -87,7 +93,7 @@ export async function enqueueRunDeliveries(db: Db, runId: bigint, now = new Date
       },
     },
   });
-  if (run === null || (run.status !== "succeeded" && run.status !== "partial")) return 0;
+  if (run === null || run.deletedAt !== null || (run.status !== "succeeded" && run.status !== "partial")) return 0;
   const rows = deliveryAddresses(run.report.owner.email, run.report.recipients);
   const created = await db.basReportDelivery.createMany({
     data: rows.map((r) => ({ runId, email: r.email, source: r.source, position: r.position, nextAttemptAt: now })),

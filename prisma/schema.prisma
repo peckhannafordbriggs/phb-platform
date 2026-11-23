@@ -89,6 +89,8 @@ model Employee {
   basRecipientsAdded       BasReportRecipient[]  @relation("BasRecipientAddedBy")
   basRecipientsConfirmed   BasReportRecipient[]  @relation("BasRecipientConfirmedBy")
   basReportRunsStarted     BasReportRun[]        @relation("BasReportRunStartedBy")
+  basReportRunsDeleted     BasReportRun[]        @relation("BasReportRunDeletedBy")
+  basReportsDeleted        BasReportDefinition[] @relation("BasReportDeletedBy")
   basReportSettingsUpdated BasReportSettings[]   @relation("BasReportSettingsUpdatedBy")
   basReportDeliveriesAsked BasReportDelivery[]   @relation("BasReportDeliveryRequestedBy")
   basTrendSummariesAsked   BasTrendSummary[]     @relation("BasTrendSummaryRequestedBy")
@@ -629,6 +631,14 @@ model BasReportDefinition {
   /// Why the scheduler paused it: set with state paused_owner_disabled, cleared when an admin transfers the owner.
   pausedReason String? @map("paused_reason")
 
+  /// "Keep generated runs for" (2026-11-20): 3, 6 or 12 months, or NULL for never (the default). The scheduler moves a finished run older than this to Recently deleted, as a person's Delete would; a run a person restored is never taken again.
+  runRetentionMonths Int? @map("run_retention_months")
+
+  /// When the report was deleted (2026-11-20): it never runs again and is on no Scheduled list, for anyone; its generated runs stay on the Reports list, labelled "(schedule deleted)". A report with no runs at all is removed outright instead.
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz()
+  deletedByEmployeeId String?   @map("deleted_by_employee_id") @db.Uuid
+  deletedByEmployee   Employee? @relation("BasReportDeletedBy", fields: [deletedByEmployeeId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
@@ -636,8 +646,13 @@ model BasReportDefinition {
   recipients BasReportRecipient[]
   runs       BasReportRun[]
 
-  /// A person does not get two reports with one name; the service also refuses a case-insensitive clash.
-  @@unique([ownerEmployeeId, name])
+  // A person does not get two LIVE reports with one name: the unique index is
+  // bas_report_definitions_owner_name_live_key, on (owner_employee_id, name)
+  // WHERE deleted_at IS NULL, written by hand in
+  // 20261120160000_bas_report_run_deletion because Prisma cannot express a
+  // partial index. Prisma 7.10's diff leaves it alone; should a later version
+  // propose dropping it, delete that line (tests/bas-reports-run-deletion.test.tsx
+  // fails on it). The service also refuses a case-insensitive clash.
   @@index([siteId])
   @@index([state, nextRunAt])
   @@map("bas_report_definitions")
@@ -825,6 +840,15 @@ model BasReportRun {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
+  /// When the run was moved to Recently deleted (2026-11-20); NULL for a run on the list. A deleted run keeps its findings, page and PDF until the scheduler purges it RECYCLE_DAYS (15) later; until then Restore brings it back whole.
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz()
+  /// Who moved it: 'person' (deleted_by_employee_id says who) or 'retention' (the report's "Keep generated runs for"). Set exactly when deleted_at is.
+  deletedBy           String?   @map("deleted_by")
+  deletedByEmployeeId String?   @map("deleted_by_employee_id") @db.Uuid
+  deletedByEmployee   Employee? @relation("BasReportRunDeletedBy", fields: [deletedByEmployeeId], references: [id], onDelete: SetNull)
+  /// When a person last restored it from Recently deleted. Retention never deletes a restored run again: the restore is the person's decision to keep it.
+  restoredAt          DateTime? @map("restored_at") @db.Timestamptz()
+
   findings          BasReportFinding[]
   firstSeenFindings BasReportFinding[]  @relation("BasReportFindingFirstSeen")
   deliveries        BasReportDelivery[]
@@ -832,6 +856,7 @@ model BasReportRun {
   @@index([reportId, createdAt(sort: Desc)])
   @@index([status])
   @@index([pdfStatus])
+  @@index([deletedAt])
   @@map("bas_report_runs")
 }
 
@@ -966,6 +991,8 @@ model BasReportFinding {
 
   firstSeenRunId BigInt?       @map("first_seen_run_id")
   firstSeenRun   BasReportRun? @relation("BasReportFindingFirstSeen", fields: [firstSeenRunId], references: [runId], onDelete: SetNull)
+  /// When the item was first seen, stored on the row (2026-11-20) so "since 10/14" survives the purge of the run that first saw it: first_seen_run_id goes NULL with that run.
+  firstSeenAt    DateTime?     @map("first_seen_at") @db.Timestamptz()
 
   @@index([runId, position])
   @@index([fingerprint])

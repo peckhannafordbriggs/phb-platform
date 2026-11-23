@@ -7,6 +7,7 @@ import { BasError } from "../errors";
 import { basSiteScope } from "../service";
 import { SETTINGS_ROW_ID, type SafetyCeilingView } from "./ceiling";
 import { readSafetyCeiling } from "./ceiling-read";
+import { isRunRetentionMonths } from "./deletion-words";
 import { enqueueRun } from "./engine/queue";
 import { randomBytes } from "node:crypto";
 import {
@@ -162,12 +163,17 @@ const DETAIL_INCLUDE = {
     include: { addedBy: { select: { email: true } } },
   },
   // The newest run, for the list's Last run cell (Phase 3). One row, so a
-  // report with a thousand runs costs the list nothing more.
+  // report with a thousand runs costs the list nothing more. Never a run in
+  // Recently deleted (2026-11-20): its link would answer 404.
   runs: {
+    where: { deletedAt: null },
     orderBy: [{ createdAt: "desc" }, { runId: "desc" }],
     take: 1,
     select: { runId: true, status: true, createdAt: true, startedAt: true, finishedAt: true, partialReason: true, error: true },
   },
+  // Every run the report has made, on the list or in Recently deleted: what
+  // the delete confirmation names (2026-11-20). A joinless count.
+  _count: { select: { runs: true } },
 } satisfies Prisma.BasReportDefinitionInclude;
 
 type DetailRow = Prisma.BasReportDefinitionGetPayload<{ include: typeof DETAIL_INCLUDE }>;
@@ -175,6 +181,9 @@ type DetailRow = Prisma.BasReportDefinitionGetPayload<{ include: typeof DETAIL_I
 /**
  * The report, or `report_not_found`. Owner or module admin; and the building
  * must be within the viewer's site entitlement, which today is every site.
+ * A DELETED report (2026-11-20) is not found, for anyone: it has no editor,
+ * no state to change, no recipients to edit and no Run now. Its runs are
+ * read through runs-service.ts, which does not come here.
  */
 async function loadVisibleReport(
   viewer: Viewer,
@@ -188,7 +197,7 @@ async function loadVisibleReport(
     where: { reportId },
     include: DETAIL_INCLUDE,
   });
-  if (row === null) throw notFound();
+  if (row === null || row.deletedAt !== null) throw notFound();
 
   const admin = await canAdminister(viewer);
   if (row.ownerEmployeeId !== viewer.id && !admin) throw notFound();
@@ -289,6 +298,8 @@ function toSummary(row: DetailRow, viewer: Viewer, stationsOnSite: number): Repo
     questionCount: row.questions.length,
     recipientCount: row.recipients.length,
     lastRun: lastRunView(row.runs[0]),
+    runCount: row._count.runs,
+    runRetentionMonths: isRunRetentionMonths(row.runRetentionMonths) ? row.runRetentionMonths : null,
     pausedReason: row.pausedReason,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -377,7 +388,10 @@ export async function listReports(viewer: Viewer): Promise<ReportsList> {
   const admin = await canAdminister(viewer);
   const { entitled } = await basSiteScope(viewer);
 
+  // A deleted report is on nobody's Scheduled list, an admin's included -
+  // in the rows and in the count beside them (2026-11-20).
   const where: Prisma.BasReportDefinitionWhereInput = {
+    deletedAt: null,
     ...(admin ? {} : { ownerEmployeeId: viewer.id }),
     ...(entitled === null ? {} : { siteId: { in: entitled } }),
   };
@@ -653,6 +667,8 @@ async function assertNameFree(ownerEmployeeId: string, name: string, exceptRepor
   const clash = await prisma.basReportDefinition.findFirst({
     where: {
       ownerEmployeeId,
+      // A deleted report gives its name back (the unique index is partial, on live reports).
+      deletedAt: null,
       name: { equals: name, mode: "insensitive" },
       ...(exceptReportId === null ? {} : { reportId: { not: exceptReportId } }),
     },
@@ -687,6 +703,7 @@ export async function createReport(viewer: Viewer, input: CreateReportInput): Pr
         scheduleKind: input.schedule.kind,
         scheduleParams: scheduleParamsOf(input.schedule) as Prisma.InputJsonValue,
         timeOfDay: input.timeOfDay,
+        runRetentionMonths: input.runRetentionMonths ?? null,
         state: "draft",
       },
       select: { reportId: true },
@@ -712,6 +729,7 @@ export async function createReport(viewer: Viewer, input: CreateReportInput): Pr
       scheduleKind: input.schedule.kind,
       timeOfDay: input.timeOfDay,
       analysisWindow: input.analysisWindow ?? "7d",
+      runRetentionMonths: input.runRetentionMonths ?? null,
     });
 
     return created.reportId;
@@ -769,6 +787,11 @@ export async function updateReport(
   if (input.analysisWindow !== undefined && input.analysisWindow !== row.analysisWindow) {
     data.analysisWindow = input.analysisWindow;
     changes.analysisWindow = { from: row.analysisWindow, to: input.analysisWindow };
+  }
+
+  if (input.runRetentionMonths !== undefined && input.runRetentionMonths !== row.runRetentionMonths) {
+    data.runRetentionMonths = input.runRetentionMonths;
+    changes.runRetentionMonths = { from: row.runRetentionMonths, to: input.runRetentionMonths };
   }
 
   let spec = readScheduleSpec(row.scheduleKind, row.scheduleParams);
@@ -860,20 +883,55 @@ export async function updateReport(
   return { changed: result.changed, nextRunAt: nextRunAt?.toISOString() ?? null };
 }
 
-export async function deleteReport(viewer: Viewer, reportIdText: string): Promise<{ deleted: boolean }> {
+/**
+ * Delete a report (2026-11-20). The owner or a module admin, at any time
+ * except while one of its runs is queued or running (409 `run_in_flight`):
+ * that run is the worker's, and it reads the report as it executes.
+ *
+ * A report that has never made a run is removed outright, with its
+ * questions and recipients, as before. A report WITH runs is marked deleted
+ * instead, because every run still reads its report for its name, its
+ * building and who may see it: from that moment it is on no Scheduled list
+ * for anyone, its editor answers 404, the scheduler never queues it again,
+ * and retention no longer touches its runs. Its question rows go - they
+ * only drive future runs, and a personal question they name could never be
+ * deleted otherwise - and its recipients stay, so a PDF still rendering when
+ * it was deleted is emailed as before. Its runs are not touched: they stay
+ * on the Reports list labelled "(schedule deleted)", and each is deleted
+ * only by its own Delete. Its name is free again for a new report.
+ *
+ * One transaction on the locked definition row, the lock Run now and the
+ * scheduler take, so a run cannot be queued between the check and the
+ * delete. Audited, with how many runs were kept.
+ */
+export async function deleteReport(viewer: Viewer, reportIdText: string, now = new Date()): Promise<{ deleted: boolean; runsKept: number }> {
   const { row } = await loadVisibleReport(viewer, reportIdText);
-  // Runs are kept indefinitely (plan §A, Limits). A report with history is
-  // paused, not deleted; the foreign key is RESTRICT and this says why.
-  const runs = await prisma.basReportRun.count({ where: { reportId: row.reportId } });
-  if (runs > 0) {
-    throw new BasError(
-      "report_has_runs",
-      `This report has ${runs} run${runs === 1 ? "" : "s"} and its history is kept. Pause it instead of deleting it.`,
-    );
-  }
-  await prisma.$transaction(async (tx) => {
-    // Questions and recipients cascade from the definition.
-    await tx.basReportDefinition.delete({ where: { reportId: row.reportId } });
+  const runsKept = await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ deleted_at: Date | null }[]>`
+      SELECT deleted_at FROM bas_report_definitions WHERE report_id = ${row.reportId} FOR UPDATE`;
+    if (locked[0] === undefined || locked[0].deleted_at !== null) throw notFound();
+    const inFlight = await tx.basReportRun.findFirst({
+      where: { reportId: row.reportId, status: { in: ["queued", "running"] } },
+      orderBy: { runId: "desc" },
+      select: { status: true },
+    });
+    if (inFlight !== null) {
+      throw new BasError(
+        "run_in_flight",
+        `A run of this report is ${inFlight.status}. Wait for it to finish, then delete the report.`,
+      );
+    }
+    const runs = await tx.basReportRun.count({ where: { reportId: row.reportId } });
+    if (runs === 0) {
+      // Questions and recipients cascade from the definition.
+      await tx.basReportDefinition.delete({ where: { reportId: row.reportId } });
+    } else {
+      await tx.basReportQuestion.deleteMany({ where: { reportId: row.reportId } });
+      await tx.basReportDefinition.update({
+        where: { reportId: row.reportId },
+        data: { deletedAt: now, deletedByEmployeeId: viewer.id },
+      });
+    }
     await audit(tx, "bas.report_deleted", viewer, {
       reportId: row.reportId.toString(),
       name: row.name,
@@ -881,9 +939,11 @@ export async function deleteReport(viewer: Viewer, reportIdText: string): Promis
       state: row.state,
       questions: row.questions.length,
       recipients: row.recipients.length,
+      runsKept: runs,
     });
+    return runs;
   });
-  return { deleted: true };
+  return { deleted: true, runsKept };
 }
 
 // ---------------------------------------------------------------------------
@@ -1325,7 +1385,10 @@ export async function requestRun(viewer: Viewer, reportIdText: string, now = new
   }
 
   const runId = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT report_id FROM bas_report_definitions WHERE report_id = ${row.reportId} FOR UPDATE`;
+    const locked = await tx.$queryRaw<{ deleted_at: Date | null }[]>`
+      SELECT deleted_at FROM bas_report_definitions WHERE report_id = ${row.reportId} FOR UPDATE`;
+    // Deleted between the read above and this lock (2026-11-20): not found, as it would be now.
+    if (locked[0] === undefined || locked[0].deleted_at !== null) throw notFound();
     const inFlight = await tx.basReportRun.findFirst({
       where: { reportId: row.reportId, status: { in: ["queued", "running"] } },
       orderBy: { runId: "desc" },

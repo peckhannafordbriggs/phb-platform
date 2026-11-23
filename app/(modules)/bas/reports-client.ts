@@ -15,7 +15,7 @@ import type { SafetyCeilingView } from "@/lib/modules/bas/reports/ceiling";
 import { REPORT_PRESETS, presetMatching, type PresetKey } from "@/lib/modules/bas/reports/presets";
 import type { PdfState } from "@/lib/modules/bas/reports/pdf/naming";
 import type { ScheduleSpec } from "@/lib/modules/bas/reports/schedule";
-import type { RunDetail, RunsList } from "@/lib/modules/bas/reports/runs-service";
+import type { DeletedRunsList, RunDetail, RunsList } from "@/lib/modules/bas/reports/runs-service";
 import { formatInZone } from "@/lib/modules/bas/reports/schedule";
 import type {
   AddRecipientInput,
@@ -78,11 +78,18 @@ export const fetchRuns = (reportId: string | null, signal?: AbortSignal) =>
 export const createReport = (body: CreateReportInput) => call<{ reportId: string }>("", json("POST", body));
 export const updateReport = (reportId: string, body: UpdateReportInput) =>
   call<{ changed: boolean; nextRunAt: string | null }>(`/${encodeURIComponent(reportId)}`, json("PATCH", body));
+/** Delete a report (2026-11-20): future runs stop; every generated run stays. 409 run_in_flight while one is queued or running. */
 export const deleteReport = (reportId: string) =>
-  call<{ deleted: boolean }>(`/${encodeURIComponent(reportId)}`, { method: "DELETE" });
+  call<{ deleted: boolean; runsKept: number }>(`/${encodeURIComponent(reportId)}`, { method: "DELETE" });
 /** Run now (Phase 3): queue a run; 202 with the run id, or 409 run_in_flight. */
 export const requestRun = (reportId: string) =>
   call<{ runId: string }>(`/${encodeURIComponent(reportId)}/runs`, { method: "POST" });
+/** Recently deleted (2026-11-20): the viewer's deleted runs, newest deletion first, with the days left before the purge. */
+export const fetchDeletedRuns = (signal?: AbortSignal) => call<DeletedRunsList>("/runs/deleted", { signal });
+/** Delete (2026-11-20): move one run or a selection to Recently deleted; all or nothing. */
+export const deleteRuns = (runIds: string[]) => call<{ deleted: number }>("/runs/delete", json("POST", { runIds }));
+/** Restore (2026-11-20): bring one run or a selection back from Recently deleted; all or nothing. */
+export const restoreRuns = (runIds: string[]) => call<{ restored: number }>("/runs/restore", json("POST", { runIds }));
 /** One run with its document; the run page polls it while a PDF is queued or rendering (Phase 4). */
 export const fetchRun = (runId: string, signal?: AbortSignal) =>
   call<RunDetail>(`/runs/${encodeURIComponent(runId)}`, { signal });

@@ -2,6 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import {
+  REPORT_DELETE_IN_FLIGHT_TITLE,
+  describeRunRetention,
+  reportDeleteHeading,
+  reportDeleteSentence,
+} from "@/lib/modules/bas/reports/deletion-words";
 import { REPORT_STATE_LABELS, type ReportSummary, type ReportsList } from "@/lib/modules/bas/reports/types";
 import { ApiError } from "./health-client";
 import {
@@ -16,6 +22,7 @@ import {
   requestRun,
 } from "./reports-client";
 import { Button } from "@/components/ui";
+import { ConfirmDialog } from "./reports-confirm";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /**
@@ -25,11 +32,17 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * cell shows it Queued, then Running, then its outcome; the list is reloaded
  * every ten seconds while a run of any report is in flight, so the change is
  * seen without a refresh.
+ *
+ * Delete (2026-11-20) opens a confirmation that says future runs stop and
+ * names how many generated reports stay; the report leaves this list for
+ * everyone, and its runs stay on the Reports list, "(schedule deleted)". It
+ * is greyed while a run of the report is queued or running.
  */
 export function ReportsListView() {
   const [data, setData] = useState<ReportsList | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<ReportSummary | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -99,12 +112,23 @@ export function ReportsListView() {
         onPause={(id) => run(() => changeReportState(id, "pause"))}
         onResume={(id) => run(() => changeReportState(id, "resume"))}
         onRunNow={(id) => run(() => requestRun(id))}
-        onDelete={(id, name) => {
-          if (window.confirm(`Delete the report "${name}"? Its questions and recipients go with it.`)) {
-            void run(() => deleteReport(id));
-          }
-        }}
+        onDelete={(id) => setConfirming(data.reports.find((r) => r.reportId === id) ?? null)}
       />
+      {confirming !== null && (
+        <ConfirmDialog
+          heading={reportDeleteHeading(confirming.name)}
+          sentence={reportDeleteSentence(confirming.runCount)}
+          confirmLabel="Delete report"
+          busyLabel="Deleting…"
+          busy={busy}
+          testIdPrefix="report-delete"
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => {
+            const id = confirming.reportId;
+            void run(() => deleteReport(id)).then(() => setConfirming(null));
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -210,7 +234,12 @@ function ReportRow({
         <Link href={`/bas/reports/${encodeURIComponent(r.reportId)}`} className="font-medium hover:underline">
           {r.name}
         </Link>
-        {r.presetLabel !== null && <div className="text-[var(--muted)]">{r.presetLabel}</div>}
+        {/* The summary line: the preset label, and how long runs are kept when that is not for ever (2026-11-20). */}
+        {(r.presetLabel !== null || r.runRetentionMonths !== null) && (
+          <div className="text-[var(--muted)]" data-testid="report-summary-line">
+            {[r.presetLabel, describeRunRetention(r.runRetentionMonths)].filter((x): x is string => x !== null).join(" · ")}
+          </div>
+        )}
         {showOwner && !r.isOwner && <div className="text-[var(--muted)]">Owner: {r.ownerName}</div>}
       </td>
       <td className="py-3 pr-3">
@@ -265,7 +294,13 @@ function ReportRow({
             </Button>
           )}
           {onDelete !== undefined && (
-            <Button size="sm"  disabled={busy} onClick={() => onDelete(r.reportId, r.name)}>
+            <Button
+              size="sm"
+              disabled={busy || inFlight}
+              title={inFlight ? REPORT_DELETE_IN_FLIGHT_TITLE : undefined}
+              onClick={() => onDelete(r.reportId, r.name)}
+              testId="report-delete"
+            >
               Delete
             </Button>
           )}

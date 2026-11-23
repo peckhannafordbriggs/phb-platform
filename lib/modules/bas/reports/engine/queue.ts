@@ -37,9 +37,11 @@ export async function enqueueRun(
 ): Promise<{ runId: bigint; periodStart: Date; periodEnd: Date }> {
   const def = await db.basReportDefinition.findUnique({
     where: { reportId: input.reportId },
-    select: { analysisWindow: true, site: { select: { timezone: true } } },
+    select: { analysisWindow: true, deletedAt: true, site: { select: { timezone: true } } },
   });
   if (def === null) throw new ReportRunError("report_not_found", `No report definition ${input.reportId}.`);
+  // The one place a run is created: a deleted report never gets another (2026-11-20).
+  if (def.deletedAt !== null) throw new ReportRunError("report_not_found", `Report ${input.reportId} was deleted; it does not run.`);
   const ceiling = await readSafetyCeiling(db);
   const window = isAnalysisWindow(def.analysisWindow) ? def.analysisWindow : "7d";
   const periodEnd = input.periodEnd;

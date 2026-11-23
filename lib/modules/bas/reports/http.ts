@@ -22,7 +22,6 @@ type ReportsErrorCode = Extract<
   | "recipient_exists"
   | "recipient_not_found"
   | "external_unconfirmed"
-  | "report_has_runs"
   | "run_not_found"
   | "run_in_flight"
   | "admin_required"
@@ -32,6 +31,7 @@ type ReportsErrorCode = Extract<
   | "nothing_to_resend"
   | "run_not_sendable"
   | "delivery_pending"
+  | "run_not_finished"
 >;
 
 /**
@@ -65,7 +65,6 @@ const STATUS: Record<ReportsErrorCode, number> = {
   recipient_exists: 409,
   recipient_not_found: 404,
   external_unconfirmed: 409,
-  report_has_runs: 409,
   run_not_found: 404,
   run_in_flight: 409,
   // The one 403 here: the report (or the Usage page) is visible to the
@@ -80,6 +79,8 @@ const STATUS: Record<ReportsErrorCode, number> = {
   nothing_to_resend: 409,
   run_not_sendable: 409,
   delivery_pending: 409,
+  // Delete (2026-11-20): the run is visible; it has not finished yet.
+  run_not_finished: 409,
 };
 
 function isReportsError(code: BasErrorCode): code is ReportsErrorCode {

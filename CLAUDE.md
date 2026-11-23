@@ -1933,6 +1933,50 @@ the two column comments only. `WHY-ITS-BUILT-THIS-WAY.md` § 92; `runbook.md` ->
 *A point is missing from a report or from Analyze...*, *A via-parent station:
 "Collected through ..."...*.
 
+**Report runs can be deleted, to a 15-day Recently deleted, and a report can
+keep its runs for a set time (2026-11-20).** On Reports → Reports a box on
+each finished row, a header box for every finished row shown, *Delete* per
+row, and one confirmation naming the count; the report's owner or a BAS
+module admin, the run's own visibility. A delete is a MARK -
+`bas_report_runs.deleted_at`, `deleted_by` (`person` / `retention`),
+`deleted_by_employee_id` - and the run's findings, page and PDF stay; it
+leaves the list, the Scheduled list's *Last run*, and every action on a run
+(open, PDF, Retry PDF, Resend, Send to me answer 404 until restored), and
+**is never the previous run of a comparison**. *Recently deleted*
+(`/bas/reports/deleted`) lists the viewer's deleted runs with the days left
+and Restore, single or on a selection; the notice after a delete offers
+Undo. The existing scheduler job (`bas-reports-sched`) gained a step after
+the report pass: **retention** - *Keep generated runs for* on the editor's
+Schedule section, never by default, 3, 6 or 12 months, shown on the
+Scheduled list's summary line when set - moves finished runs created before
+that to Recently deleted as `retention`, and the **purge** removes every run
+deleted 15 days ago or more, findings and deliveries by cascade, logged and
+not audited per run. **A restored run is never taken by retention again**
+(`restored_at`). Only a finished run is deleted (a CHECK), and the delete
+settles its queued PDF and waiting deliveries to failed in the same
+transaction so the worker's scaler never counts work for a deleted run; no
+delivery rows are written for one, and the sender re-reads the run before
+every Graph call. The delete and the restore are not audited; the retention
+setting is, in `bas.report_updated`. `bas_report_findings.first_seen_at` is
+new and backfilled, so *since* survives the purge of the run that first saw
+an item. Usage keeps counting a deleted run's spend until the purge.
+**Deleting a report touches none of its runs** (same change): the owner or
+a module admin deletes a report at any time except while one of its runs is
+queued or running (`409 run_in_flight`; `report_has_runs` is gone); it
+leaves every Scheduled list for everyone and never runs again, and its runs
+stay on the Reports list labelled *(schedule deleted)*, opening, downloading
+and emailing as before, going only by their own Delete - retention stops with
+the report. A report with runs is MARKED (`bas_report_definitions.deleted_at`)
+because each run reads it for its name, building and visibility; its question
+rows go, its recipients stay; one with no runs is removed outright. Its name
+is free again through a hand-written PARTIAL unique index,
+`bas_report_definitions_owner_name_live_key` - Prisma cannot express it and
+7.10's diff leaves it alone; a test fails if a migration drops it. The
+confirmation: *This stops future runs. The N generated reports stay.*
+`WHY-ITS-BUILT-THIS-WAY.md` § 94; `runbook.md` → *Reports: a run is missing
+from the list, or Recently deleted*, *Deleting a report, and what happens to
+its generated reports*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

@@ -4052,3 +4052,119 @@ Point Explorer reports a skew the child does not have. Let hidden points back
 into the stuck check and reports and CEI's local copies are a permanent amber
 card and a page of zeros; drop them from the risk figures as well and hiding
 becomes a way to make an outage disappear.
+
+## 94 · A report run is deleted to a recycle period, never at once; retention deletes the same way, and a restore outranks it; deleting a report touches none of its runs
+
+**Decision (2026-11-20).** Report runs are no longer kept for ever.
+
+1. **Delete is a mark.** The report's owner or a BAS module admin - the
+   people who can see the run - deletes one run or a selection from Reports →
+   Reports. `deleted_at`, `deleted_by = 'person'` and `deleted_by_employee_id`
+   are set; the findings, page and PDF stay. The run leaves the list, the
+   comparison, and every action on a run (404 until restored).
+2. **Recently deleted, 15 days.** `/bas/reports/deleted` lists the viewer's
+   deleted runs with the days left; Restore puts a run back whole.
+3. **The purge** is a step of the existing scheduler job: a run deleted 15
+   days ago or more is removed in one `DELETE`, its findings and deliveries
+   by cascade, its PDF with the row. Logged, not audited per run.
+4. **Retention per report**: *Keep generated runs for* - never (the default),
+   3, 6 or 12 months. The same scheduler step moves a finished run created
+   before that to Recently deleted, `deleted_by = 'retention'`, so the 15-day
+   undo applies to it as well. **A run a person restored is never taken by
+   retention again** (`restored_at`).
+5. **Only a finished run** is deleted - a CHECK holds it - and deleting one
+   settles the work it would leave waiting: a queued PDF and every waiting
+   email become failed with a sentence saying Restore, then Retry PDF or
+   Resend.
+6. **Deleting a report touches none of its runs.** The owner or a module
+   admin deletes a report at any time except while one of its runs is queued
+   or running. It leaves every Scheduled list, for everyone, and never runs
+   again; its runs stay on the Reports list labelled *(schedule deleted)* and
+   open, download and email as before; they go only by their own Delete, and
+   retention stops with the report. A report with runs is MARKED
+   (`deleted_at`), its question rows removed and its recipients kept; one
+   with no runs is removed outright. Its name is free again, through a
+   partial unique index on live reports.
+
+**Why a mark and a recycle period, not a delete.** A run is a record
+somebody may have acted on, and it is the previous run of the next one. A
+mis-click on a selection of twenty should cost a click to undo, not a
+database restore that takes every other table back with it. Fifteen days
+covers a two-week absence.
+
+**Why retention goes through Recently deleted rather than deleting outright.**
+A retention setting is chosen once and acts for months. The first time it
+takes something someone wanted is the moment the setting turns out to be
+wrong; the 15 days are the time to notice, restore and change it.
+
+**Why a restored run is exempt from retention.** Without it a restore of a
+run retention took is undone by the next pass, fifteen minutes later, and
+the run lands back in Recently deleted with a fresh 15 days - a loop a person
+cannot get out of except by changing the setting. A restore is a person
+saying "keep this one", and a person outranks the automation (§ 89).
+
+**Why the delete settles queued and waiting work in the same transaction.**
+The worker job's scaler counts queued PDFs and waiting deliveries
+(`infra/main.bicep`). Work the worker would refuse for a deleted run, still
+counted, is the spin of 12 November 2026: an execution restarted every 45
+seconds against a row it will never take. Settled to *failed*, nothing is
+counted. Two further guards stop a deleted run being emailed by a path the
+settle cannot see: no delivery rows are written for a deleted run when an
+in-progress render finishes, and the sender re-reads the run immediately
+before the Graph call.
+
+**Why restore does not re-queue the settled work.** An email arriving days
+late for a run somebody deleted surprises everyone on it. Retry PDF and
+Resend are one click each, and each is the person's decision.
+
+**Why `first_seen_at` was added to findings.** "Since 10/14" on an open item
+was read through `first_seen_run_id`, which is `ON DELETE SET NULL`. Once a
+run can be purged, the run that first saw a long-open item takes the date
+with it, and every later report prints the item with no *since* and sorts it
+first in *Open Items Carried Forward*. The date is stored on the finding,
+backfilled from the run, and read after the run so nothing changed while the
+run exists.
+
+**Why deleting a report keeps its runs, and marks rather than removes it.**
+Until now a report with runs could not be deleted at all (`report_has_runs`),
+so a report nobody wanted any more could only be paused, and sat on the
+Scheduled list for good. The runs are the record; the report is the
+schedule that makes more of them. Stopping the schedule must not take the
+record with it, and must not make anyone go through Recently deleted for
+runs they still want. The row stays because every run reads it for its
+name, its building, and - through its owner - who may see it; copying those
+onto every run would be a second source of truth for each. The questions go
+because they only drive future runs, and a personal question they named
+would otherwise be undeletable by its owner, whose editor for that report is
+gone. The recipients stay because a PDF still rendering when the report was
+deleted is emailed exactly as it would have been.
+
+**Why not while a run is queued or running.** That run is the worker's, and
+it reads the report as it executes; the delete takes the definition's row
+lock - the one Run now and the scheduler take - and checks for a run in
+flight under it, so nothing can be queued between the check and the delete.
+
+**Why retention stops with the report.** "Runs are deleted only through their
+own Delete" once the report is gone: a setting on a report that no longer
+exists and cannot be edited must not keep deleting things.
+
+**Why the delete is not audited.** The run is its owner's own data, and the
+owner's request. `deleted_by_employee_id` is the record until the purge; the
+purge is a log line. Restoring is not audited either; changing the retention
+setting is, as `bas.report_updated` with the change.
+
+**Why Usage keeps counting a deleted run.** The money was spent. It counts
+until the purge and its row says *deleted* and does not open.
+
+**What breaks if you undo it.** Hard-delete on click and a slip is
+unrecoverable short of a whole-database restore. Let retention delete
+outright and a wrong setting removes a year of reports in one pass. Drop the
+restore exemption and a restored run bounces back to Recently deleted every
+fifteen minutes. Let a deleted run be the previous run and deleting a bad
+report changes nothing about the next one's New / Still open. Skip the
+settle and the worker's scaler counts work for a deleted run that nothing
+will take. Read the first-seen date only through the run and the purge
+erases how long an item has been open. Remove a deleted report's row and its
+runs lose their name and their visibility; leave its questions and its
+owner can never delete a personal question it used; let retention outlive
+it and a report nobody can open keeps deleting runs.

@@ -36,7 +36,9 @@ import { trendSummaryUsage, type TrendSummaryUsage } from "../trend-summary/usag
  * "There have been no runs" without asking - which is what the page read
  * while the Reports list beside it showed a succeeded run with a cost. The
  * visibility is the runs list's own (`visibilityWhere`): a person sees
- * their reports' spend, a module admin sees every report's.
+ * their reports' spend, a module admin sees every report's. A run in
+ * Recently deleted is still counted (2026-11-20) - the money was spent -
+ * until the scheduler purges it; its row says deleted and links nowhere.
  *
  * Days are America/New_York, the company's clock, whatever the viewer's.
  */
@@ -51,6 +53,8 @@ export interface ReportsUsageRun {
   finishedAt: string;
   tokens: number;
   spend: number;
+  /** In Recently deleted (2026-11-20): still spend until the purge, but its page answers 404. */
+  deleted: boolean;
 }
 
 export interface ReportsUsage {
@@ -125,6 +129,7 @@ export async function getReportsUsage(viewer: Viewer, range: UsageRange, now = n
         plannerUnanswered: true,
         plannerSkipped: true,
         plannerCostUsd: true,
+        deletedAt: true,
         report: { select: { name: true, site: { select: { name: true } } } },
       },
       orderBy: [{ finishedAt: "desc" }, { runId: "desc" }],
@@ -169,6 +174,7 @@ export async function getReportsUsage(viewer: Viewer, range: UsageRange, now = n
       finishedAt: r.finishedAt.toISOString(),
       tokens,
       spend,
+      deleted: r.deletedAt !== null,
     });
   }
 
