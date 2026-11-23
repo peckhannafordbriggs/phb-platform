@@ -6,7 +6,9 @@ import type {
   PointExplorer as PointExplorerData,
   PointHistory,
   PointOption,
+  TrendSampling,
 } from "@/lib/modules/bas/types";
+import { axisWords, lineStyle, type AxisSide } from "@/lib/modules/bas/chart-lines";
 import {
   BREAKS_SHOWN_FIRST,
   describeBreakRule,
@@ -21,8 +23,9 @@ import {
 } from "@/lib/modules/bas/interval";
 import type { TrendSummaryResult } from "@/lib/modules/bas/trend-summary/types";
 import { unitSymbol } from "@/lib/modules/bas/units";
+import { LineSwatch } from "./point-picker";
 import type { ValueKind } from "@/lib/modules/bas/value-kind";
-import { Button, SearchBar } from "@/components/ui";
+import { Button } from "@/components/ui";
 import {
   ApiError,
   RISK_EXPLANATION,
@@ -42,8 +45,9 @@ import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
 
 /**
  * The pieces Point Explorer gained on 2026-11-20 - the Data health tile, the
- * breaks summary, the trend summary card and compare mode's picker and
- * legend. Pure in their props, so tests render each one with a fixture.
+ * breaks summary, the trend summary card and the legend of a chart of
+ * several lines. Pure in their props, so tests render each one with a
+ * fixture.
  */
 
 // ----------------------------------------------------------- Data health
@@ -181,10 +185,13 @@ export function BreaksList({
   breaks,
   expected,
   timeZone,
+  showing = null,
 }: {
   breaks: BreaksSummary;
   expected: ExpectedInterval;
   timeZone: string | null;
+  /** With several lines on the chart: the point these breaks are of. */
+  showing?: string | null;
 }) {
   const [showAll, setShowAll] = useState(false);
   const zone = timeZone ?? undefined;
@@ -207,6 +214,11 @@ export function BreaksList({
       <p className="font-medium text-[var(--foreground)]" data-testid="bas-breaks-summary">
         {describeBreaks(breaks, expected)}
       </p>
+      {showing !== null && (
+        <p className="mt-0.5" data-testid="bas-breaks-showing">
+          showing {showing}
+        </p>
+      )}
       <p className="mt-0.5">A break is {describeBreakRule(expected)} — {describeExpectedInterval(expected).toLowerCase()}.</p>
       <p className="mt-2">{breaks.count > BREAKS_SHOWN_FIRST ? `The ${BREAKS_SHOWN_FIRST} longest:` : "Breaks:"}</p>
       <ul className="mt-0.5 space-y-0.5" data-testid="bas-breaks-longest">
@@ -252,10 +264,16 @@ export function BreaksList({
 export function TrendSummaryCard({
   data,
   request = requestTrendSummary,
+  lines = 1,
 }: {
   data: PointExplorerData;
   /** Injected by a test. */
   request?: typeof requestTrendSummary;
+  /**
+   * How many lines the chart holds. A summary is written from one point's
+   * numbers, so with more than one the card says so and asks for nothing.
+   */
+  lines?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -263,6 +281,7 @@ export function TrendSummaryCard({
   const [error, setError] = useState<string | null>(null);
   const point = data.selectedPoint;
   if (point === null) return null;
+  const several = lines > 1;
   const key = `${point.pointId}|${data.range.kind}|${data.range.days ?? ""}|${data.range.fromDate ?? ""}|${data.range.toDate ?? ""}`;
   // A result asked for another point or range is not shown under this one.
   const shown = answer !== null && answer.key === key ? answer.result : null;
@@ -292,36 +311,40 @@ export function TrendSummaryCard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="eyebrow text-[var(--muted)]">Trend summary</h2>
         <div className="flex items-center gap-2">
-          {shown !== null && (
+          {shown !== null && !several && (
             <Button size="sm" onClick={() => setOpen((o) => !o)} ariaExpanded={open}>
               {open ? "Hide" : "Show"}
             </Button>
           )}
-          {shown !== null && shown.state !== "not_summarisable" && shown.state !== "no_data" && (
+          {shown !== null && !several && shown.state !== "not_summarisable" && shown.state !== "no_data" && (
             <Button size="sm" disabled={busy} onClick={() => void ask(true)} testId="bas-trend-summary-refresh">
               {busy ? "Writing…" : "Refresh"}
             </Button>
           )}
-          {shown === null && (
-            <Button size="sm" variant="primary" disabled={busy || point.valueKind === "string"} onClick={() => void ask(false)} testId="bas-explain-trend">
+          {(shown === null || several) && (
+            <Button size="sm" variant="primary" disabled={busy || several || point.valueKind === "string"} onClick={() => void ask(false)} testId="bas-explain-trend">
               {busy ? "Reading the trend…" : "Explain this trend"}
             </Button>
           )}
         </div>
       </div>
-      {shown === null && error === null && (
+      {several ? (
+        <p className="mt-1 text-xs text-[var(--muted)]" data-testid="bas-trend-summary-several">
+          A summary describes one point. With {lines} lines on the chart, plot one point to explain its trend.
+        </p>
+      ) : shown === null && error === null && (
         <p className="mt-1 text-xs text-[var(--muted)]">
           {point.valueKind === "string"
             ? "A text point has no trend to summarise."
             : "A few sentences on what this trend shows and anything worth a look, written from the numbers on this page."}
         </p>
       )}
-      {error !== null && (
+      {error !== null && !several && (
         <p className="mt-2 rounded-[var(--radius-row)] border p-2 text-xs" style={TONE_STYLE.bad} role="alert">
           {error}
         </p>
       )}
-      {shown !== null && open && (
+      {shown !== null && open && !several && (
         <div className="mt-2" data-testid="bas-trend-summary-body">
           {shown.summary !== null ? (
             <p className="text-sm leading-relaxed">{shown.summary}</p>
@@ -342,114 +365,63 @@ export function TrendSummaryCard({
   );
 }
 
-// --------------------------------------------------------------- compare
+// ------------------------------------------------------------- the lines
+
+/** The first two slots' strokes, by their old names: the point, and compare mode's purple. */
+export const PRIMARY_STROKE = lineStyle(0).stroke;
+export const COMPARE_STROKE = lineStyle(1).stroke;
+
+/** One line as the legend shows it. */
+export interface LegendLine {
+  point: PointOption;
+  slot: number;
+  axis: AxisSide;
+  sampling: TrendSampling;
+}
 
 /**
- * The candidates for a comparison: the other shown points on the selected
- * point's JACE. With no search, the ones on the same equipment first (and
- * only those, when there are any); with a search, every match on the JACE.
+ * The legend above a chart of two or more lines: per line its dash and
+ * colour, its name, what it reads in, which axis when there are two, that it
+ * is averaged when it is, the JACE when the lines come from more than one,
+ * and a remove button. The first line is the one the tiles describe. Text is
+ * in the text colours; the swatch alone carries the line's colour.
  */
-export function compareCandidates(points: readonly PointOption[], selected: PointOption, query: string): PointOption[] {
-  const onStation = points.filter((p) => p.stationId === selected.stationId && p.pointId !== selected.pointId);
-  const term = query.trim().toLowerCase();
-  if (term.length > 0) {
-    return onStation.filter(
-      (p) =>
-        p.pointName.toLowerCase().includes(term) ||
-        (p.pointRole ?? "").toLowerCase().includes(term) ||
-        (p.equipmentName ?? "").toLowerCase().includes(term),
-    );
-  }
-  if (selected.equipmentId !== null) {
-    const same = onStation.filter((p) => p.equipmentId === selected.equipmentId);
-    if (same.length > 0) return same;
-  }
-  return onStation;
-}
-
-export function ComparePicker({
-  points,
-  selected,
-  onPick,
-  onClose,
+export function LinesLegend({
+  lines,
+  onRemove,
 }: {
-  points: readonly PointOption[];
-  selected: PointOption;
-  onPick: (pointId: string) => void;
-  onClose: () => void;
+  lines: readonly LegendLine[];
+  onRemove?: (pointId: string) => void;
 }) {
-  const [query, setQuery] = useState("");
-  const candidates = compareCandidates(points, selected, query);
-  const sameEquipment = query.trim().length === 0 && selected.equipmentId !== null && candidates.every((p) => p.equipmentId === selected.equipmentId);
-
+  const twoAxes = lines.some((l) => l.axis === "right");
+  const stations = new Set(lines.map((l) => l.point.stationId));
   return (
-    <div className="border-b border-[var(--divider-soft)] px-4 py-3" data-testid="bas-compare-picker">
-      <div className="flex flex-wrap items-center gap-3">
-        <SearchBar label="Search this JACE's points" placeholder="Search this JACE's points" value={query} onChange={setQuery} className="min-w-64" />
-        <span className="text-xs text-[var(--muted)]">
-          {sameEquipment && selected.equipmentName !== null
-            ? `Points on ${selected.equipmentName}. Search to choose any point on this JACE.`
-            : "Points on this JACE."}
-        </span>
-        <Button size="sm" onClick={onClose}>
-          Cancel
-        </Button>
-      </div>
-      {candidates.length === 0 ? (
-        <p className="mt-2 text-xs text-[var(--muted)]">No other shown point on this JACE matches.</p>
-      ) : (
-        <ul className="mt-2 grid max-h-56 gap-1 overflow-auto sm:grid-cols-2 lg:grid-cols-3" data-testid="bas-compare-candidates">
-          {candidates.slice(0, 200).map((p) => (
-            <li key={p.pointId}>
-              <button
-                type="button"
-                className="w-full truncate rounded-[var(--radius-control)] border border-[var(--border)] px-2 py-1 text-left text-xs hover:bg-[var(--surface)]"
-                onClick={() => onPick(p.pointId)}
-                title={p.pointName}
-              >
-                {p.pointName}
-                <span className="text-[var(--muted)]">
-                  {" "}
-                  {p.valueKind === "boolean" ? "on / off" : (unitSymbol(p.unit) ?? "no unit")}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-/** The comparison's line colour: a palette token with no meaning on this chart. */
-export const COMPARE_STROKE = "var(--phb-purple)";
-export const PRIMARY_STROKE = "var(--module-accent, var(--phb-cyan))";
-
-/** Both legends, above the chart: name, unit, and which axis. */
-export function CompareLegend({
-  primary,
-  comparison,
-}: {
-  primary: PointOption;
-  comparison: NonNullable<PointExplorerData["comparison"]>;
-}) {
-  const label = (p: PointOption) => (p.valueKind === "boolean" && p.states !== null ? `${p.states.on} / ${p.states.off}` : (unitSymbol(p.unit) ?? "no unit recorded"));
-  return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-5 pb-1 pt-2 text-xs" data-testid="bas-compare-legend">
-      <span className="inline-flex items-center gap-1.5">
-        <span aria-hidden="true" className="inline-block h-0.5 w-5" style={{ background: PRIMARY_STROKE }} />
-        {primary.pointName} <span className="text-[var(--muted)]">({label(primary)}{comparison.sharedAxis ? "" : ", left axis"})</span>
-      </span>
-      <span className="inline-flex items-center gap-1.5">
-        <span aria-hidden="true" className="inline-block h-0.5 w-5" style={{ background: COMPARE_STROKE }} />
-        {comparison.point.pointName}{" "}
-        <span className="text-[var(--muted)]">
-          ({label(comparison.point)}
-          {comparison.sharedAxis ? ", same axis" : ", right axis"}
-          {comparison.sampling.kind === "bucketed" ? `, ${comparison.sampling.bucketLabel} averages` : ""})
-        </span>
-      </span>
-    </div>
+    <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 pb-1 pt-2 text-xs" data-testid="bas-lines-legend">
+      {lines.map((line, i) => (
+        <li key={line.point.pointId} className="inline-flex items-center gap-1.5" data-testid="bas-legend-line" data-point={line.point.pointId}>
+          <LineSwatch slot={line.slot} />
+          <span>{line.point.pointName}</span>
+          <span className="text-[var(--muted)]">
+            ({axisWords(line.point)}
+            {twoAxes ? `, ${line.axis} axis` : ""}
+            {line.sampling.kind === "bucketed" ? `, ${line.sampling.bucketLabel} averages` : ""}
+            {stations.size > 1 ? `, ${line.point.stationName}` : ""}
+            {i === 0 && lines.length > 1 ? ", in the tiles" : ""})
+          </span>
+          {onRemove !== undefined && lines.length > 1 && (
+            <button
+              type="button"
+              aria-label={`Remove ${line.point.pointName} from the chart`}
+              onClick={() => onRemove(line.point.pointId)}
+              className="rounded px-1 text-[var(--muted)] hover:bg-[var(--neutral-100)] hover:text-[var(--foreground)]"
+              data-testid="bas-legend-remove"
+            >
+              ×
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 

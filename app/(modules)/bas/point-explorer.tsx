@@ -37,29 +37,38 @@ import {
 } from "./health-client";
 import {
   BreaksList,
-  COMPARE_STROKE,
-  CompareLegend,
-  ComparePicker,
   DataHealthTile,
-  PRIMARY_STROKE,
+  LinesLegend,
   TrendSummaryCard,
   comparisonValueAt,
+  type LegendLine,
 } from "./point-explorer-parts";
+import { AddPointPanel, EquipmentSelect, LineSwatch, PointList, pruneEquipment } from "./point-picker";
 import { breakThresholdS, describeBreaks } from "@/lib/modules/bas/interval";
+import {
+  MAX_CHART_LINES,
+  addSlot,
+  lineStyle,
+  removeSlot,
+  slotIds,
+  type AxisSide,
+  type LineSlots,
+} from "@/lib/modules/bas/chart-lines";
 import { RangePicker } from "./range-picker";
 import { ReadingsTable } from "./readings-table";
 import {
   ALL_SITES,
-  COMPARE_PARAM,
   POINT_PARAM,
   PROJECT_PARAM,
   SITE_PARAM,
   STATION_PARAM,
   TABLE_VIEW,
   VIEW_PARAM,
+  chartSlots,
   readFilters,
   withCascade,
   withFilter,
+  withLines,
   withRange,
 } from "./filters";
 import { TONE_INK, TONE_STYLE, TONE_WASH } from "./tone";
@@ -72,9 +81,12 @@ import {
   stateAxis,
   valueAxis,
 } from "./value-axis";
+import { maxTicksFor, timeAxisTicks } from "@/lib/modules/bas/time-axis";
 import { unitSymbol } from "@/lib/modules/bas/units";
+import { useMeasuredWidth } from "./use-measured-width";
 import { stateWord, type BooleanStates } from "@/lib/modules/bas/value-kind";
 import { Button, Dropdown, Segmented, type DropdownOption } from "@/components/ui";
+import type { PointOption } from "@/lib/modules/bas/types";
 
 /**
  * Point Explorer - what one point has been doing.
@@ -90,11 +102,18 @@ import { Button, Dropdown, Segmented, type DropdownOption } from "@/components/u
  * quantities - which is how 55 degF and 12.8 degC end up looking like the same
  * reading.
  *
- * COMPARE MODE (2026-11-20) keeps that rule rather than dropping it: a second
- * point shares the axis ONLY when both have a unit and it is the same unit;
- * otherwise it gets its own axis on the right, labelled with its own unit (or
- * "no unit recorded"), and the legend says which line is on which axis. Off
- * by default, in the URL (`compare=`), limited to the same JACE.
+ * SEVERAL LINES (2026-11-20) keep that rule rather than dropping it: up to six
+ * points from anywhere the viewer may see, a line sharing the left axis only
+ * with the same quantity - the same recorded unit, or the same two state
+ * words - the right axis for a second quantity, and no third axis at all
+ * (lib/modules/bas/chart-lines.ts). The legend says which line is on which
+ * axis; the tiles, the breaks and the gaps describe the first line and say
+ * so. The URL carries the set (`point=` and `compare=`), so a chart is a link.
+ *
+ * THE PICKER (2026-11-20) replaced the Point dropdown, which listed 334
+ * points in one column on CEI_JCI_N2: an Equipment multi-select after the
+ * JACE, and a Point list grouped by equipment and searched by name or role
+ * (point-picker.tsx).
  */
 
 const POLL_INTERVAL_MS = 60_000;
@@ -119,7 +138,20 @@ export function PointExplorer() {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const { siteId, windowDays, range, pointId, projectId, stationId, compareId } = filters;
+  const { siteId, windowDays, range, pointId, projectId, stationId, compareSlots } = filters;
+  // The other lines to load, in slot order, free slots skipped. Keyed by
+  // value for the effect below, as the range is.
+  const compareIds = slotIds(compareSlots);
+  const compareKey = compareIds.join(",");
+
+  /**
+   * The picker's working state, which is not the chart's and stays out of the
+   * URL: the equipment chosen, and whether the Point list is open. `null`
+   * means "open exactly when no point is shown" - a Projects card lands with
+   * the list open; a chart lands with it closed.
+   */
+  const [equipment, setEquipment] = useState<string[]>([]);
+  const [listOpen, setListOpen] = useState<boolean | null>(null);
   // The trend panel as the chart (default) or the raw readings behind it.
   // In the URL like every other choice here; read by nothing on the server.
   const view: TrendView = searchParams.get(VIEW_PARAM) === TABLE_VIEW ? "table" : "chart";
@@ -133,7 +165,7 @@ export function PointExplorer() {
         pointId: string | null;
         projectId: string | null;
         stationId: string | null;
-        compareId: string | null;
+        compareIds: readonly string[];
       },
       options: { quiet?: boolean } = {},
     ) => {
@@ -165,16 +197,16 @@ export function PointExplorer() {
   const rangeKey = range === null ? null : `${range.from}..${range.to}`;
 
   useEffect(() => {
-    void load({ days: windowDays, range, siteId, pointId, projectId, stationId, compareId });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- range is keyed by rangeKey
-  }, [load, windowDays, rangeKey, siteId, pointId, projectId, stationId, compareId]);
+    void load({ days: windowDays, range, siteId, pointId, projectId, stationId, compareIds });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- range and the lines are keyed by value
+  }, [load, windowDays, rangeKey, siteId, pointId, projectId, stationId, compareKey]);
 
   // The ref carries the CURRENT selection, so a poll cannot revert the screen to
   // whatever was selected when the timer was installed.
   const pollRef = useRef<() => void>(() => {});
   pollRef.current = () => {
     void load(
-      { days: windowDays, range, siteId, pointId, projectId, stationId, compareId },
+      { days: windowDays, range, siteId, pointId, projectId, stationId, compareIds },
       { quiet: true },
     );
   };
@@ -239,6 +271,11 @@ export function PointExplorer() {
     router.replace(`${pathname}${withRange(searchParams, next)}`, { scroll: false });
   };
 
+  /** The chart's lines, as slots. One writer: plot, add and remove all go through it. */
+  const setLines = (slots: LineSlots) => {
+    router.replace(`${pathname}${withLines(searchParams, slots)}`, { scroll: false });
+  };
+
   if (loading && data === null) return <ExplorerSkeleton />;
 
   if (error !== null && data === null) {
@@ -265,7 +302,7 @@ export function PointExplorer() {
           <button
             type="button"
             onClick={() =>
-              void load({ days: windowDays, range, siteId, pointId, projectId, stationId, compareId })
+              void load({ days: windowDays, range, siteId, pointId, projectId, stationId, compareIds })
             }
             className="mt-4 inline-flex h-9 items-center rounded-[var(--radius-control)] border border-red-300 bg-white px-4 text-[0.8125rem] font-medium hover:bg-red-100"
           >
@@ -287,6 +324,20 @@ export function PointExplorer() {
   const reading = (value: number | null): string =>
     states === null ? formatValue(value, unit) : (stateWord(value, states) ?? "—");
 
+  // The lines, as slots and as the points they are. A slot the server did not
+  // draw (unavailable, or a third axis - said in its note) is not a line.
+  const slots = chartSlots(filters, selectedPoint?.pointId ?? null);
+  const drawn = new Set([selectedPoint?.pointId, ...data.comparisons.map((c) => c.point.pointId)]);
+  const plotted: PointOption[] =
+    selectedPoint === null ? [] : [selectedPoint, ...data.comparisons.map((c) => c.point)];
+  const lineCount = plotted.length;
+  const slotOf = (id: string): number | null => {
+    const at = slots.indexOf(id);
+    return at === -1 || !drawn.has(id) ? null : at;
+  };
+  const chosenEquipment = pruneEquipment(equipment, data.points);
+  const open = listOpen ?? selectedPoint === null;
+
   return (
     <div className="space-y-6">
       {/* ------------------------------------------------------- controls */}
@@ -294,11 +345,10 @@ export function PointExplorer() {
       <div className="flex flex-wrap items-center gap-3">
         {/*
           Project -> Building -> JACE, and here they narrow WHICH POINTS ARE
-          SELECTABLE: the point list below is built from the same intersection,
-          so picking a JACE shortens the picker rather than just annotating the
-          chart. Changing a level clears the ones under it, the point included -
-          a point belongs to a station in a building, so narrowing above it can
-          strand it.
+          SELECTABLE: the Equipment options and the Point list are built from
+          the same intersection. Changing a level clears the ones under it and
+          every line - a point belongs to a station in a building, so narrowing
+          above it can strand it.
         */}
         <Picker
           label="Project"
@@ -320,28 +370,15 @@ export function PointExplorer() {
           // import carries it, its own last pass beside it (2026-11-20).
           options={stationPickerOptions(data.stations)}
         />
-
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-[var(--muted)]">Point</span>
-          {/*
-            Arrived from a Projects card (`?point=none`): the list is there
-            and nothing is chosen, so the picker shows its placeholder rather
-            than the first point as though it were selected. Choosing one
-            writes `point=<id>`.
-          */}
-          <Dropdown
-            label="Point"
-            value={selectedPoint?.pointId ?? ""}
-            onChange={(next) => setCascade(POINT_PARAM, next)}
-            disabled={data.points.length === 0}
-            placeholder={data.points.length === 0 ? "No points" : "Choose a point"}
-            options={data.points.map((point) => ({
-              value: point.pointId,
-              label: `${point.pointName}${point.pointRole === null ? "" : ` (${point.pointRole})`}`,
-            }))}
-            className="min-w-64"
-          />
-        </div>
+        <EquipmentSelect
+          points={data.points}
+          value={chosenEquipment}
+          onChange={(next) => {
+            setEquipment(next);
+            // Choosing equipment is choosing what to look through: open the list.
+            setListOpen(true);
+          }}
+        />
 
         <RangePicker
           range={data.range}
@@ -361,6 +398,7 @@ export function PointExplorer() {
         {selectedPoint === null
           ? "No point selected"
           : `${selectedPoint.pointName} at ${selectedPoint.siteName}`}
+        {lineCount > 1 && ` and ${lineCount - 1} more line${lineCount === 2 ? "" : "s"}`}
         {" · "}
         {states !== null
           ? `${states.on} / ${states.off}`
@@ -390,7 +428,65 @@ export function PointExplorer() {
           {describeClockOffset(data.stationClockOffsetS, data.stationClockMeasuredAt)}
         </p>
       )}
+      {new Set(plotted.map((p) => p.stationId)).size > 1 && (
+        <p className="-mt-4 text-xs text-[var(--muted)]" data-testid="bas-stations-note">
+          The lines come from {new Set(plotted.map((p) => p.stationId)).size} JACEs, and each is stamped by its own
+          station&apos;s clock - a station whose clock is off moves its line by that much.
+        </p>
+      )}
       <ViaParentStationNote stations={data.stations} selectedStationId={data.selectedStationId} />
+
+      {/* -------------------------------------------------------- points */}
+
+      <section className="card overflow-hidden" aria-label="Points" data-testid="bas-point-picker">
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3">
+          <h2 className="eyebrow text-[var(--muted)]">Point</h2>
+          {selectedPoint === null ? (
+            <span className="text-sm text-[var(--muted)]">
+              {data.points.length === 0 ? "No points" : "Choose a point"}
+            </span>
+          ) : (
+            <span className="inline-flex min-w-0 items-center gap-2 text-sm">
+              <span className="truncate font-medium" data-testid="bas-selected-point">{selectedPoint.pointName}</span>
+              <span className="text-xs text-[var(--muted)]">{selectedPoint.pointRole ?? "role not set"}</span>
+              {lineCount > 1 && (
+                <span className="text-xs text-[var(--muted)]">
+                  + {lineCount - 1} more line{lineCount === 2 ? "" : "s"}
+                </span>
+              )}
+            </span>
+          )}
+          {data.points.length > 0 && (
+            <Button
+              size="sm"
+              className="ml-auto"
+              onClick={() => setListOpen(!open)}
+              ariaExpanded={open}
+              testId="bas-point-list-toggle"
+            >
+              {open ? "Hide list" : selectedPoint === null ? "Show list" : "Choose another point"}
+            </Button>
+          )}
+        </header>
+        {open && data.points.length > 0 && (
+          <PointList
+            points={data.points}
+            equipment={chosenEquipment}
+            plotted={plotted}
+            slotOf={slotOf}
+            hotkey
+            onPick={(id) => {
+              // One point: opens it, as the dropdown did - the other lines go.
+              setListOpen(false);
+              setCascade(POINT_PARAM, id);
+            }}
+            onPlot={(ids) => {
+              setListOpen(false);
+              setLines(ids);
+            }}
+          />
+        )}
+      </section>
 
       {selectedPoint === null ? (
         data.points.length > 0 ? (
@@ -420,6 +516,17 @@ export function PointExplorer() {
         <>
           {/* ---------------------------------------------------- tiles */}
 
+          {/*
+            One block with the tiles, so the note sits on them: space-y sets
+            margin-block-end on every child in Tailwind v4, and a negative
+            margin on the note itself pulled the tiles up over it.
+          */}
+          <div className="space-y-2">
+          {lineCount > 1 && (
+            <p className="flex items-center gap-1.5 text-xs text-[var(--muted)]" data-testid="bas-showing-note">
+              <LineSwatch slot={0} /> The tiles are showing {selectedPoint.pointName}, the first line on the chart.
+            </p>
+          )}
           <section
             aria-label="Point summary"
             className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
@@ -464,10 +571,11 @@ export function PointExplorer() {
             */}
             <DataHealthTile data={data} />
           </section>
+          </div>
 
           {/* -------------------------------------------- trend summary */}
 
-          <TrendSummaryCard data={data} />
+          <TrendSummaryCard data={data} lines={lineCount} />
 
           {/* ---------------------------------------------------- trend */}
 
@@ -476,7 +584,9 @@ export function PointExplorer() {
             unit={unit}
             view={view}
             onViewChange={(next) => setParam(VIEW_PARAM, next === "table" ? TABLE_VIEW : null)}
-            onCompare={(next) => setParam(COMPARE_PARAM, next)}
+            slots={slots}
+            onAdd={(id) => setLines(addSlot(slots, id))}
+            onRemove={(id) => setLines(removeSlot(slots, id))}
           />
 
           {/* ----------------------------------------------------- gaps */}
@@ -484,6 +594,7 @@ export function PointExplorer() {
           <GapTable
             gaps={data.dataGaps}
             pointName={selectedPoint.pointName}
+            showing={lineCount > 1}
           />
         </>
       )}
@@ -638,24 +749,43 @@ export function TrendPanel({
   unit,
   view = "chart",
   onViewChange,
-  onCompare,
+  slots,
+  onAdd,
+  onRemove,
 }: {
   data: PointExplorerData;
   unit: string | null;
   /** Chart (default) or the raw readings behind it. */
   view?: TrendView;
   onViewChange?: (view: TrendView) => void;
-  /** Compare mode: a point id to draw beside this one, or null to clear it. */
-  onCompare?: (pointId: string | null) => void;
+  /** The chart's lines as slots (chart-lines.ts); absent, each line takes its position. */
+  slots?: LineSlots;
+  /** "Add point": a point id to draw as another line. Absent, no button. */
+  onAdd?: (pointId: string) => void;
+  /** The legend's remove button. */
+  onRemove?: (pointId: string) => void;
 }) {
+  const plotted: PointOption[] =
+    data.selectedPoint === null ? [] : [data.selectedPoint, ...data.comparisons.map((c) => c.point)];
+  const several = plotted.length > 1;
+  const slotFor = (pointId: string, position: number): number => {
+    const at = slots?.indexOf(pointId) ?? -1;
+    return at === -1 ? position : at;
+  };
+  const showingName = several && data.selectedPoint !== null ? data.selectedPoint.pointName : null;
   /**
    * The count, the longest and the share missing are invisible from the
    * chart; that the line stops at a break is not. The definition of a break
    * is interval.ts's, and the same sentence heads the list under the chart.
+   * With several lines they are the first line's, and the heading says so.
    */
   const gapSummary =
-    data.breaks.count === 0 ? undefined : describeBreaks(data.breaks, data.expectedInterval);
-  const [picking, setPicking] = useState(false);
+    data.breaks.count === 0
+      ? undefined
+      : `${describeBreaks(data.breaks, data.expectedInterval)}${showingName === null ? "" : ` · showing ${showingName}`}`;
+  const [adding, setAdding] = useState(false);
+  // The chart's own width, for how many x-axis ticks fit (2026-11-23).
+  const [chartBox, chartWidth] = useMeasuredWidth<HTMLDivElement>();
 
   /**
    * Drag across the plot to zoom into a range; Reset goes back.
@@ -703,10 +833,13 @@ export function TrendPanel({
     setDownloading(true);
     setDownloadNote(null);
     try {
+      // Every line on the chart: with more than one, the file is a column
+      // per point aligned on timestamp (lib/modules/bas/csv.ts).
       const download = await downloadPointReadingsCsv({
         pointId: data.selectedPoint.pointId,
         from: data.range.from,
         to: data.range.to,
+        compareIds: data.comparisons.map((c) => c.point.pointId),
       });
       saveBlob(download.blob, download.filename);
       const capped = describeCappedExport(download);
@@ -727,17 +860,19 @@ export function TrendPanel({
   const panelActions =
     data.selectedPoint === null ? undefined : (
       <>
-        {/* Compare mode (2026-11-20): off by default; the URL carries it. */}
-        {view === "chart" && onCompare !== undefined &&
-          (data.comparison === null ? (
-            <Button size="sm" onClick={() => setPicking((open) => !open)} ariaExpanded={picking} testId="bas-compare-button">
-              Compare points
-            </Button>
-          ) : (
-            <Button size="sm" onClick={() => onCompare(null)} testId="bas-compare-clear">
-              Clear comparison
-            </Button>
-          ))}
+        {/* Add point (2026-11-20): another line from anywhere; the URL carries the set. */}
+        {view === "chart" && onAdd !== undefined && (
+          <Button
+            size="sm"
+            onClick={() => setAdding((open) => !open)}
+            ariaExpanded={adding}
+            disabled={plotted.length >= MAX_CHART_LINES && !adding}
+            title={plotted.length >= MAX_CHART_LINES ? `The chart holds ${MAX_CHART_LINES} lines. Remove one from the legend to add another.` : undefined}
+            testId="bas-add-point-button"
+          >
+            Add point
+          </Button>
+        )}
         <ViewToggle view={view} onChange={(next) => onViewChange?.(next)} />
         <Button size="sm" onClick={() => void downloadCsv()} disabled={downloading} testId="bas-download-csv">
           {downloading ? "Downloading…" : "Download CSV"}
@@ -806,20 +941,27 @@ export function TrendPanel({
           {downloadNote.text}
         </p>
       )}
-      {picking && data.comparison === null && data.selectedPoint !== null && onCompare !== undefined && view === "chart" && (
-        <ComparePicker
-          points={data.points}
-          selected={data.selectedPoint}
-          onPick={(id) => {
-            setPicking(false);
-            onCompare(id);
+      {adding && onAdd !== undefined && view === "chart" && (
+        <AddPointPanel
+          start={data}
+          windowDays={data.windowDays}
+          lines={plotted}
+          onAdd={(id) => {
+            setAdding(false);
+            onAdd(id);
           }}
-          onClose={() => setPicking(false)}
+          onClose={() => setAdding(false)}
         />
       )}
-      {data.comparisonNote !== null && view === "chart" && (
-        <p className="border-b px-4 py-2 text-xs" style={noticeStyle} role="note" data-testid="bas-compare-note">
-          {data.comparisonNote}
+      {view === "chart" &&
+        data.comparisonNotes.map((note) => (
+          <p key={note} className="border-b px-4 py-2 text-xs" style={noticeStyle} role="note" data-testid="bas-compare-note">
+            {note}
+          </p>
+        ))}
+      {view === "table" && showingName !== null && (
+        <p className="border-b px-4 py-2 text-xs text-[var(--muted)]" data-testid="bas-table-showing">
+          The table is showing {showingName}, the first line. Download CSV has every line, a column each.
         </p>
       )}
       {view === "table" && data.selectedPoint !== null ? (
@@ -829,7 +971,7 @@ export function TrendPanel({
           extent={data.pointExtent}
           onTotal={(total) => setTableTotal({ key: tableKey, total })}
         />
-      ) : data.trend.length === 0 ? (
+      ) : data.trend.length === 0 && data.comparisons.every((c) => c.trend.length === 0) ? (
         <p
           className="px-4 py-8 text-center text-sm text-[var(--muted)]"
           data-testid="bas-no-readings"
@@ -856,7 +998,15 @@ export function TrendPanel({
               role="note"
               data-testid="bas-sampling-notice"
             >
+              {showingName === null ? "" : `${showingName}: `}
               {samplingNotice}
+              {several && data.sampling.kind === "bucketed" &&
+                ` With ${plotted.length} lines on the chart, each is drawn reading by reading up to ${formatCount(data.sampling.maxRaw)} readings and averaged past that.`}
+            </p>
+          )}
+          {data.trend.length === 0 && data.selectedPoint !== null && (
+            <p className="border-b px-4 py-2 text-xs" style={noticeStyle} role="note" data-testid="bas-no-readings">
+              {describeNoReadings(data.selectedPoint.pointName, data.range, data.pointExtent)}
             </p>
           )}
           {extentNotices.map((notice) => (
@@ -884,10 +1034,18 @@ export function TrendPanel({
             </div>
           )}
 
-          {data.comparison !== null && data.selectedPoint !== null && (
-            <CompareLegend primary={data.selectedPoint} comparison={data.comparison} />
+          {several && data.selectedPoint !== null && (
+            <LinesLegend
+              lines={[
+                { point: data.selectedPoint, slot: 0, axis: "left", sampling: data.sampling },
+                ...data.comparisons.map(
+                  (c, i): LegendLine => ({ point: c.point, slot: slotFor(c.point.pointId, i + 1), axis: c.axis, sampling: c.sampling }),
+                ),
+              ]}
+              onRemove={onRemove}
+            />
           )}
-          <div className="h-[22rem] select-none px-3 pb-3 pt-1">
+          <div ref={chartBox} className="h-[22rem] select-none px-3 pb-3 pt-1">
             {/*
               ResponsiveContainer hands its measured size to the chart through
               context, so the chart component in between needs no width or
@@ -903,20 +1061,20 @@ export function TrendPanel({
                 zoom={zoom}
                 range={rangeMs}
                 timeZone={timeZone}
+                boxWidth={chartWidth}
                 sampled={data.sampling.kind === "bucketed"}
-                comparison={
-                  data.comparison === null || data.selectedPoint === null
-                    ? null
-                    : {
-                        trend: data.comparison.trend,
-                        unit: data.comparison.point.unit,
-                        states: data.comparison.point.states,
-                        name: data.comparison.point.pointName,
-                        sharedAxis: data.comparison.sharedAxis,
-                        withinMs: breakThresholdS(data.comparison.expectedInterval.seconds) * 1000,
-                        primaryName: data.selectedPoint.pointName,
-                      }
-                }
+                primaryName={data.selectedPoint?.pointName ?? ""}
+                primaryWithinMs={data.expectedInterval.breakThresholdS * 1000}
+                others={data.comparisons.map((c, i) => ({
+                  pointId: c.point.pointId,
+                  trend: c.trend,
+                  unit: c.point.unit,
+                  states: c.point.states,
+                  name: c.point.pointName,
+                  axis: c.axis,
+                  slot: slotFor(c.point.pointId, i + 1),
+                  withinMs: breakThresholdS(c.expectedInterval.seconds) * 1000,
+                }))}
                 selection={selection}
                 onDragStart={setDragFrom}
                 onDragMove={(at) => {
@@ -936,7 +1094,7 @@ export function TrendPanel({
             their outline on the chart carries the cause, and the table below
             lists them.
           */}
-          <BreaksList breaks={data.breaks} expected={data.expectedInterval} timeZone={timeZone} />
+          <BreaksList breaks={data.breaks} expected={data.expectedInterval} timeZone={timeZone} showing={showingName} />
         </>
       )}
     </Panel>
@@ -969,7 +1127,10 @@ export function TrendChart({
   range = null,
   timeZone = null,
   sampled = false,
-  comparison = null,
+  boxWidth = null,
+  others = [],
+  primaryName = "",
+  primaryWithinMs = Number.POSITIVE_INFINITY,
   selection,
   onDragStart,
   onDragMove,
@@ -1007,12 +1168,16 @@ export function TrendChart({
   /** Whether `value` is an average with `min`/`max` beside it. Names the tooltip rows. */
   sampled?: boolean;
   /**
-   * Compare mode (2026-11-20): a second point's series over the same range,
-   * drawn on the left axis when it shares the unit and on its own right axis
-   * when it does not. Its samples keep their own timestamps and their own
-   * breaks; the tooltip reads its value at the cursor from them.
+   * The chart's other lines (2026-11-20): each over the same range, on the
+   * left axis when it is the first line's quantity and on the right axis
+   * otherwise. Their samples keep their own timestamps and their own breaks;
+   * the shared cursor reads each line's value at it from them.
    */
-  comparison?: ChartComparison | null;
+  others?: ChartLine[];
+  /** The first line's name, for the shared cursor's readout. */
+  primaryName?: string;
+  /** How far from the cursor the first line's sample may be and still be "its value then". */
+  primaryWithinMs?: number;
   /** The drag in progress, or null when the pointer is up. */
   selection: TrendZoom | null;
   onDragStart: (atMs: number) => void;
@@ -1021,6 +1186,11 @@ export function TrendChart({
   /** Only a test sets these. In the page the ResponsiveContainer supplies both. */
   width?: number;
   height?: number;
+  /**
+   * The measured width of the box the chart fills (2026-11-23), for how many
+   * x-axis ticks fit. A test passes `width` instead; with neither, 900px.
+   */
+  boxWidth?: number | null;
   /**
    * Opens the tooltip on one sample without a pointer. Only a test sets it:
    * jsdom lays nothing out, so no synthetic mouse event can land on the plot,
@@ -1072,19 +1242,19 @@ export function TrendChart({
    */
   const inView = (point: { tsMs: number }) =>
     zoom === null || (point.tsMs >= zoom.from && point.tsMs <= zoom.to);
-  const comparisonValues =
-    comparison === null
-      ? []
-      : comparison.trend
-          .filter(inView)
-          .map((point) => point.value)
-          .filter((value): value is number => value !== null);
+  const valuesOf = (line: ChartLine) =>
+    line.trend
+      .filter(inView)
+      .map((point) => point.value)
+      .filter((value): value is number => value !== null);
+  const leftOthers = others.filter((line) => line.axis === "left");
+  const rightLines = others.filter((line) => line.axis === "right");
   const visibleValues = trend
     .filter(inView)
     .flatMap((point) => [point.value, point.min ?? null, point.max ?? null])
     .filter((value): value is number => value !== null)
-    // One axis for both lines only when they share a unit: then both must fit on it.
-    .concat(comparison !== null && comparison.sharedAxis ? comparisonValues : []);
+    // Every line on the left axis is the first line's quantity: all must fit on it.
+    .concat(leftOthers.flatMap(valuesOf));
   /**
    * A boolean point gets the state axis: two ticks at 0 and 1, labelled with
    * its words, whatever is on screen - a day that was "On" throughout still
@@ -1102,17 +1272,38 @@ export function TrendChart({
    * value it cannot have. Numeric points keep `monotone` - see the Area below.
    */
   const lineType = states !== null ? "stepAfter" : "monotone";
-  // The comparison's own axis, on the right, when it does not share the unit.
+  // The right axis: the second quantity, labelled by the first line drawn on
+  // it, fitted to every line on it.
+  const rightOwner = rightLines[0] ?? null;
   const rightAxis =
-    comparison === null || comparison.sharedAxis
+    rightOwner === null
       ? null
-      : comparison.states !== null
-        ? stateAxis(comparison.states, { fontSize: CHART_FONT_SIZE })
-        : valueAxis(comparisonValues, comparison.unit, { fontSize: CHART_FONT_SIZE });
+      : rightOwner.states !== null
+        ? stateAxis(rightOwner.states, { fontSize: CHART_FONT_SIZE })
+        : valueAxis(rightLines.flatMap(valuesOf), rightOwner.unit, { fontSize: CHART_FONT_SIZE });
+  /**
+   * The x-axis ticks (2026-11-23), chosen on the building's clock by
+   * `timeAxisTicks` and handed to Recharts whole: a date once per day, on
+   * its midnight, and times between where the width allows. Recharts placed
+   * them itself before, and printed each as a bare date - two on one day read
+   * "Nov 17 Nov 17". Null (a span of a minute or two, or no data) leaves
+   * Recharts to place them with the old formatter.
+   */
+  const xFrom = typeof domain[0] === "number" ? domain[0] : trend[0]?.tsMs;
+  const xTo = typeof domain[1] === "number" ? domain[1] : trend[trend.length - 1]?.tsMs;
+  const plotWidth = (width ?? boxWidth ?? 900) - axis.width - (rightAxis?.width ?? 0) - 16;
+  const xTicks = xFrom !== undefined && xTo !== undefined ? timeAxisTicks(xFrom, xTo, { maxTicks: maxTicksFor(plotWidth), timeZone: zone }) : null;
+  const xLabels = new Map((xTicks ?? []).map((t) => [t.ms, t.label]));
+  // What the cursor walks: the first line's samples, or - when it has none in
+  // the range - the busiest other line's, so the readout still works.
+  const track =
+    trend.length > 0 || others.length === 0
+      ? trend
+      : others.reduce((a, b) => (b.trend.length > a.trend.length ? b : a)).trend;
 
   return (
     <AreaChart
-      data={trend}
+      data={track}
       width={width}
       height={height}
       margin={{ top: 8, right: 12, bottom: 4, left: 4 }}
@@ -1160,10 +1351,13 @@ export function TrendChart({
         // than a suggestion.
         allowDataOverflow
         domain={domain}
-        tickFormatter={(ms: number) => formatChartTick(ms, undefined, zone, spanMs)}
+        ticks={xTicks === null ? undefined : xTicks.map((t) => t.ms)}
+        // Every chosen tick is drawn: the density was decided from the width.
+        interval={xTicks === null ? "preserveEnd" : 0}
+        tickFormatter={(ms: number) => xLabels.get(ms) ?? formatChartTick(ms, undefined, zone, spanMs)}
         stroke="var(--muted)"
         tick={{ fontSize: CHART_FONT_SIZE }}
-        minTickGap={48}
+        minTickGap={xTicks === null ? 48 : 0}
       />
       <YAxis
         stroke="var(--muted)"
@@ -1193,26 +1387,26 @@ export function TrendChart({
               }
         }
       />
-      {comparison !== null && rightAxis !== null && (
+      {rightOwner !== null && rightAxis !== null && (
         <YAxis
-          yAxisId="compare"
+          yAxisId="right"
           orientation="right"
-          stroke={COMPARE_STROKE}
+          stroke="var(--muted)"
           tick={{ fontSize: CHART_FONT_SIZE }}
           width={rightAxis.width}
           domain={rightAxis.domain}
           ticks={rightAxis.ticks}
           interval={0}
           tickFormatter={(value: number) =>
-            comparison.states !== null
-              ? formatStateTick(value, comparison.states)
+            rightOwner.states !== null
+              ? formatStateTick(value, rightOwner.states)
               : formatAxisTick(value, rightAxis.decimals)
           }
           label={
-            comparison.states !== null
+            rightOwner.states !== null
               ? undefined
               : {
-                  value: axisLabel(comparison.unit),
+                  value: axisLabel(rightOwner.unit),
                   angle: 90,
                   position: "insideRight",
                   style: { fontSize: CHART_FONT_SIZE, fill: "var(--muted)" },
@@ -1220,17 +1414,17 @@ export function TrendChart({
           }
         />
       )}
-      {comparison !== null ? (
+      {others.length > 0 ? (
         <Tooltip
           defaultIndex={tooltipIndex}
           content={(props: { active?: boolean; label?: unknown }) => (
-            <CompareTooltip
+            <LinesTooltip
               active={props.active === true}
               label={typeof props.label === "number" ? props.label : null}
-              trend={trend}
-              comparison={comparison}
-              unit={unit}
-              states={states}
+              lines={[
+                { trend, unit, states, name: primaryName, slot: 0, withinMs: primaryWithinMs },
+                ...others,
+              ]}
               zone={zone}
             />
           )}
@@ -1368,6 +1562,7 @@ export function TrendChart({
       */}
       {sampled && (
         <Area
+          data={trend}
           type={lineType}
           name="range"
           dataKey={(point: PointExplorerData["trend"][number]) =>
@@ -1390,11 +1585,12 @@ export function TrendChart({
           samples, so the curve never draws a peak the sensor did not
           record. A boolean point steps instead - see `lineType`.
         */
+        data={trend}
         type={lineType}
         dataKey="value"
         name="value"
-        // One accent, and it is the module's. Sensor data is the content.
-        stroke="var(--module-accent, var(--phb-cyan))"
+        // One accent, and it is the module's: the first line is slot 0.
+        stroke={lineStyle(0).stroke}
         strokeWidth={1.75}
         fill="url(#basTrendFill)"
         dot={false}
@@ -1410,18 +1606,20 @@ export function TrendChart({
         isAnimationActive={false}
       />
       {/*
-        The comparison: a line in its own colour, no fill, on its own data so
-        its timestamps and its breaks are its own - an explicit null breaks
-        it exactly as it breaks the first line.
+        The other lines: each in its slot's colour and dash, no fill, on its
+        own data so its timestamps and its breaks are its own - an explicit
+        null breaks it exactly as it breaks the first line.
       */}
-      {comparison !== null && (
+      {others.map((line) => (
         <Area
-          data={comparison.trend}
-          yAxisId={comparison.sharedAxis ? 0 : "compare"}
-          type={comparison.states !== null ? "stepAfter" : "monotone"}
+          key={line.pointId}
+          data={line.trend}
+          yAxisId={line.axis === "left" ? 0 : "right"}
+          type={line.states !== null ? "stepAfter" : "monotone"}
           dataKey="value"
-          name="compare"
-          stroke={COMPARE_STROKE}
+          name={`line-${line.slot}`}
+          stroke={lineStyle(line.slot).stroke}
+          strokeDasharray={lineStyle(line.slot).dash}
           strokeWidth={1.75}
           fill="none"
           fillOpacity={0}
@@ -1430,64 +1628,59 @@ export function TrendChart({
           connectNulls={false}
           isAnimationActive={false}
         />
-      )}
+      ))}
     </AreaChart>
   );
 }
 
-/** What TrendChart needs to draw a comparison. */
-export interface ChartComparison {
+/** One of the chart's other lines, as TrendChart draws it. */
+export interface ChartLine {
+  pointId: string;
   trend: PointExplorerData["trend"];
   unit: string | null;
   states: BooleanStates | null;
   name: string;
-  /** True when both points have the same recorded unit: one axis. */
-  sharedAxis: boolean;
-  /** How far from the cursor a comparison sample may be and still be "its value then". */
+  axis: AxisSide;
+  /** Its colour and dash (chart-lines.ts LINE_STYLES). */
+  slot: number;
+  /** How far from the cursor its sample may be and still be "its value then". */
   withinMs: number;
-  primaryName: string;
 }
 
 /**
- * The shared cursor's readout in compare mode: one time, both values, each
- * in its own unit or state words. The comparison's value is its nearest
- * sample to the cursor within its own break rule - never one from the far
- * side of a hole. Exported for tests.
+ * The shared cursor's readout with several lines: one time, every line's value
+ * at it, each in its own unit or state words, each beside its swatch. A
+ * line's value is its nearest sample within its own break rule - never one
+ * from the far side of a hole. Exported for tests.
  */
-export function CompareTooltip({
+export function LinesTooltip({
   active,
   label,
-  trend,
-  comparison,
-  unit,
-  states,
+  lines,
   zone,
 }: {
   active: boolean;
   label: number | null;
-  trend: PointExplorerData["trend"];
-  comparison: ChartComparison;
-  unit: string | null;
-  states: BooleanStates | null;
+  lines: ReadonlyArray<Pick<ChartLine, "trend" | "unit" | "states" | "name" | "slot" | "withinMs">>;
   zone: string | undefined;
 }) {
   if (!active || label === null) return null;
-  const primary = comparisonValueAt(trend, label, Number.POSITIVE_INFINITY);
-  const second = comparisonValueAt(comparison.trend, label, comparison.withinMs);
   const word = (value: number | null, u: string | null, s: BooleanStates | null) =>
     value === null ? "no reading" : s !== null ? formatStateTooltip(value, s) : formatTooltipValue(value, u);
   return (
     <div
       className="rounded-[0.625rem] border border-[var(--border)] bg-white px-3 py-2 text-xs shadow-sm"
-      data-testid="bas-compare-tooltip"
+      data-testid="bas-lines-tooltip"
     >
       <p className="font-medium">{formatTimestamp(new Date(label).toISOString(), undefined, zone)}</p>
-      <p style={{ color: PRIMARY_STROKE }}>
-        {comparison.primaryName}: {word(primary, unit, states)}
-      </p>
-      <p style={{ color: COMPARE_STROKE }}>
-        {comparison.name}: {word(second, comparison.unit, comparison.states)}
-      </p>
+      {lines.map((line) => (
+        <p key={`${line.slot}-${line.name}`} className="flex items-center gap-1.5">
+          <LineSwatch slot={line.slot} />
+          <span>
+            {line.name}: {word(comparisonValueAt(line.trend, label, line.withinMs), line.unit, line.states)}
+          </span>
+        </p>
+      ))}
     </div>
   );
 }
@@ -1495,15 +1688,18 @@ export function CompareTooltip({
 function GapTable({
   gaps,
   pointName,
+  showing = false,
 }: {
   gaps: DataGapRow[];
   pointName: string;
+  /** Several lines on the chart: the title names the point these gaps are of. */
+  showing?: boolean;
 }) {
   const overwritten = gaps.filter((gap) => gap.cause === "roll_overwrite");
 
   return (
     <Panel
-      title="Known data gaps — periods we did not collect"
+      title={showing ? `Known data gaps for ${pointName} — periods we did not collect` : "Known data gaps — periods we did not collect"}
       count={gaps.length}
       // Same misreading, same one line, same wording as the health screen.
       description="A gap means we were not watching, not that equipment was off."

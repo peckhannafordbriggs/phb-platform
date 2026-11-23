@@ -10232,9 +10232,9 @@ Settings and the card links.
 ### Clicking a card lands on Point Explorer with nothing drawn
 
 **Symptom.** Point Explorer opens with the Project dropdown set, the
-Building, JACE and Point lists narrowed to it, the Point dropdown reading
-*Choose a point*, and a box saying *Choose a point · N points in <project>*
-where the chart would be.
+Building, JACE and Equipment lists narrowed to it, the Point list open and
+reading *Choose a point*, and a box saying *Choose a point · N points in
+<project>* where the chart would be.
 
 **Cause.** By design. The card's href is `/bas/points?project=<id>&point=none`
 (`dashboardCardHref` in `app/(modules)/bas/filters.ts`). An absent `point`
@@ -10743,23 +10743,62 @@ fails is sent back once naming the numbers, then withheld.
 
 ---
 
-## Compare points says the point to compare with is not available
+## Finding a point on a big JACE: the Equipment picker and the Point list
 
-**Symptom.** With `compare=` in the URL, the chart draws one point and an amber
-line says *The point to compare with is not available: it is hidden, no
-longer collected, or on another JACE.*
+**What it is (2026-11-20).** The Point dropdown is gone; it listed every point
+on the JACE in one column (334 on CEI_JCI_N2). After *JACE* there is an
+**Equipment** multi-select - each equipment the listed points are on, with its
+type and how many points, plus *Unclassified (no equipment)* - and under the
+controls a **Point** card whose list shows the chosen equipment's points,
+grouped by equipment, the role beside each name, narrowed by typing any part
+of a name or a role (every word typed must match). Nothing chosen in
+Equipment is every point. Choosing one point opens it and closes the list;
+*Choose another point* opens it again. The equipment chosen and the search
+are the picker's working state and are **not in the URL**; the lines on the
+chart are. `app/(modules)/bas/point-picker.tsx`; the multi-select is the kit's
+`MultiSelect` (`components/ui/MultiSelect.tsx`).
 
-**Cause.** Compare mode offers only shown, collected points on the selected
-point's JACE. A shared link whose comparison has since been hidden, turned
-off, or that was edited to another station's point lands here. The page
-never fails for it; *Clear comparison* or choosing again fixes the URL.
+| Symptom | Cause | What to do |
+|---|---|---|
+| Everything is under *Unclassified (no equipment)* | No point on the JACE is on any equipment yet | Settings → Points: equipment from name prefixes, or the automatic assignment (*A point was given a role or equipment nobody chose*) |
+| An equipment is missing from the Equipment list | Every point on it is hidden or not collected; the list is built from the shown points, so the count is what the list will show | Settings → Points, *Shown* |
+| An equipment has no type after its name | `bas_equipment.equip_type` is empty | Settings → Points → the equipment panel |
+| Two equipment have the same name with a building after each | JACE is *All* and two buildings each have one, e.g. AHU-1. Equipment is per building | Choose the JACE |
+| A search finds nothing for an equipment name | The search reads point names and roles, not equipment names - choose the equipment in Equipment instead | — |
 
-**Two units.** Two points share the left axis only when both have a unit and
-it is the same one. Otherwise the second gets its own axis on the right,
-labelled with its unit (or *no unit recorded*), and the legend says which line
-is on which axis - a temperature in °F and a bare number are never drawn
-against one scale.
+---
 
+## A line asked for is not drawn on Point Explorer's chart
+
+**What it is (2026-11-20).** The chart holds up to **six lines** - the point
+the tiles describe and five more - from any building the viewer may see. Two
+ways to get there, both writing the same URL: **Add point** on the trend
+panel opens the whole picker (its own Project, Building, JACE, Equipment and
+search) and adds one line; **Tick several** in the Point list puts a box on
+every row, starts from the lines already drawn, and **Plot selected** draws
+the ticked set, the first ticked being the one the tiles describe. Each line
+is removed from the legend (×). The URL carries the set: `point=` is the
+first line and `compare=` the others, comma-separated, in slot order
+(`compare=44,,46` - an empty entry is a removed line, kept so the others keep
+their colours). A link from before, `point=41` or `point=41&compare=44`, reads
+as it always did. `lib/modules/bas/chart-lines.ts` is every rule below.
+
+| The note says | Cause | What to do |
+|---|---|---|
+| *One of the lines asked for is not drawn: the point is hidden, no longer collected, or not in a building you can see.* | A shared link whose point has since been hidden or turned off, or one the viewer has no access to. The point is never named, so a point the viewer may not see reads exactly like one that does not exist | Remove it from the legend, or Settings → Points → *Shown* |
+| *<name> is not drawn: the chart already has two axes (°F and %) and it reads …* | **Two axes, never three.** A line shares the left axis only with the first line's quantity - the same recorded unit, or the same two state words - and takes the right axis for a second quantity. A number with no unit shares with nothing, not even another unitless number | Remove a line of one of the two quantities, or plot the third on its own. Add point and Tick several grey such a point out with *Needs a third axis* before anyone asks |
+| *One chart holds 6 lines; the rest of the link's points were left off.* | A hand-edited URL with more than five `compare` entries | — |
+| *Averaged to one point per … With N lines on the chart, each is drawn reading by reading up to … readings* | **The draw budget is the chart's, shared.** The raw cap (10,000, `range.ts`) was measured for one line; six lines each held to it would put 60,000 points on one chart, where the measurement found a 2.7 s hang. Each line is raw up to 10,000 / lines and bucketed past it. The legend says *… averages* on any other line that was bucketed; only the first line draws its lowest-to-highest band | Fewer lines, or a shorter range, for every reading |
+| The tiles, Data health, the breaks and the gaps table do not change when a line is added | By design. They describe the first line and say so (*The tiles are showing …*, *showing …* under the breaks, *Known data gaps for …*) | Remove the first line from the legend to make the next one the tiles' line |
+| *Explain this trend* is greyed with several lines | A summary is written from one point's numbers | Plot one point |
+| The line colours | Slot 0 is the module's cyan, slot 1 compare mode's purple, then pink, gold, teal and the neutral ink - the decorative inks, never red (an alarm) or maroon (the gap bands). No four brand inks clear the colour-blind separation floor beside cyan and purple, so every line past the second is **also dashed** in its own pattern. A colour follows its line: removing a line leaves its slot empty and nobody else changes colour. Removing the *first* line moves the next one into slot 0, and that one line becomes cyan | — |
+| *The lines come from N JACEs, and each is stamped by its own station's clock* | Lines from different stations. Nothing corrects for a station's clock offset (*A BAS station's clock is wrong*); the PHBoffice JACE is about 22 minutes ahead, so its events sit that far right of another station's | Read across stations with that in mind |
+
+**The cursor** reads every line at one instant, each in its own unit or state
+words, and a line with no sample within its own break rule of the cursor reads
+*no reading* - never a value from across a hole.
+
+---
 
 ---
 
@@ -10849,14 +10888,17 @@ reads as *no unit needed* and the truth is *unit unknown*. Those are different
 claims. With a unit, the label is its symbol — °F, %, inWC — from
 `lib/modules/bas/units.ts`, never the stored name.
 
-### If a compare mode is ever added
+### Several lines on one chart (built 2026-11-20)
 
-It needs, and this is not optional:
+It needed, and has:
 
-- one Y axis per distinct unit, never a shared one;
-- an explicit refusal — not a silent overlay — when a point has no unit, because
-  an unknown unit cannot be shown to match any other;
-- the unit on every series in the legend and the tooltip.
+- an axis per quantity, shared only by the same recorded unit or the same
+  state words, and never more than two - a third is refused by name;
+- a refusal, not a silent overlay, for a point with no unit: it shares an axis
+  with nothing, because an unknown unit cannot be shown to match any other;
+- the unit on every series in the legend and the cursor's readout.
+
+*A line asked for is not drawn on Point Explorer's chart* has the symptoms.
 
 ---
 
@@ -10965,6 +11007,39 @@ axis; `tests/bas-value-kinds-service.test.ts` fails through the database if
 `value_num` is read for a boolean point. `WHY-ITS-BUILT-THIS-WAY.md` § 63.
 
 ---
+
+## A chart's time axis: a date once per day, times between
+
+Since 2026-11-23 the x-axis of Point Explorer's trend chart and of Collection
+Health's *Records written per collector run* chooses its own ticks
+(`lib/modules/bas/time-axis.ts`). Before, Recharts placed them and every one
+was printed as a bare date, so over seven days two ticks on one day read
+**"Nov 17 Nov 17"**.
+
+**What the axis says now.**
+- A tick at **local midnight** shows the **date** ("Nov 17"), and it is the
+  only tick that day that does.
+- Ticks between midnights show the **time** ("12:00"), and appear only where
+  the chart is wide enough.
+- If the range starts part-way through a day, that day's first tick shows
+  **both** ("Nov 16 16:00"), so the first day is dated too.
+- Over about a year or more, the ticks are **month starts** ("Aug 2026").
+
+The clock is the building's zone on Point Explorer and the reader's own zone
+on Collection Health, as the rest of each screen.
+
+**"A time such as 12:00 appears several times."** Once per day - that is what
+marks it as a time of the day before it. A **date** appearing twice is the
+bug this replaced; if you see one, note the range and the window width.
+
+**"On a narrow window the 7-day chart shows only every other date."** The
+number of ticks is the chart's measured width divided by 64 px; the step
+widens (12 h, a day, 2 days, a week on Mondays, ...) until the labels fit, and
+times drop out first. Widen the window for more.
+
+**"Across the clock change the hours look uneven."** The ticks are wall-clock
+times: on the November change 01:00 happens twice and is ticked once, so that
+gap is two real hours; in March 02:00 does not exist and is skipped.
 
 ## The trend chart says "Averaged to one point per …"
 
@@ -11099,10 +11174,25 @@ the primary key `(point_id, ts)` to the offset, so the last page of a
 not measured as a problem; if it becomes one, the fix is keyset paging on the
 table route (the CSV already uses it), not a smaller page.
 
+**With several lines on the chart (2026-11-20)** *Download CSV* saves every
+line: a `timestamp` column, then **one column per point** in the chart's
+order, headed `V4_22/SpaceTemp (fahrenheit; CEI_JCI_N2; point 12)` - shown
+name, unit name, station, id - and one row per instant at which ANY of the
+points has a reading, aligned on the **exact** stored timestamp. Nothing is
+rounded or filled in: two points one station logs on the same interval share
+their rows; two stations whose clocks differ by a minute do not, and the file
+shows that as rows each half empty, because that is what is stored. The cap
+counts **rows** there, and the sentence says *rows, one per timestamp*
+(`X-PHB-Readings-Unit: timestamps`). What this file cannot say that the
+one-point file can: an empty cell is either no reading at that instant or a
+null record. For that distinction, plot one point and download again. The
+table view shows the first line only and says so. `lib/modules/bas/csv.ts`,
+*the multi-point file*; `exportWide` in `readings.ts`.
+
 **The export is logged**, one line per file (`bas.readings_exported`: who,
-which point, the range, the total and whether it was capped) and one per
-table page (`bas.point_readings`). Neither is an audit row: the chart's reads
-are not audited either, and this is the same data.
+which point or points, the range, the total and whether it was capped) and
+one per table page (`bas.point_readings`). Neither is an audit row: the
+chart's reads are not audited either, and this is the same data.
 
 ---
 

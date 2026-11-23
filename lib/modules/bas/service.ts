@@ -66,6 +66,14 @@ import {
 import { plausibilityLateral } from "./plausibility-sql";
 import { orderStationTree } from "./station-tree";
 import {
+  MAX_CHART_LINES,
+  assignAxes,
+  describeThirdAxis,
+  lineShare,
+  type AxisSide,
+  type LineIdentity,
+} from "./chart-lines";
+import {
   booleanStates,
   valueKindFromDataType,
   valueKindOf,
@@ -1721,7 +1729,15 @@ export async function resolveValueKind(
  * entered broke its line at every reading.
  */
 
-/** One point's readings over a range, loaded the same way for the point and for its comparison. */
+/** One of the chart's other lines, loaded: its row, its readings, its axis, its expected interval. */
+interface LoadedLine {
+  row: PointOptionRow;
+  series: SeriesLoad;
+  axis: AxisSide;
+  expected: ExpectedInterval;
+}
+
+/** One point's readings over a range, loaded the same way for every line on the chart. */
 interface SeriesLoad {
   valueKind: ValueKind;
   stats: PointStatsRow;
@@ -1817,6 +1833,8 @@ async function loadSeries(
     to: Date;
     maxRaw: number;
     maxBuckets: number;
+    /** Already resolved by the caller, which needed it for the axis rule first. */
+    valueKind?: ValueKind;
   },
 ): Promise<SeriesLoad> {
   const { pointId, zone, from, to } = args;
@@ -1829,7 +1847,7 @@ async function loadSeries(
   // so the chart draws what is there rather than the numeric column it has
   // always read. On live every point is declared, so this branch runs for
   // none of them. See value-kind.ts.
-  const valueKind = await resolveValueKind(tx, args.dataType, pointId, from, to);
+  const valueKind = args.valueKind ?? (await resolveValueKind(tx, args.dataType, pointId, from, to));
 
   // The reading, as a number, whatever column it lives in. A boolean travels
   // as 1 or 0 - NULL stays NULL through the cast - so the break logic, the
@@ -1965,14 +1983,47 @@ function toPointHistory(row: HistoryRow): PointHistory {
   };
 }
 
-/** The message when compare mode names a point it cannot draw. */
-export const COMPARISON_NOT_AVAILABLE_MESSAGE =
-  "The point to compare with is not available: it is hidden, no longer collected, or on another JACE.";
-
-/** Two units share one axis only when both are recorded and they are the same unit. */
-export function unitsShareAxis(a: string | null, b: string | null): boolean {
-  return a !== null && b !== null && a.trim().toLowerCase() === b.trim().toLowerCase();
+/**
+ * The note when the chart is asked for lines it cannot draw because the points
+ * are not there to be drawn. Never names them: a point the viewer may not see
+ * must read exactly like one that does not exist.
+ */
+export function describeUnavailableLines(count: number): string {
+  return count === 1
+    ? "One of the lines asked for is not drawn: the point is hidden, no longer collected, or not in a building you can see."
+    : `${count} of the lines asked for are not drawn: the points are hidden, no longer collected, or not in a building you can see.`;
 }
+
+/** The note when a link asks for more lines than one chart holds. */
+export const TOO_MANY_LINES_MESSAGE = `One chart holds ${MAX_CHART_LINES} lines; the rest of the link's points were left off.`;
+
+/**
+ * The picker's columns for one point, over `bas_v_point v` joined to
+ * `bas_points p`, `bas_stations st`, `bas_sites s`, and LEFT joined to
+ * `bas_equipment e` and `bas_equipment_types et` - see POINT_OPTION_JOINS.
+ * One list for the picker, the chart's other lines and the readings table, so
+ * a point arrives as the same PointOption from every one of them.
+ */
+export function pointOptionColumns(): Prisma.Sql {
+  return Prisma.sql`v.point_id,
+         ${shownPointName(Prisma.sql`v`)} AS point_name,
+         v.point_role, v.unit, v.site_name,
+         v.collection_interval_s,
+         s.timezone AS site_timezone,
+         st.clock_offset_s, st.clock_measured_at,
+         v.data_type, v.is_status, v.is_command, v.niagara_history_name,
+         p.station_id,
+         COALESCE(st.display_name, st.niagara_station_name) AS station_name,
+         p.equipment_id, e.name AS equipment_name,
+         COALESCE(et.display_name, e.equip_type) AS equipment_type,
+         p.measured_interval_s`;
+}
+
+export const POINT_OPTION_JOINS = Prisma.sql`JOIN bas_points p USING (point_id)
+      JOIN bas_stations st ON st.station_id = p.station_id
+      JOIN bas_sites s ON s.site_id = st.site_id
+      LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
+      LEFT JOIN bas_equipment_types et ON et.equip_type = e.equip_type`;
 
 export interface PointOptionRow {
   point_id: bigint;
@@ -1995,10 +2046,12 @@ export interface PointOptionRow {
   is_status: boolean;
   is_command: boolean;
   niagara_history_name: string;
-  /** For compare mode's picker: the station and the equipment the point is on. */
+  /** For the picker: the station and the equipment the point is on, and the equipment's type. */
   station_id: bigint;
+  station_name: string;
   equipment_id: bigint | null;
   equipment_name: string | null;
+  equipment_type: string | null;
   /** The scheduler's measured interval (2026-11-20); interval.ts decides when it is used. */
   measured_interval_s: number | null;
 }
@@ -2093,12 +2146,13 @@ export interface PointExplorerOptions extends BasSelectionRequest {
   maxRawTrendPoints?: number;
   maxTrendBuckets?: number;
   /**
-   * Compare mode (2026-11-20): a second point, drawn over the same range on
-   * the same chart. It must be a shown, collected point on the selected
-   * point's JACE; anything else comes back as `comparisonNote` rather than
-   * failing the page.
+   * The chart's other lines (2026-11-20, multi-line): up to five more points,
+   * drawn over the same range on the same chart, in this order. Each must be
+   * a shown, collected point in a building the viewer may see - on any JACE.
+   * Anything else, and a line that would need a third axis, comes back as a
+   * sentence in `comparisonNotes` rather than failing the page.
    */
-  comparePointId?: bigint | null;
+  comparePointIds?: readonly bigint[] | null;
 }
 
 /**
@@ -2109,12 +2163,14 @@ export interface PointExplorerOptions extends BasSelectionRequest {
  * `points_RoomT` is in fahrenheit and `Temp1`..`Temp3` carry no unit at all, so
  * plotting two of them on one axis would put 55 degF and 12.8 degC on the same
  * line with nothing on screen saying they are different quantities. A
- * single-point chart cannot express that mistake. Compare mode (2026-11-20)
- * keeps it: the second point shares the axis only when both carry the SAME
- * recorded unit (`unitsShareAxis`), and gets its own otherwise - two unitless
- * points included, since nothing says they are one quantity. It must be on
- * the same JACE and goes through the same loader. runbook.md -> *Compare
- * points says the point to compare with is not available*.
+ * single-point chart cannot express that mistake. The chart's other lines
+ * (2026-11-20; up to five, from any building the viewer may see) keep it:
+ * a line shares the left axis only with the same quantity - the same recorded
+ * unit, or the same two state words - takes the right axis otherwise, and is
+ * not drawn when it would need a third (lib/modules/bas/chart-lines.ts). Every
+ * line goes through the same loader, over the same two instants, on a share
+ * of the one chart's draw budget. runbook.md -> *A line asked for is not
+ * drawn on Point Explorer's chart*.
  *
  * Same transaction discipline as `getCollectionHealth`: one `now()` for the
  * window, the stats and the trend, so the tiles cannot disagree with the chart
@@ -2185,26 +2241,13 @@ export async function getPointExplorer(
     const healthSitesV = Prisma.sql`${siteFilter(siteIds, Prisma.sql`v.site_id`)}
       AND ${stationFilter(stationId, Prisma.sql`v.station_id`)}`;
     const pointRows = await tx.$queryRaw<PointOptionRow[]>`
-      SELECT v.point_id,
-             ${shownPointName(Prisma.sql`v`)} AS point_name,
-             v.point_role, v.unit, v.site_name,
-             v.collection_interval_s,
-             s.timezone AS site_timezone,
-             st.clock_offset_s, st.clock_measured_at,
-             v.data_type, v.is_status, v.is_command, v.niagara_history_name,
-             p.station_id, p.equipment_id, e.name AS equipment_name,
-             p.measured_interval_s
+      SELECT ${pointOptionColumns()}
       FROM bas_v_point v
-      -- B8.3: a hidden point leaves this picker, and only this. It is still
-      -- collected, still in every Collection Health figure, and still in the
-      -- views the AI reads - is_visible is a preference of the browsing
-      -- screens, which is why it lives on bas_points and not in bas_v_point.
-      -- B8.4: the same join supplies the label the picker shows in front of
-      -- the view's point_name, for the same reason.
-      JOIN bas_points p USING (point_id)
-      JOIN bas_stations st ON st.station_id = p.station_id
-      JOIN bas_sites s ON s.site_id = st.site_id
-      LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
+      -- B8.3: a hidden point leaves this picker. It is still collected and
+      -- still in every data-loss figure - is_visible lives on bas_points and
+      -- not in bas_v_point. B8.4: the same join supplies the label the picker
+      -- shows in front of the view's point_name, for the same reason.
+      ${POINT_OPTION_JOINS}
       WHERE v.is_active AND p.is_visible AND ${healthSitesV}
       -- By the name on screen, so the picker reads alphabetically to the
       -- person using it; point_id breaks ties, as before.
@@ -2259,8 +2302,9 @@ export async function getPointExplorer(
         expected: null as ExpectedInterval | null,
         breakRows: [] as Array<{ from_ts: Date; to_ts: Date }>,
         history: null as HistoryRow | null,
-        comparison: null as { row: PointOptionRow; series: SeriesLoad; expected: ExpectedInterval } | null,
-        comparisonNote: null as string | null,
+        comparisons: [] as LoadedLine[],
+        comparisonNotes: [] as string[],
+        lineMaxRaw: null as number | null,
       };
     }
 
@@ -2333,14 +2377,70 @@ export async function getPointExplorer(
       "calendar",
     );
 
+    // --- the chart's other lines -------------------------------------------
+    //
+    // Settled BEFORE any series loads, because how many lines are drawn
+    // decides each line's share of the draw budget. Shown, collected points
+    // in a building the viewer may see, on any JACE; each one's kind is
+    // resolved over the range, then the axis rule runs over all of them in
+    // order and a line that would need a third axis is left off, named.
+    const primaryKind = await resolveValueKind(tx, selectedPoint.data_type, pointId, from, to);
+    const asked = [...new Set((options.comparePointIds ?? []).map(String))]
+      .filter((id) => id !== pointId.toString())
+      .map((id) => BigInt(id));
+    const comparisonNotes: string[] = [];
+    if (asked.length > MAX_CHART_LINES - 1) comparisonNotes.push(TOO_MANY_LINES_MESSAGE);
+    const wanted = asked.slice(0, MAX_CHART_LINES - 1);
+    const found =
+      wanted.length === 0
+        ? []
+        : await tx.$queryRaw<PointOptionRow[]>`
+            SELECT ${pointOptionColumns()}
+            FROM bas_v_point v
+            ${POINT_OPTION_JOINS}
+            WHERE v.point_id IN (${Prisma.join(wanted)})
+              AND v.is_active AND p.is_visible
+              AND ${siteFilter(entitled, Prisma.sql`st.site_id`)}
+          `;
+    const byId = new Map(found.map((row) => [row.point_id, row]));
+    const unavailable = wanted.filter((id) => !byId.has(id)).length;
+    if (unavailable > 0) comparisonNotes.push(describeUnavailableLines(unavailable));
+
+    const others: Array<{ row: PointOptionRow; valueKind: ValueKind }> = [];
+    for (const id of wanted) {
+      const row = byId.get(id);
+      if (row === undefined) continue;
+      others.push({ row, valueKind: await resolveValueKind(tx, row.data_type, row.point_id, from, to) });
+    }
+    const identity = (row: PointOptionRow, kind: ValueKind): LineIdentity => {
+      const option = toPointOption(row, kind);
+      return { pointId: option.pointId, valueKind: kind, unit: option.unit, states: option.states };
+    };
+    const identities = [identity(selectedPoint, primaryKind), ...others.map((o) => identity(o.row, o.valueKind))];
+    const sides = assignAxes(identities);
+    const drawnIdentities = identities.filter((_, i) => sides[i] !== null);
+    const placed: Array<{ row: PointOptionRow; valueKind: ValueKind; axis: AxisSide }> = [];
+    others.forEach((other, i) => {
+      const side = sides[i + 1] ?? null;
+      if (side === null) {
+        comparisonNotes.push(describeThirdAxis(other.row.point_name, identities[i + 1]!, drawnIdentities));
+      } else {
+        placed.push({ ...other, axis: side });
+      }
+    });
+    const lineCount = 1 + placed.length;
+    const lineMaxRaw = lineShare(maxRaw, lineCount);
+    const lineMaxBuckets = lineShare(maxBuckets, lineCount);
+
     const series = await loadSeries(tx, {
       pointId,
       dataType: selectedPoint.data_type,
       zone,
       from,
       to,
-      maxRaw,
-      maxBuckets,
+      maxRaw: lineMaxRaw,
+      maxBuckets: lineMaxBuckets,
+      valueKind: primaryKind,
     });
     const { valueKind, stats, latest, trend, buckets, bucketSeconds } = series;
 
@@ -2402,61 +2502,34 @@ export async function getPointExplorer(
       LIMIT ${DATA_GAPS_LIMIT}
     `;
 
-    // --- compare mode -----------------------------------------------------
+    // --- the other lines' readings ---------------------------------------
     //
-    // A shown, collected point on the same JACE, over the same two instants,
-    // through the same loader. A point that is not that - hidden since the
-    // link was shared, or never on this station - is said in a note and the
-    // page still draws the selected point; a dead comparison must not cost
-    // the person the chart they came for.
-    let comparison: { row: PointOptionRow; series: SeriesLoad; expected: ExpectedInterval } | null = null;
-    let comparisonNote: string | null = null;
-    const compareId = options.comparePointId ?? null;
-    if (compareId !== null && compareId !== pointId) {
-      const candidate = (
-        await tx.$queryRaw<PointOptionRow[]>`
-          SELECT v.point_id,
-                 ${shownPointName(Prisma.sql`v`)} AS point_name,
-                 v.point_role, v.unit, v.site_name,
-                 v.collection_interval_s,
-                 s.timezone AS site_timezone,
-                 st.clock_offset_s, st.clock_measured_at,
-                 v.data_type, v.is_status, v.is_command, v.niagara_history_name,
-                 p.station_id, p.equipment_id, e.name AS equipment_name,
-                 p.measured_interval_s
-          FROM bas_v_point v
-          JOIN bas_points p USING (point_id)
-          JOIN bas_stations st ON st.station_id = p.station_id
-          JOIN bas_sites s ON s.site_id = st.site_id
-          LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
-          WHERE v.point_id = ${compareId}
-            AND v.is_active AND p.is_visible
-            AND p.station_id = ${selectedPoint.station_id}
-            AND ${siteFilter(entitled, Prisma.sql`st.site_id`)}
-        `
-      )[0];
-      if (candidate === undefined) {
-        comparisonNote = COMPARISON_NOT_AVAILABLE_MESSAGE;
-      } else {
-        const compared = await loadSeries(tx, {
-          pointId: candidate.point_id,
-          dataType: candidate.data_type,
-          zone,
-          from,
-          to,
-          maxRaw,
-          maxBuckets,
-        });
-        comparison = {
-          row: candidate,
-          series: compared,
-          expected: resolveExpectedInterval({
-            enteredS: candidate.collection_interval_s,
-            range: compared.spacing,
-            storedMeasuredS: candidate.measured_interval_s,
-          }),
-        };
-      }
+    // Over the same two instants, through the same loader, on the same share
+    // of the budget, so no two lines on one chart are drawn by two rules. A
+    // line that could not be drawn is already a sentence in comparisonNotes;
+    // a dead line must not cost the person the chart they came for.
+    const comparisons: LoadedLine[] = [];
+    for (const line of placed) {
+      const loaded = await loadSeries(tx, {
+        pointId: line.row.point_id,
+        dataType: line.row.data_type,
+        zone,
+        from,
+        to,
+        maxRaw: lineMaxRaw,
+        maxBuckets: lineMaxBuckets,
+        valueKind: line.valueKind,
+      });
+      comparisons.push({
+        row: line.row,
+        series: loaded,
+        axis: line.axis,
+        expected: resolveExpectedInterval({
+          enteredS: line.row.collection_interval_s,
+          range: loaded.spacing,
+          storedMeasuredS: line.row.measured_interval_s,
+        }),
+      });
     }
 
     return {
@@ -2477,8 +2550,9 @@ export async function getPointExplorer(
       expected: expected as ExpectedInterval | null,
       breakRows,
       history: history as HistoryRow | null,
-      comparison,
-      comparisonNote,
+      comparisons,
+      comparisonNotes,
+      lineMaxRaw,
     };
   });
 
@@ -2535,45 +2609,40 @@ export async function getPointExplorer(
       ? { label: physical.label, min: physical.min, max: physical.max, lowest, highest }
       : null;
 
-  const comparison: PointComparison | null =
-    result.comparison === null
-      ? null
-      : (() => {
-          const c = result.comparison;
-          const drawn =
-            c.series.buckets !== null && c.series.bucketSeconds !== null
-              ? buildBucketedTrend(c.series.buckets, c.series.bucketSeconds)
-              : buildTrend(c.series.trend, c.expected.seconds);
-          const point = toPointOption(c.row, c.series.valueKind);
-          return {
-            point,
-            trend: drawn.trend,
-            sampling:
-              c.series.buckets !== null && c.series.bucketSeconds !== null
-                ? {
-                    kind: "bucketed" as const,
-                    bucketSeconds: c.series.bucketSeconds,
-                    bucketLabel: bucketLabel(c.series.bucketSeconds),
-                    buckets: c.series.buckets.length,
-                    readings: c.series.stats.readings,
-                    maxRaw,
-                  }
-                : { kind: "raw" as const, readings: c.series.stats.readings },
-            stats: {
+  // The raw cap each line was held to: the chart's, shared between its lines.
+  // The sampling notice says this number, so it must be the one that applied.
+  const lineMaxRaw = result.lineMaxRaw ?? maxRaw;
+  const comparisons: PointComparison[] = result.comparisons.map((c) => {
+    const drawn =
+      c.series.buckets !== null && c.series.bucketSeconds !== null
+        ? buildBucketedTrend(c.series.buckets, c.series.bucketSeconds)
+        : buildTrend(c.series.trend, c.expected.seconds);
+    return {
+      point: toPointOption(c.row, c.series.valueKind),
+      trend: drawn.trend,
+      sampling:
+        c.series.buckets !== null && c.series.bucketSeconds !== null
+          ? {
+              kind: "bucketed" as const,
+              bucketSeconds: c.series.bucketSeconds,
+              bucketLabel: bucketLabel(c.series.bucketSeconds),
+              buckets: c.series.buckets.length,
               readings: c.series.stats.readings,
-              average: c.series.stats.average,
-              minimum: c.series.stats.minimum,
-              maximum: c.series.stats.maximum,
-              latest: c.series.latest?.value_num ?? null,
-              latestAt: iso(c.series.latest?.ts ?? null),
-            },
-            expectedInterval: c.expected,
-            sharedAxis:
-              result.selectedPoint !== null &&
-              unitsShareAxis(result.selectedPoint.unit, c.row.unit) &&
-              (result.valueKind ?? "numeric") === c.series.valueKind,
-          };
-        })();
+              maxRaw: lineMaxRaw,
+            }
+          : { kind: "raw" as const, readings: c.series.stats.readings },
+      stats: {
+        readings: c.series.stats.readings,
+        average: c.series.stats.average,
+        minimum: c.series.stats.minimum,
+        maximum: c.series.stats.maximum,
+        latest: c.series.latest?.value_num ?? null,
+        latestAt: iso(c.series.latest?.ts ?? null),
+      },
+      expectedInterval: c.expected,
+      axis: c.axis,
+    };
+  });
 
   const sampling: TrendSampling =
     result.buckets !== null && result.bucketSeconds !== null
@@ -2583,7 +2652,7 @@ export async function getPointExplorer(
           bucketLabel: bucketLabel(result.bucketSeconds),
           buckets: result.buckets.length,
           readings: result.stats?.readings ?? 0,
-          maxRaw,
+          maxRaw: lineMaxRaw,
         }
       : { kind: "raw", readings: result.stats?.readings ?? 0 };
 
@@ -2674,8 +2743,8 @@ export async function getPointExplorer(
     breaks,
     history: result.history === null ? null : toPointHistory(result.history),
     outOfRange,
-    comparison,
-    comparisonNote: result.comparisonNote,
+    comparisons,
+    comparisonNotes: result.comparisonNotes,
   };
 
   logger.info("bas.point_explorer", {
@@ -2691,7 +2760,7 @@ export async function getPointExplorer(
       `sampling=${sampling.kind === "raw" ? "raw" : `${sampling.bucketSeconds}s`} ` +
       `interval=${expected.seconds ?? "none"}${expected.source === null ? "" : `/${expected.source}`} ` +
       `breaks=${breaks.count}` +
-      (comparison === null ? "" : ` compare=${comparison.point.pointId}`),
+      (comparisons.length === 0 ? "" : ` lines=${comparisons.map((c) => c.point.pointId).join(",")}`),
   });
 
   return explorer;
@@ -2838,7 +2907,9 @@ export function toPointOption(
           })
         : null,
     stationId: row.station_id.toString(),
+    stationName: row.station_name,
     equipmentId: row.equipment_id?.toString() ?? null,
     equipmentName: row.equipment_name,
+    equipmentType: row.equipment_type,
   };
 }

@@ -103,8 +103,57 @@ export function csvLine(row: ReadingRow, point: CsvPointContext): string {
  * removed - `2026-09-11T14:05:00.000Z` becomes `20260911T1405Z`.
  */
 export function csvFilename(pointName: string, from: string, to: string): string {
-  const stamp = (iso: string) =>
-    iso.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z").replace(/T(\d{4})\d{2}Z$/, "T$1Z");
+  return `readings-${safeName(pointName)}-${stamp(from)}-${stamp(to)}.csv`;
+}
+
+function stamp(iso: string): string {
+  return iso.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z").replace(/T(\d{4})\d{2}Z$/, "T$1Z");
+}
+
+function safeName(pointName: string): string {
   const name = pointName.replace(/[^A-Za-z0-9.-]+/g, "_").replace(/^_+|_+$/g, "");
-  return `readings-${name.length > 0 ? name : "point"}-${stamp(from)}-${stamp(to)}.csv`;
+  return name.length > 0 ? name : "point";
+}
+
+// ------------------------------------------------- the multi-point file
+
+/**
+ * The file when the chart holds more than one line (2026-11-20): one column
+ * per plotted point, in the chart's order, and one row per instant at which
+ * any of them has a reading - aligned on the EXACT stored timestamp, nothing
+ * rounded, nothing filled in. Two points logged by one station on the same
+ * interval share their rows; two stations whose clocks differ by a minute do
+ * not, and the file shows that as two rows each half empty, which is the
+ * truth about the readings rather than a resampling of it.
+ *
+ * What the single-point file says and this one cannot: an empty cell here is
+ * either no reading at that instant or a null record (docs/08). The
+ * single-point file keeps the two apart, and is still what the button
+ * downloads for one line.
+ */
+export interface CsvWideColumn {
+  pointId: string;
+  pointName: string;
+  unit: string | null;
+  stationName: string;
+}
+
+/** `V4_22/SpaceTemp (fahrenheit; CEI_JCI_N2; point 12)`: the name, the unit name, the station, the id. */
+export function csvWideColumnName(column: CsvWideColumn): string {
+  return `${column.pointName} (${column.unit ?? "no unit recorded"}; ${column.stationName}; point ${column.pointId})`;
+}
+
+export function csvWideHeader(columns: readonly CsvWideColumn[]): string {
+  return ["timestamp", ...columns.map((c) => csvField(csvWideColumnName(c)))].join(",") + CSV_RECORD_SEPARATOR;
+}
+
+/** One instant: its timestamp as stored, then each column's stored value or an empty field. */
+export function csvWideLine(ts: string, values: ReadonlyArray<string | number | boolean | null>): string {
+  return [csvField(ts), ...values.map(csvField)].join(",") + CSV_RECORD_SEPARATOR;
+}
+
+/** `readings-<first point>-and-<n> more-<from>-<to>.csv`, filesystem-safe like the single file's. */
+export function csvWideFilename(pointNames: readonly string[], from: string, to: string): string {
+  const more = pointNames.length - 1;
+  return `readings-${safeName(pointNames[0] ?? "point")}-and-${more}-more-${stamp(from)}-${stamp(to)}.csv`;
 }

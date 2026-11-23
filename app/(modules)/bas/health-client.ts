@@ -1071,8 +1071,8 @@ export async function fetchPointExplorer(
     pointId?: string | null;
     projectId?: string | null;
     stationId?: string | null;
-    /** Compare mode: the second point's id. */
-    compareId?: string | null;
+    /** The chart's other lines, in slot order, free slots already removed. */
+    compareIds?: readonly string[];
   } = {},
   signal?: AbortSignal,
 ): Promise<PointExplorer> {
@@ -1087,7 +1087,9 @@ export async function fetchPointExplorer(
   if (options.pointId != null) params.set("point", options.pointId);
   if (options.projectId != null) params.set("project", options.projectId);
   if (options.stationId != null) params.set("station", options.stationId);
-  if (options.compareId != null) params.set("compare", options.compareId);
+  if (options.compareIds !== undefined && options.compareIds.length > 0) {
+    params.set("compare", options.compareIds.join(","));
+  }
   const suffix = params.toString();
 
   let response: Response;
@@ -1174,6 +1176,8 @@ export interface ReadingsCsvDownload {
   /** Rows in the file. Less than `total` only when the cap bit. */
   exported: number;
   cap: number;
+  /** What the counts count: readings (one point), or timestamps - the rows of a multi-point file. */
+  unit: "readings" | "timestamps";
 }
 
 /**
@@ -1186,13 +1190,22 @@ export interface ReadingsCsvDownload {
  * for the caller to save. Nothing is requested until this is called.
  */
 export async function downloadPointReadingsCsv(
-  options: { pointId: string; from: string; to: string },
+  options: {
+    pointId: string;
+    from: string;
+    to: string;
+    /** The chart's other lines: with any, the file is a column per point aligned on timestamp. */
+    compareIds?: readonly string[];
+  },
   signal?: AbortSignal,
 ): Promise<ReadingsCsvDownload> {
   const params = new URLSearchParams();
   params.set("point", options.pointId);
   params.set("from", options.from);
   params.set("to", options.to);
+  if (options.compareIds !== undefined && options.compareIds.length > 0) {
+    params.set("compare", options.compareIds.join(","));
+  }
 
   let response: Response;
   try {
@@ -1228,6 +1241,7 @@ export async function downloadPointReadingsCsv(
     total: count("X-PHB-Readings-Total"),
     exported: count("X-PHB-Readings-Exported"),
     cap: count("X-PHB-Readings-Cap"),
+    unit: response.headers.get("X-PHB-Readings-Unit") === "timestamps" ? "timestamps" : "readings",
   };
 }
 
@@ -1239,9 +1253,18 @@ export async function downloadPointReadingsCsv(
 export function describeCappedExport(download: {
   total: number;
   exported: number;
+  /** A multi-point file counts rows - one per timestamp - not readings. */
+  unit?: "readings" | "timestamps";
 }): string | null {
   if (download.exported >= download.total) return null;
   const cut = download.total - download.exported;
+  if (download.unit === "timestamps") {
+    return (
+      `Exported the newest ${formatCount(download.exported)} of ${formatCount(download.total)} rows, one per timestamp. ` +
+      `${formatCount(cut)} older row${cut === 1 ? " was" : "s were"} not included; ` +
+      `narrow the range to export ${cut === 1 ? "it" : "them"}.`
+    );
+  }
   return (
     `Exported the newest ${formatCount(download.exported)} of ${formatCount(download.total)} readings. ` +
     `${formatCount(cut)} older reading${cut === 1 ? " was" : "s were"} not included; ` +

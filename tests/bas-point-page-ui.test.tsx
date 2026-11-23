@@ -10,13 +10,12 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(""),
 }));
 
-import { CompareTooltip, TrendChart, type ChartComparison } from "@/app/(modules)/bas/point-explorer";
+import { LinesTooltip, TrendChart, TrendPanel, type ChartLine } from "@/app/(modules)/bas/point-explorer";
 import {
   BreaksList,
-  CompareLegend,
   DataHealthTile,
+  LinesLegend,
   TrendSummaryCard,
-  compareCandidates,
   dataHealthTone,
 } from "@/app/(modules)/bas/point-explorer-parts";
 import { DashboardCards } from "@/app/(modules)/bas/dashboard";
@@ -38,8 +37,8 @@ import type { TrendSummaryResult } from "@/lib/modules/bas/trend-summary/types";
 
 /**
  * The point page as drawn (2026-11-20): the Data health tile, the breaks
- * summary, the trend summary card, compare mode, and the at-risk split on the
- * Projects card and Collection Health.
+ * summary, the trend summary card, several lines on one chart, and the
+ * at-risk split on the Projects card and Collection Health.
  */
 
 const roots: Array<{ root: Root; host: HTMLElement }> = [];
@@ -73,8 +72,10 @@ const point = (over: Partial<PointOption> = {}): PointOption => ({
   valueKind: "numeric",
   states: null,
   stationId: "9",
+  stationName: "CEI_JCI_N2",
   equipmentId: "3",
   equipmentName: "V4_22",
+  equipmentType: "VAV Box",
   ...over,
 });
 
@@ -121,8 +122,8 @@ function payload(over: Partial<PointExplorer> = {}): PointExplorer {
       horizon: { state: "estimated", hours: 250, currentHours: null, stationCount: null, capacity: 500, capacitySource: "assumed", intervalS: 1800, intervalSource: "measured" },
     },
     outOfRange: null,
-    comparison: null,
-    comparisonNote: null,
+    comparisons: [],
+    comparisonNotes: [],
     ...over,
   };
 }
@@ -241,19 +242,20 @@ describe("the trend summary card", () => {
   });
 });
 
-describe("compare mode", () => {
-  const comparison = (over: Partial<ChartComparison> = {}): ChartComparison => ({
+describe("several lines on one chart", () => {
+  const line = (over: Partial<ChartLine> = {}): ChartLine => ({
+    pointId: "2",
     trend: series(330, FROM + 5 * 60_000, 30 * 60_000, (i) => (i % 10) * 10),
     unit: "percent",
     states: null,
     name: "V4_22/DamperPos",
-    sharedAxis: false,
+    axis: "right",
+    slot: 1,
     withinMs: 3_600_000,
-    primaryName: "V4_22/SpaceTemp",
     ...over,
   });
 
-  const chart = (cmp: ChartComparison | null) =>
+  const chart = (others: ChartLine[]) =>
     mount(
       createElement(TrendChart, {
         trend: series(330),
@@ -267,87 +269,134 @@ describe("compare mode", () => {
         onDragEnd: () => {},
         width: 900,
         height: 350,
-        comparison: cmp,
+        others,
+        primaryName: "V4_22/SpaceTemp",
       }),
     );
 
   it("draws two units on two axes, each labelled with its unit", async () => {
-    const host = await chart(comparison());
+    const host = await chart([line()]);
     expect(host.querySelectorAll(".recharts-yAxis")).toHaveLength(2);
     const labels = [...host.querySelectorAll(".recharts-label")].map((n) => n.textContent);
     expect(labels).toContain("°F");
     expect(labels).toContain("%");
-    // Two lines: the point and the comparison, in its own colour.
     expect(host.querySelectorAll(".recharts-area-curve").length).toBeGreaterThanOrEqual(2);
     expect(host.innerHTML).toContain("var(--phb-purple)");
   });
 
-  it("shares one axis when both points carry the same unit", async () => {
-    const host = await chart(comparison({ unit: "fahrenheit", sharedAxis: true, trend: series(330, FROM + 5 * 60_000, 30 * 60_000, () => 72) }));
+  it("puts every line of the first line's unit on the left axis and keeps two axes with four lines", async () => {
+    const host = await chart([
+      line({ pointId: "5", unit: "fahrenheit", axis: "left", slot: 1, name: "V4_22/SpaceTempSp", trend: series(330, FROM, 30 * 60_000, () => 72) }),
+      line({ pointId: "2", slot: 2 }),
+      line({ pointId: "6", unit: "percent", axis: "right", slot: 3, name: "V4_22/Valve" }),
+    ]);
+    expect(host.querySelectorAll(".recharts-yAxis")).toHaveLength(2);
+    // Slots 2 and 3 carry their dash patterns as well as their colours.
+    expect(host.innerHTML).toContain('stroke-dasharray="6 3"');
+    expect(host.innerHTML).toContain('stroke-dasharray="2 3"');
+  });
+
+  it("shares one axis when every line carries the first line's unit", async () => {
+    const host = await chart([line({ unit: "fahrenheit", axis: "left", trend: series(330, FROM + 5 * 60_000, 30 * 60_000, () => 72) })]);
     expect(host.querySelectorAll(".recharts-yAxis")).toHaveLength(1);
   });
 
-  it("draws one point and one axis with compare off", async () => {
-    const host = await chart(null);
+  it("draws one point and one axis with one line", async () => {
+    const host = await chart([]);
     expect(host.querySelectorAll(".recharts-yAxis")).toHaveLength(1);
     expect(host.innerHTML).not.toContain("var(--phb-purple)");
   });
 
-  it("reads both values at the shared cursor, each in its own unit, and nothing from across a hole", () => {
+  it("reads every value at the shared cursor, each in its own unit, and nothing from across a hole", () => {
+    const at = FROM + 30 * 60_000;
     const html = renderToStaticMarkup(
-      createElement(CompareTooltip, {
+      createElement(LinesTooltip, {
         active: true,
-        label: FROM + 30 * 60_000,
-        trend: series(330),
-        comparison: comparison(),
-        unit: "fahrenheit",
-        states: null,
+        label: at,
+        lines: [
+          { trend: series(330), unit: "fahrenheit", states: null, name: "V4_22/SpaceTemp", slot: 0, withinMs: HOUR },
+          line(),
+          line({ name: "Other/OAT", unit: "fahrenheit", slot: 2, trend: series(10, FROM + 20 * HOUR), withinMs: HOUR }),
+        ],
         zone: "America/New_York",
       }),
     );
     // The single-point tooltip's own formatter: one more decimal than the axis.
     expect(html).toContain("V4_22/SpaceTemp: 71.00 °F");
     expect(html).toContain("V4_22/DamperPos: 10.0%");
-    const far = renderToStaticMarkup(
-      createElement(CompareTooltip, {
-        active: true,
-        label: FROM + 30 * 60_000,
-        trend: series(330),
-        comparison: comparison({ trend: series(10, FROM + 20 * HOUR), withinMs: HOUR }),
-        unit: "fahrenheit",
-        states: null,
-        zone: "America/New_York",
-      }),
-    );
-    expect(far).toContain("V4_22/DamperPos: no reading");
+    expect(html).toContain("Other/OAT: no reading");
   });
 
-  it("names both legends and which axis each is on", () => {
+  it("names every line in the legend with its axis, and removes one from it", async () => {
     const data = payload();
-    const html = renderToStaticMarkup(
-      createElement(CompareLegend, {
-        primary: data.selectedPoint!,
-        comparison: {
-          point: point({ pointId: "2", pointName: "V4_22/DamperPos", unit: "percent" }),
-          trend: [],
-          sampling: { kind: "raw", readings: 0 },
-          stats: { readings: 0, average: null, minimum: null, maximum: null, latest: null, latestAt: null },
-          expectedInterval: data.expectedInterval,
-          sharedAxis: false,
-        },
+    const onRemove = vi.fn();
+    const host = await mount(
+      createElement(LinesLegend, {
+        lines: [
+          { point: data.selectedPoint!, slot: 0, axis: "left", sampling: { kind: "raw", readings: 330 } },
+          { point: point({ pointId: "2", pointName: "V4_22/DamperPos", unit: "percent" }), slot: 1, axis: "right", sampling: { kind: "raw", readings: 330 } },
+          { point: point({ pointId: "4", pointName: "Other/OAT", stationId: "10", stationName: "CEI_OTHER" }), slot: 3, axis: "left", sampling: { kind: "bucketed", bucketSeconds: 3600, bucketLabel: "hour", buckets: 168, readings: 2016, maxRaw: 3333 } },
+        ],
+        onRemove,
       }),
     );
-    expect(html).toContain("V4_22/SpaceTemp");
-    expect(html).toContain("°F, left axis");
-    expect(html).toContain("V4_22/DamperPos");
-    expect(html).toContain("%, right axis");
+    const entries = [...host.querySelectorAll('[data-testid="bas-legend-line"]')].map((n) => n.textContent);
+    expect(entries[0]).toContain("V4_22/SpaceTemp(°F, left axis, CEI_JCI_N2, in the tiles)");
+    expect(entries[1]).toContain("V4_22/DamperPos(%, right axis, CEI_JCI_N2)");
+    expect(entries[2]).toContain("Other/OAT(°F, left axis, hour averages, CEI_OTHER)");
+    const remove = host.querySelector<HTMLButtonElement>('[data-point="2"] [data-testid="bas-legend-remove"]')!;
+    expect(remove.getAttribute("aria-label")).toBe("Remove V4_22/DamperPos from the chart");
+    await act(async () => remove.click());
+    expect(onRemove).toHaveBeenCalledWith("2");
   });
 
-  it("offers the same equipment first, and searches the rest of the JACE - never another JACE", () => {
-    const { points, selectedPoint } = payload();
-    expect(compareCandidates(points, selectedPoint!, "").map((p) => p.pointName)).toEqual(["V4_22/DamperPos"]);
-    expect(compareCandidates(points, selectedPoint!, "AHU").map((p) => p.pointName)).toEqual(["AHU_7/DA_T"]);
-    expect(compareCandidates(points, selectedPoint!, "OAT")).toEqual([]);
+  it("offers no remove button with one line", async () => {
+    const data = payload();
+    const host = await mount(
+      createElement(LinesLegend, { lines: [{ point: data.selectedPoint!, slot: 0, axis: "left", sampling: data.sampling }], onRemove: () => {} }),
+    );
+    expect(host.querySelector('[data-testid="bas-legend-remove"]')).toBeNull();
+  });
+
+  it("disables the trend summary with more than one line, and asks for nothing", async () => {
+    const request = vi.fn();
+    const host = await mount(createElement(TrendSummaryCard, { data: payload(), request, lines: 3 }));
+    const button = host.querySelector<HTMLButtonElement>('[data-testid="bas-explain-trend"]')!;
+    expect(button.disabled).toBe(true);
+    expect(host.querySelector('[data-testid="bas-trend-summary-several"]')?.textContent).toBe(
+      "A summary describes one point. With 3 lines on the chart, plot one point to explain its trend.",
+    );
+    await act(async () => button.click());
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("says whose breaks they are when the chart holds several lines", async () => {
+    const data = payload();
+    const host = await mount(
+      createElement(BreaksList, { breaks: data.breaks, expected: data.expectedInterval, timeZone: null, showing: "V4_22/SpaceTemp" }),
+    );
+    expect(host.querySelector('[data-testid="bas-breaks-showing"]')?.textContent).toBe("showing V4_22/SpaceTemp");
+  });
+
+  it("shows the first point's tiles under a note naming it, and the other lines' notes on the panel", async () => {
+    const data = payload({
+      comparisons: [
+        {
+          point: point({ pointId: "2", pointName: "V4_22/DamperPos", unit: "percent" }),
+          trend: series(330, FROM, 30 * 60_000, (i) => i % 100),
+          sampling: { kind: "raw", readings: 330 },
+          stats: { readings: 330, average: 50, minimum: 0, maximum: 99, latest: 10, latestAt: new Date(TO).toISOString() },
+          expectedInterval: payload().expectedInterval,
+          axis: "right",
+        },
+      ],
+      comparisonNotes: ["V4_22/Occ is not drawn: the chart already has two axes (°F and %) and it reads True / False. Remove a line to make room for it."],
+    });
+    const host = await mount(createElement(TrendPanel, { data, unit: "fahrenheit", slots: ["1", "2"], onAdd: () => {}, onRemove: () => {} }));
+    expect(host.querySelector('[data-testid="bas-compare-note"]')?.textContent).toContain("V4_22/Occ is not drawn");
+    expect(host.querySelectorAll('[data-testid="bas-legend-line"]')).toHaveLength(2);
+    expect(host.querySelector('[data-testid="bas-breaks-showing"]')?.textContent).toBe("showing V4_22/SpaceTemp");
+    expect(host.querySelector('[data-testid="bas-add-point-button"]')?.textContent).toBe("Add point");
   });
 });
 

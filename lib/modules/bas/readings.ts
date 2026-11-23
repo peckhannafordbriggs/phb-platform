@@ -39,20 +39,32 @@ import type { Viewer } from "@/lib/authz";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { BasError } from "./errors";
-import { csvFilename, csvHeader, csvLine, type CsvPointContext } from "./csv";
+import {
+  csvFilename,
+  csvHeader,
+  csvLine,
+  csvWideFilename,
+  csvWideHeader,
+  csvWideLine,
+  storedValue,
+  type CsvPointContext,
+  type CsvWideColumn,
+} from "./csv";
 import type { ParsedInput } from "./route-helpers";
 import {
   HIDDEN_POINT_MESSAGE,
   POINT_NOT_AVAILABLE_MESSAGE,
+  POINT_OPTION_JOINS,
   basSiteScope,
   parsePointId,
+  pointOptionColumns,
   resolveValueKind,
-  shownPointName,
   siteFilter,
   toPointOption,
   type PointOptionRow,
 } from "./service";
 import type { PointReadingsPage, ReadingRow } from "./types";
+import { MAX_CHART_LINES } from "./chart-lines";
 
 /**
  * Rows per page of the table.
@@ -105,14 +117,27 @@ export const EXPORT_CHUNK_ROWS = 10_000;
 export const TOTAL_HEADER = "X-PHB-Readings-Total";
 export const EXPORTED_HEADER = "X-PHB-Readings-Exported";
 export const CAP_HEADER = "X-PHB-Readings-Cap";
+/**
+ * What the three counts above count: `readings` for the one-point file,
+ * `timestamps` for the multi-point file, whose rows are instants. The button
+ * words its sentence from it.
+ */
+export const UNIT_HEADER = "X-PHB-Readings-Unit";
 
 /** The instant as stored: UTC, six fractional digits, the `Z` spelled out. */
 const TS_EXACT = Prisma.sql`to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 interface ReadingsPointRow extends PointOptionRow {
   is_visible: boolean;
-  station_id: bigint;
-  station_name: string;
+}
+
+/** One reading of one of several points, for the multi-point file. */
+interface RawWideRow {
+  ts: string;
+  point_id: bigint;
+  value_num: number | null;
+  value_bool: boolean | null;
+  value_str: string | null;
 }
 
 interface RawReadingRow {
@@ -130,6 +155,12 @@ export interface ReadingsRequest {
   to: string;
   /** 1-based. Clamped to the last page by the service. */
   page?: number;
+  /**
+   * The chart's other lines (2026-11-20), for the CSV only: with any, the
+   * file is one column per point aligned on timestamp rather than one row
+   * per reading. Ignored by the table.
+   */
+  comparePointIds?: bigint[];
 }
 
 export interface PointReadingsOptions extends ReadingsRequest {
@@ -154,6 +185,8 @@ export interface ReadingsExport {
   cap: number;
   /** The CSV, header first, in chunks of text. Runs the queries as it is read. */
   chunks: () => AsyncGenerator<string, void, undefined>;
+  /** What `total`, `exported` and `cap` count: readings, or rows of a multi-point file. */
+  unit: "readings" | "timestamps";
 }
 
 // ------------------------------------------------------------ the request
@@ -183,7 +216,7 @@ export function parseInstant(value: string, label: string): Date {
  */
 export function parseReadingsQuery(
   search: URLSearchParams,
-  options: { page: boolean },
+  options: { page: boolean; compare?: boolean },
 ): ParsedInput<ReadingsRequest> {
   const point = search.get("point")?.trim() ?? "";
   if (!/^[0-9]{1,32}$/.test(point)) {
@@ -195,6 +228,18 @@ export function parseReadingsQuery(
     return { ok: false, message: "from and to must both be given, as ISO 8601 UTC instants." };
   }
   const request: ReadingsRequest = { pointId: parsePointId(point)!, from, to };
+  if (options.compare === true) {
+    const raw = search.get("compare")?.trim() ?? "";
+    const ids = raw.split(",").map((id) => id.trim()).filter((id) => id.length > 0);
+    if (!ids.every((id) => /^[0-9]{1,32}$/.test(id))) {
+      return { ok: false, message: "compare must be point ids separated by commas." };
+    }
+    const unique = [...new Set(ids)].filter((id) => id !== point);
+    if (unique.length > MAX_CHART_LINES - 1) {
+      return { ok: false, message: `A file holds at most ${MAX_CHART_LINES} points, as the chart does.` };
+    }
+    if (unique.length > 0) request.comparePointIds = unique.map((id) => parsePointId(id)!);
+  }
   if (options.page) {
     const raw = search.get("page");
     const page = raw === null ? 1 : Number(raw);
@@ -220,22 +265,9 @@ async function loadPoint(
   pointId: bigint,
 ): Promise<ReadingsPointRow> {
   const rows = await db.$queryRaw<ReadingsPointRow[]>`
-    SELECT v.point_id,
-           ${shownPointName(Prisma.sql`v`)} AS point_name,
-           v.point_role, v.unit, v.site_name,
-           v.collection_interval_s,
-           s.timezone AS site_timezone,
-           st.clock_offset_s, st.clock_measured_at,
-           v.data_type, v.is_status, v.is_command, v.niagara_history_name,
-           p.is_visible,
-           st.station_id,
-           COALESCE(st.display_name, st.niagara_station_name) AS station_name,
-           p.equipment_id, e.name AS equipment_name, p.measured_interval_s
+    SELECT ${pointOptionColumns()}, p.is_visible
     FROM bas_v_point v
-    JOIN bas_points p USING (point_id)
-    JOIN bas_stations st ON st.station_id = p.station_id
-    JOIN bas_sites s ON s.site_id = st.site_id
-    LEFT JOIN bas_equipment e ON e.equipment_id = p.equipment_id
+    ${POINT_OPTION_JOINS}
     WHERE v.point_id = ${pointId}
       AND v.is_active
       AND ${siteFilter(entitled, Prisma.sql`st.site_id`)}
@@ -375,6 +407,14 @@ export async function exportPointReadings(
   const scope = await basSiteScope(viewer);
 
   const point = await loadPoint(prisma, scope.entitled, options.pointId);
+  const others = (options.comparePointIds ?? []).filter((id) => id !== point.point_id);
+  if (others.length > 0) {
+    // Every point on the chart, with the chart's own refusal for any that
+    // may not be seen - the file never carries a column the chart would not.
+    const points = [point];
+    for (const id of others) points.push(await loadPoint(prisma, scope.entitled, id));
+    return exportWide(scope.employeeId, points, { from, to, cap, chunkRows, options });
+  }
   const pointId = point.point_id;
   const total = (
     await prisma.$queryRaw<Array<{ total: number }>>`
@@ -432,5 +472,112 @@ export async function exportPointReadings(
     exported,
     cap,
     chunks,
+    unit: "readings",
+  };
+}
+
+/**
+ * The multi-point file (csv.ts, *the multi-point file*): one row per instant
+ * at which any of the points has a reading, newest first, a column per point.
+ *
+ * Counted and capped in ROWS - distinct instants - because a row is what a
+ * spreadsheet holds; the headers say so (`unit: "timestamps"`) and the button
+ * words its sentence from it. Walked by keyset on the instant like the single
+ * file: each chunk is the next `chunkRows` distinct instants below the cursor,
+ * then every reading of every point between the oldest of them and the
+ * cursor - which are exactly the readings at those instants, since the chunk
+ * holds every distinct instant in that stretch.
+ */
+async function exportWide(
+  employeeId: string,
+  points: ReadingsPointRow[],
+  args: { from: Date; to: Date; cap: number; chunkRows: number; options: ExportOptions },
+): Promise<ReadingsExport> {
+  const { from, to, cap, chunkRows, options } = args;
+  const ids = points.map((p) => p.point_id);
+  const column = new Map(ids.map((id, i) => [id.toString(), i]));
+  const columns: CsvWideColumn[] = points.map((p) => ({
+    pointId: p.point_id.toString(),
+    pointName: p.point_name,
+    unit: p.unit,
+    stationName: p.station_name,
+  }));
+  const total = (
+    await prisma.$queryRaw<Array<{ total: number }>>`
+      SELECT count(DISTINCT ts)::int AS total
+      FROM bas_readings
+      WHERE point_id IN (${Prisma.join(ids)}) AND ts >= ${from} AND ts < ${to}
+    `
+  )[0]!.total;
+  const exported = Math.min(total, cap);
+
+  logger.info("bas.readings_exported", {
+    employeeId,
+    moduleKey: "bas",
+    count: exported,
+    reason:
+      `points=${ids.join(",")} range=${options.from}..${options.to} rows=${total} ` +
+      `cap=${cap}${total > cap ? " CAPPED" : ""}`,
+  });
+
+  async function* chunks(): AsyncGenerator<string, void, undefined> {
+    yield csvWideHeader(columns);
+    let remaining = exported;
+    let cursor: Prisma.Sql = Prisma.sql`${to}`;
+    while (remaining > 0) {
+      const limit = Math.min(chunkRows, remaining);
+      const rows = await prisma.$queryRaw<RawWideRow[]>`
+        WITH instants AS (
+          SELECT DISTINCT ts
+          FROM bas_readings
+          WHERE point_id IN (${Prisma.join(ids)}) AND ts >= ${from} AND ts < ${cursor}
+          ORDER BY ts DESC
+          LIMIT ${limit}
+        )
+        SELECT ${TS_EXACT} AS ts, point_id, value_num, value_bool, value_str
+        FROM bas_readings
+        WHERE point_id IN (${Prisma.join(ids)})
+          AND ts >= (SELECT min(ts) FROM instants) AND ts < ${cursor}
+        ORDER BY bas_readings.ts DESC, point_id
+      `;
+      if (rows.length === 0) break;
+      const lines: string[] = [];
+      let current: { ts: string; values: Array<string | number | boolean | null> } | null = null;
+      for (const row of rows) {
+        if (current === null || current.ts !== row.ts) {
+          if (current !== null) lines.push(csvWideLine(current.ts, current.values));
+          current = { ts: row.ts, values: columns.map(() => null) };
+        }
+        current.values[column.get(row.point_id.toString())!] = storedValue({
+          ts: row.ts,
+          valueNum: row.value_num,
+          valueBool: row.value_bool,
+          valueStr: row.value_str,
+          status: null,
+        });
+      }
+      lines.push(csvWideLine(current!.ts, current!.values));
+      yield lines.join("");
+      remaining -= lines.length;
+      cursor = Prisma.sql`${current!.ts}::timestamptz`;
+    }
+  }
+
+  const first = points[0]!;
+  return {
+    point: {
+      pointId: first.point_id.toString(),
+      pointName: first.point_name,
+      niagaraHistoryName: first.niagara_history_name,
+      unit: first.unit,
+      stationId: first.station_id.toString(),
+      stationName: first.station_name,
+    },
+    filename: csvWideFilename(points.map((p) => p.point_name), options.from, options.to),
+    total,
+    exported,
+    cap,
+    chunks,
+    unit: "timestamps",
   };
 }
