@@ -1,14 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button } from "@/components/ui";
+import { Button, Dropdown } from "@/components/ui";
 import { DELETE_CONFIRM_SENTENCE, SCHEDULE_DELETED_LABEL, deleteConfirmHeading } from "@/lib/modules/bas/reports/deletion-words";
 import { describePdfState, pdfStateKind } from "@/lib/modules/bas/reports/pdf/naming";
-import type { RunsList, RunSummary } from "@/lib/modules/bas/reports/runs-service";
+import { RUN_STATUS_FILTERS, pageWindow } from "@/lib/modules/bas/reports/paging";
+import type { RunsList, RunsQuery, RunSummary } from "@/lib/modules/bas/reports/runs-service";
 import { ApiError, type Tone } from "./health-client";
 import { ConfirmDialog } from "./reports-confirm";
-import { deleteRuns, downloadRunPdf, fetchRuns, resendRunEmail, restoreRuns, retryRunPdf } from "./reports-client";
+import { deleteRuns, downloadRunPdf, fetchRuns, resendRunEmail, restoreRuns, retryRunPdf, runsQueryString } from "./reports-client";
+import { ListPager } from "./reports-pager";
 import { DeliveryCell } from "./reports-run-deliveries";
 import { DownloadPdfButton } from "./reports-run-actions";
 import { TONE_INK, TONE_STYLE } from "./tone";
@@ -39,6 +42,14 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * A run whose REPORT was deleted (2026-11-20) stays here as it was, its
  * name followed by "(schedule deleted)": no more runs of it will come, and
  * it goes only by its own Delete.
+ *
+ * PAGED (2026-11-23): 25 a page, newest first, "1–25 of N" with Previous
+ * and Next under the table, and Report, Building and Status filters above
+ * it. The page and the filters live in the URL (`?report=&building=&status=
+ * &page=`), so a reload, the back button and a pasted link land on the same
+ * page; a filter change goes back to page 1, and a page past the end - its
+ * last rows just deleted - is the last page, as the server serves it. The
+ * selection is the page's: a run that leaves the page leaves the selection.
  */
 
 /** How often the list reloads while the tab is visible. */
@@ -104,7 +115,20 @@ const runsWord = (n: number) => (n === 1 ? "1 run" : `${n} runs`);
 /** What the notice above the list says after a delete or an undo. */
 type Notice = { kind: "deleted"; runIds: string[] } | { kind: "restored"; count: number };
 
+/** The runs query in the URL, as the page reads it. */
+export function runsQueryFrom(params: { get(name: string): string | null }): RunsQuery {
+  return { page: params.get("page"), report: params.get("report"), building: params.get("building"), status: params.get("status") };
+}
+
+/** Whether any filter narrows the list. */
+export function hasRunFilters(filters: RunsList["filters"] | undefined): boolean {
+  return filters !== undefined && (filters.report !== null || filters.building !== null || filters.status !== null);
+}
+
 export function GeneratedView() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const queryKey = runsQueryString(runsQueryFrom(searchParams));
   const [data, setData] = useState<RunsList | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -112,10 +136,26 @@ export function GeneratedView() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  /** Change the URL's query; a filter change goes back to page 1. */
+  const setQuery = useCallback(
+    (patch: RunsQuery) => {
+      const current = runsQueryFrom(new URLSearchParams(queryKey));
+      const next: RunsQuery = { ...current, ...patch };
+      if (patch.page === undefined) next.page = null;
+      router.replace(`/bas/reports${runsQueryString(next)}`, { scroll: false });
+    },
+    [queryKey, router],
+  );
+
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const next = await fetchRuns(null, signal);
+      const asked = runsQueryFrom(new URLSearchParams(queryKey));
+      const next = await fetchRuns(asked, signal);
       setData(next);
+      // The server held the page to the last one: say so in the URL too.
+      if (Number(asked.page ?? 1) !== next.page && !(asked.page == null && next.page === 1)) {
+        router.replace(`/bas/reports${runsQueryString({ ...asked, page: next.page })}`, { scroll: false });
+      }
       // A run that left the list, or is no longer deletable, leaves the selection.
       const keep = new Set(next.runs.filter(isDeletable).map((r) => r.runId));
       setSelected((prev) => {
@@ -127,7 +167,7 @@ export function GeneratedView() {
       if (cause instanceof DOMException && cause.name === "AbortError") return;
       setError(cause instanceof ApiError ? cause : new ApiError("unexpected", "Something went wrong."));
     }
-  }, []);
+  }, [queryKey, router]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -259,6 +299,7 @@ export function GeneratedView() {
         busy={deleting}
         onDeleteSelected={() => setConfirming([...selected])}
         onClearSelection={() => setSelected(new Set())}
+        filters={<RunsFilterBar data={data} onChange={(patch) => setQuery(patch)} />}
       />
       <RunsTable
         data={data}
@@ -267,6 +308,8 @@ export function GeneratedView() {
         busyRunId={busyRunId}
         selection={{ selected, onToggle: toggle, onToggleAll: toggleAll }}
         onDelete={(runId) => setConfirming([runId])}
+        onPage={(page) => setQuery({ page: String(page) })}
+        onClearFilters={() => setQuery({ report: null, building: null, status: null })}
       />
       {confirming !== null && (
         <DeleteRunsDialog count={confirming.length} busy={deleting} onCancel={() => setConfirming(null)} onConfirm={() => void confirmDelete()} />
@@ -284,14 +327,18 @@ export function RunsToolbar({
   busy = false,
   onDeleteSelected,
   onClearSelection,
+  filters,
 }: {
   selectedCount: number;
   busy?: boolean;
   onDeleteSelected?: () => void;
   onClearSelection?: () => void;
+  /** The filter bar (2026-11-23), first in the row. */
+  filters?: React.ReactNode;
 }) {
   return (
     <div className="mb-3 flex min-h-7 flex-wrap items-center gap-2" data-testid="runs-toolbar">
+      {filters}
       {selectedCount > 0 && (
         <>
           <span className="text-sm font-medium" data-testid="runs-selected-count">
@@ -310,6 +357,57 @@ export function RunsToolbar({
       </Button>
     </div>
   );
+}
+
+const ALL = "";
+
+/**
+ * Report, Building and Status above the runs (2026-11-23). The options are
+ * every report and building with a run on the list, whatever is chosen, so
+ * choosing one never hides the others; a deleted report says so.
+ */
+export function RunsFilterBar({
+  data,
+  onChange,
+}: {
+  data: Pick<RunsList, "filters" | "options">;
+  onChange?: (patch: RunsQuery) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="runs-filters">
+      <Dropdown
+        label="Report"
+        className="w-60"
+        value={data.filters.report ?? ALL}
+        onChange={(v) => onChange?.({ report: v === ALL ? null : v })}
+        options={[
+          { value: ALL, label: "All reports" },
+          ...data.options.reports.map((r) => ({ value: r.reportId, label: r.deleted ? `${r.name} ${SCHEDULE_DELETED_LABEL}` : r.name })),
+        ]}
+      />
+      <Dropdown
+        label="Building"
+        className="w-48"
+        value={data.filters.building ?? ALL}
+        onChange={(v) => onChange?.({ building: v === ALL ? null : v })}
+        options={[{ value: ALL, label: "All buildings" }, ...data.options.buildings.map((b) => ({ value: b.siteId, label: b.name }))]}
+      />
+      <Dropdown
+        label="Status"
+        className="w-40"
+        value={data.filters.status ?? ALL}
+        onChange={(v) => onChange?.({ status: v === ALL ? null : v })}
+        options={[{ value: ALL, label: "All statuses" }, ...RUN_STATUS_FILTERS.map((s) => ({ value: s, label: RUN_STATUS_LABELS[s] }))]}
+      />
+    </div>
+  );
+}
+
+/** The red line when a page holds fewer rows than its count says it should. */
+export function lostRowsSentence(shown: number, expected: number, total: number, noun: string): string {
+  return expected === total
+    ? `This list shows ${shown} of the ${total} ${noun} you may see.`
+    : `This page shows ${shown} of the ${expected} ${noun} it should, of ${total} in all.`;
 }
 
 /** The confirmation for runs: how many, where they go, and for how long they can come back. */
@@ -358,10 +456,14 @@ export interface RunsSelection {
   onToggleAll: (on: boolean) => void;
 }
 
+/** What the table needs: a page of runs and its count; the paging and the filters when the list is paged. */
+export type RunsTableData = Pick<RunsList, "runs" | "runsInDatabase"> & Partial<Pick<RunsList, "page" | "pageSize" | "filters">>;
+
 /**
  * Pure, for a node test; Retry PDF and Resend are two actions a row takes
  * here, and Delete (2026-11-20) the third. The box column and the Delete
- * column are drawn only when their handlers are passed.
+ * column are drawn only when their handlers are passed; the pager (2026-11-23)
+ * when the data says which page it is.
  */
 export function RunsTable({
   data,
@@ -370,15 +472,33 @@ export function RunsTable({
   busyRunId = null,
   selection,
   onDelete,
+  onPage,
+  onClearFilters,
 }: {
-  data: RunsList;
+  data: RunsTableData;
   onRetryPdf?: (runId: string) => void;
   onResend?: (runId: string) => void;
   busyRunId?: string | null;
   selection?: RunsSelection;
   onDelete?: (runId: string) => void;
+  onPage?: (page: number) => void;
+  onClearFilters?: () => void;
 }) {
   const deletable = useMemo(() => data.runs.filter(isDeletable), [data.runs]);
+  if (data.runs.length === 0 && data.runsInDatabase === 0 && hasRunFilters(data.filters)) {
+    return (
+      <section className="card p-8 text-center" data-testid="runs-none-match">
+        <p className="text-sm font-medium">No runs match these filters</p>
+        {onClearFilters !== undefined && (
+          <div className="mt-3">
+            <Button size="sm" onClick={onClearFilters} testId="runs-clear-filters">
+              Clear filters
+            </Button>
+          </div>
+        )}
+      </section>
+    );
+  }
   if (data.runs.length === 0 && data.runsInDatabase === 0) {
     return (
       <section className="card p-8 text-center">
@@ -392,11 +512,13 @@ export function RunsTable({
   }
   const allTicked = selection !== undefined && deletable.length > 0 && deletable.every((r) => selection.selected.has(r.runId));
   const someTicked = selection !== undefined && deletable.some((r) => selection.selected.has(r.runId));
+  const paged = data.page !== undefined && data.pageSize !== undefined;
+  const expected = paged ? pageWindow(data.page!, data.runsInDatabase, data.pageSize!).expectedRows : data.runsInDatabase;
   return (
     <section className="card p-0">
-      {data.runs.length !== data.runsInDatabase && (
+      {data.runs.length !== expected && (
         <p className="m-4 rounded-[var(--radius-row)] border p-3 text-sm" style={TONE_STYLE.bad} role="alert">
-          This list shows {data.runs.length} of the {data.runsInDatabase} runs you may see.
+          {lostRowsSentence(data.runs.length, expected, data.runsInDatabase, "runs")}
         </p>
       )}
       <div className="max-h-[36rem] overflow-auto">
@@ -502,6 +624,9 @@ export function RunsTable({
           </tbody>
         </table>
       </div>
+      {paged && (
+        <ListPager page={data.page!} pageSize={data.pageSize!} total={data.runsInDatabase} label="Runs pages" onPage={onPage} />
+      )}
     </section>
   );
 }

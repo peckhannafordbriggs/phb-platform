@@ -4148,6 +4148,22 @@ flight under it, so nothing can be queued between the check and the delete.
 own Delete" once the report is gone: a setting on a report that no longer
 exists and cannot be edited must not keep deleting things.
 
+**Why the two lists are paged in SQL, newest first, with an id tiebreak
+(2026-11-23).** The runs list read the newest 200 rows and the Scheduled list
+every report; a year of daily reports on a few buildings passes 200 runs, and
+the 201st would have been unreachable from the screen. 25 a page, counted and
+paged in the database, ordered by `created_at` then the id - runs queued by
+one scheduler pass share an instant, and without the id two of them can swap
+across a page boundary so one is shown twice and the other never (the
+Phase 10 lesson, tested here with ten runs in one instant straddling row 25).
+The Scheduled list moved from name order to newest first, as asked. A page
+past the end is served as the last page rather than an empty one, because
+deleting the last rows of the last page would otherwise leave the person on a
+blank page with rows behind them. The filters' options come from every run on
+the list, not from the filtered set, so choosing a report never hides the
+other reports from the menu. The page and the filters live in the URL so a
+reload or a pasted link is the same view.
+
 **Why the delete is not audited.** The run is its owner's own data, and the
 owner's request. `deleted_by_employee_id` is the record until the purge; the
 purge is a log line. Restoring is not audited either; changing the retention

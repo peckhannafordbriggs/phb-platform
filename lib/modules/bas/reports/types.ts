@@ -131,12 +131,17 @@ export interface ReportDetail extends ReportSummary {
 }
 
 export interface ReportsList {
+  /** One page, newest first (2026-11-23; by name before). */
   reports: ReportSummary[];
   /**
    * Reports the viewer may see, counted with no joins, so the screen can say
-   * in red when the list lost one - the same guard the Projects cards carry.
+   * in red when the page lost one - the same guard the Projects cards carry.
+   * The N of "1–25 of N".
    */
   reportsInDatabase: number;
+  /** The page served - the one asked for, held to the last page - and its size. */
+  page: number;
+  pageSize: number;
   canAdminister: boolean;
   viewerEmployeeId: string;
 }

@@ -14,6 +14,7 @@ import {
 import { daysRemaining, isRunRetentionMonths, purgeDueAt, type RunRetentionMonths } from "./deletion-words";
 import type { ReportDocument, RunStatus } from "./engine/types";
 import { pdfFileName, pdfStateKind, type PdfState } from "./pdf/naming";
+import { REPORTS_PAGE_SIZE, isRunStatusFilter, pageWindow, parseIdFilter, parsePage, type RunStatusFilter } from "./paging";
 import { isExternalAddress, normaliseEmail } from "./recipients";
 import { FINISHED_RUN_STATUSES, markRunsDeleted, markRunsRestored } from "./run-deletion";
 
@@ -29,7 +30,8 @@ import { FINISHED_RUN_STATUSES, markRunsDeleted, markRunsRestored } from "./run-
  *
  * The PDF's bytes are read by `loadRunPdf` alone, by name. Every other read
  * of a run here is a `select` that leaves `pdf` out - a few hundred KB a
- * row, and the list reads up to 200 rows every ten seconds.
+ * row, and the list reads a page of 25 every ten seconds (200 rows before
+ * it was paged, 2026-11-23).
  * tests/bas-reports-pdf.test.ts holds every basReportRun read in lib/ and
  * app/ to a select, and the summaries to carrying no bytes.
  *
@@ -85,9 +87,29 @@ export interface RunDetail extends RunSummary {
   deliveries: DeliveryRowView[];
 }
 
+/** What the runs list was asked for (2026-11-23): a page, and three optional filters. Text, as a query string carries it. */
+export interface RunsQuery {
+  page?: string | number | null;
+  report?: string | null;
+  building?: string | null;
+  status?: string | null;
+}
+
 export interface RunsList {
+  /** One page, newest first. */
   runs: RunSummary[];
+  /** Every run matching the filters that the viewer may see, counted with no joins: the N of "1–25 of N". */
   runsInDatabase: number;
+  /** The page served - the one asked for, held to the last page - and its size. */
+  page: number;
+  pageSize: number;
+  /** The filters as applied; an unreadable value is no filter, and shows as none. */
+  filters: { report: string | null; building: string | null; status: RunStatusFilter | null };
+  /** What the filters offer: every report and building that has a run on the list for this viewer. */
+  options: {
+    reports: Array<{ reportId: string; name: string; deleted: boolean }>;
+    buildings: Array<{ siteId: string; name: string }>;
+  };
 }
 
 /** A run in Recently deleted (2026-11-20). */
@@ -249,20 +271,62 @@ export async function visibilityWhere(viewer: Viewer) {
   };
 }
 
-export async function listRuns(viewer: Viewer, reportIdText: string | null): Promise<RunsList> {
+/**
+ * The runs list (paged 2026-11-23): 25 a page, newest first - created_at,
+ * then run_id, so runs queued in the same instant never swap across a page
+ * boundary - narrowed by report, building and status. The count is taken
+ * first and the page held to the last one, so a page past the end (its last
+ * rows just deleted) serves the last page rather than an empty one. The
+ * filter options are every report and building with a run on the list for
+ * this viewer, whatever the filters, so choosing one never hides the rest.
+ */
+export async function listRuns(viewer: Viewer, query: RunsQuery | null = null): Promise<RunsList> {
   const visible = await visibilityWhere(viewer);
-  const reportId = reportIdText !== null && /^[0-9]{1,20}$/.test(reportIdText) ? BigInt(reportIdText) : null;
-  const where = { ...visible, ...ON_LIST, ...(reportId === null ? {} : { reportId }) };
-  const [rows, runsInDatabase] = await Promise.all([
-    prisma.basReportRun.findMany({
-      where,
-      select: RUN_SELECT,
-      orderBy: [{ createdAt: "desc" }, { runId: "desc" }],
-      take: 200,
-    }),
+  const report = parseIdFilter(query?.report);
+  const building = parseIdFilter(query?.building);
+  const status = isRunStatusFilter(query?.status) ? query.status : null;
+  const base = { AND: [visible, ON_LIST] };
+  const where = {
+    AND: [
+      visible,
+      ON_LIST,
+      ...(report === null ? [] : [{ reportId: BigInt(report) }]),
+      ...(building === null ? [] : [{ report: { siteId: BigInt(building) } }]),
+      ...(status === null ? [] : [{ status }]),
+    ],
+  };
+  const [runsInDatabase, reportsWithRuns] = await Promise.all([
     prisma.basReportRun.count({ where }),
+    prisma.basReportRun.findMany({
+      where: base,
+      distinct: ["reportId"],
+      select: { reportId: true, report: { select: { name: true, deletedAt: true, siteId: true, site: { select: { name: true } } } } },
+    }),
   ]);
-  return { runs: rows.map(toSummary), runsInDatabase };
+  const window = pageWindow(parsePage(query?.page), runsInDatabase, REPORTS_PAGE_SIZE);
+  const rows = await prisma.basReportRun.findMany({
+    where,
+    select: RUN_SELECT,
+    orderBy: [{ createdAt: "desc" }, { runId: "desc" }],
+    skip: window.offset,
+    take: window.pageSize,
+  });
+  const buildings = new Map<string, string>();
+  for (const r of reportsWithRuns) buildings.set(r.report.siteId.toString(), r.report.site.name);
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+  return {
+    runs: rows.map(toSummary),
+    runsInDatabase,
+    page: window.page,
+    pageSize: window.pageSize,
+    filters: { report, building, status },
+    options: {
+      reports: reportsWithRuns
+        .map((r) => ({ reportId: r.reportId.toString(), name: r.report.name, deleted: r.report.deletedAt !== null }))
+        .sort((a, b) => byName(a, b) || Number(a.deleted) - Number(b.deleted) || a.reportId.localeCompare(b.reportId)),
+      buildings: [...buildings].map(([siteId, name]) => ({ siteId, name })).sort((a, b) => byName(a, b) || a.siteId.localeCompare(b.siteId)),
+    },
+  };
 }
 
 const runNotFound = () => new BasError("run_not_found", "That run does not exist, or you do not have access to it.");

@@ -104,6 +104,8 @@ function list0(over: Partial<ReportsList> = {}): ReportsList {
       { ...base, reportId: "3", name: "Someone else's draft", state: "draft", nextRunAt: null, isOwner: false },
     ],
     reportsInDatabase: 3,
+    page: 1,
+    pageSize: 25,
     canAdminister: true,
     viewerEmployeeId: "o",
     ...over,

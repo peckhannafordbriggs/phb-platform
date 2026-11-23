@@ -15,8 +15,9 @@ const ROUTE = "/api/modules/bas/reports";
  * the service's decision, per row, and a report that is not theirs reads as
  * not existing.
  */
-export async function GET() {
-  return withBas(ROUTE, async (viewer) => ok(await listReports(viewer)));
+export async function GET(request: Request) {
+  // 25 a page, newest first (2026-11-23): `?page=<n>`.
+  return withBas(ROUTE, async (viewer) => ok(await listReports(viewer, new URL(request.url).searchParams.get("page"))));
 }
 
 /**

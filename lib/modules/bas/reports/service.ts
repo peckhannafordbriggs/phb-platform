@@ -8,6 +8,7 @@ import { basSiteScope } from "../service";
 import { SETTINGS_ROW_ID, type SafetyCeilingView } from "./ceiling";
 import { readSafetyCeiling } from "./ceiling-read";
 import { isRunRetentionMonths } from "./deletion-words";
+import { REPORTS_PAGE_SIZE, pageWindow, parsePage } from "./paging";
 import { enqueueRun } from "./engine/queue";
 import { randomBytes } from "node:crypto";
 import {
@@ -384,7 +385,12 @@ async function audit(
 // Reading
 // ---------------------------------------------------------------------------
 
-export async function listReports(viewer: Viewer): Promise<ReportsList> {
+/**
+ * The Scheduled list: 25 a page, newest first (2026-11-23) - created_at, then
+ * report_id - and never a deleted report. The count is taken first and the
+ * page held to the last one.
+ */
+export async function listReports(viewer: Viewer, pageText: string | number | null = null): Promise<ReportsList> {
   const admin = await canAdminister(viewer);
   const { entitled } = await basSiteScope(viewer);
 
@@ -396,21 +402,24 @@ export async function listReports(viewer: Viewer): Promise<ReportsList> {
     ...(entitled === null ? {} : { siteId: { in: entitled } }),
   };
 
-  const [rows, reportsInDatabase] = await Promise.all([
-    prisma.basReportDefinition.findMany({
-      where,
-      include: DETAIL_INCLUDE,
-      // Name, then id: the tiebreak is load-bearing on every paged list in
-      // this platform, and this one will be paged the day it needs to be.
-      orderBy: [{ name: "asc" }, { reportId: "asc" }],
-    }),
-    // Counted without the include, so a join that drops a row is visible.
-    prisma.basReportDefinition.count({ where }),
-  ]);
+  // Counted without the include, so a join that drops a row is visible.
+  const reportsInDatabase = await prisma.basReportDefinition.count({ where });
+  const window = pageWindow(parsePage(pageText), reportsInDatabase, REPORTS_PAGE_SIZE);
+  const rows = await prisma.basReportDefinition.findMany({
+    where,
+    include: DETAIL_INCLUDE,
+    // Newest first, then id: the tiebreak is load-bearing on a paged list -
+    // two reports made in one instant must not swap across a page boundary.
+    orderBy: [{ createdAt: "desc" }, { reportId: "desc" }],
+    skip: window.offset,
+    take: window.pageSize,
+  });
 
   return {
     reports: rows.map((row) => toSummary(row, viewer, row.site.stations.length)),
     reportsInDatabase,
+    page: window.page,
+    pageSize: window.pageSize,
     canAdminister: admin,
     viewerEmployeeId: viewer.id,
   };

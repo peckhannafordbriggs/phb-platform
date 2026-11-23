@@ -15,7 +15,7 @@ import type { SafetyCeilingView } from "@/lib/modules/bas/reports/ceiling";
 import { REPORT_PRESETS, presetMatching, type PresetKey } from "@/lib/modules/bas/reports/presets";
 import type { PdfState } from "@/lib/modules/bas/reports/pdf/naming";
 import type { ScheduleSpec } from "@/lib/modules/bas/reports/schedule";
-import type { DeletedRunsList, RunDetail, RunsList } from "@/lib/modules/bas/reports/runs-service";
+import type { DeletedRunsList, RunDetail, RunsList, RunsQuery } from "@/lib/modules/bas/reports/runs-service";
 import { formatInZone } from "@/lib/modules/bas/reports/schedule";
 import type {
   AddRecipientInput,
@@ -66,14 +66,33 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
 
-export const fetchReports = (signal?: AbortSignal) => call<ReportsList>("", { signal });
+/** The Scheduled list, 25 a page, newest first (2026-11-23). */
+export const fetchReports = (page: number | null = null, signal?: AbortSignal) =>
+  call<ReportsList>(page === null || page <= 1 ? "" : `?page=${page}`, { signal });
 export const fetchReport = (reportId: string, signal?: AbortSignal) =>
   call<ReportDetail>(`/${encodeURIComponent(reportId)}`, { signal });
 export const fetchReportOptions = (signal?: AbortSignal) => call<ReportOptions>("/options", { signal });
 export const fetchLibrary = (signal?: AbortSignal) => call<LibraryQuestionView[]>("/library", { signal });
 export const fetchPersonal = (signal?: AbortSignal) => call<PersonalQuestionView[]>("/personal", { signal });
-export const fetchRuns = (reportId: string | null, signal?: AbortSignal) =>
-  call<RunsList>(reportId === null ? "/runs" : `/runs?report=${encodeURIComponent(reportId)}`, { signal });
+/** The runs list, 25 a page, newest first, narrowed by report, building and status (2026-11-23). */
+export const fetchRuns = (query: RunsQuery | null = null, signal?: AbortSignal) => call<RunsList>(`/runs${runsQueryString(query)}`, { signal });
+
+/**
+ * A runs query as the URL carries it, on the page and to the API alike:
+ * only what is set, page 1 left out, the keys always in one order so the
+ * same query is the same string.
+ */
+export function runsQueryString(query: RunsQuery | null): string {
+  const params = new URLSearchParams();
+  for (const key of ["report", "building", "status"] as const) {
+    const value = query?.[key];
+    if (typeof value === "string" && value.length > 0) params.set(key, value);
+  }
+  const page = Number(query?.page ?? 1);
+  if (Number.isInteger(page) && page > 1) params.set("page", String(page));
+  const text = params.toString();
+  return text.length === 0 ? "" : `?${text}`;
+}
 
 export const createReport = (body: CreateReportInput) => call<{ reportId: string }>("", json("POST", body));
 export const updateReport = (reportId: string, body: UpdateReportInput) =>

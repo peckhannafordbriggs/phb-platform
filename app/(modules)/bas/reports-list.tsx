@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { pageWindow, parsePage } from "@/lib/modules/bas/reports/paging";
 import {
   REPORT_DELETE_IN_FLIGHT_TITLE,
   describeRunRetention,
@@ -23,6 +25,8 @@ import {
 } from "./reports-client";
 import { Button } from "@/components/ui";
 import { ConfirmDialog } from "./reports-confirm";
+import { lostRowsSentence } from "./reports-generated";
+import { ListPager } from "./reports-pager";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /**
@@ -33,12 +37,18 @@ import { TONE_INK, TONE_STYLE } from "./tone";
  * every ten seconds while a run of any report is in flight, so the change is
  * seen without a refresh.
  *
+ * Paged (2026-11-23): 25 a page, newest first, "1–25 of N" with Previous
+ * and Next under the table, the page in the URL (`?page=`).
+ *
  * Delete (2026-11-20) opens a confirmation that says future runs stop and
  * names how many generated reports stay; the report leaves this list for
  * everyone, and its runs stay on the Reports list, "(schedule deleted)". It
  * is greyed while a run of the report is queued or running.
  */
 export function ReportsListView() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const askedPage = parsePage(searchParams.get("page"));
   const [data, setData] = useState<ReportsList | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
@@ -46,13 +56,16 @@ export function ReportsListView() {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      setData(await fetchReports(signal));
+      const next = await fetchReports(askedPage, signal);
+      setData(next);
+      // The server held the page to the last one: say so in the URL too.
+      if (next.page !== askedPage) router.replace(next.page <= 1 ? "/bas/reports/scheduled" : `/bas/reports/scheduled?page=${next.page}`, { scroll: false });
       setError(null);
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") return;
       setError(cause instanceof ApiError ? cause : new ApiError("unexpected", "Something went wrong."));
     }
-  }, []);
+  }, [askedPage, router]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -113,6 +126,7 @@ export function ReportsListView() {
         onResume={(id) => run(() => changeReportState(id, "resume"))}
         onRunNow={(id) => run(() => requestRun(id))}
         onDelete={(id) => setConfirming(data.reports.find((r) => r.reportId === id) ?? null)}
+        onPage={(page) => router.replace(page <= 1 ? "/bas/reports/scheduled" : `/bas/reports/scheduled?page=${page}`, { scroll: false })}
       />
       {confirming !== null && (
         <ConfirmDialog
@@ -144,6 +158,7 @@ export function ReportsTable({
   onResume,
   onRunNow,
   onDelete,
+  onPage,
 }: {
   data: ReportsList;
   busy?: boolean;
@@ -151,6 +166,7 @@ export function ReportsTable({
   onResume?: (reportId: string) => void;
   onRunNow?: (reportId: string) => void;
   onDelete?: (reportId: string, name: string) => void;
+  onPage?: (page: number) => void;
 }) {
   if (data.reports.length === 0 && data.reportsInDatabase === 0) {
     return (
@@ -164,12 +180,13 @@ export function ReportsTable({
     );
   }
 
+  const expected = pageWindow(data.page, data.reportsInDatabase, data.pageSize).expectedRows;
   return (
     <section className="card p-0">
-      {data.reports.length !== data.reportsInDatabase && (
+      {data.reports.length !== expected && (
         <p className="m-4 rounded-[var(--radius-row)] border p-3 text-sm" style={TONE_STYLE.bad} role="alert">
-          This list shows {data.reports.length} of the {data.reportsInDatabase} reports you may see. Report
-          this - a report missing here may still be scheduled.
+          {lostRowsSentence(data.reports.length, expected, data.reportsInDatabase, "reports")} Report this - a report
+          missing here may still be scheduled.
         </p>
       )}
       <div className="max-h-[32rem] overflow-auto">
@@ -205,6 +222,7 @@ export function ReportsTable({
           </tbody>
         </table>
       </div>
+      <ListPager page={data.page} pageSize={data.pageSize} total={data.reportsInDatabase} label="Reports pages" onPage={onPage} />
     </section>
   );
 }

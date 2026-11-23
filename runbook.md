@@ -13485,6 +13485,53 @@ comparison should go through it.
 until the purge; in *Most expensive runs* its row says *· deleted* and does
 not open. After the purge it leaves the figures.
 
+## Reports: the runs list and the Scheduled list are paged, 25 a page
+
+Since 2026-11-23 Reports → Reports and Scheduled each show **25 rows a page,
+newest first**, with *1–25 of N* and **Previous / Next** under the table. The
+runs list also has three filters above the table - **Report**, **Building**,
+**Status** - each starting at *All*. The page and the filters are in the
+address bar (`/bas/reports?report=7&building=3&status=failed&page=2`,
+`/bas/reports/scheduled?page=2`), so a reload, the back button or a pasted
+link opens the same view. Code: `lib/modules/bas/reports/paging.ts` (the
+rules), `listRuns` in `runs-service.ts`, `listReports` in `service.ts`,
+`app/(modules)/bas/reports-pager.tsx`.
+
+**"Where are the rest of the runs / reports?"** On the next page: *Next*
+under the table. *N* in *1–25 of N* is every row you may see that matches
+the filters, counted in the database.
+
+**The Scheduled list's order changed.** It was by name until 2026-11-23; it
+is newest first now, like the runs. A report you are looking for by name is
+on whichever page its creation date puts it.
+
+**A link opens a different page from the one in it.** A page past the end -
+its last rows were deleted since, or a filter narrowed the list - opens the
+last page, and the address bar is corrected to say so. A page that is not a
+whole number from 1 opens page 1.
+
+**A filter is in the address bar but the screen shows *All*.** The value
+could not be read - a report or building id that is not digits, a status that
+is not one of *Queued, Running, Succeeded, Partial, Failed* - and was
+ignored; the screen shows the filters as the server applied them.
+
+**"No runs match these filters".** Nothing on the list matches all three;
+*Clear filters* goes back to everything. The Report and Building lists offer
+every report and building with a run on the list, whatever is chosen, so
+choosing one never hides the others; a deleted report is offered with
+*(schedule deleted)*. A report whose only runs are in Recently deleted is not
+offered.
+
+**A red line: "This page shows 24 of the 25 runs it should, of 30 in all."**
+The page came back with fewer rows than the count beside it says the page
+holds - a join dropped a row. Report it, with the address bar. (When every
+row fits on one page the sentence is the older *This list shows N of the M
+... you may see.*)
+
+**The selection emptied when I changed page.** The boxes are per page: a run
+that leaves the page leaves the selection, so *Delete N runs* only ever
+deletes rows you can see.
+
 ## Reports: the PDF
 
 **What it is (Phase 4, the PDF half, 2026-11-13; email is the other half,

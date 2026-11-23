@@ -1973,9 +1973,18 @@ is free again through a hand-written PARTIAL unique index,
 `bas_report_definitions_owner_name_live_key` - Prisma cannot express it and
 7.10's diff leaves it alone; a test fails if a migration drops it. The
 confirmation: *This stops future runs. The N generated reports stay.*
+**Both lists are paged (2026-11-23, same PR):** Reports → Reports and
+Scheduled are 25 rows a page, newest first (`created_at`, then the id - the
+tiebreak is load-bearing), *1–25 of N* with Previous / Next, counted and paged
+in SQL, a page past the end served as the last page; the runs list filters by
+Report, Building and Status, whose options are every report and building with
+a run on the list whatever is chosen. Page and filters are in the URL. The
+Scheduled list was by name before. `lib/modules/bas/reports/paging.ts`;
+`tests/bas-reports-paging.test.tsx`.
 `WHY-ITS-BUILT-THIS-WAY.md` § 94; `runbook.md` → *Reports: a run is missing
 from the list, or Recently deleted*, *Deleting a report, and what happens to
-its generated reports*.
+its generated reports*, *Reports: the runs list and the Scheduled list are
+paged, 25 a page*.
 
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 

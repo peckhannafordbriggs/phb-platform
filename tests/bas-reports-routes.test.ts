@@ -259,7 +259,7 @@ describe("who may see a report", () => {
     expect(d.scheduleText).toBe("Every Monday at 06:00 (America/New_York) · last 7 days");
     expect(d.stations.map((s) => s.selected)).toEqual([false, false]);
 
-    const list = await body<ReportsList>(await listRoute());
+    const list = await body<ReportsList>(await listRoute(new Request("http://localhost/api/modules/bas/reports")));
     expect(list.reports.map((r) => r.reportId)).toEqual([reportId]);
     expect(list.reportsInDatabase).toBe(1);
     expect(list.canAdminister).toBe(false);
@@ -289,7 +289,7 @@ describe("who may see a report", () => {
       expect(await r.text()).not.toContain("ZZTEST weekly");
     }
 
-    const list = await body<ReportsList>(await listRoute());
+    const list = await body<ReportsList>(await listRoute(new Request("http://localhost/api/modules/bas/reports")));
     expect(list.reports).toEqual([]);
     expect(list.reportsInDatabase).toBe(0);
 
@@ -306,7 +306,7 @@ describe("who may see a report", () => {
     expect(d.isOwner).toBe(false);
     expect(d.ownerEmail).toBe(people.owner.email);
 
-    const list = await body<ReportsList>(await listRoute());
+    const list = await body<ReportsList>(await listRoute(new Request("http://localhost/api/modules/bas/reports")));
     expect(list.reports.map((r) => r.reportId)).toEqual([reportId]);
     expect(list.canAdminister).toBe(true);
 
@@ -321,7 +321,7 @@ describe("who may see a report", () => {
   it("an employee without the BAS grant gets 404 from the list and the options", async () => {
     const nobody = await createEmployee({ email: "zztest.nobody@phb1899.com" });
     signedInAs(nobody.entraOid!);
-    expect((await listRoute()).status).toBe(404);
+    expect((await listRoute(new Request("http://localhost/api/modules/bas/reports"))).status).toBe(404);
     expect((await optionsRoute()).status).toBe(404);
     expect((await libraryRoute()).status).toBe(404);
   });
@@ -822,7 +822,7 @@ describe("draft -> active <-> paused, with the next run in the building's zone",
       expect(r.status, action).toBe(409);
       expect(await errorCode(r)).toBe("invalid_state");
     }
-    const list = await body<ReportsList>(await listRoute());
+    const list = await body<ReportsList>(await listRoute(new Request("http://localhost/api/modules/bas/reports")));
     expect(list.reports[0]).toMatchObject({ state: "draft", nextRunAt: null });
   });
 

@@ -492,7 +492,7 @@ describe("who sees a run", () => {
     expect((await getRunRoute(bare(), { params: Promise.resolve({ runId: firstRunId }) })).status).toBe(200);
 
     signedInAs(other.entraOid!);
-    expect(await data<{ runs: unknown[]; runsInDatabase: number }>(await listRunsRoute(bare()))).toEqual({ runs: [], runsInDatabase: 0 });
+    expect(await data<{ runs: unknown[]; runsInDatabase: number }>(await listRunsRoute(bare()))).toMatchObject({ runs: [], runsInDatabase: 0 });
     const denied = await getRunRoute(bare(), { params: Promise.resolve({ runId: firstRunId }) });
     expect(denied.status).toBe(404);
     expect(await denied.text()).not.toContain("ZZTEST_ENGINE_SITE");
