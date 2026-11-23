@@ -49,7 +49,12 @@ export async function PATCH(
   );
 }
 
-/** Delete a report and everything on it. A report with runs is refused: its history is kept. */
+/**
+ * Delete a report (2026-11-20): future runs stop and it leaves every
+ * Scheduled list; its generated runs stay on the Reports list, "(schedule
+ * deleted)". 409 run_in_flight while one of its runs is queued or running.
+ * Answers how many runs were kept.
+ */
 export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ reportId: string }> },

@@ -536,8 +536,14 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
       : `${actor} updated the report ${name}`;
   },
 
-  "bas.report_deleted": ({ actor, meta }) =>
-    `${actor} deleted the report ${stringField(meta, "name") ?? "(unnamed)"}`,
+  // Since 2026-11-20 a report with runs can be deleted, and its runs stay.
+  "bas.report_deleted": ({ actor, meta }) => {
+    const name = stringField(meta, "name") ?? "(unnamed)";
+    const kept = typeof meta.runsKept === "number" ? meta.runsKept : 0;
+    return kept > 0
+      ? `${actor} deleted the report ${name}; its ${kept} generated report${kept === 1 ? " was" : "s were"} kept`
+      : `${actor} deleted the report ${name}`;
+  },
 
   // The transition is the sentence: "activated", "paused", "resumed".
   "bas.report_state_changed": ({ actor, meta }) => {

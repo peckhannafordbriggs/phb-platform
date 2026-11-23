@@ -1,3 +1,4 @@
+import type { RunRetentionMonths } from "./deletion-words";
 import type { RunStatus } from "./engine/types";
 import type { LibraryQuestionKind, RoleRequirement } from "./library";
 import type { PresetKey } from "./presets";
@@ -66,8 +67,16 @@ export interface ReportSummary {
   questionCount: number;
   /** ADDITIONAL recipients. The owner is not counted: the owner is not a row. */
   recipientCount: number;
-  /** The newest run, whatever its state; null until the first is queued. */
+  /** The newest run on the Reports list, whatever its state; a run in Recently deleted is not it. Null until the first is queued. */
   lastRun: LastRunView | null;
+  /**
+   * Every run the report has made, on the Reports list or in Recently
+   * deleted (2026-11-20): the number the delete confirmation names - they
+   * all stay when the report is deleted.
+   */
+  runCount: number;
+  /** "Keep generated runs for" (2026-11-20): 3, 6 or 12 months; null is never. */
+  runRetentionMonths: RunRetentionMonths | null;
   /** Why the scheduler paused it; set only in paused_owner_disabled. */
   pausedReason: string | null;
   createdAt: string;
@@ -122,12 +131,17 @@ export interface ReportDetail extends ReportSummary {
 }
 
 export interface ReportsList {
+  /** One page, newest first (2026-11-23; by name before). */
   reports: ReportSummary[];
   /**
    * Reports the viewer may see, counted with no joins, so the screen can say
-   * in red when the list lost one - the same guard the Projects cards carry.
+   * in red when the page lost one - the same guard the Projects cards carry.
+   * The N of "1–25 of N".
    */
   reportsInDatabase: number;
+  /** The page served - the one asked for, held to the last page - and its size. */
+  page: number;
+  pageSize: number;
   canAdminister: boolean;
   viewerEmployeeId: string;
 }

@@ -12931,16 +12931,63 @@ changed - a point re-discovered under a new `point_id`, or equipment
 deleted and recreated - because names are not in the fingerprint, on
 purpose.
 
-### A report cannot be deleted: "has N runs and its history is kept"
+### Deleting a report, and what happens to its generated reports
 
-**Symptom.** `409 report_has_runs` from the editor's delete.
+Since 2026-11-20 the owner or a module admin can delete a report at any time
+except while one of its runs is queued or running (until then a report with
+runs was refused with `409 report_has_runs` - *"has N runs and its history
+is kept"* - and that code is gone). The confirmation says *This stops future
+runs. The N generated reports stay.*, N counting every run of the report,
+those in Recently deleted too.
 
-**Cause.** By design: a run is a record someone may have acted on. Pause
-the report instead; a paused report keeps its history and never runs.
+**What it does.** The report leaves the Scheduled list for everyone, admins
+included; its editor answers 404; the scheduler never queues it again and
+*Run now* is gone with it. **Its runs are not touched**: they stay on
+Reports → Reports with the report's name and *(schedule deleted)* beside it,
+and open, download, *Retry PDF*, *Resend* and *Send to me* as before. A run
+goes only by its own *Delete* (then Recently deleted, 15 days); the report's
+*Keep generated runs for* stops applying the moment the report is deleted.
+Its name is free again: its owner can make a new report called the same.
+A report that never made a run is removed outright, as before.
 
-**Fix.** If the history really is disposable (a test definition), delete
-the runs first - `DELETE FROM bas_report_runs WHERE report_id = <n>;`, the
-findings cascade - then delete the report from the screen.
+**How.** A report with runs is **marked** (`bas_report_definitions.deleted_at`,
+`deleted_by_employee_id`), not removed, because each run still reads its
+report for its name, its building and who may see it. Its question rows are
+removed (they only drive future runs, and a personal question they named
+could otherwise never be deleted); its recipients stay, so a PDF still
+rendering at the moment of the delete is emailed as before. Audited as
+`bas.report_deleted` with `runsKept`.
+
+**Delete is greyed, or answers `409 run_in_flight`: "A run of this report is
+queued (running). Wait for it to finish, then delete the report."** The run
+is the worker's and reads the report while it executes. Wait for it - the
+Scheduled list reloads every ten seconds while one is in flight - or see
+*Reports: a run is stuck or failed*.
+
+**A new report is refused "You already have a report named ..."** - only a
+LIVE report of yours holds a name. The unique index is partial,
+`bas_report_definitions_owner_name_live_key` on `(owner_employee_id, name)
+WHERE deleted_at IS NULL`, written by hand because Prisma cannot express it;
+Prisma 7.10's diff leaves it alone, and if a later version's `migrate dev`
+proposes dropping it, delete that line from the migration
+(`tests/bas-reports-run-deletion.test.tsx` fails on it).
+
+**Who deleted a report, and how many runs it kept:**
+
+```sql
+SELECT d.report_id, d.name, d.deleted_at, e.email AS deleted_by,
+       (SELECT count(*) FROM bas_report_runs r WHERE r.report_id = d.report_id) AS runs
+  FROM bas_report_definitions d
+  LEFT JOIN employees e ON e.id = d.deleted_by_employee_id
+ WHERE d.deleted_at IS NOT NULL
+ ORDER BY d.deleted_at DESC;
+```
+
+There is no undelete on screen. Bringing a deleted report back is a by-hand
+`UPDATE bas_report_definitions SET deleted_at = NULL, deleted_by_employee_id
+= NULL WHERE report_id = <n>;` - only if no live report of the owner's has
+taken its name since - and then its questions must be chosen again in the
+editor, because they were removed.
 
 ### Reading what a run did
 
@@ -13313,6 +13360,177 @@ it to another owner: the report's editor, *Recipients* → *Transfer to
 another owner* (admins only). The transfer resumes it with the next run
 computed from now; `bas.report_owner_transferred` records who did it and
 that it resumed.
+
+## Reports: a run is missing from the list, or Recently deleted
+
+Since 2026-11-20 a report run can be deleted. **Delete** - a box on each
+finished row of Reports → Reports, a box in the header for every finished
+row shown, and *Delete* on each row; one confirmation naming the count -
+moves runs to **Recently deleted** (the button above the table,
+`/bas/reports/deleted`). The report's owner and BAS module admins can do it:
+the same people who can see the run. A deleted run keeps its findings, page
+and PDF and can be restored for **15 days**; then the scheduler job
+**purges** it for good, with its findings, its email record and its PDF. A
+report's **Keep generated runs for** (the editor's Schedule section: never,
+the default, or 3, 6 or 12 months) makes the same scheduler pass move older
+runs to Recently deleted, so the 15 days apply to those too. Code:
+`lib/modules/bas/reports/run-deletion.ts`; words and numbers:
+`deletion-words.ts`; `WHY-ITS-BUILT-THIS-WAY.md` § 94.
+
+### A run is gone from the Reports list, or its link says "That run does not exist"
+
+**Cause.** One of three, in this order of likelihood:
+
+1. **Somebody deleted it.** Open *Recently deleted*: the row says when, and
+   *by* whom - an address, or *Retention (6 months)*. An admin sees every
+   report's deleted runs; an owner sees their own reports'.
+2. **Retention took it.** The report's *Keep generated runs for* is set, and
+   the run was created longer ago than that. The Scheduled list's summary
+   line under the report's name says *Keeps runs 6 months* when it is.
+3. **It was purged.** Deleted 15 or more days ago. It is not in Recently
+   deleted any more and nothing on screen will bring it back.
+
+**Fix.** 1 and 2: *Restore* on the row in Recently deleted (or tick several
+and *Restore N runs*). The run is back on the list whole - same id, same
+page, same findings, same PDF. **A restored run is never taken by retention
+again** (`restored_at` is set); delete it by hand if it should go. 3: the run
+is gone from the database; the only copies are the server's point-in-time
+restore (7 days on live, `postgresBackupRetentionDays`) and the nightly dump
+once it is turned on (*Nightly database backup*), both whole-database
+restores, and not worth it for one report. *Run now* on Scheduled makes a
+new run, for the period ending now.
+
+**Reading it with SQL** (the delete is not audited - the run is the owner's
+own data - so the row is the record):
+
+```sql
+SELECT r.run_id, d.name, r.created_at, r.deleted_at, r.deleted_by,
+       e.email AS deleted_by_person, r.restored_at
+  FROM bas_report_runs r
+  JOIN bas_report_definitions d USING (report_id)
+  LEFT JOIN employees e ON e.id = r.deleted_by_employee_id
+ WHERE r.deleted_at IS NOT NULL OR r.restored_at IS NOT NULL
+ ORDER BY r.deleted_at DESC NULLS LAST;
+```
+
+A purge leaves no row. The scheduler job's execution log says
+`[bas-reports-scheduler] purged run <id> of report <id>: deleted <when> by
+<person|retention>`, and the platform log carries `event:
+"bas.report_runs_purged"` with the ids; retention's moves are
+`[bas-reports-scheduler] moved run ... to Recently deleted` and `event:
+"bas.report_runs_retention"`.
+
+### Delete answers "still queued or running" (409 `run_not_finished`)
+
+**Cause.** A queued or running run is the worker's; only a finished one -
+succeeded, partial or failed - can be deleted, and the database holds it
+(`bas_report_runs_deleted_only_finished`). The row's box and *Delete* are
+greyed with that sentence. A selection with one such run is refused whole;
+nothing was deleted.
+
+**Fix.** Wait for it to finish (the list reloads every ten seconds), or see
+*Reports: a run is stuck or failed* if it does not.
+
+### A restored run's PDF reads "Not rendered: the run was deleted ...", or its email reads Failed "Not sent: the run was deleted ..."
+
+**Cause.** The run was deleted while its PDF was still queued, or while an
+email to someone was still waiting. Deleting settles that work in the same
+transaction - the queued render and every waiting delivery become *failed*
+with that sentence - so the worker job's scaler, which counts queued PDFs and
+waiting deliveries, never counts work for a deleted run (an uncounted job
+cannot spin; *Reports: a run is stuck or failed* has the night it did).
+Restoring does not re-queue anything: an email going out days late for a run
+somebody deleted is a surprise nobody asked for.
+
+**Fix.** *Retry PDF* on the run renders it; *Resend* sends the failed
+emails. Neither works while the run is deleted (both answer 404 until it is
+restored).
+
+**The one race.** A delivery whose send was already in flight when the run
+was deleted is left to that attempt; the worker re-reads the run immediately
+before the Graph call and fails the row with the same sentence if the run is
+gone. A message Graph had already accepted in that second has been sent and
+cannot be recalled - the row says *sent*.
+
+### Retention is set, and runs older than that are still on the list
+
+**Cause.** Retention is a step of the **scheduler job** (`*/15`), after the
+report pass. Either the job is not running (`enableBasReports`, *Reports:
+turning the jobs on*), the step failed (the execution reads Failed and its log
+says `the retention step failed:` with the reason - the assignment and
+interval steps after it still ran), or the runs were **restored** by a person
+(`restored_at` set - the SQL above shows it), which keeps them for good.
+"Older" is by `created_at`, in calendar months in UTC: 31 May less three
+months is 28 February.
+
+**Fix.** Start or fix the job; or, for a restored run that should go, delete
+it by hand.
+
+### A run's New / Still open / Cleared changed after a delete
+
+**Cause.** The comparison takes the newest run of the report that is **not
+deleted**. Deleting last week's run makes the next run compare with the one
+before it, so items that first appeared last week read *New* again, and items
+that cleared last week read *Cleared* again. Runs already generated are not
+recomputed. A finding's *since* date is stored on the finding
+(`first_seen_at`, 2026-11-20), so it survives the purge of the run that first
+saw it.
+
+**Fix.** None needed; restore the deleted run before the next run if the
+comparison should go through it.
+
+### Usage counts a run that is not on the list
+
+**Cause.** A deleted run's spend is real, so the Usage page keeps counting it
+until the purge; in *Most expensive runs* its row says *· deleted* and does
+not open. After the purge it leaves the figures.
+
+## Reports: the runs list and the Scheduled list are paged, 25 a page
+
+Since 2026-11-23 Reports → Reports and Scheduled each show **25 rows a page,
+newest first**, with *1–25 of N* and **Previous / Next** under the table. The
+runs list also has three filters above the table - **Report**, **Building**,
+**Status** - each starting at *All*. The page and the filters are in the
+address bar (`/bas/reports?report=7&building=3&status=failed&page=2`,
+`/bas/reports/scheduled?page=2`), so a reload, the back button or a pasted
+link opens the same view. Code: `lib/modules/bas/reports/paging.ts` (the
+rules), `listRuns` in `runs-service.ts`, `listReports` in `service.ts`,
+`app/(modules)/bas/reports-pager.tsx`.
+
+**"Where are the rest of the runs / reports?"** On the next page: *Next*
+under the table. *N* in *1–25 of N* is every row you may see that matches
+the filters, counted in the database.
+
+**The Scheduled list's order changed.** It was by name until 2026-11-23; it
+is newest first now, like the runs. A report you are looking for by name is
+on whichever page its creation date puts it.
+
+**A link opens a different page from the one in it.** A page past the end -
+its last rows were deleted since, or a filter narrowed the list - opens the
+last page, and the address bar is corrected to say so. A page that is not a
+whole number from 1 opens page 1.
+
+**A filter is in the address bar but the screen shows *All*.** The value
+could not be read - a report or building id that is not digits, a status that
+is not one of *Queued, Running, Succeeded, Partial, Failed* - and was
+ignored; the screen shows the filters as the server applied them.
+
+**"No runs match these filters".** Nothing on the list matches all three;
+*Clear filters* goes back to everything. The Report and Building lists offer
+every report and building with a run on the list, whatever is chosen, so
+choosing one never hides the others; a deleted report is offered with
+*(schedule deleted)*. A report whose only runs are in Recently deleted is not
+offered.
+
+**A red line: "This page shows 24 of the 25 runs it should, of 30 in all."**
+The page came back with fewer rows than the count beside it says the page
+holds - a join dropped a row. Report it, with the address bar. (When every
+row fits on one page the sentence is the older *This list shows N of the M
+... you may see.*)
+
+**The selection emptied when I changed page.** The boxes are per page: a run
+that leaves the page leaves the selection, so *Delete N runs* only ever
+deletes rows you can see.
 
 ## Reports: the PDF
 

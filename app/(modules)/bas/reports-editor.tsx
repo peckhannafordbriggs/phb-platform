@@ -3,6 +3,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  RECYCLE_DAYS,
+  REPORT_DELETE_IN_FLIGHT_TITLE,
+  RUN_RETENTION_OPTIONS,
+  isRunRetentionMonths,
+  reportDeleteHeading,
+  reportDeleteSentence,
+  type RunRetentionMonths,
+} from "@/lib/modules/bas/reports/deletion-words";
 import { LIBRARY_SECTIONS } from "@/lib/modules/bas/reports/library";
 import { REPORT_PRESETS, type PresetKey } from "@/lib/modules/bas/reports/presets";
 import {
@@ -63,6 +72,7 @@ import {
   type SelectedQuestion,
 } from "./reports-client";
 import { Button, Dropdown, INPUT, Segmented } from "@/components/ui";
+import { ConfirmDialog } from "./reports-confirm";
 import { TONE_INK, TONE_STYLE } from "./tone";
 
 /** The kit's input, with the gap under its label. Buttons are the kit's `Button` (2026-11-10). */
@@ -91,6 +101,25 @@ interface DetailsForm {
   analysisWindow: AnalysisWindow;
   schedule: ScheduleForm;
   timeOfDay: string;
+  /** "Keep generated runs for" (2026-11-20), as the segmented control holds it. */
+  runRetention: RetentionChoice;
+}
+
+type RetentionChoice = (typeof RUN_RETENTION_OPTIONS)[number]["value"];
+
+const retentionChoiceOf = (months: RunRetentionMonths | null): RetentionChoice => (months === null ? "never" : `${months}`);
+
+function retentionMonthsOf(choice: RetentionChoice): RunRetentionMonths | null {
+  const n = Number(choice);
+  return isRunRetentionMonths(n) ? n : null;
+}
+
+/** The sentence under the retention control: what the choice will do, in numbers. */
+export function describeRetentionChoice(choice: RetentionChoice): string {
+  const months = retentionMonthsOf(choice);
+  return months === null
+    ? "Every run is kept until someone deletes it."
+    : `Runs older than ${months} months move to Recently deleted, where they can be restored for ${RECYCLE_DAYS} days before they are removed for good.`;
 }
 
 /**
@@ -132,6 +161,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
   const [error, setError] = useState<ApiError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const loadReport = useCallback(async (signal?: AbortSignal) => {
     if (reportId === null) return null;
@@ -170,6 +200,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
                 analysisWindow: "7d",
                 schedule: formFromSchedule(null, todayIn(timezone)),
                 timeOfDay: "06:00",
+                runRetention: "never",
               }
             : {
                 name: detail.name,
@@ -179,6 +210,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
                 analysisWindow: detail.analysisWindow,
                 schedule: formFromSchedule(detail.schedule, todayIn(timezone)),
                 timeOfDay: detail.timeOfDay,
+                runRetention: retentionChoiceOf(detail.runRetentionMonths),
               },
         );
         setError(null);
@@ -246,6 +278,7 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
       schedule: spec,
       timeOfDay: form.timeOfDay,
       questions: selectionBody(selection, library),
+      runRetentionMonths: retentionMonthsOf(form.runRetention),
     };
   };
 
@@ -274,6 +307,8 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
   // is the owner's. A module admin editing somebody else's report keeps the
   // owner's questions and types any of their own in.
   const canUsePersonal = report === null || report.isOwner;
+  // Delete is refused while a run is in flight (2026-11-20); the button says so before the server does.
+  const reportRunInFlight = report?.lastRun?.status === "queued" || report?.lastRun?.status === "running";
 
   return (
     <div className="space-y-6">
@@ -411,6 +446,17 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
             </>
           ) : null}
         </p>
+        <div className="mt-4 border-t border-[var(--divider-soft)] pt-4" data-testid="bas-report-retention">
+          <p className="mb-2 text-sm font-medium">Keep generated runs for</p>
+          <Segmented
+            tone="light"
+            label="Keep generated runs for"
+            options={RUN_RETENTION_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            value={form.runRetention}
+            onChange={(runRetention) => set({ runRetention })}
+          />
+          <p className="mt-2 text-xs text-[var(--muted)]">{describeRetentionChoice(form.runRetention)}</p>
+        </div>
       </Section>
 
       {/* 5. Recipients */}
@@ -452,6 +498,8 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
           <dd>{WINDOW_LABELS[form.analysisWindow]}</dd>
           <dt className="text-[var(--muted)]">Schedule</dt>
           <dd>{spec === null ? "—" : `${describeCadence(spec, form.timeOfDay)} (${timezone})`}</dd>
+          <dt className="text-[var(--muted)]">Keeps runs</dt>
+          <dd>{RUN_RETENTION_OPTIONS.find((o) => o.value === form.runRetention)?.label ?? "Never"}</dd>
           <dt className="text-[var(--muted)]">Recipients</dt>
           <dd>{ownerEmail}{report !== null && report.recipients.length > 0 ? ` + ${report.recipients.length}` : ""}</dd>
           <dt className="text-[var(--muted)]">State</dt>
@@ -476,15 +524,10 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
           )}
           {report !== null && (
             <Button
-              disabled={busy}
-              onClick={() => {
-                if (window.confirm(`Delete the report "${report.name}"?`)) {
-                  void run(async () => {
-                    await deleteReport(report.reportId);
-                    router.push("/bas/reports/scheduled");
-                  });
-                }
-              }}
+              disabled={busy || reportRunInFlight}
+              title={reportRunInFlight ? REPORT_DELETE_IN_FLIGHT_TITLE : undefined}
+              onClick={() => setConfirmingDelete(true)}
+              testId="report-delete"
             >
               Delete report
             </Button>
@@ -496,6 +539,23 @@ export function ReportEditor({ reportId, viewer }: { reportId: string | null; vi
           </p>
         )}
       </Section>
+      {report !== null && confirmingDelete && (
+        <ConfirmDialog
+          heading={reportDeleteHeading(report.name)}
+          sentence={reportDeleteSentence(report.runCount)}
+          confirmLabel="Delete report"
+          busyLabel="Deleting…"
+          busy={busy}
+          testIdPrefix="report-delete"
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() =>
+            void run(async () => {
+              await deleteReport(report.reportId);
+              router.push("/bas/reports/scheduled");
+            }).then(() => setConfirmingDelete(false))
+          }
+        />
+      )}
     </div>
   );
 }

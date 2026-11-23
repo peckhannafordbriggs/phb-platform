@@ -2,6 +2,7 @@ import "./load-env";
 import { prisma } from "../lib/db";
 import { readSchedulerJobEnv } from "../lib/modules/bas/reports/job-env";
 import { abandonedCount, runSchedulerPass } from "../lib/modules/bas/reports/scheduler";
+import { runRetentionPass } from "../lib/modules/bas/reports/run-deletion";
 import { runAutoAssignPass } from "../lib/modules/bas/auto-assign";
 import { refreshMeasuredIntervals } from "../lib/modules/bas/measured-interval";
 
@@ -22,6 +23,16 @@ import { refreshMeasuredIntervals } from "../lib/modules/bas/measured-interval";
  * Needs DATABASE_URL and nothing else; prints what it did and exits 0, or
  * exits 1 if the pass threw, which Container Apps shows as a failed
  * execution.
+ *
+ * THE RETENTION AND PURGE STEP (2026-11-20). Next, every report with "Keep
+ * generated runs for" set has its finished runs older than that moved to
+ * Recently deleted, as a person's Delete would (deleted_by 'retention'),
+ * and every run deleted RECYCLE_DAYS (15) ago or more is purged for good
+ * with its findings, deliveries and PDF
+ * (lib/modules/bas/reports/run-deletion.ts). Logged, not audited per run. A
+ * failure is printed and the execution exits 1 after the steps below have
+ * run. runbook.md -> "Reports: a run is missing from the list, or Recently
+ * deleted".
  *
  * THE ASSIGNMENT STEP (2026-11-19). After the reports, the same execution
  * runs the automatic point assignment over every station
@@ -76,6 +87,25 @@ async function main(): Promise<void> {
     `[bas-reports-scheduler] ${pass.enqueued.length} queued, ${pass.paused.length} paused, ${pass.skipped.length} skipped, ${abandonedCount(pass.abandoned)} abandoned`,
   );
 
+  let retentionError: unknown = null;
+  try {
+    const retention = await runRetentionPass();
+    for (const r of retention.retained) {
+      console.log(
+        `[bas-reports-scheduler] moved run ${r.runId} of report ${r.reportId} (${r.name}) to Recently deleted: created ${r.createdAt}, the report keeps runs ${r.months} months`,
+      );
+    }
+    for (const r of retention.purged) {
+      console.log(`[bas-reports-scheduler] purged run ${r.runId} of report ${r.reportId}: deleted ${r.deletedAt} by ${r.deletedBy}`);
+    }
+    console.log(
+      `[bas-reports-scheduler] retention: ${retention.retained.length} run(s) moved to Recently deleted, ${retention.purged.length} purged`,
+    );
+  } catch (error) {
+    retentionError = error;
+    console.error("[bas-reports-scheduler] the retention step failed:", error instanceof Error ? error.message : error);
+  }
+
   const assignment = await runAutoAssignPass();
   for (const s of assignment.stations) {
     if (s.outcome !== "assigned") continue;
@@ -101,6 +131,9 @@ async function main(): Promise<void> {
     console.error("[bas-reports-scheduler] the interval step failed:", error instanceof Error ? error.message : error);
   }
 
+  if (retentionError !== null) {
+    throw new Error("the retention step failed; see the line above");
+  }
   if (assignment.failed.length > 0) {
     throw new Error(`the point assignment failed on ${assignment.failed.length} station(s); see the lines above`);
   }

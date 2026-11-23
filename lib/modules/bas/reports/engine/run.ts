@@ -179,8 +179,11 @@ export async function executeQueuedRun(runIdInput: bigint | string, options: Exe
   const range: Interval = { start: row.periodStart.getTime(), end: row.periodEnd.getTime() };
   const trigger: "manual" | "scheduled" = row.trigger === "scheduled" ? "scheduled" : "manual";
 
+  // The newest finished run that is still on the list: a deleted run is
+  // never the previous run (2026-11-20), so deleting last week's report
+  // compares this week's with the one before it.
   const previous = await prisma.basReportRun.findFirst({
-    where: { reportId: row.reportId, status: { in: ["succeeded", "partial"] }, runId: { not: runId } },
+    where: { reportId: row.reportId, status: { in: ["succeeded", "partial"] }, runId: { not: runId }, deletedAt: null },
     orderBy: [{ finishedAt: "desc" }, { runId: "desc" }],
     select: { runId: true },
   });
@@ -253,6 +256,7 @@ export async function executeQueuedRun(runIdInput: bigint | string, options: Exe
             fingerprint: f.fingerprint,
             state: f.state,
             firstSeenRunId: f.firstSeenRunId === null ? null : BigInt(f.firstSeenRunId),
+            firstSeenAt: f.firstSeenAt === null ? null : new Date(f.firstSeenAt),
           })),
         });
       }
@@ -316,6 +320,16 @@ interface Produced {
   html: string;
   rows: Finding[];
   planner: PlannerTally;
+}
+
+/**
+ * When a previous finding was first seen: the run that first saw it while
+ * that run exists, else the date stored on the finding (2026-11-20) - the
+ * purge of a deleted run sets first_seen_run_id NULL, and "since 10/14"
+ * must survive it.
+ */
+function firstSeenOf(f: { firstSeenAt: Date | null; firstSeenRun: { startedAt: Date | null; createdAt: Date } | null }): string | null {
+  return (f.firstSeenRun?.startedAt ?? f.firstSeenRun?.createdAt ?? f.firstSeenAt)?.toISOString() ?? null;
 }
 
 /** The counters stored on the run for Usage and for the next run's estimate. */
@@ -579,7 +593,7 @@ async function produce(
           state: f.state,
           priority: f.priority === "action_needed" ? "action_needed" : "watch",
           firstSeenRunId: f.firstSeenRunId?.toString() ?? null,
-          firstSeenAt: (f.firstSeenRun?.startedAt ?? f.firstSeenRun?.createdAt)?.toISOString() ?? null,
+          firstSeenAt: firstSeenOf(f),
           finding: {
             questionKey: f.questionKey,
             section: f.section as LibrarySection,
@@ -591,7 +605,7 @@ async function produce(
             priority: f.priority === "action_needed" ? "action_needed" : "watch",
             evidence: f.evidence as Finding["evidence"],
             firstSeenRunId: f.firstSeenRunId?.toString() ?? null,
-            firstSeenAt: (f.firstSeenRun?.startedAt ?? f.firstSeenRun?.createdAt)?.toISOString() ?? null,
+            firstSeenAt: firstSeenOf(f),
             likelyCause: f.likelyCause,
             recommendedAction: f.recommendedAction,
             fixLocation: null,

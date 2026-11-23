@@ -110,6 +110,19 @@ export const REMOVED_LIMIT_KEYS = ["budgetUsd", "maxMinutes"] as const;
 export const REMOVED_LIMITS_MESSAGE =
   "Per-report limits were removed on 2026-11-12. The module's safety ceiling on the Usage page applies to every run; do not send budgetUsd or maxMinutes.";
 
+/**
+ * "Keep generated runs for" (2026-11-20): 3, 6 or 12 months, or null for
+ * never. Absent on an edit leaves it alone; absent on a create is never.
+ */
+const runRetentionMonths = z.union([z.literal(3), z.literal(6), z.literal(12)]).nullable();
+
+/** Delete and Restore on the runs (2026-11-20): one id or a selection, at most what the list shows. */
+export const runSelectionSchema = z
+  .object({
+    runIds: z.array(z.string().regex(/^[0-9]{1,20}$/, "A run id is digits.")).min(1, "Choose at least one run.").max(200),
+  })
+  .strict();
+
 export const createReportSchema = z
   .object({
     name: reportName,
@@ -122,6 +135,7 @@ export const createReportSchema = z
     schedule: scheduleSchema,
     timeOfDay,
     questions: questionSelectionSchema.optional(),
+    runRetentionMonths: runRetentionMonths.optional(),
   })
   .strict();
 
@@ -143,6 +157,7 @@ export const updateReportSchema = z
     schedule: scheduleSchema.optional(),
     timeOfDay: timeOfDay.optional(),
     questions: questionSelectionSchema.optional(),
+    runRetentionMonths: runRetentionMonths.optional(),
   })
   .strict()
   .refine(
@@ -237,3 +252,4 @@ export type PromoteQuestionInput = z.infer<typeof promoteQuestionSchema>;
 export type SafetyCeilingInput = z.infer<typeof safetyCeilingSchema>;
 export type AddRecipientInput = z.infer<typeof addRecipientSchema>;
 export type TransferOwnerInput = z.infer<typeof transferOwnerSchema>;
+export type RunSelectionInput = z.infer<typeof runSelectionSchema>;

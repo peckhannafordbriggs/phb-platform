@@ -11,9 +11,12 @@ import {
   type DeliveryStatus,
   type DeliverySummary,
 } from "./delivery-words";
+import { daysRemaining, isRunRetentionMonths, purgeDueAt, type RunRetentionMonths } from "./deletion-words";
 import type { ReportDocument, RunStatus } from "./engine/types";
 import { pdfFileName, pdfStateKind, type PdfState } from "./pdf/naming";
+import { REPORTS_PAGE_SIZE, isRunStatusFilter, pageWindow, parseIdFilter, parsePage, type RunStatusFilter } from "./paging";
 import { isExternalAddress, normaliseEmail } from "./recipients";
+import { FINISHED_RUN_STATUSES, markRunsDeleted, markRunsRestored } from "./run-deletion";
 
 /**
  * Reading runs (Reports, Phase 2). The same visibility as a definition: its
@@ -27,15 +30,31 @@ import { isExternalAddress, normaliseEmail } from "./recipients";
  *
  * The PDF's bytes are read by `loadRunPdf` alone, by name. Every other read
  * of a run here is a `select` that leaves `pdf` out - a few hundred KB a
- * row, and the list reads up to 200 rows every ten seconds.
+ * row, and the list reads a page of 25 every ten seconds (200 rows before
+ * it was paged, 2026-11-23).
  * tests/bas-reports-pdf.test.ts holds every basReportRun read in lib/ and
  * app/ to a select, and the summaries to carrying no bytes.
+ *
+ * DELETED RUNS (2026-11-20). Delete moves runs to Recently deleted and
+ * Restore brings them back (run-deletion.ts does the writes). A deleted run
+ * is missing from the list and answers 404 to everything a run offers -
+ * opening it, its PDF, Retry PDF, Resend, Send to me - until it is restored:
+ * every read below that serves one adds `ON_LIST`. The visibility rule is
+ * unchanged and shared with the Usage page, which keeps counting a deleted
+ * run's spend until the purge: the money was spent.
+ *
+ * A DELETED REPORT (2026-11-20) changes nothing here: its runs keep their
+ * visibility (the report's owner, or a module admin - the row is kept for
+ * exactly that), open, download and email as before, and carry
+ * `reportDeleted` so the screens can say no more will come.
  */
 
 export interface RunSummary {
   runId: string;
   reportId: string;
   reportName: string;
+  /** The report itself was deleted (2026-11-20): no more runs will come. The screens add "(schedule deleted)". */
+  reportDeleted: boolean;
   buildingName: string;
   status: RunStatus;
   trigger: string;
@@ -68,10 +87,62 @@ export interface RunDetail extends RunSummary {
   deliveries: DeliveryRowView[];
 }
 
+/** What the runs list was asked for (2026-11-23): a page, and three optional filters. Text, as a query string carries it. */
+export interface RunsQuery {
+  page?: string | number | null;
+  report?: string | null;
+  building?: string | null;
+  status?: string | null;
+}
+
 export interface RunsList {
+  /** One page, newest first. */
   runs: RunSummary[];
+  /** Every run matching the filters that the viewer may see, counted with no joins: the N of "1–25 of N". */
+  runsInDatabase: number;
+  /** The page served - the one asked for, held to the last page - and its size. */
+  page: number;
+  pageSize: number;
+  /** The filters as applied; an unreadable value is no filter, and shows as none. */
+  filters: { report: string | null; building: string | null; status: RunStatusFilter | null };
+  /** What the filters offer: every report and building that has a run on the list for this viewer. */
+  options: {
+    reports: Array<{ reportId: string; name: string; deleted: boolean }>;
+    buildings: Array<{ siteId: string; name: string }>;
+  };
+}
+
+/** A run in Recently deleted (2026-11-20). */
+export interface DeletedRunSummary {
+  runId: string;
+  reportId: string;
+  reportName: string;
+  reportDeleted: boolean;
+  buildingName: string;
+  status: RunStatus;
+  trigger: string;
+  periodStart: string;
+  periodEnd: string;
+  timezone: string;
+  finishedAt: string | null;
+  deletedAt: string;
+  deletedBy: "person" | "retention";
+  /** The person who deleted it; null for retention, or a person whose row is gone. */
+  deletedByEmail: string | null;
+  /** The report's "Keep generated runs for", as it stands now. */
+  retentionMonths: RunRetentionMonths | null;
+  /** When the scheduler purges it, and the whole days until then (0 once due). */
+  purgeAt: string;
+  daysRemaining: number;
+}
+
+export interface DeletedRunsList {
+  runs: DeletedRunSummary[];
   runsInDatabase: number;
 }
+
+/** A run that is on the list: not in Recently deleted. Every read that serves a run adds it. */
+const ON_LIST = { deletedAt: null } as const;
 
 function toStatus(value: string): RunStatus {
   return value === "queued" || value === "running" || value === "succeeded" || value === "partial" || value === "failed" ? value : "failed";
@@ -101,7 +172,7 @@ const RUN_SELECT = {
   pdfBytes: true,
   pdfQueuedAt: true,
   pdfRenderedAt: true,
-  report: { select: { name: true, ownerEmployeeId: true, siteId: true, site: { select: { name: true } } } },
+  report: { select: { name: true, ownerEmployeeId: true, siteId: true, deletedAt: true, site: { select: { name: true } } } },
   startedBy: { select: { email: true } },
   _count: { select: { findings: { where: { state: { not: "cleared" } } } } },
   deliveries: {
@@ -163,6 +234,7 @@ function toSummary(r: RunRow): RunSummary {
     runId: r.runId.toString(),
     reportId: r.reportId.toString(),
     reportName: r.report.name,
+    reportDeleted: r.report.deletedAt !== null,
     buildingName: r.report.site.name,
     status: toStatus(r.status),
     trigger: r.trigger,
@@ -199,20 +271,62 @@ export async function visibilityWhere(viewer: Viewer) {
   };
 }
 
-export async function listRuns(viewer: Viewer, reportIdText: string | null): Promise<RunsList> {
+/**
+ * The runs list (paged 2026-11-23): 25 a page, newest first - created_at,
+ * then run_id, so runs queued in the same instant never swap across a page
+ * boundary - narrowed by report, building and status. The count is taken
+ * first and the page held to the last one, so a page past the end (its last
+ * rows just deleted) serves the last page rather than an empty one. The
+ * filter options are every report and building with a run on the list for
+ * this viewer, whatever the filters, so choosing one never hides the rest.
+ */
+export async function listRuns(viewer: Viewer, query: RunsQuery | null = null): Promise<RunsList> {
   const visible = await visibilityWhere(viewer);
-  const reportId = reportIdText !== null && /^[0-9]{1,20}$/.test(reportIdText) ? BigInt(reportIdText) : null;
-  const where = { ...visible, ...(reportId === null ? {} : { reportId }) };
-  const [rows, runsInDatabase] = await Promise.all([
-    prisma.basReportRun.findMany({
-      where,
-      select: RUN_SELECT,
-      orderBy: [{ createdAt: "desc" }, { runId: "desc" }],
-      take: 200,
-    }),
+  const report = parseIdFilter(query?.report);
+  const building = parseIdFilter(query?.building);
+  const status = isRunStatusFilter(query?.status) ? query.status : null;
+  const base = { AND: [visible, ON_LIST] };
+  const where = {
+    AND: [
+      visible,
+      ON_LIST,
+      ...(report === null ? [] : [{ reportId: BigInt(report) }]),
+      ...(building === null ? [] : [{ report: { siteId: BigInt(building) } }]),
+      ...(status === null ? [] : [{ status }]),
+    ],
+  };
+  const [runsInDatabase, reportsWithRuns] = await Promise.all([
     prisma.basReportRun.count({ where }),
+    prisma.basReportRun.findMany({
+      where: base,
+      distinct: ["reportId"],
+      select: { reportId: true, report: { select: { name: true, deletedAt: true, siteId: true, site: { select: { name: true } } } } },
+    }),
   ]);
-  return { runs: rows.map(toSummary), runsInDatabase };
+  const window = pageWindow(parsePage(query?.page), runsInDatabase, REPORTS_PAGE_SIZE);
+  const rows = await prisma.basReportRun.findMany({
+    where,
+    select: RUN_SELECT,
+    orderBy: [{ createdAt: "desc" }, { runId: "desc" }],
+    skip: window.offset,
+    take: window.pageSize,
+  });
+  const buildings = new Map<string, string>();
+  for (const r of reportsWithRuns) buildings.set(r.report.siteId.toString(), r.report.site.name);
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+  return {
+    runs: rows.map(toSummary),
+    runsInDatabase,
+    page: window.page,
+    pageSize: window.pageSize,
+    filters: { report, building, status },
+    options: {
+      reports: reportsWithRuns
+        .map((r) => ({ reportId: r.reportId.toString(), name: r.report.name, deleted: r.report.deletedAt !== null }))
+        .sort((a, b) => byName(a, b) || Number(a.deleted) - Number(b.deleted) || a.reportId.localeCompare(b.reportId)),
+      buildings: [...buildings].map(([siteId, name]) => ({ siteId, name })).sort((a, b) => byName(a, b) || a.siteId.localeCompare(b.siteId)),
+    },
+  };
 }
 
 const runNotFound = () => new BasError("run_not_found", "That run does not exist, or you do not have access to it.");
@@ -221,7 +335,7 @@ const RUN_ID = /^[0-9]{1,20}$/;
 export async function getRun(viewer: Viewer, runIdText: string): Promise<RunDetail> {
   if (!RUN_ID.test(runIdText)) throw runNotFound();
   const visible = await visibilityWhere(viewer);
-  const row = await prisma.basReportRun.findFirst({ where: { runId: BigInt(runIdText), ...visible }, select: RUN_SELECT });
+  const row = await prisma.basReportRun.findFirst({ where: { runId: BigInt(runIdText), ...visible, ...ON_LIST }, select: RUN_SELECT });
   if (row === null) throw runNotFound();
   return {
     ...toSummary(row),
@@ -265,7 +379,7 @@ export async function loadRunPdf(viewer: Viewer, runIdText: string): Promise<Run
   if (!RUN_ID.test(runIdText)) throw runNotFound();
   const visible = await visibilityWhere(viewer);
   const row = await prisma.basReportRun.findFirst({
-    where: { runId: BigInt(runIdText), ...visible },
+    where: { runId: BigInt(runIdText), ...visible, ...ON_LIST },
     select: {
       runId: true,
       pdf: true,
@@ -313,7 +427,7 @@ export async function retryRunPdf(viewer: Viewer, runIdText: string, now = new D
   if (!RUN_ID.test(runIdText)) throw runNotFound();
   const visible = await visibilityWhere(viewer);
   const row = await prisma.basReportRun.findFirst({
-    where: { runId: BigInt(runIdText), ...visible },
+    where: { runId: BigInt(runIdText), ...visible, ...ON_LIST },
     select: { runId: true, reportId: true, pdfStatus: true, pdfError: true, report: { select: { name: true } } },
   });
   if (row === null) throw runNotFound();
@@ -326,7 +440,7 @@ export async function retryRunPdf(viewer: Viewer, runIdText: string, now = new D
   await prisma.$transaction(async (tx) => {
     // Re-checked on the write: a worker may have taken or finished it since.
     const updated = await tx.basReportRun.updateMany({
-      where: { runId: row.runId, pdfStatus: "failed" },
+      where: { runId: row.runId, pdfStatus: "failed", ...ON_LIST },
       data: { pdfStatus: "queued", pdfQueuedAt: now, pdfError: null },
     });
     if (updated.count === 0) throw new BasError("pdf_not_retryable", pdfNotRetryableMessage({ status: "failed", error: null }));
@@ -358,7 +472,7 @@ async function visibleRunForEmail(viewer: Viewer, runIdText: string) {
   if (!RUN_ID.test(runIdText)) throw runNotFound();
   const visible = await visibilityWhere(viewer);
   const row = await prisma.basReportRun.findFirst({
-    where: { runId: BigInt(runIdText), ...visible },
+    where: { runId: BigInt(runIdText), ...visible, ...ON_LIST },
     select: { runId: true, reportId: true, status: true, report: { select: { name: true } } },
   });
   if (row === null) throw runNotFound();
@@ -470,4 +584,157 @@ export async function sendRunToMe(
     });
   });
   return { runId: run.runId.toString(), email };
+}
+
+// ---------------------------------------------------------------------------
+// Delete, Recently deleted and Restore (2026-11-20)
+// ---------------------------------------------------------------------------
+
+/** The most a request may name: the list shows 200 rows. */
+export const MAX_RUN_SELECTION = 200;
+
+function parseRunIds(texts: readonly string[]): bigint[] {
+  const ids = new Set<bigint>();
+  for (const t of texts) {
+    if (!RUN_ID.test(t)) throw runNotFound();
+    ids.add(BigInt(t));
+  }
+  return [...ids];
+}
+
+/**
+ * Delete: move runs to Recently deleted. The report's owner or a module
+ * admin - the run's visibility, so anyone else is told the run does not
+ * exist. ALL OR NOTHING in one transaction: a run that is not visible, or is
+ * already deleted, refuses the whole selection as 404 (reload the list); a
+ * run still queued or running refuses it as 409 `run_not_finished`. Not
+ * audited: the run is the owner's own data, and deleted_by_employee_id is
+ * the record until the purge.
+ */
+export async function deleteRuns(viewer: Viewer, runIdTexts: readonly string[], now = new Date()): Promise<{ deleted: number }> {
+  const ids = parseRunIds(runIdTexts);
+  if (ids.length === 0) return { deleted: 0 };
+  const visible = await visibilityWhere(viewer);
+  const deleted = await prisma.$transaction(async (tx) => {
+    const rows = await tx.basReportRun.findMany({
+      where: { runId: { in: ids }, ...visible, ...ON_LIST },
+      select: { runId: true, status: true },
+    });
+    if (rows.length !== ids.length) {
+      throw new BasError(
+        "run_not_found",
+        ids.length === 1
+          ? "That run does not exist, is already deleted, or you do not have access to it. Reload the list."
+          : "One or more of these runs does not exist, is already deleted, or you do not have access to it. Nothing was deleted; reload the list.",
+      );
+    }
+    const unfinished = rows.filter((r) => !(FINISHED_RUN_STATUSES as readonly string[]).includes(r.status));
+    if (unfinished.length > 0) {
+      throw new BasError(
+        "run_not_finished",
+        ids.length === 1
+          ? "This run is still queued or running. A run can be deleted once it has finished."
+          : `${unfinished.length} of these runs ${unfinished.length === 1 ? "is" : "are"} still queued or running. A run can be deleted once it has finished; nothing was deleted.`,
+      );
+    }
+    const moved = await markRunsDeleted(tx, ids, { kind: "person", employeeId: viewer.id }, now);
+    if (moved.length !== ids.length) {
+      // Another tab got there between the read and the write.
+      throw new BasError("run_not_found", "The list changed while these runs were being deleted. Nothing was deleted; reload the list.");
+    }
+    return moved.length;
+  });
+  return { deleted };
+}
+
+/**
+ * Restore: bring runs back from Recently deleted, whole - findings, page,
+ * PDF and email record as they were. Same visibility; all or nothing, 404
+ * when one is not in the viewer's Recently deleted (purged, already
+ * restored, or not theirs). A restored run is never taken by retention
+ * again. Not audited, like the delete.
+ */
+export async function restoreRuns(viewer: Viewer, runIdTexts: readonly string[], now = new Date()): Promise<{ restored: number }> {
+  const ids = parseRunIds(runIdTexts);
+  if (ids.length === 0) return { restored: 0 };
+  const visible = await visibilityWhere(viewer);
+  const restored = await prisma.$transaction(async (tx) => {
+    const rows = await tx.basReportRun.findMany({
+      where: { runId: { in: ids }, ...visible, deletedAt: { not: null } },
+      select: { runId: true },
+    });
+    if (rows.length !== ids.length) {
+      throw new BasError(
+        "run_not_found",
+        ids.length === 1
+          ? "That run is not in Recently deleted: it was restored already, it was purged, or you do not have access to it. Reload the list."
+          : "One or more of these runs is not in Recently deleted: restored already, purged, or not yours to see. Nothing was restored; reload the list.",
+      );
+    }
+    const back = await markRunsRestored(tx, ids, now);
+    if (back.length !== ids.length) {
+      throw new BasError("run_not_found", "The list changed while these runs were being restored. Nothing was restored; reload the list.");
+    }
+    return back.length;
+  });
+  return { restored };
+}
+
+/**
+ * Recently deleted: the viewer's deleted runs - their own reports', or
+ * every report's for a module admin - newest deletion first, with when each
+ * is purged.
+ */
+export async function listDeletedRuns(viewer: Viewer, now = new Date()): Promise<DeletedRunsList> {
+  const visible = await visibilityWhere(viewer);
+  const where = { ...visible, deletedAt: { not: null } };
+  const [rows, runsInDatabase] = await Promise.all([
+    prisma.basReportRun.findMany({
+      where,
+      select: {
+        runId: true,
+        reportId: true,
+        status: true,
+        trigger: true,
+        periodStart: true,
+        periodEnd: true,
+        timezone: true,
+        finishedAt: true,
+        deletedAt: true,
+        deletedBy: true,
+        deletedByEmployee: { select: { email: true } },
+        report: { select: { name: true, runRetentionMonths: true, deletedAt: true, site: { select: { name: true } } } },
+      },
+      orderBy: [{ deletedAt: "desc" }, { runId: "desc" }],
+      take: MAX_RUN_SELECTION,
+    }),
+    prisma.basReportRun.count({ where }),
+  ]);
+  return {
+    runs: rows.map((r) => {
+      const deletedAt = r.deletedAt ?? now;
+      const months = r.report.runRetentionMonths;
+      const view: DeletedRunSummary = {
+        runId: r.runId.toString(),
+        reportId: r.reportId.toString(),
+        reportName: r.report.name,
+        reportDeleted: r.report.deletedAt !== null,
+        buildingName: r.report.site.name,
+        status: toStatus(r.status),
+        trigger: r.trigger,
+        periodStart: r.periodStart.toISOString(),
+        periodEnd: r.periodEnd.toISOString(),
+        timezone: r.timezone,
+        finishedAt: r.finishedAt?.toISOString() ?? null,
+        deletedAt: deletedAt.toISOString(),
+        deletedBy: r.deletedBy === "retention" ? "retention" : "person",
+        deletedByEmail: r.deletedByEmployee?.email ?? null,
+        retentionMonths: isRunRetentionMonths(months) ? months : null,
+        purgeAt: purgeDueAt(deletedAt).toISOString(),
+        daysRemaining: daysRemaining(deletedAt, now),
+      };
+      return view;
+    }),
+    runsInDatabase,
+  };
 }

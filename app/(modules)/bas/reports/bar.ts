@@ -10,8 +10,9 @@ import { SUB_BAR_BACK_HREF, activeSubBarItemHref, type SubBar, type SubBarItem }
  * Real routes, one list, longest-prefix match, on the tabs.ts pattern. The
  * items and the paths that belong to each:
  *
- *   Reports    /bas/reports (the runs, the default when Reports is opened)
- *              and a run at /bas/reports/generated/<runId>
+ *   Reports    /bas/reports (the runs, the default when Reports is opened),
+ *              a run at /bas/reports/generated/<runId>, and Recently
+ *              deleted at /bas/reports/deleted (2026-11-20)
  *   Scheduled  /bas/reports/scheduled (the definitions), the editor at
  *              /bas/reports/new and /bas/reports/<id>
  *   Questions  /bas/reports/library (the shared questions and the viewer's
@@ -43,6 +44,7 @@ export const REPORTS_SUB_BAR: SubBar = {
   paths: [
     { prefix: "/bas/reports", item: "/bas/reports" },
     { prefix: "/bas/reports/generated", item: "/bas/reports" },
+    { prefix: "/bas/reports/deleted", item: "/bas/reports" },
     { prefix: "/bas/reports/scheduled", item: "/bas/reports/scheduled" },
     { prefix: "/bas/reports/new", item: "/bas/reports/scheduled" },
     { prefix: "/bas/reports/library", item: "/bas/reports/library" },

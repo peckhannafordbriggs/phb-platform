@@ -87,13 +87,20 @@ export function ReportsUsageView({ usage, canAdminister }: { usage: ReportsUsage
             headers={["Run", "Report", "Building", "Status", "Started", "Spend"]}
             rows={usage.topRuns.map((r) => [
               <span key="id" className="font-mono text-[0.75rem]">{`#${r.runId}`}</span>,
-              <span key="r" className="truncate">{r.reportName}</span>,
+              <span key="r" className="truncate">
+                {r.reportName}
+                {r.deleted && <span className="ml-1.5 text-[var(--muted)]">· deleted</span>}
+              </span>,
               <span key="b" className="truncate">{r.buildingName}</span>,
               <RunStatusChip key="s" status={r.status} />,
               WHEN.format(new Date(r.startedAt ?? r.finishedAt)),
               <span key="c" className="font-semibold tabular-nums">{formatMoney(r.spend)}</span>,
             ])}
-            onRowClick={(i) => router.push(`/bas/reports/generated/${encodeURIComponent(usage.topRuns[i]!.runId)}`)}
+            onRowClick={(i) => {
+              // A run in Recently deleted has no page until it is restored.
+              const r = usage.topRuns[i]!;
+              if (!r.deleted) router.push(`/bas/reports/generated/${encodeURIComponent(r.runId)}`);
+            }}
           />
         )}
       </Card>
