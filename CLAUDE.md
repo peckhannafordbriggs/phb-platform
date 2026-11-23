@@ -2045,6 +2045,29 @@ Point Inventory: one line, apart from the person-hidden one.
 `WHY-ITS-BUILT-THIS-WAY.md` § 95; `runbook.md` → *A point was hidden
 automatically as a duplicate copy*.
 
+**A station named for a unit or a plant is that equipment (2026-11-23).**
+CEI's controllers were read from production, read-only through the
+`bas_analyze` role, into `docs/fixtures/cei-controller-point-names.txt`
+(station, name, unit, data type; 242 points). The assignment pass's step 0
+(`lib/modules/bas/station-equipment.ts`): a station ending in `AHU_7`/`RTU_3`
+is that unit; `CHILLER`/`BOILER`/`CHW`/`HW`/`PLANT` is a plant, a bare
+`PLANT` typed by its points (all chilled water → plant_chw; both sides →
+split `PLANT_CHW`/`PLANT_HW`, a point naming neither left without
+equipment). Points naming no unit, or the same one (`AHU_07_` ≡ `AHU_7`), are
+attached, to the building's existing equipment of that name **even if
+another station's points are on it**; `CEI_JCI_N2` is never equipment. Third
+round of suffix tokens over every CEI token the vocabulary has a role for
+(`Da_Press`, `Sa_Fan_Sts/Cmd/Sig`, `Oa_Dmpr_Sig`, `Clg_Sig`, `Zn_Press`,
+`Chws_Temp`, `Chws_Temp_Spt`, …), `Clg_Plant_` stripped before a plant's
+measurement, and `Spt` a setpoint word. **Numbered array members
+(`Sa_Fan_1_Sts`, `Ch_1_*`, `Sec_Chwp_1_*`) are silent by design**: the report
+engine reads the best-covered point with a role. *Download names* on Settings
+→ Points' *Needs a decision* filter saves the list as a file. Found on the
+way: **PR #140's duplicate step cannot pair CEI's real names**
+(`AHU_7/MA_T` vs `AHU_7_Ma_Temp`); until it pairs by equipment and role, the
+copies are hidden by hand. `WHY-ITS-BUILT-THIS-WAY.md` § 96; `runbook.md` → *A
+controller's points were attached to the unit its station is named for*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

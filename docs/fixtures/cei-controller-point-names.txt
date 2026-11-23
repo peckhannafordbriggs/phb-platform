@@ -1,0 +1,242 @@
+CEI_AHU_7	AHU_07_Oa_Temp	fahrenheit	real
+CEI_AHU_7	AHU_07_Ra_Fan_DP_1	inches of water	real
+CEI_AHU_7	AHU_07_Ra_Fan_DP_2	inches of water	real
+CEI_AHU_7	AHU_07_Ra_Fan_DP_3	inches of water	real
+CEI_AHU_7	AHU_07_Ra_Fan_DP_4	inches of water	real
+CEI_AHU_7	AHU_07_Ra_Fan_DP_5	inches of water	real
+CEI_AHU_7	AHU_07_Ra_Press_Lo_Alm		bool
+CEI_AHU_7	AHU_07_Zn_Press	inches of water	real
+CEI_AHU_7	AHU_7_Clg_Available		bool
+CEI_AHU_7	AHU_7_Clg_Req_Scaled		real
+CEI_AHU_7	AHU_7_Clg_Sig	percent	real
+CEI_AHU_7	AHU_7_Clg_Sig_Lower	percent	real
+CEI_AHU_7	AHU_7_Clg_Sig_Upper	percent	real
+CEI_AHU_7	AHU_7_Clv_Vlv_Lower_Fbk	percent	real
+CEI_AHU_7	AHU_7_Clv_Vlv_Upper_Fbk	percent	real
+CEI_AHU_7	AHU_7_Da_Press	inches of water	real
+CEI_AHU_7	AHU_7_Da_Press_Spt	inches of water	real
+CEI_AHU_7	AHU_7_Da_Temp	fahrenheit	real
+CEI_AHU_7	AHU_7_Da_Temp_Spt	fahrenheit	real
+CEI_AHU_7	AHU_7_Da_Temp_Spt_Max	fahrenheit	real
+CEI_AHU_7	AHU_7_Da_Temp_Spt_Min	fahrenheit	real
+CEI_AHU_7	AHU_7_Dehum_State		bool
+CEI_AHU_7	AHU_7_Ea_Dmpr_Fbk	percent	real
+CEI_AHU_7	AHU_7_Ea_Dmpr_Sig	percent	real
+CEI_AHU_7	AHU_7_Ea_Press	inches of water	real
+CEI_AHU_7	AHU_7_Econ_State		bool
+CEI_AHU_7	AHU_7_Fire_Alm		bool
+CEI_AHU_7	AHU_7_Frz_Alm		bool
+CEI_AHU_7	AHU_7_Hi_Lo_Press_Alm		bool
+CEI_AHU_7	AHU_7_Htg_Available		bool
+CEI_AHU_7	AHU_7_Htg_Sig	percent	real
+CEI_AHU_7	AHU_7_Htg_Vlv_Fbk	percent	real
+CEI_AHU_7	AHU_7_Ma_Temp	fahrenheit	real
+CEI_AHU_7	AHU_7_NOT_USED_Trim_Respond_Pressure_I		real
+CEI_AHU_7	AHU_7_NOT_USED_Trim_Respond_Pressure_SP_Active	inches of water	real
+CEI_AHU_7	AHU_7_NOT_USED_Trim_Respond_Temp_I		real
+CEI_AHU_7	AHU_7_Oa_Dmpr_Cmd		bool
+CEI_AHU_7	AHU_7_Oa_Dmpr_Fbk	percent	real
+CEI_AHU_7	AHU_7_Oa_Dmpr_Min_Pos_Spt_Sa_Fan_Sig	percent	real
+CEI_AHU_7	AHU_7_Oa_Dmpr_Sa_Fan_Max_Spt	percent	real
+CEI_AHU_7	AHU_7_Oa_Dmpr_Sa_Fan_Min_Spt	percent	real
+CEI_AHU_7	AHU_7_Oa_Dmpr_Sig	percent	real
+CEI_AHU_7	AHU_7_Oa_Flow	cubic feet per minute	real
+CEI_AHU_7	AHU_7_Oa_Temp	fahrenheit	real
+CEI_AHU_7	AHU_7_R_Clg		real
+CEI_AHU_7	AHU_7_R_Press		real
+CEI_AHU_7	AHU_7_Ra_Dmpr_Fbk	percent	real
+CEI_AHU_7	AHU_7_Ra_Dmpr_Sig	percent	real
+CEI_AHU_7	AHU_7_Ra_Fan_1_Sts		bool
+CEI_AHU_7	AHU_7_Ra_Fan_1_Sts_DP		bool
+CEI_AHU_7	AHU_7_Ra_Fan_2_Sts		bool
+CEI_AHU_7	AHU_7_Ra_Fan_2_Sts_DP		bool
+CEI_AHU_7	AHU_7_Ra_Fan_3_Sts		bool
+CEI_AHU_7	AHU_7_Ra_Fan_3_Sts_DP		bool
+CEI_AHU_7	AHU_7_Ra_Fan_4_Sts		bool
+CEI_AHU_7	AHU_7_Ra_Fan_4_Sts_DP		bool
+CEI_AHU_7	AHU_7_Ra_Fan_5_Sts		bool
+CEI_AHU_7	AHU_7_Ra_Fan_5_Sts_DP		bool
+CEI_AHU_7	AHU_7_Ra_Fan_Cmd		bool
+CEI_AHU_7	AHU_7_Ra_Fan_DP_1		unknown
+CEI_AHU_7	AHU_7_Ra_Fan_DP_2		unknown
+CEI_AHU_7	AHU_7_Ra_Fan_DP_3		unknown
+CEI_AHU_7	AHU_7_Ra_Fan_DP_4		unknown
+CEI_AHU_7	AHU_7_Ra_Fan_DP_5		unknown
+CEI_AHU_7	AHU_7_Ra_Fan_DP_6		unknown
+CEI_AHU_7	AHU_7_Ra_Fan_Sig	percent	real
+CEI_AHU_7	AHU_7_Ra_Fan_Sts		bool
+CEI_AHU_7	AHU_7_Ra_Press_Spt	inches of water	real
+CEI_AHU_7	AHU_7_Ra_Rh	percent relative humidity	real
+CEI_AHU_7	AHU_7_Ra_Rh_Spt	percent relative humidity	real
+CEI_AHU_7	AHU_7_Ra_Temp	fahrenheit	real
+CEI_AHU_7	AHU_7_Sa_Fan_1_Sts		bool
+CEI_AHU_7	AHU_7_Sa_Fan_2_Sts		bool
+CEI_AHU_7	AHU_7_Sa_Fan_3_Sts		bool
+CEI_AHU_7	AHU_7_Sa_Fan_4_Sts		bool
+CEI_AHU_7	AHU_7_Sa_Fan_5_Sts		bool
+CEI_AHU_7	AHU_7_Sa_Fan_6_Sts		bool
+CEI_AHU_7	AHU_7_Sa_Fan_Cmd		bool
+CEI_AHU_7	AHU_7_Sa_Fan_Sig	percent	real
+CEI_AHU_7	AHU_7_Sa_Fan_Sts		bool
+CEI_AHU_7	AHU_7_Safety_Latched		bool
+CEI_AHU_7	AHU_7_Safety_Reset_Cmd		bool
+CEI_AHU_7	AHU_7_Safety_Tripped		bool
+CEI_AHU_7	AHU_7_Sched_Mode		enum
+CEI_AHU_7	AHU_7_Software_Frz_Alm		bool
+CEI_AHU_7	AHU_7_State		bool
+CEI_AHU_7	AHU_7_Zn_A_Press	inches of water	real
+CEI_AHU_7	AHU_7_Zn_Rh	percent relative humidity	real
+CEI_AHU_7	AHU_7_Zn_Rh_Avg	percent relative humidity	real
+CEI_AHU_7	AHU_7_Zn_Rh_Max	percent relative humidity	real
+CEI_AHU_7	AHU_7_Zn_Rh_Min	percent relative humidity	real
+CEI_AHU_7	AHU_7_Zn_Temp	fahrenheit	real
+CEI_AHU_7	AHU_7_Zn_Temp_Avg	fahrenheit	real
+CEI_AHU_7	AHU_7_Zn_Temp_Max	fahrenheit	real
+CEI_AHU_7	AHU_7_Zn_Temp_Min	fahrenheit	real
+CEI_AHU_8	AHU_8_Clg_Available		bool
+CEI_AHU_8	AHU_8_Clg_Req_Scaled		real
+CEI_AHU_8	AHU_8_Clg_Sig	percent	real
+CEI_AHU_8	AHU_8_Clg_Sig_Lower	percent	real
+CEI_AHU_8	AHU_8_Clg_Sig_Upper	percent	real
+CEI_AHU_8	AHU_8_Clv_Vlv_Lower_Fbk	percent	real
+CEI_AHU_8	AHU_8_Clv_Vlv_Upper_Fbk	percent	real
+CEI_AHU_8	AHU_8_Da_Press	inches of water	real
+CEI_AHU_8	AHU_8_Da_Press_Hi_Alm		bool
+CEI_AHU_8	AHU_8_Da_Press_Spt	inches of water	real
+CEI_AHU_8	AHU_8_Da_Temp	fahrenheit	real
+CEI_AHU_8	AHU_8_Da_Temp_Spt	fahrenheit	real
+CEI_AHU_8	AHU_8_Da_Temp_Spt_Max	fahrenheit	real
+CEI_AHU_8	AHU_8_Da_Temp_Spt_Min	fahrenheit	real
+CEI_AHU_8	AHU_8_Dehum_State		bool
+CEI_AHU_8	AHU_8_Ea_Dmpr_Fbk	percent	real
+CEI_AHU_8	AHU_8_Ea_Dmpr_Sig	percent	real
+CEI_AHU_8	AHU_8_Ea_Press	inches of water	real
+CEI_AHU_8	AHU_8_Econ_State		bool
+CEI_AHU_8	AHU_8_Fire_Alm		bool
+CEI_AHU_8	AHU_8_Frz_Alm		bool
+CEI_AHU_8	AHU_8_Hi_Lo_Press_Alm		bool
+CEI_AHU_8	AHU_8_Htg_Available		bool
+CEI_AHU_8	AHU_8_Htg_Sig	percent	real
+CEI_AHU_8	AHU_8_Htg_Vlv_Fbk	percent	real
+CEI_AHU_8	AHU_8_Humidifier_Sig	percent	real
+CEI_AHU_8	AHU_8_Ma_Temp	fahrenheit	real
+CEI_AHU_8	AHU_8_NOT_USED_Trim_Respond_Pressure_I		real
+CEI_AHU_8	AHU_8_NOT_USED_Trim_Respond_Pressure_SP_Active	inches of water	real
+CEI_AHU_8	AHU_8_NOT_USED_Trim_Respond_Temp_I		real
+CEI_AHU_8	AHU_8_Oa_Dmpr_Cmd		bool
+CEI_AHU_8	AHU_8_Oa_Dmpr_Fbk	percent	real
+CEI_AHU_8	AHU_8_Oa_Dmpr_Min_Pos_Spt_Sa_Fan_Sig	percent	real
+CEI_AHU_8	AHU_8_Oa_Dmpr_Sa_Fan_Max_Spt	percent	real
+CEI_AHU_8	AHU_8_Oa_Dmpr_Sa_Fan_Min_Spt	percent	real
+CEI_AHU_8	AHU_8_Oa_Dmpr_Sig	percent	real
+CEI_AHU_8	AHU_8_Oa_Flow	cubic feet per minute	real
+CEI_AHU_8	AHU_8_Oa_Rh	percent relative humidity	real
+CEI_AHU_8	AHU_8_Oa_Temp	fahrenheit	real
+CEI_AHU_8	AHU_8_Oa_Temp_Backup	fahrenheit	real
+CEI_AHU_8	AHU_8_R_Clg		real
+CEI_AHU_8	AHU_8_R_Press		real
+CEI_AHU_8	AHU_8_Ra_Dmpr_Fbk	percent	real
+CEI_AHU_8	AHU_8_Ra_Dmpr_Sig	percent	real
+CEI_AHU_8	AHU_8_Ra_Fan_1_Sts		bool
+CEI_AHU_8	AHU_8_Ra_Fan_2_Sts		bool
+CEI_AHU_8	AHU_8_Ra_Fan_3_Sts		bool
+CEI_AHU_8	AHU_8_Ra_Fan_4_Sts		bool
+CEI_AHU_8	AHU_8_Ra_Fan_Cmd		bool
+CEI_AHU_8	AHU_8_Ra_Fan_DP_1	inches of water	real
+CEI_AHU_8	AHU_8_Ra_Fan_DP_2	inches of water	real
+CEI_AHU_8	AHU_8_Ra_Fan_DP_3	inches of water	real
+CEI_AHU_8	AHU_8_Ra_Fan_DP_4	inches of water	real
+CEI_AHU_8	AHU_8_Ra_Fan_Sig	percent	real
+CEI_AHU_8	AHU_8_Ra_Fan_Sts		bool
+CEI_AHU_8	AHU_8_Ra_Press_Lo_Alm		bool
+CEI_AHU_8	AHU_8_Ra_Press_Spt	inches of water	real
+CEI_AHU_8	AHU_8_Ra_Rh	percent relative humidity	real
+CEI_AHU_8	AHU_8_Ra_Rh_Spt	percent relative humidity	real
+CEI_AHU_8	AHU_8_Ra_Temp	fahrenheit	real
+CEI_AHU_8	AHU_8_Sa_Fan_1_Sts		bool
+CEI_AHU_8	AHU_8_Sa_Fan_2_Sts		bool
+CEI_AHU_8	AHU_8_Sa_Fan_3_Sts		bool
+CEI_AHU_8	AHU_8_Sa_Fan_4_Sts		bool
+CEI_AHU_8	AHU_8_Sa_Fan_5_Sts		bool
+CEI_AHU_8	AHU_8_Sa_Fan_6_Sts		bool
+CEI_AHU_8	AHU_8_Sa_Fan_Cmd		bool
+CEI_AHU_8	AHU_8_Sa_Fan_Sig	percent	real
+CEI_AHU_8	AHU_8_Sa_Fan_Sts		bool
+CEI_AHU_8	AHU_8_Safety_Latched		bool
+CEI_AHU_8	AHU_8_Safety_Reset_Cmd		bool
+CEI_AHU_8	AHU_8_Safety_Tripped		bool
+CEI_AHU_8	AHU_8_Sched_Mode		enum
+CEI_AHU_8	AHU_8_Software_Frz_Alm		bool
+CEI_AHU_8	AHU_8_State		bool
+CEI_AHU_8	AHU_8_Zn_A_Press	inches of water	real
+CEI_AHU_8	AHU_8_Zn_Press	inches of water	real
+CEI_AHU_8	AHU_8_Zn_Rh	percent relative humidity	real
+CEI_AHU_8	AHU_8_Zn_Rh_Avg	percent relative humidity	real
+CEI_AHU_8	AHU_8_Zn_Rh_Max	percent relative humidity	real
+CEI_AHU_8	AHU_8_Zn_Rh_Min	percent relative humidity	real
+CEI_AHU_8	AHU_8_Zn_Temp	fahrenheit	real
+CEI_AHU_8	AHU_8_Zn_Temp_Avg	fahrenheit	real
+CEI_AHU_8	AHU_8_Zn_Temp_Max	fahrenheit	real
+CEI_AHU_8	AHU_8_Zn_Temp_Min	fahrenheit	real
+CEI_JCI_N2	AHU_7/OA_Enth		real
+CEI_JCI_N2	AHU_7/RA_Enth		real
+CEI_JCI_N2	AHU_8/RA_Enth		real
+CEI_PLANT	Clg_Plant_Ch_1_Alarm		bool
+CEI_PLANT	Clg_Plant_Ch_1_Cmd		bool
+CEI_PLANT	Clg_Plant_Ch_1_Enab		bool
+CEI_PLANT	Clg_Plant_Ch_1_Flt_Alm		enum
+CEI_PLANT	Clg_Plant_Ch_1_Iso_Vlv_Fbk	percent	real
+CEI_PLANT	Clg_Plant_Ch_1_Iso_Vlv_Sig	percent	real
+CEI_PLANT	Clg_Plant_Ch_1_Lvg_Temp	fahrenheit	real
+CEI_PLANT	Clg_Plant_Ch_1_Mode		enum
+CEI_PLANT	Clg_Plant_Ch_1_State		enum
+CEI_PLANT	Clg_Plant_Ch_1_Sts		bool
+CEI_PLANT	Clg_Plant_Ch_1_Sts_Bacnet		bool
+CEI_PLANT	Clg_Plant_Ch_2_Alarm		bool
+CEI_PLANT	Clg_Plant_Ch_2_Cmd		bool
+CEI_PLANT	Clg_Plant_Ch_2_Enab		bool
+CEI_PLANT	Clg_Plant_Ch_2_Flt_Alm		enum
+CEI_PLANT	Clg_Plant_Ch_2_Iso_Vlv_Fbk	percent	real
+CEI_PLANT	Clg_Plant_Ch_2_Iso_Vlv_Sig	percent	real
+CEI_PLANT	Clg_Plant_Ch_2_Lvg_Temp	fahrenheit	real
+CEI_PLANT	Clg_Plant_Ch_2_Mode		enum
+CEI_PLANT	Clg_Plant_Ch_2_State		enum
+CEI_PLANT	Clg_Plant_Ch_2_Sts		bool
+CEI_PLANT	Clg_Plant_Ch_2_Sts_Bacnet		bool
+CEI_PLANT	Clg_Plant_Ch_Cmd		bool
+CEI_PLANT	Clg_Plant_Ch_Min_On_Spt	second	real
+CEI_PLANT	Clg_Plant_Ch_On_Delay_Spt	second	real
+CEI_PLANT	Clg_Plant_Chw_Diff_Press_Spt	pounds per square inch	real
+CEI_PLANT	Clg_Plant_Chw_Press	pounds per square inch	real
+CEI_PLANT	Clg_Plant_Chwp_A_Binary_Sts		bool
+CEI_PLANT	Clg_Plant_Chwp_B_Binary_Sts		bool
+CEI_PLANT	Clg_Plant_Chwr_Temp	fahrenheit	real
+CEI_PLANT	Clg_Plant_Chws_Temp	fahrenheit	real
+CEI_PLANT	Clg_Plant_Chws_Temp_Spt	fahrenheit	real
+CEI_PLANT	Clg_Plant_Clg_Oa_Temp_Spt	fahrenheit	real
+CEI_PLANT	Clg_Plant_Clg_Plant_Enab		bool
+CEI_PLANT	Clg_Plant_Freeze_Protection_Mode		bool
+CEI_PLANT	Clg_Plant_Frz_Protection_Mode		bool
+CEI_PLANT	Clg_Plant_Iso_Vlv_Cmd		bool
+CEI_PLANT	Clg_Plant_Lead_Current		enum
+CEI_PLANT	Clg_Plant_Oa_Rh	percent relative humidity	real
+CEI_PLANT	Clg_Plant_Oa_Temp	fahrenheit	real
+CEI_PLANT	Clg_Plant_Reset_Chws_Temp_Spt_Max_Ahu_Ra_Rh	percent	real
+CEI_PLANT	Clg_Plant_Sched_Mode		bool
+CEI_PLANT	Clg_Plant_Sec_Chwp_1_Cmd		bool
+CEI_PLANT	Clg_Plant_Sec_Chwp_1_Current	ampere	real
+CEI_PLANT	Clg_Plant_Sec_Chwp_1_Fbk	percent	real
+CEI_PLANT	Clg_Plant_Sec_Chwp_1_Sig	percent	real
+CEI_PLANT	Clg_Plant_Sec_Chwp_1_Sts		bool
+CEI_PLANT	Clg_Plant_Sec_Chwp_2_Cmd		bool
+CEI_PLANT	Clg_Plant_Sec_Chwp_2_Current	ampere	real
+CEI_PLANT	Clg_Plant_Sec_Chwp_2_Fbk	percent	real
+CEI_PLANT	Clg_Plant_Sec_Chwp_2_Sig	percent	real
+CEI_PLANT	Clg_Plant_Sec_Chwp_2_Sts		bool
+CEI_PLANT	Clg_Plant_Sec_Chwp_Spt_TAB	percent	real
+CEI_PLANT	Clg_Plant_Sys_A_Cmd		bool
+CEI_PLANT	Clg_Plant_Sys_B_Cmd		bool
+CEI_PLANT	Clg_Plant_Unit_A_Pump_Cmd		bool
+CEI_PLANT	Clg_Plant_Unit_A_Sts		bool
+CEI_PLANT	Clg_Plant_Unit_B_Pump_Cmd		bool
+CEI_PLANT	Clg_Plant_Unit_B_Sts		bool

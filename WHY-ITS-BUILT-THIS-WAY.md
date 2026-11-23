@@ -4342,3 +4342,56 @@ names across siblings and an idle unit's sensors vanish from its reports.
 Judge by name alone and a live controller's points disappear the day its own
 station is the one that died. Stop clearing the reason on a person's change
 and the CHECK refuses every Unhide.
+
+## 96 · A station named for a unit or a plant is that equipment; numbered members of an array are left for a person
+
+**Decision (2026-11-23).** CEI's controllers were read from production
+(`docs/fixtures/cei-controller-point-names.txt`): CEI_AHU_7, CEI_AHU_8 and
+CEI_PLANT, via-parent stations under CEI_JCI_N2. The assignment pass's new
+step 0 (`lib/modules/bas/station-equipment.ts`) treats a station whose name
+ends with an equipment token as that equipment:
+
+- `AHU_7` → ahu, `RTU_3` → rtu;
+- `CHILLER`, `BOILER`, `CHW`, `HW`, or `PLANT`, whose points decide its type
+  and split it when it mixes both sides.
+
+Its points that name no unit, or the same one, are attached; the role rules
+then run with that type. The third round of suffix tokens covers every token
+in those names that the vocabulary has a role for, and `Spt` became a
+setpoint word.
+
+**Why the station, and not only the name.** CEI_PLANT's names carry no unit at
+all (`Clg_Plant_Chws_Temp`); the station is the only place it is written.
+CEI_AHU_7's names carry `AHU_7_` - and eight carry `AHU_07_`, which the prefix
+rule read as a second unit. The station's name settles both.
+
+**Why reuse equipment another station's points are on.** The prefix rule
+(§ 89) refuses that, because two JACEs' `V1_01` need not be one box. Here the
+station is named for the unit, and is the via-parent child of the JACE whose
+`AHU_7/...` points made that equipment: the evidence the prefix rule lacked.
+A second `AHU_7` would also be refused by the building's unique name.
+
+**Why the PLANT split uses the plant types, not chiller and boiler.** The
+request said HW/BLR → boiler and CHW/CH → chiller. A split half carries the
+loop's supply and return temperatures and its pumps, which belong to the
+plant, not to one machine. The report library treats chiller and plant_chw
+(and boiler and plant_hw) alike, so the reports are the same either way. A
+station named `BOILER` or `CHILLER` still gets that type.
+
+**Why numbered members stay silent.** `Sa_Fan_1_Sts` … `Sa_Fan_6_Sts`,
+`Ch_1_Sts`, `Sec_Chwp_1_Sts`. The vocabulary has one supply fan status per
+unit, and the report engine reads the best-covered point carrying a role
+(`analysis/common.ts` `pick`). Six fans of an array all called
+`supply_fan_status` would let one stopped fan say the unit was off. The
+un-numbered aggregate (`Sa_Fan_Sts`) takes the role. Members are a person's,
+or the vocabulary's, decision.
+
+**Why `Spt`.** Every CEI controller setpoint is `…_Spt`. Rule 1 (a setpoint
+word decides the setpoint roles) did not know the spelling, so
+`AHU_7_Da_Temp_Spt` was not a setpoint and matched nothing.
+
+**What breaks if you undo it.** Drop step 0 and CEI_PLANT's points have no
+equipment, so the hydronic questions read Not Applicable. CEI_AHU_7's points
+are then never attached to AHU_7, and the eight `AHU_07_` points get a unit of
+their own. Give numbered members the unit's role and a report judges an air
+handler by whichever fan of six was best trended.
