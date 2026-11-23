@@ -441,6 +441,9 @@ describe("the screen says so when the list falls short", () => {
     plausibility: NOT_CHECKED_FIXTURE,
     assignmentSource: null,
     needsDecision: true,
+    hiddenSource: null,
+    hiddenReason: null,
+    duplicateOf: null,
   });
 
   function render(list: StationPointsList, expectedTotal: number): string {

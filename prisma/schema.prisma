@@ -463,6 +463,25 @@ model BasPoint {
   /// 20261119120000_bas_point_assignment_source.
   assignmentSource String? @map("assignment_source")
 
+  /// Who last decided this point's is_visible (2026-11-23): 'auto' (the
+  /// duplicate-copy step of the scheduler's point pass, or "Run assignment
+  /// now"), 'manual' (a person, through Settings), or NULL (nobody yet; the
+  /// point is shown by default). The automatic step never writes a 'manual'
+  /// point. CHECK and backfill in 20261123120000_bas_auto_hide_duplicate_copies.
+  hiddenSource String? @map("hidden_source")
+
+  /// Why the platform hid this point: 'duplicate_copy' (it reads one value
+  /// while the same measurement varies on another station of the building),
+  /// or NULL. Only ever set while hidden_source is 'auto' and the point is
+  /// hidden; a person's show or hide clears it.
+  hiddenReason String? @map("hidden_reason")
+
+  /// The live point this one is a dead copy of, while hidden_reason is
+  /// 'duplicate_copy'. SET NULL if that point is ever deleted.
+  duplicateOfId BigInt?    @map("duplicate_of")
+  duplicateOf   BasPoint?  @relation("BasPointDuplicateOf", fields: [duplicateOfId], references: [pointId], onDelete: SetNull)
+  duplicates    BasPoint[] @relation("BasPointDuplicateOf")
+
   firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz()
   lastSeenAt  DateTime? @map("last_seen_at") @db.Timestamptz()
 
@@ -478,6 +497,7 @@ model BasPoint {
   @@index([equipmentId])
   @@index([pointRole])
   @@index([isActive])
+  @@index([duplicateOfId])
   @@map("bas_points")
 }
 

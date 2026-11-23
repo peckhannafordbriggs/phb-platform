@@ -150,6 +150,23 @@ export type AuditAction =
   | "bas.point_auto_assigned"
   | "bas.auto_assignment_ran"
   /**
+   * Dead duplicate copies (2026-11-23, lib/modules/bas/auto-hide.ts).
+   *
+   * `bas.point_auto_hidden`: the platform hid a point as a dead copy of a live
+   * one on another station of the building - both named (the copy at the top
+   * level, the live point under `duplicateOf`), the rule that paired them
+   * (`prefix` / `exact`), the seven days' numbers for each half, and `swap`
+   * when the copy used to be the live half. `trigger` and actor as for
+   * `bas.point_auto_assigned`. Never written for a point a person showed or
+   * hid.
+   *
+   * `bas.point_auto_shown`: the platform showed a former copy again -
+   * `reason` "readings_vary" (it varies now) or "swap" (it varies and the
+   * point it copied is now the flat one, which is hidden in its place).
+   */
+  | "bas.point_auto_hidden"
+  | "bas.point_auto_shown"
+  /**
    * A question typed into the Analyze tab (B5). One row per question,
    * whatever the outcome, carrying the question, the SQL that ran (or was
    * tried), the row count, the duration and the outcome kind.

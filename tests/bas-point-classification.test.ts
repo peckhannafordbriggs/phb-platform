@@ -894,7 +894,7 @@ describe("the list's rules", () => {
     horizon: { state: "unknown", hours: null, currentHours: null, stationCount: null, capacity: null, capacitySource: "entered", intervalS: null, intervalSource: null },
     rollRisk: null,
     collected: true, inactiveReason: null, completeness: null, lastRecordAt: null, visible: true,
-    plausibility: notCheckedPlausibility("no_role"), assignmentSource: null, needsDecision: false, ...over,
+    plausibility: notCheckedPlausibility("no_role"), assignmentSource: null, needsDecision: false, hiddenSource: null, hiddenReason: null, duplicateOf: null, ...over,
   });
 
   it("filters by role, equipment and collected, and 'select all shown' is the filtered set", () => {
@@ -907,7 +907,7 @@ describe("the list's rules", () => {
     expect(shownPoints([a, b, c], "", { ...NO_POINT_FILTERS, equipment: "none" }).map((p) => p.pointId)).toEqual(["b", "c"]);
     expect(shownPoints([a, b, c], "", { ...NO_POINT_FILTERS, equipment: "1" }).map((p) => p.pointId)).toEqual(["a"]);
     expect(shownPoints([a, b, c], "", { ...NO_POINT_FILTERS, collected: "no" }).map((p) => p.pointId)).toEqual(["c"]);
-    expect(shownPoints([a, b, c], "", { role: "zone_temp", equipment: "none", collected: "yes", assignment: "any", history: "any" })).toEqual([]);
+    expect(shownPoints([a, b, c], "", { role: "zone_temp", equipment: "none", collected: "yes", assignment: "any", history: "any", visibility: "any" })).toEqual([]);
   });
 
   it("filters by assignment: a decision is needed by a collected point with no role, whoever touched it last", () => {

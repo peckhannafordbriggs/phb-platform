@@ -4260,3 +4260,85 @@ erases how long an item has been open. Remove a deleted report's row and its
 runs lose their name and their visibility; leave its questions and its
 owner can never delete a personal question it used; let retention outlive
 it and a report nobody can open keeps deleting runs.
+
+## 95 · The platform hides a dead duplicate copy by itself, from numbers alone, and a person's show or hide outranks it for good
+
+**Decision (2026-11-23).** CEI_JCI_N2's `AHU_7/*` histories are the JACE's
+dead local copies of points collected live through the via-parent station
+CEI_AHU_7; since § 92 people were hiding them by hand. The scheduler's point
+pass now does it (`lib/modules/bas/auto-hide.ts`; the rules alone in
+`lib/modules/bas/duplicate-copies.ts`):
+
+1. **Pairs by name, within one building.** `<unit>/<name>` on one station
+   with `<name>` on a station whose name ends with `<unit>` on a token
+   boundary, separators and case ignored; or the same name on two stations
+   when the name carries its unit. The unit is what `parsePointName` finds
+   for the assignment pass, and must have letters and a number.
+2. **The dead-copy test is numbers only**, over seven days: one half flat
+   (one value, or 99% one value, at least 10 readings), the other live (at
+   least 10 readings, more than 3 distinct values, a non-zero range). Then the
+   flat half is hidden with `hidden_source 'auto'`, `hidden_reason
+   'duplicate_copy'`, `duplicate_of` the live point. Both flat, both varying,
+   or either short of data: nothing.
+3. **A person outranks it, hidden or shown, for good.** New
+   `bas_points.hidden_source`: every person's change through Settings stamps
+   `'manual'`, and the step's `UPDATE` refuses a `'manual'` point. The
+   migration marked `'manual'` every point hidden before that day and every
+   point the audit log says a person ever showed or hid.
+4. **It undoes its own decision when the evidence goes.** A copy that varies
+   again is shown; if its partner is now the flat one, the partner is hidden
+   in its place (the swap). Both audited.
+5. **Cheap.** Per building with more than one station: the names, and ONE
+   aggregate over the paired points' last seven days - never a query per
+   point. Nothing to change writes nothing.
+
+**Why from numbers and not from the name alone.** A name pair is evidence two
+points describe one measurement; it is not evidence which one is dead. The
+JACE's copy is usually the dead one, but a controller that drops off the
+via-parent station while the JACE's link still works makes it the other way
+round - and the swap exists for exactly that. A constant is something the
+data says, and the copy's note on Point Explorer prints the value it reads.
+
+**Why exact names only when the name carries its unit - narrower than asked.**
+The request asked for exact-name matches across stations. CEI_AHU_7 and
+CEI_AHU_8 are sibling stations of one building and hold the same bare names
+(`OA_H`, `RA_HUM`). An air handler that sits off for a week reads flat; the
+other one's same-named point varies; a bare exact match would hide the idle
+unit's real sensors as "copies" of the running one's, and take them out of
+every report and the stuck-value check. With the unit in the name
+(`V4_22/SpaceTemp` on two JACEs), the name says which unit it is. The prefix
+rule, which is unit-specific by construction, covers the CEI case.
+
+**Why a flat half needs ten readings too.** Not in the request, which set ten
+only for the live half. One or two readings that agree are not evidence; a
+real CEI copy logs 336 a week. A change-of-value copy that never changes logs
+almost nothing and is left to a person.
+
+**Why booleans are never called live.** The request's live test is "more
+than 3 distinct values"; a status cycling on and off has two. So CEI's
+`AHU_7/SF_S` and `AHU_7/RF_S` copies stay shown. Loosening it for booleans
+would let any two statuses that disagree for a week hide one of them; that is
+a decision for a person, and the runbook says how to hide them by hand.
+
+**Why a separate column, not `assignment_source`.** A person who set a point's
+role has not decided whether it is shown, and a person who unhid a copy has
+not decided its role. One column each, the same two words.
+
+**Why the person's change clears the reason, enforced by a CHECK.** A reason
+describes the platform's decision. Once a person has decided, the point is
+"hidden in Settings" or shown, and a lingering `duplicate_copy` would count
+it twice - as the platform's on Settings -> General and on the report, as the
+person's in the audit log. The CHECK makes a reason without the platform's
+own hide impossible.
+
+**Why the note is on Point Explorer and not an error.** A person who follows a
+bookmark to a copy needs the live reading, not a red box. A point a person
+hid is still refused as before: the platform knows what replaces a dead copy;
+it does not know what replaces a point somebody chose to hide.
+
+**What breaks if you undo it.** Drop the `'manual'` guard and the next pass
+re-hides a point somebody unhid on purpose, every fifteen minutes. Pair bare
+names across siblings and an idle unit's sensors vanish from its reports.
+Judge by name alone and a live controller's points disappear the day its own
+station is the one that died. Stop clearing the reason on a person's change
+and the CHECK refuses every Unhide.

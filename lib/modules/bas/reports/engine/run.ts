@@ -862,6 +862,10 @@ async function produce(
       hidden: scope.stations
         .map((s) => ({ stationName: s.name, count: scope.hiddenByStation.get(s.stationId) ?? 0 }))
         .filter((s) => s.count > 0),
+      // Dead copies the platform hid (2026-11-23): one line, all stations.
+      duplicateCopies: scope.stations
+        .map((s) => ({ stationName: s.name, count: scope.duplicateCopiesByStation.get(s.stationId) ?? 0 }))
+        .filter((s) => s.count > 0),
     },
     summary: {
       status: summaryStatus,

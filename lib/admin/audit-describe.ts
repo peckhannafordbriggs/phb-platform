@@ -417,6 +417,8 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
     const equipment = count("equipmentAttached");
     const created = Array.isArray(meta.equipmentCreated) ? meta.equipmentCreated.length : 0;
     const open = count("needDecision");
+    const hidden = count("duplicatesHidden");
+    const shown = count("duplicatesShown");
     const opener =
       meta.trigger === "run_now"
         ? `${actor} ran the automatic point assignment on station ${station}`
@@ -429,7 +431,49 @@ const KNOWN_ACTIONS: Record<AuditAction, SentenceBuilder> = {
             `equipment on ${equipment}`,
             ...(created > 0 ? [`${created} piece${created === 1 ? "" : "s"} of equipment created`] : []),
           ].join(", ");
-    return `${opener}: ${did}; ${open} point${open === 1 ? " needs" : "s need"} a decision`;
+    // The duplicate step (2026-11-23), said only when it changed something;
+    // rows written before it existed carry neither count.
+    const copies = [
+      ...(hidden > 0 ? [`${hidden} dead duplicate cop${hidden === 1 ? "y" : "ies"} hidden`] : []),
+      ...(shown > 0 ? [`${shown} former cop${shown === 1 ? "y" : "ies"} shown again`] : []),
+    ];
+    return `${opener}: ${did}${copies.length > 0 ? `; ${copies.join(", ")}` : ""}; ${open} point${open === 1 ? " needs" : "s need"} a decision`;
+  },
+
+  // 2026-11-23. Both names, always: the copy and the live point it copies,
+  // each with its station, because the two often share a name ("DA_SAP").
+  "bas.point_auto_hidden": ({ actor, meta }) => {
+    const name = stringField(meta, "label") ?? stringField(meta, "pointName") ?? stringField(meta, "niagaraHistoryName") ?? "a point";
+    const station = stringField(meta, "stationName");
+    const live = meta.duplicateOf !== null && typeof meta.duplicateOf === "object" ? (meta.duplicateOf as Record<string, unknown>) : null;
+    const liveName = live === null ? null : (stringField(live, "pointName") ?? stringField(live, "niagaraHistoryName"));
+    const liveStation = live === null ? null : stringField(live, "stationName");
+    const readings = meta.readings !== null && typeof meta.readings === "object" ? (meta.readings as Record<string, unknown>) : null;
+    const value = readings === null ? null : stringField(readings, "modeValue");
+    const days = typeof meta.windowDays === "number" ? meta.windowDays : 7;
+    const who = meta.trigger === "run_now" ? `${actor}, with Run assignment now,` : actor;
+    const copy = `${name}${station === null ? "" : ` on ${station}`}`;
+    const of = liveName === null ? "a live point" : `${liveName}${liveStation === null ? "" : ` on ${liveStation}`}`;
+    const why = value === null ? "" : `: it read ${value} for ${days} days while that point varied`;
+    return `${who} hid the point ${copy} as a dead copy of ${of}${meta.swap === true ? ", in place of the other way round" : ""}${why} (still collected)`;
+  },
+
+  "bas.point_auto_shown": ({ actor, meta }) => {
+    const name = stringField(meta, "label") ?? stringField(meta, "pointName") ?? stringField(meta, "niagaraHistoryName") ?? "a point";
+    const station = stringField(meta, "stationName");
+    const previous =
+      meta.previousDuplicateOf !== null && typeof meta.previousDuplicateOf === "object"
+        ? (meta.previousDuplicateOf as Record<string, unknown>)
+        : null;
+    const previousName = previous === null ? null : (stringField(previous, "pointName") ?? stringField(previous, "niagaraHistoryName"));
+    const previousStation = previous === null ? null : stringField(previous, "stationName");
+    const who = meta.trigger === "run_now" ? `${actor}, with Run assignment now,` : actor;
+    const other = previousName === null ? "the point it copied" : `${previousName}${previousStation === null ? "" : ` on ${previousStation}`}`;
+    const why =
+      meta.reason === "swap"
+        ? `its readings vary again and ${other} now reads one value, so that one is hidden instead`
+        : "its readings vary again";
+    return `${who} showed the point ${name}${station === null ? "" : ` on ${station}`} again, no longer hidden as a duplicate copy: ${why}`;
   },
 
   // 2026-11-19. One sentence for the whole action; the per-point rows beside
@@ -1122,6 +1166,8 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   "bas.suggestions_applied": "BAS name suggestions applied",
   "bas.point_auto_assigned": "BAS point assigned automatically",
   "bas.auto_assignment_ran": "BAS automatic assignment ran",
+  "bas.point_auto_hidden": "BAS point hidden automatically as a duplicate copy",
+  "bas.point_auto_shown": "BAS duplicate copy shown again automatically",
   "bas.equipment_updated": "BAS equipment updated",
   "bas.equipment_deleted": "BAS equipment deleted",
   "bas.question_asked": "BAS question asked",

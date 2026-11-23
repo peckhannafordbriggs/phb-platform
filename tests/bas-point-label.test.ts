@@ -693,6 +693,9 @@ describe("the Points list", () => {
     plausibility: NOT_CHECKED_FIXTURE,
     assignmentSource: null,
     needsDecision: true,
+    hiddenSource: null,
+    hiddenReason: null,
+    duplicateOf: null,
   });
   const list = (p: SettingsPoint): StationPointsList => ({
     stationId: "1",

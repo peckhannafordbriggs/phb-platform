@@ -9402,7 +9402,10 @@ point hidden in Settings*. The *Values that have stopped changing* card no
 longer lists a point it used to, and its *Not judged* line says *N hidden in
 Settings*.
 
-**Cause.** Somebody hid the point. Since 2026-11-20 a hidden point
+**Cause.** Somebody hid the point - or, since 2026-11-23, the platform did,
+as a dead duplicate copy of a live point on another station (*A point was
+hidden automatically as a duplicate copy*; the Points list's *Shown* cell
+then reads *automatically · copy of ...*). Since 2026-11-20 a hidden point
 (`bas_points.is_visible = false`) is left out of reports (the scope query),
 of the Analyze catalogue and the planner's rules (*keep only visible points*),
 and of the stuck-value check (`hidden` is a not-checked reason, in the SQL
@@ -10027,6 +10030,106 @@ assignment_source = 'manual' WHERE station_id = <id> AND assignment_source IS
 NULL` stops the pass touching that station's existing points (new points from
 a later discovery are still candidates); reverting the change is the real off
 switch. `WHY-ITS-BUILT-THIS-WAY.md` § 89.
+
+---
+
+## A point was hidden automatically as a duplicate copy
+
+Built 2026-11-23. The same scheduler step as the assignment above (every
+fifteen minutes, `phbplat-prod-bas-reports-sched`) ends, for every building
+with more than one station, with a **duplicate-copy** step,
+`lib/modules/bas/auto-hide.ts` over the rules in
+`lib/modules/bas/duplicate-copies.ts`. It was built for CEI_JCI_N2, whose
+`AHU_7/DA_SAP`, `AHU_7/MA_T`, `AHU_7/OA_H` ... are the JACE's dead local
+copies - one value for ever - of points collected live through the via-parent
+station CEI_AHU_7 as `DA_SAP`, `MA_T`, `OA_H`.
+
+**What it does.** Two points on two stations of one building pair by name:
+`<unit>/<name>` on one station and `<name>` on a station whose name ends with
+that unit (`CEI_AHU_7` ends with `AHU_7`; separators and case ignored), or the
+same name on two stations **when the name carries its unit**
+(`V4_22/SpaceTemp`; a bare `OA_H` matches nothing exactly, because CEI_AHU_7
+and CEI_AHU_8 both have one). Over the last seven days, if one half is flat -
+one value, or 99% of its readings one value, at least 10 readings - and the
+other is live - at least 10 readings, more than 3 distinct values, a non-zero
+range - the flat half is hidden as a copy of the live one:
+`is_visible = false`, `hidden_source = 'auto'`, `hidden_reason =
+'duplicate_copy'`, `duplicate_of` = the live point. Hidden means what it has
+meant since 2026-11-20: **still collected**, still in every data-loss figure,
+out of reports, Analyze and the stuck-value check. Both flat or both varying:
+nothing - that is a question for a person, not a duplicate. A copy that varies
+again is shown; if its partner is now the flat one, that partner is hidden in
+its place (the **swap**). *Run assignment now* runs the step for its station's
+pairs.
+
+**Symptom: a point is hidden and nobody hid it.** The audit log says who and
+why - each change is one row with both names and the seven days' numbers:
+
+```sql
+SELECT a.occurred_at, e.email, a.action,
+       a.metadata->>'stationName' AS station, a.metadata->>'pointName' AS point,
+       a.metadata->'duplicateOf'->>'stationName' AS live_station,
+       a.metadata->'duplicateOf'->>'pointName' AS live_point,
+       a.metadata->'readings' AS copy_readings, a.metadata->>'reason' AS reason,
+       a.metadata->>'trigger' AS trigger
+  FROM audit_events a LEFT JOIN employees e ON e.id = a.actor_employee_id
+ WHERE a.action IN ('bas.point_auto_hidden', 'bas.point_auto_shown')
+ ORDER BY a.occurred_at DESC
+ LIMIT 50;
+```
+
+Settings -> General shows *N hidden as duplicate copies* on the station's
+row; clicking it opens the Points list on *Hidden: duplicate copies*, each row
+reading *Hidden · automatically · copy of CEI_AHU_7/DA_SAP*. Point Explorer,
+asked for the copy, says *Hidden automatically: reads a constant 0 inWC; the
+live reading is CEI_AHU_7/DA_SAP* with a link. The weekly report's Point
+Inventory counts them in one line, apart from the points a person hid.
+
+**Fix, if it is wrong:** *Unhide* on that row (or tick its *Shown* box). Every
+person's show or hide stamps `hidden_source = 'manual'`, and the step **never
+writes a `'manual'` point again**, hidden or shown. If a whole pairing rule is
+wrong for a building, the rule is the fix, in `duplicate-copies.ts`; every
+number there is named, with its reason, and `tests/bas-duplicate-copies.test.ts`
+says what moved.
+
+**Symptom: CEI_JCI_N2's `AHU_7/SF_S` and `AHU_7/RF_S` (the fan statuses) are
+still shown, flat at off.** By the numbers. A live half needs more than three
+distinct values, and a cycling boolean has two, so a status copy is never
+called dead by this step. Hide it by hand if it is a copy (*Hide 1 point…*).
+
+**Symptom: a copy somebody hid by hand before 2026-11-23 is not counted as a
+duplicate copy.** By design. The migration marked every point hidden before
+that day, and every point whose visibility a person ever changed, as
+`'manual'`; the step leaves those alone, so they count under *hidden in
+Settings*, not *hidden as duplicate copies*. To hand one to the platform:
+`UPDATE bas_points SET hidden_source = NULL, is_visible = true WHERE point_id
+= <id>` and the next pass decides it - or leave it as it is, which is equally
+correct.
+
+**Symptom: a flat point that pairs with a live one is NOT hidden.** One of:
+a person set it (`hidden_source = 'manual'`); it has fewer than 10 readings in
+the last seven days (a change-of-value copy that never changes logs almost
+nothing); the live half is hidden or not collected; or the names do not pair
+(a bare name on two sibling stations, or a station whose name does not end
+with the prefix on a token boundary - `CEI_AHU_17` is not `AHU_7`). The audit
+log has no row for it because nothing was written.
+
+**Symptom: a scheduler execution reads Failed and its log ends "the
+duplicate-copy step failed on N building(s)".** The line before it names the
+building and the error. A transaction timeout (sixty seconds) is the likely
+one on a very large building; *Run assignment now* on one of its stations
+runs the same code for that station's pairs and shows the error. A check
+violation naming `bas_points_hidden_reason_check` means something wrote
+`is_visible` without clearing the reason - only the Settings service and this
+step write it, and both clear it.
+
+**There is no switch**, as for the assignment. In an emergency, `UPDATE
+bas_points SET hidden_source = 'manual' WHERE station_id IN (<ids>) AND
+hidden_source IS NULL` stops the step hiding any existing point on those
+stations, and `UPDATE bas_points SET is_visible = true, hidden_source =
+'manual', hidden_reason = NULL, duplicate_of = NULL WHERE hidden_reason =
+'duplicate_copy'` puts back every copy it hid and keeps them shown. Reverting
+the change is the real off switch. `WHY-ITS-BUILT-THIS-WAY.md` § 95.
 
 ---
 

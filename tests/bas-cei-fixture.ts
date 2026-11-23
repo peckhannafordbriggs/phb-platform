@@ -190,3 +190,168 @@ export async function createCeiFixture(): Promise<CeiFixture> {
     cleanup,
   };
 }
+
+// ---------------------------------------------------------------------------
+// CEI with its via-parent stations: the duplicate copies (2026-11-23)
+// ---------------------------------------------------------------------------
+
+/**
+ * CEI_JCI_N2 as it holds its histories - the 334 real names from
+ * docs/fixtures/cei-point-names.txt, oBIX-escaped (`/` as `$2f`) - with two
+ * via-parent stations under it on the same building, CEI_AHU_7 and CEI_AHU_8,
+ * as the collector reads them since 2026-11-20.
+ *
+ * The JACE's `AHU_7/*` and `AHU_8/*` histories are its dead copies: every 30
+ * minutes for eight days they log 0 (a number) or false (the two fan
+ * statuses). Each via-parent station holds the same measurements under the
+ * bare name - `DA_SAP`, `MA_T`, `OA_H` - and they are live: a different value
+ * almost every reading, the fan statuses cycling on and off. The child
+ * stations' point lists are the parent's tails: what CEI_AHU_7 really holds
+ * was not read for this fixture.
+ *
+ * Nothing else carries readings; the 155 VAVs are names only. `cleanup()`
+ * removes everything it made; readings cascade from bas_points.
+ */
+export type SeriesKind = "flat" | "live" | "bool_flat" | "bool_cycle";
+
+export const CEI_COPY_TAILS: Readonly<Record<"AHU_7" | "AHU_8", readonly string[]>> = {
+  AHU_7: ["DA_SAP", "DA_T", "MA_T", "OA_Enth", "OA_H", "OA_T", "RA_Enth", "RA_HUM", "RA_T", "RF_S", "SF_S"],
+  AHU_8: ["OA_H", "RA_Enth", "RA_HUM"],
+};
+const BOOL_TAILS = new Set(["RF_S", "SF_S"]);
+
+export interface CeiDuplicateFixture {
+  orgId: bigint;
+  projectId: bigint;
+  siteId: bigint;
+  jaceId: bigint;
+  ahu7Id: bigint;
+  ahu8Id: bigint;
+  /** "CEI_JCI_N2:AHU_7/DA_SAP" or "CEI_AHU_7:DA_SAP" -> point id. Names decoded. */
+  ids: Map<string, bigint>;
+  /** The newest reading's instant on every series. */
+  newestMs: number;
+  /** Replace a point's readings with a series of this kind. */
+  setSeries: (pointId: bigint, kind: SeriesKind) => Promise<void>;
+  /** One more point on a station, with a series. */
+  addPoint: (stationId: bigint, name: string, kind: SeriesKind) => Promise<bigint>;
+  cleanup: () => Promise<void>;
+}
+
+export const ceiEscape = (name: string) => name.replace(/\//g, "$2f").replace(/-/g, "$2d");
+
+export async function createCeiDuplicateFixture(names: readonly string[]): Promise<CeiDuplicateFixture> {
+  await expectBasTablesEmpty();
+  const org = await testDb.basOrg.create({ data: { name: "ZZTEST_ORG_CEI_COPIES" } });
+  const project = await testDb.basProject.create({ data: { orgId: org.orgId, name: "ZZTEST_PROJECT_CEI_COPIES" } });
+  const site = await testDb.basSite.create({
+    data: { orgId: org.orgId, projectId: project.projectId, name: "ZZTEST CEI", timezone: "America/New_York" },
+  });
+  const jace = await testDb.basStation.create({
+    data: { siteId: site.siteId, niagaraStationName: "CEI_JCI_N2", connectionMode: "direct", baseUrl: "https://198.51.100.40" },
+  });
+  const child = (name: string) =>
+    testDb.basStation.create({
+      data: { siteId: site.siteId, niagaraStationName: name, connectionMode: "via_parent", parentStationId: jace.stationId },
+    });
+  const ahu7 = await child("CEI_AHU_7");
+  const ahu8 = await child("CEI_AHU_8");
+
+  const now = Date.now();
+  const newestMs = Math.floor((now - 10 * 60_000) / HALF_HOUR_MS) * HALF_HOUR_MS;
+  const count = (CEI_DAYS * 86_400_000) / HALF_HOUR_MS;
+  const stamps = Array.from({ length: count }, (_, i) => newestMs - (count - 1 - i) * HALF_HOUR_MS);
+
+  const setSeries = async (pointId: bigint, kind: SeriesKind) => {
+    await testDb.$executeRaw`DELETE FROM bas_readings WHERE point_id = ${pointId}`;
+    const rows = stamps.map((ms, i): [number, number | null, boolean | null] => {
+      switch (kind) {
+        case "flat":
+          return [ms, 0, null];
+        case "live":
+          // A daily swing with a little noise: hundreds of distinct values.
+          return [ms, Math.round((1.2 + 0.4 * Math.sin((ms / 86_400_000) * 2 * Math.PI) + (i % 7) * 0.01) * 1000) / 1000, null];
+        case "bool_flat":
+          return [ms, null, false];
+        case "bool_cycle":
+          return [ms, null, Math.floor(i / 4) % 2 === 0];
+      }
+    });
+    for (let i = 0; i < rows.length; i += 1000) {
+      const chunk = rows.slice(i, i + 1000);
+      await testDb.$executeRaw`
+        INSERT INTO bas_readings (point_id, ts, value_num, value_bool)
+        VALUES ${Prisma.join(chunk.map(([ms, n, b]) => Prisma.sql`(${pointId}, ${new Date(ms)}, ${n}, ${b})`))}`;
+    }
+  };
+
+  const ids = new Map<string, bigint>();
+  const stationName = new Map([
+    [jace.stationId, "CEI_JCI_N2"],
+    [ahu7.stationId, "CEI_AHU_7"],
+    [ahu8.stationId, "CEI_AHU_8"],
+  ]);
+  const addPoint = async (stationId: bigint, name: string, kind: SeriesKind) => {
+    const bool = kind === "bool_flat" || kind === "bool_cycle";
+    const pointId = (
+      await testDb.basPoint.create({
+        data: {
+          stationId,
+          niagaraHistoryName: ceiEscape(name),
+          dataType: bool ? "bool" : "real",
+          unit: !bool && /SAP$/i.test(name) ? "inches of water" : null,
+        },
+      })
+    ).pointId;
+    ids.set(`${stationName.get(stationId)}:${name}`, pointId);
+    await setSeries(pointId, kind);
+    return pointId;
+  };
+
+  // The JACE's 334 names; the AHU copies get their flat series below.
+  const copyNames = new Set(
+    (Object.entries(CEI_COPY_TAILS) as Array<[string, readonly string[]]>).flatMap(([unit, tails]) => tails.map((t) => `${unit}/${t}`)),
+  );
+  await testDb.basPoint.createMany({
+    data: names
+      .filter((n) => !copyNames.has(n))
+      .map((name) => ({ stationId: jace.stationId, niagaraHistoryName: ceiEscape(name) })),
+  });
+  for (const p of await testDb.basPoint.findMany({ where: { stationId: jace.stationId }, select: { pointId: true, niagaraHistoryName: true } })) {
+    ids.set(`CEI_JCI_N2:${p.niagaraHistoryName.replace(/\$2f/g, "/").replace(/\$2d/g, "-")}`, p.pointId);
+  }
+  for (const [unit, tails] of Object.entries(CEI_COPY_TAILS) as Array<["AHU_7" | "AHU_8", readonly string[]]>) {
+    const childId = unit === "AHU_7" ? ahu7.stationId : ahu8.stationId;
+    for (const tail of tails) {
+      const bool = BOOL_TAILS.has(tail);
+      await addPoint(jace.stationId, `${unit}/${tail}`, bool ? "bool_flat" : "flat");
+      await addPoint(childId, tail, bool ? "bool_cycle" : "live");
+    }
+  }
+
+  const cleanup = async () => {
+    const stations = [jace.stationId, ahu7.stationId, ahu8.stationId];
+    // One statement, so duplicate_of between them never blocks the delete.
+    await testDb.basPoint.deleteMany({ where: { stationId: { in: stations } } });
+    await testDb.basEquipment.deleteMany({ where: { siteId: site.siteId } });
+    await testDb.basStation.deleteMany({ where: { stationId: { in: [ahu7.stationId, ahu8.stationId] } } });
+    await testDb.basStation.deleteMany({ where: { stationId: jace.stationId } });
+    await testDb.basSite.deleteMany({ where: { siteId: site.siteId } });
+    await testDb.basProject.deleteMany({ where: { projectId: project.projectId } });
+    await testDb.basOrg.deleteMany({ where: { orgId: org.orgId } });
+  };
+
+  return {
+    orgId: org.orgId,
+    projectId: project.projectId,
+    siteId: site.siteId,
+    jaceId: jace.stationId,
+    ahu7Id: ahu7.stationId,
+    ahu8Id: ahu8.stationId,
+    ids,
+    newestMs,
+    setSeries,
+    addPoint,
+    cleanup,
+  };
+}

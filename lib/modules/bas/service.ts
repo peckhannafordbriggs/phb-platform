@@ -8,6 +8,7 @@ import type {
   CollectionHealth,
   Completeness,
   DataGapRow,
+  HiddenDuplicateNote,
   HorizonSource,
   IngestRunRow,
   PointExplorer,
@@ -65,6 +66,8 @@ import {
 } from "./plausibility";
 import { plausibilityLateral } from "./plausibility-sql";
 import { orderStationTree } from "./station-tree";
+import { loadSeriesStats } from "./auto-hide";
+import { decodeNiagaraName } from "./suggestions";
 import {
   MAX_CHART_LINES,
   assignAxes,
@@ -1672,6 +1675,64 @@ function toDataGapRow(row: GapRow): DataGapRow {
  * a hidden point reads as hidden on both and nowhere as missing.
  */
 export const POINT_NOT_AVAILABLE_MESSAGE = "That point is not available.";
+interface HiddenPointRow {
+  point_id: bigint;
+  niagara_history_name: string;
+  unit: string | null;
+  hidden_source: string | null;
+  hidden_reason: string | null;
+  duplicate_of: bigint | null;
+  station_name: string;
+}
+
+/**
+ * The note for a dead copy the platform hid (2026-11-23): what it reads over
+ * the duplicate test's window - the same aggregate the pass judged it by -
+ * and the live point it copies, when that point is collected, shown and in a
+ * building the viewer may see. Null for anything else, which the caller then
+ * refuses as a hidden point, as before.
+ */
+async function loadHiddenDuplicate(
+  tx: Prisma.TransactionClient,
+  copy: HiddenPointRow,
+  siteIds: bigint[] | null,
+  observedAt: Date,
+): Promise<HiddenDuplicateNote | null> {
+  if (copy.hidden_source !== "auto" || copy.hidden_reason !== "duplicate_copy" || copy.duplicate_of === null) {
+    return null;
+  }
+  const live = await tx.$queryRaw<
+    Array<{ point_id: bigint; niagara_history_name: string; station_id: bigint; station_name: string; site_id: bigint }>
+  >`
+    SELECT lp.point_id, lp.niagara_history_name, lp.station_id,
+           COALESCE(ls.display_name, ls.niagara_station_name) AS station_name, ls.site_id
+      FROM bas_points lp
+      JOIN bas_stations ls ON ls.station_id = lp.station_id
+     WHERE lp.point_id = ${copy.duplicate_of}
+       AND lp.is_active AND lp.is_visible
+       AND ls.site_id IS NOT NULL
+       AND ${siteFilter(siteIds, Prisma.sql`ls.site_id`)}`;
+  const target = live[0];
+  if (target === undefined) return null;
+  const stats = (await loadSeriesStats(tx, [copy.point_id], observedAt)).get(copy.point_id.toString());
+  return {
+    pointId: copy.point_id.toString(),
+    pointName: decodeNiagaraName(copy.niagara_history_name),
+    stationName: copy.station_name,
+    unit: copy.unit,
+    value: stats?.modeValue ?? null,
+    constant: stats !== undefined && stats.distinct === 1,
+    share: stats === undefined || stats.readings === 0 ? null : stats.modeCount / stats.readings,
+    live: {
+      pointId: target.point_id.toString(),
+      name: decodeNiagaraName(target.niagara_history_name),
+      stationId: target.station_id.toString(),
+      stationName: target.station_name,
+      siteId: target.site_id.toString(),
+    },
+  };
+}
+
 export const HIDDEN_POINT_MESSAGE =
   "That point is hidden from Point Explorer. Show it again under Settings → Points.";
 
@@ -2216,6 +2277,10 @@ export async function getPointExplorer(
     }
   }
 
+  // Set inside the transaction when the point asked for is a dead copy the
+  // platform hid (2026-11-23); the screen then shows the note, not a chart.
+  let hiddenDuplicate: HiddenDuplicateNote | null = null;
+
   const result = await prisma.$transaction(async (tx) => {
     const observedAt = firstRow(
       await tx.$queryRaw<Array<{ now: Date }>>`SELECT now() AS now`,
@@ -2270,17 +2335,26 @@ export async function getPointExplorer(
       // yesterday must not read as the point having ceased to exist - and the
       // fix is a checkbox, not a query. Scoped exactly as the picker is, so
       // this can only ever describe a point the viewer could see if shown.
-      const hidden = await tx.$queryRaw<Array<{ point_id: bigint }>>`
-        SELECT v.point_id
+      const hidden = await tx.$queryRaw<HiddenPointRow[]>`
+        SELECT v.point_id, p.niagara_history_name, p.unit, p.hidden_source, p.hidden_reason,
+               p.duplicate_of, COALESCE(st.display_name, st.niagara_station_name) AS station_name
         FROM bas_v_point v
         JOIN bas_points p USING (point_id)
+        JOIN bas_stations st ON st.station_id = p.station_id
         WHERE v.point_id = ${requestedPointId}
           AND v.is_active AND NOT p.is_visible AND ${healthSitesV}
       `;
-      throw new BasError(
-        "point_not_found",
-        hidden.length > 0 ? HIDDEN_POINT_MESSAGE : POINT_NOT_AVAILABLE_MESSAGE,
-      );
+      // A dead copy the PLATFORM hid (2026-11-23) is not an error: the screen
+      // says what it reads and links to the live point. One a person hid is
+      // refused as before.
+      const copy = hidden[0];
+      if (copy !== undefined) hiddenDuplicate = await loadHiddenDuplicate(tx, copy, siteIds, observedAt);
+      if (hiddenDuplicate === null) {
+        throw new BasError(
+          "point_not_found",
+          hidden.length > 0 ? HIDDEN_POINT_MESSAGE : POINT_NOT_AVAILABLE_MESSAGE,
+        );
+      }
     }
 
     if (selectedPoint === null) {
@@ -2745,6 +2819,7 @@ export async function getPointExplorer(
     outOfRange,
     comparisons,
     comparisonNotes: result.comparisonNotes,
+    hiddenDuplicate,
   };
 
   logger.info("bas.point_explorer", {

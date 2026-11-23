@@ -2124,10 +2124,12 @@ export function describeAssignmentResult(result: StationAssignment): string {
     result.needDecision === 0
       ? "Nothing needs a decision."
       : `${points(result.needDecision)} ${result.needDecision === 1 ? "needs" : "need"} a decision.`;
+  const copies = describeDuplicateCounts(result.duplicatesHidden ?? 0, result.duplicatesShown ?? 0);
+  const tail = copies === null ? open : `${copies} ${open}`;
   if (result.outcome !== "assigned") {
     return result.outcome === "nothing_to_assign"
-      ? `Nothing to assign: every collected point has a role and equipment, or was set by a person. ${open}`
-      : `Nothing new to assign: no high-confidence suggestion for the ${points(result.candidates)} left. ${open}`;
+      ? `Nothing to assign: every collected point has a role and equipment, or was set by a person. ${tail}`
+      : `Nothing new to assign: no high-confidence suggestion for the ${points(result.candidates)} left. ${tail}`;
   }
   const parts = [`Gave a role to ${points(result.roleAssigned)}`, `attached ${points(result.equipmentAttached)} to equipment`];
   if (result.equipmentCreated.length > 0) {
@@ -2135,7 +2137,18 @@ export function describeAssignmentResult(result: StationAssignment): string {
       `created ${result.equipmentCreated.length} piece${result.equipmentCreated.length === 1 ? "" : "s"} of equipment`,
     );
   }
-  return `${parts.join(", ")}. ${open}`;
+  return `${parts.join(", ")}. ${tail}`;
+}
+
+/**
+ * What the duplicate step did on a press of "Run assignment now"
+ * (2026-11-23), or null when it changed nothing - silence, not "0 hidden".
+ */
+export function describeDuplicateCounts(hidden: number, shown: number): string | null {
+  const parts: string[] = [];
+  if (hidden > 0) parts.push(`Hid ${hidden} dead duplicate cop${hidden === 1 ? "y" : "ies"}`);
+  if (shown > 0) parts.push(`${parts.length > 0 ? "showed" : "Showed"} ${shown} former cop${shown === 1 ? "y" : "ies"} again, because ${shown === 1 ? "it varies" : "they vary"}`);
+  return parts.length === 0 ? null : `${parts.join("; ")}.`;
 }
 
 /** The station row's line on Settings -> General: "12 auto-assigned · 3 need a decision". */
@@ -2144,6 +2157,40 @@ export function describeAssignmentCounts(station: { autoAssigned: number; needDe
     `${station.autoAssigned} auto-assigned · ` +
     (station.needDecision === 1 ? "1 needs a decision" : `${station.needDecision} need a decision`)
   );
+}
+
+/**
+ * The station row's count of dead copies the platform hid (2026-11-23):
+ * "9 hidden as duplicate copies". Drawn only when there is one.
+ */
+export function describeHiddenDuplicates(count: number): string {
+  return count === 1 ? "1 hidden as a duplicate copy" : `${count} hidden as duplicate copies`;
+}
+
+/** A Settings row's note on a hidden copy: "copy of CEI_AHU_7/DA_SAP". */
+export function describeCopyOf(live: { stationName: string; name: string }): string {
+  return `copy of ${live.stationName}/${live.name}`;
+}
+
+/**
+ * Point Explorer's note on a dead copy the platform hid (2026-11-23), up to
+ * the link: "Hidden automatically: reads a constant 0 °F; the live reading
+ * is". The value is the one the duplicate test judged it by, with the unit
+ * symbol; "almost always" when 99% or more of its readings are that value
+ * rather than all of them.
+ */
+export function describeHiddenDuplicateNote(note: {
+  value: string | null;
+  unit: string | null;
+  constant: boolean;
+  share: number | null;
+}): string {
+  if (note.value === null) return "Hidden automatically as a duplicate copy; the live reading is";
+  const numeric = /^-?\d+(\.\d+)?(e[-+]?\d+)?$/i.test(note.value);
+  const shown = numeric ? withUnit(note.value, note.unit) : note.value;
+  if (note.constant) return `Hidden automatically: reads a constant ${shown}; the live reading is`;
+  const share = note.share === null ? "" : ` (${(Math.floor(note.share * 1000) / 10).toString()}% of its readings)`;
+  return `Hidden automatically: reads ${shown} almost all the time${share}; the live reading is`;
 }
 
 /** What "Create N pieces of equipment from name prefixes" did, from the server's counts. */
