@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Area,
@@ -14,6 +15,7 @@ import {
 } from "recharts";
 import type {
   DataGapRow,
+  HiddenDuplicateNote,
   PointExplorer as PointExplorerData,
 } from "@/lib/modules/bas/types";
 import {
@@ -33,6 +35,7 @@ import {
   formatValue,
   type Tone,
   describeStationPass,
+  describeHiddenDuplicateNote,
   stationPickerOptions,
 } from "./health-client";
 import {
@@ -65,6 +68,7 @@ import {
   TABLE_VIEW,
   VIEW_PARAM,
   chartSlots,
+  liveCopyHref,
   readFilters,
   withCascade,
   withFilter,
@@ -435,6 +439,7 @@ export function PointExplorer() {
         </p>
       )}
       <ViaParentStationNote stations={data.stations} selectedStationId={data.selectedStationId} />
+      <HiddenCopyNote note={data.hiddenDuplicate ?? null} />
 
       {/* -------------------------------------------------------- points */}
 
@@ -1822,6 +1827,33 @@ export function ViaParentStationNote({
       {station.name} is collected through {station.parentName ?? "its parent station"}
       {" · "}
       <span style={{ color: pass.tone === "ok" ? undefined : TONE_INK[pass.tone] }}>{pass.label}</span>
+    </p>
+  );
+}
+
+/**
+ * The point asked for is a dead copy the platform hid (2026-11-23): what it
+ * reads, and a link to the live point it copies. A small note above the
+ * picker, not an error - the copy is still collected, and the live reading
+ * is one click away. A point a person hid is still refused with the red box.
+ * Exported for tests.
+ */
+export function HiddenCopyNote({ note }: { note: HiddenDuplicateNote | null }) {
+  if (note === null) return null;
+  return (
+    <p
+      className="-mt-2 rounded-[var(--radius-row)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs"
+      data-testid="bas-hidden-duplicate-note"
+      role="status"
+    >
+      <span className="font-medium">{note.pointName}</span>
+      <span className="text-[var(--muted)]"> on {note.stationName}</span>
+      {" · "}
+      {describeHiddenDuplicateNote(note)}{" "}
+      <Link href={liveCopyHref(note.live)} className="font-medium underline">
+        {note.live.stationName}/{note.live.name}
+      </Link>
+      .
     </p>
   );
 }

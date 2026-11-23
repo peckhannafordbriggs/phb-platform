@@ -24,6 +24,7 @@ import {
   describeActivity,
   describeAssignmentCounts,
   describeAssignmentResult,
+  describeHiddenDuplicates,
   describeLogin,
   describeReach,
   describeThroughParent,
@@ -930,6 +931,8 @@ function StationRow({
   // such points opens its list on them, and one without stays closed.
   const historyLink = urlFilters.history === HISTORY_UNKNOWN && station.historyUnknown > 0;
   const [showPoints, setShowPoints] = useState(historyLink);
+  // "N hidden as duplicate copies" opens the list on them (2026-11-23).
+  const [copiesLink, setCopiesLink] = useState(0);
   const reach = describeReach(station);
   const activity = describeActivity(station.activity);
   const login = describeLogin(station);
@@ -1121,6 +1124,24 @@ function StationRow({
         {/* The automatic assignment (2026-11-19): what the pass wrote, what waits for a person. */}
         {" · "}
         {describeAssignmentCounts(station)}
+        {/* Dead copies the platform hid (2026-11-23); the Points list filters to them. */}
+        {station.hiddenDuplicates > 0 && (
+          <>
+            {" · "}
+            <button
+              type="button"
+              className="underline decoration-dotted"
+              data-testid="bas-station-hidden-duplicates"
+              title="Points that read one value while the same measurement varies on another station of this building. Hidden automatically: still collected, left out of reports, Analyze and the stuck-value check. Click to list them, each with Unhide."
+              onClick={() => {
+                setCopiesLink((n) => n + 1);
+                setShowPoints(true);
+              }}
+            >
+              {describeHiddenDuplicates(station.hiddenDuplicates)}
+            </button>
+          </>
+        )}
         {station.historyUnknown > 0 && (
           <>
             {" · "}
@@ -1172,11 +1193,17 @@ function StationRow({
         <StationPoints
           // Remounted (and so refetched) when a run of the assignment changes
           // the counts, so the list under the row never shows the old roles.
-          key={`${station.autoAssigned}:${station.needDecision}`}
+          key={`${station.autoAssigned}:${station.needDecision}:${station.hiddenDuplicates}:${copiesLink}`}
           stationId={station.stationId}
           expectedTotal={station.totalPoints}
           initialQuery={initialPointQuery}
-          initialFilters={historyLink ? { ...NO_POINT_FILTERS, history: "unknown" } : NO_POINT_FILTERS}
+          initialFilters={
+            copiesLink > 0
+              ? { ...NO_POINT_FILTERS, visibility: "duplicate_copy" }
+              : historyLink
+                ? { ...NO_POINT_FILTERS, history: "unknown" }
+                : NO_POINT_FILTERS
+          }
         />
       )}
     </div>

@@ -382,6 +382,9 @@ describe("the Points list renders the checkbox", () => {
     plausibility: NOT_CHECKED_FIXTURE,
     assignmentSource: null,
     needsDecision: true,
+    hiddenSource: null,
+    hiddenReason: null,
+    duplicateOf: null,
   });
 
   const render = (visible: boolean) =>

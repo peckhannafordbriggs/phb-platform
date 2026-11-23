@@ -139,6 +139,7 @@ function payload(overrides: Partial<PointExplorer> = {}): PointExplorer {
     outOfRange: null,
     comparisons: [],
     comparisonNotes: [],
+    hiddenDuplicate: null,
     ...overrides,
   };
 }

@@ -2015,6 +2015,36 @@ from the list, or Recently deleted*, *Deleting a report, and what happens to
 its generated reports*, *Reports: the runs list and the Scheduled list are
 paged, 25 a page*.
 
+**Dead duplicate copies are hidden automatically (2026-11-23).** For
+CEI_JCI_N2's `AHU_7/*` histories, the JACE's dead copies of points collected
+live on the via-parent station CEI_AHU_7. The scheduler's point pass, after
+the assignment, runs per building with more than one station
+(`lib/modules/bas/auto-hide.ts`; the rules alone, with every number, in
+`lib/modules/bas/duplicate-copies.ts`): names pair as `<unit>/<name>` with
+`<name>` on a station whose name ends with `<unit>` (token boundary,
+separators and case ignored), or the same name on two stations **only when
+the name carries its unit** - narrower than asked, because CEI_AHU_7 and
+CEI_AHU_8 share bare names and an idle unit would have its real sensors
+hidden. Over seven days one half flat (one value or 99%, at least 10
+readings) and the other live (at least 10, more than 3 distinct, non-zero
+range): the flat half is hidden, `hidden_source 'auto'`, `hidden_reason
+'duplicate_copy'`, `duplicate_of` the live point, audited
+`bas.point_auto_hidden` with both names; a copy that varies again is shown,
+and if its partner is now flat the two swap (`bas.point_auto_shown`). One
+names query and ONE readings aggregate per building. **New
+`bas_points.hidden_source`: every person's show or hide stamps `'manual'`
+and clears the reason (a CHECK), and the step never writes a `'manual'`
+point**; the migration marked `'manual'` every point hidden before and every
+point the audit log says a person showed or hid. Booleans are never "live"
+by these numbers, so CEI's fan-status copies stay for a person. *Run
+assignment now* runs it for its station's pairs. Settings -> General: *N
+hidden as duplicate copies*, opening the Points list on its new *Hidden:
+duplicate copies* filter with *copy of <station>/<point>* and *Unhide*; Point
+Explorer: a note with the constant and a link to the live point; the report's
+Point Inventory: one line, apart from the person-hidden one.
+`WHY-ITS-BUILT-THIS-WAY.md` § 95; `runbook.md` → *A point was hidden
+automatically as a duplicate copy*.
+
 Roadmap: `docs/06-roadmap.md`. Do not implement a later phase without being told to.
 
 ---

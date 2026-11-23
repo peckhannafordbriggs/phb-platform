@@ -973,6 +973,28 @@ export interface PointExplorer {
   comparisons: PointComparison[];
   /** Why a line asked for is not drawn - unavailable, or needing a third axis. One sentence each. */
   comparisonNotes: string[];
+  /**
+   * The point asked for is a dead copy the platform hid (2026-11-23): no
+   * point is loaded, and the screen says what it reads and links to the
+   * live one. Null otherwise - a point a person hid is still refused with
+   * HIDDEN_POINT_MESSAGE.
+   */
+  hiddenDuplicate: HiddenDuplicateNote | null;
+}
+
+/** "Hidden automatically: reads a constant 0; the live reading is <link>." */
+export interface HiddenDuplicateNote {
+  pointId: string;
+  pointName: string;
+  stationName: string;
+  unit: string | null;
+  /** The value it reads, as stored text (`0`, `70.5`, `false`); null if it has no readings in the window. */
+  value: string | null;
+  /** True when every reading in the window is that value; false when 99% or more is. */
+  constant: boolean;
+  /** Share of its readings that are `value`, 0-1. */
+  share: number | null;
+  live: DuplicateOfPoint & { siteId: string };
 }
 
 /** One point's history horizon, as the Data health tile shows it. */
@@ -1160,6 +1182,12 @@ export interface SettingsStation {
   /** Collected points with no role: pointNeedsDecision, counted in SQL. */
   needDecision: number;
   /**
+   * Collected points the platform hid as dead copies of a live point on
+   * another station of the building (hidden_reason 'duplicate_copy',
+   * 2026-11-23). Not the points a person hid.
+   */
+  hiddenDuplicates: number;
+  /**
    * The history capacity assumed for this station's points whose own
    * capacity is not entered (2026-11-20). 500, Niagara's default, unless a
    * person changed it here.
@@ -1179,6 +1207,23 @@ export type AssignmentSource = "auto" | "manual";
 
 export function isAssignmentSource(value: string | null): value is AssignmentSource {
   return value === "auto" || value === "manual";
+}
+
+/**
+ * Who last decided a point's visibility (2026-11-23): 'auto' the duplicate
+ * step, 'manual' a person, null nobody (shown by default). Same two words as
+ * AssignmentSource, a separate column: a person who set a role has not
+ * thereby decided whether the point is shown.
+ */
+export type HiddenSource = AssignmentSource;
+
+/** The live point a hidden copy reads (2026-11-23). */
+export interface DuplicateOfPoint {
+  pointId: string;
+  /** Its decoded Niagara name: what the station calls it. */
+  name: string;
+  stationId: string;
+  stationName: string;
 }
 
 /**
@@ -1216,6 +1261,14 @@ export interface StationAssignment {
   equipmentCreated: string[];
   /** Collected points on the station with no role, after the pass. */
   needDecision: number;
+  /**
+   * The duplicate-copy step (2026-11-23): dead copies it hid, and former
+   * copies it showed again because they vary. From the scheduler, the points
+   * ON this station; from "Run assignment now", everything the press changed,
+   * which for a via-parent station is its parent's copies of its points.
+   */
+  duplicatesHidden: number;
+  duplicatesShown: number;
 }
 
 /** One weekday's occupied hours, HH:MM in the building's zone (Reports, Phase 2). */
@@ -1527,6 +1580,15 @@ export interface SettingsPoint {
   assignmentSource: AssignmentSource | null;
   /** pointNeedsDecision: collected and no role. */
   needsDecision: boolean;
+  /**
+   * Who last decided `visible` (2026-11-23): 'auto' the duplicate step,
+   * 'manual' a person, null nobody. Unhide on the list makes it 'manual'.
+   */
+  hiddenSource: HiddenSource | null;
+  /** 'duplicate_copy' while the platform has it hidden as a copy; else null. */
+  hiddenReason: "duplicate_copy" | null;
+  /** The live point it is a copy of, while hiddenReason says so. */
+  duplicateOf: DuplicateOfPoint | null;
 }
 
 /**

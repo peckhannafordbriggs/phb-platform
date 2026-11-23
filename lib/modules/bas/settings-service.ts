@@ -13,6 +13,7 @@ import {
 import { basSiteScope } from "./service";
 import { resetSchemaContextCache } from "./analyze/schema-context";
 import {
+  decodeNiagaraName,
   planSuggestionBatches,
   readableName,
   suggestClassification,
@@ -133,6 +134,7 @@ interface StationRow {
   total_points: bigint;
   auto_assigned: bigint;
   need_decision: bigint;
+  hidden_duplicates: bigint;
   assumed_capacity: number;
   history_unknown: bigint;
   /** Username and timestamp only. The ciphertext column is never selected. */
@@ -177,6 +179,7 @@ function toStation(row: StationRow): SettingsStation {
     totalPoints: Number(row.total_points),
     autoAssigned: Number(row.auto_assigned),
     needDecision: Number(row.need_decision),
+    hiddenDuplicates: Number(row.hidden_duplicates),
     assumedCapacity: row.assumed_capacity,
     historyUnknown: Number(row.history_unknown),
     lastSeenAt: row.last_seen_at?.toISOString() ?? null,
@@ -440,6 +443,11 @@ export async function getBasSettingsTree(
         (SELECT count(*) FROM bas_points x
           WHERE x.station_id = st.station_id AND x.is_active
             AND x.point_role IS NULL)                         AS need_decision,
+        -- Dead duplicate copies the platform hid (2026-11-23), the same kind
+        -- of joinless count. Not the points a person hid.
+        (SELECT count(*) FROM bas_points x
+          WHERE x.station_id = st.station_id AND x.is_active AND NOT x.is_visible
+            AND x.hidden_reason = 'duplicate_copy')           AS hidden_duplicates,
         -- The capacity assumed where none is entered, and the points whose
         -- history size still cannot be worked out (2026-11-20): the Projects
         -- card's muted count, by the card's own predicate, per station.
@@ -631,6 +639,13 @@ interface PointListRow extends PlausibilityRow {
   inactive_reason: string | null;
   is_visible: boolean;
   assignment_source: string | null;
+  hidden_source: string | null;
+  hidden_reason: string | null;
+  /** The live point a hidden copy reads (2026-11-23): its id, decoded name and station. */
+  duplicate_of: bigint | null;
+  duplicate_of_name: string | null;
+  duplicate_of_station_id: bigint | null;
+  duplicate_of_station_name: string | null;
   completeness: string | null;
   last_record_ts: Date | null;
   /** From bas_v_collection_health. NULL when the station has no view row. */
@@ -698,6 +713,18 @@ function toPoint(row: PointListRow, suggestion: PointSuggestion | null): Setting
     // The CHECK closes the set; the guard is for the type.
     assignmentSource: isAssignmentSource(row.assignment_source) ? row.assignment_source : null,
     needsDecision: pointNeedsDecision({ collected: row.is_active, pointRole: row.point_role }),
+    // The CHECKs close both sets; the guards are for the type.
+    hiddenSource: isAssignmentSource(row.hidden_source) ? row.hidden_source : null,
+    hiddenReason: row.hidden_reason === "duplicate_copy" ? "duplicate_copy" : null,
+    duplicateOf:
+      row.duplicate_of === null || row.duplicate_of_name === null || row.duplicate_of_station_id === null
+        ? null
+        : {
+            pointId: row.duplicate_of.toString(),
+            name: decodeNiagaraName(row.duplicate_of_name),
+            stationId: row.duplicate_of_station_id.toString(),
+            stationName: row.duplicate_of_station_name ?? row.duplicate_of_station_id.toString(),
+          },
   };
 }
 
@@ -745,6 +772,12 @@ export async function getStationPoints(
         p.inactive_reason,
         p.is_visible,
         p.assignment_source,
+        p.hidden_source,
+        p.hidden_reason,
+        p.duplicate_of,
+        dq.niagara_history_name AS duplicate_of_name,
+        dq.station_id           AS duplicate_of_station_id,
+        COALESCE(dst.display_name, dst.niagara_station_name) AS duplicate_of_station_name,
         c.completeness,
         c.last_record_ts,
         h.horizon_state,
@@ -775,6 +808,10 @@ export async function getStationPoints(
       LEFT JOIN bas_point_roles      pr ON pr.point_role   = p.point_role
       LEFT JOIN bas_equipment        e  ON e.equipment_id  = p.equipment_id
       LEFT JOIN bas_sync_checkpoints c  ON c.point_id      = p.point_id
+      -- The live point a hidden copy reads, and its station (2026-11-23).
+      -- LEFT, and 1:1 on a primary key: no row is lost or doubled.
+      LEFT JOIN bas_points           dq  ON dq.point_id     = p.duplicate_of
+      LEFT JOIN bas_stations         dst ON dst.station_id  = dq.station_id
       -- The horizon in its three states, from the one place that decides them.
       -- Cheap: the view reads checkpoints, never bas_readings.
       LEFT JOIN bas_v_collection_health h ON h.point_id    = p.point_id
@@ -974,7 +1011,10 @@ export async function setBasPointVisibility(
   await prisma.$transaction(async (tx) => {
     await tx.basPoint.update({
       where: { pointId },
-      data: { isVisible: input.visible },
+      // A person's change is 'manual' (2026-11-23): the duplicate step never
+      // writes it again, hidden or shown. Unhiding a copy the platform hid
+      // clears why it was hidden, which the CHECK requires.
+      data: { isVisible: input.visible, hiddenSource: "manual", hiddenReason: null, duplicateOfId: null },
     });
 
     await writeAuditEvent(tx, {
@@ -989,6 +1029,8 @@ export async function setBasPointVisibility(
         visible: input.visible,
         // So the row can never be read as "and stopped collecting it".
         collected: point.is_active,
+        // Unhiding a dead copy the platform hid (2026-11-23) says so.
+        ...(point.hidden_reason === "duplicate_copy" ? { wasDuplicateCopy: true } : {}),
       },
     });
   });
@@ -1028,9 +1070,11 @@ export async function bulkSetPointVisibility(
       label: string | null;
       is_visible: boolean;
       is_active: boolean;
+      hidden_reason: string | null;
     }>
   >`
-    SELECT p.point_id, p.station_id, p.niagara_history_name, p.label, p.is_visible, p.is_active
+    SELECT p.point_id, p.station_id, p.niagara_history_name, p.label, p.is_visible, p.is_active,
+           p.hidden_reason
       FROM bas_points p
       JOIN bas_stations st ON st.station_id = p.station_id
      WHERE p.point_id IN (${Prisma.join(pointIds)})
@@ -1050,8 +1094,9 @@ export async function bulkSetPointVisibility(
       async (tx) => {
         await tx.basPoint.updateMany({
           where: { pointId: { in: toChange.map((row) => row.point_id) } },
-          // isVisible alone. Never isActive: hiding does not stop collection.
-          data: { isVisible: input.visible },
+          // Never isActive: hiding does not stop collection. A person's
+          // change is 'manual' (2026-11-23), and clears why the platform hid it.
+          data: { isVisible: input.visible, hiddenSource: "manual", hiddenReason: null, duplicateOfId: null },
         });
         for (const row of toChange) {
           await writeAuditEvent(tx, {
@@ -1065,6 +1110,7 @@ export async function bulkSetPointVisibility(
               label: row.label,
               visible: input.visible,
               collected: row.is_active,
+              ...(row.hidden_reason === "duplicate_copy" ? { wasDuplicateCopy: true } : {}),
               viaBulk: true,
               selectionSize: rows.length,
             },
@@ -1139,6 +1185,7 @@ interface ScopedPointRow {
   label: string | null;
   is_visible: boolean;
   is_active: boolean;
+  hidden_reason: string | null;
 }
 
 /**
@@ -1162,7 +1209,7 @@ async function loadScopedPoint(
 
   const rows = await prisma.$queryRaw<ScopedPointRow[]>`
     SELECT p.station_id, p.niagara_history_name, p.display_name, p.label,
-           p.is_visible, p.is_active
+           p.is_visible, p.is_active, p.hidden_reason
       FROM bas_points p
       JOIN bas_stations st ON st.station_id = p.station_id
      WHERE p.point_id = ${pointId}
@@ -1916,7 +1963,8 @@ export async function applyHighConfidenceSuggestions(
 export async function runAssignmentNow(viewer: Viewer, stationIdText: string): Promise<StationAssignment> {
   const { stationId } = await loadScopedStation(viewer, stationIdText);
   const result = await autoAssignStation(stationId, { kind: "run_now", actorEmployeeId: viewer.id });
-  if (result.pointsAssigned > 0) resetSchemaContextCache();
+  // A role and a hidden point both change the Analyze catalogue.
+  if (result.pointsAssigned + result.duplicatesHidden + result.duplicatesShown > 0) resetSchemaContextCache();
   return result;
 }
 

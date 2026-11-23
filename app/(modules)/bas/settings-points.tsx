@@ -31,6 +31,7 @@ import {
   describeBulkVisibilityResult,
   describeEquipmentFromNamesResult,
   describeCollected,
+  describeCopyOf,
   describePlausibility,
   describePointCompleteness,
   describeSuggestion,
@@ -111,6 +112,12 @@ export interface PointFilters {
    * predicate, so the list and the card's count agree.
    */
   history: "any" | "unknown";
+  /**
+   * Shown or hidden (2026-11-23). `hidden`: every hidden point, whoever hid
+   * it. `duplicate_copy`: the dead copies the platform hid - each row says
+   * what it is a copy of and offers Unhide.
+   */
+  visibility: "any" | "hidden" | "duplicate_copy";
 }
 
 export const NO_POINT_FILTERS: PointFilters = {
@@ -119,7 +126,13 @@ export const NO_POINT_FILTERS: PointFilters = {
   collected: "any",
   assignment: "any",
   history: "any",
+  visibility: "any",
 };
+
+/** A dead copy the platform hid (2026-11-23): the filter's predicate, and the row's. */
+export function pointIsHiddenCopy(point: Pick<SettingsPoint, "visible" | "hiddenReason">): boolean {
+  return !point.visible && point.hiddenReason === "duplicate_copy";
+}
 
 /** The card's predicate, for one row. */
 export function pointHistoryUnknown(point: Pick<SettingsPoint, "collected" | "rollRisk">): boolean {
@@ -145,6 +158,9 @@ export function pointMatchesFilters(point: SettingsPoint, filters: PointFilters)
   if (filters.assignment === "auto" && point.assignmentSource !== "auto") return false;
   if (filters.assignment === "manual" && point.assignmentSource !== "manual") return false;
   if (filters.history === "unknown" && !pointHistoryUnknown(point)) return false;
+  // Absent on a filter object built before the field existed: no filter.
+  if (filters.visibility === "hidden" && point.visible) return false;
+  if (filters.visibility === "duplicate_copy" && !pointIsHiddenCopy(point)) return false;
   return true;
 }
 
@@ -366,6 +382,21 @@ export function StationPoints({
       failed(cause);
     });
   }, []);
+
+  /**
+   * Unhide a dead copy the platform hid (2026-11-23). The same PATCH the
+   * Shown box sends, so it is a person's choice - 'manual' - and the
+   * duplicate step never hides it again. Refetched rather than flipped,
+   * because the row's "copy of" goes with it.
+   */
+  const unhide = useCallback(
+    (point: SettingsPoint) =>
+      run(async () => {
+        await updatePointVisibility(point.pointId, true);
+        return `Showed ${pointDisplayName(point)}. Shown by a person now, so it will not be hidden automatically again.`;
+      }).then(() => undefined),
+    [run],
+  );
 
   const setRole = useCallback(
     (point: SettingsPoint, role: string | null) =>
@@ -670,6 +701,7 @@ export function StationPoints({
         selected={canClassify ? selected : undefined}
         onSelectionChange={canClassify ? setSelected : undefined}
         onToggleVisible={toggleVisible}
+        onUnhide={unhide}
         onSaveLabel={saveLabel}
         onSetRole={canClassify ? setRole : undefined}
         onSetEquipment={canClassify ? setPointEquipment : undefined}
@@ -885,6 +917,22 @@ function ClassificationToolbar({
           ]}
           className="min-w-48"
         />
+        <Dropdown
+          label="Filter by shown or hidden"
+          value={filters.visibility ?? "any"}
+          onChange={(visibility) =>
+            onFiltersChange({ ...filters, visibility: visibility as PointFilters["visibility"] })
+          }
+          options={[
+            { value: "any", label: "Shown or hidden" },
+            { value: "hidden", label: `Hidden (${list.points.filter((p) => !p.visible).length})` },
+            {
+              value: "duplicate_copy",
+              label: `Hidden: duplicate copies (${list.points.filter(pointIsHiddenCopy).length})`,
+            },
+          ]}
+          className="min-w-52"
+        />
         <span className="text-[var(--muted)]">·</span>
         <Button size="sm"
           disabled={busy || shown.length === 0}
@@ -1093,6 +1141,7 @@ export function PointsTable({
   selected,
   onSelectionChange,
   onToggleVisible,
+  onUnhide,
   onSaveLabel,
   onSetRole,
   onSetEquipment,
@@ -1118,6 +1167,8 @@ export function PointsTable({
   onSelectionChange?: (next: ReadonlySet<string>) => void;
   /** Absent in a static render; the checkbox is then read-only. */
   onToggleVisible?: (point: SettingsPoint, visible: boolean) => void;
+  /** Unhide a dead copy the platform hid (2026-11-23). Absent: no button. */
+  onUnhide?: (point: SettingsPoint) => Promise<void>;
   /** Absent in a static render; the label is then plain text. */
   onSaveLabel?: (point: SettingsPoint, label: string | null) => Promise<void>;
   onSetRole?: (point: SettingsPoint, role: string | null) => Promise<void>;
@@ -1277,6 +1328,7 @@ export function PointsTable({
                         : undefined
                     }
                     onToggleVisible={onToggleVisible}
+                    onUnhide={onUnhide}
                     onSaveLabel={onSaveLabel}
                     onEdit={onSaveLabel === undefined ? undefined : setEditing}
                     onSetRole={onSetRole}
@@ -1327,6 +1379,7 @@ function PointRow({
   selected,
   onSelect,
   onToggleVisible,
+  onUnhide,
   onSaveLabel,
   onEdit,
   onSetRole,
@@ -1342,6 +1395,7 @@ function PointRow({
   selected: boolean | null;
   onSelect?: (checked: boolean) => void;
   onToggleVisible?: (point: SettingsPoint, visible: boolean) => void;
+  onUnhide?: (point: SettingsPoint) => Promise<void>;
   onSaveLabel?: (point: SettingsPoint, label: string | null) => Promise<void>;
   onEdit?: (point: SettingsPoint) => void;
   onSetRole?: (point: SettingsPoint, role: string | null) => Promise<void>;
@@ -1443,6 +1497,26 @@ function PointRow({
           />
           {point.visible ? "Shown" : "Hidden"}
         </label>
+        {/* A dead copy the platform hid (2026-11-23): what it copies, and Unhide. */}
+        {pointIsHiddenCopy(point) && (
+          <span className="block text-[var(--muted)]" data-testid="bas-point-copy-of">
+            automatically
+            {point.duplicateOf !== null && <> · {describeCopyOf(point.duplicateOf)}</>}
+            {onUnhide !== undefined && (
+              <>
+                {" "}
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void onUnhide(point)}
+                  title="Show this point again. It becomes a person's choice, and is never hidden automatically again."
+                >
+                  Unhide
+                </Button>
+              </>
+            )}
+          </span>
+        )}
       </td>
     </tr>
   );

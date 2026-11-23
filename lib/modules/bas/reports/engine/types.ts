@@ -263,6 +263,12 @@ export interface InventoryDocument {
    * before that day.
    */
   hidden?: Array<{ stationName: string; count: number }>;
+  /**
+   * Collected points the platform hid as dead copies of a live point on
+   * another station, per station, with at least one (2026-11-23). Not in
+   * `hidden`. One line on the page. Absent on documents stored before.
+   */
+  duplicateCopies?: Array<{ stationName: string; count: number }>;
 }
 
 export interface SummaryDocument {

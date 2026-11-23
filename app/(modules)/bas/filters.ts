@@ -88,6 +88,19 @@ export function dashboardCardHref(projectId: string): string {
 }
 
 /**
+ * Where a hidden duplicate copy's note links (2026-11-23): the live point,
+ * with its building and station set so the cascade lands on it whatever the
+ * copy's URL had narrowed to.
+ */
+export function liveCopyHref(live: { siteId: string; stationId: string; pointId: string }): string {
+  const params = new URLSearchParams();
+  params.set(SITE_PARAM, live.siteId);
+  params.set(STATION_PARAM, live.stationId);
+  params.set(POINT_PARAM, live.pointId);
+  return `/bas/points?${params.toString()}`;
+}
+
+/**
  * Which parameters a change at each level must CLEAR.
  *
  * Pick Liberty Center -> North Building, then switch to Kenwood Mall, and

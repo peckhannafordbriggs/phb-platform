@@ -44,6 +44,15 @@ import { refreshMeasuredIntervals } from "../lib/modules/bas/measured-interval";
  * committed. runbook.md -> "A point was given a role or equipment nobody
  * chose".
  *
+ * THE DUPLICATE-COPY STEP (2026-11-23). Part of the assignment step, after
+ * every station: for each building with more than one station, a point that
+ * read one value for seven days while the point its name matches on another
+ * station varied is hidden as a dead copy of it (lib/modules/bas/auto-hide.ts;
+ * the rules in duplicate-copies.ts), and a former copy that varies again is
+ * shown. Never a point a person showed or hid. Each change is printed; a
+ * building that fails is printed and the execution exits 1. runbook.md ->
+ * "A point was hidden automatically as a duplicate copy".
+ *
  * THE INTERVAL STEP (2026-11-20). Last, the same execution measures how often
  * every collected point reports over the last seven days and stores it on
  * the point (bas_points.measured_interval_s, lib/modules/bas/measured-interval.ts)
@@ -120,6 +129,21 @@ async function main(): Promise<void> {
   console.log(
     `[bas-reports-scheduler] assignment: ${assignment.stations.length} station(s), ${assigned} assigned, ${assignment.failed.length} failed`,
   );
+  const copies = assignment.duplicates;
+  for (const c of copies.changes) {
+    const partner = c.partner === null ? "a point no longer there" : `${c.partner.stationName}/${c.partner.pointName}`;
+    console.log(
+      c.kind === "hidden"
+        ? `[bas-reports-scheduler] hid ${c.stationName}/${c.pointName} (point ${c.pointId}) as a dead copy of ${partner}${c.swap ? ", in a swap" : ""}`
+        : `[bas-reports-scheduler] showed ${c.stationName}/${c.pointName} (point ${c.pointId}) again: ${c.swap ? `it varies and ${partner} is now the flat one` : "its readings vary"}`,
+    );
+  }
+  for (const f of copies.failed) {
+    console.error(`[bas-reports-scheduler] duplicate-copy step failed on building ${f.siteId} (${f.siteName}): ${f.error}`);
+  }
+  console.log(
+    `[bas-reports-scheduler] duplicate copies: ${copies.buildings} building(s) with more than one station, ${copies.changes.filter((c) => c.kind === "hidden").length} hidden, ${copies.changes.filter((c) => c.kind === "shown").length} shown, ${copies.failed.length} failed`,
+  );
   let intervalError: unknown = null;
   try {
     const intervals = await refreshMeasuredIntervals();
@@ -136,6 +160,9 @@ async function main(): Promise<void> {
   }
   if (assignment.failed.length > 0) {
     throw new Error(`the point assignment failed on ${assignment.failed.length} station(s); see the lines above`);
+  }
+  if (copies.failed.length > 0) {
+    throw new Error(`the duplicate-copy step failed on ${copies.failed.length} building(s); see the lines above`);
   }
   if (intervalError !== null) {
     throw new Error("the interval step failed; see the line above");

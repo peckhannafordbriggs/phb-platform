@@ -132,6 +132,12 @@ export interface Scope {
    * Inventory says how many, so leaving them out is never silent.
    */
   hiddenByStation: Map<string, number>;
+  /**
+   * Collected points the PLATFORM hid as dead copies of a live point on
+   * another station (2026-11-23), per station. Not in `points` and not in
+   * `hiddenByStation`: the Point Inventory counts them on a line of their own.
+   */
+  duplicateCopiesByStation: Map<string, number>;
 }
 
 interface PointRow {
@@ -162,7 +168,7 @@ export async function resolveScope(def: DefinitionForRun, range: Interval): Prom
   const stations = stationRows.map((s) => ({ stationId: s.stationId.toString(), name: s.displayName ?? s.niagaraStationName }));
   const stationIds = stationRows.map((s) => s.stationId);
   if (stationIds.length === 0) {
-    return { stations, points: [], pointsByStation: new Map(), units: [], stationOfUnit: new Map(), occupancyByStation: new Map(), outdoor: null, hiddenByStation: new Map() };
+    return { stations, points: [], pointsByStation: new Map(), units: [], stationOfUnit: new Map(), occupancyByStation: new Map(), outdoor: null, hiddenByStation: new Map(), duplicateCopiesByStation: new Map() };
   }
 
   const pointRows = await prisma.$queryRaw<PointRow[]>`
@@ -184,13 +190,18 @@ export async function resolveScope(def: DefinitionForRun, range: Interval): Prom
        AND p.is_visible
      ORDER BY p.point_id`;
 
-  const hiddenRows = await prisma.$queryRaw<Array<{ station_id: bigint; n: number }>>`
-    SELECT p.station_id, count(*)::int AS n
+  // Hidden by a person, and hidden by the platform as a dead copy
+  // (2026-11-23): two lines on the Point Inventory, never one point on both.
+  const hiddenRows = await prisma.$queryRaw<Array<{ station_id: bigint; n: number; copies: number }>>`
+    SELECT p.station_id,
+           count(*) FILTER (WHERE p.hidden_reason IS DISTINCT FROM 'duplicate_copy')::int AS n,
+           count(*) FILTER (WHERE p.hidden_reason = 'duplicate_copy')::int AS copies
       FROM bas_points p
      WHERE p.station_id IN (${Prisma.join(stationIds)})
        AND p.is_active AND NOT p.is_visible
      GROUP BY p.station_id`;
   const hiddenByStation = new Map(hiddenRows.map((r) => [r.station_id.toString(), r.n]));
+  const duplicateCopiesByStation = new Map(hiddenRows.map((r) => [r.station_id.toString(), r.copies]));
 
   const ids = pointRows.map((p) => p.point_id);
   const [series, gaps] = await Promise.all([loadSeries(ids, range), loadGaps(ids, range)]);
@@ -280,7 +291,7 @@ export async function resolveScope(def: DefinitionForRun, range: Interval): Prom
           pointName: oat.name,
         };
 
-  return { stations, points, pointsByStation, units, stationOfUnit, occupancyByStation, outdoor, hiddenByStation };
+  return { stations, points, pointsByStation, units, stationOfUnit, occupancyByStation, outdoor, hiddenByStation, duplicateCopiesByStation };
 }
 
 function round1(n: number): number {

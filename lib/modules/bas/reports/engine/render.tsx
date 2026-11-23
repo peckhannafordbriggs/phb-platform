@@ -478,6 +478,26 @@ export function hiddenLine(u: { stationName: string; count: number }): string {
   );
 }
 
+/**
+ * The Point Inventory's ONE line for the dead copies the platform hid
+ * (2026-11-23), across every station that has any: how many, where, and that
+ * they are still collected. Null when there are none.
+ */
+export function duplicateCopiesLine(list: ReadonlyArray<{ stationName: string; count: number }>): string | null {
+  const total = list.reduce((sum, s) => sum + s.count, 0);
+  if (total === 0) return null;
+  const one = total === 1;
+  const where =
+    list.length === 1
+      ? ` on ${list[0]!.stationName}`
+      : ` (${list.map((s) => `${s.count} on ${s.stationName}`).join(", ")})`;
+  return (
+    `${total} point${one ? "" : "s"}${where} ${one ? "was" : "were"} hidden automatically as ` +
+    `${one ? "a dead copy of a live point" : "dead copies of live points"} on another station and left out ` +
+    `of this report; ${one ? "it is" : "they are"} still collected.`
+  );
+}
+
 function equipmentTypesText(found: ReadonlyArray<EquipmentTypeFound | string>): string {
   if (found.length === 0) return "none in scope";
   return found.map((t) => (typeof t === "string" ? t : `${t.label} × ${t.count}`)).join(", ");
@@ -740,6 +760,9 @@ export function ReportView({ document: doc, plannerDetails }: { document: Report
       {(inventory.unroled ?? []).map((u) => (
         <p key={u.stationName}>{unroledLine(u)}</p>
       ))}
+      {duplicateCopiesLine(inventory.duplicateCopies ?? []) !== null && (
+        <p key="duplicate-copies">{duplicateCopiesLine(inventory.duplicateCopies ?? [])}</p>
+      )}
       {(inventory.hidden ?? []).map((u) => (
         <p key={`hidden-${u.stationName}`}>{hiddenLine(u)}</p>
       ))}

@@ -124,6 +124,7 @@ function payload(over: Partial<PointExplorer> = {}): PointExplorer {
     outOfRange: null,
     comparisons: [],
     comparisonNotes: [],
+    hiddenDuplicate: null,
     ...over,
   };
 }

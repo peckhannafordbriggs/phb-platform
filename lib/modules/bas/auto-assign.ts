@@ -4,6 +4,7 @@ import { writeAuditEvent, writeAuditEvents, type AuditEventInput } from "@/lib/a
 import { BAS_MODULE_KEY } from "./constants";
 import { equipmentKey, groupEquipmentPrefixes, groupIncludedByDefault } from "./name-prefix";
 import { readableName, suggestClassification, type EquipmentFacts, type RoleFacts } from "./suggestions";
+import { countChangesByStation, hideDuplicateCopies, runDuplicatePass, type DuplicatePass } from "./auto-hide";
 import type { StationAssignment, StationAssignmentOutcome } from "./types";
 
 export type { StationAssignment, StationAssignmentOutcome } from "./types";
@@ -26,6 +27,13 @@ export type { StationAssignment, StationAssignmentOutcome } from "./types";
  *      AHU's is supply air);
  *   3. stamps `assignment_source = 'auto'` on each point it wrote, and writes
  *      one `bas.point_auto_assigned` row per point saying what and why.
+ *
+ * THEN, DEAD DUPLICATE COPIES (2026-11-23, lib/modules/bas/auto-hide.ts): for
+ * every building with more than one station, a point that reads one value
+ * over the last seven days while the point its name matches on another
+ * station varies is hidden as a copy of it - CEI_JCI_N2's AHU_7/DA_SAP of
+ * CEI_AHU_7's DA_SAP. "Run assignment now" does the same for its station's
+ * pairs. Never a point a person showed or hid (hidden_source 'manual').
  *
  * MEDIUM STAYS UNASSIGNED. A medium suggestion is a guess a person should
  * look at; it stays on the row under "Needs a decision" as a one-click
@@ -66,6 +74,8 @@ export interface AssignmentPass {
   at: string;
   stations: StationAssignment[];
   failed: Array<{ stationId: string; stationName: string; error: string }>;
+  /** The duplicate-copy step, per building (2026-11-23). Its counts are also on each station above. */
+  duplicates: DuplicatePass;
 }
 
 // ---------------------------------------------------------------------------
@@ -455,8 +465,12 @@ async function writePlan(
     equipmentAttached: attached.size,
     equipmentCreated: created,
     needDecision: await countNeedDecision(tx, facts.stationId),
+    duplicatesHidden: 0,
+    duplicatesShown: 0,
   };
-  if (result.outcome === "assigned" || trigger.kind === "run_now") await writeSummary(tx, facts, result, trigger);
+  // A press of the button writes its summary after the duplicate step, in
+  // autoAssignStation, so the one row carries both.
+  if (result.outcome === "assigned" && trigger.kind === "scheduler") await writeSummary(tx, facts, result, trigger);
   return result;
 }
 
@@ -482,6 +496,8 @@ async function writeSummary(
       equipmentAttached: result.equipmentAttached,
       equipmentCreated: result.equipmentCreated,
       needDecision: result.needDecision,
+      duplicatesHidden: result.duplicatesHidden,
+      duplicatesShown: result.duplicatesShown,
     },
   });
 }
@@ -494,34 +510,49 @@ export async function autoAssignStation(stationId: bigint, trigger: AutoAssignTr
   const facts = await loadFacts(prisma, stationId);
   if (facts === null) throw new Error(`station ${stationId} does not exist`);
 
-  const quiet = async (outcome: StationAssignmentOutcome): Promise<StationAssignment> => {
-    const result: StationAssignment = {
-      stationId: stationId.toString(),
-      stationName: facts.stationName,
-      outcome,
-      candidates: facts.candidates.length,
-      pointsAssigned: 0,
-      roleAssigned: 0,
-      equipmentAttached: 0,
-      equipmentCreated: [],
-      needDecision: await countNeedDecision(prisma, stationId),
-    };
-    // A press of the button is recorded even when it found nothing to do.
-    if (trigger.kind === "run_now") await writeSummary(prisma, facts, result, trigger);
-    return result;
-  };
+  const quiet = async (outcome: StationAssignmentOutcome): Promise<StationAssignment> => ({
+    stationId: stationId.toString(),
+    stationName: facts.stationName,
+    outcome,
+    candidates: facts.candidates.length,
+    pointsAssigned: 0,
+    roleAssigned: 0,
+    equipmentAttached: 0,
+    equipmentCreated: [],
+    needDecision: await countNeedDecision(prisma, stationId),
+    duplicatesHidden: 0,
+    duplicatesShown: 0,
+  });
 
-  if (facts.candidates.length === 0) return quiet("nothing_to_assign");
-  if (planIsEmpty(planStation(facts))) return quiet("no_change");
+  const result =
+    facts.candidates.length === 0
+      ? await quiet("nothing_to_assign")
+      : planIsEmpty(planStation(facts))
+        ? await quiet("no_change")
+        : await prisma.$transaction(async (tx) => {
+            // Two passes on one station - the scheduler and a press of the
+            // button - run one after the other, and the second plans from what
+            // the first wrote.
+            await tx.$queryRaw`SELECT station_id FROM bas_stations WHERE station_id = ${stationId} FOR UPDATE`;
+            const fresh = await loadFacts(tx, stationId);
+            if (fresh === null) throw new Error(`station ${stationId} does not exist`);
+            return writePlan(tx, fresh, planStation(fresh), trigger);
+          }, TRANSACTION);
 
-  return prisma.$transaction(async (tx) => {
-    // Two passes on one station - the scheduler and a press of the button -
-    // run one after the other, and the second plans from what the first wrote.
-    await tx.$queryRaw`SELECT station_id FROM bas_stations WHERE station_id = ${stationId} FOR UPDATE`;
-    const fresh = await loadFacts(tx, stationId);
-    if (fresh === null) throw new Error(`station ${stationId} does not exist`);
-    return writePlan(tx, fresh, planStation(fresh), trigger);
-  }, TRANSACTION);
+  // The scheduler runs the duplicate step once per building, after every
+  // station (runAutoAssignPass). A press of the button runs it here, for this
+  // station's pairs, and records the press - even one that found nothing to do.
+  if (trigger.kind === "run_now") {
+    if (facts.siteId !== null) {
+      // Everything the press changed, wherever the point is: pressed on
+      // CEI_AHU_7, the copies it hides are on CEI_JCI_N2.
+      const changes = await hideDuplicateCopies({ siteId: facts.siteId, stationId }, trigger);
+      result.duplicatesHidden = changes.filter((c) => c.kind === "hidden").length;
+      result.duplicatesShown = changes.filter((c) => c.kind === "shown").length;
+    }
+    await writeSummary(prisma, facts, result, trigger);
+  }
+  return result;
 }
 
 /**
@@ -541,7 +572,12 @@ export async function runAutoAssignPass(now: Date = new Date()): Promise<Assignm
      GROUP BY st.station_id
      ORDER BY st.station_id`;
 
-  const pass: AssignmentPass = { at: now.toISOString(), stations: [], failed: [] };
+  const pass: AssignmentPass = {
+    at: now.toISOString(),
+    stations: [],
+    failed: [],
+    duplicates: { buildings: 0, changes: [], failed: [] },
+  };
   for (const station of stations) {
     if (Number(station.candidates) === 0) {
       // Skipped without another query.
@@ -555,6 +591,8 @@ export async function runAutoAssignPass(now: Date = new Date()): Promise<Assignm
         equipmentAttached: 0,
         equipmentCreated: [],
         needDecision: Number(station.need_decision),
+        duplicatesHidden: 0,
+        duplicatesShown: 0,
       });
       continue;
     }
@@ -567,6 +605,16 @@ export async function runAutoAssignPass(now: Date = new Date()): Promise<Assignm
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  // Dead duplicate copies, per building, after every station's roles: one
+  // query for the buildings, then per building its names and ONE aggregate.
+  pass.duplicates = await runDuplicatePass(now);
+  const counts = countChangesByStation(pass.duplicates.changes);
+  for (const station of pass.stations) {
+    const entry = counts.get(station.stationId);
+    station.duplicatesHidden = entry?.hidden ?? 0;
+    station.duplicatesShown = entry?.shown ?? 0;
   }
   return pass;
 }
